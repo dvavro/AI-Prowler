@@ -3449,6 +3449,7 @@ Built with Python, ChromaDB, and Ollama"""
         info_data = MODEL_INFO.get(model, {}) if RAG_AVAILABLE else {}
         size_gb  = info_data.get("size_gb", None)
         ram_gb   = info_data.get("min_ram_gb", None)
+        maker    = info_data.get("maker", "")
         desc     = info_data.get("description", "")
         sys_ram  = getattr(self, '_system_ram_gb', 0)
 
@@ -3458,9 +3459,13 @@ Built with Python, ChromaDB, and Ollama"""
         if ram_gb:
             fit = "" if sys_ram == 0 else ("  ✅ fits your RAM" if ram_gb <= sys_ram else "  ⚠️ exceeds your RAM")
             parts.append(f"Min RAM: {ram_gb} GB{fit}")
+        line2_parts = []
+        if maker:
+            line2_parts.append(f"By {maker}")
         if desc:
-            parts.append(desc)
-        self.model_info_label.config(text="  |  ".join(parts[:3]) + (f"\n{parts[3]}" if len(parts) > 3 else ""))
+            line2_parts.append(desc)
+        line2 = "  |  ".join(line2_parts)
+        self.model_info_label.config(text="  |  ".join(parts[:3]) + (f"\n{line2}" if line2 else ""))
     
     def show_model_picker(self):
         """Show a custom model browser dialog that closes when clicking outside."""
@@ -3521,12 +3526,13 @@ Built with Python, ChromaDB, and Ollama"""
             info = MODEL_INFO.get(m, {})
             size  = info.get("size_gb", 0)
             ram   = info.get("min_ram_gb", 0)
+            maker = info.get("maker", "")
             desc  = info.get("description", "")
             if sys_ram > 0:
                 badge = "✅" if ram <= sys_ram else "⚠️"
             else:
                 badge = "  "
-            line = f"{badge} {m:<20} {size:>5.1f} GB dl  {ram:>3} GB RAM   {desc}"
+            line = f"{badge} {m:<20} {size:>5.1f} GB dl  {ram:>3} GB RAM   {maker:<11}  {desc}"
             listbox.insert('end', line)
             # Gray out models that exceed RAM
             if sys_ram > 0 and ram > sys_ram:
@@ -3551,14 +3557,16 @@ Built with Python, ChromaDB, and Ollama"""
             if sel:
                 m = picker_models[sel[0]]
                 info = MODEL_INFO.get(m, {})
-                size = info.get("size_gb", 0)
-                ram  = info.get("min_ram_gb", 0)
-                desc = info.get("description", "")
-                ctx  = MODEL_CONTEXT_WINDOWS.get(m, 0)
-                warn = ""
+                size  = info.get("size_gb", 0)
+                ram   = info.get("min_ram_gb", 0)
+                maker = info.get("maker", "")
+                desc  = info.get("description", "")
+                ctx   = MODEL_CONTEXT_WINDOWS.get(m, 0)
+                warn  = ""
                 if sys_ram > 0 and ram > sys_ram:
                     warn = f"  ⚠️ Needs {ram} GB RAM — you have {sys_ram:.0f} GB."
-                desc_var.set(f"{m}  ▸  {size:.1f} GB download  |  {ram} GB RAM  |  {ctx:,} token context  |  {desc}{warn}")
+                maker_str = f"  |  By {maker}" if maker else ""
+                desc_var.set(f"{m}{maker_str}  ▸  {size:.1f} GB download  |  {ram} GB RAM  |  {ctx:,} token context  |  {desc}{warn}")
         listbox.bind('<<ListboxSelect>>', on_select)
 
         # ── Buttons ───────────────────────────────────────────────────────────
