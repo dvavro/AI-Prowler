@@ -1,0 +1,24 @@
+# AI Prowler - Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# ── Core RAG / indexing ────────────────────────────────────────────────────────
+chromadb>=0.4.22
+sentence-transformers>=2.2.2
+
+# ── Document parsing ───────────────────────────────────────────────────────────
+pdfplumber>=0.10.3
+python-docx>=1.1.0
+pypdf>=3.17.4
+
+# ── Email parsing ──────────────────────────────────────────────────────────────
+extract-msg>=0.45.0
+
+# ── HTTP / API ─────────────────────────────────────────────────────────────────
+requests>=2.31.0
+
+# ── Speech-to-text (microphone input in GUI) ──────────────────────────────────
+# Required for the mic voice input button in the Ask Questions tab.
+# Whisper large-v3-turbo model (~1.6 GB) is downloaded on first use.
+numpy>=1.24.0
+faster-whisper>=1.0.0
+sounddevice>=0.4.6
