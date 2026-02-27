@@ -11,14 +11,17 @@ echo Starting AI Prowler GUI...
 echo.
 
 REM Use Python 3.11 if available (best AI package compatibility), else default
-set "PYTHON_CMD=python"
 py -3.11 --version >nul 2>&1
 if not errorlevel 1 (
-    set "PYTHON_CMD=py -3.11"
+    set "PYTHON_EXE=py"
+    set "PYTHON_VER=-3.11"
+) else (
+    set "PYTHON_EXE=python"
+    set "PYTHON_VER="
 )
 
 REM Check if Python is available
-%PYTHON_CMD% --version >nul 2>&1
+%PYTHON_EXE% %PYTHON_VER% --version >nul 2>&1
 if errorlevel 1 (
     echo [ERROR] Python not found
     echo.
@@ -51,7 +54,7 @@ if not exist "rag_preprocessor.py" (
 )
 
 REM Launch GUI (use pythonw to hide console)
-start "" %PYTHON_CMD% "%~dp0rag_gui.py"
+start "" %PYTHON_EXE% %PYTHON_VER% "%~dp0rag_gui.py"
 
 REM Exit immediately (GUI is running in background)
 exit /b 0
