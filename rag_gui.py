@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 import queue
 import os
+import ctypes
 
 # Ensure script directory is on sys.path so rag_preprocessor.py is always found
 # even when launched via desktop icon
@@ -45,7 +46,7 @@ try:
         remove_directory_from_index,
         scan_directory_for_changes, save_tracking_database,
         normalise_path,
-        MODEL_CONTEXT_WINDOWS,
+        MODEL_CONTEXT_WINDOWS, MODEL_INFO,
         check_license, prompt_for_license, LICENSE_REQUIRED,
         command_update, show_stats, clear_database,
         prewarm_ollama, prewarm_embeddings, invalidate_chroma_cache, check_ollama_available,
@@ -65,6 +66,8 @@ except Exception as e:
     print("Continuing with limited functionality...")
     RAG_AVAILABLE = False
     _RAG_ERROR = str(e)
+    MODEL_INFO = {}
+    MODEL_CONTEXT_WINDOWS = {"default": 8192}
 else:
     _RAG_ERROR = ""
 
@@ -1744,7 +1747,12 @@ this application is closed."""
         
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
-        
+
+        # Stretch the inner frame to fill the canvas width whenever canvas resizes
+        def _on_canvas_resize(event):
+            canvas.itemconfig(canvas.find_withtag("all")[0], width=event.width)
+        canvas.bind("<Configure>", _on_canvas_resize)
+
         # Pack canvas and scrollbar
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
@@ -1765,25 +1773,76 @@ this application is closed."""
         
         ttk.Label(model_frame, text="Select model:").pack(anchor='w', pady=5)
         
-        # Get available models
-        models = list(MODEL_CONTEXT_WINDOWS.keys())
-        models.remove('default')
-        models.sort()
-        
-        model_combo = ttk.Combobox(model_frame, textvariable=self.current_model,
-                                   values=models, width=30, state='readonly')
+        # Detect system RAM (Windows)
+        try:
+            class _MEMSTATUS(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong),
+                            ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong),
+                            ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong),
+                            ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong),
+                            ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+            ms = _MEMSTATUS()
+            ms.dwLength = ctypes.sizeof(_MEMSTATUS)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(ms))
+            self._system_ram_gb = ms.ullTotalPhys / (1024 ** 3)
+        except Exception:
+            self._system_ram_gb = 0  # unknown
+
+        # Build model list sorted by recommended first, then by size
+        def _model_sort_key(m):
+            info = MODEL_INFO.get(m, {})
+            needed = info.get("min_ram_gb", 999)
+            fits = needed <= self._system_ram_gb if self._system_ram_gb > 0 else True
+            return (0 if fits else 1, info.get("size_gb", 0))
+
+        models = [m for m in MODEL_CONTEXT_WINDOWS.keys() if m != 'default']
+        models.sort(key=_model_sort_key)
+        self._model_names = models  # plain names for actual use
+
+        # Display names shown in combobox include size + RAM badge
+        def _display_name(m):
+            info = MODEL_INFO.get(m, {})
+            size = info.get("size_gb", 0)
+            needed = info.get("min_ram_gb", 0)
+            if self._system_ram_gb > 0:
+                badge = "✅" if needed <= self._system_ram_gb else "⚠️"
+            else:
+                badge = ""
+            return f"{badge} {m}  [{size:.1f} GB dl | {needed} GB RAM]"
+
+        display_names = [_display_name(m) for m in models]
+        self._model_display_map = dict(zip(display_names, models))
+        self._model_reverse_map = dict(zip(models, display_names))
+
+        # Use a StringVar that holds the display name for the combobox
+        self._model_display_var = tk.StringVar()
+        current = self.current_model.get()
+        self._model_display_var.set(self._model_reverse_map.get(current, display_names[0] if display_names else ""))
+
+        model_combo = ttk.Combobox(model_frame, textvariable=self._model_display_var,
+                                   values=display_names, width=45, state='readonly')
         model_combo.pack(fill='x', pady=5)
         model_combo.bind('<<ComboboxSelected>>', self.on_model_change)
-        
+
+        if self._system_ram_gb > 0:
+            ram_lbl = ttk.Label(model_frame,
+                text=f"Your PC has {self._system_ram_gb:.1f} GB RAM  |  ✅ = fits in RAM   ⚠️ = may be slow",
+                font=('Arial', 9), foreground='gray')
+            ram_lbl.pack(anchor='w')
+
         # Model info
-        self.model_info_label = ttk.Label(model_frame, text="", 
+        self.model_info_label = ttk.Label(model_frame, text="",
                                           font=('Arial', 10))
         self.model_info_label.pack(anchor='w', pady=5)
         self.update_model_info()
-        
+
         # Install model button
-        install_btn = ttk.Button(model_frame, text="Install Selected Model",
-                                command=self.install_model)
+        install_btn = ttk.Button(model_frame, text="Browse & Install Model…",
+                                command=self.show_model_picker)
         install_btn.pack(pady=5)
         
         # Database info
@@ -3359,8 +3418,11 @@ Built with Python, ChromaDB, and Ollama"""
 
     def on_model_change(self, event=None):
         """Handle model selection change"""
-        model = self.current_model.get()
-        
+        # Resolve display name (with badges/sizes) back to real model name
+        display = self._model_display_var.get() if hasattr(self, '_model_display_var') else self.current_model.get()
+        model = getattr(self, '_model_display_map', {}).get(display, display)
+        self.current_model.set(model)
+
         # Save configuration
         save_config(model=model)
         
@@ -3384,23 +3446,179 @@ Built with Python, ChromaDB, and Ollama"""
         model = self.current_model.get()
         context = get_model_context_window(model)
         chunks = calculate_optimal_chunks(model)
-        
-        info = f"Context: {context:,} tokens | Optimal chunks: {chunks}"
-        self.model_info_label.config(text=info)
+        info_data = MODEL_INFO.get(model, {}) if RAG_AVAILABLE else {}
+        size_gb  = info_data.get("size_gb", None)
+        ram_gb   = info_data.get("min_ram_gb", None)
+        desc     = info_data.get("description", "")
+        sys_ram  = getattr(self, '_system_ram_gb', 0)
+
+        parts = [f"Context: {context:,} tokens | Optimal chunks: {chunks}"]
+        if size_gb:
+            parts.append(f"Download: {size_gb:.1f} GB")
+        if ram_gb:
+            fit = "" if sys_ram == 0 else ("  ✅ fits your RAM" if ram_gb <= sys_ram else "  ⚠️ exceeds your RAM")
+            parts.append(f"Min RAM: {ram_gb} GB{fit}")
+        if desc:
+            parts.append(desc)
+        self.model_info_label.config(text="  |  ".join(parts[:3]) + (f"\n{parts[3]}" if len(parts) > 3 else ""))
     
+    def show_model_picker(self):
+        """Show a custom model browser dialog that closes when clicking outside."""
+        picker = tk.Toplevel(self.root)
+        picker.title("Browse & Install Model")
+        picker.resizable(True, True)
+        picker.minsize(620, 380)
+        picker.transient(self.root)
+
+        # Position near center of main window
+        self.root.update_idletasks()
+        rx, ry = self.root.winfo_rootx(), self.root.winfo_rooty()
+        rw, rh = self.root.winfo_width(), self.root.winfo_height()
+        pw, ph = 680, 520
+        picker.geometry(f"{pw}x{ph}+{rx + rw//2 - pw//2}+{ry + rh//2 - ph//2}")
+
+        # Configure grid so the listbox row expands
+        picker.columnconfigure(0, weight=1)
+        picker.rowconfigure(1, weight=1)  # row 1 = list_frame
+
+        sys_ram = getattr(self, '_system_ram_gb', 0)
+
+        # ── Header ────────────────────────────────────────────────────────────
+        hdr = ttk.Frame(picker, padding=(12, 8))
+        hdr.grid(row=0, column=0, sticky='ew')
+        ttk.Label(hdr, text="Install an AI Model", font=('Arial', 13, 'bold')).pack(side='left')
+        if sys_ram > 0:
+            ttk.Label(hdr, text=f"  Your RAM: {sys_ram:.0f} GB   ✅ fits   ⚠️ may be slow",
+                      font=('Arial', 9), foreground='gray').pack(side='left', padx=8)
+
+        ttk.Separator(picker, orient='horizontal').grid(row=1, column=0, sticky='ew')
+
+        # ── Listbox ───────────────────────────────────────────────────────────
+        list_frame = ttk.Frame(picker, padding=(8, 6))
+        list_frame.grid(row=2, column=0, sticky='nsew')
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
+        picker.rowconfigure(2, weight=1)  # list_frame row expands
+
+        scrollbar = ttk.Scrollbar(list_frame, orient='vertical')
+        listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set,
+                             font=('Courier New', 10), selectmode='single',
+                             activestyle='dotbox')
+        scrollbar.config(command=listbox.yview)
+        listbox.grid(row=0, column=0, sticky='nsew')
+        scrollbar.grid(row=0, column=1, sticky='ns')
+
+        # Populate listbox
+        picker_models = [m for m in MODEL_CONTEXT_WINDOWS.keys() if m != 'default']
+        def _sort_key(m):
+            info = MODEL_INFO.get(m, {})
+            needed = info.get("min_ram_gb", 999)
+            fits = needed <= sys_ram if sys_ram > 0 else True
+            return (0 if fits else 1, info.get("size_gb", 0))
+        picker_models.sort(key=_sort_key)
+
+        for m in picker_models:
+            info = MODEL_INFO.get(m, {})
+            size  = info.get("size_gb", 0)
+            ram   = info.get("min_ram_gb", 0)
+            desc  = info.get("description", "")
+            if sys_ram > 0:
+                badge = "✅" if ram <= sys_ram else "⚠️"
+            else:
+                badge = "  "
+            line = f"{badge} {m:<20} {size:>5.1f} GB dl  {ram:>3} GB RAM   {desc}"
+            listbox.insert('end', line)
+            # Gray out models that exceed RAM
+            if sys_ram > 0 and ram > sys_ram:
+                listbox.itemconfig('end', foreground='#888888')
+
+        # Pre-select currently active model
+        current = self.current_model.get()
+        if current in picker_models:
+            idx = picker_models.index(current)
+            listbox.selection_set(idx)
+            listbox.see(idx)
+
+        # ── Description label ─────────────────────────────────────────────────
+        ttk.Separator(picker, orient='horizontal').grid(row=3, column=0, sticky='ew')
+        desc_var = tk.StringVar(value="Select a model above to see details.")
+        desc_lbl = ttk.Label(picker, textvariable=desc_var, font=('Arial', 9),
+                             padding=(10, 4), wraplength=pw - 20, anchor='w')
+        desc_lbl.grid(row=4, column=0, sticky='ew')
+
+        def on_select(event=None):
+            sel = listbox.curselection()
+            if sel:
+                m = picker_models[sel[0]]
+                info = MODEL_INFO.get(m, {})
+                size = info.get("size_gb", 0)
+                ram  = info.get("min_ram_gb", 0)
+                desc = info.get("description", "")
+                ctx  = MODEL_CONTEXT_WINDOWS.get(m, 0)
+                warn = ""
+                if sys_ram > 0 and ram > sys_ram:
+                    warn = f"  ⚠️ Needs {ram} GB RAM — you have {sys_ram:.0f} GB."
+                desc_var.set(f"{m}  ▸  {size:.1f} GB download  |  {ram} GB RAM  |  {ctx:,} token context  |  {desc}{warn}")
+        listbox.bind('<<ListboxSelect>>', on_select)
+
+        # ── Buttons ───────────────────────────────────────────────────────────
+        ttk.Separator(picker, orient='horizontal').grid(row=5, column=0, sticky='ew')
+        btn_frame = ttk.Frame(picker, padding=(8, 6))
+        btn_frame.grid(row=6, column=0, sticky='ew')
+
+        def do_install():
+            sel = listbox.curselection()
+            if not sel:
+                messagebox.showwarning("No Selection", "Please select a model first.", parent=picker)
+                return
+            m = picker_models[sel[0]]
+            info = MODEL_INFO.get(m, {})
+            ram  = info.get("min_ram_gb", 0)
+            size = info.get("size_gb", 0)
+            warn = ""
+            if sys_ram > 0 and ram > sys_ram:
+                warn = f"\n\n⚠️ Warning: {m} needs {ram} GB RAM but your PC has {sys_ram:.0f} GB.\nIt will be very slow on CPU."
+            if messagebox.askyesno("Install Model",
+                    f"Install {m}?\n\nDownload size: ~{size:.1f} GB\nMin RAM: {ram} GB{warn}\n\nThis may take several minutes.",
+                    parent=picker):
+                picker.destroy()
+                self.status_var.set(f"Installing {m}...")
+                thread = threading.Thread(target=self.install_model_worker, args=(m,))
+                thread.daemon = True
+                thread.start()
+
+        install_btn = ttk.Button(btn_frame, text="⬇  Install Selected Model", command=do_install)
+        install_btn.pack(side='left', padx=4)
+
+        cancel_btn = ttk.Button(btn_frame, text="Cancel", command=picker.destroy)
+        cancel_btn.pack(side='left', padx=4)
+
+        # Update desc wraplength when picker is resized
+        def _on_picker_resize(event):
+            desc_lbl.config(wraplength=event.width - 20)
+        picker.bind('<Configure>', _on_picker_resize)
+
+        # ── Close on click outside ────────────────────────────────────────────
+        def _on_focus_out(event):
+            # Only close if focus moved to a widget outside the picker window
+            try:
+                focused = picker.focus_get()
+            except Exception:
+                focused = None
+            if focused is None:
+                picker.destroy()
+
+        picker.bind('<FocusOut>', _on_focus_out)
+
+        # Also close on Escape
+        picker.bind('<Escape>', lambda e: picker.destroy())
+
+        picker.focus_force()
+        picker.grab_set()
+
     def install_model(self):
-        """Install selected model"""
-        model = self.current_model.get()
-        
-        if messagebox.askyesno("Install Model", 
-                              f"Install {model}?\n\nThis may take several minutes."):
-            self.status_var.set(f"Installing {model}...")
-            
-            # Run in thread
-            thread = threading.Thread(target=self.install_model_worker, 
-                                     args=(model,))
-            thread.daemon = True
-            thread.start()
+        """Install selected model (legacy — called directly for backward compat)"""
+        self.show_model_picker()
     
     def install_model_worker(self, model):
         """Worker thread for model installation — streams progress output to status bar"""

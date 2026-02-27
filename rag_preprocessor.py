@@ -155,6 +155,39 @@ MODEL_CONTEXT_WINDOWS = {
     "default": 8192
 }
 
+# Model metadata: download size (GB) and minimum RAM required (GB)
+# size_gb  = approximate download size from Ollama registry
+# min_ram_gb = minimum system RAM to run at acceptable speed (CPU inference)
+MODEL_INFO = {
+    # Llama 3.2 models
+    "llama3.2:1b":   {"size_gb": 1.3,  "min_ram_gb": 4,   "description": "Fastest, great for quick queries"},
+    "llama3.2:3b":   {"size_gb": 2.0,  "min_ram_gb": 6,   "description": "Good balance of speed and quality"},
+    # Llama 3.1 models
+    "llama3.1:8b":   {"size_gb": 4.7,  "min_ram_gb": 8,   "description": "Strong general-purpose model"},
+    "llama3.1:70b":  {"size_gb": 40.0, "min_ram_gb": 48,  "description": "Very capable, needs high-end hardware"},
+    "llama3.1:405b": {"size_gb": 231.0,"min_ram_gb": 256, "description": "Frontier model, requires server-grade RAM"},
+    # Llama 3 models
+    "llama3:8b":     {"size_gb": 4.7,  "min_ram_gb": 8,   "description": "Solid 8B model (older generation)"},
+    "llama3:70b":    {"size_gb": 40.0, "min_ram_gb": 48,  "description": "Large model (older generation)"},
+    # Qwen models
+    "qwen2.5:0.5b":  {"size_gb": 0.4,  "min_ram_gb": 2,   "description": "Ultra-lightweight, fastest possible"},
+    "qwen2.5:1.5b":  {"size_gb": 1.0,  "min_ram_gb": 4,   "description": "Very fast, surprisingly capable"},
+    "qwen2.5:3b":    {"size_gb": 1.9,  "min_ram_gb": 6,   "description": "Efficient and capable small model"},
+    "qwen2.5:7b":    {"size_gb": 4.7,  "min_ram_gb": 8,   "description": "Excellent quality-to-speed ratio"},
+    "qwen2.5:14b":   {"size_gb": 9.0,  "min_ram_gb": 16,  "description": "High quality, needs 16GB+ RAM"},
+    "qwen2.5:32b":   {"size_gb": 20.0, "min_ram_gb": 32,  "description": "Near-frontier quality on CPU"},
+    "qwen2.5:72b":   {"size_gb": 47.0, "min_ram_gb": 64,  "description": "Top-tier quality, high RAM needed"},
+    # Mistral models
+    "mistral:7b":    {"size_gb": 4.1,  "min_ram_gb": 8,   "description": "Fast and efficient 7B model"},
+    "mixtral:8x7b":  {"size_gb": 26.0, "min_ram_gb": 48,  "description": "Mixture-of-experts, high quality"},
+    "mixtral:8x22b": {"size_gb": 80.0, "min_ram_gb": 128, "description": "Very large MoE model"},
+    # Gemma models
+    "gemma:2b":      {"size_gb": 1.7,  "min_ram_gb": 4,   "description": "Google's compact model"},
+    "gemma:7b":      {"size_gb": 5.0,  "min_ram_gb": 8,   "description": "Google's 7B model"},
+    "gemma2:9b":     {"size_gb": 5.5,  "min_ram_gb": 8,   "description": "Improved Gemma, strong at 9B"},
+    "gemma2:27b":    {"size_gb": 16.0, "min_ram_gb": 32,  "description": "Google's large model, needs 32GB"},
+}
+
 # GUI_MODE: set to True by rag_gui.py before calling any functions.
 # When True, the terminal spinner is disabled and replaced with simple
 # periodic progress lines that are safe for the Tkinter output queue.
