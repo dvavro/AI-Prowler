@@ -149,24 +149,7 @@ if errorlevel 1 (
     echo [OK] %PYTHON_VERSION% found
     echo.
 
-    REM ── Check Python version is compatible with AI/ML packages ───────────
-    echo Checking Python version compatibility...
-    powershell -NoProfile -Command "if ([int]((python --version 2>&1) -replace 'Python \d+\.(\d+).*','$1') -gt 12) { exit 1 } else { exit 0 }" >nul 2>&1
-    if errorlevel 1 (
-        echo.
-        echo [WARN] Python 3.13+ detected - incompatible with AI packages!
-        echo.
-        echo Installing Python 3.11 (recommended for AI work)...
-        winget install Python.Python.3.11 --silent --accept-package-agreements --accept-source-agreements
-        echo.
-        echo [INFO] Python 3.11 installed. Please close this window,
-        echo        open a NEW Command Prompt and run INSTALL.bat again.
-        echo.
-        pause
-        exit /b 0
-    )
-    echo [OK] Python version is compatible
-    echo.
+
 
     REM Ensure Python is in PATH for other programs
     echo Verifying Python environment variables...
