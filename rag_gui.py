@@ -15,6 +15,7 @@ from pathlib import Path
 import queue
 import os
 import ctypes
+import webbrowser
 
 # Ensure script directory is on sys.path so rag_preprocessor.py is always found
 # even when launched via desktop icon
@@ -47,6 +48,9 @@ try:
         scan_directory_for_changes, save_tracking_database,
         normalise_path,
         MODEL_CONTEXT_WINDOWS, MODEL_INFO,
+        EXTERNAL_PROVIDERS,
+        get_provider_status, get_provider_timeout_str, set_provider_timeout,
+        query_external_llm, test_provider_connection,
         check_license, prompt_for_license, LICENSE_REQUIRED,
         command_update, show_stats, clear_database,
         prewarm_ollama, prewarm_embeddings, invalidate_chroma_cache, check_ollama_available,
@@ -68,6 +72,7 @@ except Exception as e:
     _RAG_ERROR = str(e)
     MODEL_INFO = {}
     MODEL_CONTEXT_WINDOWS = {"default": 8192}
+    EXTERNAL_PROVIDERS = {}
 else:
     _RAG_ERROR = ""
 
@@ -107,21 +112,39 @@ class SpeechRecorder:
 
     @classmethod
     def _get_model(cls):
-        """Load the Whisper large-v3-turbo model once and cache it for the session."""
+        """Load the Whisper large-v3-turbo model once and cache it for the session.
+
+        Tries CUDA first (faster), but automatically falls back to CPU if the
+        CTranslate2 CUDA backend fails — a common mismatch even when PyTorch
+        reports CUDA as available.
+        """
         with cls._model_lock:
             if cls._whisper_model is None:
-                # Use GPU if available, otherwise CPU with int8 quantisation
+                # Determine preferred device
                 try:
                     import torch
-                    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                    preferred_device = 'cuda' if torch.cuda.is_available() else 'cpu'
                 except ImportError:
-                    device = 'cpu'
-                compute = 'float16' if device == 'cuda' else 'int8'
-                cls._whisper_model = WhisperModel(
-                    'large-v3-turbo',
-                    device=device,
-                    compute_type=compute
-                )
+                    preferred_device = 'cpu'
+
+                # Try preferred device first; fall back to CPU on any CUDA error
+                for device, compute in [
+                    (preferred_device, 'float16' if preferred_device == 'cuda' else 'int8'),
+                    ('cpu', 'int8'),   # fallback -- always works
+                ]:
+                    try:
+                        cls._whisper_model = WhisperModel(
+                            'large-v3-turbo',
+                            device=device,
+                            compute_type=compute
+                        )
+                        break   # success -- stop trying
+                    except Exception as cuda_err:
+                        if device == 'cpu':
+                            raise   # CPU also failed -- nothing more to try
+                        # CUDA failed; log and retry with CPU
+                        print(f"[Whisper] CUDA init failed ({cuda_err}), "
+                              f"falling back to CPU transcription.")
             return cls._whisper_model
 
     # ── Recording control ─────────────────────────────────────────────────────
@@ -531,6 +554,8 @@ class RAGGui:
         self._mic_recorder  = None
         self._mic_recording = False
         self.mic_silence_var = tk.DoubleVar(value=3.0)
+        # Mic insertion mode: True = append to existing text, False = replace (clear first)
+        self.mic_mode_append = tk.BooleanVar(value=True)
 
         # Index queue — list of (directory_path, recursive) tuples
         self._index_queue = []
@@ -549,6 +574,17 @@ class RAGGui:
         
         # Load config
         self.load_configuration()
+
+        # Sync provider dropdown to saved active_provider
+        if RAG_AVAILABLE and hasattr(self, '_provider_ids'):
+            try:
+                saved = _rag_engine.ACTIVE_PROVIDER
+                if saved in self._provider_ids:
+                    idx = self._provider_ids.index(saved)
+                    self._provider_combo.current(idx)
+                    self._provider_var.set(self._provider_labels[idx])
+            except Exception:
+                pass
         
         # Check if AI Prowler engine is available
         if not RAG_AVAILABLE:
@@ -622,6 +658,9 @@ class RAGGui:
                     self.mic_silence_var.set(silence_secs)
                     if SPEECH_AVAILABLE:
                         SpeechRecorder.SILENCE_SECS = silence_secs
+                    # Load active provider — default 'local'
+                    active_provider = config.get('active_provider', 'local')
+                    _rag_engine.ACTIVE_PROVIDER = active_provider
                 else:
                     self.current_model.set("llama3.2:1b")
             else:
@@ -1009,21 +1048,35 @@ or from the Help menu."""
         question_frame = ttk.LabelFrame(query_frame, text="Your Question", padding=10)
         question_frame.pack(fill='x', padx=20, pady=10)
 
-        # Entry + mic button on same row
-        entry_row = ttk.Frame(question_frame)
-        entry_row.pack(fill='x', padx=5, pady=5)
+        # Multi-line scrollable question text box
+        text_frame = ttk.Frame(question_frame)
+        text_frame.pack(fill='x', padx=5, pady=(5, 0))
 
-        self.question_var = tk.StringVar()
-        question_entry = ttk.Entry(entry_row, textvariable=self.question_var,
-                                   font=('Arial', 12))
-        question_entry.pack(side='left', fill='x', expand=True)
-        question_entry.bind('<Return>', lambda e: self.start_query())
+        self.question_text = tk.Text(text_frame, height=4, font=('Arial', 12),
+                                     wrap=tk.WORD, relief='sunken', bd=1)
+        q_scrollbar = ttk.Scrollbar(text_frame, orient='vertical',
+                                    command=self.question_text.yview)
+        self.question_text.configure(yscrollcommand=q_scrollbar.set)
+        self.question_text.pack(side='left', fill='x', expand=True)
+        q_scrollbar.pack(side='left', fill='y')
 
-        # Mic button — only shown if faster-whisper + sounddevice are installed
+        # Ctrl+Enter submits; plain Enter inserts a newline (expected in multi-line box)
+        self.question_text.bind('<Control-Return>', lambda e: self.start_query())
+        self.question_text.bind('<Control-KP_Enter>', lambda e: self.start_query())
+
+        # Hint label (Ctrl+Enter shortcut reminder)
+        ttk.Label(question_frame,
+                  text="Tip: press Ctrl+Enter to submit  |  Enter adds a new line",
+                  font=('Arial', 8), foreground='gray').pack(anchor='w', padx=6, pady=(1, 0))
+
+        # Mic button row — only shown if faster-whisper + sounddevice are installed
         if SPEECH_AVAILABLE:
+            mic_row = ttk.Frame(question_frame)
+            mic_row.pack(fill='x', padx=5, pady=(4, 2))
+
             self._mic_btn_text = tk.StringVar(value="🎤")
             self._mic_btn = tk.Button(
-                entry_row,
+                mic_row,
                 textvariable=self._mic_btn_text,
                 font=('Arial', 13),
                 width=3,
@@ -1033,10 +1086,24 @@ or from the Help menu."""
                 cursor='hand2',
                 command=self._toggle_mic
             )
-            self._mic_btn.pack(side='left', padx=(6, 0))
+            self._mic_btn.pack(side='left', padx=(0, 8))
+
+            # Append / Replace mode toggle
+            ttk.Checkbutton(
+                mic_row,
+                text="Append (add to existing text)",
+                variable=self.mic_mode_append
+            ).pack(side='left', padx=(0, 12))
+
+            ttk.Button(
+                mic_row,
+                text="🗑 Clear Question",
+                command=self._clear_question
+            ).pack(side='left')
+
             self._mic_status_var = tk.StringVar(value="")
             ttk.Label(question_frame, textvariable=self._mic_status_var,
-                      font=('Arial', 9), foreground='gray').pack(anchor='w', padx=5)
+                      font=('Arial', 9), foreground='gray').pack(anchor='w', padx=6)
         
         # Query options
         options_frame = ttk.Frame(query_frame)
@@ -1058,10 +1125,45 @@ or from the Help menu."""
         # is loaded at the right num_ctx before the next query.
         chunks_combo.bind('<<ComboboxSelected>>', self._on_chunks_changed)
         
-        # Model info
-        model_info = ttk.Label(options_frame, 
-                              text=f"Model: {self.current_model.get()}")
-        model_info.pack(side='left', padx=20)
+        # ── Provider selector ────────────────────────────────────────────────
+        provider_frame = ttk.Frame(options_frame)
+        provider_frame.pack(side='left', padx=(12, 0))
+
+        ttk.Label(provider_frame, text="AI Provider:").pack(side='left', padx=(0, 4))
+
+        # Coloured status circle
+        self._prov_light_canvas = tk.Canvas(provider_frame, width=14, height=14,
+                                            highlightthickness=0,
+                                            bg=self.root.cget('bg'))
+        self._prov_light_canvas.pack(side='left', padx=(0, 3))
+        self._prov_light = self._prov_light_canvas.create_oval(
+            1, 1, 13, 13, fill='#aaaaaa', outline='#888888', width=1)
+
+        # Build display list: "ChatGPT (OpenAI)", "Local Ollama", etc.
+        self._provider_ids  = list(EXTERNAL_PROVIDERS.keys()) if RAG_AVAILABLE else ['local']
+        self._provider_labels = []
+        for pid in self._provider_ids:
+            p = EXTERNAL_PROVIDERS[pid]
+            if pid == 'local':
+                self._provider_labels.append(f"Local Ollama  [{self.current_model.get()}]")
+            else:
+                self._provider_labels.append(f"{p['name']}  ({p['maker']})")
+
+        self._provider_var = tk.StringVar(value=self._provider_labels[0])
+        self._provider_combo = ttk.Combobox(provider_frame,
+                                            textvariable=self._provider_var,
+                                            values=self._provider_labels,
+                                            width=26, state='readonly')
+        self._provider_combo.pack(side='left')
+        self._provider_combo.bind('<<ComboboxSelected>>', self._on_provider_changed)
+
+        # Timeout/status note next to dropdown
+        self._provider_status_var = tk.StringVar(value="")
+        ttk.Label(provider_frame, textvariable=self._provider_status_var,
+                  font=('Arial', 8), foreground='gray').pack(side='left', padx=(4, 0))
+
+        # Kick off the initial light update
+        self.root.after(500, self._refresh_provider_light)
         
         # ── Action row: Ask + Load button + status light ─────────────────────
         action_row = ttk.Frame(query_frame)
@@ -1844,7 +1946,116 @@ this application is closed."""
         install_btn = ttk.Button(model_frame, text="Browse & Install Model…",
                                 command=self.show_model_picker)
         install_btn.pack(pady=5)
-        
+
+        # ── External AI APIs ──────────────────────────────────────────────────
+        ext_frame = ttk.LabelFrame(scrollable_frame, text="External AI APIs", padding=10)
+        ext_frame.pack(fill='x', padx=20, pady=10)
+
+        ttk.Label(ext_frame,
+                  text="Enter API keys to use cloud AI providers. Keys are stored locally in ~/.rag_config.json",
+                  font=('Arial', 9), foreground='gray').pack(anchor='w', pady=(0, 6))
+
+        self._api_key_vars = {}   # {provider_id: tk.StringVar}
+        self._api_key_dots = {}   # {provider_id: canvas item ref}
+        self._api_key_canvases = {}
+
+        ext_providers = [(pid, p) for pid, p in EXTERNAL_PROVIDERS.items() if pid != 'local'] if RAG_AVAILABLE else []
+
+        # Free-tier notes per provider
+        _free_tier = {
+            'openai':    'Pay-per-use',
+            'anthropic': '$5 free credit',
+            'google':    '✅ Free tier',
+            'xai':       'Limited free',
+            'meta':      '✅ Free tier',
+            'mistral':   'Limited free',
+        }
+
+        for pid, prov in ext_providers:
+            row = ttk.Frame(ext_frame)
+            row.pack(fill='x', pady=2)
+
+            # Status dot
+            dot_canvas = tk.Canvas(row, width=12, height=12,
+                                   highlightthickness=0, bg=self.root.cget('bg'))
+            dot_canvas.pack(side='left', padx=(0, 4))
+            dot = dot_canvas.create_oval(1, 1, 11, 11, fill='#aaaaaa', outline='#888888')
+            self._api_key_dots[pid]    = dot
+            self._api_key_canvases[pid]= dot_canvas
+
+            # Label: "ChatGPT (OpenAI)"
+            ttk.Label(row, text=f"{prov['name']} ({prov['maker']}):",
+                      width=22, anchor='w').pack(side='left')
+
+            # Key entry
+            existing_key = _rag_engine.PROVIDER_API_KEYS.get(pid, '') if RAG_AVAILABLE else ''
+            var = tk.StringVar(value=existing_key)
+            self._api_key_vars[pid] = var
+
+            entry = ttk.Entry(row, textvariable=var, width=42, show='*')
+            entry.pack(side='left', padx=(0, 4))
+
+            # Toggle show/hide
+            def _make_toggle(e=entry):
+                def _toggle():
+                    e.config(show='' if e.cget('show') == '*' else '*')
+                return _toggle
+            ttk.Button(row, text="👁", width=3, command=_make_toggle()).pack(side='left', padx=(0, 4))
+
+            # Save button
+            def _make_save(p=pid, v=var):
+                def _save():
+                    key = v.get().strip()
+                    _rag_engine.PROVIDER_API_KEYS[p] = key
+                    save_config(provider_api_keys=_rag_engine.PROVIDER_API_KEYS)
+                    self._update_api_dot(p)
+                    self._build_provider_display_list()
+                    self.status_var.set(f"✅ {EXTERNAL_PROVIDERS[p]['name']} API key saved.")
+                return _save
+            ttk.Button(row, text="Save", command=_make_save()).pack(side='left', padx=(0, 4))
+
+            # Test button — fires a live ping and shows a detailed result popup
+            def _make_test(p=pid, v=var):
+                def _test():
+                    key = v.get().strip()
+                    if not key:
+                        messagebox.showwarning("No Key",
+                            "Enter an API key first, then click Test.",
+                            parent=self.root)
+                        return
+                    self.status_var.set(f"🔌 Testing {EXTERNAL_PROVIDERS[p]['name']}…")
+                    self.root.update_idletasks()
+                    def _run():
+                        result = test_provider_connection(p, api_key=key)
+                        self.output_queue.put(('provider_test_result', result))
+                    threading.Thread(target=_run, daemon=True).start()
+                return _test
+            ttk.Button(row, text="🔌 Test",
+                       command=_make_test()).pack(side='left', padx=(0, 6))
+
+            # Get Key button — opens browser directly to the provider's API key page
+            key_url = prov.get('key_url')
+            if key_url:
+                free_note = _free_tier.get(pid, '')
+                btn_text  = f"🔑 Get Key  {free_note}".strip()
+                def _make_get_key(u=key_url):
+                    return lambda: webbrowser.open(u)
+                ttk.Button(row, text=btn_text,
+                           command=_make_get_key()).pack(side='left')
+
+        # Fallback toggle
+        fb_row = ttk.Frame(ext_frame)
+        fb_row.pack(fill='x', pady=(8, 2))
+        self._fallback_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(fb_row,
+                        text="Auto-fallback to Local Ollama if external provider fails or is rate-limited",
+                        variable=self._fallback_var,
+                        command=self._on_fallback_change).pack(anchor='w')
+
+        # Initial dot colours
+        for pid in self._api_key_dots:
+            self._update_api_dot(pid)
+
         # Database info
         db_frame = ttk.LabelFrame(scrollable_frame, text="Database", padding=10)
         db_frame.pack(fill='x', padx=20, pady=10)
@@ -2866,7 +3077,7 @@ Built with Python, ChromaDB, and Ollama"""
 
     def start_query(self):
         """Start query — auto-loads Ollama if not ready."""
-        question = self.question_var.get().strip()
+        question = self.question_text.get('1.0', 'end-1c').strip()
 
         if not question:
             messagebox.showwarning("No Question", "Please enter a question")
@@ -2991,6 +3202,115 @@ Built with Python, ChromaDB, and Ollama"""
             self.output_queue.put(('done', 'query'))
         finally:
             sys.stdout = old_stdout
+
+    # ── Provider selector ───────────────────────────────────────────────────
+
+    def _on_provider_changed(self, event=None):
+        """User picked a different provider from the dropdown."""
+        if not RAG_AVAILABLE:
+            return
+        idx = self._provider_combo.current()
+        pid = self._provider_ids[idx]
+        _rag_engine.ACTIVE_PROVIDER = pid
+        save_config(active_provider=pid)
+        self._refresh_provider_light()
+        # Also keep local label in sync if local model changed
+        if pid == 'local':
+            self._sync_local_provider_label()
+
+    def _sync_local_provider_label(self):
+        """Keep the 'Local Ollama [model]' label in the combobox current."""
+        if not RAG_AVAILABLE or not hasattr(self, '_provider_labels'):
+            return
+        try:
+            idx = self._provider_ids.index('local')
+            self._provider_labels[idx] = f"Local Ollama  [{self.current_model.get()}]"
+            self._provider_combo.configure(values=self._provider_labels)
+            if self._provider_combo.current() == idx:
+                self._provider_var.set(self._provider_labels[idx])
+        except Exception:
+            pass
+
+    def _refresh_provider_light(self):
+        """Update the coloured dot and status note for the currently selected provider."""
+        if not RAG_AVAILABLE or not hasattr(self, '_provider_ids'):
+            return
+        try:
+            idx = self._provider_combo.current()
+            if idx < 0:
+                idx = 0
+            pid = self._provider_ids[idx]
+            status = get_provider_status(pid)
+
+            # dot colour
+            if pid == 'local':
+                # Reflect Ollama readiness
+                dot_color = '#27ae60' if self._ollama_ready else '#aaaaaa'
+                note = ''
+            elif status == 'ready':
+                dot_color = '#27ae60'   # green
+                note = '● Ready'
+            elif status == 'timeout':
+                dot_color = '#e74c3c'   # red
+                note = f"● Rate-limited {get_provider_timeout_str(pid)}"
+            else:  # no_key
+                dot_color = '#aaaaaa'   # grey
+                note = '● No API key — add in Settings'
+
+            self._prov_light_canvas.itemconfig(self._prov_light,
+                                               fill=dot_color, outline=dot_color)
+            self._provider_status_var.set(note)
+        except Exception:
+            pass
+
+        # Re-schedule — check every 30 s so timeouts expire visually
+        self.root.after(30_000, self._refresh_provider_light)
+
+    def _update_api_dot(self, provider_id: str):
+        """Update the coloured dot beside an API key entry in Settings."""
+        if not RAG_AVAILABLE:
+            return
+        status = get_provider_status(provider_id)
+        colours = {
+            'ready':   ('#27ae60', '#1a7a40'),
+            'timeout': ('#e74c3c', '#a93226'),
+            'no_key':  ('#aaaaaa', '#888888'),
+        }
+        fill, outline = colours.get(status, colours['no_key'])
+        self._update_api_dot_color(provider_id, fill, outline)
+
+    def _update_api_dot_color(self, provider_id_or_name: str,
+                              fill: str, outline: str = None):
+        """Set dot colour directly — used by test result handler."""
+        if outline is None:
+            outline = fill
+        # Accept either provider_id ('google') or display name ('Gemini')
+        pid = provider_id_or_name
+        if pid not in self._api_key_dots:
+            # Try to match by display name
+            for p, prov in EXTERNAL_PROVIDERS.items():
+                if prov.get('name') == provider_id_or_name:
+                    pid = p
+                    break
+        try:
+            dot    = self._api_key_dots[pid]
+            canvas = self._api_key_canvases[pid]
+            canvas.itemconfig(dot, fill=fill, outline=outline)
+        except Exception:
+            pass
+
+    def _on_fallback_change(self):
+        """Toggle fallback-to-local setting."""
+        if RAG_AVAILABLE:
+            _rag_engine.FALLBACK_TO_LOCAL = self._fallback_var.get()
+
+    def _build_provider_display_list(self):
+        """Rebuild the combobox values — call after API keys change."""
+        if not RAG_AVAILABLE or not hasattr(self, '_provider_combo'):
+            return
+        self._sync_local_provider_label()
+        self._provider_combo.configure(values=self._provider_labels)
+        self._refresh_provider_light()
     
     # ── Ollama status light ─────────────────────────────────────────────────
 
@@ -3217,6 +3537,12 @@ Built with Python, ChromaDB, and Ollama"""
         # Scroll to top so first line is always visible
         self.gpu_status_text.see('1.0')
 
+    def _clear_question(self):
+        """Clear the question text box."""
+        self.question_text.delete('1.0', tk.END)
+        if SPEECH_AVAILABLE:
+            self._mic_status_var.set("")
+
     def _refresh_silence_label(self):
         """Update the silence timeout display label."""
         val = self.mic_silence_var.get()
@@ -3430,6 +3756,7 @@ Built with Python, ChromaDB, and Ollama"""
         self.update_model_info()
         
         self.status_var.set(f"Model changed to {model}")
+        self._sync_local_provider_label()
         
         # Reset prewarm — new model needs to be loaded into memory.
         # Also invalidate the embedding cache so the next prewarm does a
@@ -3712,9 +4039,15 @@ Built with Python, ChromaDB, and Ollama"""
                     text = msg_data.strip()
                     self._mic_reset_button()
                     if text:
-                        # Append to any existing text in the box (allows multi-sentence)
-                        existing = self.question_var.get().strip()
-                        self.question_var.set((existing + ' ' + text).strip())
+                        if self.mic_mode_append.get():
+                            # Append mode — add to whatever is already in the box
+                            existing = self.question_text.get('1.0', 'end-1c').strip()
+                            new_text = (existing + ' ' + text).strip() if existing else text
+                        else:
+                            # Replace mode — clear the box first
+                            new_text = text
+                        self.question_text.delete('1.0', tk.END)
+                        self.question_text.insert('1.0', new_text)
                         self._mic_status_var.set("✅ Transcription complete — review and press Ask Question")
                         self.status_var.set("Speech transcribed")
                     else:
@@ -3800,6 +4133,25 @@ Built with Python, ChromaDB, and Ollama"""
                     threading.Thread(target=self.query_worker,
                                      args=(question, n_contexts), daemon=True).start()
                     
+                elif msg_type == 'provider_test_result':
+                    r = msg_data
+                    # Update status bar
+                    self.status_var.set(r['message'])
+                    # Update the dot for this provider
+                    if r.get('ok'):
+                        self._update_api_dot_color(r.get('provider',''), '#27ae60')
+                    # Show a clear popup with full diagnostics
+                    title  = f"Connection Test — {r['provider']}"
+                    body   = (f"{r['message']}\n\n"
+                              f"{'─'*48}\n"
+                              f"{r.get('detail','')}\n\n"
+                              f"Model: {r.get('model','')}\n"
+                              f"HTTP status: {r.get('status', 'n/a')}")
+                    if r.get('ok'):
+                        messagebox.showinfo(title, body)
+                    else:
+                        messagebox.showwarning(title, body)
+
                 elif msg_type == 'error':
                     messagebox.showerror("Error", msg_data)
                     

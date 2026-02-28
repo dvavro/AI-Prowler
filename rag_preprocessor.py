@@ -188,6 +188,303 @@ MODEL_INFO = {
     "gemma2:27b":    {"maker": "Google",     "size_gb": 16.0, "min_ram_gb": 32,  "description": "Large model, high quality output"},
 }
 
+# ═══════════════════════════════════════════════════════════
+# EXTERNAL LLM PROVIDERS
+# ═══════════════════════════════════════════════════════════
+
+EXTERNAL_PROVIDERS = {
+    'local':     {'name': 'Local Ollama',  'maker': 'Local',      'model': None,                             'url': None,                                                                                  'auth': None,        'color': '#888888', 'key_url': None},
+    'openai':    {'name': 'ChatGPT',       'maker': 'OpenAI',     'model': 'gpt-4o',                         'url': 'https://api.openai.com/v1/chat/completions',                                          'auth': 'Bearer',    'color': '#10a37f', 'key_url': 'https://platform.openai.com/api-keys'},
+    'anthropic': {'name': 'Claude',        'maker': 'Anthropic',  'model': 'claude-opus-4-5',                'url': 'https://api.anthropic.com/v1/messages',                                               'auth': 'x-api-key', 'color': '#d4691e', 'key_url': 'https://console.anthropic.com/settings/keys'},
+    'google':    {'name': 'Gemini',        'maker': 'Google',     'model': 'gemini-2.0-flash',               'url': 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent',      'auth': 'key_param', 'color': '#4285f4', 'key_url': 'https://aistudio.google.com/app/apikey'},
+    'xai':       {'name': 'Grok',          'maker': 'xAI',        'model': 'grok-beta',                      'url': 'https://api.x.ai/v1/chat/completions',                                                'auth': 'Bearer',    'color': '#1da1f2', 'key_url': 'https://console.x.ai/'},
+    'meta':      {'name': 'Llama API',     'maker': 'Meta',       'model': 'Llama-4-Scout-17B-16E-Instruct', 'url': 'https://api.llama.com/v1/chat/completions',                                           'auth': 'Bearer',    'color': '#0866ff', 'key_url': 'https://llama.developer.meta.com/'},
+    'mistral':   {'name': 'Mistral Large', 'maker': 'Mistral AI', 'model': 'mistral-large-latest',           'url': 'https://api.mistral.ai/v1/chat/completions',                                          'auth': 'Bearer',    'color': '#ff7000', 'key_url': 'https://console.mistral.ai/api-keys/'},
+}
+
+# Currently active provider — 'local' uses Ollama, others call external APIs
+ACTIVE_PROVIDER = 'local'
+
+# API keys: {provider_id: api_key_string}
+PROVIDER_API_KEYS: dict = {}
+
+# Rate-limit timeouts: {provider_id: unix_timestamp_when_available_again}
+PROVIDER_TIMEOUTS: dict = {}
+
+# When True, fall back to local Ollama if an external provider call fails
+FALLBACK_TO_LOCAL = True
+
+
+def get_provider_status(provider_id: str) -> str:
+    """
+    Returns one of:
+      'local'    — the local Ollama provider
+      'ready'    — external, key present, not rate-limited
+      'timeout'  — external, currently rate-limited
+      'no_key'   — external, no API key configured
+    """
+    if provider_id == 'local':
+        return 'local'
+    key = PROVIDER_API_KEYS.get(provider_id, '').strip()
+    if not key:
+        return 'no_key'
+    until = PROVIDER_TIMEOUTS.get(provider_id, 0)
+    if until and time.time() < until:
+        return 'timeout'
+    return 'ready'
+
+
+def get_provider_timeout_str(provider_id: str) -> str:
+    """Returns human-readable string like 'until 3:45 PM', or empty string."""
+    until = PROVIDER_TIMEOUTS.get(provider_id, 0)
+    if until and time.time() < until:
+        import datetime as _dt
+        return f"until {_dt.datetime.fromtimestamp(until).strftime('%I:%M %p')}"
+    return ''
+
+
+def set_provider_timeout(provider_id: str, seconds: int = 3600):
+    """Mark a provider as rate-limited for the given number of seconds."""
+    PROVIDER_TIMEOUTS[provider_id] = time.time() + seconds
+
+
+def query_external_llm(provider_id: str, prompt: str, max_tokens: int = 2000) -> str:
+    """
+    Route prompt to the chosen external LLM API, return answer text.
+    Supports OpenAI-compatible (Bearer), Anthropic (x-api-key), Google (key_param).
+    Automatically sets a rate-limit timeout on HTTP 429 responses.
+    Returns a string starting with \\n\\n❌ on any error (triggers fallback in rag_query).
+    """
+    import json as _json
+    prov   = EXTERNAL_PROVIDERS[provider_id]
+    apikey = PROVIDER_API_KEYS.get(provider_id, '').strip()
+    model  = prov['model']
+    # Allow {model} placeholder in URL (used by Gemini so URL stays in sync with model)
+    url    = prov['url'].replace('{model}', model) if prov['url'] else ''
+    auth   = prov['auth']
+
+    if not apikey:
+        return (f"\n\n❌ No API key for {prov['name']}.\n"
+                f"Add your key in Settings → External AI APIs.")
+
+    headers = {'Content-Type': 'application/json'}
+    params  = {}
+
+    if auth == 'Bearer':
+        headers['Authorization'] = f"Bearer {apikey}"
+        payload = {'model': model, 'messages': [{'role': 'user', 'content': prompt}], 'max_tokens': max_tokens}
+
+    elif auth == 'x-api-key':
+        headers['x-api-key']         = apikey
+        headers['anthropic-version'] = '2023-06-01'
+        payload = {'model': model, 'max_tokens': max_tokens, 'messages': [{'role': 'user', 'content': prompt}]}
+
+    elif auth == 'key_param':
+        params['key'] = apikey
+        payload = {'contents': [{'parts': [{'text': prompt}]}],
+                   'generationConfig': {'maxOutputTokens': max_tokens}}
+    else:
+        return "\n\n❌ Unknown auth style for this provider."
+
+    try:
+        resp = requests.post(url, json=payload, headers=headers, params=params, timeout=120)
+
+        if resp.status_code == 429:
+            # Use the retry-after header if present, but cap at 5 minutes for
+            # free-tier providers that incorrectly report 1-hour timeouts
+            retry_after = min(int(resp.headers.get('retry-after', 300)), 300)
+            set_provider_timeout(provider_id, retry_after)
+            import datetime as _dt
+            until_str = _dt.datetime.fromtimestamp(time.time() + retry_after).strftime('%I:%M %p')
+            return (f"\n\n❌ {prov['name']} rate limit reached. Quota resets at {until_str}.\n"
+                    f"Free tier allows ~15 requests/minute. Falling back to local Ollama.")
+
+        if resp.status_code == 401:
+            return (f"\n\n❌ {prov['name']}: Invalid API key (HTTP 401).\n"
+                    f"Check your key in Settings → External AI APIs.")
+
+        if resp.status_code == 403:
+            return (f"\n\n❌ {prov['name']}: Access denied (HTTP 403).\n"
+                    f"Your key may not have access to model '{model}'.\n"
+                    f"Check your account permissions at the provider's console.")
+
+        if not resp.ok:
+            # Try to extract a useful message from the response body
+            try:
+                err_body = resp.json()
+                err_msg  = (err_body.get('error', {}).get('message')
+                            or err_body.get('message')
+                            or resp.text[:300])
+            except Exception:
+                err_msg = resp.text[:300]
+            return f"\n\n❌ {prov['name']} API error (HTTP {resp.status_code}): {err_msg}"
+
+        data = resp.json()
+
+        if auth == 'Bearer':
+            return data['choices'][0]['message']['content']
+
+        elif auth == 'x-api-key':
+            return data['content'][0]['text']
+
+        elif auth == 'key_param':
+            # Gemini may return 200 OK but with no candidates if content was blocked
+            candidates = data.get('candidates', [])
+            if not candidates:
+                block_reason = data.get('promptFeedback', {}).get('blockReason', 'unknown')
+                return (f"\n\n❌ {prov['name']}: Response blocked by safety filters "
+                        f"(reason: {block_reason}).\nTry rephrasing your question.")
+            finish = candidates[0].get('finishReason', '')
+            if finish == 'SAFETY':
+                return (f"\n\n❌ {prov['name']}: Response blocked — SAFETY filter triggered.\n"
+                        f"Try rephrasing your question.")
+            try:
+                return candidates[0]['content']['parts'][0]['text']
+            except (KeyError, IndexError) as ke:
+                return (f"\n\n❌ {prov['name']}: Unexpected response format — {ke}\n"
+                        f"Raw response: {str(data)[:300]}")
+
+    except requests.exceptions.Timeout:
+        return f"\n\n❌ {prov['name']} timed out after 120s."
+    except requests.exceptions.ConnectionError:
+        return f"\n\n❌ Cannot reach {prov['name']}. Check your internet connection."
+    except Exception as exc:
+        return f"\n\n❌ {prov['name']} error: {type(exc).__name__}: {exc}"
+
+    return "\n\n❌ Unknown error."
+
+
+def test_provider_connection(provider_id: str, api_key: str = None) -> dict:
+    """
+    Fire a tiny 'say hello' request to verify a provider key works end-to-end.
+    Uses the key supplied (not-yet-saved entry box value) or falls back to stored key.
+
+    Returns a dict:
+      ok        bool   — True = got a real reply
+      status    int    — HTTP status code (0 = no network)
+      provider  str    — display name
+      model     str    — model string used
+      message   str    — one-line human summary (shown in popup header)
+      detail    str    — full diagnostic text (shown in popup body)
+    """
+    prov  = EXTERNAL_PROVIDERS.get(provider_id, {})
+    name  = prov.get('name', provider_id)
+    model = prov.get('model', '')
+    auth  = prov.get('auth')
+    url   = (prov.get('url') or '').replace('{model}', model)
+    key   = (api_key or PROVIDER_API_KEYS.get(provider_id, '')).strip()
+
+    def _r(ok, status, message, detail=''):
+        return {'ok': ok, 'status': status, 'provider': name,
+                'model': model, 'message': message, 'detail': detail}
+
+    if not key:
+        return _r(False, 0, 'No API key entered.',
+                  'Type or paste your API key then click Test.')
+    if not url:
+        return _r(False, 0, 'Local Ollama does not need a connection test.', '')
+
+    headers = {'Content-Type': 'application/json'}
+    params  = {}
+    ping    = "Reply with exactly one word: CONNECTED"
+
+    if auth == 'Bearer':
+        headers['Authorization'] = f"Bearer {key}"
+        payload = {'model': model,
+                   'messages': [{'role': 'user', 'content': ping}],
+                   'max_tokens': 10}
+    elif auth == 'x-api-key':
+        headers['x-api-key']         = key
+        headers['anthropic-version'] = '2023-06-01'
+        payload = {'model': model, 'max_tokens': 10,
+                   'messages': [{'role': 'user', 'content': ping}]}
+    elif auth == 'key_param':
+        params['key'] = key
+        payload = {'contents': [{'parts': [{'text': ping}]}],
+                   'generationConfig': {'maxOutputTokens': 10}}
+    else:
+        return _r(False, 0, f'Unknown auth style: {auth}')
+
+    try:
+        resp   = requests.post(url, json=payload, headers=headers,
+                               params=params, timeout=20)
+        status = resp.status_code
+        try:
+            body = resp.json()
+        except Exception:
+            body = {}
+        raw = resp.text[:600]
+
+        def _err_msg():
+            return (body.get('error', {}).get('message')
+                    or body.get('message') or raw)
+
+        if status == 200:
+            try:
+                if auth == 'Bearer':
+                    reply = body['choices'][0]['message']['content'].strip()
+                elif auth == 'x-api-key':
+                    reply = body['content'][0]['text'].strip()
+                elif auth == 'key_param':
+                    cands = body.get('candidates', [])
+                    if not cands:
+                        block = body.get('promptFeedback', {}).get('blockReason', 'unknown')
+                        return _r(False, 200,
+                                  f'Connected but response blocked (reason: {block}).',
+                                  raw)
+                    reply = cands[0]['content']['parts'][0]['text'].strip()
+                detail = (f"Provider : {name}\n"
+                          f"Model    : {model}\n"
+                          f"HTTP     : 200 OK\n"
+                          f"Reply    : {reply}")
+                return _r(True, 200,
+                          f'✅ Connected!  Model replied: "{reply}"', detail)
+            except (KeyError, IndexError) as e:
+                return _r(False, 200,
+                          'Connected but response format was unexpected.',
+                          f'Parse error: {e}\n\nRaw response:\n{raw}')
+
+        elif status == 401:
+            return _r(False, 401,
+                      '❌ Invalid API key — rejected by server (HTTP 401).',
+                      f'The key you entered was not accepted.\n'
+                      f'Double-check you copied the full key.\n\n{_err_msg()}')
+
+        elif status == 403:
+            return _r(False, 403,
+                      f'❌ Access denied (HTTP 403) — key valid but no access to "{model}".',
+                      f'Your key works but may not have permission to use model "{model}".\n'
+                      f'Check your plan at {prov.get("key_url","the provider console")}.\n\n{_err_msg()}')
+
+        elif status == 404:
+            return _r(False, 404,
+                      f'❌ Model not found (HTTP 404) — "{model}" may not exist on your plan.',
+                      f'The model name "{model}" was not recognised.\n'
+                      f'Your plan may use a different model name.\n\n{_err_msg()}')
+
+        elif status == 429:
+            retry = int(resp.headers.get('retry-after', 300))
+            import datetime as _dt
+            until = _dt.datetime.fromtimestamp(time.time() + retry).strftime('%I:%M %p')
+            return _r(False, 429,
+                      f'⚠️ Key is valid but rate-limited until {until}.',
+                      f'Free tier limit reached. Wait ~{retry}s and try again.\n\n{raw}')
+
+        else:
+            return _r(False, status,
+                      f'❌ HTTP {status} error.',
+                      f'Server returned an unexpected status.\n\n{_err_msg()}')
+
+    except requests.exceptions.Timeout:
+        return _r(False, 0, '❌ Timed out after 20s.',
+                  'Server did not respond. Check your internet connection.')
+    except requests.exceptions.ConnectionError as e:
+        return _r(False, 0, f'❌ Cannot reach {name}.',
+                  f'Network error — check your internet connection.\n\n{e}')
+    except Exception as e:
+        return _r(False, 0, f'❌ Unexpected error: {type(e).__name__}', str(e))
+
+
 # GUI_MODE: set to True by rag_gui.py before calling any functions.
 # When True, the terminal spinner is disabled and replaced with simple
 # periodic progress lines that are safe for the Tkinter output queue.
@@ -205,19 +502,26 @@ CONFIG_FILE = Path.home() / '.rag_config.json'
 def load_config():
     """Load configuration from file"""
     global OLLAMA_MODEL, OLLAMA_URL, CHUNK_SIZE, CHUNK_OVERLAP, SHOW_SOURCES, GPU_LAYERS, DEBUG_OUTPUT
+    global ACTIVE_PROVIDER, PROVIDER_API_KEYS, PROVIDER_TIMEOUTS
 
     config = {}
     if CONFIG_FILE.exists():
         try:
             with open(CONFIG_FILE, 'r') as f:
                 config = json.load(f)
-                OLLAMA_MODEL  = config.get('model',           OLLAMA_MODEL)
-                OLLAMA_URL    = config.get('url',             OLLAMA_URL)
-                CHUNK_SIZE    = config.get('chunk_size',      CHUNK_SIZE)
-                CHUNK_OVERLAP = config.get('chunk_overlap',   CHUNK_OVERLAP)
-                SHOW_SOURCES  = config.get('show_sources',    SHOW_SOURCES)
-                GPU_LAYERS    = config.get('gpu_layers',      GPU_LAYERS)
-                DEBUG_OUTPUT  = config.get('debug_output',    DEBUG_OUTPUT)
+                OLLAMA_MODEL     = config.get('model',           OLLAMA_MODEL)
+                OLLAMA_URL       = config.get('url',             OLLAMA_URL)
+                CHUNK_SIZE       = config.get('chunk_size',      CHUNK_SIZE)
+                CHUNK_OVERLAP    = config.get('chunk_overlap',   CHUNK_OVERLAP)
+                SHOW_SOURCES     = config.get('show_sources',    SHOW_SOURCES)
+                GPU_LAYERS       = config.get('gpu_layers',      GPU_LAYERS)
+                DEBUG_OUTPUT     = config.get('debug_output',    DEBUG_OUTPUT)
+                ACTIVE_PROVIDER  = config.get('active_provider', ACTIVE_PROVIDER)
+                PROVIDER_API_KEYS= config.get('provider_api_keys', {})
+                # Load timeouts but discard any that have already expired
+                raw_timeouts = config.get('provider_timeouts', {})
+                now = time.time()
+                PROVIDER_TIMEOUTS = {k: v for k, v in raw_timeouts.items() if v > now}
         except:
             pass
 
@@ -267,7 +571,8 @@ def load_extension_config():
 
 def save_config(model=None, url=None, chunk_size=None, chunk_overlap=None,
                 show_sources=None, gpu_layers=None, mic_silence_secs=None,
-                debug_output=None, auto_start_ollama=None):
+                debug_output=None, auto_start_ollama=None,
+                active_provider=None, provider_api_keys=None, provider_timeouts=None):
     """Save configuration to file"""
     config = {}
 
@@ -278,15 +583,18 @@ def save_config(model=None, url=None, chunk_size=None, chunk_overlap=None,
         except:
             pass
 
-    if model           is not None: config['model']           = model
-    if url             is not None: config['url']             = url
-    if chunk_size      is not None: config['chunk_size']      = chunk_size
-    if chunk_overlap   is not None: config['chunk_overlap']   = chunk_overlap
-    if show_sources    is not None: config['show_sources']    = show_sources
-    if gpu_layers      is not None: config['gpu_layers']      = gpu_layers
-    if mic_silence_secs is not None: config['mic_silence_secs'] = mic_silence_secs
-    if debug_output    is not None: config['debug_output']    = debug_output
-    if auto_start_ollama is not None: config['auto_start_ollama'] = auto_start_ollama
+    if model              is not None: config['model']              = model
+    if url                is not None: config['url']                = url
+    if chunk_size         is not None: config['chunk_size']         = chunk_size
+    if chunk_overlap      is not None: config['chunk_overlap']      = chunk_overlap
+    if show_sources       is not None: config['show_sources']       = show_sources
+    if gpu_layers         is not None: config['gpu_layers']         = gpu_layers
+    if mic_silence_secs   is not None: config['mic_silence_secs']   = mic_silence_secs
+    if debug_output       is not None: config['debug_output']       = debug_output
+    if auto_start_ollama  is not None: config['auto_start_ollama']  = auto_start_ollama
+    if active_provider    is not None: config['active_provider']    = active_provider
+    if provider_api_keys  is not None: config['provider_api_keys']  = provider_api_keys
+    if provider_timeouts  is not None: config['provider_timeouts']  = provider_timeouts
 
     try:
         with open(CONFIG_FILE, 'w') as f:
@@ -2534,14 +2842,47 @@ Answer:"""
     # loaded at that size. Any request with num_ctx ≤ 8192 is instant.
     # Ollama will automatically handle larger contexts if needed.
     
-    # Phase 3: Query LLM
+    # Phase 3: Query LLM — route to active provider
     llm_start = time.time()
     if SHOW_SOURCES:
-        print(f"🤖 Querying {OLLAMA_MODEL}…")
+        prov_name = EXTERNAL_PROVIDERS.get(ACTIVE_PROVIDER, {}).get('name', OLLAMA_MODEL)
+        print(f"🤖 Querying {prov_name}…")
     else:
         if DEBUG_OUTPUT:
-            print(f"⏱  [Phase 3] Querying {OLLAMA_MODEL}…")
-    answer     = query_ollama(prompt)
+            prov_name = EXTERNAL_PROVIDERS.get(ACTIVE_PROVIDER, {}).get('name', OLLAMA_MODEL)
+            print(f"⏱  [Phase 3] Querying {prov_name}…")
+
+    if ACTIVE_PROVIDER == 'local':
+        answer = query_ollama(prompt)
+    else:
+        status = get_provider_status(ACTIVE_PROVIDER)
+        if status == 'timeout':
+            until_str = get_provider_timeout_str(ACTIVE_PROVIDER)
+            prov_name = EXTERNAL_PROVIDERS[ACTIVE_PROVIDER]['name']
+            if FALLBACK_TO_LOCAL:
+                print(f"⚠️ {prov_name} is rate-limited ({until_str}) — falling back to local Ollama.\n\n")
+                answer = query_ollama(prompt)
+            else:
+                answer = (f"\n\n⚠️ {prov_name} is rate-limited {until_str}.\n"
+                          f"Switch to a different provider or wait until the quota resets.")
+        elif status == 'no_key':
+            prov_name = EXTERNAL_PROVIDERS[ACTIVE_PROVIDER]['name']
+            answer = (f"\n\n❌ No API key for {prov_name}.\n"
+                      f"Add your key in Settings → External AI APIs.")
+        else:
+            answer = query_external_llm(ACTIVE_PROVIDER, prompt)
+            # If external call returned an error/warning and fallback is on, use local
+            if FALLBACK_TO_LOCAL and (answer.startswith('\n\n❌') or answer.startswith('\n\n⚠️')):
+                prov_name = EXTERNAL_PROVIDERS[ACTIVE_PROVIDER]['name']
+                # Print the actual error so user knows WHY it fell back
+                print(f"⚠️ {prov_name} failed — falling back to local Ollama.\n"
+                      f"Error detail: {answer.strip()}\n\n")
+                answer = query_ollama(prompt)
+            elif GUI_MODE:
+                # External succeeded — print answer for GUI
+                import sys as _sys
+                _sys.stdout.write(answer)
+                _sys.stdout.flush()
     llm_time   = time.time() - llm_start
     total_time = time.time() - total_start
     if DEBUG_OUTPUT:
