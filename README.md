@@ -10,8 +10,9 @@ No API keys required for local AI &nbsp;•&nbsp; No cloud services for local AI
 
 > **No technical knowledge required — one batch file does everything.**
 
-1. Go to the **[Releases page](../../releases)** and download the latest `AI-Prowler-vX.X.zip`
-2. Extract the ZIP to a permanent folder — e.g. `C:\AI-Prowler\`
+1. Go to the **[Releases page](https://github.com/dvavro/AI-Prowler/releases)** 
+   and download the latest `AI-Prowler-v2.0.zip`
+2. Extract the ZIP to a permanent folder — e.g. `C:\Users\Joe
 3. Double-click **`INSTALL.bat`** — it installs Python, all packages, Ollama, and the AI model automatically
 4. Wait for **"INSTALLATION COMPLETE"** (15–30 minutes, ~4 GB download)
 5. Double-click the **AI Prowler** shortcut that appears on your Desktop
@@ -191,7 +192,7 @@ The User Guide is also accessible from within the app via **Help → 📖 User G
 
 ## 🐛 Reporting Issues
 
-Found a bug or have a feature request? Open an **[Issue](../../issues)** and include:
+Found a bug or have a feature request? Open an **[Issue](https://github.com/dvavro/AI-Prowler/issues)** and include:
 
 - Your Windows version
 - The error message (run `python rag_gui.py` from Command Prompt to capture it)
@@ -201,7 +202,7 @@ Found a bug or have a feature request? Open an **[Issue](../../issues)** and inc
 
 ## 📝 Changelog
 
-See the **[Releases page](../../releases)** for full version history and release notes.
+See the **[Releases page](https://github.com/dvavro/AI-Prowler/releases)** for full version history and release notes.
 
 **Latest: v2.0**
 - ☁️ Six cloud AI providers (ChatGPT, Claude, Gemini, Grok, Llama API, Mistral)
@@ -215,7 +216,7 @@ See the **[Releases page](../../releases)** for full version history and release
 
 ## ⚖️ License
 
-PC version is free open source. Mobile Access requires small App Download fee and small monthly prescription.
+PC version is free open source. Mobile Access requires a small App Download fee and a small monthly user subscription cost.
 
 ---
 
