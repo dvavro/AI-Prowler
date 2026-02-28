@@ -1,8 +1,8 @@
-# 🔍 AI Prowler — Personal AI Knowledge Base
+# 🔍 AI Prowler — Personal AI Knowledge Base (PC version free for Win 10/11)
 
 **Ask questions about YOUR documents using AI — running locally on your Windows PC**
 
-No API keys required &nbsp;•&nbsp; No cloud services &nbsp;•&nbsp; No subscription &nbsp;•&nbsp; Complete privacy
+No API keys required for local AI &nbsp;•&nbsp; No cloud services for local AI &nbsp;•&nbsp; No subscription for local use &nbsp;•&nbsp; Complete privacy
 
 ---
 
@@ -215,7 +215,7 @@ See the **[Releases page](../../releases)** for full version history and release
 
 ## ⚖️ License
 
-See [LICENSE](LICENSE) for details.
+PC version is free open source. Mobile Access requires small App Download fee and small monthly prescription.
 
 ---
 
