@@ -414,65 +414,7 @@ echo STEP 3/6: Checking Ollama
 echo ============================================================
 echo.
 
-where ollama >nul 2>&1
-if errorlevel 1 (
-    echo [INFO] Ollama not found - installing automatically...
-    echo.
-    call :INSTALL_OLLAMA
-) else (
-    echo [OK] Ollama found
-    echo.
-
-    REM Refresh PATH so ollama is usable in this session
-    for /f "usebackq delims=" %%p in (`powershell -NoProfile -Command "[System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User')"`) do set "PATH=%%p"
-
-    REM Check if Ollama is running
-    curl -s http://localhost:11434/api/tags >nul 2>&1
-    if errorlevel 1 (
-        echo Starting Ollama server...
-        start /B ollama serve >nul 2>&1
-        timeout /t 5 /nobreak >nul
-    )
-    
-    REM Download llama3.2:1b model if Ollama is available
-    echo Checking for llama3.2:1b model...
-    ollama list | findstr "llama3.2:1b" >nul 2>&1
-    if errorlevel 1 (
-        echo.
-        echo Downloading llama3.2:1b model (~1.3 GB)
-        echo This is a one-time download and may take 5-10 minutes...
-        echo.
-        echo Downloading (please wait)...
-        echo.
-        
-        REM Download with progress feedback
-        REM Start download in background
-        start /min cmd /c "ollama pull llama3.2:1b >nul 2>&1"
-        
-        REM Wait and show we're working
-        for /l %%i in (1,1,60) do (
-            <nul set /p "=."
-            timeout /t 5 /nobreak >nul
-            
-            REM Check if download complete
-            ollama list 2>nul | findstr "llama3.2:1b" >nul 2>&1
-            if not errorlevel 1 goto MODEL_COMPLETE
-        )
-        
-        :MODEL_COMPLETE
-        echo.
-        echo.
-        if errorlevel 1 (
-            echo [WARN] Model download failed or was interrupted
-            echo You can download it later with: ollama pull llama3.2:1b
-        ) else (
-            echo [OK] Model downloaded successfully
-        )
-    ) else (
-        echo [OK] Model already available
-    )
-    echo.
-)
+call :CHECK_OLLAMA
 
 REM ============================================================
 REM STEP 4: System Configuration
@@ -680,6 +622,52 @@ goto :EOF
 REM ============================================================
 REM Helper Subroutine: Install Ollama
 REM ============================================================
+
+REM ============================================================
+REM Helper Subroutine: Check and setup Ollama
+REM ============================================================
+:CHECK_OLLAMA
+where ollama >nul 2>&1
+if errorlevel 1 (
+    echo [INFO] Ollama not found - installing automatically...
+    echo.
+    call :INSTALL_OLLAMA
+    goto :CHECK_OLLAMA_DONE
+)
+
+echo [OK] Ollama found
+echo.
+
+REM Refresh PATH so ollama is usable in this session
+for /f "usebackq delims=" %%p in (`powershell -NoProfile -Command "[System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User')"`) do set "PATH=%%p"
+
+REM Start Ollama server if not running
+curl -s http://localhost:11434/api/tags >nul 2>&1
+if errorlevel 1 (
+    echo Starting Ollama server...
+    start /B ollama serve >nul 2>&1
+    timeout /t 5 /nobreak >nul
+)
+
+REM Download model if needed
+echo Checking for llama3.2:1b model...
+ollama list | findstr "llama3.2:1b" >nul 2>&1
+if errorlevel 1 (
+    echo.
+    echo Downloading llama3.2:1b model (~1.3 GB)
+    echo This is a one-time download and may take 5-10 minutes...
+    echo.
+    ollama pull llama3.2:1b
+    echo.
+    echo [OK] Model downloaded successfully
+) else (
+    echo [OK] Model already available
+)
+echo.
+
+:CHECK_OLLAMA_DONE
+goto :EOF
+
 :INSTALL_OLLAMA
 setlocal
 echo.

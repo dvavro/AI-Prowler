@@ -22,3 +22,7 @@ requests>=2.31.0
 numpy>=1.24.0
 faster-whisper>=1.0.0
 sounddevice>=0.4.6
+
+# ── GPU acceleration (auto-installed by INSTALL.bat) ──────────────────────────
+# torch is installed automatically with the correct CUDA version by INSTALL.bat
+# To install manually: pip install torch --index-url https://download.pytorch.org/whl/cu128
