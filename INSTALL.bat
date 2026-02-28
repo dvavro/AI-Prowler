@@ -1,4 +1,5 @@
 @echo off
+setlocal enabledelayedexpansion
 REM Keep window open if double-clicked
 if "%1"=="" (
     cmd /k "%~f0" RUN
@@ -180,6 +181,69 @@ if errorlevel 1 (
 
 echo.
 
+
+REM ============================================================
+REM STEP 1.5: Detect GPU and Install PyTorch
+REM ============================================================
+echo ============================================================
+echo STEP 1.5/6: Detecting GPU and Installing PyTorch
+echo ============================================================
+echo.
+
+set "TORCH_INSTALLED=0"
+set "CUDA_VER=cpu"
+
+REM Check if nvidia-smi is available
+where nvidia-smi >nul 2>&1
+if errorlevel 1 (
+    echo [INFO] No NVIDIA GPU detected - will use CPU for embeddings
+    echo.
+    echo Installing PyTorch CPU version...
+    python -m pip install torch torchvision torchaudio --prefer-binary --no-warn-script-location
+    set "TORCH_INSTALLED=1"
+    goto :TORCH_DONE
+)
+
+REM NVIDIA GPU found - detect CUDA version
+echo [OK] NVIDIA GPU detected!
+for /f "tokens=3" %%v in ('nvidia-smi ^| findstr "CUDA Version"') do set "CUDA_FULL=%%v"
+echo      CUDA Version: %CUDA_FULL%
+
+REM Parse major version
+for /f "tokens=1 delims=." %%a in ("%CUDA_FULL%") do set "CUDA_MAJOR=%%a"
+
+echo.
+echo Installing PyTorch with CUDA %CUDA_FULL% support...
+echo This may take 5-10 minutes (~2-3 GB download)...
+echo.
+
+REM Select correct CUDA wheel based on major version
+if %CUDA_MAJOR% GEQ 12 (
+    REM Check for 12.8+
+    for /f "tokens=2 delims=." %%b in ("%CUDA_FULL%") do set "CUDA_MINOR=%%b"
+    if !CUDA_MINOR! GEQ 8 (
+        echo [INFO] Using CUDA 12.8 wheels (cu128^)
+        python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128 --prefer-binary --no-warn-script-location
+    ) else (
+        echo [INFO] Using CUDA 12.1 wheels (cu121^)
+        python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 --prefer-binary --no-warn-script-location
+    )
+) else (
+    echo [INFO] Using CUDA 11.8 wheels (cu118^)
+    python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 --prefer-binary --no-warn-script-location
+)
+
+set "TORCH_INSTALLED=1"
+echo.
+
+:TORCH_DONE
+if %TORCH_INSTALLED%==1 (
+    python -c "import torch; print('[OK] PyTorch', torch.__version__, '- CUDA available:', torch.cuda.is_available())" 2>nul
+) else (
+    echo [WARN] PyTorch installation skipped - embeddings will use CPU
+)
+echo.
+
 REM ============================================================
 REM STEP 2: Install Python Dependencies
 REM ============================================================
@@ -352,36 +416,9 @@ echo.
 
 where ollama >nul 2>&1
 if errorlevel 1 (
-    echo [WARN] Ollama not found
+    echo [INFO] Ollama not found - installing automatically...
     echo.
-    echo Ollama is required for the LLM functionality.
-    echo.
-    echo ============================================================
-    echo OLLAMA INSTALLATION
-    echo ============================================================
-    echo.
-    echo Option 1: Auto-install Ollama (Recommended)
-    echo   - Downloads and installs Ollama automatically
-    echo   - No browser or manual steps required
-    echo   - Quick and easy (30-60 seconds)
-    echo.
-    echo Option 2: Continue without Ollama
-    echo   - Indexing will work
-    echo   - Queries will NOT work until Ollama is installed
-    echo   - You can install Ollama later
-    echo.
-    set /P "OLLAMA_CHOICE=Install Ollama now? (y/n): "
-    
-    if /I "%OLLAMA_CHOICE%"=="y" (
-        call :INSTALL_OLLAMA
-    ) else (
-        echo.
-        echo [INFO] Continuing without Ollama
-        echo.
-        echo You can install it later from: https://ollama.com/download/windows
-        echo After installing, run: ollama pull llama3.2:1b
-        echo.
-    )
+    call :INSTALL_OLLAMA
 ) else (
     echo [OK] Ollama found
     echo.
