@@ -534,6 +534,8 @@ class RAGGui:
         
         # Debug output checkbox var
         self.debug_output_var    = tk.BooleanVar(value=False)
+        # Debug View — show DOS/console windows in foreground (default: hidden)
+        self.debug_view_var      = tk.BooleanVar(value=False)
 
         # ── Ollama status ────────────────────────────────────────────────────
         self._ollama_ready       = False   # True = model loaded and warmed
@@ -556,6 +558,11 @@ class RAGGui:
         self.mic_silence_var = tk.DoubleVar(value=3.0)
         # Mic insertion mode: True = append to existing text, False = replace (clear first)
         self.mic_mode_append = tk.BooleanVar(value=True)
+
+        # File attachments for questions (images + text files)
+        self._attached_files = []   # list of dicts: {path, name, type}
+        # File output mode — tells LLM to tag output files for auto-detection
+        self.file_output_mode_var = tk.BooleanVar(value=True)   # ON by default
 
         # Index queue — list of (directory_path, recursive) tuples
         self._index_queue = []
@@ -644,6 +651,9 @@ class RAGGui:
                     self.debug_output_var.set(debug_output)
                     if RAG_AVAILABLE:
                         _rag_engine.DEBUG_OUTPUT = debug_output
+                    # Load debug_view — default False (background/hidden windows)
+                    debug_view = config.get('debug_view', False)
+                    self.debug_view_var.set(debug_view)
                     # Load gpu_layers — default -1 (auto)
                     gpu_layers = config.get('gpu_layers', -1)
                     self.gpu_layers_var.set(gpu_layers)
@@ -1035,20 +1045,51 @@ or from the Help menu."""
         self.index_output.pack(fill='both', expand=True, padx=20, pady=(0, 5))
     
     def create_query_tab(self):
-        """Create query tab"""
-        query_frame = ttk.Frame(self.notebook)
-        self.notebook.add(query_frame, text="🔍 Ask Questions")
-        
+        """Create query tab — fully scrollable pane."""
+        # ── Outer tab frame holds the canvas + scrollbar ──────────────────────
+        outer = ttk.Frame(self.notebook)
+        self.notebook.add(outer, text="🔍 Ask Questions")
+
+        vscroll = ttk.Scrollbar(outer, orient='vertical')
+        vscroll.pack(side='right', fill='y')
+
+        self._query_canvas = tk.Canvas(outer, highlightthickness=0,
+                                       yscrollcommand=vscroll.set)
+        self._query_canvas.pack(side='left', fill='both', expand=True)
+        vscroll.configure(command=self._query_canvas.yview)
+
+        # Inner frame — all content lives here
+        query_frame = ttk.Frame(self._query_canvas)
+        _qf_win = self._query_canvas.create_window((0, 0), window=query_frame,
+                                                    anchor='nw')
+
+        # Keep inner frame width equal to canvas width
+        def _on_canvas_resize(e):
+            self._query_canvas.itemconfig(_qf_win, width=e.width)
+        self._query_canvas.bind('<Configure>', _on_canvas_resize)
+
+        # Update scrollregion whenever inner content changes size
+        def _on_frame_resize(e):
+            self._query_canvas.configure(
+                scrollregion=self._query_canvas.bbox('all'))
+        query_frame.bind('<Configure>', _on_frame_resize)
+
+        # Mouse-wheel scrolling (Windows & macOS)
+        def _on_mousewheel(e):
+            self._query_canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units')
+        self._query_canvas.bind('<MouseWheel>', _on_mousewheel)
+        # Activate canvas scrolling only when the mouse is NOT over the answer box
+        # (so the answer box can still be scrolled internally)
+        self._query_scroll_cmd = _on_mousewheel
+
         # Title
-        title = ttk.Label(query_frame, text="Ask Your AI Questions", 
-                         font=('Arial', 16, 'bold'))
-        title.pack(pady=10)
-        
-        # Question input
+        ttk.Label(query_frame, text="Ask Your AI Questions",
+                  font=('Arial', 16, 'bold')).pack(pady=10)
+
+        # ── Question input ────────────────────────────────────────────────────
         question_frame = ttk.LabelFrame(query_frame, text="Your Question", padding=10)
         question_frame.pack(fill='x', padx=20, pady=10)
 
-        # Multi-line scrollable question text box
         text_frame = ttk.Frame(question_frame)
         text_frame.pack(fill='x', padx=5, pady=(5, 0))
 
@@ -1060,78 +1101,84 @@ or from the Help menu."""
         self.question_text.pack(side='left', fill='x', expand=True)
         q_scrollbar.pack(side='left', fill='y')
 
-        # Ctrl+Enter submits; plain Enter inserts a newline (expected in multi-line box)
         self.question_text.bind('<Control-Return>', lambda e: self.start_query())
         self.question_text.bind('<Control-KP_Enter>', lambda e: self.start_query())
 
-        # Hint label (Ctrl+Enter shortcut reminder)
         ttk.Label(question_frame,
                   text="Tip: press Ctrl+Enter to submit  |  Enter adds a new line",
                   font=('Arial', 8), foreground='gray').pack(anchor='w', padx=6, pady=(1, 0))
 
-        # Mic button row — only shown if faster-whisper + sounddevice are installed
+        # Mic row (only if faster-whisper + sounddevice installed)
         if SPEECH_AVAILABLE:
             mic_row = ttk.Frame(question_frame)
             mic_row.pack(fill='x', padx=5, pady=(4, 2))
 
             self._mic_btn_text = tk.StringVar(value="🎤")
             self._mic_btn = tk.Button(
-                mic_row,
-                textvariable=self._mic_btn_text,
-                font=('Arial', 13),
-                width=3,
-                relief='flat',
-                bg='#e8e8e8',
-                activebackground='#d0d0d0',
-                cursor='hand2',
-                command=self._toggle_mic
-            )
+                mic_row, textvariable=self._mic_btn_text,
+                font=('Arial', 13), width=3, relief='flat',
+                bg='#e8e8e8', activebackground='#d0d0d0',
+                cursor='hand2', command=self._toggle_mic)
             self._mic_btn.pack(side='left', padx=(0, 8))
 
-            # Append / Replace mode toggle
-            ttk.Checkbutton(
-                mic_row,
-                text="Append (add to existing text)",
-                variable=self.mic_mode_append
-            ).pack(side='left', padx=(0, 12))
-
-            ttk.Button(
-                mic_row,
-                text="🗑 Clear Question",
-                command=self._clear_question
-            ).pack(side='left')
+            ttk.Checkbutton(mic_row, text="Append (add to existing text)",
+                            variable=self.mic_mode_append).pack(side='left', padx=(0, 12))
+            ttk.Button(mic_row, text="🗑 Clear Question",
+                       command=self._clear_question).pack(side='left')
 
             self._mic_status_var = tk.StringVar(value="")
             ttk.Label(question_frame, textvariable=self._mic_status_var,
                       font=('Arial', 9), foreground='gray').pack(anchor='w', padx=6)
-        
-        # Query options
+
+        # ── Attachments area ──────────────────────────────────────────────────
+        attach_lf = ttk.LabelFrame(query_frame,
+                                   text="📎 Attachments  (images, code, text files)",
+                                   padding=(8, 4))
+        attach_lf.pack(fill='x', padx=20, pady=(0, 6))
+
+        attach_btn_row = ttk.Frame(attach_lf)
+        attach_btn_row.pack(fill='x')
+        ttk.Button(attach_btn_row, text="📎 Attach Files…",
+                   command=self._attach_files).pack(side='left', padx=(0, 8))
+        ttk.Button(attach_btn_row, text="🗑 Clear All",
+                   command=self._clear_attachments).pack(side='left', padx=(0, 16))
+
+        fom_row = ttk.Frame(attach_lf)
+        fom_row.pack(fill='x', pady=(6, 2))
+        self._fom_check = ttk.Checkbutton(fom_row, text="📄 File Output Mode",
+                                          variable=self.file_output_mode_var)
+        self._fom_check.pack(side='left', padx=(0, 8))
+        ttk.Label(fom_row,
+                  text="When ticked: AI will label every code/script it writes with a filename "
+                       "so a 💾 Save button appears automatically — no copy/paste needed.",
+                  font=('Arial', 8), foreground='#555555',
+                  wraplength=620, justify='left').pack(side='left')
+
+        self._attach_display = ttk.Frame(attach_lf)
+        self._attach_display.pack(fill='x', pady=(4, 0))
+        self._attach_hint_var = tk.StringVar(
+            value="No files attached  •  Attach images or files to include them in your question")
+        ttk.Label(attach_lf, textvariable=self._attach_hint_var,
+                  font=('Arial', 8), foreground='gray').pack(anchor='w', pady=(2, 0))
+
+        # ── Context chunks + provider selector ───────────────────────────────
         options_frame = ttk.Frame(query_frame)
         options_frame.pack(fill='x', padx=20, pady=5)
-        
+
         ttk.Label(options_frame, text="Context chunks:").pack(side='left', padx=5)
-        
         self.chunks_var = tk.StringVar(value="Auto (3)")
         chunks_combo = ttk.Combobox(options_frame, textvariable=self.chunks_var,
-                                    values=[
-                                        "Auto (3)",
-                                        "1", "2", "3", "4", "5", "6",
-                                        "7 ⚠reload", "10 ⚠reload",
-                                        "15 ⚠reload", "20 ⚠reload",
-                                    ],
+                                    values=["Auto (3)", "1", "2", "3", "4", "5", "6",
+                                            "7 ⚠reload", "10 ⚠reload",
+                                            "15 ⚠reload", "20 ⚠reload"],
                                     width=14, state='readonly')
         chunks_combo.pack(side='left', padx=5)
-        # Re-prewarm whenever the user changes chunk count — ensures the model
-        # is loaded at the right num_ctx before the next query.
         chunks_combo.bind('<<ComboboxSelected>>', self._on_chunks_changed)
-        
-        # ── Provider selector ────────────────────────────────────────────────
+
         provider_frame = ttk.Frame(options_frame)
         provider_frame.pack(side='left', padx=(12, 0))
-
         ttk.Label(provider_frame, text="AI Provider:").pack(side='left', padx=(0, 4))
 
-        # Coloured status circle
         self._prov_light_canvas = tk.Canvas(provider_frame, width=14, height=14,
                                             highlightthickness=0,
                                             bg=self.root.cget('bg'))
@@ -1139,15 +1186,13 @@ or from the Help menu."""
         self._prov_light = self._prov_light_canvas.create_oval(
             1, 1, 13, 13, fill='#aaaaaa', outline='#888888', width=1)
 
-        # Build display list: "ChatGPT (OpenAI)", "Local Ollama", etc.
-        self._provider_ids  = list(EXTERNAL_PROVIDERS.keys()) if RAG_AVAILABLE else ['local']
+        self._provider_ids    = list(EXTERNAL_PROVIDERS.keys()) if RAG_AVAILABLE else ['local']
         self._provider_labels = []
         for pid in self._provider_ids:
             p = EXTERNAL_PROVIDERS[pid]
-            if pid == 'local':
-                self._provider_labels.append(f"Local Ollama  [{self.current_model.get()}]")
-            else:
-                self._provider_labels.append(f"{p['name']}  ({p['maker']})")
+            self._provider_labels.append(
+                f"Local Ollama  [{self.current_model.get()}]" if pid == 'local'
+                else f"{p['name']}  ({p['maker']})")
 
         self._provider_var = tk.StringVar(value=self._provider_labels[0])
         self._provider_combo = ttk.Combobox(provider_frame,
@@ -1157,73 +1202,97 @@ or from the Help menu."""
         self._provider_combo.pack(side='left')
         self._provider_combo.bind('<<ComboboxSelected>>', self._on_provider_changed)
 
-        # Timeout/status note next to dropdown
         self._provider_status_var = tk.StringVar(value="")
         ttk.Label(provider_frame, textvariable=self._provider_status_var,
                   font=('Arial', 8), foreground='gray').pack(side='left', padx=(4, 0))
 
-        # Kick off the initial light update
         self.root.after(500, self._refresh_provider_light)
-        
-        # ── Action row: Ask + Load button + status light ─────────────────────
+
+        # ── Action row ───────────────────────────────────────────────────────
         action_row = ttk.Frame(query_frame)
         action_row.pack(fill='x', padx=20, pady=(8, 4))
 
         query_btn = ttk.Button(action_row, text="Ask Question",
-                               command=self.start_query,
-                               style='Accent.TButton')
+                               command=self.start_query, style='Accent.TButton')
         query_btn.pack(side='left', padx=(0, 6))
 
         self._stop_query_btn = ttk.Button(action_row, text="⏹ Stop",
-                                          command=self._stop_query,
-                                          state='disabled')
+                                          command=self._stop_query, state='disabled')
         self._stop_query_btn.pack(side='left', padx=(0, 12))
+
+        ttk.Button(action_row, text="💾 Save Answer",
+                   command=self._save_answer).pack(side='left', padx=(0, 8))
 
         self._load_model_btn = ttk.Button(action_row, text="⚡ Load AI Model",
                                           command=self._load_ollama_manual)
         self._load_model_btn.pack(side='left', padx=(0, 10))
 
-        # Status indicator — coloured circle canvas
         self._ollama_light_canvas = tk.Canvas(action_row, width=18, height=18,
                                               highlightthickness=0,
                                               bg=self.root.cget('bg'))
         self._ollama_light_canvas.pack(side='left', padx=(0, 4))
         self._ollama_light = self._ollama_light_canvas.create_oval(
-            2, 2, 16, 16, fill='#aaaaaa', outline='#888888', width=1
-        )
+            2, 2, 16, 16, fill='#aaaaaa', outline='#888888', width=1)
 
         self._ollama_status_var = tk.StringVar(value="● Model not loaded")
         self._ollama_status_lbl = ttk.Label(action_row,
                                             textvariable=self._ollama_status_var,
-                                            font=('Arial', 9),
-                                            foreground='#888888')
+                                            font=('Arial', 9), foreground='#888888')
         self._ollama_status_lbl.pack(side='left')
 
-        # Progress bar + elapsed time label side by side
+        # ── Progress bar + elapsed timer ──────────────────────────────────────
         progress_row = ttk.Frame(query_frame)
         progress_row.pack(fill='x', padx=20, pady=(5, 0))
-        
+
         self.query_progress = ttk.Progressbar(progress_row, mode='indeterminate')
         self.query_progress.pack(side='left', fill='x', expand=True)
-        
+
         self.query_elapsed_var = tk.StringVar(value="")
-        elapsed_label = ttk.Label(progress_row, textvariable=self.query_elapsed_var,
-                                  font=('Arial', 9), foreground='gray', width=14,
-                                  anchor='e')
-        elapsed_label.pack(side='left', padx=(8, 0))
-        
-        self._query_timer_id = None   # holds the .after() handle
+        ttk.Label(progress_row, textvariable=self.query_elapsed_var,
+                  font=('Arial', 9), foreground='gray', width=14,
+                  anchor='e').pack(side='left', padx=(8, 0))
+
+        self._query_timer_id   = None
         self._query_start_time = None
-        
-        # Answer
-        answer_label = ttk.Label(query_frame, text="Answer:")
-        answer_label.pack(anchor='w', padx=20)
-        
-        self.answer_output = scrolledtext.ScrolledText(query_frame, height=18, 
+
+        # ── Detected files panel ──────────────────────────────────────────────
+        # Container is ALWAYS packed here — never moved.
+        # Only the LabelFrame inside is shown/hidden so pack order is preserved.
+        self._detected_files_container = ttk.Frame(query_frame)
+        self._detected_files_container.pack(fill='x', padx=20)
+
+        self._detected_files_frame = ttk.LabelFrame(
+            self._detected_files_container,
+            text="📁 Files in Answer", padding=8)
+        # NOT packed yet — shown by _show_detected_files()
+
+        _df_header = ttk.Frame(self._detected_files_frame)
+        _df_header.pack(fill='x', pady=(0, 4))
+        ttk.Label(_df_header, text="Click 💾 Save to download each file.",
+                  font=('Arial', 8), foreground='#555555').pack(side='left')
+        ttk.Button(_df_header, text="✕ Clear",
+                   command=self._clear_detected_files).pack(side='right')
+
+        self._detected_files_inner = ttk.Frame(self._detected_files_frame)
+        self._detected_files_inner.pack(fill='x')
+
+        # ── Answer box ────────────────────────────────────────────────────────
+        # Fixed height (scrollable internally); outer canvas scrolls the whole tab
+        ttk.Label(query_frame, text="Answer:").pack(anchor='w', padx=20)
+        self.answer_output = scrolledtext.ScrolledText(query_frame, height=22,
                                                        wrap=tk.WORD,
                                                        font=('Arial', 11))
-        self.answer_output.pack(fill='both', expand=True, padx=20, pady=5)
-    
+        self.answer_output.pack(fill='x', padx=20, pady=5)
+
+        # When mouse is over answer box, let it scroll internally.
+        # When mouse leaves, restore canvas scrolling.
+        def _bind_answer_scroll(e):
+            self.answer_output.unbind('<MouseWheel>')   # use default Text scrolling
+        def _unbind_answer_scroll(e):
+            pass  # canvas mousewheel binding already active for everything else
+        self.answer_output.bind('<Enter>', _bind_answer_scroll)
+
+
     def create_update_tab(self):
         """Create update tab"""
         update_frame = ttk.Frame(self.notebook)
@@ -2097,6 +2166,17 @@ this application is closed."""
         )
         debug_check.pack(side='left', anchor='w')
 
+        # Debug View checkbox — on its own row so it doesn't get cramped
+        debug_view_row = ttk.Frame(output_frame)
+        debug_view_row.pack(fill='x', pady=(4, 0))
+        debug_view_check = ttk.Checkbutton(
+            debug_view_row,
+            text="Debug View  (view DOS windows in foreground — uncheck to hide them in background)",
+            variable=self.debug_view_var,
+            command=self._on_debug_view_change
+        )
+        debug_view_check.pack(side='left', anchor='w')
+
         # ── Microphone Settings ───────────────────────────────────────────────
         if SPEECH_AVAILABLE:
             mic_frame = ttk.LabelFrame(scrollable_frame, text="Microphone / Speech Input", padding=(10, 6))
@@ -2276,15 +2356,7 @@ Built with Python, ChromaDB, and Ollama"""
         needed_ctx = max(8192, math.ceil(estimated_tokens / 1024) * 1024)
         default_ctx = get_model_num_ctx(self.current_model.get()) if RAG_AVAILABLE else 8192
 
-        if needed_ctx != default_ctx:
-            self.status_var.set(
-                f"⚠️  {n_chunks} chunks needs num_ctx={needed_ctx} — "
-                f"reloading model (CPU: ~2-5 min) — wait for green light"
-            )
-        else:
-            self.status_var.set(
-                f"✅ {n_chunks} chunks fits in num_ctx={default_ctx} — loading model…"
-            )
+        # Status messages for chunk changes suppressed — prewarm runs silently
 
         # Reset warmup — new chunk count means the model will reload
         self._warmup_reset()
@@ -2330,14 +2402,28 @@ Built with Python, ChromaDB, and Ollama"""
             # CREATE_NEW_CONSOLE opens a separate window
             # The window stays open so user can see server logs
             if sys.platform == 'win32':
-                print("  → Creating new CMD window...")
-                self._ollama_process = subprocess.Popen(
-                    ['ollama', 'serve'],
-                    creationflags=subprocess.CREATE_NEW_CONSOLE
-                )
-                print(f"  → CMD window created!")
+                if self.debug_view_var.get():
+                    # Debug View ON — visible CMD window for server log inspection
+                    print("  → Creating visible CMD window (Debug View mode)...")
+                    self._ollama_process = subprocess.Popen(
+                        ['ollama', 'serve'],
+                        creationflags=subprocess.CREATE_NEW_CONSOLE
+                    )
+                    print("  → CMD window visible on desktop.")
+                else:
+                    # Debug View OFF — completely hidden, no CMD window on desktop
+                    print("  → Starting Ollama silently in background...")
+                    _si = subprocess.STARTUPINFO()
+                    _si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    _si.wShowWindow = 0   # SW_HIDE
+                    self._ollama_process = subprocess.Popen(
+                        ['ollama', 'serve'],
+                        startupinfo=_si,
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                    )
+                    print("  → Ollama running silently (no CMD window).")
             else:
-                # For Linux/Mac, start in background
+                # Linux/Mac — always background
                 self._ollama_process = subprocess.Popen(
                     ['ollama', 'serve'],
                     stdout=subprocess.DEVNULL,
@@ -3127,6 +3213,50 @@ Built with Python, ChromaDB, and Ollama"""
             # Strip warning suffix e.g. "7 ⚠reload" → 7
             n_contexts = int(chunks_str.split()[0])
 
+        # ── Build final question: embed text-file contents + file-output instructions ──
+        final_question = question
+        images_b64 = []
+        text_attachments = []
+        for f in self._attached_files:
+            if f['type'] == 'image':
+                try:
+                    import base64
+                    with open(f['path'], 'rb') as fh:
+                        images_b64.append(base64.b64encode(fh.read()).decode('utf-8'))
+                except Exception as e:
+                    self.status_var.set(f"⚠ Could not read image {f['name']}: {e}")
+            else:  # text / code / PDF text
+                try:
+                    text = Path(f['path']).read_text(encoding='utf-8', errors='replace')
+                    text_attachments.append(f"\n\n--- Attached file: {f['name']} ---\n{text}\n--- End of {f['name']} ---")
+                except Exception as e:
+                    self.status_var.set(f"⚠ Could not read {f['name']}: {e}")
+        if text_attachments:
+            final_question = question + ''.join(text_attachments)
+        if images_b64 and not text_attachments:
+            final_question = question + '\n\n[User has attached image(s) — please analyse and describe them.]'
+        # File Output Mode: when ticked, prepend filename-tagging instructions
+        # so the LLM wraps every output file in a named code fence.
+        # AI Prowler then detects those fences and shows a Save button per file.
+        if self.file_output_mode_var.get():
+            final_question = (
+                "IMPORTANT: When producing any code, scripts, or files in your answer, "
+                "wrap EACH file in a markdown code fence with its filename on the opening line, "
+                "like this:\n"
+                "```python my_script.py\n"
+                "# code here\n"
+                "```\n"
+                "Always include the filename so it can be auto-detected and saved.\n\n"
+            ) + final_question
+
+        # Clear detected files panel completely before each new query
+        for w in self._detected_files_inner.winfo_children():
+            w.destroy()
+        self._detected_files_frame.pack_forget()
+        # Collapse container to zero height — restored when new files are detected
+        self._detected_files_container.configure(height=1)
+        self._detected_files_container.pack_propagate(False)
+
         # Reset cancel so future idle prewarming works again after query finishes
         self._prewarm_cancel = False
         # Reset stop flag and mark query as running — enables Stop button
@@ -3135,7 +3265,7 @@ Built with Python, ChromaDB, and Ollama"""
         self._query_running = True
         self._stop_query_btn.configure(state='normal')
         thread = threading.Thread(target=self.query_worker,
-                                  args=(question, n_contexts), daemon=True)
+                                  args=(final_question, n_contexts, images_b64), daemon=True)
         thread.start()
 
     def _stop_query(self):
@@ -3184,15 +3314,16 @@ Built with Python, ChromaDB, and Ollama"""
 
         threading.Thread(target=_worker, daemon=True).start()
     
-    def query_worker(self, question, n_contexts):
+    def query_worker(self, question, n_contexts, images_b64=None):
         """Worker thread for querying"""
         old_stdout = sys.stdout
         try:
             # Redirect output
             sys.stdout = TextRedirector(self.output_queue, 'query')
             
-            # Query
-            rag_query(question, n_contexts=n_contexts, verbose=True)
+            # Query — pass images if attached
+            rag_query(question, n_contexts=n_contexts, verbose=True,
+                      images_b64=images_b64 if images_b64 else None)
             
             self.output_queue.put(('status', 'Query complete!'))
             self.output_queue.put(('done', 'query'))
@@ -3537,6 +3668,225 @@ Built with Python, ChromaDB, and Ollama"""
         # Scroll to top so first line is always visible
         self.gpu_status_text.see('1.0')
 
+    # ── Attachment management ─────────────────────────────────────────────────
+
+    def _attach_files(self):
+        """Open file dialog and add selected files to the attachment list."""
+        paths = filedialog.askopenfilenames(
+            title="Attach files to your question",
+            filetypes=[("All files", "*.*")]
+        )
+        image_exts = {'.png','.jpg','.jpeg','.gif','.bmp','.webp','.tiff'}
+        for p in paths:
+            path = Path(p)
+            ftype = 'image' if path.suffix.lower() in image_exts else 'text'
+            # Avoid duplicates
+            if not any(f['path'] == str(path) for f in self._attached_files):
+                self._attached_files.append({'path': str(path), 'name': path.name, 'type': ftype})
+        self._refresh_attach_display()
+
+    def _clear_attachments(self):
+        """Remove all attached files."""
+        self._attached_files.clear()
+        self._refresh_attach_display()
+
+    def _remove_attachment(self, idx):
+        """Remove a single attached file by index."""
+        if 0 <= idx < len(self._attached_files):
+            self._attached_files.pop(idx)
+        self._refresh_attach_display()
+
+    def _refresh_attach_display(self):
+        """Rebuild the attachment chip display row."""
+        for w in self._attach_display.winfo_children():
+            w.destroy()
+        if not self._attached_files:
+            self._attach_hint_var.set(
+                "No files attached  •  Attach images or files to include them in your question")
+            return
+        n = len(self._attached_files)
+        self._attach_hint_var.set(f"{n} file{'s' if n != 1 else ''} attached:")
+        for i, f in enumerate(self._attached_files):
+            icon = "🖼" if f['type'] == 'image' else "📄"
+            chip = ttk.Frame(self._attach_display, relief='groove', padding=(4, 2))
+            chip.pack(side='left', padx=(0, 6), pady=2)
+            ttk.Label(chip, text=f"{icon} {f['name']}",
+                      font=('Arial', 9)).pack(side='left', padx=(0, 4))
+            ttk.Button(chip, text="✕", width=2,
+                       command=lambda i=i: self._remove_attachment(i)).pack(side='left')
+
+    # ── File output detection ─────────────────────────────────────────────────
+
+    def _scan_answer_for_files(self):
+        """Scan the answer box for fenced code blocks that include a filename.
+
+        Matches patterns like:
+          ```python my_script.py      <- language + filename (most common)
+          ```my_script.py             <- filename only (no language)
+          ### FILE: name.ext ###      <- explicit file marker
+
+        Two separate patterns are used so that command-line examples such as:
+            ```
+            python hello_world.py
+            ```
+        are NOT falsely detected as files (no spaces allowed in filenames).
+
+        Returns list of (filename, content) tuples, deduped by filename.
+        """
+        import re
+        answer = self.answer_output.get('1.0', 'end-1c')
+        found = []
+        seen  = set()
+
+        # Pattern A: ```<language> <filename.ext>\n code ```
+        # Requires a language word before the filename — no spaces in filename.
+        # This correctly rejects  ```\npython hello_world.py\n```  (command example).
+        pA = re.compile(
+            r'```[\w+\-#.]+\s+([\w.\-]+\.\w+)\s*\n(.*?)```',
+            re.DOTALL)
+        for m in pA.finditer(answer):
+            fname   = m.group(1).strip()
+            content = m.group(2)
+            # Must have actual code content, not just whitespace
+            if fname not in seen and content.strip():
+                found.append((fname, content))
+                seen.add(fname)
+
+        # Pattern B: ```<filename.ext>\n code ```
+        # Filename-only fence (no language prefix).
+        pB = re.compile(
+            r'```([\w.\-]+\.\w+)\s*\n(.*?)```',
+            re.DOTALL)
+        for m in pB.finditer(answer):
+            fname   = m.group(1).strip()
+            content = m.group(2)
+            if fname not in seen and content.strip():
+                found.append((fname, content))
+                seen.add(fname)
+
+        # Pattern C: ### FILE: name.ext ### ... ### END FILE ###
+        pC = re.compile(
+            r'###\s*FILE:\s*([\w.\-/\\ ]+\.\w+)\s*###\n?(.*?)###\s*END\s*FILE\s*###',
+            re.DOTALL | re.IGNORECASE)
+        for m in pC.finditer(answer):
+            fname   = m.group(1).strip()
+            content = m.group(2)
+            if fname not in seen:
+                found.append((fname, content))
+                seen.add(fname)
+
+        return found
+
+    def _show_detected_files(self, files):
+        """Populate and show the detected-files panel; hide it if no files found."""
+        for w in self._detected_files_inner.winfo_children():
+            w.destroy()
+
+        if not files:
+            self._detected_files_frame.pack_forget()
+            # Collapse container to zero height so no gap appears
+            self._detected_files_container.configure(height=1)
+            self._detected_files_container.pack_propagate(False)
+            return
+
+        ICONS = {'.py':'🐍', '.js':'📜', '.ts':'📜', '.html':'🌐', '.css':'🎨',
+                 '.json':'{}', '.md':'📝', '.txt':'📄', '.sql':'🗄',
+                 '.sh':'⚙', '.bat':'⚙', '.csv':'📊', '.yaml':'⚙', '.yml':'⚙',
+                 '.xml':'📋', '.jsx':'📜', '.tsx':'📜', '.vue':'📜',
+                 '.rb':'💎', '.go':'🐹', '.rs':'🦀', '.cpp':'⚙', '.c':'⚙',
+                 '.java':'☕', '.kt':'📱', '.swift':'🍎', '.ps1':'⚙'}
+
+        for fname, content in files:
+            ext  = Path(fname).suffix.lower()
+            icon = ICONS.get(ext, '📄')
+            row  = ttk.Frame(self._detected_files_inner)
+            row.pack(fill='x', pady=3)
+
+            ttk.Label(row, text=f"{icon} {fname}",
+                      font=('Arial', 10, 'bold')).pack(side='left', padx=(0, 10))
+            lines = len(content.splitlines())
+            ttk.Label(row, text=f"({lines} line{'s' if lines != 1 else ''})",
+                      font=('Arial', 9), foreground='gray').pack(side='left', padx=(0, 12))
+
+            _f, _c = fname, content   # capture for lambdas
+            ttk.Button(row, text="💾 Save File",
+                       command=lambda f=_f, c=_c: self._save_detected_file(f, c)
+                       ).pack(side='left', padx=(0, 6))
+
+        # Restore container auto-sizing then pack the LabelFrame inside it
+        self._detected_files_container.pack_propagate(True)
+        self._detected_files_frame.pack(fill='x')
+
+    def _clear_detected_files(self):
+        """Manually clear all entries from the detected files panel."""
+        for w in self._detected_files_inner.winfo_children():
+            w.destroy()
+        self._detected_files_frame.pack_forget()
+        # Collapse container to zero height so the gap disappears instantly
+        self._detected_files_container.configure(height=1)
+        self._detected_files_container.pack_propagate(False)
+        self.root.update_idletasks()
+
+    def _save_detected_file(self, filename, content):
+        """Save a detected file to disk via a Save-As dialog."""
+        ext = Path(filename).suffix or '.txt'
+        ext_types = {
+            '.py':   [("Python",     "*.py")],
+            '.js':   [("JavaScript", "*.js")],
+            '.ts':   [("TypeScript", "*.ts")],
+            '.html': [("HTML",       "*.html")],
+            '.css':  [("CSS",        "*.css")],
+            '.json': [("JSON",       "*.json")],
+            '.md':   [("Markdown",   "*.md")],
+            '.txt':  [("Text",       "*.txt")],
+            '.sql':  [("SQL",        "*.sql")],
+            '.sh':   [("Shell",      "*.sh")],
+            '.bat':  [("Batch",      "*.bat")],
+            '.csv':  [("CSV",        "*.csv")],
+        }
+        ftypes = ext_types.get(ext, [(f"{ext.lstrip('.')} files", f"*{ext}")]) + [("All files", "*.*")]
+        save_path = filedialog.asksaveasfilename(
+            title=f"Save {filename}",
+            initialfile=filename,
+            defaultextension=ext,
+            filetypes=ftypes
+        )
+        if save_path:
+            try:
+                Path(save_path).write_text(content, encoding='utf-8')
+                self.status_var.set(f"✅ Saved: {Path(save_path).name}")
+                self.root.after(3000, lambda: self.status_var.set("Ready"))
+            except Exception as e:
+                messagebox.showerror("Save Failed", f"Could not save {filename}:\n{e}")
+
+    def _copy_to_clipboard(self, text):
+        """Copy text to the system clipboard."""
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.status_var.set("📋 Copied to clipboard")
+        self.root.after(2000, lambda: self.status_var.set("Ready"))
+
+    def _save_answer(self):
+        """Save the full answer text to a file."""
+        answer = self.answer_output.get('1.0', 'end-1c').strip()
+        if not answer:
+            messagebox.showwarning("Nothing to Save", "The answer box is empty.")
+            return
+        save_path = filedialog.asksaveasfilename(
+            title="Save Answer",
+            defaultextension=".txt",
+            filetypes=[("Text file", "*.txt"), ("Markdown", "*.md"), ("All files", "*.*")]
+        )
+        if save_path:
+            try:
+                Path(save_path).write_text(answer, encoding='utf-8')
+                self.status_var.set(f"✅ Saved: {Path(save_path).name}")
+                self.root.after(3000, lambda: self.status_var.set("Ready"))
+            except Exception as e:
+                messagebox.showerror("Save Failed", f"Could not save answer:\n{e}")
+
+    def _clear_question(self):
+        """Clear the question text box."""
     def _clear_question(self):
         """Clear the question text box."""
         self.question_text.delete('1.0', tk.END)
@@ -3724,6 +4074,19 @@ Built with Python, ChromaDB, and Ollama"""
         label = "ON — timing/debug printed to answer box" if value else "OFF — clean answer only"
         self.status_var.set(f"Debug output: {label}")
         self.root.after(3000, lambda: self.status_var.set("Ready"))
+
+    def _on_debug_view_change(self):
+        """Save debug_view toggle to config. Takes effect next time Ollama starts."""
+        value = self.debug_view_var.get()
+        save_config(debug_view=value)
+        if value:
+            msg = ("Debug View ON — DOS windows will be visible next time Ollama starts. "
+                   "Restart AI Prowler to apply.")
+        else:
+            msg = ("Debug View OFF — DOS windows will be hidden in background. "
+                   "Restart AI Prowler to apply.")
+        self.status_var.set(msg)
+        self.root.after(5000, lambda: self.status_var.set("Ready"))
 
     # ── Warmup indicator ────────────────────────────────────────────────────
 
@@ -4131,7 +4494,7 @@ Built with Python, ChromaDB, and Ollama"""
                     chunks_str = self.chunks_var.get()
                     n_contexts = None if chunks_str.startswith("Auto") else int(chunks_str.split()[0])
                     threading.Thread(target=self.query_worker,
-                                     args=(question, n_contexts), daemon=True).start()
+                                     args=(question, n_contexts, []), daemon=True).start()
                     
                 elif msg_type == 'provider_test_result':
                     r = msg_data
@@ -4194,6 +4557,9 @@ Built with Python, ChromaDB, and Ollama"""
                                 time_str = f"{mins}m {secs:02d}s" if mins > 0 else f"{secs}s"
                                 self.query_elapsed_var.set(f"✅ Done in {time_str}")
                             self._query_start_time = None
+                        # Scan answer for downloadable files and show Save buttons
+                        detected = self._scan_answer_for_files()
+                        self._show_detected_files(detected)
                     elif msg_data == 'update':
                         self.update_progress.stop()
                         self.refresh_tracked_dirs()
@@ -4306,7 +4672,27 @@ class TextRedirector:
 
 def main():
     """Main entry point"""
-    
+
+    # ── Hide the Python console window (2nd DOS window) when Debug View is OFF ──
+    # AI Prowler is launched with python.exe which always creates a CMD console.
+    # We hide it here unless the saved config has debug_view=True.
+    if sys.platform == 'win32':
+        try:
+            import json as _json
+            _cfg_path = Path.home() / '.rag_config.json'
+            _debug_view = False
+            if _cfg_path.exists():
+                with open(_cfg_path, 'r') as _f:
+                    _cfg = _json.load(_f)
+                _debug_view = _cfg.get('debug_view', False)
+            if not _debug_view:
+                # Hide the console window without closing it
+                _hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+                if _hwnd:
+                    ctypes.windll.user32.ShowWindow(_hwnd, 0)  # SW_HIDE
+        except Exception:
+            pass   # Never crash startup over window-hiding
+
     if not RAG_AVAILABLE:
         root = tk.Tk()
         root.withdraw()

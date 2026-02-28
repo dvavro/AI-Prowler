@@ -248,7 +248,7 @@ def set_provider_timeout(provider_id: str, seconds: int = 3600):
     PROVIDER_TIMEOUTS[provider_id] = time.time() + seconds
 
 
-def query_external_llm(provider_id: str, prompt: str, max_tokens: int = 2000) -> str:
+def query_external_llm(provider_id: str, prompt: str, max_tokens: int = 2000, images_b64: list = None) -> str:
     """
     Route prompt to the chosen external LLM API, return answer text.
     Supports OpenAI-compatible (Bearer), Anthropic (x-api-key), Google (key_param).
@@ -272,17 +272,41 @@ def query_external_llm(provider_id: str, prompt: str, max_tokens: int = 2000) ->
 
     if auth == 'Bearer':
         headers['Authorization'] = f"Bearer {apikey}"
-        payload = {'model': model, 'messages': [{'role': 'user', 'content': prompt}], 'max_tokens': max_tokens}
+        if images_b64:
+            img_content = [{'type': 'text', 'text': prompt}]
+            for img in images_b64:
+                img_content.append({'type': 'image_url',
+                                    'image_url': {'url': f'data:image/png;base64,{img}'}})
+            payload = {'model': model, 'messages': [{'role': 'user', 'content': img_content}], 'max_tokens': max_tokens}
+        else:
+            payload = {'model': model, 'messages': [{'role': 'user', 'content': prompt}], 'max_tokens': max_tokens}
 
     elif auth == 'x-api-key':
         headers['x-api-key']         = apikey
         headers['anthropic-version'] = '2023-06-01'
-        payload = {'model': model, 'max_tokens': max_tokens, 'messages': [{'role': 'user', 'content': prompt}]}
+        if images_b64:
+            img_content = []
+            for img in images_b64:
+                img_content.append({'type': 'image',
+                                    'source': {'type': 'base64', 'media_type': 'image/png', 'data': img}})
+            img_content.append({'type': 'text', 'text': prompt})
+            payload = {'model': model, 'max_tokens': max_tokens,
+                       'messages': [{'role': 'user', 'content': img_content}]}
+        else:
+            payload = {'model': model, 'max_tokens': max_tokens, 'messages': [{'role': 'user', 'content': prompt}]}
 
     elif auth == 'key_param':
         params['key'] = apikey
-        payload = {'contents': [{'parts': [{'text': prompt}]}],
-                   'generationConfig': {'maxOutputTokens': max_tokens}}
+        if images_b64:
+            parts = []
+            for img in images_b64:
+                parts.append({'inline_data': {'mime_type': 'image/png', 'data': img}})
+            parts.append({'text': prompt})
+            payload = {'contents': [{'parts': parts}],
+                       'generationConfig': {'maxOutputTokens': max_tokens}}
+        else:
+            payload = {'contents': [{'parts': [{'text': prompt}]}],
+                       'generationConfig': {'maxOutputTokens': max_tokens}}
     else:
         return "\n\n❌ Unknown auth style for this provider."
 
@@ -571,7 +595,7 @@ def load_extension_config():
 
 def save_config(model=None, url=None, chunk_size=None, chunk_overlap=None,
                 show_sources=None, gpu_layers=None, mic_silence_secs=None,
-                debug_output=None, auto_start_ollama=None,
+                debug_output=None, debug_view=None, auto_start_ollama=None,
                 active_provider=None, provider_api_keys=None, provider_timeouts=None):
     """Save configuration to file"""
     config = {}
@@ -591,6 +615,7 @@ def save_config(model=None, url=None, chunk_size=None, chunk_overlap=None,
     if gpu_layers         is not None: config['gpu_layers']         = gpu_layers
     if mic_silence_secs   is not None: config['mic_silence_secs']   = mic_silence_secs
     if debug_output       is not None: config['debug_output']       = debug_output
+    if debug_view         is not None: config['debug_view']         = debug_view
     if auto_start_ollama  is not None: config['auto_start_ollama']  = auto_start_ollama
     if active_provider    is not None: config['active_provider']    = active_provider
     if provider_api_keys  is not None: config['provider_api_keys']  = provider_api_keys
@@ -2513,7 +2538,7 @@ def invalidate_chroma_cache():
     _chroma_client_cache = None
     _embedding_func_cache = None
 
-def query_ollama(prompt: str, max_tokens: int = 2000) -> str:
+def query_ollama(prompt: str, max_tokens: int = 2000, images_b64: list = None) -> str:
     """
     Send prompt to Ollama and stream tokens back in real time.
 
@@ -2558,6 +2583,9 @@ def query_ollama(prompt: str, max_tokens: int = 2000) -> str:
             'num_gpu':     GPU_LAYERS,
         }
     }
+    # Vision: attach base64 images if provided (requires a vision model like llava)
+    if images_b64:
+        payload['images'] = images_b64
 
     if DEBUG_OUTPUT:
         # ── Print exact DOS test command with full real payload ─────────────
@@ -2722,7 +2750,7 @@ def query_ollama(prompt: str, max_tokens: int = 2000) -> str:
             return f"Error: {e}"
 
 
-def rag_query(question: str, n_contexts: int = None, verbose: bool = True):
+def rag_query(question: str, n_contexts: int = None, verbose: bool = True, images_b64: list = None):
     """
     Perform RAG query: search + LLM
 
@@ -2811,16 +2839,16 @@ def rag_query(question: str, n_contexts: int = None, verbose: bool = True):
 
     # Build prompt
     if SHOW_SOURCES:
-        prompt = f"""You are a helpful AI assistant. Answer the question based ONLY on the provided context. Be concise and cite which source number you're using.
+        prompt = f"""You are a helpful AI assistant with broad knowledge. Use the provided context as reference material when it is relevant to the question. For tasks like writing code, scripts, creative writing, analysis, or general knowledge questions, use your own expertise freely — you are not restricted to the context alone. When the context is relevant, cite which source number you are using.
 
 Context:
 {context}
 
 Question: {question}
 
-Answer (cite sources as [Source 1], [Source 2], etc.):"""
+Answer (cite sources as [Source 1], [Source 2], etc. only when directly relevant):"""
     else:
-        prompt = f"""You are a helpful AI assistant. Answer the question based ONLY on the provided context. Be concise and clear. Do not mention source numbers or file names in your answer.
+        prompt = f"""You are a helpful AI assistant with broad knowledge. Use the provided context as reference material when it is relevant to the question. For tasks like writing code, scripts, creative writing, analysis, or general knowledge questions, use your own expertise freely — you are not restricted to the context alone. Be concise and clear.
 
 Context:
 {context}
@@ -2853,7 +2881,7 @@ Answer:"""
             print(f"⏱  [Phase 3] Querying {prov_name}…")
 
     if ACTIVE_PROVIDER == 'local':
-        answer = query_ollama(prompt)
+        answer = query_ollama(prompt, images_b64=images_b64)
     else:
         status = get_provider_status(ACTIVE_PROVIDER)
         if status == 'timeout':
@@ -2861,7 +2889,7 @@ Answer:"""
             prov_name = EXTERNAL_PROVIDERS[ACTIVE_PROVIDER]['name']
             if FALLBACK_TO_LOCAL:
                 print(f"⚠️ {prov_name} is rate-limited ({until_str}) — falling back to local Ollama.\n\n")
-                answer = query_ollama(prompt)
+                answer = query_ollama(prompt, images_b64=images_b64)
             else:
                 answer = (f"\n\n⚠️ {prov_name} is rate-limited {until_str}.\n"
                           f"Switch to a different provider or wait until the quota resets.")
@@ -2870,14 +2898,14 @@ Answer:"""
             answer = (f"\n\n❌ No API key for {prov_name}.\n"
                       f"Add your key in Settings → External AI APIs.")
         else:
-            answer = query_external_llm(ACTIVE_PROVIDER, prompt)
+            answer = query_external_llm(ACTIVE_PROVIDER, prompt, images_b64=images_b64)
             # If external call returned an error/warning and fallback is on, use local
             if FALLBACK_TO_LOCAL and (answer.startswith('\n\n❌') or answer.startswith('\n\n⚠️')):
                 prov_name = EXTERNAL_PROVIDERS[ACTIVE_PROVIDER]['name']
                 # Print the actual error so user knows WHY it fell back
                 print(f"⚠️ {prov_name} failed — falling back to local Ollama.\n"
                       f"Error detail: {answer.strip()}\n\n")
-                answer = query_ollama(prompt)
+                answer = query_ollama(prompt, images_b64=images_b64)
             elif GUI_MODE:
                 # External succeeded — print answer for GUI
                 import sys as _sys

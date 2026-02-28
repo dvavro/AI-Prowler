@@ -1,0 +1,36 @@
+⚠️  CONTEXT OVERFLOW: prompt ~34672 tok + 500 response = 35684 tok  >  num_ctx 8192.  Bumping num_ctx → 35840.  This triggers a model reload (~2min on CPU). Use 3 or fewer chunks to stay within 8192 and avoid this.
+# What `rag_preprocessor.py` Does
+
+This is the **core engine** for AI Prowler, a local RAG (Retrieval-Augmented Generation) document search and question-answering system. Here's what it does:
+
+## Main Functions
+
+### 1. **Document Indexing**
+- Loads and processes 55+ file types: documents (PDF, Word, text), code files, emails (.eml, .mbox, .msg), spreadsheets, and more
+- Splits documents into overlapping text chunks (default 500 words with 50-word overlap)
+- Stores chunks in a ChromaDB vector database with semantic embeddings using the `all-MiniLM-L6-v2` model
+
+### 2. **Semantic Search & AI Queries**
+- Searches your indexed documents using vector similarity to find relevant passages
+- Sends those passages as context to a local Ollama LLM (or external APIs like OpenAI, Claude, Gemini)
+- Streams AI-generated answers back in real-time
+
+### 3. **Email Handling**
+- Special incremental indexing for email archives—only indexes new/changed messages using Message-ID tracking
+- Supports Gmail Takeout (.mbox), Thunderbird, Apple Mail, Outlook (.msg), and more
+
+### 4. **File Change Tracking**
+- Detects new, modified, and deleted files since the last index
+- Supports pause/resume during long indexing jobs
+- Auto-update functionality to keep indexes current
+
+### 5. **Configuration Management**
+- Saves settings (model choice, GPU layers, API keys) to `~/.rag_config.json`
+- Supports 15+ AI models with automatic context window sizing
+- External provider support with rate-limit handling and automatic fallback to local Ollama
+
+## Key Design Features
+- **100% offline after install**—no cloud uploads
+- **GPU auto-detection** for faster embeddings and inference
+- **Streaming responses** so answers appear word-by-word
+- **CLI and GUI compatible**—used by both `rag_gui.py` and command-line
