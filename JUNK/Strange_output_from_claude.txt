@@ -1,5 +1,0 @@
-I can only answer questions based on the provided context, which is documentation about AI Prowler (a local AI knowledge base tool) and a creature evolution simulation system.
-
-The context doesn't contain information about writing Python scripts to print "Hello World David!" - this is a general programming request outside the scope of the provided documentation.
-
-If you have questions about AI Prowler's features, installation, indexing documents, or the creature evolution system described in the documentation, I'd be happy to help with those.

@@ -1,0 +1,144 @@
+# ============================================================
+# AI Prowler — .gitignore
+# ============================================================
+# Keep the repository clean: source files and docs only.
+# User data, generated files, and large binaries are excluded.
+# ============================================================
+
+
+# ── AI Prowler runtime data ──────────────────────────────────
+# ChromaDB vector database (can be gigabytes — rebuilt by INSTALL.bat)
+rag_database/
+
+# User config and tracking files (personal to each installation)
+.rag_config.json
+.rag_file_tracking.json
+.rag_auto_update_dirs.json
+.rag_email_index.json
+.rag_license.key
+
+# Generated update script (created by the Schedule tab)
+rag_auto_update.bat
+
+
+# ── Python ───────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+.env
+.env.local
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+wheels/
+
+# Unit test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+nosetests.xml
+coverage.xml
+*.cover
+
+# MyPy / type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+
+# ── AI / ML model files ──────────────────────────────────────
+# Ollama models are large binaries — installed separately by INSTALL.bat
+*.gguf
+*.ggml
+*.bin
+*.safetensors
+*.pt
+*.pth
+
+# HuggingFace cache (Whisper model ~1.6 GB — downloaded on first use)
+.cache/
+
+
+# ── Windows ──────────────────────────────────────────────────
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+*.stackdump
+
+# Windows shortcuts (created by create_shortcut.py — personal to each PC)
+*.lnk
+
+
+# ── IDE and editor files ─────────────────────────────────────
+# VS Code
+.vscode/
+*.code-workspace
+
+# PyCharm / IntelliJ
+.idea/
+*.iml
+*.iws
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# macOS (if any contributors use Mac)
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+
+# ── Logs and temporary files ─────────────────────────────────
+*.log
+*.tmp
+*.temp
+*.bak
+*.orig
+*.pid
+
+
+# ── Sensitive files — never commit these ─────────────────────
+*.key
+*.pem
+*.p12
+*.pfx
+*.cert
+*.cer
+secrets.json
+credentials.json
+# (API keys are stored in .rag_config.json which is already excluded above)
+
+
+# ── Archives ─────────────────────────────────────────────────
+# Don't commit release ZIPs — use GitHub Releases for distribution
+*.zip
+*.tar.gz
+*.rar
+*.7z
