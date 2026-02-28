@@ -1,10 +1,10 @@
 # AI Prowler — Personal AI Knowledge Base
 
-**Complete User Guide · Version 1.9**
+**Complete User Guide · Version 2.0**
 
-**Ask questions about YOUR documents using AI — running 100% locally on your computer**
+**Ask questions about YOUR documents using AI — locally or via the cloud**
 
-No API keys &nbsp;•&nbsp; No cloud services &nbsp;•&nbsp; No subscription fees &nbsp;•&nbsp; Complete privacy
+Local-first &nbsp;•&nbsp; Optional cloud AI &nbsp;•&nbsp; Complete privacy &nbsp;•&nbsp; No subscription required
 
 ---
 
@@ -50,18 +50,21 @@ Step 3 — Double-click the "AI Prowler" Desktop icon
 
 ## 🎯 What Is AI Prowler?
 
-AI Prowler uses **RAG (Retrieval-Augmented Generation)** — when you ask a question it first searches your own indexed documents for relevant passages, then feeds those passages to a local AI model that writes a grounded, accurate answer. Your documents never leave your computer.
+AI Prowler uses **RAG (Retrieval-Augmented Generation)** — when you ask a question it first searches your own indexed documents for relevant passages, then feeds those passages to an AI model that writes a grounded, accurate answer.
 
 **What it does:**
 - 📚 Indexes documents, code, email, spreadsheets, and 55+ file types
 - 🔍 Answers questions using your own content, not just general knowledge
-- 🤖 Runs 100% offline after installation
-- 🔒 Zero cloud contact — no uploads, no telemetry, no accounts
+- 🤖 Runs 100% offline using local Ollama (default)
+- ☁️ Optionally uses cloud AI — ChatGPT, Claude, Gemini, Grok, Llama API, Mistral Large
+- 🔒 Local-first — no cloud contact unless you explicitly add an API key
 - 📬 Deep email support — Gmail, Apple Mail, Thunderbird, Yahoo, and more
 - ⚡ Incremental updates — only re-processes files that changed
 - 🎤 Voice input — speak questions via local Whisper speech recognition
+- 📎 File attachments — attach images and files to questions (images sent to cloud providers)
+- 💾 File Output Mode — AI-written code files get one-click Save buttons automatically
 - ⏰ Scheduled auto-updates — keep the index current automatically
-- 💡 15+ AI models — tune speed vs. quality for your hardware
+- 💡 20+ AI models — local and cloud, tune speed vs. quality for your needs
 - 🟢 Auto-start Ollama — optionally launch the AI server automatically
 
 **Example conversation:**
@@ -83,7 +86,7 @@ AI Prowler:  According to NEAT_Documentation.md, the mutation rate
 | From install folder | Double-click `RAG_RUN.bat` |
 | Command line | `python rag_gui.py` |
 
-When the GUI opens, the embedding model begins warming up in the background. If **Auto-start Ollama** is enabled in Settings, the Ollama server also launches automatically in a separate window — you do not need to start it manually.
+When the GUI opens, the embedding model begins warming up in the background. If **Auto-start Ollama** is enabled in Settings, the Ollama server also launches automatically — you do not need to start it manually.
 
 ---
 
@@ -113,8 +116,9 @@ AI Prowler uses a **queue system** — stage as many folders and individual file
 
 | Button | What it does |
 |--------|-------------|
-| 📁 Browse Folders… | Opens a custom tree browser. Navigate your filesystem, select one or more folders (Ctrl/Shift click for multiple), click Add |
-| 📄 Browse Files… | Opens a standard file picker. Ctrl/Shift click to select multiple individual files |
+| 📂 Browse… ▼ | Opens a dropdown menu with two choices — see below |
+| 📄 Browse Files (multi-select)… | Standard file picker; Ctrl/Shift click to select multiple files |
+| 📁 Browse Folder… | Opens a folder browser for selecting a single directory |
 | ➕ Add to Queue | Adds whatever is typed in the path entry box |
 | Type + Enter | Type a path directly and press Enter |
 
@@ -372,65 +376,119 @@ This works because AI Prowler tracks individual `Message-ID` values, not file mo
 
 ## 🔍 Tab 2 — Ask Questions
 
-**Purpose:** Ask natural language questions about your indexed documents.
+**Purpose:** Ask natural language questions about your indexed documents, using either a local AI model or a cloud AI provider.
 
 ### Asking a Question
 
 1. Click the **🔍 Ask Questions** tab
-2. Type your question in the entry box — or use the 🎤 mic button (see below)
-3. Press **Enter** or click **Ask Question**
+2. Type your question in the text box — or use the 🎤 mic button (see below)
+3. Optionally attach files using the **📎 Attachments** panel
+4. Select your preferred AI provider from the **AI Provider** dropdown
+5. Press **Ctrl+Enter** or click **Ask Question**
 
 The model pre-warms automatically when you switch to this tab, so the first query is faster than it would otherwise be.
+
+### Question Input Box
+
+The question box accepts multi-line input. **Enter** adds a new line; **Ctrl+Enter** submits.
 
 ### Action Buttons
 
 | Button | What it does |
 |--------|-------------|
-| **Ask Question** | Submits the typed question and begins the query |
+| **Ask Question** | Submits the question and begins the query |
 | **⏹ Stop** | Cancels the current query in progress |
-| **⚡ Load AI Model** | Manually triggers the Ollama model pre-warm — useful if the model is not yet loaded or you want to reload it before asking a question |
+| **💾 Save Answer** | Saves the full answer text to a `.txt` or `.md` file |
+| **⚡ Load AI Model** | Manually triggers the Ollama model pre-warm — useful to get the model ready before you start typing |
 
 ### Model Status Indicator
 
-A small **coloured dot** and status label appear to the right of the action buttons. They show the current state of the AI model at all times:
+A small **coloured dot** and status label appear to the right of the action buttons, showing the real-time state of the local Ollama model:
 
 | Indicator | Meaning |
 |-----------|---------|
 | ⚫ Grey — "Model not loaded" | Ollama has not yet been contacted |
-| 🟡 Yellow — "Loading model…" | Pre-warm is in progress; the model is being loaded into memory |
-| 🟢 Green — "Model ready" | The model is loaded and queries will respond quickly |
+| 🟡 Yellow — "Loading model…" | Pre-warm is in progress; model is being loaded into memory |
+| 🟢 Green — "Model ready" | The model is loaded and queries respond quickly |
 
-If you see the grey indicator and your first query feels slow, click **⚡ Load AI Model** to start pre-warming manually before you need to ask anything.
+If you see grey and your first query feels slow, click **⚡ Load AI Model** to pre-warm before you need it.
 
-### Voice Input (🎤 Microphone)
+### 📎 Attachments
 
-When `faster-whisper`, `sounddevice`, and `numpy` are installed (they are by default), a microphone button appears next to the question entry box.
+The **Attachments** panel lets you add files to your question — useful for asking the AI to analyse, compare, or generate code based on existing files.
 
-| State | What to do |
-|-------|-----------|
-| 🎤 (grey) | Click to start recording |
-| 🔴 (red, recording) | Speak your question. Click again to stop early |
-| Transcribing… | Whisper is converting your speech to text |
-| Question populated | Review, edit if needed, then press Enter |
+**To attach files:**
+1. Click **📎 Attach Files…** — a standard file picker opens supporting multi-select
+2. Attached files appear as chips below the button showing an icon and filename
+3. Click the **✕** on any chip to remove that file individually, or click **🗑 Clear All** to remove everything
 
-**Auto-stop:** recording ends automatically after a configurable silence period (default 3 seconds). Set in the Settings tab.
+**Supported attachment types:**
 
-The Whisper `large-v3-turbo` model (~1.6 GB) is downloaded once on first use and cached. Subsequent launches load it instantly from the local cache.
+- **Images** (`.png` `.jpg` `.jpeg` `.gif` `.bmp` `.webp` `.tiff`) — sent as base64 to cloud providers that support vision (ChatGPT, Claude, Gemini). Local Ollama also supports image input on compatible models.
+- **Text files** (any other extension) — file content is read and included in the question prompt alongside the question text.
+
+> **Cloud AI tip:** Image attachments require a cloud provider with vision support. If you are using Local Ollama with a text-only model, images in attachments will be ignored.
+
+### 📄 File Output Mode
+
+The **File Output Mode** checkbox (just below the Attachments panel) optimises AI answers when you ask the AI to write or modify code files.
+
+**When ticked (default ON):** AI Prowler instructs the AI to label every code block it generates with an explicit filename. When the answer arrives, the app automatically scans for labelled code blocks and displays a **📁 Files in Answer** panel with a **💾 Save File** button for each detected file — no copy-pasting required.
+
+**How the detection works:**
+
+The engine looks for three patterns in the answer:
+
+1. ` ```python my_script.py ` — language + filename (most common)
+2. ` ```my_script.py ` — filename-only fence (no language prefix)
+3. `### FILE: name.ext ###` … `### END FILE ###` — explicit block markers
+
+The **📁 Files in Answer** panel shows each detected file's name, line count, and a **💾 Save File** button that opens a Save-As dialog pre-populated with the correct filename and file type filter.
+
+**When unticked:** The AI answers normally without being prompted to label files. Useful for conversational questions where you do not want code outputs.
+
+### AI Provider Selector
+
+The **AI Provider** dropdown lets you choose which AI answers your question. It appears in the options row alongside the Context Chunks control.
+
+A small **coloured status light** to the left of the dropdown shows the current provider's state at a glance:
+
+| Light colour | Meaning |
+|-------------|---------|
+| ⚫ Grey | No API key configured, or local Ollama |
+| 🟢 Green | External provider ready — key present, not rate-limited |
+| 🟠 Orange | Provider is temporarily rate-limited |
+
+Available providers (configure API keys in the Settings tab):
+
+| Provider | Model used | Free tier |
+|----------|-----------|-----------|
+| **Local Ollama** (default) | Your selected local model | Free forever |
+| **ChatGPT** (OpenAI) | GPT-4o | Pay-per-use |
+| **Claude** (Anthropic) | claude-opus-4-5 | $5 free credit |
+| **Gemini** (Google) | gemini-2.0-flash | ✅ Free tier |
+| **Grok** (xAI) | grok-beta | Limited free |
+| **Llama API** (Meta) | Llama-4-Scout-17B-16E-Instruct | ✅ Free tier |
+| **Mistral Large** (Mistral AI) | mistral-large-latest | Limited free |
+
+> **Auto-fallback:** If an external provider fails or hits its rate limit, AI Prowler automatically falls back to your local Ollama model and shows an error note in the answer. You can disable this in Settings → External AI APIs.
 
 ### Context Chunks
 
-The **Context chunks** dropdown controls how many document excerpts are retrieved from the index to give the AI context for generating its answer.
+The **Context chunks** dropdown controls how many document excerpts are retrieved from the index to give the AI context for its answer.
 
 | Setting | Best for |
 |---------|---------|
-| Auto (default) | Calculates the optimal number based on the selected model's context window size — usually the best choice |
-| 3–5 | Quick factual lookups |
-| 7–10 | Broader questions that span multiple documents |
-| 15–20 | Summarisation or questions that need wide coverage |
+| Auto (3) | Calculates optimally for most questions — recommended |
+| 1–5 | Quick factual lookups |
+| 6 | Broader questions spanning multiple files |
+| 7 ⚠reload – 20 ⚠reload | Wide coverage / summarisation — **triggers model reload**, adds 2–12 minutes on CPU |
+
+Values marked **⚠reload** require a larger context window than the default model configuration. AI Prowler will automatically re-prewarm the model at the required size when you change to these values — a status message appears during the reload. On GPU systems this is much faster.
 
 ### Progress and Timing
 
-A **progress bar** animates while the query runs. An **elapsed timer** ticks up in real time. When the answer arrives the timer freezes, showing total time — e.g. `✅ 14s`.
+A **progress bar** animates while the query runs. An **elapsed timer** ticks up in real time. When the answer arrives the timer freezes — e.g. `✅ 14s`.
 
 ### Example Questions
 
@@ -445,24 +503,40 @@ Broad summaries:
   "Summarise my project documentation"
   "What are the recurring issues in my support tickets?"
 
-Technical:
+Technical / coding:
   "Show me all Python functions that use asyncio"
   "What libraries are imported in my backend code?"
-  "Explain the authentication flow in my app"
+  "Write me a script to parse the CSV files in my data folder"
 
 Email:
   "What did John say about the Q3 budget?"
   "Find any emails about the server outage in January"
   "What agreements did I make with Acme Corp last year?"
+
+With attachments (cloud AI):
+  "Here's my current login.py — add OAuth2 support"
+  "What errors are in this screenshot?"
+  "Refactor this code to follow PEP 8"
 ```
 
-### Tips
+### Voice Input (🎤 Microphone)
 
-- The **first query after launch** triggers model loading — allow 20–60 seconds
-- Use **⚡ Load AI Model** before your first question to pre-load and avoid the wait
-- Subsequent queries run in 10–30 seconds (model stays loaded in memory)
-- **Specific questions** get better answers than vague ones
-- If an answer feels shallow, increase the context chunks or try a larger model
+When `faster-whisper`, `sounddevice`, and `numpy` are installed (they are by default), a microphone button and controls appear below the question box.
+
+| State | What to do |
+|-------|-----------|
+| 🎤 (grey) | Click to start recording |
+| 🔴 (red, recording) | Speak your question — click again to stop early |
+| Transcribing… | Whisper is converting speech to text |
+| Question populated | Review, edit if needed, then press Ctrl+Enter |
+
+**Append mode** — the **Append (add to existing text)** checkbox controls whether dictated text is added to whatever is already in the question box (ON) or replaces it (OFF).
+
+**🗑 Clear Question** — clears the question box and resets mic status.
+
+**Auto-stop:** recording ends automatically after a configurable silence period (default 3 seconds). Adjust the threshold in Settings → Microphone / Speech Input.
+
+The Whisper `large-v3-turbo` model (~1.6 GB) is downloaded once on first use and cached. Subsequent launches load it instantly.
 
 ---
 
@@ -485,9 +559,7 @@ For email archives the engine goes deeper — see the Email chapter for how per-
 
 ### Tracked Directories List
 
-Shows every directory registered for tracking. Click **🔄 Refresh List** to reload from disk.
-
-The info bar at the top shows the exact paths of both tracking data files so you know where they live and that they are separate from the ChromaDB database (they survive a database wipe).
+Shows every directory registered for tracking. The info bar at the top shows the exact paths of both tracking data files so you know where they live — they are **separate from the ChromaDB database** and survive a database wipe. Click **🔄 Refresh List** to reload from disk.
 
 ### Update Buttons
 
@@ -505,6 +577,8 @@ Select a directory and click **🗑 Remove Selected (untrack + delete its vector
 2. Deletes all file-tracking timestamps for that directory
 3. Deletes all ChromaDB chunks whose filepath falls within that directory
 4. Removes any email index entries for archive files inside that directory
+
+The actual files on disk are NOT touched. You can re-index the directory later if needed.
 
 ---
 
@@ -599,13 +673,33 @@ Add project-specific folders (e.g. `backup`, `.cache`, `temp`) to exclude them f
 
 ## ⚙️ Tab 6 — Settings
 
-**Purpose:** Configure the AI model, GPU acceleration, Ollama server behaviour, voice input, query output format, and database tools.
+**Purpose:** Configure the AI model, external cloud AI providers, GPU acceleration, Ollama server behaviour, query output format, voice input, and database tools.
+
+The Settings tab is scrollable — scroll down to see all sections.
+
+---
 
 ### AI Model
 
-**Select model** — choose from the full list of Ollama-compatible models. The change takes effect on the next query.
+**Select model** — choose from the full list of Ollama-compatible local models. The dropdown displays each model with its download size and minimum RAM requirement:
 
-**Install Selected Model** — downloads the selected model via Ollama. Progress shows in the status bar. Can take several minutes for large models.
+```
+✅ llama3.2:1b  [1.3 GB dl | 4 GB RAM]
+✅ llama3.2:3b  [2.0 GB dl | 6 GB RAM]
+✅ llama3.1:8b  [4.7 GB dl | 8 GB RAM]
+⚠️ qwen2.5:14b  [9.0 GB dl | 16 GB RAM]
+```
+
+AI Prowler automatically detects your system RAM and adds a **fitness badge** to every model:
+
+| Badge | Meaning |
+|-------|---------|
+| ✅ | Model fits in your RAM — recommended |
+| ⚠️ | Model needs more RAM than detected — may run slowly |
+
+Models that fit in your RAM appear first in the list. A note below the dropdown confirms your detected RAM size.
+
+**Browse & Install Model…** — opens a full model browser where you can search, review, and download any Ollama-compatible model directly from within the app.
 
 **Model families and trade-offs:**
 
@@ -613,8 +707,8 @@ Add project-specific folders (e.g. `backup`, `.cache`, `temp`) to exclude them f
 |--------|--------|---------|
 | Llama 3.2 | `llama3.2:1b` ⭐ `llama3.2:3b` | Default — fast and capable |
 | Llama 3.1 | `llama3.1:8b` `70b` `405b` | High-quality answers |
-| Llama 3 | `llama3:8b` `70b` | Proven quality |
-| Qwen 2.5 | `0.5b` through `72b` | Multilingual content |
+| Llama 3 | `llama3:8b` `70b` | Proven quality (older generation) |
+| Qwen 2.5 | `0.5b` through `72b` | Multilingual, ultra-lightweight options |
 | Mistral | `mistral:7b` `mixtral:8x7b` `8x22b` | Code-heavy projects |
 | Gemma | `gemma:2b` `7b` `gemma2:9b` `27b` | Google's models |
 
@@ -629,6 +723,57 @@ Add project-specific folders (e.g. `backup`, `.cache`, `temp`) to exclude them f
 
 Start with `llama3.2:1b`. If answers feel shallow, upgrade to `llama3.2:3b` or `llama3.1:8b`.
 
+---
+
+### External AI APIs
+
+This section lets you connect AI Prowler to cloud AI providers. Cloud providers typically give higher-quality answers for complex questions and support image attachments — at the cost of sending your prompts (but **not your raw documents**) to an external service.
+
+> **Privacy note:** Only the question text and retrieved document excerpts are sent to cloud providers — not your original files. The RAG retrieval step always runs locally.
+
+**Setting up a provider:**
+
+1. Click **🔑 Get Key** next to the provider — this opens the provider's API key page in your browser
+2. Sign up / log in and generate an API key
+3. Paste the key into the entry box in AI Prowler
+4. Click **Save**
+5. Optionally click **🔌 Test** to verify the key works with a live ping
+
+Each provider row contains:
+
+| Element | Purpose |
+|---------|---------|
+| **Coloured status dot** | Shows provider status at a glance (see below) |
+| **Provider name label** | e.g. "ChatGPT (OpenAI)" |
+| **API key entry box** | Masked by default — paste your key here |
+| **👁 Toggle** | Show or hide the key characters |
+| **Save** | Saves the key to `~/.rag_config.json` |
+| **🔌 Test** | Fires a live connection test and shows a result popup |
+| **🔑 Get Key (free note)** | Opens the provider's key page in your browser |
+
+**Status dot colours:**
+
+| Dot | Meaning |
+|-----|---------|
+| ⚫ Grey | No API key saved |
+| 🟢 Green | Key saved and connection verified |
+| 🟠 Orange | Provider is temporarily rate-limited |
+
+**Provider reference:**
+
+| Provider | Free tier note | Key URL |
+|----------|---------------|---------|
+| ChatGPT (OpenAI) | Pay-per-use | platform.openai.com/api-keys |
+| Claude (Anthropic) | $5 free credit on sign-up | console.anthropic.com |
+| Gemini (Google) | ✅ Generous free tier | aistudio.google.com |
+| Grok (xAI) | Limited free | console.x.ai |
+| Llama API (Meta) | ✅ Free tier available | llama.developer.meta.com |
+| Mistral Large | Limited free | console.mistral.ai |
+
+**Auto-fallback to Local Ollama** — when this checkbox is ON (default), if an external provider fails or returns a rate-limit error, AI Prowler silently retries with your local Ollama model and includes a brief error note in the answer. Uncheck to disable fallback and see the raw error instead.
+
+---
+
 ### Database
 
 | Button | Effect |
@@ -636,24 +781,38 @@ Start with `llama3.2:1b`. If answers feel shallow, upgrade to `llama3.2:3b` or `
 | View Statistics | Opens a dialog showing total chunks, unique files, and collection metadata |
 | Clear Database | Permanently deletes all indexed content from ChromaDB — asks for confirmation. Does not affect the file-tracking database or email index. |
 
+---
+
 ### Query Output
 
-**Show source references** — when ON, the answer panel includes file paths, relevance scores, chunk counts, and query timing alongside the AI's answer. When OFF (default), only the clean answer is shown.
+Controls what appears in the answer panel alongside the AI's response.
+
+**Show source references** — when ON, the answer panel includes file paths, relevance scores, chunk counts, and query timing. When OFF (default), only the clean answer is shown.
+
+**Enable debug output** — when ON, the answer panel includes detailed timing markers (⏱), debug annotations (🔬), and a DOS test command that shows the raw Ollama call. Useful for diagnosing slow or unexpected responses. When OFF (default), all debug lines are suppressed.
+
+**Debug View** — when ON, any DOS/Command Prompt windows opened by AI Prowler (e.g. the Ollama server window) appear in the **foreground** on your desktop. When OFF (default), those windows open **silently in the background** — the server runs but no CMD window appears on screen. This setting affects the Ollama auto-start window and any subprocesses launched during queries.
+
+> **Tip:** Use Debug View temporarily if you need to inspect Ollama server logs or troubleshoot connection issues, then turn it off for everyday use.
+
+---
 
 ### Microphone / Speech Input
 
 *(Only visible when faster-whisper, sounddevice, and numpy are installed)*
 
-**Auto-stop after silence** — a slider from 1.0 to 8.0 seconds controlling how long Whisper waits after you stop speaking before ending the recording automatically.
+**Auto-stop after silence** — a slider from 1.0 to 8.0 seconds (in 0.5s steps) controlling how long Whisper waits after you stop speaking before ending the recording automatically.
 
 - **Short (1–2s)** — snappy for short direct questions
 - **Long (4–8s)** — better if you pause between phrases or speak slowly
 
-The value is saved to config and persists across restarts.
+The value is saved to config and persists across restarts. It also applies live to any recording already in progress.
+
+---
 
 ### GPU Acceleration
 
-Controls how many AI model layers Ollama offloads to your GPU. More layers on the GPU means faster query responses on systems with a dedicated graphics card.
+Controls how many AI model layers Ollama offloads to your GPU. More layers on GPU means faster query responses on systems with a dedicated graphics card.
 
 | Value | Meaning |
 |-------|---------|
@@ -661,27 +820,27 @@ Controls how many AI model layers Ollama offloads to your GPU. More layers on th
 | 0 | **CPU only** — use if GPU causes errors or VRAM is insufficient |
 | 1–99 | **Partial offload** — fine-tune for laptops with limited VRAM |
 
-**🔍 Detect GPU** — runs a background scan that identifies your GPU model, VRAM size, and suggests an optimal layers value. The suggestion is automatically populated in the spinbox.
+**🔍 Detect GPU** — runs a background scan that identifies your GPU model, VRAM size, and suggests an optimal layers value. The full detection output appears in a scrollable status box below the controls (long results are no longer cut off).
 
 **✅ Apply & Reload** — saves the layers value and reloads the Ollama configuration so it takes effect immediately on the next query — no app restart needed.
 
-A scrollable status box below the controls shows the full detection output, including details that may be cut off in a plain label.
+---
 
 ### Ollama Server
 
-The **Ollama Server** section controls how AI Prowler manages the Ollama backend process.
+Controls how AI Prowler manages the Ollama backend process.
 
 **Auto-start Ollama server (opens separate CMD window)**
 
 When this checkbox is **enabled**:
 - AI Prowler checks on startup whether Ollama is already running
-- If Ollama is not running, it launches `ollama serve` automatically in a separate CMD window
-- When you close AI Prowler, the Ollama server window also closes
-- The CMD window shows live Ollama server logs — you can minimise but do not close it manually while using AI Prowler
+- If Ollama is not running, it launches `ollama serve` automatically
+- When AI Prowler is closed, the Ollama process is also shut down
+- Whether the Ollama window is visible depends on the **Debug View** setting (see Query Output section above)
 
 When this checkbox is **disabled** (default):
 - AI Prowler does not start Ollama automatically
-- You must start Ollama manually before using the query features — open a Command Prompt and run `ollama serve`, or start it from the Windows Start menu if installed as a service
+- You must start Ollama manually before using query features — open a Command Prompt and run `ollama serve`, or start it from the Windows Start menu
 
 > **Recommendation:** Enable auto-start if you only use Ollama through AI Prowler and want a one-click experience. Leave it disabled if you run other Ollama-based tools and want the server to stay running independently of AI Prowler.
 
@@ -734,7 +893,7 @@ python rag_preprocessor.py clear
 | RAM | 8 GB |
 | Storage | 6 GB free |
 | CPU | Any modern 64-bit processor |
-| Internet | Required for installation only |
+| Internet | Required for installation only (and for cloud AI providers if used) |
 
 ### Recommended
 
@@ -756,7 +915,7 @@ python rag_preprocessor.py clear
 | Whisper speech model — large-v3-turbo | ~1.6 GB |
 | **Total** | **~4 GB** |
 
-After installation: 100% offline, no cloud connections, no data uploads ever.
+After installation: 100% offline by default, no cloud connections unless you configure cloud provider API keys.
 
 ---
 
@@ -783,13 +942,15 @@ C:\Users\YourName\AI Prowler\
 
 ```
 C:\Users\YourName\
-├── .rag_config.json              ← All settings (model, GPU layers, silence threshold, auto-start, etc.)
+├── .rag_config.json              ← All settings (model, GPU layers, silence, auto-start, API keys, etc.)
 ├── .rag_auto_update_dirs.json    ← List of tracked directories
 ├── .rag_file_tracking.json       ← File modification baselines for change detection
 ├── .rag_email_index.json         ← Per-email Message-ID tracking for incremental indexing
 ├── .rag_license.key              ← License key (if applicable)
 └── rag_auto_update.bat           ← Generated update script (created when you set a schedule)
 ```
+
+> **API keys** are stored in `.rag_config.json` under your user home folder — not in the AI Prowler installation folder and not transmitted anywhere other than to the provider you explicitly selected.
 
 ### Speech Model Cache
 
@@ -803,17 +964,21 @@ C:\Users\YourName\.cache\huggingface\hub\
 
 ## 🔐 Privacy and Security
 
-**AI Prowler makes zero network connections after installation.**
+**AI Prowler is local-first. Cloud AI is entirely opt-in.**
 
 | What it does | What it does NOT do |
 |--------------|-------------------|
-| ✅ Runs 100% on your local machine | ❌ No cloud storage of any kind |
-| ✅ All AI inference runs via local Ollama | ❌ No external API calls |
-| ✅ No login or account required | ❌ No telemetry or analytics |
-| ✅ No internet needed after install | ❌ No data collection |
-| ✅ All data stays on your hard drive | ❌ No phone-home behaviour |
+| ✅ Runs 100% locally by default | ❌ No cloud contact unless you add an API key |
+| ✅ All local AI inference via Ollama | ❌ No automatic data uploads |
+| ✅ No login or account required for local use | ❌ No telemetry or analytics |
+| ✅ All indexed data stays on your hard drive | ❌ No phone-home behaviour |
+| ✅ API keys stored locally in your home folder | ❌ Raw document files never sent to cloud |
 
-**Your documents, your questions, and your answers never leave your computer.**
+**When cloud AI providers are used:**
+- Only your question text and retrieved document **excerpts** (not full files) are sent to the provider
+- The RAG retrieval step — finding relevant passages from your index — always runs locally
+- Your original source files are never transmitted
+- You choose when to use a cloud provider for each individual question via the AI Provider dropdown
 
 ---
 
@@ -827,7 +992,7 @@ Double-click `UNINSTALL.bat`. It walks through 9 clearly labelled steps:
 |------|----------------|
 | 1/9 | Windows Task Scheduler task |
 | 2/9 | Desktop shortcut (both "AI Prowler.lnk" and "RAG.lnk" if present) |
-| 3/9 | AI Prowler entry from Windows PATH |
+| 3/9 | AI Prowler entry from Windows PATH (uses PowerShell for reliability) |
 | 4/9 | Config files (`.rag_config.json`, `.rag_file_tracking.json`, `.rag_email_index.json`, etc.) |
 | 5/9 | ChromaDB database (optional — confirms before deleting) |
 | 6/9 | AI Prowler program files |
@@ -868,6 +1033,7 @@ Delete:
 | Microphone button missing | Run `pip install faster-whisper sounddevice numpy`, then restart |
 | Tab appears blank | Try launching via `RAG_RUN.bat` instead |
 | Status indicator stays grey | Click **⚡ Load AI Model** or check that Ollama is running |
+| Settings checkbox not sticking | Verify you have write access to your home folder (`C:\Users\YourName\`) |
 
 ### Queries
 
@@ -875,8 +1041,19 @@ Delete:
 |---------|---------|
 | First query takes 2–3 minutes | Normal — the AI model is loading into memory for the first time. Use ⚡ Load AI Model beforehand to pre-warm |
 | "Cannot connect to Ollama" | Enable Auto-start Ollama in Settings, or open Command Prompt and run `ollama serve` |
-| Answers are vague | Try a larger model (Settings tab) or ask more specific questions |
+| Answers are vague | Try a larger model (Settings tab) or increase Context Chunks |
 | "No results" | Make sure the relevant documents have been indexed |
+| Context chunks ⚠reload is very slow | This is expected on CPU-only systems for >6 chunks — use a GPU or limit chunks to 5 or fewer |
+
+### Cloud AI Providers
+
+| Problem | Solution |
+|---------|---------|
+| 🔌 Test shows "Invalid API key" | Double-check the key was copied fully with no spaces; regenerate if needed |
+| Provider returns HTTP 429 | Rate limit reached — AI Prowler shows a timeout until the quota resets, then resumes normally |
+| Image attachments not working | Confirm you are using a cloud provider that supports vision (ChatGPT, Claude, Gemini) |
+| Cloud answer but no document context | The RAG retrieval still runs locally — if it finds nothing, index the relevant documents first |
+| Auto-fallback kicked in | The selected provider failed; answer came from local Ollama. Check the provider status dot in Settings |
 
 ### Email Indexing
 
@@ -892,8 +1069,8 @@ Delete:
 
 | Problem | Solution |
 |---------|---------|
-| Ollama CMD window opens on startup unexpectedly | Auto-start is enabled — uncheck it in Settings → Ollama Server if you prefer to manage Ollama yourself |
-| Ollama CMD window closed by accident | Re-enable auto-start and restart AI Prowler, or run `ollama serve` manually in a new Command Prompt |
+| No CMD window on startup | Expected when Debug View is OFF — Ollama runs silently in background. Enable Debug View in Settings → Query Output to see the window |
+| Ollama CMD window closed by accident | Re-enable auto-start and restart AI Prowler, or run `ollama serve` manually |
 | Auto-start isn't launching Ollama | Ensure `ollama` is in your PATH — re-run INSTALL.bat or install Ollama from ollama.com/download/windows |
 
 ### Scheduling
@@ -923,12 +1100,24 @@ Delete:
 
 ✅ Use complete natural-language questions  
 ✅ Reference document names or dates when you know them  
-✅ Increase context chunks for broad summarisation questions  
+✅ Keep Context Chunks at Auto (3) or 3–5 for everyday use  
+✅ Only increase to ⚠reload chunks when you need broad coverage — be prepared for a wait on CPU  
 ✅ Use voice input for longer or more natural questions  
 ✅ Click ⚡ Load AI Model when you open AI Prowler to pre-warm while you work  
+✅ Enable File Output Mode when asking the AI to write or modify code — Save buttons appear automatically  
 
 ❌ Don't use single keywords — the AI needs full context  
 ❌ Don't ask about content that hasn't been indexed  
+
+### Cloud AI Providers
+
+✅ Try Gemini or Llama API first — both have free tiers and are easy to set up  
+✅ Use cloud providers for complex, multi-document questions that need higher reasoning quality  
+✅ Use image attachments with ChatGPT, Claude, or Gemini for screenshot analysis or diagram understanding  
+✅ Keep Auto-fallback ON so queries always get an answer even if a provider is temporarily unavailable  
+
+❌ Don't put API keys anywhere other than the Settings → External AI APIs fields  
+❌ Don't send highly sensitive personal data via cloud providers — use Local Ollama for maximum privacy  
 
 ### Email
 
@@ -945,6 +1134,7 @@ Delete:
 ✅ Schedule updates during off-hours (overnight, lunch)  
 ✅ Stick with `llama3.2:1b` unless you need higher answer quality  
 ✅ Enable Auto-start Ollama for a seamless one-click launch experience  
+✅ Use Debug View only when troubleshooting — keep it OFF for everyday use  
 
 ❌ Don't use 70b+ models unless you have 32+ GB RAM  
 ❌ Don't run multiple AI Prowler instances simultaneously  
@@ -954,19 +1144,19 @@ Delete:
 ## ❓ Frequently Asked Questions
 
 **Q: Do I need an API key or account?**  
-A: No. Everything runs locally with no accounts, keys, or registration of any kind.
+A: No — everything runs locally with no accounts, keys, or registration. Cloud AI providers are entirely optional and only used when you explicitly add a key.
 
 **Q: Does this work offline?**  
-A: Yes — 100% offline after the one-time installation.
+A: Yes — 100% offline by default. Cloud providers obviously need an internet connection, but local Ollama queries work with no network at all.
 
 **Q: Is my data private?**  
-A: Completely. Nothing leaves your computer at any point.
+A: Completely private when using local Ollama. When you opt in to a cloud provider, only your question and retrieved excerpts are sent — your original files never leave your computer.
 
 **Q: How much does it cost?**  
-A: Free.
+A: The app is free. Local Ollama is free. Cloud providers are billed by the provider — several offer generous free tiers (Gemini and Llama API in particular).
 
 **Q: Does it need a GPU?**  
-A: No. The default model runs well on CPU-only hardware. A GPU speeds up larger models significantly.
+A: No. The default model runs well on CPU-only hardware. A GPU speeds up larger models significantly and makes high ⚠reload chunk counts much faster.
 
 **Q: How many documents can I index?**  
 A: Thousands — limited only by available disk space and ChromaDB index capacity.
@@ -987,16 +1177,46 @@ A: Windows Task Scheduler runs the task the next time the computer is on and the
 A: Yes — any Ollama-compatible model works. Install it from the Settings tab or by running `ollama pull <model-name>`.
 
 **Q: What does the Auto-start Ollama option do?**  
-A: When enabled, AI Prowler automatically launches the Ollama server in a separate CMD window when you open AI Prowler. This means you never need to manually start Ollama — just open the app and it's ready. Disable it if you want to manage Ollama yourself or use it with other tools.
+A: When enabled, AI Prowler automatically launches the Ollama server when you open the app and shuts it down on exit. The server window is hidden by default — enable Debug View in Settings if you need to see it.
 
 **Q: What is the ⚡ Load AI Model button for?**  
-A: It manually triggers the model pre-warm so the AI is ready before you type your first question. The model loads automatically anyway when you switch to the Ask Questions tab, but clicking this button lets you start loading while you're still on another tab.
+A: It manually triggers the model pre-warm so the AI is ready before you type your first question. The model loads automatically when you switch to the Ask Questions tab, but clicking this button lets you start loading while you're still on another tab.
+
+**Q: What does File Output Mode do?**  
+A: It instructs the AI to label any code or script files it writes with a filename. AI Prowler then detects those filenames in the answer and shows a 💾 Save File button for each one — eliminating copy-paste for code file answers.
+
+**Q: Can I attach images to questions?**  
+A: Yes — use the 📎 Attach Files button. Images are supported by cloud providers with vision capability (ChatGPT, Claude, Gemini). Text files can be attached regardless of provider.
+
+**Q: What context chunks setting should I use?**  
+A: "Auto (3)" is the best default — it calculates the optimal number for your model. Increase to 5–6 for broader questions. Only use ⚠reload values (7+) when you need wide document coverage and can wait for the model to reload its context window.
 
 ---
 
 ## 📝 Version History
 
-### Version 1.9 (Current)
+### Version 2.0 (Current)
+
+**New features:**
+- ☁️ **External AI APIs** — six cloud providers now integrated: ChatGPT (OpenAI), Claude (Anthropic), Gemini (Google), Grok (xAI), Llama API (Meta), Mistral Large. API keys managed entirely in Settings with save, show/hide toggle, live 🔌 Test connection, and 🔑 Get Key buttons. Status dots show per-provider readiness at a glance.
+- 🔄 **Auto-fallback** — if a cloud provider fails or hits its rate limit, AI Prowler transparently falls back to local Ollama and notes the fallback in the answer.
+- 🎯 **AI Provider selector** — dropdown in the Ask Questions tab lets you pick the AI for each query. Live coloured status light reflects provider readiness.
+- 📎 **Attachments panel** — attach images and text files to questions. Images are sent to vision-capable cloud providers; text files are injected into the prompt.
+- 📄 **File Output Mode** — when enabled, the AI labels code blocks with filenames. Detected files appear in a **📁 Files in Answer** panel with per-file 💾 Save buttons — no copy-paste.
+- 💾 **Save Answer button** — save the full answer to `.txt` or `.md` with a single click.
+- 🔍 **Debug View** — checkbox in Settings → Query Output controls whether Ollama/subprocess windows appear in the foreground or run silently in the background.
+- 🏅 **RAM-aware model selector** — model dropdown now shows ✅/⚠️ fit badges based on detected system RAM, download size, and minimum RAM requirement. Models are sorted so compatible ones appear first.
+- 🔭 **Browse & Install Model…** — opens a full model browser for downloading new Ollama models from within the app.
+- ⚠️ **Context chunks reload warnings** — values ≥7 are labelled "⚠reload" to signal that the model will need to reload its context window. Changing the chunk count triggers an automatic re-prewarm at the required context size.
+- ⛏ **Enable debug output** checkbox — show/hide ⏱ timing markers and 🔬 debug annotations in answers without restarting.
+
+**Fixes:**
+- `qo_frame` NameError in `create_settings_tab()` resolved — renamed to `output_frame` to match the enclosing LabelFrame.
+- `debug_view` not persisting across restarts — `save_config()` in `rag_preprocessor.py` was missing the `debug_view` parameter, so the value was silently discarded. Parameter added to both the function signature and the save block.
+
+---
+
+### Version 1.9
 
 **New features:**
 - 🟢 Auto-start Ollama — new "Ollama Server" section in Settings. When enabled, AI Prowler launches `ollama serve` automatically on startup and shuts it down on exit. Saves and restores across sessions.
@@ -1040,7 +1260,9 @@ You now know how to:
 ✅ Install AI Prowler completely  
 ✅ Index documents, code, and email from every major provider  
 ✅ Export email from Gmail, Apple Mail, Thunderbird, Yahoo, and Outlook  
-✅ Ask questions with text or voice  
+✅ Ask questions with text, voice, or file attachments  
+✅ Use cloud AI providers for higher-quality answers  
+✅ Get one-click Save buttons for AI-written code files  
 ✅ Pre-warm the AI model with the Load AI Model button  
 ✅ Keep your index current with smart incremental updates  
 ✅ Schedule automatic background updates  
@@ -1053,5 +1275,5 @@ You now know how to:
 
 ---
 
-*AI Prowler v1.9 — Your Personal AI Knowledge Base*  
-*100% Local &nbsp;•&nbsp; 100% Private &nbsp;•&nbsp; 100% Yours*
+*AI Prowler v2.0 — Your Personal AI Knowledge Base*  
+*Local-first &nbsp;•&nbsp; Cloud-optional &nbsp;•&nbsp; 100% Yours*
