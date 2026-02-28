@@ -148,7 +148,26 @@ if errorlevel 1 (
     for /f "tokens=*" %%i in ('python --version') do set PYTHON_VERSION=%%i
     echo [OK] %PYTHON_VERSION% found
     echo.
-    
+
+    REM ── Check Python version is compatible with AI/ML packages ───────────
+    echo Checking Python version compatibility...
+    powershell -NoProfile -Command "if ([int]((python --version 2>&1) -replace 'Python \d+\.(\d+).*','$1') -gt 12) { exit 1 } else { exit 0 }" >nul 2>&1
+    if errorlevel 1 (
+        echo.
+        echo [WARN] Python 3.13+ detected - incompatible with AI packages!
+        echo.
+        echo Installing Python 3.11 (recommended for AI work)...
+        winget install Python.Python.3.11 --silent --accept-package-agreements --accept-source-agreements
+        echo.
+        echo [INFO] Python 3.11 installed. Please close this window,
+        echo        open a NEW Command Prompt and run INSTALL.bat again.
+        echo.
+        pause
+        exit /b 0
+    )
+    echo [OK] Python version is compatible
+    echo.
+
     REM Ensure Python is in PATH for other programs
     echo Verifying Python environment variables...
     
@@ -230,43 +249,43 @@ echo.
 REM Install packages one by one showing actual output
 echo.
 echo [2/11] Installing chromadb (AI database)...
-python -m pip install "chromadb>=0.4.22" --no-warn-script-location
+python -m pip install "chromadb==0.6.3" --prefer-binary --no-warn-script-location
 if not errorlevel 1 (<nul set /p "=     Done .")
 echo.
 
 echo.
 echo [3/11] Installing sentence-transformers (AI embeddings)...
-python -m pip install "sentence-transformers>=2.2.2" --no-warn-script-location
+python -m pip install "sentence-transformers>=2.2.2" --prefer-binary --no-warn-script-location
 if not errorlevel 1 (<nul set /p "=     Done .")
 echo.
 
 echo.
 echo [4/11] Installing pdfplumber (PDF support)...
-python -m pip install "pdfplumber>=0.10.3" --no-warn-script-location
+python -m pip install "pdfplumber>=0.10.3" --prefer-binary --no-warn-script-location
 if not errorlevel 1 (<nul set /p "=     Done .")
 echo.
 
 echo.
 echo [5/11] Installing python-docx (Word support)...
-python -m pip install "python-docx>=1.1.0" --no-warn-script-location
+python -m pip install "python-docx>=1.1.0" --prefer-binary --no-warn-script-location
 if not errorlevel 1 (<nul set /p "=     Done .")
 echo.
 
 echo.
 echo [6/11] Installing pypdf (PDF processing)...
-python -m pip install "pypdf>=3.17.4" --no-warn-script-location
+python -m pip install "pypdf>=3.17.4" --prefer-binary --no-warn-script-location
 if not errorlevel 1 (<nul set /p "=     Done .")
 echo.
 
 echo.
 echo [7/11] Installing extract-msg (Email support)...
-python -m pip install "extract-msg>=0.45.0" --no-warn-script-location
+python -m pip install "extract-msg>=0.45.0" --prefer-binary --no-warn-script-location
 if not errorlevel 1 (<nul set /p "=     Done .")
 echo.
 
 echo.
 echo [8/11] Installing requests (HTTP library)...
-python -m pip install "requests>=2.31.0" --no-warn-script-location
+python -m pip install "requests>=2.31.0" --prefer-binary --no-warn-script-location
 if not errorlevel 1 (<nul set /p "=     Done .")
 echo.
 
@@ -277,19 +296,19 @@ echo ============================================================
 echo These enable the microphone button in the Ask Questions tab.
 echo.
 echo [9/11] Installing numpy (audio processing)...
-python -m pip install "numpy>=1.24.0" --no-warn-script-location
+python -m pip install "numpy>=1.24.0" --prefer-binary --no-warn-script-location
 if not errorlevel 1 (<nul set /p "=     Done .")
 echo.
 
 echo.
 echo [10/11] Installing faster-whisper (local speech recognition)...
-python -m pip install "faster-whisper>=1.0.0" --no-warn-script-location
+python -m pip install "faster-whisper>=1.0.0" --prefer-binary --no-warn-script-location
 if not errorlevel 1 (<nul set /p "=     Done .")
 echo.
 
 echo.
 echo [11/11] Installing sounddevice (microphone capture)...
-python -m pip install "sounddevice>=0.4.6" --no-warn-script-location
+python -m pip install "sounddevice>=0.4.6" --prefer-binary --no-warn-script-location
 if not errorlevel 1 (<nul set /p "=     Done .")
 echo.
 
@@ -330,7 +349,7 @@ if errorlevel 1 (
     echo [WARN] Some packages may have failed to install.
     echo Retrying all packages via requirements.txt...
     echo.
-    python -m pip install -r "%~dp0requirements.txt" --no-warn-script-location
+    python -m pip install -r "%~dp0requirements.txt" --prefer-binary --no-warn-script-location
     echo.
 ) else (
     echo .......... Done!
@@ -383,7 +402,10 @@ if errorlevel 1 (
 ) else (
     echo [OK] Ollama found
     echo.
-    
+
+    REM Refresh PATH so ollama is usable in this session
+    for /f "usebackq delims=" %%p in (`powershell -NoProfile -Command "[System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User')"`) do set "PATH=%%p"
+
     REM Check if Ollama is running
     curl -s http://localhost:11434/api/tags >nul 2>&1
     if errorlevel 1 (
@@ -626,17 +648,11 @@ if exist "%ICON%" (
     )
 )
 
-REM Create shortcut with PowerShell
-powershell -Command "$WshShell = New-Object -ComObject WScript.Shell; $Shortcut = $WshShell.CreateShortcut('%SHORTCUT%'); $Shortcut.TargetPath = '%TARGET%'; $Shortcut.WorkingDirectory = '%INSTALL_DIR%'; $Shortcut.Description = 'AI Prowler - Personal AI Knowledge Base'; if (Test-Path '%ICON%') { $Shortcut.IconLocation = '%ICON%,0' }; $Shortcut.Save()" >nul 2>&1
+REM Use Python to create the shortcut (handles OneDrive Desktop and spaces cleanly)
+python "%~dp0create_shortcut.py"
 
-if exist "%SHORTCUT%" (
-    echo [OK] Desktop shortcut created!
-    echo.
-    echo Double-click "AI Prowler" on your desktop to launch!
-) else (
-    echo [WARN] Could not create desktop shortcut automatically
-    echo        You can manually create a shortcut to RAG_RUN.bat
-)
+echo [OK] Desktop shortcut created on your Desktop!
+echo.
 
 echo.
 goto :EOF

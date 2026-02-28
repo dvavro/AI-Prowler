@@ -2,7 +2,7 @@
 # Install with: pip install -r requirements.txt
 
 # ── Core RAG / indexing ────────────────────────────────────────────────────────
-chromadb>=0.4.22
+chromadb==0.6.3
 sentence-transformers>=2.2.2
 
 # ── Document parsing ───────────────────────────────────────────────────────────

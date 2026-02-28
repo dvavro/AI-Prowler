@@ -125,43 +125,44 @@ def create_desktop_shortcut_fallback():
     """Create desktop shortcut using PowerShell (no dependencies)"""
     try:
         import subprocess
-        
+
         # Get paths
         install_dir = Path(__file__).parent
-        desktop = Path.home() / "Desktop"
-        shortcut_path = desktop / "RAG.lnk"
         target = install_dir / "RAG_RUN.bat"
         icon_path = install_dir / "rag_icon.ico"
-        
-        # PowerShell script to create shortcut
+
+        # Use Windows Shell API to get real Desktop path (handles OneDrive Desktop)
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "[Environment]::GetFolderPath('Desktop')"],
+            capture_output=True, text=True
+        )
+        desktop = Path(result.stdout.strip()) if result.returncode == 0 and result.stdout.strip() else Path.home() / "Desktop"
+        shortcut_path = desktop / "AI Prowler.lnk"
+
+        icon_line = f'$Shortcut.IconLocation = "{icon_path},0"' if icon_path.exists() else ""
+
         ps_script = f'''
 $WshShell = New-Object -ComObject WScript.Shell
 $Shortcut = $WshShell.CreateShortcut("{shortcut_path}")
 $Shortcut.TargetPath = "{target}"
 $Shortcut.WorkingDirectory = "{install_dir}"
-$Shortcut.Description = "RAG - Personal AI Knowledge Base"
+$Shortcut.Description = "AI Prowler - Personal AI Knowledge Base"
+{icon_line}
+$Shortcut.Save()
 '''
-        
-        # Add icon if exists
-        if icon_path.exists():
-            ps_script += f'$Shortcut.IconLocation = "{icon_path}"\n'
-        
-        ps_script += '$Shortcut.Save()'
-        
-        # Execute PowerShell
         result = subprocess.run(
-            ["powershell", "-Command", ps_script],
-            capture_output=True,
-            text=True
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
+            capture_output=True, text=True
         )
-        
-        if result.returncode == 0 and shortcut_path.exists():
+
+        if shortcut_path.exists():
             print(f"✅ Created desktop shortcut: {shortcut_path}")
             return True
         else:
             print(f"⚠️  Could not create shortcut: {result.stderr}")
             return False
-            
+
     except Exception as e:
         print(f"⚠️  Could not create shortcut: {e}")
         return False

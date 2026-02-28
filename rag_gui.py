@@ -15,6 +15,10 @@ from pathlib import Path
 import queue
 import os
 
+# Ensure script directory is on sys.path so rag_preprocessor.py is always found
+# even when launched via desktop icon
+sys.path.insert(0, str(Path(__file__).parent.resolve()))
+
 # ── Optional speech-to-text packages ────────────────────────────────────────
 # Both packages are optional — if missing the mic button is simply hidden.
 # Install with: pip install faster-whisper sounddevice
@@ -55,10 +59,14 @@ except ImportError as e:
     print(f"Warning: Could not import AI Prowler functions: {e}")
     print("Make sure rag_preprocessor.py is in the same directory")
     RAG_AVAILABLE = False
+    _RAG_ERROR = str(e)
 except Exception as e:
     print(f"Error loading AI Prowler module: {e}")
     print("Continuing with limited functionality...")
     RAG_AVAILABLE = False
+    _RAG_ERROR = str(e)
+else:
+    _RAG_ERROR = ""
 
 # ── Speech Recorder ──────────────────────────────────────────────────────────
 
@@ -3725,8 +3733,9 @@ def main():
         root = tk.Tk()
         root.withdraw()
         messagebox.showerror("AI Prowler Engine Not Found",
-                           "Could not import AI Prowler modules.\n\n"
-                           "Make sure rag_preprocessor.py is in the same directory.")
+                           f"Could not import AI Prowler modules.\n\n"
+                           f"Error: {_RAG_ERROR}\n\n"
+                           f"Script dir: {str(Path(__file__).parent)}")
         return
     
     root = tk.Tk()
