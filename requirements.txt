@@ -3,12 +3,35 @@
 
 # ── Core RAG / indexing ────────────────────────────────────────────────────────
 chromadb==0.6.3
-sentence-transformers>=2.2.2
+# sentence-transformers and huggingface-hub are pinned together deliberately.
+# Mismatched versions cause huggingface_hub to return a cache path with a
+# trailing backslash; sentence-transformers then appends another backslash
+# via os.path.join, producing a double-backslash path that Windows rejects
+# with Errno 22 Invalid argument. These two versions are tested together on
+# both Windows 10 and Windows 11 and do not have this bug.
+huggingface-hub==0.26.5
+sentence-transformers==3.3.1
+# transformers is pinned to a tested version compatible with the huggingface-hub
+# and sentence-transformers pair above. Without this pin, pip backtracks through
+# 20+ transformers versions at install time trying to satisfy tokenizers
+# constraints from pre-existing user site-packages, making installs slow and
+# nondeterministic.
+transformers==4.44.2
 
 # ── Document parsing ───────────────────────────────────────────────────────────
 pdfplumber>=0.10.3
 python-docx>=1.1.0
 pypdf>=3.17.4
+
+# ── OCR — scanned PDFs and image files ────────────────────────────────────────
+# pytesseract: Python wrapper for the Tesseract OCR engine.
+#   Requires the Tesseract binary — installed automatically by AI-Prowler-Setup.iss
+#   (downloads from https://github.com/UB-Mannheim/tesseract).
+# pypdfium2: renders PDF pages to PIL images (no poppler needed — pure pip).
+# pillow: image I/O used by both pytesseract and pypdfium2.
+pytesseract>=0.3.10
+pypdfium2>=4.0.0
+pillow>=10.0.0
 
 # ── Email parsing ──────────────────────────────────────────────────────────────
 extract-msg>=0.45.0
@@ -24,5 +47,9 @@ faster-whisper>=1.0.0
 sounddevice>=0.4.6
 
 # ── GPU acceleration (auto-installed by INSTALL.bat) ──────────────────────────
-# torch is installed automatically with the correct CUDA version by INSTALL.bat
-# To install manually: pip install torch --index-url https://download.pytorch.org/whl/cu128
+# torch is intentionally NOT listed here. The installer detects whether an
+# NVIDIA GPU is present and installs the correct build automatically:
+#   - NVIDIA GPU found : pip install torch --index-url .../whl/cu121  (~2.5 GB)
+#   - No GPU found     : pip install torch                            (~200 MB)
+# To install manually with CUDA:  pip install torch --index-url https://download.pytorch.org/whl/cu121
+# To install manually (CPU only): pip install torch

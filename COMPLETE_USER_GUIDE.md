@@ -1,618 +1,389 @@
 # AI Prowler — Personal AI Knowledge Base
+**Complete User Guide · Version 3.0.0**
 
-**Complete User Guide · Version 2.0**
-
-**Ask questions about YOUR documents using AI — locally or via the cloud**
-
-Local-first &nbsp;•&nbsp; Optional cloud AI &nbsp;•&nbsp; Complete privacy &nbsp;•&nbsp; No subscription required
+*Local-first · Cloud-optional · 100% Yours*
 
 ---
 
-## 📦 What's in the Box
+## Table of Contents
 
-```
-AI-Prowler/
-├── RAG_RUN.bat              ← Double-click to launch
-├── INSTALL.bat              ← One-click installer (run once)
-├── UNINSTALL.bat            ← Clean removal tool
-├── rag_gui.py               ← GUI application
-├── rag_preprocessor.py      ← Core indexing & query engine
-├── create_shortcut.py       ← Desktop shortcut creator
-├── requirements.txt         ← Python package list (11 packages)
-├── rag_icon.ico             ← Application icon
-├── COMPLETE_USER_GUIDE.md   ← This guide
-└── generate_license.py      ← License tool (optional)
-```
-
----
-
-## ⚡ Quick Start
-
-```
-Step 1 — Double-click INSTALL.bat
-  • Installs Python 3.11 if not found (automatic)
-  • Installs all 11 required Python packages
-  • Downloads and installs Ollama AI engine
-  • Downloads default AI model — llama3.2:1b (~1.3 GB)
-  • Downloads Whisper speech model — large-v3-turbo (~1.6 GB)
-  • Creates "AI Prowler" shortcut on your Desktop
-  • Total download: ~4 GB · Time: 15–30 minutes
-
-Step 2 — Wait for "INSTALLATION COMPLETE"
-
-Step 3 — Double-click the "AI Prowler" Desktop icon
-  • GUI opens — no terminal window visible
-  • AI model begins loading silently in background
-  • Ready to index and query immediately
-```
+1. [What Is AI Prowler?](#1-what-is-ai-prowler)
+2. [System Requirements](#2-system-requirements)
+3. [Installation](#3-installation)
+4. [Quick Start (5 Minutes)](#4-quick-start-5-minutes)
+5. [Tab Reference](#5-tab-reference)
+   - [🔍 Ask Questions](#51--ask-questions)
+   - [📚 Index Documents](#52--index-documents)
+   - [🔄 Update Index](#53--update-index)
+   - [🗂 Smart Scan](#54--smart-scan)
+   - [⏰ Schedule](#55--schedule)
+   - [⚙️ Settings](#56-️-settings)
+6. [AI Models — Local](#6-ai-models--local)
+7. [Cloud AI Providers](#7-cloud-ai-providers)
+8. [File Attachments & File Output Mode](#8-file-attachments--file-output-mode)
+9. [Voice Input (Microphone)](#9-voice-input-microphone)
+10. [Email Indexing](#10-email-indexing)
+11. [OCR — Scanned PDFs & Images](#11-ocr--scanned-pdfs--images)
+12. [GPU Acceleration](#12-gpu-acceleration)
+13. [Supported File Types](#13-supported-file-types)
+14. [Scheduling Automatic Updates](#14-scheduling-automatic-updates)
+15. [Command Line (Advanced)](#15-command-line-advanced)
+16. [Privacy & Security](#16-privacy--security)
+17. [Troubleshooting](#17-troubleshooting)
+18. [Tips & Best Practices](#18-tips--best-practices)
+19. [Frequently Asked Questions](#19-frequently-asked-questions)
+20. [Uninstalling](#20-uninstalling)
+21. [File & Folder Reference](#21-file--folder-reference)
+22. [Version History](#22-version-history)
 
 ---
 
-## 🎯 What Is AI Prowler?
+## 1. What Is AI Prowler?
 
-AI Prowler uses **RAG (Retrieval-Augmented Generation)** — when you ask a question it first searches your own indexed documents for relevant passages, then feeds those passages to an AI model that writes a grounded, accurate answer.
+AI Prowler is a **local RAG (Retrieval-Augmented Generation)** application. It indexes your documents into a private vector database, and when you ask a question it retrieves the most relevant passages and feeds them to an AI model that writes a grounded, accurate answer.
+
+```
+You ask:       "What was the mutation rate in my NEAT project?"
+
+AI Prowler:    According to NEAT_Documentation.md, the mutation rate
+               is set to 0.02 (2%). This controls how frequently
+               weights and connections mutate during evolution...
+```
+
+Everything runs on your own machine by default. Your documents are never uploaded anywhere unless you choose to use a cloud AI provider — in that case only your question text and short retrieved excerpts are sent, never your original files.
 
 **What it does:**
 - 📚 Indexes documents, code, email, spreadsheets, and 55+ file types
-- 🔍 Answers questions using your own content, not just general knowledge
+- 🔍 Answers questions using your own content, not just general AI knowledge
 - 🤖 Runs 100% offline using local Ollama (default)
-- ☁️ Optionally uses cloud AI — ChatGPT, Claude, Gemini, Grok, Llama API, Mistral Large
+- ☁️ Optionally connects to cloud AI — ChatGPT, Claude, Gemini, Grok, Llama API, Mistral Large
 - 🔒 Local-first — no cloud contact unless you explicitly add an API key
-- 📬 Deep email support — Gmail, Apple Mail, Thunderbird, Yahoo, and more
+- 📬 Deep email support — Gmail, Apple Mail, Thunderbird, Yahoo, Outlook, and more
 - ⚡ Incremental updates — only re-processes files that changed
-- 🎤 Voice input — speak questions via local Whisper speech recognition
-- 📎 File attachments — attach images and files to questions (images sent to cloud providers)
-- 💾 File Output Mode — AI-written code files get one-click Save buttons automatically
+- 🎤 Voice input — speak questions using local Whisper speech recognition
+- 📎 File attachments — attach images and documents to questions
+- 💾 File Output Mode — AI-written code files get one-click Save buttons
 - ⏰ Scheduled auto-updates — keep the index current automatically
-- 💡 20+ AI models — local and cloud, tune speed vs. quality for your needs
-- 🟢 Auto-start Ollama — optionally launch the AI server automatically
-
-**Example conversation:**
-```
-You:         "What was the mutation rate in my NEAT project?"
-
-AI Prowler:  According to NEAT_Documentation.md, the mutation rate
-             is set to 0.02 (2%). This controls how frequently
-             weights and connections mutate during evolution...
-```
+- 🖨 OCR support — scanned PDFs and image files are automatically read with Tesseract
 
 ---
 
-## 🚀 Launching AI Prowler
+## 2. System Requirements
 
-| Method | How |
-|--------|-----|
-| Desktop icon (easiest) | Double-click "AI Prowler" |
-| From install folder | Double-click `RAG_RUN.bat` |
-| Command line | `python rag_gui.py` |
+| Component | Minimum | Recommended |
+|-----------|---------|-------------|
+| OS | Windows 10 64-bit | Windows 11 64-bit |
+| RAM | 8 GB | 16 GB+ |
+| Storage | 6 GB free | 15 GB free |
+| CPU | Any modern 64-bit | Quad-core or better |
+| GPU | Not required | NVIDIA (speeds up 7b+ models) |
+| Internet | Install only | Install + cloud AI (optional) |
 
-When the GUI opens, the embedding model begins warming up in the background. If **Auto-start Ollama** is enabled in Settings, the Ollama server also launches automatically — you do not need to start it manually.
+**GPU note:** Any NVIDIA GPU is supported including the RTX 50xx Blackwell series (RTX 5060, 5070, 5080, 5090). The installer automatically detects your GPU and installs the CUDA 12.8 build of PyTorch for full Blackwell compatibility. AMD and Intel GPUs are not supported for Ollama inference — they fall back to CPU automatically.
+
+### Download Sizes (First Install Only)
+
+| Component | Size |
+|-----------|------|
+| Python 3.11.8 | ~30 MB |
+| Python packages | ~600 MB |
+| Tesseract OCR | ~50 MB |
+| Ollama engine | ~400 MB |
+| AI model — llama3.2:1b (default) | ~1.3 GB |
+| Whisper speech model (first mic use) | ~1.6 GB |
+| **Total** | **~4 GB** |
 
 ---
 
-## 🎛️ Menu Bar
+## 3. Installation
 
-### File
-- **Exit** — close AI Prowler
+### Running the Installer
 
-### Help
-- **📖 User Guide** — opens this guide in a built-in scrollable viewer window
-- **🚀 Quick Start** — abbreviated quick-start guide in a separate window
-- **ℹ️ About AI Prowler** — version, feature list, and credits
+Double-click **AI-Prowler_INSTALL.exe** and follow the prompts. The installer handles everything automatically.
 
-> **Note:** The User Guide viewer loads this `COMPLETE_USER_GUIDE.md` file directly from the installation folder. Keep the file in the same directory as `rag_gui.py` for the best reading experience.
+| Step | What happens |
+|------|-------------|
+| 1 | Installs Python 3.11.8 to `%LocalAppData%\Programs\Python\Python311` |
+| 2 | Upgrades pip and installs all Python packages from `requirements.txt` |
+| 3 | Downloads and installs Tesseract OCR 5.4 (enables scanned PDF and image indexing) |
+| 4 | Detects your GPU and installs the correct PyTorch build (CUDA 12.8 or CPU-only) |
+| 5 | Downloads and installs the latest Ollama (always updated, even on reinstall) |
+| 6 | Pulls the `llama3.2:1b` default AI model (~1.3 GB) |
+| 7 | Creates a Desktop shortcut and Start Menu entry |
+
+### Reinstalling / Upgrading
+
+Just run the installer again. It will update Ollama to the latest version (important for new GPU architectures), update all application files, and preserve your existing RAG database and settings.
+
+### What Gets Installed Where
+
+| Item | Location |
+|------|----------|
+| Application files | `C:\Program Files\AI-Prowler\` |
+| Python 3.11 | `%LocalAppData%\Programs\Python\Python311\` |
+| Tesseract OCR | `%LocalAppData%\Programs\Tesseract-OCR\` |
+| Ollama engine | `%LocalAppData%\Programs\Ollama\` |
+| Ollama models | `%UserProfile%\.ollama\models\` |
+| RAG database | `%UserProfile%\AI-Prowler\rag_database\` |
+| Config file | `%UserProfile%\.rag_config.json` |
+| Install log | `%LocalAppData%\Temp\AI-Prowler\install_log.txt` |
+
+> **Tip:** If anything goes wrong during install, open `install_log.txt` — it contains the exact error, return codes, and every step the installer took. This is the first place to look when troubleshooting.
 
 ---
 
-## 📚 Tab 1 — Index Documents
+## 4. Quick Start (5 Minutes)
 
-**Purpose:** Add documents to your knowledge base.
+**Step 1 — Index your documents**
+1. Open AI Prowler from the Desktop shortcut
+2. Click the **📚 Index Documents** tab
+3. Click **Browse… ▼** and choose **Browse Folder…** to select a folder
+4. Click **▶ Start Indexing Queue** and wait for it to finish
 
-### The Directory Queue
+**Step 2 — Ask a question**
+1. Click the **🔍 Ask Questions** tab
+2. Type your question in the text box
+3. Press **Ctrl+Enter** or click **Ask Question**
+4. The answer streams in the box below
 
-AI Prowler uses a **queue system** — stage as many folders and individual files as you want, then process them all in one batch.
+**Step 3 — Get code files with one-click Save**
+1. Tick **📄 File Output Mode** in the Ask Questions tab
+2. Ask the AI to write you a script
+3. A **💾 Save** button appears automatically for each file in the answer
 
-**Adding items to the queue:**
+---
+
+## 5. Tab Reference
+
+### 5.1 🔍 Ask Questions
+
+This is the main tab you use every day.
+
+#### Your Question box
+
+Type your question here. The box supports multi-line input — press **Enter** for a new line and **Ctrl+Enter** to submit.
+
+#### 🎤 Microphone button *(shown when faster-whisper is installed)*
+
+Click the microphone to speak your question using the local Whisper `large-v3-turbo` model. Nothing is sent to any cloud transcription service. The model downloads automatically (~1.6 GB) on first use.
+
+- **Append mode** — tick "Append (add to existing text)" to add spoken words to whatever is already in the question box
+- **Auto-stop** — recording stops automatically after a configurable silence period (set in Settings → Microphone)
+
+#### 📎 Attachments
+
+Click **📎 Attach Files…** to include images or files alongside your question.
+
+- **Images** (.jpg, .png, .bmp, .gif, .tiff) — included as base64 for vision-capable models. Cloud providers (Claude, Gemini, ChatGPT-4o) fully support vision; local Ollama requires a vision model such as `llava`
+- **Text files** (.txt, .md, .pdf, .docx) — file content is extracted and appended to your question before it is sent to the AI
+- **Clear All** removes all attached files at once
+
+#### 📄 File Output Mode
+
+When ticked, AI Prowler instructs the AI to label every code block it writes with a filename. After the answer finishes, the **📁 Files in Answer** panel appears with a **💾 Save** button and **📋 Copy** button for each detected file.
+
+Supported auto-detection patterns:
+- ` ```python my_script.py ` — language + filename
+- ` ```my_script.py ` — filename only
+- `### FILE: name.ext ###` ... `### END FILE ###` — explicit block marker
+- ` ```python ` (no filename) — Ollama fallback: auto-named `script_1.py`, etc.
+
+#### Context Chunks
+
+Controls how many document excerpts are retrieved from your index and fed to the AI.
+
+| Setting | Use when |
+|---------|----------|
+| Auto (3) | Best default — calculates optimally for most questions |
+| 1–3 | Fast answers, focused topics |
+| 4–6 | Broader questions spanning multiple files |
+| 7–20 ⚠ reload | Deep research — triggers model reload, adds 2–12 minutes on CPU |
+
+Values marked **⚠ reload** require a larger model context window. AI Prowler automatically re-prewarns the model at the required size when you switch to these values.
+
+#### AI Provider
+
+Select which AI to use for this question. The dropdown lists all installed Ollama models first, then any configured cloud providers.
+
+The coloured dot shows current status:
+- 🟢 Green — ready (Ollama warmed, or cloud key valid)
+- 🟡 Yellow — loading / connecting
+- 🔴 Red — not available
+
+#### Action Buttons
+
+| Button | Action |
+|--------|--------|
+| **Ask Question** | Submit the question (same as Ctrl+Enter) |
+| **⏹ Stop** | Cancel a running query immediately |
+| **💾 Save Answer** | Save the full answer text to `.txt` or `.md` |
+| **⚡ Load AI Model** | Manually trigger Ollama model loading |
+
+#### Model Status Indicator
+
+| Indicator | Meaning |
+|-----------|---------|
+| ⚫ Grey — "Model not loaded" | Ollama has not yet been contacted |
+| 🟡 Yellow — "Loading model…" | Pre-warm is in progress |
+| 🟢 Green — "Model ready" | The model is loaded and queries respond quickly |
+
+If you see grey and your first query feels slow, click **⚡ Load AI Model** to pre-warm before you start typing.
+
+#### Answer Box
+
+Responses stream in token-by-token. After the answer finishes:
+- The elapsed time is shown (e.g. `✅ Done in 5s`)
+- The **📁 Files in Answer** panel appears if any code blocks were detected
+
+---
+
+### 5.2 📚 Index Documents
+
+Use this tab to build or rebuild your knowledge base.
+
+#### The Directory Queue
+
+AI Prowler uses a queue system — stage as many folders and files as you want, then process them all in one batch.
 
 | Button | What it does |
 |--------|-------------|
-| 📂 Browse… ▼ | Opens a dropdown menu with two choices — see below |
-| 📄 Browse Files (multi-select)… | Standard file picker; Ctrl/Shift click to select multiple files |
-| 📁 Browse Folder… | Opens a folder browser for selecting a single directory |
-| ➕ Add to Queue | Adds whatever is typed in the path entry box |
-| Type + Enter | Type a path directly and press Enter |
-
-The **Queue counter** at the top right updates live as you add and remove items.
-
-**Managing the queue:**
+| **Browse… ▼** | Opens a dropdown with two choices (see below) |
+| **Browse Files (multi-select)…** | File picker — Ctrl/Shift click to select multiple files |
+| **Browse Folder…** | Opens a folder browser |
+| **➕ Add to Queue** | Adds the path currently typed in the entry box |
+| **Type + Enter** | Type a path directly and press Enter |
 
 | Button | What it does |
 |--------|-------------|
-| ❌ Remove Selected | Removes the highlighted item before starting |
-| 🗑 Clear Queue | Removes everything and starts fresh |
-| Include subdirectories | Checkbox (default ON) — when checked every subfolder is scanned recursively |
+| **❌ Remove Selected** | Removes the highlighted item from the queue |
+| **🗑 Clear Queue** | Clears the entire queue |
+| **Include subdirectories** | When checked, every subfolder is scanned recursively (default ON) |
 
-### Options
+#### Smart Scan Option
 
-**Smart scan** (default ON, recommended) — before indexing, AI Prowler pre-scans the queue and automatically skips:
+When ticked (default), AI Prowler pre-scans and automatically skips:
 - Executable and compiled binary files (`.exe`, `.dll`, `.pyc`, …)
 - Media files — images, audio, video, fonts
 - Archive files — `.zip`, `.rar`, `.7z`, …
-- Database and VM image files
-- Known system/tool directories — `.git`, `node_modules`, `__pycache__`, `venv`, `build`, `dist`, `.idea`, `.vscode`, and more
+- System directories — `.git`, `node_modules`, `__pycache__`, `venv`, `build`, `.idea`, `.vscode`, and more
 
 **Pre-scan only** — check this to see a full report of what *would* be indexed without actually indexing anything. Useful before committing to a large folder.
 
-### Action Buttons
+#### Action Buttons
 
 | Button | Function |
 |--------|---------|
-| ▶ Start Indexing Queue | Begin processing all queued items |
-| ⏸ Pause | Freeze at the end of the current file. Click again to Resume |
-| ⏹ Stop | Stop cleanly after the current file and save position |
-| 🔍 Scan Queue | Run pre-scan and show report without indexing |
+| **▶ Start Indexing Queue** | Begin processing all queued items |
+| **⏸ Pause** | Freeze at the end of the current file — click again to Resume |
+| **⏹ Stop** | Stop cleanly after the current file and save progress |
+| **🔍 Scan Queue** | Run pre-scan and show a report without indexing |
 
-### Progress Display
+#### Progress Display
 
 Three live indicators appear while indexing runs:
-
 - **Animated progress bar** on the left
 - **Directory/file counter** in the centre — e.g. `Dir 2/4: Projects` or `[Email 847/12,034] Re: Budget`
-- **Elapsed timer** on the right — ticks up in real time (e.g. `⏱ 3m 42s`)
+- **Elapsed timer** on the right — ticks up in real time
 
-For email archives the counter shows per-message progress so you always know exactly where you are inside a large export.
-
-### Pause and Resume
+#### Pause and Resume
 
 - **Pause** freezes the worker thread immediately. The timer pauses too. Click **Resume** to continue from exactly where you stopped.
-- **Stop** saves your exact position — the Start button changes to **▶ Resume Indexing**. Clicking it picks up from where you stopped, including the position within a partially-processed directory.
+- **Stop** saves your exact position — the Start button changes to **▶ Resume Indexing**. Clicking it picks up from where you stopped, including position within a partially-processed directory.
 
-### What Gets Indexed
-
-**Documents:** `.txt` `.md` `.rst` `.rtf` `.odt` `.pdf` `.docx` `.doc` `.xlsx` `.xls` `.pptx` `.ppt`
-
-**Code and markup:** `.py` `.js` `.ts` `.jsx` `.tsx` `.cs` `.java` `.cpp` `.c` `.h` `.hpp` `.go` `.rs` `.rb` `.php` `.swift` `.kt` `.scala` `.r` `.html` `.htm` `.css` `.scss` `.sass` `.less` `.xml` `.xhtml`
-
-**Config and data:** `.json` `.yaml` `.yml` `.toml` `.ini` `.cfg` `.conf` `.env` `.csv` `.tsv` `.log` `.sql`
-
-**Scripts:** `.sh` `.bash` `.zsh` `.ps1` `.bat` `.cmd` `.gitignore` `.dockerignore` `.editorconfig`
-
-**Email — single-message files:**
-`.eml` `.msg` `.emlx`
-
-**Email — multi-message archives** *(incremental indexer — see Email chapter below):*
-`.mbox` `.rmail` `.babyl` `.mmdf`
-
-### After Indexing
+#### After Indexing
 
 When a directory finishes indexing it is automatically **registered for tracking** — it appears in the Update Index tab and becomes eligible for scheduled updates.
 
 ---
 
-## 📬 Email Indexing — Complete Guide
+### 5.3 🔄 Update Index
 
-AI Prowler has first-class support for email from every major provider. This chapter covers how the engine works and exactly how to export from each service.
+Use this tab to keep your knowledge base current after adding or changing files.
 
----
+#### How File Tracking Works
 
-### How It Works
-
-**Single-message files** (`.eml`, `.msg`, `.emlx`) are indexed like any other document — one file in, one record out. The standard file-change tracker handles re-indexing: if the file's modification time hasn't changed since the last run, it is skipped.
-
-**Multi-message archives** (`.mbox`, `.rmail`, `.babyl`, `.mmdf`) use a completely different engine called the **per-email incremental indexer**:
-
-1. Every message in the archive is identified by a **stable unique ID** derived from its `Message-ID` header — an RFC 5322 globally-unique string assigned by the sending mail server. When a message has no `Message-ID`, a fingerprint is computed from `From + Date + Subject` instead.
-
-2. A local database at `~/.rag_email_index.json` records which IDs have already been indexed for each archive file path.
-
-3. On every re-import run, the engine compares the set of IDs in the archive against the set already in the database:
-   - **New ID** (in archive, not in database) → message is indexed and its chunks are added to ChromaDB
-   - **Known ID** (in both) → message is skipped entirely — no re-processing
-   - **Removed ID** (in database but no longer in archive) → its chunks are automatically deleted from ChromaDB
-
-4. A 100,000-message archive that gained 200 new emails this week processes only those 200 — not the whole archive.
-
-**Stop response:** The Stop button is checked after every single message (not just between files), so clicking Stop while processing a 50 GB archive responds within a second or two.
-
-**Per-message progress:** The output panel shows `[Email 4,271/52,000] Re: Q3 Budget (87 words)` so you always know what is happening and can estimate completion time.
-
----
-
-### Supported Archive Formats
-
-| Format | Extension(s) | Notes |
-|--------|-------------|-------|
-| Unix mbox | `.mbox` | The most common export format. Used by Gmail Takeout, Thunderbird, Apple Mail, iCloud Mail, and many others |
-| GNU Babyl / RMAIL | `.rmail` `.babyl` | GNU Emacs mail format — rare but fully supported |
-| MMDF | `.mmdf` | Legacy SCO/Unix mail server format — rare but fully supported |
-
-Single-message formats `.eml`, `.msg`, and `.emlx` are supported natively — no special configuration needed, just add the files or their containing folder to the index queue.
-
----
-
-### Exporting From Every Major Provider
-
----
-
-#### Gmail (Google)
-
-Gmail exports in `.mbox` format — one file per label — via Google Takeout.
-
-**Steps:**
-1. Go to [takeout.google.com](https://takeout.google.com) and sign in
-2. Click **Deselect all**, then scroll down and check only **Mail**
-3. Click **All Mail data included** to choose specific labels (Inbox, Sent, a project label, etc.) rather than your entire mailbox if you don't need everything
-4. Choose delivery: `.zip`, frequency: **Export once**, size: up to 50 GB per file
-5. Click **Create export** — Google emails a download link when it's ready (minutes to hours depending on mailbox size)
-6. Download and extract the `.zip` — inside you will find files named like `All mail Including Spam and Trash.mbox` or one `.mbox` per label
-7. Add the `.mbox` file(s) to the AI Prowler index queue
-
-> **Tip:** Label-by-label exports are easier to manage. Export just "Work" or "Projects" if that is all you need to query.
-
-> **Re-exporting:** When you export again next month, Google regenerates the `.mbox` from scratch with all messages including new ones. AI Prowler's incremental indexer handles this correctly — it uses `Message-ID` to identify what's new, so only genuinely new messages are processed even though the whole file is new.
-
----
-
-#### Apple Mail and iCloud Mail
-
-Apple Mail stores mail internally as `.emlx` files and can export entire mailboxes as `.mbox` bundles.
-
-**Export as .mbox (recommended for large mailboxes):**
-1. Open the Mail app on your Mac
-2. In the sidebar, select the mailbox you want to export (e.g. Inbox, a project folder)
-3. Go to **Mailbox → Export Mailbox…**
-4. Choose a save location and click **Choose**
-5. Apple Mail saves a `.mbox` package — on macOS this looks like a folder but on Windows (after copying) it is treated as a standard `.mbox` file
-6. Add it to the AI Prowler index queue
-
-**Access raw .emlx files directly (no export needed):**
-If you have access to the macOS filesystem, Apple Mail's internal storage is at `~/Library/Mail/`. Each message is an individual `.emlx` file. Add the `Mail` folder or specific account sub-folders to the AI Prowler queue — smart scan will find and index all `.emlx` files recursively.
-
-**iCloud Mail** uses the same Apple Mail client, so the export process is identical. Make sure your iCloud Mail is synced to the local Mail app first (Mail → Preferences → Accounts → check the account is enabled and synced).
-
----
-
-#### Thunderbird (Mozilla)
-
-Thunderbird stores each folder as a single raw `.mbox` file on disk — **no export step is needed**. You point AI Prowler directly at the profile folder.
-
-**Finding your Thunderbird mbox files:**
-
-| OS | Default path |
-|----|-------------|
-| Windows | `C:\Users\YourName\AppData\Roaming\Thunderbird\Profiles\[profile]\Mail\` |
-| macOS | `~/Library/Thunderbird/Profiles/[profile]/Mail/` |
-| Linux | `~/.thunderbird/[profile]/Mail/` |
-
-Inside each account folder you will find files named `Inbox`, `Sent`, `Drafts`, etc. with no file extension — these are standard mbox files. You can either:
-
-- Add the entire `Mail` folder to the AI Prowler queue. Smart scan will find all mbox files automatically.
-- Copy specific mailbox files, rename them with a `.mbox` extension, and add those instead.
-
-> **Keeping it current:** Because Thunderbird's mbox files live on your disk permanently and are updated as new mail arrives, you can schedule AI Prowler to re-scan the Thunderbird folder weekly. The incremental indexer will pick up only new messages each time.
-
----
-
-#### Yahoo Mail
-
-Yahoo does not provide a direct export tool. The recommended path is to use a third-party tool to pull your mail via IMAP and save it as `.mbox`.
-
-**Recommended approach — Thunderbird bridge:**
-1. Add your Yahoo account to Thunderbird using IMAP
-2. Let Thunderbird sync (can take hours for a large mailbox)
-3. Point AI Prowler at the Thunderbird profile folder as described above
-
-**Yahoo IMAP settings for Thunderbird:**
-- Server: `imap.mail.yahoo.com` · Port: `993` · SSL/TLS: Yes
-- You **must** use a Yahoo App Password — go to [security.yahoo.com](https://security.yahoo.com) → Manage app passwords → Generate one for Thunderbird. Your regular Yahoo password will not work for IMAP.
-
-**Alternative — MailStore Home (free):**
-1. Download MailStore Home from [mailstore.com/en/products/mailstore-home](https://www.mailstore.com/en/products/mailstore-home)
-2. Add Yahoo as a source using the IMAP settings above
-3. Export to `.mbox` format
-4. Add the exported file to the AI Prowler queue
-
----
-
-#### Outlook / Microsoft 365 / Exchange
-
-Outlook's native format is `.pst`/`.ost` — a proprietary binary format that requires conversion. The cleanest approach depends on how many emails you need.
-
-**Option A — Drag to folder (small batches):**
-1. Open Outlook
-2. Select messages (Ctrl+A to select all in a folder)
-3. Drag and drop them onto a Windows folder — Outlook saves each as an `.eml` file
-4. Add that folder to the AI Prowler index queue
-
-**Option B — MailStore Home (large mailboxes, recommended):**
-1. Download MailStore Home (free) from [mailstore.com](https://www.mailstore.com/en/products/mailstore-home)
-2. Add your Outlook/Exchange account or import from a `.pst` file
-3. Export to `.mbox` format
-4. Add the `.mbox` to the AI Prowler queue
-
-**Option C — Aid4Mail or similar PST converter:**
-Converts `.pst` directly to `.mbox`. Several free and paid tools are available — search for "PST to mbox converter".
-
-> **Note:** `.pst` and `.ost` files cannot be indexed directly because they use a proprietary binary format that requires Microsoft libraries to read. Conversion to `.mbox` or a folder of `.eml` files first is the reliable path.
-
----
-
-#### Windows Live Mail / Windows Mail (legacy)
-
-These apps stored each message as an individual `.eml` file in a folder hierarchy on disk.
-
-**Default storage location:**
-`C:\Users\YourName\AppData\Local\Microsoft\Windows Live Mail\`
-
-Add that folder (or specific account sub-folders) directly to the AI Prowler index queue — smart scan finds all `.eml` files recursively.
-
----
-
-#### Other Clients
-
-| Client | How to export |
-|--------|--------------|
-| **Evolution** (Linux) | File → Save As Mbox |
-| **KMail** (Linux) | Folder → Export → mbox |
-| **Mutt / Neomutt** | Uses mbox or Maildir natively — add the mbox file or folder directly |
-| **Postfix / Dovecot** | Maildir format — add the mail spool directory |
-| **Proton Mail** | Use Proton Mail Bridge (IMAP) → Thunderbird → AI Prowler |
-| **Fastmail** | Settings → Export → mbox per folder |
-| **Zoho Mail** | Settings → Data Migration → Export → mbox |
-
----
-
-### Re-Importing Updated Archives
-
-When you export a fresh copy of your Gmail `.mbox` or Thunderbird folder next month:
-
-- **New messages** added since the last import → indexed
-- **Messages present in both** old and new export → skipped (already indexed)
-- **Messages in old export but absent from new** → chunks automatically removed from ChromaDB
-
-This works because AI Prowler tracks individual `Message-ID` values, not file modification times. Even when Google Takeout regenerates the entire `.mbox` from scratch, only genuinely new messages are processed.
-
----
-
-## 🔍 Tab 2 — Ask Questions
-
-**Purpose:** Ask natural language questions about your indexed documents, using either a local AI model or a cloud AI provider.
-
-### Asking a Question
-
-1. Click the **🔍 Ask Questions** tab
-2. Type your question in the text box — or use the 🎤 mic button (see below)
-3. Optionally attach files using the **📎 Attachments** panel
-4. Select your preferred AI provider from the **AI Provider** dropdown
-5. Press **Ctrl+Enter** or click **Ask Question**
-
-The model pre-warms automatically when you switch to this tab, so the first query is faster than it would otherwise be.
-
-### Question Input Box
-
-The question box accepts multi-line input. **Enter** adds a new line; **Ctrl+Enter** submits.
-
-### Action Buttons
-
-| Button | What it does |
-|--------|-------------|
-| **Ask Question** | Submits the question and begins the query |
-| **⏹ Stop** | Cancels the current query in progress |
-| **💾 Save Answer** | Saves the full answer text to a `.txt` or `.md` file |
-| **⚡ Load AI Model** | Manually triggers the Ollama model pre-warm — useful to get the model ready before you start typing |
-
-### Model Status Indicator
-
-A small **coloured dot** and status label appear to the right of the action buttons, showing the real-time state of the local Ollama model:
-
-| Indicator | Meaning |
-|-----------|---------|
-| ⚫ Grey — "Model not loaded" | Ollama has not yet been contacted |
-| 🟡 Yellow — "Loading model…" | Pre-warm is in progress; model is being loaded into memory |
-| 🟢 Green — "Model ready" | The model is loaded and queries respond quickly |
-
-If you see grey and your first query feels slow, click **⚡ Load AI Model** to pre-warm before you need it.
-
-### 📎 Attachments
-
-The **Attachments** panel lets you add files to your question — useful for asking the AI to analyse, compare, or generate code based on existing files.
-
-**To attach files:**
-1. Click **📎 Attach Files…** — a standard file picker opens supporting multi-select
-2. Attached files appear as chips below the button showing an icon and filename
-3. Click the **✕** on any chip to remove that file individually, or click **🗑 Clear All** to remove everything
-
-**Supported attachment types:**
-
-- **Images** (`.png` `.jpg` `.jpeg` `.gif` `.bmp` `.webp` `.tiff`) — sent as base64 to cloud providers that support vision (ChatGPT, Claude, Gemini). Local Ollama also supports image input on compatible models.
-- **Text files** (any other extension) — file content is read and included in the question prompt alongside the question text.
-
-> **Cloud AI tip:** Image attachments require a cloud provider with vision support. If you are using Local Ollama with a text-only model, images in attachments will be ignored.
-
-### 📄 File Output Mode
-
-The **File Output Mode** checkbox (just below the Attachments panel) optimises AI answers when you ask the AI to write or modify code files.
-
-**When ticked (default ON):** AI Prowler instructs the AI to label every code block it generates with an explicit filename. When the answer arrives, the app automatically scans for labelled code blocks and displays a **📁 Files in Answer** panel with a **💾 Save File** button for each detected file — no copy-pasting required.
-
-**How the detection works:**
-
-The engine looks for three patterns in the answer:
-
-1. ` ```python my_script.py ` — language + filename (most common)
-2. ` ```my_script.py ` — filename-only fence (no language prefix)
-3. `### FILE: name.ext ###` … `### END FILE ###` — explicit block markers
-
-The **📁 Files in Answer** panel shows each detected file's name, line count, and a **💾 Save File** button that opens a Save-As dialog pre-populated with the correct filename and file type filter.
-
-**When unticked:** The AI answers normally without being prompted to label files. Useful for conversational questions where you do not want code outputs.
-
-### AI Provider Selector
-
-The **AI Provider** dropdown lets you choose which AI answers your question. It appears in the options row alongside the Context Chunks control.
-
-A small **coloured status light** to the left of the dropdown shows the current provider's state at a glance:
-
-| Light colour | Meaning |
-|-------------|---------|
-| ⚫ Grey | No API key configured, or local Ollama |
-| 🟢 Green | External provider ready — key present, not rate-limited |
-| 🟠 Orange | Provider is temporarily rate-limited |
-
-Available providers (configure API keys in the Settings tab):
-
-| Provider | Model used | Free tier |
-|----------|-----------|-----------|
-| **Local Ollama** (default) | Your selected local model | Free forever |
-| **ChatGPT** (OpenAI) | GPT-4o | Pay-per-use |
-| **Claude** (Anthropic) | claude-opus-4-5 | $5 free credit |
-| **Gemini** (Google) | gemini-2.0-flash | ✅ Free tier |
-| **Grok** (xAI) | grok-beta | Limited free |
-| **Llama API** (Meta) | Llama-4-Scout-17B-16E-Instruct | ✅ Free tier |
-| **Mistral Large** (Mistral AI) | mistral-large-latest | Limited free |
-
-> **Auto-fallback:** If an external provider fails or hits its rate limit, AI Prowler automatically falls back to your local Ollama model and shows an error note in the answer. You can disable this in Settings → External AI APIs.
-
-### Context Chunks
-
-The **Context chunks** dropdown controls how many document excerpts are retrieved from the index to give the AI context for its answer.
-
-| Setting | Best for |
-|---------|---------|
-| Auto (3) | Calculates optimally for most questions — recommended |
-| 1–5 | Quick factual lookups |
-| 6 | Broader questions spanning multiple files |
-| 7 ⚠reload – 20 ⚠reload | Wide coverage / summarisation — **triggers model reload**, adds 2–12 minutes on CPU |
-
-Values marked **⚠reload** require a larger context window than the default model configuration. AI Prowler will automatically re-prewarm the model at the required size when you change to these values — a status message appears during the reload. On GPU systems this is much faster.
-
-### Progress and Timing
-
-A **progress bar** animates while the query runs. An **elapsed timer** ticks up in real time. When the answer arrives the timer freezes — e.g. `✅ 14s`.
-
-### Example Questions
-
-```
-Factual lookups:
-  "What was the mutation rate in my NEAT config?"
-  "What's the deadline for the Smith project?"
-  "Find my flight confirmation number for the Paris trip"
-
-Broad summaries:
-  "What documents do I have about machine learning?"
-  "Summarise my project documentation"
-  "What are the recurring issues in my support tickets?"
-
-Technical / coding:
-  "Show me all Python functions that use asyncio"
-  "What libraries are imported in my backend code?"
-  "Write me a script to parse the CSV files in my data folder"
-
-Email:
-  "What did John say about the Q3 budget?"
-  "Find any emails about the server outage in January"
-  "What agreements did I make with Acme Corp last year?"
-
-With attachments (cloud AI):
-  "Here's my current login.py — add OAuth2 support"
-  "What errors are in this screenshot?"
-  "Refactor this code to follow PEP 8"
-```
-
-### Voice Input (🎤 Microphone)
-
-When `faster-whisper`, `sounddevice`, and `numpy` are installed (they are by default), a microphone button and controls appear below the question box.
-
-| State | What to do |
-|-------|-----------|
-| 🎤 (grey) | Click to start recording |
-| 🔴 (red, recording) | Speak your question — click again to stop early |
-| Transcribing… | Whisper is converting speech to text |
-| Question populated | Review, edit if needed, then press Ctrl+Enter |
-
-**Append mode** — the **Append (add to existing text)** checkbox controls whether dictated text is added to whatever is already in the question box (ON) or replaces it (OFF).
-
-**🗑 Clear Question** — clears the question box and resets mic status.
-
-**Auto-stop:** recording ends automatically after a configurable silence period (default 3 seconds). Adjust the threshold in Settings → Microphone / Speech Input.
-
-The Whisper `large-v3-turbo` model (~1.6 GB) is downloaded once on first use and cached. Subsequent launches load it instantly.
-
----
-
-## 🔄 Tab 3 — Update Index
-
-**Purpose:** Keep your knowledge base current without re-indexing everything.
-
-### How File Tracking Works
-
-When a directory is indexed, AI Prowler records each file's path, modification time, and size in `~/.rag_file_tracking.json`. On the next update run:
+When a directory is indexed, AI Prowler records each file's path, modification time, and size in `%UserProfile%\.rag_file_tracking.json`. On the next update run:
 
 | File status | What happens |
 |-------------|-------------|
 | New file | Indexed and added to ChromaDB |
 | Modified file | Old chunks deleted, new chunks added |
 | Deleted file | Chunks removed from ChromaDB |
-| Unchanged file | Skipped entirely |
+| Unchanged file | Skipped entirely — no processing |
 
 For email archives the engine goes deeper — see the Email chapter for how per-message deduplication works.
 
-### Tracked Directories List
+#### Tracked Directories List
 
-Shows every directory registered for tracking. The info bar at the top shows the exact paths of both tracking data files so you know where they live — they are **separate from the ChromaDB database** and survive a database wipe. Click **🔄 Refresh List** to reload from disk.
+Shows every directory registered for tracking. The info bar shows the exact paths of both tracking data files so you know where they live — they are separate from the ChromaDB database and survive a database wipe.
 
-### Update Buttons
-
-| Button | What it does |
-|--------|-------------|
-| Update Selected | Updates only the highlighted directory |
-| Update All | Updates every tracked directory in sequence |
-
-Both buttons run the full change detection pipeline and show a per-file log in the output panel.
-
-### Removing a Tracked Directory
-
-Select a directory and click **🗑 Remove Selected (untrack + delete its vectors)**. This does four things atomically:
-1. Removes the directory from the auto-update list
-2. Deletes all file-tracking timestamps for that directory
-3. Deletes all ChromaDB chunks whose filepath falls within that directory
-4. Removes any email index entries for archive files inside that directory
+| Button | Action |
+|--------|--------|
+| **🔄 Refresh List** | Re-reads the directory list from disk |
+| **🗑 Remove Selected** | Untracks the selected directory and deletes its vectors from the database |
 
 The actual files on disk are NOT touched. You can re-index the directory later if needed.
 
+#### Update Buttons
+
+| Button | Action |
+|--------|--------|
+| **Update Selected** | Re-index only the highlighted directory |
+| **Update All** | Re-index every tracked directory |
+
 ---
 
-## ⏰ Tab 4 — Schedule
+### 5.4 🗂 Smart Scan
 
-**Purpose:** Run automatic index updates on a timer using Windows Task Scheduler.
+Customise exactly which file types AI Prowler indexes and which it ignores. All changes take effect immediately and are saved to `%UserProfile%\.rag_config.json`.
 
-### Why Schedule
+#### Supported Extensions (left panel)
 
-Your documents change constantly. Scheduling ensures the AI always knows your latest content without you having to remember to click Update.
+The **✅ Supported Extensions** list contains every file type that will be indexed (55+ types by default).
+- **➕ Add** — type an extension (e.g. `.nfo`) and press Enter or click Add. The leading dot is added automatically.
+- **❌ Remove** — click an extension to select it, then click Remove.
+- **Conflict detection** — if you try to add an extension already in the Skipped list, AI Prowler warns and blocks the add.
 
-### Quick Schedule Presets
+#### Skipped Extensions (right panel)
 
-| Preset | Runs |
-|--------|------|
-| Daily at 8:00 AM | Every day at 8 AM |
-| Daily at 9:00 AM | Every day at 9 AM |
-| Weekdays at 8:00 AM | Monday–Friday at 8 AM |
+Types that are always ignored — compiled binaries, media, archives, etc. Same Add/Remove controls.
 
-### Custom Schedule
+#### Skipped Directories (bottom panel)
 
-1. Enter a time in **HH:MM** 24-hour format — e.g. `07:30`, `13:00`, `22:15`
-2. Choose **DAILY** or **WEEKDAYS**
-3. Click **Set Schedule**
+Folder *names* (not full paths) that are skipped when walking any directory tree. Defaults include `.git`, `node_modules`, `__pycache__`, `venv`, `build`, `dist`, `.idea`, `.vscode`, and more.
 
-### Schedule Controls
+Add project-specific folders (e.g. `backup`, `.cache`, `temp`) to exclude them from all future scans.
+
+#### Save and Reset
+
+| Button | Effect |
+|--------|--------|
+| **💾 Save Changes** | Explicitly saves (changes also auto-save as you edit) |
+| **↩ Reset to Defaults** | Restores all three lists to built-in defaults — asks for confirmation |
+
+---
+
+### 5.5 ⏰ Schedule
+
+Automate index updates so your knowledge base stays current without manual effort.
+
+#### Schedule Setup
+
+1. Enter a **Run time** in 24-hour format (e.g. `08:00`, `14:30`)
+2. Tick the days you want it to run — **Weekdays** and **Every day** buttons for quick selection
+3. Click **✅ Set Schedule**
+
+AI Prowler registers a Windows Task Scheduler task named `AI Prowler Auto-Update` that runs the update command against all tracked directories.
+
+#### Schedule Control
 
 | Control | Effect |
 |---------|--------|
-| Disable Schedule | Suspends the task without deleting it |
-| Remove Schedule | Permanently deletes the Task Scheduler task |
-| Refresh Status | Polls Task Scheduler and refreshes the display |
+| **Disable Schedule** | Suspends the task without deleting it |
+| **Remove Schedule** | Permanently deletes the scheduled task |
+| **Refresh Status** | Polls Task Scheduler and updates the display |
 
-### Status Display
+#### Status Display
 
 ```
 Active:
@@ -623,133 +394,34 @@ Not set:
   ❌ No Schedule Set
 ```
 
-### Requirements
+#### Requirements
 
 - At least one tracked directory in the Update Index tab
 - Windows Task Scheduler service running (on by default in all Windows versions)
-- AI Prowler installed in a permanent location — the task uses the full install path
 
 ---
 
-## 🗂 Tab 5 — Auto Scan Config
-
-**Purpose:** Control exactly which file types and directories are included or excluded during smart scan.
-
-All changes take effect immediately and are saved to `~/.rag_config.json`. They apply to every future scan and update run.
-
-### Supported Extensions (left panel)
-
-The **✅ Supported Extensions** list contains every file type that will be indexed. The default list covers 55+ types.
-
-- **➕ Add** — type an extension (e.g. `.nfo`) and press Enter or click Add. The leading dot is added automatically if you omit it.
-- **❌ Remove** — click an extension to select it, then click Remove.
-- **Conflict detection** — if you try to add an extension that already exists in the Skipped list, AI Prowler warns you and blocks the add.
-
-### Skipped Extensions (right panel)
-
-The **🚫 Skipped Extensions** list contains types that are always ignored — compiled binaries, media, archives, etc. Same Add/Remove controls.
-
-### Skipped Directories (bottom panel)
-
-The **📂 Skipped Directories** list contains folder *names* (not full paths) that are skipped when walking any directory tree. Defaults include:
-
-- Version control: `.git` `.svn` `.hg` `.bzr`
-- Package managers: `node_modules` `vendor` `.nuget`
-- Python: `__pycache__` `.venv` `venv` `site-packages`
-- Build output: `build` `dist` `bin` `obj` `target`
-- IDE folders: `.idea` `.vscode` `.vs`
-- AI Prowler's own database: `rag_database`
-
-Add project-specific folders (e.g. `backup`, `.cache`, `temp`) to exclude them from all future scans.
-
-### Save and Reset
-
-| Button | Effect |
-|--------|--------|
-| 💾 Save Changes | Explicitly saves (changes also auto-save as you edit) |
-| ↩ Reset to Defaults | Restores all three lists to built-in defaults — asks for confirmation |
-
----
-
-## ⚙️ Tab 6 — Settings
-
-**Purpose:** Configure the AI model, external cloud AI providers, GPU acceleration, Ollama server behaviour, query output format, voice input, and database tools.
+### 5.6 ⚙️ Settings
 
 The Settings tab is scrollable — scroll down to see all sections.
 
----
+#### Active Model
 
-### AI Model
+Selects which local Ollama model is used for queries. The dropdown displays each model with a RAM-fit indicator:
+- **✅** — fits comfortably in your RAM (recommended)
+- **⚠️** — may run slowly or cause memory swapping
 
-**Select model** — choose from the full list of Ollama-compatible local models. The dropdown displays each model with its download size and minimum RAM requirement:
+Click **Browse & Install Model…** to open the model browser, which shows all available models with their size, minimum RAM, maker, and install status.
 
-```
-✅ llama3.2:1b  [1.3 GB dl | 4 GB RAM]
-✅ llama3.2:3b  [2.0 GB dl | 6 GB RAM]
-✅ llama3.1:8b  [4.7 GB dl | 8 GB RAM]
-⚠️ qwen2.5:14b  [9.0 GB dl | 16 GB RAM]
-```
+#### External AI APIs
 
-AI Prowler automatically detects your system RAM and adds a **fitness badge** to every model:
+Enter API keys for cloud providers. Keys are stored locally in `%UserProfile%\.rag_config.json` and are never transmitted anywhere except directly to the provider's own API when you make a query.
 
-| Badge | Meaning |
-|-------|---------|
-| ✅ | Model fits in your RAM — recommended |
-| ⚠️ | Model needs more RAM than detected — may run slowly |
-
-Models that fit in your RAM appear first in the list. A note below the dropdown confirms your detected RAM size.
-
-**Browse & Install Model…** — opens a full model browser where you can search, review, and download any Ollama-compatible model directly from within the app.
-
-**Model families and trade-offs:**
-
-| Family | Models | Best for |
-|--------|--------|---------|
-| Llama 3.2 | `llama3.2:1b` ⭐ `llama3.2:3b` | Default — fast and capable |
-| Llama 3.1 | `llama3.1:8b` `70b` `405b` | High-quality answers |
-| Llama 3 | `llama3:8b` `70b` | Proven quality (older generation) |
-| Qwen 2.5 | `0.5b` through `72b` | Multilingual, ultra-lightweight options |
-| Mistral | `mistral:7b` `mixtral:8x7b` `8x22b` | Code-heavy projects |
-| Gemma | `gemma:2b` `7b` `gemma2:9b` `27b` | Google's models |
-
-**Size vs. hardware guide:**
-
-| Model size | Speed | Quality | Min RAM |
-|-----------|-------|---------|---------|
-| 0.5b–1b | ⚡⚡⚡ | ⭐ | 4 GB |
-| 3b–7b | ⚡⚡ | ⭐⭐ | 8 GB |
-| 8b–14b | ⚡ | ⭐⭐⭐ | 16 GB |
-| 70b+ | 🐌 | ⭐⭐⭐⭐ | 32+ GB |
-
-Start with `llama3.2:1b`. If answers feel shallow, upgrade to `llama3.2:3b` or `llama3.1:8b`.
-
----
-
-### External AI APIs
-
-This section lets you connect AI Prowler to cloud AI providers. Cloud providers typically give higher-quality answers for complex questions and support image attachments — at the cost of sending your prompts (but **not your raw documents**) to an external service.
-
-> **Privacy note:** Only the question text and retrieved document excerpts are sent to cloud providers — not your original files. The RAG retrieval step always runs locally.
-
-**Setting up a provider:**
-
-1. Click **🔑 Get Key** next to the provider — this opens the provider's API key page in your browser
-2. Sign up / log in and generate an API key
-3. Paste the key into the entry box in AI Prowler
-4. Click **Save**
-5. Optionally click **🔌 Test** to verify the key works with a live ping
-
-Each provider row contains:
-
-| Element | Purpose |
-|---------|---------|
-| **Coloured status dot** | Shows provider status at a glance (see below) |
-| **Provider name label** | e.g. "ChatGPT (OpenAI)" |
-| **API key entry box** | Masked by default — paste your key here |
-| **👁 Toggle** | Show or hide the key characters |
-| **Save** | Saves the key to `~/.rag_config.json` |
-| **🔌 Test** | Fires a live connection test and shows a result popup |
-| **🔑 Get Key (free note)** | Opens the provider's key page in your browser |
+For each provider you can:
+- **👁 Toggle** — show or hide the key in the entry field
+- **Save** — save the key to config
+- **🔌 Test** — fire a live test ping and see a detailed result popup
+- **🔑 Get Key** — open the provider's API key page in your browser
 
 **Status dot colours:**
 
@@ -759,60 +431,34 @@ Each provider row contains:
 | 🟢 Green | Key saved and connection verified |
 | 🟠 Orange | Provider is temporarily rate-limited |
 
-**Provider reference:**
+**Auto-fallback to Local Ollama** — when this checkbox is ON (default), if an external provider fails or returns a rate-limit error, AI Prowler silently falls back to your local Ollama model and notes the fallback in the answer.
 
-| Provider | Free tier note | Key URL |
-|----------|---------------|---------|
-| ChatGPT (OpenAI) | Pay-per-use | platform.openai.com/api-keys |
-| Claude (Anthropic) | $5 free credit on sign-up | console.anthropic.com |
-| Gemini (Google) | ✅ Generous free tier | aistudio.google.com |
-| Grok (xAI) | Limited free | console.x.ai |
-| Llama API (Meta) | ✅ Free tier available | llama.developer.meta.com |
-| Mistral Large | Limited free | console.mistral.ai |
-
-**Auto-fallback to Local Ollama** — when this checkbox is ON (default), if an external provider fails or returns a rate-limit error, AI Prowler silently retries with your local Ollama model and includes a brief error note in the answer. Uncheck to disable fallback and see the raw error instead.
-
----
-
-### Database
+#### Database
 
 | Button | Effect |
 |--------|--------|
-| View Statistics | Opens a dialog showing total chunks, unique files, and collection metadata |
-| Clear Database | Permanently deletes all indexed content from ChromaDB — asks for confirmation. Does not affect the file-tracking database or email index. |
+| **View Statistics** | Shows total chunks, unique files, and collection metadata |
+| **Clear Database** | Permanently deletes all indexed content — asks for confirmation. Does not affect the file-tracking database or email index. |
 
----
+#### Query Output
 
-### Query Output
-
-Controls what appears in the answer panel alongside the AI's response.
-
-**Show source references** — when ON, the answer panel includes file paths, relevance scores, chunk counts, and query timing. When OFF (default), only the clean answer is shown.
-
-**Enable debug output** — when ON, the answer panel includes detailed timing markers (⏱), debug annotations (🔬), and a DOS test command that shows the raw Ollama call. Useful for diagnosing slow or unexpected responses. When OFF (default), all debug lines are suppressed.
-
-**Debug View** — when ON, any DOS/Command Prompt windows opened by AI Prowler (e.g. the Ollama server window) appear in the **foreground** on your desktop. When OFF (default), those windows open **silently in the background** — the server runs but no CMD window appears on screen. This setting affects the Ollama auto-start window and any subprocesses launched during queries.
+| Option | Effect |
+|--------|--------|
+| **Show source references** | Prints file paths, similarity scores, and query timing with every answer |
+| **Enable debug output** | Prints token counts, context details, and a full curl test command |
+| **Debug View** | Shows background DOS windows in the foreground instead of hidden |
 
 > **Tip:** Use Debug View temporarily if you need to inspect Ollama server logs or troubleshoot connection issues, then turn it off for everyday use.
 
----
+#### Microphone / Speech Input *(visible when faster-whisper is installed)*
 
-### Microphone / Speech Input
-
-*(Only visible when faster-whisper, sounddevice, and numpy are installed)*
-
-**Auto-stop after silence** — a slider from 1.0 to 8.0 seconds (in 0.5s steps) controlling how long Whisper waits after you stop speaking before ending the recording automatically.
-
+**Auto-stop after silence** — a slider from 1.0 to 8.0 seconds controlling how long Whisper waits after you stop speaking before ending the recording automatically.
 - **Short (1–2s)** — snappy for short direct questions
 - **Long (4–8s)** — better if you pause between phrases or speak slowly
 
-The value is saved to config and persists across restarts. It also applies live to any recording already in progress.
+#### GPU Acceleration
 
----
-
-### GPU Acceleration
-
-Controls how many AI model layers Ollama offloads to your GPU. More layers on GPU means faster query responses on systems with a dedicated graphics card.
+Controls how many AI model layers Ollama offloads to your GPU.
 
 | Value | Meaning |
 |-------|---------|
@@ -820,301 +466,526 @@ Controls how many AI model layers Ollama offloads to your GPU. More layers on GP
 | 0 | **CPU only** — use if GPU causes errors or VRAM is insufficient |
 | 1–99 | **Partial offload** — fine-tune for laptops with limited VRAM |
 
-**🔍 Detect GPU** — runs a background scan that identifies your GPU model, VRAM size, and suggests an optimal layers value. The full detection output appears in a scrollable status box below the controls (long results are no longer cut off).
+**🔍 Detect GPU** — runs a background scan identifying your GPU model, VRAM size, and whether the embedding model is using CUDA.
 
-**✅ Apply & Reload** — saves the layers value and reloads the Ollama configuration so it takes effect immediately on the next query — no app restart needed.
+**✅ Apply & Reload** — saves the layers value and reloads the Ollama configuration immediately — no app restart needed.
 
----
+#### OCR — Scanned PDFs & Image Files
 
-### Ollama Server
+Shows the current status of Tesseract OCR:
+- ✅ **OCR active — Tesseract detected** — scanned PDFs and image files will be indexed automatically
+- ⚠️ **Tesseract binary not found** — reinstall AI Prowler to restore the Tesseract binary
 
-Controls how AI Prowler manages the Ollama backend process.
+#### Ollama Server
 
-**Auto-start Ollama server (opens separate CMD window)**
+**Auto-start Ollama server** — when enabled, AI Prowler launches `ollama serve` automatically on startup and shuts it down on exit. The window visibility depends on the **Debug View** setting.
 
-When this checkbox is **enabled**:
-- AI Prowler checks on startup whether Ollama is already running
-- If Ollama is not running, it launches `ollama serve` automatically
-- When AI Prowler is closed, the Ollama process is also shut down
-- Whether the Ollama window is visible depends on the **Debug View** setting (see Query Output section above)
-
-When this checkbox is **disabled** (default):
-- AI Prowler does not start Ollama automatically
-- You must start Ollama manually before using query features — open a Command Prompt and run `ollama serve`, or start it from the Windows Start menu
-
-> **Recommendation:** Enable auto-start if you only use Ollama through AI Prowler and want a one-click experience. Leave it disabled if you run other Ollama-based tools and want the server to stay running independently of AI Prowler.
-
-The setting is saved immediately and persists across restarts.
+> **Recommendation:** Enable auto-start if you only use Ollama through AI Prowler and want a one-click experience. Leave it disabled if you run other Ollama-based tools and want the server to stay running independently.
 
 ---
 
-## 💻 Command Line (Advanced)
+## 6. AI Models — Local
+
+Models run entirely on your hardware via Ollama — no internet required after download.
+
+| Model | Size | Min RAM | Maker | Best for |
+|-------|------|---------|-------|---------|
+| `qwen2.5:0.5b` | 0.4 GB | 2 GB | Alibaba | Ultra-fast, basic queries |
+| `qwen2.5:1.5b` | 1.0 GB | 4 GB | Alibaba | Very fast, surprisingly capable |
+| `llama3.2:1b` ⭐ | 1.3 GB | 4 GB | Meta | **Default** — fast and capable |
+| `gemma:2b` | 1.7 GB | 4 GB | Google | Compact and efficient |
+| `qwen2.5:3b` | 1.9 GB | 6 GB | Alibaba | Efficient small model |
+| `llama3.2:3b` | 2.0 GB | 6 GB | Meta | Better quality, still fast |
+| `mistral:7b` | 4.1 GB | 8 GB | Mistral AI | Fast and efficient 7B |
+| `llama3.1:8b` | 4.7 GB | 8 GB | Meta | Strong general-purpose |
+| `qwen2.5:7b` | 4.7 GB | 8 GB | Alibaba | Excellent quality/speed ratio |
+| `gemma2:9b` | 5.5 GB | 8 GB | Google | Improved Gemma, strong |
+| `qwen2.5:14b` | 9.0 GB | 16 GB | Alibaba | High quality |
+| `gemma2:27b` | 16.0 GB | 32 GB | Google | Large, high quality |
+| `llama3.1:70b` | 40.0 GB | 48 GB | Meta | Near-frontier quality |
+| `qwen2.5:72b` | 47.0 GB | 64 GB | Alibaba | Top-tier, high RAM needed |
+
+**Installing a model:** Go to Settings → Browse & Install Model, select a model, click **Download**.
+
+**Choosing a model:**
+- Start with `llama3.2:1b` (default) for speed on any machine
+- Move to `llama3.1:8b` or `qwen2.5:7b` for better quality on 16 GB+ RAM
+- Use `qwen2.5:14b` or higher only if your PC has 16 GB+ free RAM
+
+---
+
+## 7. Cloud AI Providers
+
+Cloud providers give you access to frontier models (GPT-4o, Claude, Gemini) that are far larger than any model you can run locally. Only your question and retrieved document excerpts are sent — never your original files.
+
+| Provider | Model | Free Tier |
+|----------|-------|-----------|
+| ChatGPT (OpenAI) | GPT-4o | Pay-per-use |
+| Claude (Anthropic) | claude-opus-4-5 | $5 credit on sign-up |
+| Gemini (Google) | gemini-2.0-flash | ✅ Generous free tier |
+| Grok (xAI) | grok-beta | Limited free |
+| Llama API (Meta) | Llama-4-Scout-17B | ✅ Free tier |
+| Mistral Large (Mistral AI) | mistral-large-latest | Limited free |
+
+### Setting Up a Cloud Provider
+
+1. Go to **Settings → External AI APIs**
+2. Click **🔑 Get Key** to open the provider's key page in your browser
+3. Paste your key into the entry field
+4. Click **Save**, then **🔌 Test** to verify it works
+5. In the **Ask Questions** tab, select the provider from the **AI Provider** dropdown
+
+### Provider Notes
+
+**Gemini (Google)** — the most generous free tier. Great first choice for trying cloud AI at no cost.
+
+**Llama API (Meta)** — free tier access to Meta's latest Llama 4 models hosted on Meta's infrastructure.
+
+**Claude (Anthropic)** — high-quality reasoning, excellent at code and document analysis.
+
+**ChatGPT (OpenAI)** — GPT-4o is multimodal; image attachment queries work especially well here.
+
+---
+
+## 8. File Attachments & File Output Mode
+
+### Attaching Files to a Question
+
+Click **📎 Attach Files…** in the Ask Questions tab. Supported types:
+- **Images** (.jpg, .png, .bmp, .gif, .tiff) — sent as vision data to cloud providers; requires a vision-enabled Ollama model (e.g. `llava`) for local use
+- **Text files** (.txt, .md, .pdf, .docx) — content is extracted and appended to your question
+
+Use **🗑 Clear All** to remove all attached files before your next question.
+
+### File Output Mode
+
+Tick **📄 File Output Mode** to instruct the AI to label every file it produces with a filename. After the answer streams in, the **📁 Files in Answer** panel appears above the answer box.
+
+Each detected file gets its own row showing:
+- The filename (e.g. `hello_world.py`)
+- A **💾 Save** button — opens a Save dialog with the filename pre-filled
+- A **📋 Copy** button — copies the file content to the clipboard
+
+This works with all providers. If Ollama doesn't label a file, the fallback auto-names unnamed code blocks (`script_1.py`, `script_1.js`, etc.).
+
+---
+
+## 9. Voice Input (Microphone)
+
+The microphone button (🎤) appears in the Ask Questions tab when `faster-whisper` and `sounddevice` are installed (included in the default install).
+
+### First Use
+
+The Whisper `large-v3-turbo` model (~1.6 GB) downloads automatically the first time you click the mic button. This is a one-time download — subsequent launches load it instantly from cache.
+
+### Using the Microphone
+
+1. Click 🎤 to start recording (button turns red / shows "🔴 Recording…")
+2. Speak your question
+3. Recording stops automatically after the silence threshold (default 3 seconds)
+4. The transcribed text appears in the question box
+5. Click **Ask Question** or press **Ctrl+Enter** to submit
+
+### Append Mode
+
+Tick **Append (add to existing text)** before recording to add the transcription after whatever is already in the question box. Useful for composing long questions across multiple recording sessions.
+
+### Adjusting the Silence Threshold
+
+Go to **Settings → Microphone / Speech Input** and drag the **Auto-stop after silence** slider:
+- **1–2 seconds** — stops quickly after you finish speaking
+- **4–8 seconds** — waits longer, giving you time to pause mid-sentence
+
+---
+
+## 10. Email Indexing
+
+AI Prowler has first-class support for email from every major provider. Indexed emails behave exactly like documents — ask "What did John say about the budget in April?" and get answers citing specific messages.
+
+### How It Works
+
+**Single-message files** (`.eml`, `.msg`, `.emlx`) are indexed like any other document.
+
+**Multi-message archives** (`.mbox`, `.rmail`, `.babyl`, `.mmdf`) use the **per-email incremental indexer**:
+
+1. Every message is identified by a **stable unique ID** derived from its `Message-ID` header (or a fingerprint of From + Date + Subject when no Message-ID is present)
+2. A local database at `%UserProfile%\.rag_email_index.json` records which IDs have already been indexed
+3. On re-import, only messages with a new ID are processed — a 100,000-message archive that gained 200 new emails processes only those 200
+4. Messages removed from the archive are automatically deleted from ChromaDB
+5. The Stop button responds after every individual message — clicking Stop while processing a 50 GB archive responds within seconds
+
+### Supported Formats
+
+| Format | Extension | Providers |
+|--------|-----------|-----------|
+| MBOX archive | `.mbox` | Gmail, Thunderbird, Apple Mail, Yahoo (via bridge) |
+| Single message | `.eml` | Outlook drag-and-drop, Windows Live Mail |
+| Outlook message | `.msg` | Outlook, Exchange |
+| Apple Mail message | `.emlx` | Apple Mail direct folder |
+| GNU RMAIL / Babyl | `.rmail` `.babyl` | GNU Emacs mail formats |
+| MMDF format | `.mmdf` | Legacy Unix mail |
+
+### Exporting From Every Major Provider
+
+#### Gmail (Google)
+
+Gmail exports in `.mbox` format via Google Takeout.
+
+1. Go to [takeout.google.com](https://takeout.google.com) and sign in
+2. Click **Deselect all**, then scroll down and check only **Mail**
+3. Click **All Mail data included** to choose specific labels (Inbox, Sent, a project label) rather than your entire mailbox
+4. Choose delivery: `.zip`, frequency: Export once, size: up to 50 GB per file
+5. Click **Create export** — Google emails a download link when it's ready
+6. Download and extract the `.zip` — inside you will find files like `All mail Including Spam and Trash.mbox` or one `.mbox` per label
+7. Add the `.mbox` file(s) to the AI Prowler index queue
+
+> **Re-exporting:** When you export again next month, Google regenerates the `.mbox` from scratch. AI Prowler handles this correctly — it uses `Message-ID` to identify what's new, so only genuinely new messages are processed even though the whole file is new.
+
+#### Apple Mail and iCloud Mail
+
+**Export as .mbox (recommended for large mailboxes):**
+1. Open the Mail app on your Mac
+2. In the sidebar, select the mailbox you want to export
+3. Go to **Mailbox → Export Mailbox…**
+4. Choose a save location and click **Choose**
+5. Apple Mail saves a `.mbox` package — on Windows (after copying) it becomes a standard `.mbox` file
+6. Add it to the AI Prowler index queue
+
+**Access raw .emlx files directly (no export needed):**
+Apple Mail's internal storage is at `~/Library/Mail/`. Each message is an individual `.emlx` file. Add the `Mail` folder or specific account sub-folders to the AI Prowler queue — smart scan will find and index all `.emlx` files recursively.
+
+**iCloud Mail** uses the same Apple Mail client. Make sure your iCloud Mail is synced to the local Mail app first (Mail → Preferences → Accounts → check the account is enabled).
+
+#### Thunderbird (Mozilla)
+
+Thunderbird stores each folder as a single raw `.mbox` file on disk — **no export step is needed**.
+
+| OS | Default path |
+|----|-------------|
+| Windows | `C:\Users\YourName\AppData\Roaming\Thunderbird\Profiles\[profile]\Mail\` |
+| macOS | `~/Library/Thunderbird/Profiles/[profile]/Mail/` |
+| Linux | `~/.thunderbird/[profile]/Mail/` |
+
+Inside each account folder you will find files named `Inbox`, `Sent`, `Drafts`, etc. with no file extension — these are standard mbox files. Either add the entire `Mail` folder to the queue (smart scan finds them automatically), or copy specific files, rename with a `.mbox` extension, and add those.
+
+> **Keeping it current:** Because Thunderbird's mbox files are updated as new mail arrives, you can schedule AI Prowler to re-scan the Thunderbird folder weekly. The incremental indexer picks up only new messages each time.
+
+#### Yahoo Mail
+
+Yahoo does not provide a direct export tool. The recommended path is to use Thunderbird as a bridge.
+
+**Thunderbird bridge (recommended):**
+1. Add your Yahoo account to Thunderbird using IMAP
+2. Let Thunderbird sync (can take hours for a large mailbox)
+3. Point AI Prowler at the Thunderbird profile folder
+
+**Yahoo IMAP settings:**
+- Server: `imap.mail.yahoo.com` · Port: `993` · SSL/TLS: Yes
+- Use a Yahoo **App Password** — go to [security.yahoo.com](https://security.yahoo.com) → Manage app passwords → Generate one for Thunderbird. Your regular Yahoo password will not work for IMAP.
+
+**Alternative — MailStore Home (free):**
+Download from [mailstore.com](https://www.mailstore.com/en/products/mailstore-home), add Yahoo via IMAP, export to `.mbox`.
+
+#### Outlook / Microsoft 365 / Exchange
+
+Outlook's native format is `.pst`/`.ost` — a proprietary format that requires conversion.
+
+**Option A — Drag to folder (small batches):**
+1. Open Outlook
+2. Select messages (Ctrl+A to select all in a folder)
+3. Drag and drop them onto a Windows folder — Outlook saves each as an `.eml` file
+4. Add that folder to the AI Prowler queue
+
+**Option B — MailStore Home (large mailboxes, recommended):**
+1. Download MailStore Home (free)
+2. Add your Outlook/Exchange account or import from a `.pst` file
+3. Export to `.mbox` or `.eml` format
+4. Add to the AI Prowler queue
+
+> **Note:** `.pst` and `.ost` files cannot be indexed directly — they use a proprietary binary format. Conversion to `.mbox` or a folder of `.eml` files first is the reliable path.
+
+#### Windows Live Mail / Windows Mail (legacy)
+
+These apps stored each message as an individual `.eml` file.
+
+Default storage location: `C:\Users\YourName\AppData\Local\Microsoft\Windows Live Mail\`
+
+Add that folder directly to the AI Prowler queue — smart scan finds all `.eml` files recursively.
+
+#### Other Clients
+
+| Client | How to export |
+|--------|--------------|
+| **Evolution** (Linux) | File → Save As Mbox |
+| **KMail** (Linux) | Folder → Export → mbox |
+| **Mutt / Neomutt** | Uses mbox or Maildir natively — add the mbox file or folder directly |
+| **Proton Mail** | Use Proton Mail Bridge (IMAP) → Thunderbird → AI Prowler |
+| **Fastmail** | Settings → Export → mbox per folder |
+| **Zoho Mail** | Settings → Data Migration → Export → mbox |
+
+---
+
+## 11. OCR — Scanned PDFs & Images
+
+AI Prowler automatically OCRs any document where the text layer is missing or too short.
+
+### What Gets OCRed
+
+- **Scanned PDFs** — contracts, court documents, manuals, old reports, living trusts
+- **Image files** — `.jpg`, `.jpeg`, `.png`, `.bmp`, `.tiff`, `.tif`, `.gif`
+
+### How It Works
+
+1. `pdfplumber` attempts to extract the text layer from each PDF page
+2. If fewer than 150 characters are found, the page is treated as image-only
+3. `pypdfium2` renders the page at 300 DPI to a PIL image
+4. `pytesseract` (Tesseract 5.4 OCR engine) extracts the text
+5. The extracted text is chunked and indexed normally
+
+### Verifying OCR Status
+
+Go to **Settings → OCR — Scanned PDFs & Image Files**:
+- ✅ **OCR active — Tesseract detected** — everything is working
+- ⚠️ **Tesseract binary not found** — reinstall AI Prowler to restore Tesseract
+
+---
+
+## 12. GPU Acceleration
+
+AI Prowler uses the GPU in two places:
+
+| Component | GPU support |
+|-----------|-------------|
+| Sentence embeddings (indexing & search) | ✅ NVIDIA CUDA — automatic via PyTorch |
+| LLM inference (Ollama) | ✅ NVIDIA CUDA — controlled by GPU Layers setting |
+
+### Checking GPU Status
+
+Go to **Settings → GPU Acceleration** and click **🔍 Detect GPU**. The output shows:
+- GPU model and VRAM
+- Whether the embedding model is using CUDA
+- Whether Ollama's LLM is running on GPU or CPU
+- How much VRAM the loaded model is occupying
+
+### Updating Ollama for New GPUs
+
+If you upgrade your GPU to a newer architecture, run the AI Prowler installer again. It always downloads the latest Ollama, which includes support for newer GPU architectures. After reinstalling, click **✅ Apply & Reload** in Settings to reload the model with GPU support.
+
+### GPU Layers Explained
+
+- **-1 (auto)** — let Ollama decide how many layers fit in VRAM (recommended)
+- **0** — force CPU inference (use if GPU is causing errors)
+- **1–99** — manual partial offload (advanced: tune if VRAM is limited)
+
+---
+
+## 13. Supported File Types
+
+### Documents & Text
+`.txt` `.md` `.rst` `.rtf` `.odt` `.pdf` `.docx` `.doc` `.xlsx` `.xls` `.pptx` `.ppt`
+
+### Code & Markup
+`.py` `.js` `.ts` `.jsx` `.tsx` `.cs` `.java` `.cpp` `.c` `.h` `.hpp` `.go` `.rs` `.rb` `.php` `.swift` `.kt` `.scala` `.r` `.html` `.htm` `.css` `.scss` `.sass` `.less` `.xml` `.xhtml`
+
+### Data & Config
+`.json` `.yaml` `.yml` `.toml` `.ini` `.cfg` `.conf` `.env` `.csv` `.tsv` `.log` `.sql`
+
+### Images *(OCR — text is extracted)*
+`.jpg` `.jpeg` `.png` `.bmp` `.tiff` `.tif` `.gif`
+
+### Email
+`.eml` `.msg` `.emlx` `.mbox` `.rmail` `.babyl` `.mmdf`
+
+### Scripts
+`.sh` `.bash` `.zsh` `.ps1` `.bat` `.cmd` `.gitignore` `.dockerignore` `.editorconfig`
+
+### Not Indexed *(skipped by default)*
+Executables, DLLs, archives (`.zip`, `.rar`, `.7z`), audio/video, design files (`.psd`, `.ai`), database files, and other binary formats. Customise the skip list in the **🗂 Smart Scan** tab.
+
+---
+
+## 14. Scheduling Automatic Updates
+
+The **⏰ Schedule** tab configures AI Prowler to re-index your documents automatically via Windows Task Scheduler.
+
+### Recommended Schedules
+
+| Use case | Recommended schedule |
+|----------|---------------------|
+| Actively changing documents | Daily at 08:00 weekdays |
+| Stable documents + email | Weekly on Monday at 08:00 |
+| Thunderbird sync | Daily (Thunderbird updates live) |
+| Large Gmail archive | Weekly (re-export monthly, update daily) |
+
+### What the Schedule Runs
+
+The scheduled task calls `rag_preprocessor.py auto-update`, which runs the full change-detection pipeline against all tracked directories. Only changed files are re-processed — unchanged files are skipped instantly, making weekly updates fast even on large collections.
+
+---
+
+## 15. Command Line (Advanced)
 
 All core functions are available without the GUI:
 
 ```bash
 # Index a directory (recursive by default)
-python rag_preprocessor.py index C:\Users\YourName\Documents
+python "C:\Program Files\AI-Prowler\rag_preprocessor.py" index "C:\Users\YourName\Documents"
 
 # Ask a question
-python rag_preprocessor.py query "What is in my documents?"
+python "C:\Program Files\AI-Prowler\rag_preprocessor.py" query "What is in my documents?"
 
 # List indexed files
-python rag_preprocessor.py list
+python "C:\Program Files\AI-Prowler\rag_preprocessor.py" list
 
 # Show database statistics
-python rag_preprocessor.py stats
+python "C:\Program Files\AI-Prowler\rag_preprocessor.py" stats
 
 # Scan a directory for changes without updating
-python rag_preprocessor.py check C:\Users\YourName\Documents
+python "C:\Program Files\AI-Prowler\rag_preprocessor.py" check "C:\Users\YourName\Documents"
 
 # Update only changed files in a directory
-python rag_preprocessor.py update C:\Users\YourName\Documents
+python "C:\Program Files\AI-Prowler\rag_preprocessor.py" update "C:\Users\YourName\Documents"
 
 # Auto-update all tracked directories
-python rag_preprocessor.py auto-update
+python "C:\Program Files\AI-Prowler\rag_preprocessor.py" auto-update
 
 # Change the active AI model
-python rag_preprocessor.py model llama3.1:8b
+python "C:\Program Files\AI-Prowler\rag_preprocessor.py" model llama3.1:8b
 
 # Clear the entire database
-python rag_preprocessor.py clear
+python "C:\Program Files\AI-Prowler\rag_preprocessor.py" clear
 ```
+
+Use `%LocalAppData%\Programs\Python\Python311\python.exe` if `python` is not on your PATH.
 
 ---
 
-## 🔧 System Requirements
-
-### Minimum
-
-| Component | Requirement |
-|-----------|------------|
-| OS | Windows 10 or Windows 11 (64-bit) |
-| RAM | 8 GB |
-| Storage | 6 GB free |
-| CPU | Any modern 64-bit processor |
-| Internet | Required for installation only (and for cloud AI providers if used) |
-
-### Recommended
-
-| Component | Recommendation |
-|-----------|---------------|
-| RAM | 16 GB (enables 7b–8b models) |
-| Storage | 15 GB (room for multiple models) |
-| CPU | Modern quad-core or better |
-| GPU | Optional — significantly speeds up 7b+ models |
-
-### Download Sizes (One-Time, Installation Only)
-
-| Component | Size |
-|-----------|------|
-| Python 3.11 | ~30 MB |
-| Python packages (11 total) | ~600 MB |
-| Ollama engine | ~400 MB |
-| AI model — llama3.2:1b (default) | ~1.3 GB |
-| Whisper speech model — large-v3-turbo | ~1.6 GB |
-| **Total** | **~4 GB** |
-
-After installation: 100% offline by default, no cloud connections unless you configure cloud provider API keys.
-
----
-
-## 📁 File Locations
-
-### Installation Folder
-
-```
-C:\Users\YourName\AI Prowler\
-├── rag_gui.py
-├── rag_preprocessor.py
-├── requirements.txt
-├── RAG_RUN.bat
-├── INSTALL.bat
-├── UNINSTALL.bat
-├── create_shortcut.py
-├── rag_icon.ico
-├── COMPLETE_USER_GUIDE.md
-└── rag_database\               ← ChromaDB index (your indexed content)
-    └── [ChromaDB files]
-```
-
-### User Data Files (Home Folder)
-
-```
-C:\Users\YourName\
-├── .rag_config.json              ← All settings (model, GPU layers, silence, auto-start, API keys, etc.)
-├── .rag_auto_update_dirs.json    ← List of tracked directories
-├── .rag_file_tracking.json       ← File modification baselines for change detection
-├── .rag_email_index.json         ← Per-email Message-ID tracking for incremental indexing
-├── .rag_license.key              ← License key (if applicable)
-└── rag_auto_update.bat           ← Generated update script (created when you set a schedule)
-```
-
-> **API keys** are stored in `.rag_config.json` under your user home folder — not in the AI Prowler installation folder and not transmitted anywhere other than to the provider you explicitly selected.
-
-### Speech Model Cache
-
-```
-C:\Users\YourName\.cache\huggingface\hub\
-└── models--Systran--faster-whisper-large-v3-turbo\   ← ~1.6 GB
-    (Only this sub-folder is touched by AI Prowler)
-```
-
----
-
-## 🔐 Privacy and Security
+## 16. Privacy & Security
 
 **AI Prowler is local-first. Cloud AI is entirely opt-in.**
 
-| What it does | What it does NOT do |
-|--------------|-------------------|
-| ✅ Runs 100% locally by default | ❌ No cloud contact unless you add an API key |
-| ✅ All local AI inference via Ollama | ❌ No automatic data uploads |
-| ✅ No login or account required for local use | ❌ No telemetry or analytics |
-| ✅ All indexed data stays on your hard drive | ❌ No phone-home behaviour |
-| ✅ API keys stored locally in your home folder | ❌ Raw document files never sent to cloud |
+| ✅ AI Prowler does | ❌ AI Prowler does NOT |
+|-------------------|----------------------|
+| Run 100% offline by default | Upload your documents anywhere |
+| Store all data on your hard drive | Collect telemetry or usage analytics |
+| Keep API keys in your local config file | Phone home or require an account |
+| Use Ollama for local-only LLM inference | Send original files to cloud providers |
+| Send only question text + excerpts to cloud | Share any data with third parties |
 
-**When cloud AI providers are used:**
-- Only your question text and retrieved document **excerpts** (not full files) are sent to the provider
-- The RAG retrieval step — finding relevant passages from your index — always runs locally
-- Your original source files are never transmitted
-- You choose when to use a cloud provider for each individual question via the AI Provider dropdown
+When you use a cloud AI provider, only these things leave your machine:
+1. Your question text
+2. Short retrieved excerpts from your indexed documents (typically 1–3 paragraphs per chunk)
 
----
+Your original source files are never transmitted.
 
-## 🗑️ Uninstalling
-
-### Option 1 — UNINSTALL.bat (recommended)
-
-Double-click `UNINSTALL.bat`. It walks through 9 clearly labelled steps:
-
-| Step | What is removed |
-|------|----------------|
-| 1/9 | Windows Task Scheduler task |
-| 2/9 | Desktop shortcut (both "AI Prowler.lnk" and "RAG.lnk" if present) |
-| 3/9 | AI Prowler entry from Windows PATH (uses PowerShell for reliability) |
-| 4/9 | Config files (`.rag_config.json`, `.rag_file_tracking.json`, `.rag_email_index.json`, etc.) |
-| 5/9 | ChromaDB database (optional — confirms before deleting) |
-| 6/9 | AI Prowler program files |
-| 7/9 | Ollama engine |
-| 8/9 | Whisper model cache — targets **only** the AI Prowler model folder, leaving other HuggingFace models untouched |
-| 9/9 | Summary |
-
-Python packages are intentionally kept to avoid breaking other programs. Remove Python separately via Settings → Apps if needed.
-
-### Option 2 — Manual Removal
-
-Delete:
-- The AI Prowler installation folder
-- From your home folder: `.rag_config.json`, `.rag_auto_update_dirs.json`, `.rag_file_tracking.json`, `.rag_email_index.json`, `.rag_license.key`, `rag_auto_update.bat`
-- Desktop shortcut (`AI Prowler.lnk`)
-- Task Scheduler task — open Task Scheduler from Start menu, find and delete the "RAG Auto-Update" task
-- Whisper cache: `C:\Users\YourName\.cache\huggingface\hub\models--Systran--faster-whisper-large-v3-turbo\`
+> **API keys** are stored in `%UserProfile%\.rag_config.json` under your user home folder — not in the AI Prowler installation folder, and not transmitted anywhere other than to the provider you explicitly selected.
 
 ---
 
-## 🚨 Troubleshooting
+## 17. Troubleshooting
 
 ### Installation
 
 | Problem | Solution |
 |---------|---------|
-| "Python not found" | Re-run INSTALL.bat — it installs Python 3.11 automatically |
-| Package install failed | Check internet connection, re-run INSTALL.bat |
-| "Ollama not found" | Download from [ollama.com/download/windows](https://ollama.com/download/windows) or re-run INSTALL.bat |
+| Install fails / Python not found | Ensure 6 GB free space; run installer as Administrator |
+| Package install failed | Check internet connection and re-run the installer |
+| Ollama not installed | Download from [ollama.com/download/windows](https://ollama.com/download/windows) or re-run the installer |
 | Whisper download failed | Non-critical — model downloads on first mic button use |
+| Any install error | Open `%LocalAppData%\Temp\AI-Prowler\install_log.txt` for the exact error and return codes |
 
 ### GUI
 
 | Problem | Solution |
 |---------|---------|
 | GUI won't open | Run `python rag_gui.py` from Command Prompt to see the error message |
-| "Could not import AI Prowler modules" | Ensure `rag_preprocessor.py` is in the same folder as `rag_gui.py` |
-| Microphone button missing | Run `pip install faster-whisper sounddevice numpy`, then restart |
-| Tab appears blank | Try launching via `RAG_RUN.bat` instead |
+| "Could not import AI Prowler modules" | Ensure `rag_preprocessor.py` is in `C:\Program Files\AI-Prowler\` |
+| Microphone button missing | Packages are installed by default — if missing, run `pip install faster-whisper sounddevice numpy` and restart |
+| Tab appears blank | Try launching via `RAG_RUN.bat` instead of the desktop icon |
 | Status indicator stays grey | Click **⚡ Load AI Model** or check that Ollama is running |
-| Settings checkbox not sticking | Verify you have write access to your home folder (`C:\Users\YourName\`) |
+| Settings not saving | Verify write access to your home folder (`C:\Users\YourName\`) |
+
+### Indexing
+
+| Problem | Solution |
+|---------|---------|
+| Indexing error: Errno 22 Invalid argument | AI Prowler detects this automatically and repairs the model cache on the next run. If it persists, delete `%UserProfile%\.cache\huggingface\hub\models--sentence-transformers--all-MiniLM-L6-v2` and restart |
+| OCR not working / scanned PDFs not indexed | Go to Settings → OCR. If Tesseract not found, reinstall AI Prowler |
+| Large .mbox import is slow | Normal for first import — per-message progress shows in output. Use Stop/Resume to spread across sessions |
+| Stop button slow to respond | Stop responds after each individual message — current message is still processing |
+| Re-importing same .mbox re-indexes everything | Check that the archive file path hasn't changed — the incremental indexer tracks by path + Message-ID |
 
 ### Queries
 
 | Problem | Solution |
 |---------|---------|
-| First query takes 2–3 minutes | Normal — the AI model is loading into memory for the first time. Use ⚡ Load AI Model beforehand to pre-warm |
+| "No documents found. Index some documents first." | Go to Index Documents, add a folder, and click Start Indexing |
+| First query takes 2–3 minutes | Normal — AI model is loading into memory for the first time. Use ⚡ Load AI Model to pre-warm |
 | "Cannot connect to Ollama" | Enable Auto-start Ollama in Settings, or open Command Prompt and run `ollama serve` |
-| Answers are vague | Try a larger model (Settings tab) or increase Context Chunks |
-| "No results" | Make sure the relevant documents have been indexed |
-| Context chunks ⚠reload is very slow | This is expected on CPU-only systems for >6 chunks — use a GPU or limit chunks to 5 or fewer |
+| Answers are vague or off-topic | Try a larger model or increase Context Chunks; enable Show source references to see what was retrieved |
+| Context chunks ⚠reload is very slow | Expected on CPU-only systems for >6 chunks — use a GPU or limit chunks to 5 or fewer |
 
 ### Cloud AI Providers
 
 | Problem | Solution |
 |---------|---------|
 | 🔌 Test shows "Invalid API key" | Double-check the key was copied fully with no spaces; regenerate if needed |
-| Provider returns HTTP 429 | Rate limit reached — AI Prowler shows a timeout until the quota resets, then resumes normally |
-| Image attachments not working | Confirm you are using a cloud provider that supports vision (ChatGPT, Claude, Gemini) |
-| Cloud answer but no document context | The RAG retrieval still runs locally — if it finds nothing, index the relevant documents first |
-| Auto-fallback kicked in | The selected provider failed; answer came from local Ollama. Check the provider status dot in Settings |
-
-### Email Indexing
-
-| Problem | Solution |
-|---------|---------|
-| Large .mbox import is slow | Normal for first import — per-message progress shows in the output panel. Use Stop/Resume to spread across multiple sessions |
-| Stop button is slow to respond | Stop now responds after each individual message — if delayed, the current message is still being processed |
-| Re-importing same .mbox re-indexes everything | Incremental indexing uses Message-ID tracking to skip known messages. If re-indexing still occurs, check that the archive file path hasn't changed |
-| Yahoo/Outlook won't import | These formats need conversion first — see the Email chapter above |
-| Apple Mail .mbox looks like a folder | On macOS it is a package. Copy it to Windows, it becomes a regular `.mbox` file |
+| Provider returns HTTP 429 | Rate limit reached — AI Prowler notes the timeout and falls back to local Ollama |
+| Image attachments not working | Confirm you are using a cloud provider with vision support (ChatGPT, Claude, Gemini) |
+| Auto-fallback kicked in | The selected provider failed; answer came from local Ollama. Check the status dot in Settings |
 
 ### Ollama Server
 
 | Problem | Solution |
 |---------|---------|
-| No CMD window on startup | Expected when Debug View is OFF — Ollama runs silently in background. Enable Debug View in Settings → Query Output to see the window |
+| No CMD window on startup | Expected when Debug View is OFF — Ollama runs silently in background |
 | Ollama CMD window closed by accident | Re-enable auto-start and restart AI Prowler, or run `ollama serve` manually |
-| Auto-start isn't launching Ollama | Ensure `ollama` is in your PATH — re-run INSTALL.bat or install Ollama from ollama.com/download/windows |
+| "ollama is not recognized as a command" | Use AI Prowler's built-in controls; Ollama installs to LocalAppData, not system PATH |
+| Ollama LLM: Running on CPU (0 bytes in VRAM) | Your Ollama version doesn't support your GPU — re-run the installer and click Apply & Reload |
 
 ### Scheduling
 
 | Problem | Solution |
 |---------|---------|
-| Schedule not running | Check the Schedule tab shows "✅ Schedule Active" and verify Windows Task Scheduler is running |
-| Can't create schedule | Run AI Prowler as Administrator (right-click → Run as administrator) |
+| Schedule not running | Check the Schedule tab shows "✅ Schedule Active" and verify Task Scheduler is running |
+| Can't create schedule | Right-click AI Prowler → Run as administrator |
 | Schedule shows wrong time | Remove and recreate; check Windows time zone settings |
 
 ---
 
-## 🎓 Tips and Best Practices
+## 18. Tips & Best Practices
 
 ### Indexing
 
-✅ Use Pre-scan first on any unfamiliar large folder  
+✅ Use **Pre-scan first** on any unfamiliar large folder before committing  
 ✅ Start with one focused project folder to test, then expand  
-✅ Use Pause/Stop freely — progress is always saved and resumable  
+✅ Use **Pause/Stop freely** — progress is always saved and resumable  
 ✅ For email, keep exported archives in a dedicated folder and re-export periodically  
+✅ Schedule weekly re-imports for actively-used mailboxes (Thunderbird especially)  
 
 ❌ Don't index your entire C:\ drive  
 ❌ Don't index temp folders, Downloads, or the Recycle Bin  
-❌ Don't run indexing and querying at the same time  
+❌ Don't run indexing and querying at the same time on low-RAM machines  
 
 ### Queries
 
-✅ Use complete natural-language questions  
+✅ Use complete natural-language questions — not single keywords  
 ✅ Reference document names or dates when you know them  
-✅ Keep Context Chunks at Auto (3) or 3–5 for everyday use  
-✅ Only increase to ⚠reload chunks when you need broad coverage — be prepared for a wait on CPU  
-✅ Use voice input for longer or more natural questions  
-✅ Click ⚡ Load AI Model when you open AI Prowler to pre-warm while you work  
-✅ Enable File Output Mode when asking the AI to write or modify code — Save buttons appear automatically  
+✅ Keep **Context Chunks at Auto (3)** or 3–5 for everyday use  
+✅ Only increase to ⚠reload chunks when you need broad coverage — be prepared to wait on CPU  
+✅ Use **voice input** for longer or more natural questions  
+✅ Click **⚡ Load AI Model** when you open AI Prowler to pre-warm while you work on another tab  
+✅ Enable **File Output Mode** when asking the AI to write or modify code  
 
-❌ Don't use single keywords — the AI needs full context  
-❌ Don't ask about content that hasn't been indexed  
+❌ Don't ask about content that hasn't been indexed yet  
+❌ Don't use 70b+ models unless you have 32+ GB RAM  
 
 ### Cloud AI Providers
 
-✅ Try Gemini or Llama API first — both have free tiers and are easy to set up  
-✅ Use cloud providers for complex, multi-document questions that need higher reasoning quality  
-✅ Use image attachments with ChatGPT, Claude, or Gemini for screenshot analysis or diagram understanding  
-✅ Keep Auto-fallback ON so queries always get an answer even if a provider is temporarily unavailable  
+✅ Try **Gemini or Llama API** first — both have free tiers and are easy to set up  
+✅ Use cloud providers for complex multi-document questions that need higher reasoning quality  
+✅ Use **image attachments** with ChatGPT, Claude, or Gemini for screenshot analysis  
+✅ Keep **Auto-fallback ON** so queries always get an answer  
 
 ❌ Don't put API keys anywhere other than the Settings → External AI APIs fields  
 ❌ Don't send highly sensitive personal data via cloud providers — use Local Ollama for maximum privacy  
@@ -1123,157 +994,162 @@ Delete:
 
 ✅ Export by label/folder from Gmail rather than "All Mail" if you only need specific content  
 ✅ Keep archive files at a stable path — the incremental indexer deduplicates by path + Message-ID  
-✅ Schedule weekly re-imports for actively-used mailboxes  
 ✅ Use the per-message progress counter to estimate time for very large archives  
+✅ Schedule **Thunderbird folder** scans daily — new mail arrives continuously  
 
-❌ Don't delete and recreate archive files unnecessarily — the incremental engine works best when the file path stays the same  
-
-### Performance
-
-✅ Use GPU layers = -1 (Auto) — Ollama optimises automatically  
-✅ Schedule updates during off-hours (overnight, lunch)  
-✅ Stick with `llama3.2:1b` unless you need higher answer quality  
-✅ Enable Auto-start Ollama for a seamless one-click launch experience  
-✅ Use Debug View only when troubleshooting — keep it OFF for everyday use  
-
-❌ Don't use 70b+ models unless you have 32+ GB RAM  
-❌ Don't run multiple AI Prowler instances simultaneously  
+❌ Don't delete and recreate archive files unnecessarily — the incremental engine works best when file paths stay stable  
 
 ---
 
-## ❓ Frequently Asked Questions
+## 19. Frequently Asked Questions
 
 **Q: Do I need an API key or account?**  
-A: No — everything runs locally with no accounts, keys, or registration. Cloud AI providers are entirely optional and only used when you explicitly add a key.
+No — everything runs locally with no accounts, keys, or registration. Cloud AI providers are entirely optional.
 
 **Q: Does this work offline?**  
-A: Yes — 100% offline by default. Cloud providers obviously need an internet connection, but local Ollama queries work with no network at all.
+Yes — 100% offline by default. Cloud providers obviously need an internet connection, but local Ollama queries work with no network at all.
 
 **Q: Is my data private?**  
-A: Completely private when using local Ollama. When you opt in to a cloud provider, only your question and retrieved excerpts are sent — your original files never leave your computer.
+Completely private when using local Ollama. When you use a cloud provider, only your question and retrieved excerpts are sent — your original files never leave your computer.
 
 **Q: How much does it cost?**  
-A: The app is free. Local Ollama is free. Cloud providers are billed by the provider — several offer generous free tiers (Gemini and Llama API in particular).
+The app is free. Local Ollama is free. Cloud providers are billed by the provider — Gemini and Llama API have generous free tiers.
 
 **Q: Does it need a GPU?**  
-A: No. The default model runs well on CPU-only hardware. A GPU speeds up larger models significantly and makes high ⚠reload chunk counts much faster.
+No. The default model runs well on CPU-only hardware. A GPU significantly speeds up larger models.
 
 **Q: How many documents can I index?**  
-A: Thousands — limited only by available disk space and ChromaDB index capacity.
+Thousands — limited only by available disk space.
 
 **Q: My Gmail export is 8 GB. Will AI Prowler handle it?**  
-A: Yes. The incremental indexer processes messages one at a time with Stop/Resume support, so you can spread a large initial import over multiple sessions. Future re-imports only process new messages.
-
-**Q: Can I query email from 10 years ago?**  
-A: Yes, as long as those emails are in the exported archive and have been indexed.
+Yes. The incremental indexer processes messages one at a time with Stop/Resume support, so you can spread a large initial import over multiple sessions. Future re-imports only process new messages.
 
 **Q: Do I need to re-index everything when files change?**  
-A: No — the Update Index tab re-indexes only new and changed files. For email archives, only new messages are processed.
+No — the Update Index tab re-indexes only new and changed files. For email archives, only new messages are processed.
 
 **Q: What if my computer is off when a schedule is due?**  
-A: Windows Task Scheduler runs the task the next time the computer is on and the trigger time is reached.
+Windows Task Scheduler runs the task the next time the computer is on and the trigger time is reached.
 
 **Q: Can I use a different AI model?**  
-A: Yes — any Ollama-compatible model works. Install it from the Settings tab or by running `ollama pull <model-name>`.
+Yes — any Ollama-compatible model works. Install it from Settings → Browse & Install Model.
 
 **Q: What does the Auto-start Ollama option do?**  
-A: When enabled, AI Prowler automatically launches the Ollama server when you open the app and shuts it down on exit. The server window is hidden by default — enable Debug View in Settings if you need to see it.
+When enabled, AI Prowler automatically launches the Ollama server when you open the app and shuts it down on exit. The server window is hidden by default — enable Debug View in Settings if you need to see it.
 
 **Q: What is the ⚡ Load AI Model button for?**  
-A: It manually triggers the model pre-warm so the AI is ready before you type your first question. The model loads automatically when you switch to the Ask Questions tab, but clicking this button lets you start loading while you're still on another tab.
+It manually triggers the model pre-warm so the AI is ready before you type your first question. The model loads automatically when you switch to the Ask Questions tab, but this button lets you start loading earlier while you're on another tab.
 
 **Q: What does File Output Mode do?**  
-A: It instructs the AI to label any code or script files it writes with a filename. AI Prowler then detects those filenames in the answer and shows a 💾 Save File button for each one — eliminating copy-paste for code file answers.
-
-**Q: Can I attach images to questions?**  
-A: Yes — use the 📎 Attach Files button. Images are supported by cloud providers with vision capability (ChatGPT, Claude, Gemini). Text files can be attached regardless of provider.
+It instructs the AI to label any code or script files it writes with a filename. AI Prowler then detects those filenames in the answer and shows a 💾 Save button for each one — eliminating copy-paste for code file answers.
 
 **Q: What context chunks setting should I use?**  
-A: "Auto (3)" is the best default — it calculates the optimal number for your model. Increase to 5–6 for broader questions. Only use ⚠reload values (7+) when you need wide document coverage and can wait for the model to reload its context window.
+"Auto (3)" is the best default — it calculates the optimal number for your model. Increase to 5–6 for broader questions. Only use ⚠reload values (7+) when you need wide coverage and can wait for the model to reload on CPU.
 
 ---
 
-## 📝 Version History
+## 20. Uninstalling
 
-### Version 2.0 (Current)
+Run the AI Prowler uninstaller from **Windows Settings → Apps → AI-Prowler → Uninstall**, or from `C:\Program Files\AI-Prowler\`.
 
-**New features:**
-- ☁️ **External AI APIs** — six cloud providers now integrated: ChatGPT (OpenAI), Claude (Anthropic), Gemini (Google), Grok (xAI), Llama API (Meta), Mistral Large. API keys managed entirely in Settings with save, show/hide toggle, live 🔌 Test connection, and 🔑 Get Key buttons. Status dots show per-provider readiness at a glance.
-- 🔄 **Auto-fallback** — if a cloud provider fails or hits its rate limit, AI Prowler transparently falls back to local Ollama and notes the fallback in the answer.
-- 🎯 **AI Provider selector** — dropdown in the Ask Questions tab lets you pick the AI for each query. Live coloured status light reflects provider readiness.
-- 📎 **Attachments panel** — attach images and text files to questions. Images are sent to vision-capable cloud providers; text files are injected into the prompt.
-- 📄 **File Output Mode** — when enabled, the AI labels code blocks with filenames. Detected files appear in a **📁 Files in Answer** panel with per-file 💾 Save buttons — no copy-paste.
-- 💾 **Save Answer button** — save the full answer to `.txt` or `.md` with a single click.
-- 🔍 **Debug View** — checkbox in Settings → Query Output controls whether Ollama/subprocess windows appear in the foreground or run silently in the background.
-- 🏅 **RAM-aware model selector** — model dropdown now shows ✅/⚠️ fit badges based on detected system RAM, download size, and minimum RAM requirement. Models are sorted so compatible ones appear first.
-- 🔭 **Browse & Install Model…** — opens a full model browser for downloading new Ollama models from within the app.
-- ⚠️ **Context chunks reload warnings** — values ≥7 are labelled "⚠reload" to signal that the model will need to reload its context window. Changing the chunk count triggers an automatic re-prewarm at the required context size.
-- ⛏ **Enable debug output** checkbox — show/hide ⏱ timing markers and 🔬 debug annotations in answers without restarting.
+The uninstaller will:
 
-**Fixes:**
-- `qo_frame` NameError in `create_settings_tab()` resolved — renamed to `output_frame` to match the enclosing LabelFrame.
-- `debug_view` not persisting across restarts — `save_config()` in `rag_preprocessor.py` was missing the `debug_view` parameter, so the value was silently discarded. Parameter added to both the function signature and the save block.
+| Step | What is removed |
+|------|----------------|
+| 1 | Windows Task Scheduler task |
+| 2 | Desktop shortcut and Start Menu entry |
+| 3 | AI Prowler entry from Windows PATH |
+| 4 | Config files (`.rag_config.json`, tracking files, email index, etc.) |
+| 5 | ChromaDB database — **asks for confirmation before deleting** |
+| 6 | AI Prowler program files from `C:\Program Files\AI-Prowler\` |
+| 7 | Python 3.11 (if installed by AI Prowler) |
+| 8 | Ollama engine and optionally its model files |
+| 9 | Whisper model cache — targets only the AI Prowler model, leaving other HuggingFace models untouched |
+
+Python packages are intentionally kept during uninstall to avoid breaking other programs. Remove Python separately via Settings → Apps if needed.
+
+### Manual Removal
+
+If the uninstaller is not available, delete:
+- `C:\Program Files\AI-Prowler\`
+- From your home folder: `.rag_config.json`, `.rag_auto_update_dirs.json`, `.rag_file_tracking.json`, `.rag_email_index.json`, `rag_auto_update.bat`
+- Desktop shortcut: `AI Prowler.lnk`
+- Task Scheduler task: open Task Scheduler from Start menu → find and delete the "AI Prowler Auto-Update" task
+- Whisper cache: `%UserProfile%\.cache\huggingface\hub\models--Systran--faster-whisper-large-v3-turbo\`
 
 ---
 
-### Version 1.9
+## 21. File & Folder Reference
+
+| File / Folder | Purpose |
+|---------------|---------|
+| `C:\Program Files\AI-Prowler\rag_gui.py` | Main GUI application |
+| `C:\Program Files\AI-Prowler\rag_preprocessor.py` | Core indexing and query engine |
+| `C:\Program Files\AI-Prowler\RAG_RUN.bat` | Launch script (used by the Desktop shortcut) |
+| `C:\Program Files\AI-Prowler\requirements.txt` | Python package list |
+| `C:\Program Files\AI-Prowler\COMPLETE_USER_GUIDE.md` | This document |
+| `%UserProfile%\.rag_config.json` | All settings (model, GPU layers, API keys, etc.) |
+| `%UserProfile%\AI-Prowler\rag_database\` | ChromaDB vector database |
+| `%UserProfile%\.rag_file_tracking.json` | File modification baselines for change detection |
+| `%UserProfile%\.rag_auto_update_dirs.json` | List of tracked directories |
+| `%UserProfile%\.rag_email_index.json` | Per-email Message-ID tracking database |
+| `%UserProfile%\.ollama\models\` | Downloaded Ollama models |
+| `%UserProfile%\.cache\huggingface\hub\` | Sentence-transformer embedding model cache |
+| `%LocalAppData%\Programs\Python\Python311\` | Python runtime |
+| `%LocalAppData%\Programs\Tesseract-OCR\` | Tesseract OCR engine |
+| `%LocalAppData%\Programs\Ollama\` | Ollama engine |
+| `%LocalAppData%\Temp\AI-Prowler\install_log.txt` | Full installer log — first place to look when troubleshooting |
+
+---
+
+## 22. Version History
+
+### Version 3.0.0 (Current)
 
 **New features:**
-- 🟢 Auto-start Ollama — new "Ollama Server" section in Settings. When enabled, AI Prowler launches `ollama serve` automatically on startup and shuts it down on exit. Saves and restores across sessions.
-- ⚡ Load AI Model button — manual pre-warm trigger in the Ask Questions tab. Start loading the model while you are still navigating other tabs.
-- ⏹ Stop query button — cancel a running query without closing the application.
-- 🔵 Model status indicator — coloured dot (grey/yellow/green) and text label in the Ask Questions tab shows real-time model load state.
-- 🛠 UNINSTALL.bat PATH step rewritten — Step 3 now uses PowerShell exclusively, eliminating the hang caused by piping long PATH strings through CMD's `echo | find`.
+- 🔧 **Professional Windows installer** — `AI-Prowler_INSTALL.exe` replaces `INSTALL.bat`. Full Inno Setup installer with license agreement, progress bar, Start Menu and Desktop shortcuts. Handles Python, pip, Tesseract OCR, Ollama, and the default model in a single step.
+- 🖨 **Tesseract OCR integration** — scanned PDFs and image files (`.jpg`, `.png`, `.bmp`, `.tiff`, `.gif`) are automatically OCR'd and indexed using Tesseract 5.4 (UB-Mannheim build). No manual setup required — the installer downloads and configures Tesseract automatically.
+- ⚡ **RTX 50xx Blackwell support** — GPU detection now installs CUDA 12.8 / cu128 PyTorch on NVIDIA Blackwell cards (RTX 5060, 5070, 5080, 5090) for full GPU acceleration.
+- 🔑 **`HF_HUB_CACHE` env var fix** — prevents the Windows 10 Errno 22 double-backslash path bug in huggingface_hub that caused indexing to fail silently after install.
+- 🛠 **Self-healing model cache** — if a corrupted model cache is detected at startup (Errno 22), the app automatically deletes it and re-downloads a clean copy. Users see a clear message in the output panel; no manual intervention is required.
+- 📦 **Pinned package versions** — `huggingface-hub==0.26.5`, `sentence-transformers==3.3.1`, and `transformers==4.44.2` are pinned together to prevent the double-backslash path bug and eliminate the 20-version pip backtracking that made installs slow and nondeterministic.
 
-**Fixes:**
-- `ping_ollama` NameError on startup resolved — replaced with the correctly imported `check_ollama_available()` from `rag_preprocessor.py`.
+---
+
+### Version 2.0
+
+**New features:**
+- ☁️ **External AI APIs** — six cloud providers integrated: ChatGPT, Claude, Gemini, Grok, Llama API, Mistral Large
+- 🔄 **Auto-fallback** — transparent fallback to local Ollama if a cloud provider fails
+- 📎 **Attachments panel** — attach images and text files to questions
+- 📄 **File Output Mode** — AI-labelled code blocks get per-file 💾 Save buttons
+- 💾 **Save Answer button** — save the full answer to `.txt` or `.md`
+- 🏅 **RAM-aware model selector** — ✅/⚠️ fit badges based on detected system RAM
+- 🔭 **Browse & Install Model** — model browser for downloading new Ollama models from within the app
+- ⚠️ **Context chunks reload warnings** — values ≥7 labelled "⚠reload" to signal model context reload
 
 ---
 
 ### Version 1.8
 
 **New features:**
-- 🎤 Voice input with Whisper large-v3-turbo, auto-stop silence detection, adjustable threshold
-- ⏸ Pause / Resume indexing — freeze mid-run and continue from exactly where you stopped
-- 📬 Per-email incremental indexing for `.mbox`, `.rmail`, `.babyl`, `.mmdf` — Message-ID deduplication, near-instant Stop, automatic cleanup of deleted messages
-- 🗂 Auto Scan Config tab — live editor for supported/skipped extensions and skipped directories
-- 📁 Multi-folder queue with custom tree browser, Ctrl/Shift multi-select, mix of folders and individual files
+- 🎤 Voice input with Whisper large-v3-turbo, auto-stop silence detection
+- ⏸ Pause / Resume indexing mid-run
+- 📬 Per-email incremental indexing for `.mbox`, `.rmail`, `.babyl`, `.mmdf` with Message-ID deduplication
+- 🗂 Auto Scan Config tab — live editor for supported/skipped extensions and directories
+- 📁 Multi-folder queue with custom tree browser
 - 🔍 Pre-scan mode — preview what will be indexed before committing
 - ⚡ GPU acceleration controls — Detect GPU, set layers, Apply & Reload without restarting
-- 🔄 Per-directory Remove with full vector and tracking cleanup
-- 📊 Live elapsed timers on both the indexing and query progress bars
-- 🎛 Named tab index constants — adding/reordering tabs no longer silently breaks prewarm
-
-**Fixes:**
-- Stop button now responds after each individual email message (was: waited for entire archive file)
-- INSTALL.bat fallback `requirements.txt` generator now includes all 11 packages including speech
-- UNINSTALL.bat Whisper removal targets only the AI Prowler model, not the entire HuggingFace cache
-- UNINSTALL.bat step counter corrected (was mixed 1/7–9/9, now consistent 1/9–9/9)
-- Version numbers synchronised between GUI and engine (both 1.8)
 
 ---
 
 ## 🎉 You're Ready!
 
-You now know how to:
-
-✅ Install AI Prowler completely  
-✅ Index documents, code, and email from every major provider  
-✅ Export email from Gmail, Apple Mail, Thunderbird, Yahoo, and Outlook  
-✅ Ask questions with text, voice, or file attachments  
-✅ Use cloud AI providers for higher-quality answers  
-✅ Get one-click Save buttons for AI-written code files  
-✅ Pre-warm the AI model with the Load AI Model button  
-✅ Keep your index current with smart incremental updates  
-✅ Schedule automatic background updates  
-✅ Configure Ollama auto-start for a seamless one-click experience  
-✅ Customise scan behaviour for your workflow  
-✅ Tune GPU acceleration for your hardware  
-✅ Troubleshoot every common issue  
+You now know how to index documents, ask questions, export and index email from every major provider, use cloud AI for higher-quality answers, set up scheduled updates, and troubleshoot every common issue.
 
 **Start exploring your documents with AI!** 🚀
 
 ---
 
-*AI Prowler v2.0 — Your Personal AI Knowledge Base*  
-*Local-first &nbsp;•&nbsp; Cloud-optional &nbsp;•&nbsp; 100% Yours*
+*AI Prowler v3.0.0 — Your Personal AI Knowledge Base*  
+*Local-first · Cloud-optional · 100% Yours*  
+*Copyright © 2026 David Kevin Vavro*

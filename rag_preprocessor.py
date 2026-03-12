@@ -20,6 +20,25 @@ os.environ['HF_HUB_DISABLE_SYMLINKS_WARNING'] = '1'
 os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
 os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
 
+# ── Errno 22 / double-backslash path fix ──────────────────────────────────────
+# On some Windows 10 configurations huggingface_hub derives its cache path via
+# string operations that leave a trailing backslash on the snapshot directory.
+# When sentence-transformers appends a filename with os.path.join it produces
+# "...\<hash>\\filename" — the double backslash Windows rejects as Errno 22
+# Invalid argument.
+#
+# Setting HF_HUB_CACHE explicitly bypasses that derivation entirely: huggingface
+# reads the env var and uses it verbatim, so our os.path.join-built string is
+# always clean.  Must be set BEFORE huggingface_hub is imported (the library
+# reads this env var at module import time).
+#
+# Only set if not already set so that users who have a custom HF cache location
+# configured in their system environment are not overridden.
+if not os.environ.get('HF_HUB_CACHE'):
+    os.environ['HF_HUB_CACHE'] = os.path.join(
+        os.path.expanduser('~'), '.cache', 'huggingface', 'hub'
+    )
+
 # Suppress Python warnings
 import warnings
 warnings.filterwarnings('ignore')
@@ -68,6 +87,38 @@ except ImportError as e:
     print("Please run: pip install -r requirements.txt")
     sys.exit(1)
 
+# ── OCR — required (not optional) ─────────────────────────────────────────────
+# pytesseract wraps the Tesseract binary; pypdfium2 renders PDF pages to images
+# without needing a separate poppler install; pillow handles image I/O.
+# All three are listed in requirements.txt and installed by the .iss installer.
+# The Tesseract binary itself is downloaded and installed by the .iss installer.
+try:
+    import pytesseract
+    import pypdfium2 as pdfium
+    from PIL import Image as _PILImage
+except ImportError as e:
+    print(f"❌ OCR dependency missing: {e}")
+    print("Please run: pip install pytesseract pypdfium2 pillow")
+    sys.exit(1)
+
+# ── Auto-locate Tesseract binary on Windows ───────────────────────────────────
+# The .iss installer puts Tesseract in the default location below.
+# If it's already on PATH this has no effect; it only matters when PATH wasn't
+# updated yet (e.g., first run before a reboot on some Windows configurations).
+if sys.platform == 'win32':
+    _local_appdata = os.environ.get('LOCALAPPDATA', '')
+    _tess_candidates = [
+        # 1st choice: per-user install (target of AI Prowler installer)
+        os.path.join(_local_appdata, 'Programs', 'Tesseract-OCR', 'tesseract.exe'),
+        # 2nd choice: system-wide install (e.g. manual install or old build)
+        r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+        r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
+    ]
+    for _tc in _tess_candidates:
+        if os.path.exists(_tc):
+            pytesseract.pytesseract.tesseract_cmd = _tc
+            break
+
 # ═══════════════════════════════════════════════════════════
 # CONFIGURATION
 # ═══════════════════════════════════════════════════════════
@@ -75,10 +126,16 @@ except ImportError as e:
 # Default settings
 OLLAMA_URL = "http://localhost:11434"
 OLLAMA_MODEL = "llama3.2:1b"
-CHROMA_DB_PATH = "./rag_database"
+# Database lives in the user's home folder (C:\Users\<name>\AI-Prowler\rag_database).
+# This keeps it out of C:\Program Files\ which is write-protected after install,
+# survives app upgrades/reinstalls, and follows standard Windows conventions.
+CHROMA_DB_PATH = str(Path.home() / 'AI-Prowler' / 'rag_database')
 COLLECTION_NAME = "documents"
-CHUNK_SIZE = 500  # words per chunk
-CHUNK_OVERLAP = 50  # words overlap between chunks
+CHUNK_SIZE    = 500   # words per chunk
+CHUNK_OVERLAP = 50    # words overlap between chunks
+# Scanned-PDF threshold: if pdfplumber finds fewer chars than this the
+# document is treated as image-only and OCR is run automatically.
+OCR_MIN_CHARS = 150
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 def normalise_path(filepath: str) -> str:
@@ -629,6 +686,35 @@ def save_config(model=None, url=None, chunk_size=None, chunk_overlap=None,
         return False
 
 
+def validate_model_config():
+    """
+    Verify that the model currently saved in config actually exists in Ollama.
+
+    Called once at startup after load_config().  If the model from the config
+    file is not present (e.g. after a reinstall where the config file survived
+    but Ollama was wiped), the app resets to the compiled-in default
+    (OLLAMA_MODEL = 'llama3.2:1b') and writes that back to the config so the
+    stale value does not persist.
+
+    This is the safety net that prevents a leftover ~/.rag_config.json from a
+    previous install causing 'model not found' errors on a fresh install.
+    """
+    global OLLAMA_MODEL
+    try:
+        response = requests.get(f"{OLLAMA_URL}/api/tags", timeout=5)
+        if response.status_code != 200:
+            return  # Ollama not running yet — skip validation, don't reset
+        available = [m['name'] for m in response.json().get('models', [])]
+        if OLLAMA_MODEL not in available:
+            # Saved model is missing — reset to the compiled-in default
+            default = "llama3.2:1b"
+            print(f"⚠️  Configured model '{OLLAMA_MODEL}' not found in Ollama — "                  f"resetting to default '{default}'.")
+            OLLAMA_MODEL = default
+            save_config(model=default)
+    except Exception:
+        pass  # Ollama not reachable — leave config unchanged
+
+
 def save_extension_config(supported_extensions: set, skipped_extensions: set,
                           skipped_directories: set):
     """
@@ -807,8 +893,12 @@ def safe_num_ctx_for_prompt(prompt: str, max_tokens: int, model_name: str) -> in
         return bumped
     return base_ctx
 
-# Load config at startup
+# Load config at startup — then verify the saved model is actually available
+# in Ollama.  If not (e.g. fresh reinstall with stale config file) the model
+# is reset to the default 'llama3.2:1b' so the app is never stuck pointing
+# at a model that was installed in a previous session and then wiped.
 load_config()
+validate_model_config()
 
 # Supported file extensions — content-bearing files worth indexing
 SUPPORTED_EXTENSIONS = {
@@ -822,6 +912,8 @@ SUPPORTED_EXTENSIONS = {
     '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf', '.env',
     # Data / logs
     '.csv', '.tsv', '.log', '.sql',
+    # Images — OCR extracts text content via Tesseract
+    '.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.gif',
     # Email — single-message files (one email per file)
     '.eml', '.msg', '.emlx',
     # Email — archive/export files (multiple messages, handled by incremental indexer)
@@ -844,8 +936,8 @@ SKIP_EXTENSIONS = {
     '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz', '.tgz',
     '.jar', '.war', '.ear', '.whl', '.egg', '.nupkg', '.vsix',
     '.deb', '.rpm', '.msi', '.pkg', '.dmg', '.iso', '.img',
-    # Media — images
-    '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif',
+    # Media — images (common formats moved to SUPPORTED_EXTENSIONS for OCR indexing)
+    # Camera RAW and design-tool formats remain skipped — no OCR value.
     '.webp', '.ico', '.svg', '.psd', '.ai', '.eps', '.raw',
     '.cr2', '.nef', '.orf', '.arw',
     # Media — audio / video
@@ -1029,8 +1121,85 @@ def load_text_file(filepath: str) -> str:
     print(f"⚠️  Could not decode {filepath} with any encoding")
     return ""
 
+def load_md(filepath: str) -> str:
+    """Load a Markdown file, stripping syntax for cleaner RAG indexing."""
+    raw = load_text_file(filepath)
+    if not raw:
+        return ""
+    import re
+    t = raw
+    t = re.sub('```[^`]*```', ' ', t, flags=re.DOTALL)
+    t = re.sub('`[^`]+`', ' ', t)
+    t = re.sub(r'!\[([^\]]*)\]\([^)]*\)', r'\1', t)
+    t = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', t)
+    t = re.sub(r'^#{1,6}\s+', '', t, flags=re.MULTILINE)
+    t = re.sub(r'\*{1,2}([^*]+)\*{1,2}', r'\1', t)
+    t = re.sub(r'_{1,2}([^_]+)_{1,2}', r'\1', t)
+    t = re.sub(r'^>\s+', '', t, flags=re.MULTILINE)
+    t = re.sub(r'^[-*_]{3,}\s*$', '', t, flags=re.MULTILINE)
+    t = re.sub(r'<[^>]+>', ' ', t)
+    t = re.sub(r'\n{3,}', '\n\n', t)
+    return t.strip()
+
+
+def _pdf_page_to_pil(pdf_doc, page_index: int, dpi: int = 300) -> '_PILImage.Image':
+    """Render a single PDF page to a PIL Image using pypdfium2."""
+    page   = pdf_doc[page_index]
+    scale  = dpi / 72          # pypdfium2 native resolution is 72 dpi
+    bitmap = page.render(scale=scale, rotation=0)
+    return bitmap.to_pil()
+
+
+def _ocr_pdf(filepath: str) -> str:
+    """
+    OCR an image-only (scanned) PDF using pypdfium2 + Tesseract.
+
+    pypdfium2 renders each page to a PIL Image at 300 DPI — no poppler needed.
+    Tesseract then extracts text from each image.
+    """
+    try:
+        pdf_doc = pdfium.PdfDocument(filepath)
+        parts   = []
+        n_pages = len(pdf_doc)
+        for i in range(n_pages):
+            page_img  = _pdf_page_to_pil(pdf_doc, i, dpi=300)
+            page_text = pytesseract.image_to_string(page_img, lang='eng')
+            if page_text.strip():
+                parts.append(f"--- Page {i + 1} ---\n{page_text.strip()}")
+        pdf_doc.close()
+        return "\n\n".join(parts)
+    except Exception as e:
+        print(f"⚠️  OCR failed for {filepath}: {e}")
+        return ""
+
+
+def load_image_ocr(filepath: str) -> str:
+    """
+    Extract text from a standalone image file (.jpg, .png, .tiff, etc.)
+    using Tesseract OCR.  This allows image files to be indexed just like
+    any other document.
+    """
+    try:
+        img  = _PILImage.open(filepath)
+        text = pytesseract.image_to_string(img, lang='eng')
+        return text.strip()
+    except Exception as e:
+        print(f"⚠️  OCR failed for image {filepath}: {e}")
+        return ""
+
+
 def load_pdf(filepath: str) -> str:
-    """Extract text from PDF"""
+    """Extract text from a PDF file with automatic OCR for scanned documents.
+
+    Strategy
+    --------
+    1. pdfplumber — fast; perfect for PDFs that have a real text layer.
+    2. If the total extracted text is under OCR_MIN_CHARS the file is an
+       image-only PDF (living trust, court docs, old contracts, scanned pages).
+       pypdfium2 renders each page at 300 DPI and Tesseract reads the image.
+
+    Both paths always run — no user toggle required.
+    """
     text = ""
     try:
         with pdfplumber.open(filepath) as pdf:
@@ -1040,7 +1209,21 @@ def load_pdf(filepath: str) -> str:
                     text += page_text + "\n"
     except Exception as e:
         print(f"⚠️  Error reading PDF {filepath}: {e}")
-    return text
+
+    # Text layer has sufficient content — OCR not needed.
+    if len(text.strip()) >= OCR_MIN_CHARS:
+        return text
+
+    # Scanned PDF detected — run OCR automatically.
+    fname = os.path.basename(filepath)
+    print(f"   🔍 Scanned PDF detected: '{fname}' — running Tesseract OCR…")
+    ocr_text = _ocr_pdf(filepath)
+    if ocr_text.strip():
+        print(f"   ✅ OCR complete: extracted {len(ocr_text.split()):,} words from '{fname}'")
+        return ocr_text
+    else:
+        print(f"   ⚠️  OCR found no readable text in '{fname}'")
+        return text   # return whatever pdfplumber got (may be empty)
 
 def load_docx(filepath: str) -> str:
     """Extract text from Word document"""
@@ -1593,6 +1776,11 @@ def load_file(filepath: str) -> Optional[Dict[str, str]]:
         content = load_eml(filepath)
     elif ext == '.msg':
         content = load_msg(filepath)
+    elif ext in ('.md', '.rst', '.markdown'):
+        content = load_md(filepath)
+        print(f"   [load_md] {os.path.basename(filepath)} → {len(content) if content else 0} chars")
+    elif ext in ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.gif'):
+        content = load_image_ocr(filepath)
     elif ext in ('.mbox', '.rmail', '.babyl', '.mmdf'):
         # Legacy blob fallback — normal GUI path uses index_email_archive() instead
         content = _load_archive_as_blob(filepath)
@@ -1722,11 +1910,27 @@ def detect_gpu():
 
 def get_best_embedding_device() -> str:
     """Return the best available torch device string for the embedding model.
-    Returns 'cuda', 'mps', or 'cpu'. Fast — only imports torch if available."""
+    Returns 'cuda', 'mps', or 'cpu'.
+
+    Validates that CUDA actually works with a small test tensor before
+    returning 'cuda' — torch.cuda.is_available() can return True even when
+    the installed CUDA kernel is incompatible with the GPU driver, which
+    causes a hard crash during collection.add().
+    """
     try:
         import torch
         if torch.cuda.is_available():
-            return 'cuda'
+            try:
+                # Quick smoke-test: allocate a tiny tensor on the GPU.
+                # If the CUDA kernel is incompatible this raises a RuntimeError
+                # ("no kernel image is available for execution on the device")
+                # before we ever try to embed anything.
+                _t = torch.zeros(1, device='cuda')
+                del _t
+                return 'cuda'
+            except Exception:
+                # CUDA reported as available but unusable — fall through to CPU
+                pass
         if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
             return 'mps'
     except ImportError:
@@ -1737,6 +1941,77 @@ def get_best_embedding_device() -> str:
 # ═══════════════════════════════════════════════════════════
 # VECTOR DATABASE
 # ═══════════════════════════════════════════════════════════
+
+
+class _SentenceTransformerEmbedding:
+    """
+    GPU-aware drop-in replacement for ChromaDB's SentenceTransformerEmbeddingFunction.
+
+    ChromaDB's own wrapper (v0.6.x) accepts a 'device' argument but does not
+    expose 'batch_size', so large GPUs receive the sentence-transformers default
+    of 32 documents per forward pass and show near-zero utilisation in Task Manager.
+
+    This class calls SentenceTransformer directly, setting:
+      - batch_size = 128 on CUDA / MPS  (fills GPU memory efficiently)
+      - batch_size = 32  on CPU          (matches library default)
+      - normalize_embeddings = True      (cosine similarity without extra math)
+      - no_grad context                  (skips autograd tape, saves VRAM)
+
+    Compatible with ChromaDB's EmbeddingFunction protocol: __call__ receives a
+    list of strings and returns a list of lists of floats.
+    """
+
+    def __init__(self, model_name: str, device: str = 'cpu'):
+        import warnings
+        import shutil
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            from sentence_transformers import SentenceTransformer
+            try:
+                self._model = SentenceTransformer(model_name, device=device)
+            except OSError as e:
+                if e.errno != 22:
+                    raise  # unrelated OS error — don't swallow it
+                # ── Errno 22: corrupted HuggingFace model cache ───────────────
+                # The cache folder was written by an old huggingface_hub version
+                # that produced a double-backslash path on Windows 10. Even after
+                # upgrading the library, the stale metadata on disk reproduces the
+                # bad path. Fix: delete just the model subfolder and retry once —
+                # SentenceTransformer will re-download a clean copy automatically.
+                hf_cache = os.environ.get(
+                    'HF_HUB_CACHE',
+                    os.path.join(os.path.expanduser('~'), '.cache', 'huggingface', 'hub')
+                )
+                # Convert model name "all-MiniLM-L6-v2" ->
+                #   "models--sentence-transformers--all-MiniLM-L6-v2"
+                cache_subfolder = 'models--sentence-transformers--' + model_name
+                corrupt_path = os.path.join(hf_cache, cache_subfolder)
+                print(f'⚠️  Errno 22 detected — corrupted model cache at:')
+                print(f'   {corrupt_path}')
+                if os.path.isdir(corrupt_path):
+                    print(f'🗑️  Deleting corrupted cache — model will re-download...')
+                    shutil.rmtree(corrupt_path, ignore_errors=True)
+                    print(f'✅ Cache cleared. Re-downloading model (one-time, ~90 MB)...')
+                else:
+                    print(f'⚠️  Cache folder not found — retrying load anyway...')
+                # Retry — SentenceTransformer downloads fresh on cache miss
+                self._model = SentenceTransformer(model_name, device=device)
+        self._device     = device
+        self._batch_size = 128 if device in ('cuda', 'mps') else 32
+        print(f'\u2705 Embedding model loaded on {device.upper()} '
+              f'(batch_size={self._batch_size})')
+
+    def __call__(self, input):          # ChromaDB calls embedding_func(documents)
+        import torch
+        with torch.no_grad():
+            vecs = self._model.encode(
+                input,
+                batch_size=self._batch_size,
+                show_progress_bar=False,
+                normalize_embeddings=True,
+                convert_to_numpy=True,
+            )
+        return vecs.tolist()
 
 def get_chroma_client():
     """
@@ -1768,12 +2043,9 @@ def get_chroma_client():
     if not GUI_MODE:
         print(f"🔧 Loading embedding model: {EMBEDDING_MODEL} (device: {device})")
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name=EMBEDDING_MODEL,
-            device=device
-        )
+    # Use our GPU-aware wrapper instead of ChromaDB's built-in
+    # SentenceTransformerEmbeddingFunction (see class docstring above).
+    embedding_func = _SentenceTransformerEmbedding(EMBEDDING_MODEL, device=device)
 
     _chroma_client_cache = client
     _embedding_func_cache = embedding_func
@@ -1886,6 +2158,23 @@ def scan_directory(directory: str, recursive: bool = True) -> dict:
     return result
 
 
+def _get_flat_file_tracking() -> dict:
+    """
+    Build a flat {filepath: {modified, size}} dict from all directories in the
+    tracking database.  Used by index_file_list to skip files that have not
+    changed since they were last indexed.
+    """
+    flat = {}
+    try:
+        db = load_tracking_database()
+        for dir_entry in db.values():
+            for fp, info in dir_entry.get('files', {}).items():
+                flat[normalise_path(fp)] = info
+    except Exception:
+        pass  # Tracking DB unreadable — treat all files as new
+    return flat
+
+
 def index_file_list(file_paths: list, label: str = "",
                     stop_event=None, pause_event=None,
                     start_from: int = 0) -> dict:
@@ -1915,6 +2204,9 @@ def index_file_list(file_paths: list, label: str = "",
     processed = skipped = total_chunks = total_words = 0
     stopped_at = 0
 
+    # Build flat tracking lookup once — used to skip unchanged files below
+    _flat_tracking = _get_flat_file_tracking()
+
     prefix = f"[{label}] " if label else ""
 
     for i, filepath in enumerate(file_paths, 1):
@@ -1943,6 +2235,19 @@ def index_file_list(file_paths: list, label: str = "",
         ext      = Path(filepath).suffix.lower()
         progress = f"[{i}/{total}]"
 
+        # ── Skip unchanged files (mtime + size match tracking DB) ───────────────
+        try:
+            _stat    = os.stat(filepath)
+            _tracked = _flat_tracking.get(filepath)
+            if (_tracked is not None
+                    and abs(_tracked.get('modified', 0) - _stat.st_mtime) < 1.0
+                    and _tracked.get('size') == _stat.st_size):
+                print(f"{prefix}{progress} ✓ {os.path.basename(filepath)}  (unchanged — skipping)")
+                skipped += 1
+                continue
+        except OSError:
+            pass  # File vanished between scan and index — let load_file handle it
+
         # ── Email archive — use per-message incremental indexer ────────────────
         if ext in EMAIL_ARCHIVE_EXTENSIONS:
             print(f"{prefix}{progress} 📬 {os.path.basename(filepath)}  "
@@ -1966,6 +2271,9 @@ def index_file_list(file_paths: list, label: str = "",
         # ── All other file types — normal single-file loader ───────────────────
         file_data = load_file(filepath)
         if not file_data:
+            print(f"{prefix}{progress} WARNING: SKIPPED "
+                  f"{os.path.basename(filepath)}"
+                  f" (empty, unreadable, or format not supported)")
             skipped += 1
             continue
 
@@ -2352,9 +2660,9 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False)
 
                     # Show script location
                     if sys.platform == 'win32':
-                        script_path = Path.home() / 'rag_auto_update.bat'
+                        script_path = Path.home() / 'AI-Prowler' / 'rag_auto_update.bat'
                     else:
-                        script_path = Path.home() / 'rag_auto_update.sh'
+                        script_path = Path.home() / 'AI-Prowler' / 'rag_auto_update.sh'
 
                     if script_path.exists():
                         print(f"📝 Auto-update script regenerated: {script_path}")
@@ -2500,6 +2808,23 @@ def prewarm_ollama(num_ctx: int = None) -> bool:
         )
         if resp.status_code == 200:
             print(f"✅ prewarm_ollama: ready  (model={OLLAMA_MODEL}  num_ctx={ctx})")
+            # Check whether Ollama actually loaded onto GPU or silently fell
+            # back to CPU (e.g. old Ollama build on a new GPU architecture).
+            try:
+                ps = requests.get(f"{OLLAMA_URL}/api/ps", timeout=5).json()
+                models = ps.get('models', [])
+                if models:
+                    size_vram  = models[0].get('size_vram', 0)
+                    size_total = models[0].get('size', 1)
+                    if size_vram == 0:
+                        print(f"⚠️  prewarm_ollama: model loaded but running on CPU only")
+                        print(f"   → Check GPU layers setting or update Ollama if GPU is new")
+                    else:
+                        pct     = round(size_vram / size_total * 100)
+                        vram_gb = round(size_vram / 1024**3, 1)
+                        print(f"⚡ prewarm_ollama: {pct}% of model in VRAM ({vram_gb} GB)")
+            except Exception:
+                pass  # /api/ps check is informational only
             return True
         print(f"⚠️  prewarm_ollama: HTTP {resp.status_code}")
         return False
@@ -3683,10 +4008,10 @@ def generate_auto_update_script():
     is_windows = sys.platform == 'win32'
     
     if is_windows:
-        script_path = Path.home() / 'rag_auto_update.bat'
+        script_path = Path.home() / 'AI-Prowler' / 'rag_auto_update.bat'
         script_content = generate_windows_script(dirs)
     else:
-        script_path = Path.home() / 'rag_auto_update.sh'
+        script_path = Path.home() / 'AI-Prowler' / 'rag_auto_update.sh'
         script_content = generate_unix_script(dirs)
     
     try:
@@ -3722,11 +4047,11 @@ echo.
     for i, directory in enumerate(directories, 1):
         dir_name = Path(directory).name or Path(directory).as_posix()
         script += f"""echo [{i}/{len(directories)}] Updating: {dir_name}
-python rag_preprocessor.py update "{directory}" --yes
+python "C:\\Program Files\\AI-Prowler\\rag_preprocessor.py" update "{directory}" --yes
 if errorlevel 1 (
-    echo   ❌ Update failed
+    echo   [FAIL] Update failed
 ) else (
-    echo   ✅ Updated
+    echo   [OK] Updated
 )
 echo.
 
@@ -3739,7 +4064,7 @@ echo Finished: %DATE% %TIME%
 echo.
 
 REM Optional: Log completion
-echo [%DATE% %TIME%] Auto-update completed >> "%USERPROFILE%\\.rag_update.log"
+echo [%DATE% %TIME%] Auto-update completed >> "%USERPROFILE%\\AI-Prowler\\.rag_update.log"
 """
     
     return script

@@ -1,60 +1,52 @@
 @echo off
 REM ============================================================
-REM AI Prowler - Launch GUI
-REM Starts the graphical interface for AI Prowler
+REM AI-Prowler - Launch GUI
 REM ============================================================
 
-REM Change to the directory where this script is located
-cd /d "%~dp0"
+set "INSTALL_DIR=C:\Program Files\AI-Prowler"
+set "LOCAL_PYTHON_EXE=%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
 
-echo Starting AI Prowler GUI...
+REM ── Roaming site-packages fix ─────────────────────────────────────────────────
+REM Prevents Python from loading old package versions from Roaming site-packages.
+REM The PYTHONNOUSERSITE=1 env var written to the registry by the installer
+REM requires Explorer to process WM_SETTINGCHANGE before it takes effect.
+REM Setting it explicitly here ensures it is always active, even when the app
+REM is launched immediately after install before Explorer has seen the broadcast.
+set PYTHONNOUSERSITE=1
+
+REM ── Errno 22 / double-backslash path fix ─────────────────────────────────────
+REM huggingface_hub on some Windows 10 builds derives its cache path with a
+REM trailing backslash. Setting HF_HUB_CACHE explicitly here gives the library
+REM a clean, pre-built path with no trailing backslash, preventing the
+REM double-backslash Errno 22 Invalid argument error on indexing.
+REM Only set if not already set (respects user custom HF cache locations).
+if not defined HF_HUB_CACHE (
+    set "HF_HUB_CACHE=%USERPROFILE%\.cache\huggingface\hub"
+)
+
+if not exist "%LOCAL_PYTHON_EXE%" (
+    echo ERROR: Python not found at:
+    echo %LOCAL_PYTHON_EXE%
+    pause
+    exit /b 1
+)
+
+if not exist "%INSTALL_DIR%\rag_gui.py" (
+    echo ERROR: rag_gui.py not found in %INSTALL_DIR%
+    pause
+    exit /b 1
+)
+
+if not exist "%INSTALL_DIR%\rag_preprocessor.py" (
+    echo ERROR: rag_preprocessor.py not found in %INSTALL_DIR%
+    pause
+    exit /b 1
+)
+
+"%LOCAL_PYTHON_EXE%" "%INSTALL_DIR%\rag_gui.py"
+
 echo.
-
-REM Use Python 3.11 if available (best AI package compatibility), else default
-py -3.11 --version >nul 2>&1
-if not errorlevel 1 (
-    set "PYTHON_EXE=py"
-    set "PYTHON_VER=-3.11"
-) else (
-    set "PYTHON_EXE=python"
-    set "PYTHON_VER="
-)
-
-REM Check if Python is available
-%PYTHON_EXE% %PYTHON_VER% --version >nul 2>&1
-if errorlevel 1 (
-    echo [ERROR] Python not found
-    echo.
-    echo Please run INSTALL.bat first to install Python and AI Prowler
-    echo.
-    pause
-    exit /b 1
-)
-
-REM Check if rag_gui.py exists
-if not exist "rag_gui.py" (
-    echo [ERROR] rag_gui.py not found
-    echo.
-    echo Please make sure you're running this from the AI Prowler installation directory
-    echo Current directory: %CD%
-    echo.
-    pause
-    exit /b 1
-)
-
-REM Check if rag_preprocessor.py exists
-if not exist "rag_preprocessor.py" (
-    echo [ERROR] rag_preprocessor.py not found
-    echo.
-    echo Please make sure all AI Prowler files are in this directory
-    echo Current directory: %CD%
-    echo.
-    pause
-    exit /b 1
-)
-
-REM Launch GUI (use pythonw to hide console)
-start "" %PYTHON_EXE% %PYTHON_VER% "%~dp0rag_gui.py"
-
-REM Exit immediately (GUI is running in background)
+echo --- Python exited with code %errorlevel% ---
+echo.
+pause
 exit /b 0

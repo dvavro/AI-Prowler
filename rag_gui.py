@@ -14,6 +14,23 @@ import sys
 from pathlib import Path
 import queue
 import os
+
+# ── Errno 22 / double-backslash HuggingFace path fix ─────────────────────────
+# MUST be set before ANY import that could transitively pull in huggingface_hub
+# (including faster_whisper, sentence_transformers, and transformers below).
+# huggingface_hub reads HF_HUB_CACHE at module-import time and caches the
+# resolved path as a constant for the lifetime of the process. On some Windows
+# 10 machines the default home-directory path derivation produces a trailing
+# backslash; os.path.join then appends another, giving "...\hash\filename"
+# which Windows rejects as Errno 22 Invalid argument on every indexing attempt.
+# pathlib.Path / operator never produces a trailing backslash, so this string
+# is always clean regardless of OS version, locale, or registry state.
+if not os.environ.get('HF_HUB_CACHE'):
+    from pathlib import Path as _Path
+    os.environ['HF_HUB_CACHE'] = str(
+        _Path.home() / '.cache' / 'huggingface' / 'hub'
+    )
+
 import ctypes
 import webbrowser
 
@@ -549,7 +566,7 @@ class RAGGui:
         self.gpu_layers_var = tk.IntVar(value=-1)
         
         # Auto-start Ollama server on startup
-        self.auto_start_ollama_var = tk.BooleanVar(value=False)
+        self.auto_start_ollama_var = tk.BooleanVar(value=True)
         self._ollama_process = None  # Track if we started Ollama
 
         # Microphone / speech-to-text state
@@ -660,7 +677,7 @@ class RAGGui:
                     if RAG_AVAILABLE:
                         _rag_engine.GPU_LAYERS = gpu_layers
                     # Load auto_start_ollama — default False (manual start)
-                    auto_start = config.get('auto_start_ollama', False)
+                    auto_start = config.get('auto_start_ollama', True)
                     self.auto_start_ollama_var.set(auto_start)
                     print(f"[CONFIG] Loaded auto_start_ollama: {auto_start}")
                     # Load mic silence timeout — default 3.0 seconds
@@ -910,17 +927,59 @@ or from the Help menu."""
         # Status bar
         self.create_status_bar()
     
+    def _make_scrollable_tab(self, outer_frame):
+        """Wrap outer_frame in a canvas + scrollbar and return the inner content frame.
+
+        Uses grid layout on outer_frame so both the canvas and the scrollbar are
+        anchored to the frame edges — this means they resize correctly when the
+        application window is resized by the user.
+        """
+        # Grid the outer frame so column 0 (canvas) stretches and column 1
+        # (scrollbar) stays fixed-width.
+        outer_frame.columnconfigure(0, weight=1)
+        outer_frame.rowconfigure(0, weight=1)
+
+        canvas = tk.Canvas(outer_frame, highlightthickness=0)
+        vsb    = ttk.Scrollbar(outer_frame, orient='vertical', command=canvas.yview)
+        inner  = ttk.Frame(canvas)
+
+        win_id = canvas.create_window((0, 0), window=inner, anchor='nw')
+        canvas.configure(yscrollcommand=vsb.set)
+
+        # Keep inner frame width locked to the visible canvas width so all
+        # child widgets that use fill='x' expand properly on window resize.
+        def _sync_width(e, wid=win_id):
+            canvas.itemconfig(wid, width=e.width)
+
+        # Update scrollregion whenever child content changes height.
+        def _sync_scrollregion(e):
+            canvas.configure(scrollregion=canvas.bbox('all'))
+
+        canvas.bind('<Configure>', _sync_width)
+        inner.bind('<Configure>',  _sync_scrollregion)
+
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), 'units')
+        canvas.bind('<Enter>',  lambda e: canvas.bind_all('<MouseWheel>', _on_mousewheel))
+        canvas.bind('<Leave>',  lambda e: canvas.unbind_all('<MouseWheel>'))
+
+        # Use grid (not pack) so outer_frame's weight config takes effect.
+        canvas.grid(row=0, column=0, sticky='nsew')
+        vsb.grid(row=0, column=1, sticky='ns')
+        return inner
+
     def create_index_tab(self):
         """Create indexing tab with multi-directory queue and smart scan mode."""
         index_frame = ttk.Frame(self.notebook)
         self.notebook.add(index_frame, text="📚 Index Documents")
+        f = self._make_scrollable_tab(index_frame)
 
         # Title
-        ttk.Label(index_frame, text="Index Your Documents",
+        ttk.Label(f, text="Index Your Documents",
                   font=('Arial', 16, 'bold')).pack(pady=10)
 
         # ── Directory queue ───────────────────────────────────────────────────
-        queue_frame = ttk.LabelFrame(index_frame, text="Directory Queue", padding=10)
+        queue_frame = ttk.LabelFrame(f, text="Directory Queue", padding=10)
         queue_frame.pack(fill='x', padx=20, pady=(0, 5))
 
         # Entry row — manual path entry + multi-select browse buttons
@@ -984,7 +1043,7 @@ or from the Help menu."""
                   font=('Arial', 9), foreground='gray').pack(side='right')
 
         # ── Options ───────────────────────────────────────────────────────────
-        opt_frame = ttk.LabelFrame(index_frame, text="Options", padding=(10, 6))
+        opt_frame = ttk.LabelFrame(f, text="Options", padding=(10, 6))
         opt_frame.pack(fill='x', padx=20, pady=(0, 5))
 
         self.scan_mode_var = tk.BooleanVar(value=True)
@@ -993,13 +1052,9 @@ or from the Help menu."""
                              "(recommended)",
                         variable=self.scan_mode_var).pack(anchor='w')
 
-        self.prescan_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(opt_frame,
-                        text="Pre-scan only — show what will be indexed without indexing",
-                        variable=self.prescan_var).pack(anchor='w')
 
         # ── Action buttons ────────────────────────────────────────────────────
-        btn_row = ttk.Frame(index_frame)
+        btn_row = ttk.Frame(f)
         btn_row.pack(pady=8)
 
         self.index_start_btn = ttk.Button(btn_row, text="▶ Start Indexing Queue",
@@ -1022,7 +1077,7 @@ or from the Help menu."""
         self.index_scan_btn.pack(side='left')
 
         # Progress
-        prog_row = ttk.Frame(index_frame)
+        prog_row = ttk.Frame(f)
         prog_row.pack(fill='x', padx=20, pady=(0, 4))
 
         self.index_progress = ttk.Progressbar(prog_row, mode='indeterminate')
@@ -1039,10 +1094,10 @@ or from the Help menu."""
                   width=32, anchor='e').pack(side='right', padx=(8, 0))
 
         # Output
-        ttk.Label(index_frame, text="Output:").pack(anchor='w', padx=20)
-        self.index_output = scrolledtext.ScrolledText(index_frame, height=14,
+        ttk.Label(f, text="Output:").pack(anchor='w', padx=20)
+        self.index_output = scrolledtext.ScrolledText(f, height=14,
                                                       wrap=tk.WORD)
-        self.index_output.pack(fill='both', expand=True, padx=20, pady=(0, 5))
+        self.index_output.pack(fill='x', padx=20, pady=(0, 10))
     
     def create_query_tab(self):
         """Create query tab — fully scrollable pane."""
@@ -1186,20 +1241,30 @@ or from the Help menu."""
         self._prov_light = self._prov_light_canvas.create_oval(
             1, 1, 13, 13, fill='#aaaaaa', outline='#888888', width=1)
 
-        self._provider_ids    = list(EXTERNAL_PROVIDERS.keys()) if RAG_AVAILABLE else ['local']
+        # Build provider list: one entry per installed Ollama model, then cloud providers
+        self._provider_ids    = []
         self._provider_labels = []
-        for pid in self._provider_ids:
-            p = EXTERNAL_PROVIDERS[pid]
-            self._provider_labels.append(
-                f"Local Ollama  [{self.current_model.get()}]" if pid == 'local'
-                else f"{p['name']}  ({p['maker']})")
+        self._rebuild_local_provider_entries()   # populates _provider_ids/_labels for local models
 
-        self._provider_var = tk.StringVar(value=self._provider_labels[0])
+        # Append cloud providers after local ones
+        if RAG_AVAILABLE:
+            for pid, p in EXTERNAL_PROVIDERS.items():
+                if pid != 'local':
+                    self._provider_ids.append(pid)
+                    self._provider_labels.append(f"{p['name']}  ({p['maker']})")
+
+        # Default to first local model (or first entry)
+        current_model = self.current_model.get()
+        default_idx = next((i for i, pid in enumerate(self._provider_ids)
+                            if pid == f'local:{current_model}'), 0)
+
+        self._provider_var = tk.StringVar(value=self._provider_labels[default_idx] if self._provider_labels else '')
         self._provider_combo = ttk.Combobox(provider_frame,
                                             textvariable=self._provider_var,
                                             values=self._provider_labels,
-                                            width=26, state='readonly')
+                                            width=30, state='readonly')
         self._provider_combo.pack(side='left')
+        self._provider_combo.current(default_idx)
         self._provider_combo.bind('<<ComboboxSelected>>', self._on_provider_changed)
 
         self._provider_status_var = tk.StringVar(value="")
@@ -1297,9 +1362,10 @@ or from the Help menu."""
         """Create update tab"""
         update_frame = ttk.Frame(self.notebook)
         self.notebook.add(update_frame, text="🔄 Update Index")
+        f = self._make_scrollable_tab(update_frame)
 
         # Title
-        ttk.Label(update_frame, text="Keep Your Index Current",
+        ttk.Label(f, text="Keep Your Index Current",
                   font=('Arial', 16, 'bold')).pack(pady=10)
 
         # Storage locations info bar
@@ -1310,7 +1376,7 @@ or from the Help menu."""
             tracking_path    = "~/.rag_file_tracking.json"
             update_list_path = "~/.rag_auto_update_dirs.json"
 
-        info_frame = ttk.LabelFrame(update_frame,
+        info_frame = ttk.LabelFrame(f,
                                     text="ℹ️  Tracking data location  "
                                          "(separate from rag_database — survives DB wipe)",
                                     padding=(10, 4))
@@ -1323,9 +1389,9 @@ or from the Help menu."""
                   font=('Courier', 8), foreground='gray').pack(anchor='w')
 
         # Tracked directories
-        tracked_frame = ttk.LabelFrame(update_frame,
+        tracked_frame = ttk.LabelFrame(f,
                                        text="Tracked Directories", padding=10)
-        tracked_frame.pack(fill='both', expand=True, padx=20, pady=(0, 6))
+        tracked_frame.pack(fill='x', padx=20, pady=(0, 6))
 
         # Listbox with scrollbar
         list_frame = ttk.Frame(tracked_frame)
@@ -1346,8 +1412,11 @@ or from the Help menu."""
         tracked_btn_row = ttk.Frame(tracked_frame)
         tracked_btn_row.pack(fill='x', pady=(6, 0))
 
-        ttk.Button(tracked_btn_row, text="🔄 Refresh List",
+        ttk.Button(tracked_btn_row, text="🔄 Reload List",
                    command=self.refresh_tracked_dirs).pack(side='left', padx=(0, 8))
+        ttk.Label(tracked_btn_row,
+                  text="(re-reads the saved directory list from disk — use if you indexed from another session)",
+                  font=('Arial', 8), foreground='gray').pack(side='left', padx=(0, 6))
 
         self.remove_tracked_btn = ttk.Button(
             tracked_btn_row,
@@ -1357,7 +1426,7 @@ or from the Help menu."""
         self.remove_tracked_btn.pack(side='left')
 
         # Update buttons
-        buttons_frame = ttk.Frame(update_frame)
+        buttons_frame = ttk.Frame(f)
         buttons_frame.pack(fill='x', padx=20, pady=(0, 6))
 
         ttk.Button(buttons_frame, text="Update Selected",
@@ -1368,170 +1437,152 @@ or from the Help menu."""
                    style='Accent.TButton').pack(side='left')
 
         # Progress
-        self.update_progress = ttk.Progressbar(update_frame, mode='indeterminate')
+        self.update_progress = ttk.Progressbar(f, mode='indeterminate')
         self.update_progress.pack(fill='x', padx=20, pady=(0, 6))
 
         # Output
-        ttk.Label(update_frame, text="Output:").pack(anchor='w', padx=20)
-        self.update_output = scrolledtext.ScrolledText(update_frame, height=10,
+        ttk.Label(f, text="Output:").pack(anchor='w', padx=20)
+        self.update_output = scrolledtext.ScrolledText(f, height=10,
                                                        wrap=tk.WORD)
-        self.update_output.pack(fill='both', expand=True, padx=20, pady=(0, 5))
+        self.update_output.pack(fill='x', padx=20, pady=(0, 10))
 
         # Load tracked directories
         self.refresh_tracked_dirs()
     
     def create_scheduling_tab(self):
-        """Create scheduling tab for automatic updates"""
+        """Create scheduling tab — scrollable, day-checkbox based."""
         schedule_frame = ttk.Frame(self.notebook)
         self.notebook.add(schedule_frame, text="⏰ Schedule")
-        
-        # Title
-        title_label = ttk.Label(schedule_frame, text="Schedule Automatic Updates",
-                               font=('Arial', 14, 'bold'))
-        title_label.pack(pady=10)
-        
-        # Description
-        desc_text = ("Configure automatic updates to keep your knowledge base current.\n"
-                    "Updates will re-index tracked directories at the specified time.")
-        desc_label = ttk.Label(schedule_frame, text=desc_text, justify=tk.CENTER)
-        desc_label.pack(pady=5)
-        
-        # Current schedule frame
-        current_frame = ttk.LabelFrame(schedule_frame, text="Current Schedule", 
-                                      padding=20)
-        current_frame.pack(fill=tk.X, padx=50, pady=10)
-        
+        f = self._make_scrollable_tab(schedule_frame)
+
+        ttk.Label(f, text="Schedule Automatic Updates",
+                  font=('Arial', 14, 'bold')).pack(pady=10)
+        ttk.Label(f,
+                  text="Configure automatic updates to keep your knowledge base current.\n"
+                       "Updates will re-index all tracked directories at the specified time.",
+                  justify=tk.CENTER).pack(pady=(0, 8))
+
+        # ── Current schedule status ───────────────────────────────────────────
+        current_frame = ttk.LabelFrame(f, text="Current Schedule", padding=15)
+        current_frame.pack(fill=tk.X, padx=40, pady=(0, 10))
         self.schedule_status = tk.StringVar(value="Checking...")
-        status_label = ttk.Label(current_frame, textvariable=self.schedule_status)
-        status_label.pack(pady=5)
-        
-        # Quick schedule buttons frame
-        quick_frame = ttk.LabelFrame(schedule_frame, text="Quick Schedule Options",
-                                     padding=20)
-        quick_frame.pack(fill=tk.X, padx=50, pady=10)
-        
-        quick_desc = ttk.Label(quick_frame, 
-                              text="Choose a preset schedule time:")
-        quick_desc.pack(anchor=tk.W, pady=5)
-        
-        btn_frame = ttk.Frame(quick_frame)
-        btn_frame.pack(fill=tk.X, pady=10)
-        
-        ttk.Button(btn_frame, text="Daily at 8:00 AM",
-                  command=lambda: self.set_schedule("08:00", "DAILY")).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Daily at 9:00 AM",
-                  command=lambda: self.set_schedule("09:00", "DAILY")).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Weekdays at 8:00 AM",
-                  command=lambda: self.set_schedule("08:00", "WEEKDAYS")).pack(side=tk.LEFT, padx=5)
-        
-        # Custom schedule frame
-        custom_frame = ttk.LabelFrame(schedule_frame, text="Custom Schedule",
-                                     padding=20)
-        custom_frame.pack(fill=tk.X, padx=50, pady=10)
-        
-        custom_desc = ttk.Label(custom_frame,
-                               text="Set a custom time for automatic updates:")
-        custom_desc.pack(anchor=tk.W, pady=5)
-        
-        time_frame = ttk.Frame(custom_frame)
-        time_frame.pack(fill=tk.X, pady=10)
-        
-        ttk.Label(time_frame, text="Time (HH:MM):").pack(side=tk.LEFT, padx=5)
-        self.custom_time = tk.StringVar(value="12:00")
-        time_entry = ttk.Entry(time_frame, textvariable=self.custom_time, width=10)
-        time_entry.pack(side=tk.LEFT, padx=5)
-        
-        ttk.Label(time_frame, text="Frequency:").pack(side=tk.LEFT, padx=(20,5))
-        self.custom_freq = tk.StringVar(value="DAILY")
-        freq_combo = ttk.Combobox(time_frame, textvariable=self.custom_freq,
-                                 values=["DAILY", "WEEKDAYS"], width=12, state='readonly')
-        freq_combo.pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(time_frame, text="Set Schedule",
-                  command=self.set_custom_schedule).pack(side=tk.LEFT, padx=10)
-        
-        # Disable/Remove schedule frame
-        control_frame = ttk.LabelFrame(schedule_frame, text="Schedule Control",
-                                      padding=20)
-        control_frame.pack(fill=tk.X, padx=50, pady=10)
-        
-        control_btn_frame = ttk.Frame(control_frame)
-        control_btn_frame.pack(pady=10)
-        
-        ttk.Button(control_btn_frame, text="Disable Schedule",
-                  command=self.disable_schedule).pack(side=tk.LEFT, padx=5)
-        ttk.Button(control_btn_frame, text="Remove Schedule",
-                  command=self.remove_schedule).pack(side=tk.LEFT, padx=5)
-        ttk.Button(control_btn_frame, text="Refresh Status",
-                  command=self.refresh_schedule_status).pack(side=tk.LEFT, padx=5)
-        
-        # Info text
-        info_text = scrolledtext.ScrolledText(schedule_frame, height=8, width=70,
-                                              wrap=tk.WORD)
-        info_text.pack(fill=tk.BOTH, expand=True, padx=50, pady=10)
-        
-        info_content = """How Automatic Updates Work:
+        ttk.Label(current_frame, textvariable=self.schedule_status,
+                  justify=tk.LEFT).pack(anchor='w')
 
-1. The scheduler runs at your specified time
-2. It re-indexes all directories in the Update Index tab
-3. Your knowledge base stays current with new/changed files
-4. Runs in the background - you don't need to do anything
+        # ── Schedule setup ────────────────────────────────────────────────────
+        setup_frame = ttk.LabelFrame(f, text="Schedule Setup", padding=15)
+        setup_frame.pack(fill=tk.X, padx=40, pady=(0, 10))
 
-Requirements:
-• At least one directory tracked (see Update Index tab)
-• Windows Task Scheduler enabled
-• AI Prowler files in a permanent location
+        # Time row
+        time_row = ttk.Frame(setup_frame)
+        time_row.pack(fill='x', pady=(0, 12))
+        ttk.Label(time_row, text="Run time:").pack(side='left', padx=(0, 8))
+        self.custom_time = tk.StringVar(value="08:00")
+        ttk.Entry(time_row, textvariable=self.custom_time, width=8).pack(side='left', padx=(0, 6))
+        ttk.Label(time_row, text="24-hour format  (e.g. 08:00 = 8 AM,  14:30 = 2:30 PM,  23:00 = 11 PM)",
+                  font=('Arial', 8), foreground='gray').pack(side='left')
 
-The schedule uses Windows Task Scheduler, so it will run even when
-this application is closed."""
-        
-        info_text.insert('1.0', info_content)
-        info_text.config(state='disabled')
-        
-        # Load current schedule status
+        # Day-of-week checkboxes
+        ttk.Label(setup_frame, text="Run on these days:",
+                  font=('Arial', 9)).pack(anchor='w', pady=(0, 6))
+        days_row = ttk.Frame(setup_frame)
+        days_row.pack(fill='x', pady=(0, 4))
+
+        self._day_vars = {}
+        day_defs = [
+            ('Mon', 'MON'), ('Tue', 'TUE'), ('Wed', 'WED'),
+            ('Thu', 'THU'), ('Fri', 'FRI'), ('Sat', 'SAT'), ('Sun', 'SUN'),
+        ]
+        for label, key in day_defs:
+            var = tk.BooleanVar(value=key in ('MON', 'TUE', 'WED', 'THU', 'FRI'))
+            self._day_vars[key] = var
+            ttk.Checkbutton(days_row, text=label, variable=var).pack(side='left', padx=6)
+
+        # Quick-select helpers
+        quick_row = ttk.Frame(setup_frame)
+        quick_row.pack(fill='x', pady=(0, 14))
+        ttk.Label(quick_row, text="Quick select:",
+                  font=('Arial', 8), foreground='gray').pack(side='left', padx=(0, 8))
+        def _sel_weekdays():
+            for k, v in self._day_vars.items():
+                v.set(k in ('MON', 'TUE', 'WED', 'THU', 'FRI'))
+        def _sel_everyday():
+            for v in self._day_vars.values():
+                v.set(True)
+        ttk.Button(quick_row, text="Weekdays", command=_sel_weekdays).pack(side='left', padx=4)
+        ttk.Button(quick_row, text="Every day", command=_sel_everyday).pack(side='left', padx=4)
+
+        ttk.Button(setup_frame, text="✅ Set Schedule",
+                   command=self.set_custom_schedule,
+                   style='Accent.TButton').pack(anchor='w')
+
+        # ── Schedule control ──────────────────────────────────────────────────
+        control_frame = ttk.LabelFrame(f, text="Schedule Control", padding=15)
+        control_frame.pack(fill=tk.X, padx=40, pady=(0, 10))
+        ctrl_row = ttk.Frame(control_frame)
+        ctrl_row.pack()
+        ttk.Button(ctrl_row, text="Disable Schedule",
+                   command=self.disable_schedule).pack(side='left', padx=6)
+        ttk.Button(ctrl_row, text="Remove Schedule",
+                   command=self.remove_schedule).pack(side='left', padx=6)
+        ttk.Button(ctrl_row, text="Refresh Status",
+                   command=self.refresh_schedule_status).pack(side='left', padx=6)
+
+        # ── Info ──────────────────────────────────────────────────────────────
+        info_frame = ttk.LabelFrame(f, text="How It Works", padding=10)
+        info_frame.pack(fill=tk.X, padx=40, pady=(0, 20))
+        ttk.Label(info_frame, justify='left', font=('Arial', 9), foreground='#444',
+                  text=(
+                      "1. The scheduler runs at your specified time on the selected days\n"
+                      "2. It re-indexes all directories in the Update Index tab\n"
+                      "3. Your knowledge base stays current with new/changed files\n\n"
+                      "Requirements:\n"
+                      "  • At least one directory tracked (see Update Index tab)\n"
+                      "  • Windows Task Scheduler enabled\n"
+                      "  • AI Prowler files in a permanent location\n\n"
+                      "The schedule uses Windows Task Scheduler and runs\n"
+                      "even when this application is closed."
+                  )).pack(anchor='w')
+
         self.refresh_schedule_status()
-    
-    def set_schedule(self, time_str, frequency):
-        """Set a quick schedule"""
+
+    def set_schedule(self, time_str, days):
+        """Create a Windows Task Scheduler entry for the given days."""
         try:
-            # Create the schedule using schtasks
-            script_path = Path.home() / "rag_auto_update.bat"
-            
-            # Determine schedule type
-            if frequency == "WEEKDAYS":
-                # Schedule for Monday-Friday
-                cmd = f'schtasks /create /tn "AI Prowler Auto-Update" /tr "{script_path}" /sc weekly /d MON,TUE,WED,THU,FRI /st {time_str} /f'
-            else:
-                # Schedule daily
+            script_path = Path.home() / "AI-Prowler" / "rag_auto_update.bat"
+            all_days    = {'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'}
+            days_str    = ",".join(days)
+            if set(days) == all_days:
                 cmd = f'schtasks /create /tn "AI Prowler Auto-Update" /tr "{script_path}" /sc daily /st {time_str} /f'
-            
+                day_label = "every day"
+            else:
+                cmd = f'schtasks /create /tn "AI Prowler Auto-Update" /tr "{script_path}" /sc weekly /d {days_str} /st {time_str} /f'
+                day_label = days_str
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-            
             if result.returncode == 0:
                 messagebox.showinfo("Success",
-                                   f"Schedule set successfully!\n\n"
-                                   f"Updates will run {frequency.lower()} at {time_str}")
+                                    f"Schedule set!\n\nRuns {day_label} at {time_str}")
                 self.refresh_schedule_status()
             else:
                 messagebox.showerror("Error",
-                                    f"Failed to create schedule.\n\n"
-                                    f"Error: {result.stderr}")
+                                     f"Failed to create schedule.\n\nError: {result.stderr}")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to set schedule: {str(e)}")
     
     def set_custom_schedule(self):
-        """Set a custom schedule"""
+        """Set schedule from the day-checkbox UI."""
         time_str = self.custom_time.get().strip()
-        frequency = self.custom_freq.get()
-        
-        # Validate time format
         if not self.validate_time(time_str):
             messagebox.showerror("Invalid Time",
-                                "Please enter time in HH:MM format\n"
-                                "Examples: 08:00, 12:00, 18:30")
+                                 "Please enter time in HH:MM format\n"
+                                 "Examples: 08:00, 12:00, 18:30")
             return
-        
-        self.set_schedule(time_str, frequency)
+        selected_days = [k for k, v in self._day_vars.items() if v.get()]
+        if not selected_days:
+            messagebox.showerror("No Days Selected",
+                                 "Please tick at least one day.")
+            return
+        self.set_schedule(time_str, selected_days)
     
     def validate_time(self, time_str):
         """Validate time format HH:MM"""
@@ -1588,35 +1639,51 @@ this application is closed."""
             messagebox.showerror("Error", f"Failed to remove schedule: {str(e)}")
     
     def refresh_schedule_status(self):
-        """Refresh the current schedule status"""
+        """Query Windows Task Scheduler and show full schedule + last-run details."""
         try:
-            # Query the scheduled task
-            cmd = 'schtasks /query /tn "AI Prowler Auto-Update" /fo list'
+            cmd    = 'schtasks /query /tn "AI Prowler Auto-Update" /fo list'
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-            
+
             if result.returncode == 0:
-                # Parse the output to get schedule details
-                output = result.stdout
-                
-                # Extract status and time
-                status = "Unknown"
-                next_run = "Unknown"
-                
+                output   = result.stdout
+                status   = "Unknown"
+                next_run = "N/A"
+                last_run = "Never"
+                schedule = "N/A"
+
                 for line in output.split('\n'):
-                    if 'Status:' in line:
-                        status = line.split('Status:')[1].strip()
-                    elif 'Next Run Time:' in line:
-                        next_run = line.split('Next Run Time:')[1].strip()
-                
+                    line = line.strip()
+                    if line.startswith('Status:'):
+                        status = line.split(':', 1)[1].strip()
+                    elif line.startswith('Next Run Time:'):
+                        next_run = line.split(':', 1)[1].strip()
+                    elif line.startswith('Last Run Time:'):
+                        last_run = line.split(':', 1)[1].strip()
+                    elif line.startswith('Schedule Type:') or line.startswith('Days:'):
+                        schedule += f"  {line}"
+
+                # Also show when AI Prowler itself last completed an index run
+                app_last = getattr(self, '_last_index_time', None)
+                app_line = (f"AI Prowler last indexed:  {app_last}"
+                            if app_last else
+                            "AI Prowler last indexed:  not yet this session")
+
                 self.schedule_status.set(
                     f"✅ Schedule Active\n"
-                    f"Status: {status}\n"
-                    f"Next Run: {next_run}"
+                    f"  Task status:   {status}\n"
+                    f"  Last run:      {last_run}\n"
+                    f"  Next run:      {next_run}\n"
+                    f"  {app_line}"
                 )
             else:
+                app_last = getattr(self, '_last_index_time', None)
+                app_line = (f"AI Prowler last indexed:  {app_last}"
+                            if app_last else
+                            "AI Prowler last indexed:  not yet this session")
                 self.schedule_status.set(
-                    "❌ No Schedule Set\n"
-                    "Use the options above to create a schedule"
+                    f"❌ No schedule set\n"
+                    f"  Use Schedule Setup above to create one.\n"
+                    f"  {app_line}"
                 )
         except Exception as e:
             self.schedule_status.set(f"⚠️ Error checking status: {str(e)}")
@@ -1626,10 +1693,11 @@ this application is closed."""
         """Smart Scan Configuration — edit supported/skipped extensions and dirs."""
         scan_cfg_frame = ttk.Frame(self.notebook)
         self.notebook.add(scan_cfg_frame, text="🗂 Smart Scan")
+        f = self._make_scrollable_tab(scan_cfg_frame)
 
-        ttk.Label(scan_cfg_frame, text="Smart Scan Configuration",
+        ttk.Label(f, text="Smart Scan Configuration",
                   font=('Arial', 16, 'bold')).pack(pady=(10, 2))
-        ttk.Label(scan_cfg_frame,
+        ttk.Label(f,
                   text="Customise which file types are indexed and which are skipped "
                        "during smart scan.\nChanges are saved immediately and apply "
                        "to all future scans.",
@@ -1645,8 +1713,8 @@ this application is closed."""
             dirs = {'node_modules', '__pycache__', '.git'}
 
         # ── Top two-column panel: Supported | Skipped extensions ─────────────
-        cols_frame = ttk.Frame(scan_cfg_frame)
-        cols_frame.pack(fill='both', expand=True, padx=20, pady=(0, 6))
+        cols_frame = ttk.Frame(f)
+        cols_frame.pack(fill='x', padx=20, pady=(0, 6))
         cols_frame.columnconfigure(0, weight=1)
         cols_frame.columnconfigure(1, weight=1)
 
@@ -1707,7 +1775,7 @@ this application is closed."""
                   font=('Arial', 8), foreground='gray').pack(anchor='w', pady=(4, 0))
 
         # ── Bottom panel — Skip Directories ──────────────────────────────────
-        dir_frame = ttk.LabelFrame(scan_cfg_frame,
+        dir_frame = ttk.LabelFrame(f,
                                    text="📂 Skipped Directories  (entire folder ignored)",
                                    padding=8)
         dir_frame.pack(fill='x', padx=20, pady=(0, 6))
@@ -1744,8 +1812,8 @@ this application is closed."""
                   font=('Arial', 8), foreground='gray').pack(side='left')
 
         # ── Bottom action bar ─────────────────────────────────────────────────
-        action_row = ttk.Frame(scan_cfg_frame)
-        action_row.pack(fill='x', padx=20, pady=(4, 10))
+        action_row = ttk.Frame(f)
+        action_row.pack(fill='x', padx=20, pady=(4, 16))
 
         ttk.Button(action_row, text="💾 Save Changes",
                    command=self._scan_cfg_save,
@@ -1942,7 +2010,9 @@ this application is closed."""
         model_frame = ttk.LabelFrame(scrollable_frame, text="AI Model", padding=10)
         model_frame.pack(fill='x', padx=20, pady=10)
         
-        ttk.Label(model_frame, text="Select model:").pack(anchor='w', pady=5)
+        ttk.Label(model_frame,
+                  text="Active model  (switches which already-installed model Ollama uses):",
+                  font=('Arial', 9)).pack(anchor='w', pady=(5, 2))
         
         # Detect system RAM (Windows)
         try:
@@ -1963,27 +2033,41 @@ this application is closed."""
         except Exception:
             self._system_ram_gb = 0  # unknown
 
-        # Build model list sorted by recommended first, then by size
-        def _model_sort_key(m):
-            info = MODEL_INFO.get(m, {})
-            needed = info.get("min_ram_gb", 999)
-            fits = needed <= self._system_ram_gb if self._system_ram_gb > 0 else True
-            return (0 if fits else 1, info.get("size_gb", 0))
+        # Build model list from INSTALLED Ollama models only
+        # Falls back to current active model if Ollama isn't running yet
+        def _get_installed_models():
+            installed = []
+            try:
+                r = requests.get("http://localhost:11434/api/tags", timeout=3,
+                                 proxies={"http": None, "https": None})
+                if r.status_code == 200:
+                    installed = [m.get('name','') for m in r.json().get('models',[]) if m.get('name')]
+            except Exception:
+                pass
+            if not installed:
+                # Ollama not running — show at least the currently configured model
+                installed = [self.current_model.get()]
+            # Sort: active model first, then alphabetical
+            active = self.current_model.get()
+            installed.sort(key=lambda m: (0 if m == active else 1, m))
+            return installed
 
-        models = [m for m in MODEL_CONTEXT_WINDOWS.keys() if m != 'default']
-        models.sort(key=_model_sort_key)
-        self._model_names = models  # plain names for actual use
-
-        # Display names shown in combobox include size + RAM badge
         def _display_name(m):
-            info = MODEL_INFO.get(m, {})
-            size = info.get("size_gb", 0)
+            info   = MODEL_INFO.get(m, {})
+            size   = info.get("size_gb", 0)
             needed = info.get("min_ram_gb", 0)
-            if self._system_ram_gb > 0:
-                badge = "✅" if needed <= self._system_ram_gb else "⚠️"
+            sys_ram = self._system_ram_gb
+            if sys_ram > 0 and needed:
+                badge = "✅" if needed <= sys_ram else "⚠️"
             else:
-                badge = ""
-            return f"{badge} {m}  [{size:.1f} GB dl | {needed} GB RAM]"
+                badge = "✅"   # installed = always show checkmark
+            size_str = f"{size:.1f} GB dl | {needed} GB RAM" if (size or needed) else "installed"
+            return f"{badge} {m}  [{size_str}]"
+
+        # Merge catalogue + any Ollama extras (not just installed) for _get_all_models()
+        # but show only installed in the combobox
+        models = _get_installed_models()
+        self._model_names = models
 
         display_names = [_display_name(m) for m in models]
         self._model_display_map = dict(zip(display_names, models))
@@ -1995,13 +2079,17 @@ this application is closed."""
         self._model_display_var.set(self._model_reverse_map.get(current, display_names[0] if display_names else ""))
 
         model_combo = ttk.Combobox(model_frame, textvariable=self._model_display_var,
-                                   values=display_names, width=45, state='readonly')
+                                   values=display_names, width=55, state='readonly')
         model_combo.pack(fill='x', pady=5)
         model_combo.bind('<<ComboboxSelected>>', self.on_model_change)
+        self._model_combo_widget = model_combo   # ref for _rebuild_model_combo
+        # Background poller starts at app launch — list is always fresh
+        self.root.after(500, self._start_model_poller)
 
         if self._system_ram_gb > 0:
             ram_lbl = ttk.Label(model_frame,
-                text=f"Your PC has {self._system_ram_gb:.1f} GB RAM  |  ✅ = fits in RAM   ⚠️ = may be slow",
+                text=f"Your PC has {self._system_ram_gb:.1f} GB RAM  |  ✅ = fits in RAM  ⚠️ = may be slow  "
+                     f"(only downloaded models shown — use Browse & Install to add more)",
                 font=('Arial', 9), foreground='gray')
             ram_lbl.pack(anchor='w')
 
@@ -2258,6 +2346,37 @@ this application is closed."""
         # Update the layers description label for the currently loaded value
         self._refresh_gpu_layers_desc()
         
+        # ── OCR — Scanned PDF & Image Indexing ───────────────────────────────
+        ocr_frame = ttk.LabelFrame(scrollable_frame,
+                                   text="📄 OCR — Scanned PDFs & Image Files",
+                                   padding=(10, 8))
+        ocr_frame.pack(fill='x', padx=20, pady=(5, 10))
+
+        # Determine live status
+        _ocr_ready = RAG_AVAILABLE and getattr(_rag_engine, 'pytesseract', None) is not None
+        try:
+            import pytesseract as _pt
+            _pt.get_tesseract_version()   # will throw if binary missing
+            _ocr_ready = True
+        except Exception:
+            _ocr_ready = False
+
+        _ocr_color = '#27ae60' if _ocr_ready else '#c0392b'
+        _ocr_label = ("✅ OCR active  —  Tesseract detected"
+                      if _ocr_ready else
+                      "⚠️  Tesseract binary not found  —  reinstall AI Prowler to fix")
+        ttk.Label(ocr_frame, text=_ocr_label,
+                  font=('Arial', 9, 'bold'), foreground=_ocr_color).pack(anchor='w', pady=(0, 6))
+
+        ttk.Label(ocr_frame, justify='left', font=('Arial', 9),
+                  text="OCR is always enabled.  AI Prowler automatically detects and indexes:\n"
+                       "  •  Scanned PDFs  (living trusts, contracts, court docs, old manuals)\n"
+                       "  •  Standalone image files  (.jpg  .png  .tiff  .bmp  .gif)\n\n"
+                       "How it works:  pdfplumber first tries to extract a text layer.  If fewer\n"
+                       "than 150 characters are found the document is treated as image-only and\n"
+                       "each page is rendered at 300 DPI then passed to Tesseract OCR."
+                  ).pack(anchor='w')
+
         # ── Ollama Server ─────────────────────────────────────────────────────
         ollama_frame = ttk.LabelFrame(scrollable_frame, text="Ollama Server", padding=(10, 6))
         ollama_frame.pack(fill='x', padx=20, pady=(5, 10))
@@ -2366,11 +2485,12 @@ Built with Python, ChromaDB, and Ollama"""
         self._trigger_prewarm(num_ctx=needed_ctx)
 
     def _on_tab_changed(self, event=None):
-        """Prewarm Ollama whenever the user switches to the Ask Questions tab."""
+        """Handle tab switches."""
         try:
             selected = self.notebook.index(self.notebook.select())
             if selected == self._TAB_INDEX_QUERY:
                 self._trigger_prewarm()
+            # Settings tab: no synchronous refresh — background poller keeps list current
         except Exception:
             pass
 
@@ -2900,6 +3020,21 @@ Built with Python, ChromaDB, and Ollama"""
                 print(f"   {', '.join(items_desc)} queued")
                 print(f"   Smart scan: {'ON' if smart_scan else 'OFF'}")
                 print(f"   Recursive:  {'YES' if recursive else 'NO'}")
+                # Show which device the embedding model will run on
+                try:
+                    _gpu_info = detect_gpu()
+                    _dev = _gpu_info.get('embedding_device', 'cpu').upper()
+                    if _dev == 'CUDA':
+                        _gpu_name = _gpu_info.get('cuda_device_name') or 'NVIDIA GPU'
+                        _vram     = _gpu_info.get('cuda_vram_gb')
+                        _vram_str = f'  ({_vram} GB VRAM)' if _vram else ''
+                        print(f"   Embeddings: GPU ⚡ {_gpu_name}{_vram_str}")
+                    elif _dev == 'MPS':
+                        print(f"   Embeddings: GPU ⚡ Apple MPS")
+                    else:
+                        print(f"   Embeddings: CPU  (no compatible GPU detected)")
+                except Exception:
+                    pass
                 print(f"{'='*60}\n")
 
             stopped = False
@@ -3009,7 +3144,11 @@ Built with Python, ChromaDB, and Ollama"""
                 print(f"{'='*60}")
                 if smart_scan:
                     print(f"   Files indexed:  {grand_processed:,}")
-                    print(f"   Files skipped:  {grand_skipped:,}")
+                    print(f"   Files skipped:  {grand_skipped:,}"
+                          f"  ← load failed (unreadable, empty, or unsupported format)")
+                    if grand_skipped > 0 and grand_processed == 0:
+                        print(f"   💡 Tip: click 'Scan Queue' to see exactly which files")
+                        print(f"          and what extensions are in the directory.")
                     print(f"   Total chunks:   {grand_chunks:,}")
                     print(f"   Total words:    {grand_words:,}")
                 print(f"   Directories:    {n_dirs}")
@@ -3342,25 +3481,85 @@ Built with Python, ChromaDB, and Ollama"""
             return
         idx = self._provider_combo.current()
         pid = self._provider_ids[idx]
-        _rag_engine.ACTIVE_PROVIDER = pid
-        save_config(active_provider=pid)
+
+        if pid.startswith('local:'):
+            # Switch both the active provider and the active model
+            model = pid[len('local:'):]
+            self.current_model.set(model)
+            _rag_engine.ACTIVE_PROVIDER = 'local'
+            save_config(active_provider='local', model=model)
+            # Sync the Settings model combobox
+            self._rebuild_model_combo()
+            self.update_model_info()
+            # Reset prewarm for new model
+            invalidate_chroma_cache()
+            self._prewarm_done = False
+            self._prewarm_in_progress = False
+            self._warmup_reset()
+            self._warmup_first_fired = False
+            self._trigger_prewarm()
+        else:
+            _rag_engine.ACTIVE_PROVIDER = pid
+            save_config(active_provider=pid)
         self._refresh_provider_light()
-        # Also keep local label in sync if local model changed
-        if pid == 'local':
-            self._sync_local_provider_label()
 
     def _sync_local_provider_label(self):
-        """Keep the 'Local Ollama [model]' label in the combobox current."""
-        if not RAG_AVAILABLE or not hasattr(self, '_provider_labels'):
+        """Legacy shim — rebuilds local entries so the combobox stays current."""
+        self._rebuild_local_provider_entries(rebuild_combo=True)
+
+    def _rebuild_local_provider_entries(self, rebuild_combo=False):
+        """Query Ollama for installed models and (re)build the local provider slots.
+
+        Creates one entry per installed model: pid='local:modelname'.
+        Falls back to current_model if Ollama is unreachable.
+        After a fresh download call with rebuild_combo=True to push changes to the widget.
+        """
+        if not RAG_AVAILABLE:
             return
+
+        # Get installed models from Ollama
+        installed = []
         try:
-            idx = self._provider_ids.index('local')
-            self._provider_labels[idx] = f"Local Ollama  [{self.current_model.get()}]"
-            self._provider_combo.configure(values=self._provider_labels)
-            if self._provider_combo.current() == idx:
-                self._provider_var.set(self._provider_labels[idx])
+            r = requests.get("http://localhost:11434/api/tags", timeout=3,
+                             proxies={"http": None, "https": None})
+            if r.status_code == 200:
+                installed = [m.get('name', '') for m in r.json().get('models', []) if m.get('name')]
         except Exception:
             pass
+
+        # Fall back to catalogue models that are in use, plus current active model
+        if not installed:
+            installed = [self.current_model.get()]
+
+        # Sort: active model first, then alphabetical
+        current = self.current_model.get()
+        installed.sort(key=lambda m: (0 if m == current else 1, m))
+
+        new_local_ids    = [f'local:{m}' for m in installed]
+        new_local_labels = [f"Local Ollama  [{m}]" for m in installed]
+
+        if not hasattr(self, '_provider_ids') or not rebuild_combo:
+            # Called during construction — just set the lists
+            self._provider_ids    = new_local_ids
+            self._provider_labels = new_local_labels
+            return
+
+        # Called after download — splice updated local entries into existing lists
+        # Remove old local:* entries, keep cloud providers
+        cloud_ids    = [pid for pid in self._provider_ids    if not pid.startswith('local:')]
+        cloud_labels = [lbl for pid, lbl in zip(self._provider_ids, self._provider_labels)
+                        if not pid.startswith('local:')]
+
+        self._provider_ids    = new_local_ids    + cloud_ids
+        self._provider_labels = new_local_labels + cloud_labels
+
+        if hasattr(self, '_provider_combo'):
+            self._provider_combo.configure(values=self._provider_labels)
+            # Reselect current model
+            target = f'local:{self.current_model.get()}'
+            idx = next((i for i, pid in enumerate(self._provider_ids) if pid == target), 0)
+            self._provider_combo.current(idx)
+            self._provider_var.set(self._provider_labels[idx])
 
     def _refresh_provider_light(self):
         """Update the coloured dot and status note for the currently selected provider."""
@@ -3371,10 +3570,10 @@ Built with Python, ChromaDB, and Ollama"""
             if idx < 0:
                 idx = 0
             pid = self._provider_ids[idx]
-            status = get_provider_status(pid)
+            status = get_provider_status(pid if not pid.startswith('local:') else 'local')
 
             # dot colour
-            if pid == 'local':
+            if pid.startswith('local:') or pid == 'local':
                 # Reflect Ollama readiness
                 dot_color = '#27ae60' if self._ollama_ready else '#aaaaaa'
                 note = ''
@@ -4105,6 +4304,96 @@ Built with Python, ChromaDB, and Ollama"""
         except Exception:
             pass
 
+    def _query_ollama_models_bg(self):
+        """Blocking call — run in a background thread, never on the main thread.
+
+        Tries HTTP /api/tags first; falls back to `ollama list` subprocess.
+        Returns list of model name strings.
+        """
+        # HTTP attempt (proxy bypass)
+        try:
+            import requests as _req
+            r = _req.get("http://localhost:11434/api/tags", timeout=3,
+                         proxies={"http": None, "https": None})
+            if r.status_code == 200:
+                names = [m.get('name', '') for m in r.json().get('models', [])
+                         if m.get('name')]
+                if names:
+                    return names
+        except Exception:
+            pass
+
+        # Subprocess fallback — same as typing `ollama list` in DOS
+        try:
+            import subprocess, os, shutil
+            exe = shutil.which('ollama')
+            if not exe:
+                exe = os.path.join(os.environ.get('LOCALAPPDATA', ''),
+                                   'Programs', 'Ollama', 'ollama.exe')
+            if exe and os.path.exists(exe):
+                si = subprocess.STARTUPINFO()
+                si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                si.wShowWindow = 0
+                result = subprocess.run(
+                    [exe, 'list'],
+                    capture_output=True, text=True, timeout=8,
+                    startupinfo=si, creationflags=subprocess.CREATE_NO_WINDOW
+                )
+                names = [line.split()[0] for line in result.stdout.splitlines()[1:]
+                         if line.strip()]
+                if names:
+                    return names
+        except Exception:
+            pass
+
+        return []
+
+    def _apply_model_list(self, installed):
+        """Update the combo widget on the main thread — always called via root.after."""
+        if not hasattr(self, '_model_combo_widget'):
+            return
+        if not installed:
+            installed = [self.current_model.get()]
+
+        active = self.current_model.get()
+        installed.sort(key=lambda m: (0 if m == active else 1, m))
+        sys_ram = getattr(self, '_system_ram_gb', 0)
+
+        def _disp(m):
+            info   = MODEL_INFO.get(m, {}) if RAG_AVAILABLE else {}
+            size   = info.get('size_gb', 0)
+            needed = info.get('min_ram_gb', 0)
+            badge  = ('✅' if needed <= sys_ram else '⚠️') if (sys_ram > 0 and needed) else '✅'
+            size_str = f"{size:.1f} GB | {needed} GB RAM" if (size or needed) else "installed"
+            return f"{badge} {m}  [{size_str}]"
+
+        display_names = [_disp(m) for m in installed]
+        self._model_names       = installed
+        self._model_display_map = dict(zip(display_names, installed))
+        self._model_reverse_map = dict(zip(installed, display_names))
+        self._model_combo_widget.configure(values=display_names)
+        disp = self._model_reverse_map.get(active, display_names[0] if display_names else '')
+        self._model_display_var.set(disp)
+
+    def _rebuild_model_combo(self):
+        """Trigger a non-blocking background refresh of the Active Model dropdown."""
+        import threading
+        def _worker():
+            names = self._query_ollama_models_bg()
+            self.root.after(0, lambda: self._apply_model_list(names))
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _start_model_poller(self):
+        """Start the background poller that keeps the model list fresh every 10s."""
+        def _poll():
+            import threading
+            def _worker():
+                names = self._query_ollama_models_bg()
+                self.root.after(0, lambda: self._apply_model_list(names))
+            threading.Thread(target=_worker, daemon=True).start()
+            self.root.after(10000, _poll)   # repeat every 10 seconds
+        _poll()
+
     def on_model_change(self, event=None):
         """Handle model selection change"""
         # Resolve display name (with badges/sizes) back to real model name
@@ -4165,182 +4454,603 @@ Built with Python, ChromaDB, and Ollama"""
         picker.minsize(620, 380)
         picker.transient(self.root)
 
-        # Position near center of main window
         self.root.update_idletasks()
         rx, ry = self.root.winfo_rootx(), self.root.winfo_rooty()
         rw, rh = self.root.winfo_width(), self.root.winfo_height()
-        pw, ph = 680, 520
+        pw, ph = 720, 540
         picker.geometry(f"{pw}x{ph}+{rx + rw//2 - pw//2}+{ry + rh//2 - ph//2}")
 
-        # Configure grid so the listbox row expands
         picker.columnconfigure(0, weight=1)
-        picker.rowconfigure(1, weight=1)  # row 1 = list_frame
+        picker.rowconfigure(2, weight=1)  # listbox row expands
 
         sys_ram = getattr(self, '_system_ram_gb', 0)
 
-        # ── Header ────────────────────────────────────────────────────────────
+        # ── Query Ollama for already-downloaded models ─────────────────────────
+        installed_names = set()
+        installed_sizes = {}   # name → size_on_disk bytes
+        try:
+            r = requests.get("http://localhost:11434/api/tags", timeout=3,
+                             proxies={"http": None, "https": None})
+            if r.status_code == 200:
+                for m in r.json().get('models', []):
+                    raw_name = m.get('name', '')
+                    # Normalise: "llama3.1:8b" and "llama3.1:8b-instruct-q4_0" both
+                    # match the catalogue entry "llama3.1:8b"
+                    installed_names.add(raw_name)
+                    installed_sizes[raw_name] = m.get('size', 0)
+        except Exception:
+            pass   # Ollama not running — no installed badges, that's fine
+
+        def is_installed(model_name):
+            """True if model_name (or a variant with extra tags) is in Ollama."""
+            if model_name in installed_names:
+                return True
+            # Also match on base name before any extra qualifier
+            base = model_name.split(':')[0]
+            return any(n.startswith(base + ':') or n == base for n in installed_names)
+
+        # ── Header ─────────────────────────────────────────────────────────────
         hdr = ttk.Frame(picker, padding=(12, 8))
         hdr.grid(row=0, column=0, sticky='ew')
-        ttk.Label(hdr, text="Install an AI Model", font=('Arial', 13, 'bold')).pack(side='left')
-        if sys_ram > 0:
-            ttk.Label(hdr, text=f"  Your RAM: {sys_ram:.0f} GB   ✅ fits   ⚠️ may be slow",
-                      font=('Arial', 9), foreground='gray').pack(side='left', padx=8)
+        ttk.Label(hdr, text="Browse & Install AI Models",
+                  font=('Arial', 13, 'bold')).pack(side='left')
+        ram_text = f"  Your RAM: {sys_ram:.0f} GB  |  " if sys_ram > 0 else "  "
+        ollama_text = f"Ollama: {len(installed_names)} model(s) installed" if installed_names else                       "Ollama: not running (install status unknown)"
+        ttk.Label(hdr, text=ram_text + ollama_text,
+                  font=('Arial', 9), foreground='gray').pack(side='left', padx=8)
 
         ttk.Separator(picker, orient='horizontal').grid(row=1, column=0, sticky='ew')
 
-        # ── Listbox ───────────────────────────────────────────────────────────
+        # ── Listbox ─────────────────────────────────────────────────────────────
         list_frame = ttk.Frame(picker, padding=(8, 6))
         list_frame.grid(row=2, column=0, sticky='nsew')
         list_frame.columnconfigure(0, weight=1)
         list_frame.rowconfigure(0, weight=1)
-        picker.rowconfigure(2, weight=1)  # list_frame row expands
 
-        scrollbar = ttk.Scrollbar(list_frame, orient='vertical')
-        listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set,
+        sb = ttk.Scrollbar(list_frame, orient='vertical')
+        listbox = tk.Listbox(list_frame, yscrollcommand=sb.set,
                              font=('Courier New', 10), selectmode='single',
                              activestyle='dotbox')
-        scrollbar.config(command=listbox.yview)
+        sb.config(command=listbox.yview)
         listbox.grid(row=0, column=0, sticky='nsew')
-        scrollbar.grid(row=0, column=1, sticky='ns')
+        sb.grid(row=0, column=1, sticky='ns')
 
-        # Populate listbox
+        # Populate — installed models first, then by RAM fit, then by size
         picker_models = [m for m in MODEL_CONTEXT_WINDOWS.keys() if m != 'default']
         def _sort_key(m):
-            info = MODEL_INFO.get(m, {})
+            info   = MODEL_INFO.get(m, {})
             needed = info.get("min_ram_gb", 999)
-            fits = needed <= sys_ram if sys_ram > 0 else True
-            return (0 if fits else 1, info.get("size_gb", 0))
+            fits   = needed <= sys_ram if sys_ram > 0 else True
+            return (0 if is_installed(m) else 1, 0 if fits else 1, info.get("size_gb", 0))
         picker_models.sort(key=_sort_key)
 
         for m in picker_models:
-            info = MODEL_INFO.get(m, {})
+            info  = MODEL_INFO.get(m, {})
             size  = info.get("size_gb", 0)
             ram   = info.get("min_ram_gb", 0)
             maker = info.get("maker", "")
             desc  = info.get("description", "")
-            if sys_ram > 0:
-                badge = "✅" if ram <= sys_ram else "⚠️"
+
+            inst = is_installed(m)
+            if inst:
+                status_badge = "📦"   # already on disk
+            elif sys_ram > 0 and ram > sys_ram:
+                status_badge = "⚠️"   # too big for RAM
             else:
-                badge = "  "
-            line = f"{badge} {m:<20} {size:>5.1f} GB dl  {ram:>3} GB RAM   {maker:<11}  {desc}"
+                status_badge = "  "   # available to download
+
+            ram_badge = "✅" if (sys_ram > 0 and ram <= sys_ram) else ("⚠️" if sys_ram > 0 else "  ")
+            inst_tag  = " [installed]" if inst else ""
+            line = f"{status_badge} {m:<22} {size:>5.1f} GB  {ram:>3} GB RAM  {maker:<10}{inst_tag}"
             listbox.insert('end', line)
-            # Gray out models that exceed RAM
-            if sys_ram > 0 and ram > sys_ram:
+
+            if inst:
+                listbox.itemconfig('end', foreground='#44bb44', background='#f0fff0')
+            elif sys_ram > 0 and ram > sys_ram:
                 listbox.itemconfig('end', foreground='#888888')
 
-        # Pre-select currently active model
+        # Pre-select active model
         current = self.current_model.get()
         if current in picker_models:
             idx = picker_models.index(current)
             listbox.selection_set(idx)
             listbox.see(idx)
 
-        # ── Description label ─────────────────────────────────────────────────
+        # ── Description label ──────────────────────────────────────────────────
         ttk.Separator(picker, orient='horizontal').grid(row=3, column=0, sticky='ew')
         desc_var = tk.StringVar(value="Select a model above to see details.")
         desc_lbl = ttk.Label(picker, textvariable=desc_var, font=('Arial', 9),
-                             padding=(10, 4), wraplength=pw - 20, anchor='w')
+                             padding=(10, 6), wraplength=pw - 20, anchor='w', justify='left')
         desc_lbl.grid(row=4, column=0, sticky='ew')
 
         def on_select(event=None):
             sel = listbox.curselection()
-            if sel:
-                m = picker_models[sel[0]]
-                info = MODEL_INFO.get(m, {})
-                size  = info.get("size_gb", 0)
-                ram   = info.get("min_ram_gb", 0)
-                maker = info.get("maker", "")
-                desc  = info.get("description", "")
-                ctx   = MODEL_CONTEXT_WINDOWS.get(m, 0)
-                warn  = ""
-                if sys_ram > 0 and ram > sys_ram:
-                    warn = f"  ⚠️ Needs {ram} GB RAM — you have {sys_ram:.0f} GB."
-                maker_str = f"  |  By {maker}" if maker else ""
-                desc_var.set(f"{m}{maker_str}  ▸  {size:.1f} GB download  |  {ram} GB RAM  |  {ctx:,} token context  |  {desc}{warn}")
+            if not sel:
+                return
+            m    = picker_models[sel[0]]
+            info = MODEL_INFO.get(m, {})
+            size  = info.get("size_gb", 0)
+            ram   = info.get("min_ram_gb", 0)
+            maker = info.get("maker", "")
+            desc  = info.get("description", "")
+            ctx   = MODEL_CONTEXT_WINDOWS.get(m, 0)
+
+            inst = is_installed(m)
+            inst_line = ""
+            if inst:
+                # Show actual disk size from Ollama if available
+                disk_bytes = next((installed_sizes[n] for n in installed_names
+                                   if n == m or n.startswith(m.split(':')[0] + ':')), 0)
+                disk_str = f"{disk_bytes/1_073_741_824:.2f} GB on disk" if disk_bytes else "installed"
+                inst_line = f"  ✅ Already installed ({disk_str})"
+            ram_warn = f"  ⚠️ Needs {ram} GB RAM — you have {sys_ram:.0f} GB."                        if sys_ram > 0 and ram > sys_ram else ""
+            maker_str = f"By {maker}  |  " if maker else ""
+            active_str = "  ← active" if m == current else ""
+            desc_var.set(
+                f"{m}{active_str}\n"
+                + f"{maker_str}{size:.1f} GB download  |  {ram} GB RAM min  |  {ctx:,} token context\n"
+                + f"{desc}{inst_line}{ram_warn}"
+            )
+            # Update action button label based on install status
+            if inst:
+                action_btn.config(text=f"✅  Switch to {m}" if m != current else "✅  Already active model")
+            else:
+                action_btn.config(text=f"⬇  Download & Install {m}")
+
         listbox.bind('<<ListboxSelect>>', on_select)
 
-        # ── Buttons ───────────────────────────────────────────────────────────
+        # ── Buttons ─────────────────────────────────────────────────────────────
         ttk.Separator(picker, orient='horizontal').grid(row=5, column=0, sticky='ew')
         btn_frame = ttk.Frame(picker, padding=(8, 6))
         btn_frame.grid(row=6, column=0, sticky='ew')
 
-        def do_install():
+        def do_action():
             sel = listbox.curselection()
             if not sel:
                 messagebox.showwarning("No Selection", "Please select a model first.", parent=picker)
                 return
-            m = picker_models[sel[0]]
+            m    = picker_models[sel[0]]
             info = MODEL_INFO.get(m, {})
             ram  = info.get("min_ram_gb", 0)
             size = info.get("size_gb", 0)
-            warn = ""
-            if sys_ram > 0 and ram > sys_ram:
-                warn = f"\n\n⚠️ Warning: {m} needs {ram} GB RAM but your PC has {sys_ram:.0f} GB.\nIt will be very slow on CPU."
-            if messagebox.askyesno("Install Model",
-                    f"Install {m}?\n\nDownload size: ~{size:.1f} GB\nMin RAM: {ram} GB{warn}\n\nThis may take several minutes.",
-                    parent=picker):
-                picker.destroy()
-                self.status_var.set(f"Installing {m}...")
-                thread = threading.Thread(target=self.install_model_worker, args=(m,))
-                thread.daemon = True
-                thread.start()
 
-        install_btn = ttk.Button(btn_frame, text="⬇  Install Selected Model", command=do_install)
-        install_btn.pack(side='left', padx=4)
+            if is_installed(m):
+                # Already on disk — just switch the active model
+                picker.destroy()
+                self.current_model.set(m)
+                self.status_var.set(f"Switched active model to {m}")
+            else:
+                # Need to download
+                warn = ""
+                if sys_ram > 0 and ram > sys_ram:
+                    warn = f"\n\n⚠️ Warning: {m} needs {ram} GB RAM but your PC has {sys_ram:.0f} GB.\nIt will run on CPU and be very slow."
+                if messagebox.askyesno("Download Model",
+                        f"Download and install {m}?\n\nSize: ~{size:.1f} GB\nMin RAM: {ram} GB{warn}\n\nThis may take several minutes.",
+                        parent=picker):
+                    picker.destroy()
+                    self.status_var.set(f"Downloading {m}...")
+                    self._launch_install_progress_window(m)
+
+        action_btn = ttk.Button(btn_frame, text="⬇  Download & Install", command=do_action)
+        action_btn.pack(side='left', padx=4)
 
         cancel_btn = ttk.Button(btn_frame, text="Cancel", command=picker.destroy)
         cancel_btn.pack(side='left', padx=4)
 
-        # Update desc wraplength when picker is resized
+        # Legend
+        ttk.Label(btn_frame, text="  📦 = installed   ✅ = fits your RAM   ⚠️ = needs more RAM",
+                  font=('Arial', 8), foreground='gray').pack(side='right', padx=8)
+
         def _on_picker_resize(event):
-            desc_lbl.config(wraplength=event.width - 20)
+            if event.widget is picker:
+                desc_lbl.config(wraplength=max(100, event.width - 20))
         picker.bind('<Configure>', _on_picker_resize)
-
-        # ── Close on click outside ────────────────────────────────────────────
-        def _on_focus_out(event):
-            # Only close if focus moved to a widget outside the picker window
-            try:
-                focused = picker.focus_get()
-            except Exception:
-                focused = None
-            if focused is None:
-                picker.destroy()
-
-        picker.bind('<FocusOut>', _on_focus_out)
-
-        # Also close on Escape
         picker.bind('<Escape>', lambda e: picker.destroy())
 
-        picker.focus_force()
         picker.grab_set()
+        picker.focus_force()
+
+        # Trigger description update for pre-selected model
+        if current in picker_models:
+            on_select()
 
     def install_model(self):
         """Install selected model (legacy — called directly for backward compat)"""
         self.show_model_picker()
     
-    def install_model_worker(self, model):
-        """Worker thread for model installation — streams progress output to status bar"""
-        try:
-            process = subprocess.Popen(
-                f"ollama pull {model}",
-                shell=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True
-            )
-            for line in process.stdout:
-                line = line.strip()
-                if line:
-                    self.output_queue.put(('status', f"Installing {model}: {line}"))
-            process.wait()
-            if process.returncode == 0:
-                self.output_queue.put(('status', f'{model} installed successfully!'))
-                self.output_queue.put(('info', f'✅ {model} is now ready to use.\n\nSwitch to it in the Settings tab.'))
+    @staticmethod
+    def _find_ollama_exe():
+        """Resolve the full path to ollama.exe.
+
+        On Windows, Ollama installs to %LOCALAPPDATA%/Programs/Ollama/ollama.exe
+        but the GUI process may not have that on its PATH (especially when launched
+        via a shortcut or RAG_RUN.bat). We check the known install location first,
+        then fall back to shutil.which so it also works on Linux/Mac.
+        """
+        import shutil, os
+        # Known Windows install location
+        local_app = os.environ.get('LOCALAPPDATA', '')
+        if local_app:
+            candidate = os.path.join(local_app, 'Programs', 'Ollama', 'ollama.exe')
+            if os.path.isfile(candidate):
+                return candidate
+        # Fall back to PATH search (works if Ollama added itself to PATH, or on Linux/Mac)
+        found = shutil.which('ollama')
+        if found:
+            return found
+        return None   # not found anywhere
+
+    def install_model_worker(self, model, dl_queue, abort_event):
+        """Background thread: pull model via Ollama REST API.
+
+        Messages put onto dl_queue:
+          ('line',    str)  — new line of text
+          ('bar',     str)  — overwrite last line (progress update)
+          ('done',    str)  — finished OK
+          ('failed',  str)  — error detail
+          ('aborted', '')   — user aborted
+        """
+        import json as _json, time as _time, subprocess as _sp, os as _os, shutil as _sh, sys as _sys, requests as requests
+
+        OLLAMA_BASE = "http://localhost:11434"
+
+        def put(kind, data=""):
+            dl_queue.put((kind, data))
+
+        # ── Step 1: locate ollama.exe ─────────────────────────────────────────
+        local_app   = _os.environ.get('LOCALAPPDATA', '')
+        ollama_exe  = None
+        if local_app:
+            cand = _os.path.join(local_app, 'Programs', 'Ollama', 'ollama.exe')
+            if _os.path.isfile(cand):
+                ollama_exe = cand
+        if not ollama_exe:
+            ollama_exe = _sh.which('ollama')
+
+        if ollama_exe:
+            put('line', f"Found ollama: {ollama_exe}\n")
+        else:
+            put('failed',
+                "Cannot find ollama.exe.\n"
+                "Expected: %LOCALAPPDATA%\\Programs\\Ollama\\ollama.exe\n"
+                "Install Ollama from https://ollama.com and try again.")
+            return
+
+        # ── Step 2: ensure Ollama server is running ─────────────────────────
+        # Use TCP port check — works even before Ollama's HTTP layer is ready,
+        # and bypasses Windows proxy settings that break requests.get().
+        import socket as _sock
+
+        def port_open():
+            try:
+                with _sock.create_connection(('127.0.0.1', 11434), timeout=2):
+                    return True
+            except OSError:
+                return False
+
+        def is_up():
+            """HTTP check with explicit proxy bypass for Windows."""
+            try:
+                r = requests.get(f"{OLLAMA_BASE}/api/tags", timeout=3,
+                                 proxies={"http": None, "https": None})
+                return r.status_code == 200
+            except Exception:
+                return False
+
+        if port_open():
+            put('line', "Ollama server: port 11434 is open ✓\n")
+            # Even when the port is open, Ollama may not have finished
+            # initialising — specifically, it writes an Ed25519 identity
+            # key to ~/.ollama/id_ed25519 on first run.  If that file is
+            # missing (e.g. the .ollama folder was cleared by a previous
+            # uninstall) Ollama must be restarted to regenerate it;
+            # otherwise every 'ollama pull' fails with:
+            #   'open ...id_ed25519: The system cannot find the file'
+            user_profile  = _os.environ.get('USERPROFILE', _os.path.expanduser('~'))
+            ollama_key    = _os.path.join(user_profile, '.ollama', 'id_ed25519')
+            if not _os.path.isfile(ollama_key):
+                put('line', "⚠️  Ollama identity key missing — restarting Ollama to regenerate it...\n")
+                # Kill the running Ollama process so serve can restart cleanly
+                try:
+                    if _sys.platform == 'win32':
+                        _sp.run(['taskkill', '/F', '/IM', 'ollama.exe'],
+                                capture_output=True)
+                    else:
+                        _sp.run(['pkill', '-f', 'ollama serve'],
+                                capture_output=True)
+                except Exception:
+                    pass
+                _time.sleep(2)  # brief pause so the port is released
+                # Fall through to the 'else' branch below to start serve
+                # and wait for the port — reuse the same startup logic.
+                try:
+                    if _sys.platform == 'win32':
+                        _si = _sp.STARTUPINFO()
+                        _si.dwFlags |= _sp.STARTF_USESHOWWINDOW
+                        _si.wShowWindow = 0
+                        srv_proc = _sp.Popen(
+                            [ollama_exe, 'serve'],
+                            startupinfo=_si,
+                            creationflags=_sp.CREATE_NO_WINDOW,
+                            stdout=_sp.PIPE, stderr=_sp.STDOUT
+                        )
+                    else:
+                        srv_proc = _sp.Popen(
+                            [ollama_exe, 'serve'],
+                            stdout=_sp.PIPE, stderr=_sp.STDOUT
+                        )
+                    self._ollama_process = srv_proc
+                    # Wait for port to reopen and key file to appear
+                    put('line', "Waiting for Ollama to reinitialise")
+                    deadline2 = _time.time() + 60
+                    dots2 = 0
+                    while _time.time() < deadline2:
+                        if abort_event.is_set():
+                            srv_proc.kill()
+                            put('aborted')
+                            return
+                        if port_open() and _os.path.isfile(ollama_key):
+                            put('line', f" ready after ~{dots2}s ✓\n")
+                            break
+                        dots2 += 1
+                        put('bar', f"Waiting for Ollama to reinitialise {'.' * (dots2 % 6 + 1)}")
+                        _time.sleep(1)
+                    else:
+                        put('failed',
+                            "Ollama did not reinitialise within 60 seconds.\n"
+                            "Try: quit Ollama from the system tray, relaunch it, then try again.")
+                        return
+                except Exception as e:
+                    put('failed', f"Failed to restart Ollama: {e}")
+                    return
+        else:
+            put('line', "Ollama not running — starting it now...\n")
+            try:
+                if _sys.platform == 'win32':
+                    _si = _sp.STARTUPINFO()
+                    _si.dwFlags |= _sp.STARTF_USESHOWWINDOW
+                    _si.wShowWindow = 0
+                    srv_proc = _sp.Popen(
+                        [ollama_exe, 'serve'],
+                        startupinfo=_si,
+                        creationflags=_sp.CREATE_NO_WINDOW,
+                        stdout=_sp.PIPE,
+                        stderr=_sp.STDOUT
+                    )
+                else:
+                    srv_proc = _sp.Popen(
+                        [ollama_exe, 'serve'],
+                        stdout=_sp.PIPE, stderr=_sp.STDOUT
+                    )
+                put('line', f"Ollama process started (PID {srv_proc.pid})\n")
+                self._ollama_process = srv_proc
+            except Exception as e:
+                put('failed', f"Failed to launch ollama serve: {e}")
+                return
+
+            # Wait up to 90s for TCP port to open
+            put('line', "Waiting for Ollama port 11434")
+            deadline = _time.time() + 90
+            dots = 0
+            while _time.time() < deadline:
+                if abort_event.is_set():
+                    srv_proc.kill()
+                    put('aborted')
+                    return
+                rc = srv_proc.poll()
+                if rc is not None:
+                    try:
+                        out_text = srv_proc.stdout.read(4000).decode('utf-8', errors='replace').strip()
+                    except Exception:
+                        out_text = ""
+                    # "address in use" = another Ollama already running — not an error
+                    addr_in_use = ('address already in use' in out_text.lower() or
+                                   'only one usage of each socket' in out_text.lower())
+                    if addr_in_use:
+                        put('line', "\nOllama already running on port 11434 ✓\n")
+                        break
+                    detail = f"\n\n{out_text}" if out_text else ""
+                    put('failed', f"Ollama exited immediately (code {rc}).{detail}\n\nTry: ollama serve")
+                    return
+                if port_open():
+                    put('line', f" opened after ~{dots}s ✓\n")
+                    break
+                dots += 1
+                put('bar', f"Waiting for Ollama port 11434 {'.' * (dots % 6 + 1)}")
+                _time.sleep(1)
             else:
-                self.output_queue.put(('error', f'Failed to install {model}.\nCheck that Ollama is running: ollama serve'))
+                srv_proc.kill()
+                put('failed', "Ollama did not open port 11434 within 90 seconds.\nTry: ollama serve")
+                return
+
+        put('line', "Proceeding to pull model...\n")
+
+        # ── Step 3: stream the pull via REST API ──────────────────────────────
+        put('line', f"\nPulling {model} — this may take several minutes...\n")
+        try:
+            resp = requests.post(
+                f"{OLLAMA_BASE}/api/pull",
+                json={"name": model, "stream": True},
+                stream=True,
+                timeout=None,
+                proxies={"http": None, "https": None}
+            )
+            resp.raise_for_status()
+
+            for raw in resp.iter_lines():
+                if abort_event.is_set():
+                    resp.close()
+                    put('aborted')
+                    return
+                if not raw:
+                    continue
+                try:
+                    evt = _json.loads(raw)
+                except Exception:
+                    continue
+
+                status    = evt.get('status',    '')
+                total     = evt.get('total',     0)
+                completed = evt.get('completed', 0)
+                digest    = evt.get('digest',    '')
+                error     = evt.get('error',     '')
+
+                if error:
+                    put('failed', f"Ollama error: {error}")
+                    return
+
+                if total and completed:
+                    pct      = completed / total * 100
+                    done_mb  = completed / 1_048_576
+                    tot_mb   = total     / 1_048_576
+                    layer    = digest[-12:] if digest else ''
+                    filled   = int(pct / 5)
+                    bar      = '█' * filled + '░' * (20 - filled)
+                    put('bar', f"{status:<22} [{bar}] {pct:5.1f}%  {done_mb:,.0f}/{tot_mb:,.0f} MB  {layer}")
+                elif status:
+                    put('line', status + "\n")
+
+            put('done', f"✅  {model} downloaded successfully!")
+
         except Exception as e:
-            self.output_queue.put(('error', f'Failed to install {model}: {e}'))
-    
+            put('failed', f"REST API error: {e}")
+    def _launch_install_progress_window(self, model):
+        """Open progress window, write initial text immediately, start worker."""
+        import threading as _threading
+        import queue    as _queue
+
+        dl_queue    = _queue.Queue()
+        abort_event = _threading.Event()
+
+        win = tk.Toplevel(self.root)
+        win.title(f"Downloading {model}")
+        win.resizable(True, True)
+        win.minsize(560, 360)
+        win.transient(self.root)
+
+        self.root.update_idletasks()
+        rx, ry = self.root.winfo_rootx(), self.root.winfo_rooty()
+        rw, rh = self.root.winfo_width(), self.root.winfo_height()
+        pw, ph = 620, 420
+        win.geometry(f"{pw}x{ph}+{rx + rw//2 - pw//2}+{ry + rh//2 - ph//2}")
+        win.columnconfigure(0, weight=1)
+        win.rowconfigure(1, weight=1)
+
+        # Header
+        hdr = ttk.Frame(win, padding=(12, 8))
+        hdr.grid(row=0, column=0, sticky='ew')
+        ttk.Label(hdr, text=f"⬇  Downloading {model}",
+                  font=('Arial', 12, 'bold')).pack(side='left')
+
+        # Terminal
+        txt_frame = ttk.Frame(win, padding=(8, 0, 8, 0))
+        txt_frame.grid(row=1, column=0, sticky='nsew')
+        txt_frame.columnconfigure(0, weight=1)
+        txt_frame.rowconfigure(0, weight=1)
+
+        sb  = ttk.Scrollbar(txt_frame, orient='vertical')
+        out = tk.Text(txt_frame, wrap='char', font=('Courier New', 9),
+                      yscrollcommand=sb.set, background='#1e1e1e',
+                      foreground='#d4d4d4', insertbackground='white')
+        sb.config(command=out.yview)
+        out.grid(row=0, column=0, sticky='nsew')
+        sb.grid(row=0, column=1, sticky='ns')
+
+        # Status bar
+        sf = ttk.Frame(win, padding=(8, 6))
+        sf.grid(row=2, column=0, sticky='ew')
+        status_var = tk.StringVar(value="Initialising...")
+        status_lbl = ttk.Label(sf, textvariable=status_var,
+                               font=('Arial', 9), foreground='gray')
+        status_lbl.pack(side='left', fill='x', expand=True)
+
+        close_btn = ttk.Button(sf, text="Close", command=win.destroy, state='disabled')
+        close_btn.pack(side='right', padx=(4, 0))
+
+        def do_abort():
+            abort_event.set()
+            abort_btn.config(state='disabled', text="Aborting…")
+            status_var.set("⏹  Aborting — please wait...")
+            status_lbl.config(foreground='orange')
+
+        abort_btn = ttk.Button(sf, text="⏹  Abort", command=do_abort)
+        abort_btn.pack(side='right', padx=(0, 4))
+
+        def _on_close():
+            if abort_event.is_set() or close_btn['state'] == 'normal':
+                win.destroy()
+            elif messagebox.askyesno("Abort?",
+                    f"Download of {model} is still in progress.\n\nAbort and close?",
+                    parent=win):
+                do_abort()
+        win.protocol("WM_DELETE_WINDOW", _on_close)
+
+        # ── Write helpers (main thread only) ─────────────────────────────────
+        def write(text):
+            out.insert('end', text)
+            out.see('end')
+
+        def overwrite_last(text):
+            out.delete('end-1l linestart', 'end-1c')
+            out.insert('end', text)
+            out.see('end')
+
+        # Write first line IMMEDIATELY so user knows the widget is alive
+        write(f"Starting download of {model}...\n")
+        win.update_idletasks()   # force tkinter to render it now
+
+        # ── Queue poller — fires every 50 ms on main thread ──────────────────
+        def poll():
+            try:
+                while True:
+                    kind, data = dl_queue.get_nowait()
+                    if kind == 'line':
+                        write(data)
+                        status_var.set(data.strip()[:100] or status_var.get())
+                    elif kind == 'bar':
+                        overwrite_last(data)
+                        status_var.set(data[:100])
+                    elif kind == 'done':
+                        write("\n" + data + "\n")
+                        status_var.set(data)
+                        status_lbl.config(foreground='green')
+                        self.status_var.set(f"✅ {model} installed — select it in Settings → Active model.")
+                        self._rebuild_model_combo()   # refresh Active Model dropdown
+                        self._rebuild_model_combo()   # add new model to Settings dropdown
+                        self._rebuild_local_provider_entries(rebuild_combo=True)   # add to provider dropdown
+                        abort_btn.config(state='disabled')
+                        close_btn.config(state='normal')
+                        return   # stop polling
+                    elif kind == 'failed':
+                        write("\n❌ FAILED: " + data + "\n")
+                        status_var.set("❌ Download failed — see details above.")
+                        status_lbl.config(foreground='red')
+                        self.status_var.set(f"❌ Failed to install {model}.")
+                        abort_btn.config(state='disabled')
+                        close_btn.config(state='normal')
+                        return
+                    elif kind == 'aborted':
+                        write("\n⏹  Download cancelled.\n")
+                        status_var.set("⏹  Download cancelled.")
+                        status_lbl.config(foreground='orange')
+                        self.status_var.set(f"Download of {model} cancelled.")
+                        abort_btn.config(state='disabled')
+                        close_btn.config(state='normal')
+                        return
+            except Exception:
+                pass
+            try:
+                win.after(50, poll)   # keep polling while window alive
+            except Exception:
+                pass
+
+        win.after(50, poll)
+
+        _threading.Thread(
+            target=self.install_model_worker,
+            args=(model, dl_queue, abort_event),
+            daemon=True
+        ).start()
     def show_stats(self):
         """Show database statistics"""
         old_stdout = sys.stdout
@@ -4531,6 +5241,8 @@ Built with Python, ChromaDB, and Ollama"""
                         self._stop_index_timer()        # show final ✅ time
                         self._index_set_buttons('idle')
                         self.refresh_tracked_dirs()
+                        import datetime as _dt
+                        self._last_index_time = _dt.datetime.now().strftime('%Y-%m-%d  %H:%M:%S')
                     elif msg_data == 'index_stopped':
                         self.index_progress.stop()
                         self._cancel_index_timer()      # freeze at stopped time
@@ -4563,6 +5275,8 @@ Built with Python, ChromaDB, and Ollama"""
                     elif msg_data == 'update':
                         self.update_progress.stop()
                         self.refresh_tracked_dirs()
+                        import datetime as _dt
+                        self._last_index_time = _dt.datetime.now().strftime('%Y-%m-%d  %H:%M:%S')
                     elif msg_data == 'remove_tracked':
                         self.update_progress.stop()
                         self.remove_tracked_btn.configure(state='normal')

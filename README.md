@@ -1,36 +1,35 @@
-# 🔍 AI Prowler — Personal AI Knowledge Base (PC version free for Win 10/11)
+# 🔍 AI Prowler — Personal AI Knowledge Base
+**Version 3.0.0** · Free for Windows 10/11 · Local-first · Cloud-optional
 
 **Ask questions about YOUR documents using AI — running locally on your Windows PC**
 
-No API keys required for local AI &nbsp;•&nbsp; No cloud services for local AI &nbsp;•&nbsp; No subscription for local use &nbsp;•&nbsp; Complete privacy
+No API keys required for local AI &nbsp;•&nbsp; No cloud for local use &nbsp;•&nbsp; No subscription &nbsp;•&nbsp; Complete privacy
 
 ---
 
 ## 📥 Download & Install
 
-> **No technical knowledge required — one batch file does everything.**
+> **No technical knowledge required — one installer does everything.**
 
-1. Go to the **[Releases page](https://github.com/dvavro/AI-Prowler/releases)** 
-   and download the latest `AI-Prowler-v2.0.zip`
-2. Extract the ZIP to a permanent folder — e.g. `C:\Users\Joe
-3. Double-click **`INSTALL.bat`** — it installs Python, all packages, Ollama, and the AI model automatically
-4. Wait for **"INSTALLATION COMPLETE"** (15–30 minutes, ~4 GB download)
-5. Double-click the **AI Prowler** shortcut that appears on your Desktop
+1. Go to the **[Releases page](https://github.com/dvavro/AI-Prowler/releases)** and download the latest `AI-Prowler_INSTALL.exe`
+2. Double-click the installer and follow the prompts
+3. Wait for **"Installation complete"** — it downloads Python, all packages, Tesseract OCR, Ollama, and the default AI model automatically (~4 GB, 15–30 minutes)
+4. Click the **AI Prowler** shortcut that appears on your Desktop
 
-That's it. No terminal, no configuration, no accounts.
+That's it. No terminal. No configuration. No accounts.
 
 ---
 
 ## 🎯 What Is AI Prowler?
 
-AI Prowler uses **RAG (Retrieval-Augmented Generation)** — it indexes your local documents, then when you ask a question it retrieves the most relevant passages and feeds them to an AI model that writes a grounded, accurate answer. Everything runs on your own machine.
+AI Prowler uses **RAG (Retrieval-Augmented Generation)** — it indexes your local documents into a private vector database, then when you ask a question it retrieves the most relevant passages and feeds them to an AI model that writes a grounded, accurate answer. Everything runs on your own machine.
 
 ```
-You:         "What was the mutation rate in my NEAT project?"
+You ask:       "What was the mutation rate in my NEAT project?"
 
-AI Prowler:  According to NEAT_Documentation.md, the mutation rate
-             is set to 0.02 (2%). This controls how frequently
-             weights and connections mutate during evolution...
+AI Prowler:    According to NEAT_Documentation.md, the mutation rate
+               is set to 0.02 (2%). This controls how frequently
+               weights and connections mutate during evolution...
 ```
 
 Your documents are **never uploaded anywhere**. The AI runs entirely on your hardware.
@@ -40,7 +39,7 @@ Your documents are **never uploaded anywhere**. The AI runs entirely on your har
 ## ✨ Features
 
 ### Core
-- 📚 **55+ file types** — documents, code, spreadsheets, PDFs, email, and more
+- 📚 **65+ file types** — documents, code, spreadsheets, PDFs, images (OCR), email archives, and more
 - 🔍 **Semantic search** — finds relevant content even when exact words don't match
 - ⚡ **Incremental indexing** — only re-processes files that have actually changed
 - ⏸ **Pause / Resume** — stop indexing mid-run and continue exactly where you left off
@@ -49,23 +48,33 @@ Your documents are **never uploaded anywhere**. The AI runs entirely on your har
 ### AI Providers
 - 🤖 **Local Ollama** — 20+ models from tiny (0.5b) to powerful (70b+), completely free and offline
 - ☁️ **Cloud AI (optional)** — connect ChatGPT, Claude, Gemini, Grok, Llama API, or Mistral Large for higher-quality answers
-- 🔄 **Auto-fallback** — if a cloud provider fails, automatically falls back to your local model
+- 🔄 **Auto-fallback** — if a cloud provider fails or rate-limits, automatically falls back to your local model
 
 ### Query Tools
-- 🎤 **Voice input** — speak your questions via local Whisper speech recognition
-- 📎 **File attachments** — attach images or files to questions (vision support with cloud providers)
-- 💾 **File Output Mode** — AI-written code gets automatic 💾 Save buttons — no copy-paste
+- 🎤 **Voice input** — speak your questions via local Whisper speech recognition (never sent to a cloud)
+- 📎 **File attachments** — attach images or text files to questions (vision support with cloud providers)
+- 💾 **File Output Mode** — AI-written code gets automatic 💾 Save buttons across all providers, not just Claude — no copy-paste needed
 - ⏹ **Stop query** — cancel any running query instantly
 
 ### Email Support
-- 📬 **All major providers** — Gmail (`.mbox`), Apple Mail, Thunderbird, Yahoo, Outlook/Exchange
-- 🔢 **Incremental email indexing** — only new messages are processed on re-import
+- 📬 **All major providers** — Gmail (`.mbox`), Apple Mail, Thunderbird, Yahoo, Outlook (`.eml`, `.msg`)
+- 🔢 **Incremental email indexing** — only new messages are processed on re-import via Message-ID deduplication
 - 📊 **Per-message progress** — `[Email 4,271/52,000] Re: Budget` — always know where you are
 
+### OCR — Scanned Documents
+- 🖼️ **Automatic OCR** — scanned PDFs, contracts, court docs, old manuals, and standalone image files
+- 🔬 **Smart detection** — pdfplumber checks for a text layer first; only falls back to OCR when needed
+- 🏎️ **300 DPI rendering** — pypdfium2 renders pages to high-quality images before Tesseract processing
+
 ### Automation
-- ⏰ **Windows Task Scheduler** — set daily or weekday auto-updates
+- ⏰ **Windows Task Scheduler** — set daily or custom-day auto-updates directly from the app UI
 - 🟢 **Auto-start Ollama** — launch the AI server automatically on app open
-- 🗂 **Auto Scan Config** — customise exactly which file types and folders are included
+- 🗂 **Smart Scan Config** — customise exactly which file types and folders are included or skipped
+
+### GPU Support
+- 🎮 **Full NVIDIA support** — including Blackwell RTX 50xx series (CUDA 12.8 / cu128)
+- ⚡ **GPU embeddings** — sentence-transformer embeddings use CUDA automatically
+- 🔧 **GPU Detect tool** — one-click check showing VRAM usage, GPU layers, and model offload status
 
 ---
 
@@ -74,23 +83,25 @@ Your documents are **never uploaded anywhere**. The AI runs entirely on your har
 | Component | Minimum | Recommended |
 |-----------|---------|-------------|
 | OS | Windows 10 64-bit | Windows 11 64-bit |
-| RAM | 8 GB | 16 GB |
+| RAM | 8 GB | 16 GB+ |
 | Storage | 6 GB free | 15 GB free |
 | CPU | Any modern 64-bit | Quad-core or better |
-| GPU | Not required | Speeds up 7b+ models significantly |
+| GPU | Not required | NVIDIA (any, including RTX 50xx) |
 | Internet | Install only | Install + cloud AI providers (optional) |
 
 ---
 
-## 📦 What's Installed
+## 📦 What Gets Installed
 
 | Component | Size | Purpose |
 |-----------|------|---------|
 | Python 3.11 | ~30 MB | Runtime |
-| Python packages (11) | ~600 MB | ChromaDB, sentence-transformers, PDF support, etc. |
-| Ollama engine | ~400 MB | Local AI model runner |
-| llama3.2:1b (default model) | ~1.3 GB | Fast, capable local AI |
-| Whisper large-v3-turbo | ~1.6 GB | Local speech recognition |
+| Python packages | ~600 MB | ChromaDB, sentence-transformers, PDF support, OCR, speech |
+| Tesseract OCR 5.4 | ~50 MB | Scanned PDF and image text extraction |
+| PyTorch (CUDA 12.8 or CPU) | ~2.5 GB / ~200 MB | GPU-accelerated embeddings |
+| Ollama engine | ~400 MB | Local AI model runner (always latest version) |
+| llama3.2:1b (default model) | ~1.3 GB | Fast, capable default local AI |
+| Whisper large-v3-turbo | ~1.6 GB | Local speech recognition (on first mic use) |
 | **Total** | **~4 GB** | One-time download |
 
 ---
@@ -99,37 +110,46 @@ Your documents are **never uploaded anywhere**. The AI runs entirely on your har
 
 ```
 AI-Prowler/
-├── INSTALL.bat              ← One-click installer — run this first
-├── UNINSTALL.bat            ← Clean removal tool
-├── RAG_RUN.bat              ← Launch AI Prowler
-├── rag_gui.py               ← Main GUI application
-├── rag_preprocessor.py      ← Core indexing & query engine
-├── requirements.txt         ← Python package list
-├── create_shortcut.py       ← Desktop shortcut creator
-├── rag_icon.ico             ← Application icon
-└── COMPLETE_USER_GUIDE.md   ← Full documentation
+├── AI-Prowler_INSTALL.exe       ← One-click installer (run this first)
+├── UNINSTALL.bat                ← Clean removal tool
+├── RAG_RUN.bat                  ← Launch AI Prowler directly
+├── rag_gui.py                   ← Main GUI application
+├── rag_preprocessor.py          ← Core indexing & query engine
+├── requirements.txt             ← Python package list
+├── create_shortcut.py           ← Desktop shortcut creator
+├── generate_license.py          ← License key generator (developer tool)
+├── rag_icon.ico                 ← Application icon
+├── AI-Prowler Setup License.txt ← License agreement
+├── COMPLETE_USER_GUIDE.md       ← Full documentation (also accessible from Help menu)
+└── README.md                    ← This file
 ```
 
 ---
 
 ## 🚀 Supported AI Models (Local)
 
-Models are ranked automatically based on your PC's RAM. Install any of them from within the app.
+Models are ranked automatically based on your PC's RAM. Install any of them from within the app via Settings → Browse & Install Model.
 
-| Model | Size | Min RAM | Best for |
-|-------|------|---------|---------|
-| `qwen2.5:0.5b` | 0.4 GB | 2 GB | Ultra-fast, basic queries |
-| `llama3.2:1b` ⭐ | 1.3 GB | 4 GB | **Default** — fast and capable |
-| `llama3.2:3b` | 2.0 GB | 6 GB | Better quality, still fast |
-| `llama3.1:8b` | 4.7 GB | 8 GB | Strong general-purpose |
-| `qwen2.5:14b` | 9.0 GB | 16 GB | High quality |
-| `llama3.1:70b` | 40 GB | 48 GB | Near-frontier quality |
+| Model | Size | Min RAM | Maker | Best for |
+|-------|------|---------|-------|---------|
+| `qwen2.5:0.5b` | 0.4 GB | 2 GB | Alibaba | Ultra-fast, basic queries |
+| `qwen2.5:1.5b` | 1.0 GB | 4 GB | Alibaba | Very fast, capable |
+| `llama3.2:1b` ⭐ | 1.3 GB | 4 GB | Meta | **Default** — fast and capable |
+| `gemma:2b` | 1.7 GB | 4 GB | Google | Compact and efficient |
+| `llama3.2:3b` | 2.0 GB | 6 GB | Meta | Better quality, still fast |
+| `qwen2.5:7b` | 4.7 GB | 8 GB | Alibaba | Excellent quality/speed ratio |
+| `llama3.1:8b` | 4.7 GB | 8 GB | Meta | Strong general-purpose |
+| `qwen2.5:14b` | 9.0 GB | 16 GB | Alibaba | High quality |
+| `qwen2.5:32b` | 20.0 GB | 32 GB | Alibaba | Near-frontier on CPU |
+| `llama3.1:70b` | 40.0 GB | 48 GB | Meta | Near-frontier quality |
+
+*See COMPLETE_USER_GUIDE.md for the full 21-model catalogue.*
 
 ---
 
 ## ☁️ Optional Cloud AI Providers
 
-Add an API key in Settings to use these alongside your local model:
+Add an API key in Settings → External AI APIs to use these alongside your local model:
 
 | Provider | Model | Free Tier |
 |----------|-------|-----------|
@@ -138,7 +158,7 @@ Add an API key in Settings to use these alongside your local model:
 | Gemini (Google) | gemini-2.0-flash | ✅ Generous free tier |
 | Grok (xAI) | grok-beta | Limited free |
 | Llama API (Meta) | Llama-4-Scout-17B | ✅ Free tier |
-| Mistral Large | mistral-large-latest | Limited free |
+| Mistral Large (Mistral AI) | mistral-large-latest | Limited free |
 
 > **Privacy:** Only your question and retrieved document excerpts are sent to cloud providers — your original files never leave your PC.
 
@@ -168,25 +188,16 @@ AI Prowler is **local-first**. Cloud AI is entirely opt-in.
 | ✅ Does | ❌ Does NOT |
 |--------|-----------|
 | Runs 100% offline by default | Upload your documents anywhere |
-| Store all data on your hard drive | Collect telemetry or analytics |
-| Keep API keys in your local config | Phone home or require an account |
-| Use Ollama for local inference | Send original files to cloud providers |
+| Stores all data on your hard drive | Collect telemetry or analytics |
+| Keeps API keys in your local config | Phone home or require an account |
+| Uses Ollama for local inference | Send original files to cloud providers |
+| Sends only question text + excerpts | Share any data with third parties |
 
 ---
 
 ## 📖 Documentation
 
-The full **[COMPLETE_USER_GUIDE.md](COMPLETE_USER_GUIDE.md)** is included in every release. It covers:
-
-- Complete installation walkthrough
-- All 6 GUI tabs in detail
-- Email export instructions for every major provider
-- Cloud AI setup and provider reference
-- Scheduling, GPU tuning, and voice input
-- Troubleshooting for every common issue
-- Command-line usage reference
-
-The User Guide is also accessible from within the app via **Help → 📖 User Guide**.
+The full **[COMPLETE_USER_GUIDE.md](COMPLETE_USER_GUIDE.md)** is included in every release and covers every feature in detail. It is also accessible from within the app via **Help → 📖 User Guide**.
 
 ---
 
@@ -195,30 +206,54 @@ The User Guide is also accessible from within the app via **Help → 📖 User G
 Found a bug or have a feature request? Open an **[Issue](https://github.com/dvavro/AI-Prowler/issues)** and include:
 
 - Your Windows version
-- The error message (run `python rag_gui.py` from Command Prompt to capture it)
+- The error message (run `RAG_RUN.bat` to capture it in a console window)
+- Your GPU model and the output of Settings → 🔍 Detect GPU
 - What you were doing when it happened
+
+errno22 manule fix
+- in a doc command prompt or shortcut is Win + R key together, type cmd, press Enter
+-uninstall huggingface-hub
+"%LOCALAPPDATA%\Programs\Python\Python311\python.exe" -m pip uninstall huggingface-hub
+- Delete the corrupted model cache
+rmdir /s /q "%USERPROFILE%\.cache\huggingface\hub\models--sentence-transformers--all-MiniLM-L6-v2"
+- Reinstall huggingface-hub
+"%LOCALAPPDATA%\Programs\Python\Python311\python.exe" -m pip install huggingface-hub==0.26.5
+
+
 
 ---
 
 ## 📝 Changelog
 
-See the **[Releases page](https://github.com/dvavro/AI-Prowler/releases)** for full version history and release notes.
+See the **[Releases page](https://github.com/dvavro/AI-Prowler/releases)** for full version history.
 
-**Latest: v2.0**
+### v3.0.0 (current)
+- 🎮 NVIDIA Blackwell GPU support (RTX 50xx / CUDA 12.8)
+- 🔄 Installer always updates Ollama to latest version (fixes GPU support on reinstall)
+- 💾 File Output Mode now works with all providers including Ollama — auto-names unnamed code blocks
+- 🖼️ OCR with Tesseract 5.4 — scanned PDFs and standalone images indexed automatically
+- 🔧 GPU Detect tool with VRAM occupancy reporting
+- 📄 System prompt injection for Ollama file-output instructions (more reliable filenames)
+
+### v2.0
 - ☁️ Six cloud AI providers (ChatGPT, Claude, Gemini, Grok, Llama API, Mistral)
 - 📎 File attachments (images + text files) with vision support
 - 💾 File Output Mode — auto-detected code blocks with Save buttons
 - 🏅 RAM-aware model selector with ✅/⚠️ fit badges
 - 🔍 Debug View — hide/show background processes
-- 🔧 Various bug fixes and stability improvements
+- 🗂 Smart Scan configuration tab
 
 ---
 
 ## ⚖️ License
 
-PC version is free open source. Mobile Access requires a small App Download fee and a small monthly user subscription cost.
+PC version is free and open source. See [AI-Prowler Setup License.txt](AI-Prowler%20Setup%20License.txt) for full terms.
+
+Mobile access requires a small app download fee and monthly subscription.
+
+Copyright © 2026 David Kevin Vavro
 
 ---
 
-*AI Prowler — Your Personal AI Knowledge Base*  
+*AI Prowler — Your Personal AI Knowledge Base*
 *Local-first &nbsp;•&nbsp; Cloud-optional &nbsp;•&nbsp; 100% Yours*
