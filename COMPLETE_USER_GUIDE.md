@@ -1,1155 +1,1166 @@
-# AI Prowler — Personal AI Knowledge Base
-**Complete User Guide · Version 3.0.0**
+# AI-Prowler — Complete User Guide
 
-*Local-first · Cloud-optional · 100% Yours*
+**Version 4.1.0**
 
----
+\---
 
 ## Table of Contents
 
-1. [What Is AI Prowler?](#1-what-is-ai-prowler)
-2. [System Requirements](#2-system-requirements)
-3. [Installation](#3-installation)
-4. [Quick Start (5 Minutes)](#4-quick-start-5-minutes)
-5. [Tab Reference](#5-tab-reference)
-   - [🔍 Ask Questions](#51--ask-questions)
-   - [📚 Index Documents](#52--index-documents)
-   - [🔄 Update Index](#53--update-index)
-   - [🗂 Smart Scan](#54--smart-scan)
-   - [⏰ Schedule](#55--schedule)
-   - [⚙️ Settings](#56-️-settings)
-6. [AI Models — Local](#6-ai-models--local)
-7. [Cloud AI Providers](#7-cloud-ai-providers)
-8. [File Attachments & File Output Mode](#8-file-attachments--file-output-mode)
-9. [Voice Input (Microphone)](#9-voice-input-microphone)
-10. [Email Indexing](#10-email-indexing)
-11. [OCR — Scanned PDFs & Images](#11-ocr--scanned-pdfs--images)
-12. [GPU Acceleration](#12-gpu-acceleration)
-13. [Supported File Types](#13-supported-file-types)
-14. [Scheduling Automatic Updates](#14-scheduling-automatic-updates)
-15. [Command Line (Advanced)](#15-command-line-advanced)
-16. [Privacy & Security](#16-privacy--security)
+1. [What is AI-Prowler?](#1-what-is-ai-prowler)
+2. [Installation](#2-installation)
+3. [Connecting Claude Desktop via MCP](#3-connecting-claude-desktop-via-mcp)
+4. [Indexing Your Documents](#4-indexing-your-documents)
+5. [Agentic RAG — How Claude Uses Your Knowledge Base](#5-agentic-rag--how-claude-uses-your-knowledge-base)
+6. [MCP Tools Reference](#6-mcp-tools-reference)
+7. [Remote Access — Claude.ai on Mobile and Web](#7-remote-access--claudeai-on-mobile-and-web)
+8. [Mobile Subscription Management](#8-mobile-subscription-management)
+9. [Desktop Ask Questions Tab (Optional Local AI)](#9-desktop-ask-questions-tab-optional-local-ai)
+10. [Settings \& Configuration](#10-settings--configuration)
+11. [Supported File Types](#11-supported-file-types)
+12. [OCR — Scanned Documents \& Images](#12-ocr--scanned-documents--images)
+13. [Email Indexing](#13-email-indexing)
+14. [Scheduling \& Automation](#14-scheduling--automation)
+15. [GPU Support](#15-gpu-support)
+16. [Debugging \& Log Files](#16-debugging--log-files)
 17. [Troubleshooting](#17-troubleshooting)
-18. [Tips & Best Practices](#18-tips--best-practices)
-19. [Frequently Asked Questions](#19-frequently-asked-questions)
-20. [Uninstalling](#20-uninstalling)
-21. [File & Folder Reference](#21-file--folder-reference)
-22. [Version History](#22-version-history)
+18. [Uninstalling](#18-uninstalling)
 
----
+\---
 
-## 1. What Is AI Prowler?
+## 1\. What is AI-Prowler?
 
-AI Prowler is a **local RAG (Retrieval-Augmented Generation)** application. It indexes your documents into a private vector database, and when you ask a question it retrieves the most relevant passages and feeds them to an AI model that writes a grounded, accurate answer.
+AI-Prowler is an **Agentic RAG (Retrieval-Augmented Generation)** knowledge base for Windows. It indexes your local documents into a private ChromaDB vector database and exposes them to Claude as a suite of intelligent search and retrieval tools.
+
+**The key difference from traditional RAG:**
+
+Traditional RAG retrieves a chunk, hands it to a small local model, and gets a mediocre answer. AI-Prowler's Agentic RAG lets Claude actively drive the research process:
+
+* Claude decides what to search for based on your question
+* It evaluates what it finds and identifies gaps
+* It reformulates queries and searches again
+* It reads surrounding context when a result is incomplete
+* It synthesizes a comprehensive answer from everything it gathered
+
+This produces dramatically better results — equivalent to having a skilled research assistant who knows your entire document library.
+
+**Hardware requirements are minimal.** Because Claude does the reasoning, AI-Prowler only needs to run the embedding model (\~400 MB RAM) and ChromaDB. No GPU is required. No large local AI model is needed.
+
+\---
+
+## 2\. Installation
+
+### Quick Start
+
+1. Download `AI-Prowler\_INSTALL.exe` from the [Releases page](https://github.com/dvavro/AI-Prowler/releases)
+2. Double-click and follow the prompts (admin rights required)
+3. The installer automatically sets up:
+
+   * Python 3.11
+   * All required Python packages
+   * Tesseract OCR engine
+   * Claude Desktop
+   * Cloudflare Tunnel client
+4. Sign in to Claude Desktop when it opens and pin it to the taskbar for quick access
+5. Click the AI-Prowler shortcut on your Desktop. For mobile/web access, click **Start HTTP Server** in the Settings tab
+6. Open Claude Desktop — it will communicate directly with AI-Prowler via the MCP interface
+
+### What the Installer Does NOT Do
+
+**Ollama is not installed or downloaded automatically.** The primary AI interface is Claude Desktop via MCP, which requires no local model. If you want to use the standalone Ask Questions tab offline, you can install Ollama and download models manually from **Settings → Browse \& Install Model** after the main install completes.
+
+This makes installation significantly faster — typically under 10 minutes vs 30+ minutes previously.
+
+### Install Log
+
+The full installation log is saved to:
 
 ```
-You ask:       "What was the mutation rate in my NEAT project?"
-
-AI Prowler:    According to NEAT_Documentation.md, the mutation rate
-               is set to 0.02 (2%). This controls how frequently
-               weights and connections mutate during evolution...
+%LOCALAPPDATA%\\Temp\\AI-Prowler\\install\_log.txt
 ```
 
-Everything runs on your own machine by default. Your documents are never uploaded anywhere unless you choose to use a cloud AI provider — in that case only your question text and short retrieved excerpts are sent, never your original files.
+This is useful for diagnosing installation failures.
 
-**What it does:**
-- 📚 Indexes documents, code, email, spreadsheets, and 55+ file types
-- 🔍 Answers questions using your own content, not just general AI knowledge
-- 🤖 Runs 100% offline using local Ollama (default)
-- ☁️ Optionally connects to cloud AI — ChatGPT, Claude, Gemini, Grok, Llama API, Mistral Large
-- 🔒 Local-first — no cloud contact unless you explicitly add an API key
-- 📬 Deep email support — Gmail, Apple Mail, Thunderbird, Yahoo, Outlook, and more
-- ⚡ Incremental updates — only re-processes files that changed
-- 🎤 Voice input — speak questions using local Whisper speech recognition
-- 📎 File attachments — attach images and documents to questions
-- 💾 File Output Mode — AI-written code files get one-click Save buttons
-- ⏰ Scheduled auto-updates — keep the index current automatically
-- 🖨 OCR support — scanned PDFs and image files are automatically read with Tesseract
+### First Launch
 
----
+After install, AI-Prowler opens automatically. Claude Desktop is also installed. On first use:
 
-## 2. System Requirements
+1. Open Claude Desktop and verify it shows "AI-Prowler" in the MCP tools panel
+2. In AI-Prowler, go to **Index Documents** and add your first document folder
+3. Launch Claude and In Claude Desktop, ask a question about your documents
+4. For Mobile Access or Web access consider subscribing to Mobile.
 
-| Component | Minimum | Recommended |
-|-----------|---------|-------------|
-| OS | Windows 10 64-bit | Windows 11 64-bit |
-| RAM | 8 GB | 16 GB+ |
-| Storage | 6 GB free | 15 GB free |
-| CPU | Any modern 64-bit | Quad-core or better |
-| GPU | Not required | NVIDIA (speeds up 7b+ models) |
-| Internet | Install only | Install + cloud AI (optional) |
+### Launch Script (RAG\_RUN.bat)
 
-**GPU note:** Any NVIDIA GPU is supported including the RTX 50xx Blackwell series (RTX 5060, 5070, 5080, 5090). The installer automatically detects your GPU and installs the CUDA 12.8 build of PyTorch for full Blackwell compatibility. AMD and Intel GPUs are not supported for Ollama inference — they fall back to CPU automatically.
+AI-Prowler is launched via `RAG\_RUN.bat`, which sets two important environment variables before starting the GUI:
 
-### Download Sizes (First Install Only)
+* **`PYTHONNOUSERSITE=1`** — prevents Python from loading stale package versions from the Roaming site-packages folder. This fixes a class of "wrong version" bugs that can occur after reinstalls.
+* **`HF\_HUB\_CACHE`** — sets the HuggingFace cache path explicitly to avoid the Errno 22 / double-backslash bug on some Windows 10 builds (see Section 17).
 
-| Component | Size |
-|-----------|------|
-| Python 3.11.8 | ~30 MB |
-| Python packages | ~600 MB |
-| Tesseract OCR | ~50 MB |
-| Ollama engine | ~400 MB |
-| AI model — llama3.2:1b (default) | ~1.3 GB |
-| Whisper speech model (first mic use) | ~1.6 GB |
-| **Total** | **~4 GB** |
+These are set automatically; no user action is required.
 
----
+\---
 
-## 3. Installation
+## 3\. Connecting Claude Desktop via MCP
 
-### Running the Installer
+Claude Desktop connects to AI-Prowler via the MCP (Model Context Protocol) — a standard that lets Claude use external tools and data sources.
 
-Double-click **AI-Prowler_INSTALL.exe** and follow the prompts. The installer handles everything automatically.
+### How It Works
 
-| Step | What happens |
-|------|-------------|
-| 1 | Installs Python 3.11.8 to `%LocalAppData%\Programs\Python\Python311` |
-| 2 | Upgrades pip and installs all Python packages from `requirements.txt` |
-| 3 | Downloads and installs Tesseract OCR 5.4 (enables scanned PDF and image indexing) |
-| 4 | Detects your GPU and installs the correct PyTorch build (CUDA 12.8 or CPU-only) |
-| 5 | Downloads and installs the latest Ollama (always updated, even on reinstall) |
-| 6 | Pulls the `llama3.2:1b` default AI model (~1.3 GB) |
-| 7 | Creates a Desktop shortcut and Start Menu entry |
-
-### Reinstalling / Upgrading
-
-Just run the installer again. It will update Ollama to the latest version (important for new GPU architectures), update all application files, and preserve your existing RAG database and settings.
-
-### What Gets Installed Where
-
-| Item | Location |
-|------|----------|
-| Application files | `C:\Program Files\AI-Prowler\` |
-| Python 3.11 | `%LocalAppData%\Programs\Python\Python311\` |
-| Tesseract OCR | `%LocalAppData%\Programs\Tesseract-OCR\` |
-| Ollama engine | `%LocalAppData%\Programs\Ollama\` |
-| Ollama models | `%UserProfile%\.ollama\models\` |
-| RAG database | `%UserProfile%\AI-Prowler\rag_database\` |
-| Config file | `%UserProfile%\.rag_config.json` |
-| Install log | `%LocalAppData%\Temp\AI-Prowler\install_log.txt` |
-
-> **Tip:** If anything goes wrong during install, open `install_log.txt` — it contains the exact error, return codes, and every step the installer took. This is the first place to look when troubleshooting.
-
----
-
-## 4. Quick Start (5 Minutes)
-
-**Step 1 — Index your documents**
-1. Open AI Prowler from the Desktop shortcut
-2. Click the **📚 Index Documents** tab
-3. Click **Browse… ▼** and choose **Browse Folder…** to select a folder
-4. Click **▶ Start Indexing Queue** and wait for it to finish
-
-**Step 2 — Ask a question**
-1. Click the **🔍 Ask Questions** tab
-2. Type your question in the text box
-3. Press **Ctrl+Enter** or click **Ask Question**
-4. The answer streams in the box below
-
-**Step 3 — Get code files with one-click Save**
-1. Tick **📄 File Output Mode** in the Ask Questions tab
-2. Ask the AI to write you a script
-3. A **💾 Save** button appears automatically for each file in the answer
-
----
-
-## 5. Tab Reference
-
-### 5.1 🔍 Ask Questions
-
-This is the main tab you use every day.
-
-#### Your Question box
-
-Type your question here. The box supports multi-line input — press **Enter** for a new line and **Ctrl+Enter** to submit.
-
-#### 🎤 Microphone button *(shown when faster-whisper is installed)*
-
-Click the microphone to speak your question using the local Whisper `large-v3-turbo` model. Nothing is sent to any cloud transcription service. The model downloads automatically (~1.6 GB) on first use.
-
-- **Append mode** — tick "Append (add to existing text)" to add spoken words to whatever is already in the question box
-- **Auto-stop** — recording stops automatically after a configurable silence period (set in Settings → Microphone)
-
-#### 📎 Attachments
-
-Click **📎 Attach Files…** to include images or files alongside your question.
-
-- **Images** (.jpg, .png, .bmp, .gif, .tiff) — included as base64 for vision-capable models. Cloud providers (Claude, Gemini, ChatGPT-4o) fully support vision; local Ollama requires a vision model such as `llava`
-- **Text files** (.txt, .md, .pdf, .docx) — file content is extracted and appended to your question before it is sent to the AI
-- **Clear All** removes all attached files at once
-
-#### 📄 File Output Mode
-
-When ticked, AI Prowler instructs the AI to label every code block it writes with a filename. After the answer finishes, the **📁 Files in Answer** panel appears with a **💾 Save** button and **📋 Copy** button for each detected file.
-
-Supported auto-detection patterns:
-- ` ```python my_script.py ` — language + filename
-- ` ```my_script.py ` — filename only
-- `### FILE: name.ext ###` ... `### END FILE ###` — explicit block marker
-- ` ```python ` (no filename) — Ollama fallback: auto-named `script_1.py`, etc.
-
-#### Context Chunks
-
-Controls how many document excerpts are retrieved from your index and fed to the AI.
-
-| Setting | Use when |
-|---------|----------|
-| Auto (3) | Best default — calculates optimally for most questions |
-| 1–3 | Fast answers, focused topics |
-| 4–6 | Broader questions spanning multiple files |
-| 7–20 ⚠ reload | Deep research — triggers model reload, adds 2–12 minutes on CPU |
-
-Values marked **⚠ reload** require a larger model context window. AI Prowler automatically re-prewarns the model at the required size when you switch to these values.
-
-#### AI Provider
-
-Select which AI to use for this question. The dropdown lists all installed Ollama models first, then any configured cloud providers.
-
-The coloured dot shows current status:
-- 🟢 Green — ready (Ollama warmed, or cloud key valid)
-- 🟡 Yellow — loading / connecting
-- 🔴 Red — not available
-
-#### Action Buttons
-
-| Button | Action |
-|--------|--------|
-| **Ask Question** | Submit the question (same as Ctrl+Enter) |
-| **⏹ Stop** | Cancel a running query immediately |
-| **💾 Save Answer** | Save the full answer text to `.txt` or `.md` |
-| **⚡ Load AI Model** | Manually trigger Ollama model loading |
-
-#### Model Status Indicator
-
-| Indicator | Meaning |
-|-----------|---------|
-| ⚫ Grey — "Model not loaded" | Ollama has not yet been contacted |
-| 🟡 Yellow — "Loading model…" | Pre-warm is in progress |
-| 🟢 Green — "Model ready" | The model is loaded and queries respond quickly |
-
-If you see grey and your first query feels slow, click **⚡ Load AI Model** to pre-warm before you start typing.
-
-#### Answer Box
-
-Responses stream in token-by-token. After the answer finishes:
-- The elapsed time is shown (e.g. `✅ Done in 5s`)
-- The **📁 Files in Answer** panel appears if any code blocks were detected
-
----
-
-### 5.2 📚 Index Documents
-
-Use this tab to build or rebuild your knowledge base.
-
-#### The Directory Queue
-
-AI Prowler uses a queue system — stage as many folders and files as you want, then process them all in one batch.
-
-| Button | What it does |
-|--------|-------------|
-| **Browse… ▼** | Opens a dropdown with two choices (see below) |
-| **Browse Files (multi-select)…** | File picker — Ctrl/Shift click to select multiple files |
-| **Browse Folder…** | Opens a folder browser |
-| **➕ Add to Queue** | Adds the path currently typed in the entry box |
-| **Type + Enter** | Type a path directly and press Enter |
-
-| Button | What it does |
-|--------|-------------|
-| **❌ Remove Selected** | Removes the highlighted item from the queue |
-| **🗑 Clear Queue** | Clears the entire queue |
-| **Include subdirectories** | When checked, every subfolder is scanned recursively (default ON) |
-
-#### Smart Scan Option
-
-When ticked (default), AI Prowler pre-scans and automatically skips:
-- Executable and compiled binary files (`.exe`, `.dll`, `.pyc`, …)
-- Media files — images, audio, video, fonts
-- Archive files — `.zip`, `.rar`, `.7z`, …
-- System directories — `.git`, `node_modules`, `__pycache__`, `venv`, `build`, `.idea`, `.vscode`, and more
-
-**Pre-scan only** — check this to see a full report of what *would* be indexed without actually indexing anything. Useful before committing to a large folder.
-
-#### Action Buttons
-
-| Button | Function |
-|--------|---------|
-| **▶ Start Indexing Queue** | Begin processing all queued items |
-| **⏸ Pause** | Freeze at the end of the current file — click again to Resume |
-| **⏹ Stop** | Stop cleanly after the current file and save progress |
-| **🔍 Scan Queue** | Run pre-scan and show a report without indexing |
-
-#### Progress Display
-
-Three live indicators appear while indexing runs:
-- **Animated progress bar** on the left
-- **Directory/file counter** in the centre — e.g. `Dir 2/4: Projects` or `[Email 847/12,034] Re: Budget`
-- **Elapsed timer** on the right — ticks up in real time
-
-#### Pause and Resume
-
-- **Pause** freezes the worker thread immediately. The timer pauses too. Click **Resume** to continue from exactly where you stopped.
-- **Stop** saves your exact position — the Start button changes to **▶ Resume Indexing**. Clicking it picks up from where you stopped, including position within a partially-processed directory.
-
-#### After Indexing
-
-When a directory finishes indexing it is automatically **registered for tracking** — it appears in the Update Index tab and becomes eligible for scheduled updates.
-
----
-
-### 5.3 🔄 Update Index
-
-Use this tab to keep your knowledge base current after adding or changing files.
-
-#### How File Tracking Works
-
-When a directory is indexed, AI Prowler records each file's path, modification time, and size in `%UserProfile%\.rag_file_tracking.json`. On the next update run:
-
-| File status | What happens |
-|-------------|-------------|
-| New file | Indexed and added to ChromaDB |
-| Modified file | Old chunks deleted, new chunks added |
-| Deleted file | Chunks removed from ChromaDB |
-| Unchanged file | Skipped entirely — no processing |
-
-For email archives the engine goes deeper — see the Email chapter for how per-message deduplication works.
-
-#### Tracked Directories List
-
-Shows every directory registered for tracking. The info bar shows the exact paths of both tracking data files so you know where they live — they are separate from the ChromaDB database and survive a database wipe.
-
-| Button | Action |
-|--------|--------|
-| **🔄 Refresh List** | Re-reads the directory list from disk |
-| **🗑 Remove Selected** | Untracks the selected directory and deletes its vectors from the database |
-
-The actual files on disk are NOT touched. You can re-index the directory later if needed.
-
-#### Update Buttons
-
-| Button | Action |
-|--------|--------|
-| **Update Selected** | Re-index only the highlighted directory |
-| **Update All** | Re-index every tracked directory |
-
----
-
-### 5.4 🗂 Smart Scan
-
-Customise exactly which file types AI Prowler indexes and which it ignores. All changes take effect immediately and are saved to `%UserProfile%\.rag_config.json`.
-
-#### Supported Extensions (left panel)
-
-The **✅ Supported Extensions** list contains every file type that will be indexed (55+ types by default).
-- **➕ Add** — type an extension (e.g. `.nfo`) and press Enter or click Add. The leading dot is added automatically.
-- **❌ Remove** — click an extension to select it, then click Remove.
-- **Conflict detection** — if you try to add an extension already in the Skipped list, AI Prowler warns and blocks the add.
-
-#### Skipped Extensions (right panel)
-
-Types that are always ignored — compiled binaries, media, archives, etc. Same Add/Remove controls.
-
-#### Skipped Directories (bottom panel)
-
-Folder *names* (not full paths) that are skipped when walking any directory tree. Defaults include `.git`, `node_modules`, `__pycache__`, `venv`, `build`, `dist`, `.idea`, `.vscode`, and more.
-
-Add project-specific folders (e.g. `backup`, `.cache`, `temp`) to exclude them from all future scans.
-
-#### Save and Reset
-
-| Button | Effect |
-|--------|--------|
-| **💾 Save Changes** | Explicitly saves (changes also auto-save as you edit) |
-| **↩ Reset to Defaults** | Restores all three lists to built-in defaults — asks for confirmation |
-
----
-
-### 5.5 ⏰ Schedule
-
-Automate index updates so your knowledge base stays current without manual effort.
-
-#### Schedule Setup
-
-1. Enter a **Run time** in 24-hour format (e.g. `08:00`, `14:30`)
-2. Tick the days you want it to run — **Weekdays** and **Every day** buttons for quick selection
-3. Click **✅ Set Schedule**
-
-AI Prowler registers a Windows Task Scheduler task named `AI Prowler Auto-Update` that runs the update command against all tracked directories.
-
-#### Schedule Control
-
-| Control | Effect |
-|---------|--------|
-| **Disable Schedule** | Suspends the task without deleting it |
-| **Remove Schedule** | Permanently deletes the scheduled task |
-| **Refresh Status** | Polls Task Scheduler and updates the display |
-
-#### Status Display
+The installer automatically writes AI-Prowler's entry into Claude Desktop's configuration file:
 
 ```
-Active:
-  ✅ Schedule Active
-  Next Run: 2/25/2026 8:00 AM
-
-Not set:
-  ❌ No Schedule Set
+%APPDATA%\\Claude\\claude\_desktop\_config.json
 ```
 
-#### Requirements
+When Claude Desktop starts, it connects to AI-Prowler and discovers all available tools automatically. No manual configuration is needed. Note if mobile is configured, only mobile access will be used for all Claude MCP connections going forward. This includes when in Claude Desktop application.
 
-- At least one tracked directory in the Update Index tab
-- Windows Task Scheduler service running (on by default in all Windows versions)
+### Verifying the Connection
 
----
+Open Claude Desktop and start a new conversation. You should see a tools indicator showing AI-Prowler is connected. Ask:
 
-### 5.6 ⚙️ Settings
+```
+What AI-Prowler tools do you have available?
+```
 
-The Settings tab is scrollable — scroll down to see all sections.
+Claude will list all 13 tools. If you see `get\_knowledge\_base\_overview` and `search\_documents`, the connection is working.
 
-#### Active Model
+### If Claude Desktop Loses the Connection
 
-Selects which local Ollama model is used for queries. The dropdown displays each model with a RAM-fit indicator:
-- **✅** — fits comfortably in your RAM (recommended)
-- **⚠️** — may run slowly or cause memory swapping
+1. Open AI-Prowler
+2. Go to **Settings → Claude Desktop MCP**
+3. Click **Write MCP Config** to re-write the configuration
+4. Restart Claude Desktop completely (quit from the system tray, then relaunch)
+5. Start a **new chat or conversation** — note, existing conversations do not pick up reconnected tools
 
-Click **Browse & Install Model…** to open the model browser, which shows all available models with their size, minimum RAM, maker, and install status.
+### Manual Config Reference
 
-#### External AI APIs
+If you need to add AI-Prowler to Claude Desktop manually, the config entry looks like:
 
-Enter API keys for cloud providers. Keys are stored locally in `%UserProfile%\.rag_config.json` and are never transmitted anywhere except directly to the provider's own API when you make a query.
+```json
+{
+  "mcpServers": {
+    "AI-Prowler": {
+      "command": "C:\\\\Users\\\\YourName\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python311\\\\python.exe",
+      "args": \["C:\\\\Program Files\\\\AI-Prowler\\\\ai\_prowler\_mcp.py"]
+    }
+  }
+}
+```
 
-For each provider you can:
-- **👁 Toggle** — show or hide the key in the entry field
-- **Save** — save the key to config
-- **🔌 Test** — fire a live test ping and see a detailed result popup
-- **🔑 Get Key** — open the provider's API key page in your browser
+A pre-filled example is in `C:\\Program Files\\AI-Prowler\\claude\_desktop\_config\_example.json`.
 
-**Status dot colours:**
+### MCP Diagnostics Tool
 
-| Dot | Meaning |
-|-----|---------|
-| ⚫ Grey | No API key saved |
-| 🟢 Green | Key saved and connection verified |
-| 🟠 Orange | Provider is temporarily rate-limited |
+If tools are not appearing or tool calls are failing in Claude Desktop, use the built-in diagnostics tool:
 
-**Auto-fallback to Local Ollama** — when this checkbox is ON (default), if an external provider fails or returns a rate-limit error, AI Prowler silently falls back to your local Ollama model and notes the fallback in the answer.
+1. Go to **Settings → Claude Desktop MCP**
+2. Click **🔬 Run MCP Diagnostics**
+3. A scrollable output window shows:
 
-#### Database
+   * MCP SDK version and `instructions=` support status
+   * FastMCP constructor parameters
+   * Whether all 13 agentic RAG tools are present in `ai\_prowler\_mcp.py`
+   * Claude Desktop config validity
+   * Subscription cache status
+   * MCP server log tail
+   * rag\_preprocessor import and ChromaDB path check
+4. Click **📋 Copy Output** to copy the full report for sharing with support
 
-| Button | Effect |
-|--------|--------|
-| **View Statistics** | Shows total chunks, unique files, and collection metadata |
-| **Clear Database** | Permanently deletes all indexed content — asks for confirmation. Does not affect the file-tracking database or email index. |
+### stdio Transport and stdout Protection
 
-#### Query Output
+If AI-Prowler is not configured for Mobile, When Claude Desktop launches AI-Prowler's MCP server, it communicates over the stdio pipe (standard input/output). The server includes a critical protection mechanism:
 
-| Option | Effect |
-|--------|--------|
-| **Show source references** | Prints file paths, similarity scores, and query timing with every answer |
-| **Enable debug output** | Prints token counts, context details, and a full curl test command |
-| **Debug View** | Shows background DOS windows in the foreground instead of hidden |
+* **`\_STDIO\_MODE` flag** — set to `True` before `mcp.run()` is called; this disables all internal stdout redirection so no tool call can accidentally corrupt the MCP pipe
+* **stdout sealed to devnull** — immediately before the MCP server starts, `sys.stdout` is redirected to `os.devnull`, ensuring that any stray `print()` from third-party libraries cannot corrupt the JSON-RPC stream
 
-> **Tip:** Use Debug View temporarily if you need to inspect Ollama server logs or troubleshoot connection issues, then turn it off for everyday use.
+This prevents the "Claude's response was interrupted" error that can occur when tool calls try to capture print output.
 
-#### Microphone / Speech Input *(visible when faster-whisper is installed)*
+\---
 
-**Auto-stop after silence** — a slider from 1.0 to 8.0 seconds controlling how long Whisper waits after you stop speaking before ending the recording automatically.
-- **Short (1–2s)** — snappy for short direct questions
-- **Long (4–8s)** — better if you pause between phrases or speak slowly
+## 4\. Indexing Your Documents
 
-#### GPU Acceleration
+Before Claude can search your documents, they must be indexed. Indexing extracts text, splits it into chunks, generates embeddings, and stores everything in ChromaDB.
 
-Controls how many AI model layers Ollama offloads to your GPU.
+### Index Documents Tab
 
-| Value | Meaning |
-|-------|---------|
-| -1 (default) | **Auto** — Ollama decides how many layers fit in available VRAM |
-| 0 | **CPU only** — use if GPU causes errors or VRAM is insufficient |
-| 1–99 | **Partial offload** — fine-tune for laptops with limited VRAM |
+1. Click **Index Documents**
+2. Click **Add Directory** and select a folder containing your documents
+3. Check **Include Subfolders** if needed
+4. Click **Start Indexing**
 
-**🔍 Detect GPU** — runs a background scan identifying your GPU model, VRAM size, and whether the embedding model is using CUDA.
+Indexing is incremental — on subsequent runs, only new or modified files are processed.
 
-**✅ Apply & Reload** — saves the layers value and reloads the Ollama configuration immediately — no app restart needed.
+### Supported Operations
 
-#### OCR — Scanned PDFs & Image Files
+* **Add Directory** — index all supported files in a folder
+* **Update Index** — re-scan tracked folders for changes
+* **Smart Scan** — Selects file types and allows preview of what would be indexed without committing
+* **Pause / Resume** — stop mid-index and continue later
 
-Shows the current status of Tesseract OCR:
-- ✅ **OCR active — Tesseract detected** — scanned PDFs and image files will be indexed automatically
-- ⚠️ **Tesseract binary not found** — reinstall AI Prowler to restore the Tesseract binary
+### Index Size
 
-#### Ollama Server
+There is no practical limit on index size. A 10,000-document collection with 500,000 chunks is typical for a large business knowledge base.
 
-**Auto-start Ollama server** — when enabled, AI Prowler launches `ollama serve` automatically on startup and shuts it down on exit. The window visibility depends on the **Debug View** setting.
+### Tracking Directories
 
-> **Recommendation:** Enable auto-start if you only use Ollama through AI Prowler and want a one-click experience. Leave it disabled if you run other Ollama-based tools and want the server to stay running independently.
+Directories added for indexing are tracked automatically. The **Update Index** tab re-scans all tracked directories and indexes only what has changed. Set up scheduling (see Section 14) for fully automatic updates.
 
----
+### Automatic Purge of Skipped Extensions
 
-## 6. AI Models — Local
+When you add a file extension to the **Skipped** list in Smart Scan Config and then run indexing, AI-Prowler automatically purges any existing chunks for that extension from the database at the start of the index run. It also removes those files from the tracking database so they are treated as new if you ever move them back to Supported. This keeps the knowledge base consistent with your current extension settings without requiring a full re-index.
 
-Models run entirely on your hardware via Ollama — no internet required after download.
+### Progress Display
 
-| Model | Size | Min RAM | Maker | Best for |
-|-------|------|---------|-------|---------|
-| `qwen2.5:0.5b` | 0.4 GB | 2 GB | Alibaba | Ultra-fast, basic queries |
-| `qwen2.5:1.5b` | 1.0 GB | 4 GB | Alibaba | Very fast, surprisingly capable |
-| `llama3.2:1b` ⭐ | 1.3 GB | 4 GB | Meta | **Default** — fast and capable |
-| `gemma:2b` | 1.7 GB | 4 GB | Google | Compact and efficient |
-| `qwen2.5:3b` | 1.9 GB | 6 GB | Alibaba | Efficient small model |
-| `llama3.2:3b` | 2.0 GB | 6 GB | Meta | Better quality, still fast |
-| `mistral:7b` | 4.1 GB | 8 GB | Mistral AI | Fast and efficient 7B |
-| `llama3.1:8b` | 4.7 GB | 8 GB | Meta | Strong general-purpose |
-| `qwen2.5:7b` | 4.7 GB | 8 GB | Alibaba | Excellent quality/speed ratio |
-| `gemma2:9b` | 5.5 GB | 8 GB | Google | Improved Gemma, strong |
-| `qwen2.5:14b` | 9.0 GB | 16 GB | Alibaba | High quality |
-| `gemma2:27b` | 16.0 GB | 32 GB | Google | Large, high quality |
-| `llama3.1:70b` | 40.0 GB | 48 GB | Meta | Near-frontier quality |
-| `qwen2.5:72b` | 47.0 GB | 64 GB | Alibaba | Top-tier, high RAM needed |
+The indexing progress display shows:
 
-**Installing a model:** Go to Settings → Browse & Install Model, select a model, click **Download**.
+* A progress bar that grows as files are processed
+* An elapsed-time counter updated every second
+* Per-file status messages in the output panel
+* File counts (e.g., `\[File 47/312] report.pdf`)
 
-**Choosing a model:**
-- Start with `llama3.2:1b` (default) for speed on any machine
-- Move to `llama3.1:8b` or `qwen2.5:7b` for better quality on 16 GB+ RAM
-- Use `qwen2.5:14b` or higher only if your PC has 16 GB+ free RAM
+\---
 
----
+## 5\. Agentic RAG — How Claude Uses Your Knowledge Base
 
-## 7. Cloud AI Providers
+This is the core capability of AI-Prowler. Understanding it helps you get the best results.
 
-Cloud providers give you access to frontier models (GPT-4o, Claude, Gemini) that are far larger than any model you can run locally. Only your question and retrieved document excerpts are sent — never your original files.
+### The Research Loop
 
-| Provider | Model | Free Tier |
-|----------|-------|-----------|
-| ChatGPT (OpenAI) | GPT-4o | Pay-per-use |
-| Claude (Anthropic) | claude-opus-4-5 | $5 credit on sign-up |
-| Gemini (Google) | gemini-2.0-flash | ✅ Generous free tier |
-| Grok (xAI) | grok-beta | Limited free |
-| Llama API (Meta) | Llama-4-Scout-17B | ✅ Free tier |
-| Mistral Large (Mistral AI) | mistral-large-latest | Limited free |
+When you ask Claude a question with AI-Prowler connected, Claude follows this pattern automatically (guided by built-in instructions):
 
-### Setting Up a Cloud Provider
+```
+Step 1 — Orient
+  Claude calls: get\_knowledge\_base\_overview()
+  Claude learns: what documents are indexed, file types, topics covered
 
-1. Go to **Settings → External AI APIs**
-2. Click **🔑 Get Key** to open the provider's key page in your browser
-3. Paste your key into the entry field
-4. Click **Save**, then **🔌 Test** to verify it works
-5. In the **Ask Questions** tab, select the provider from the **AI Provider** dropdown
+Step 2 — Explore
+  Claude calls: list\_indexed\_documents(filter\_ext="pdf")
+  Claude learns: which specific files might be relevant
 
-### Provider Notes
+Step 3 — Search
+  Claude calls: search\_documents("your main topic")
+  Claude calls: search\_documents("related angle or synonym")
+  Claude calls: search\_by\_multiple\_queries(\["term1", "term2", "term3"])
+  Claude gathers: relevant chunks from multiple angles
 
-**Gemini (Google)** — the most generous free tier. Great first choice for trying cloud AI at no cost.
+Step 4 — Expand
+  Claude calls: get\_chunk\_context("file.pdf", 12)
+  Claude reads: the paragraphs around a promising but incomplete result
 
-**Llama API (Meta)** — free tier access to Meta's latest Llama 4 models hosted on Meta's infrastructure.
+Step 5 — Deep Read
+  Claude calls: get\_document\_chunks("contract.pdf", start\_chunk=0)
+  Claude reads: an entire document sequentially when needed
 
-**Claude (Anthropic)** — high-quality reasoning, excellent at code and document analysis.
+Step 6 — Synthesize
+  Claude writes: a comprehensive answer from everything it gathered
+```
 
-**ChatGPT (OpenAI)** — GPT-4o is multimodal; image attachment queries work especially well here.
+### Tips for Best Results
 
----
+**Ask open-ended research questions.** Claude works best when given latitude to investigate. "What does our policy say about refunds?" is better than "find the word refund."
 
-## 8. File Attachments & File Output Mode
+**Let Claude finish.** You'll see multiple tool calls before Claude answers. This is the agentic loop working. Don't interrupt unless it's taking an unusually long time.
 
-### Attaching Files to a Question
+**Ask follow-up questions.** Claude retains context within a conversation. "What about international orders?" after a refund policy question will trigger another search with that refinement.
 
-Click **📎 Attach Files…** in the Ask Questions tab. Supported types:
-- **Images** (.jpg, .png, .bmp, .gif, .tiff) — sent as vision data to cloud providers; requires a vision-enabled Ollama model (e.g. `llava`) for local use
-- **Text files** (.txt, .md, .pdf, .docx) — content is extracted and appended to your question
+**Specify document types when relevant.** "In our PDF contracts, what are the liability limits?" helps Claude narrow its search efficiently.
 
-Use **🗑 Clear All** to remove all attached files before your next question.
+### Calling Tools Manually
+
+You can also direct Claude explicitly:
+
+```
+Call search\_documents("Q3 financial results") and show me the raw chunks.
+```
+
+```
+Use get\_document\_chunks to read the entire executive summary document.
+```
+
+This is useful when you want to see what's in the knowledge base before asking Claude to interpret it.
+
+\---
+
+## 6\. MCP Tools Reference
+
+AI-Prowler exposes **13 tools** to Claude. They fall into two categories.
+
+### Agentic RAG Tools (Primary)
+
+These tools require no local LLM. Claude does all reasoning directly.
+
+#### `how\_to\_use\_ai\_prowler()`
+
+Returns the recommended workflow and tool sequence. Claude calls this automatically at the start of research sessions. You can also call it explicitly to see usage guidance and confirm the MCP connection is active. Also reports the active MCP SDK version and whether the `instructions=` parameter is supported.
+
+#### `get\_knowledge\_base\_overview()`
+
+Returns a summary of the entire knowledge base: document count, file types, chunk count, database location, and tracked directories. Call this to orient Claude at the start of a research task.
+
+#### `search\_documents(query, n\_results, min\_similarity)`
+
+The primary retrieval tool. Performs semantic vector search and returns raw document chunks with source metadata and similarity scores. Claude calls this multiple times with different query phrasings to gather comprehensive context.
+
+Parameters:
+
+* `query` — natural language search query
+* `n\_results` — chunks to return (default 8, max 20)
+* `min\_similarity` — filter threshold 0.0–1.0 (default 0.0)
+
+#### `search\_by\_multiple\_queries(queries, n\_results\_each, min\_similarity)`
+
+Runs 2–6 search queries in parallel and returns deduplicated results ranked by best similarity. More efficient than calling `search\_documents` repeatedly when a topic has multiple angles or synonyms.
+
+#### `get\_chunk\_context(filename, chunk\_index, window)`
+
+Retrieves the chunks immediately before and after a specific chunk, providing fuller context around a result that may be cut off at a chunk boundary.
+
+Parameters:
+
+* `filename` — filename from a search result (partial match accepted)
+* `chunk\_index` — zero-based index from the search result
+* `window` — chunks before and after to include (default 2, max 5)
+
+#### `get\_document\_chunks(filename, start\_chunk, max\_chunks)`
+
+Retrieves chunks from a specific document in reading order. Use for full document summaries or when a user asks "what does this document say?"
+
+Parameters:
+
+* `filename` — filename to retrieve (partial match accepted)
+* `start\_chunk` — zero-based starting position (default 0)
+* `max\_chunks` — chunks per call (default 10, max 30)
+
+#### `list\_indexed\_documents(filter\_ext, filter\_path, limit)`
+
+Lists all indexed documents grouped by file type. Use to browse available content before searching.
+
+Parameters:
+
+* `filter\_ext` — show only this type, e.g. "pdf", "docx"
+* `filter\_path` — show only files whose path contains this string
+* `limit` — max documents shown (default 50)
+
+### Knowledge Base Management Tools
+
+These tools let Claude help you manage your knowledge base from a conversation.
+
+#### `add\_and\_index\_directory(directory, recursive, track)`
+
+Indexes all documents in a folder and optionally adds it to the auto-update tracking list.
+
+#### `update\_tracked\_directories(directory)`
+
+Re-scans tracked directories and indexes only changed files. Omit `directory` to update all tracked folders.
+
+#### `get\_database\_stats()`
+
+Returns statistics: chunk count, unique document count, breakdown by file type, and database location. Queries ChromaDB directly for accurate counts.
+
+#### `list\_tracked\_directories()`
+
+Lists all directories currently registered for auto-update tracking.
+
+#### `remove\_directory(directory)`
+
+Removes a directory from tracking and deletes all its chunks from ChromaDB. Destructive — requires re-indexing to restore.
+
+### Status Tool
+
+#### `check\_status()`
+
+Checks ChromaDB connectivity, reports the chunk count, database path, embedding model status, and tracked directories. No Ollama or local LLM is involved.
+
+\---
+
+## 7\. Remote Access — Claude.ai on Mobile and Web
+
+The Remote Access feature lets you use AI-Prowler with Claude.ai from any device — your phone, tablet, or any web browser — using the same agentic RAG capability as Claude Desktop.
+
+### Architecture
+
+```
+Your Phone/Browser
+       ↓ HTTPS
+Claude.ai
+       ↓ MCP (HTTP + OAuth 2.0 + PKCE)
+Cloudflare Tunnel (public HTTPS URL)
+       ↓ localhost
+AI-Prowler HTTP Server (on your PC)
+       ↓
+ChromaDB (your local documents)
+```
+
+### Setup Steps
+
+**1. Set a Bearer Token**
+
+In AI-Prowler, go to **Settings → Remote Access**. Enter a Bearer token — this is a password you create. Make it at least 10 characters with mixed case and numbers. Click **Save Token**.
+
+**2. Start the HTTP Server**
+
+Click **▶ Start HTTP Server**. The status light turns green when running. You will also see the internet and subscription status lights update.
+
+**3. Start the Cloudflare Tunnel**
+
+Click **▶ Start Tunnel**. The tunnel provides a permanent public HTTPS URL (e.g. `https://mobile.dvavro-ai-prowler.com/mcp`).
+
+**4. Add AI-Prowler as a Connector in Claude.ai**
+
+The HTTP/Cloudflare path is exclusively for Claude.ai (web and mobile). **Do not add this URL to Claude Desktop** — Claude Desktop uses the stdio path configured automatically by the installer. Adding the HTTP URL to Claude Desktop's config is a common misconfiguration that causes Claude Desktop to require the HTTP server to be running. Use **Settings → Claude Desktop MCP → Auto-configure Claude Desktop** if you need to fix this.
+
+To connect Claude.ai to your knowledge base:
+
+1. Open [claude.ai](https://claude.ai) in a browser and sign in (Claude Pro or Team required)
+2. Click your profile icon (top right) → **Settings**
+3. In the left sidebar, click **Connectors**
+4. Click **Add custom connector** (or **+ Add** depending on your plan)
+5. In the **MCP Server URL** field, enter your tunnel URL followed by `/mcp`:
+
+```
+   https://mobile.dvavro-ai-prowler.com/mcp
+   ```
+
+   (Replace with your actual Cloudflare Tunnel hostname)
+
+6. Claude.ai redirects you to your AI-Prowler authorization page
+7. Enter your Bearer token and click **Connect**
+8. Claude.ai redirects back — AI-Prowler now appears in your Connectors list with a green status dot
+
+   **To use the connector in a conversation:**
+
+* Start a new conversation on Claude.ai
+* In the chat toolbar, click the **Connectors** or **Tools** button (puzzle-piece icon)
+* Select **AI-Prowler** to enable it for that conversation
+* Ask any research question — Claude will call your knowledge base tools automatically
+
+  **Tip:** Claude.ai in the browser supports downloading any files that Claude produces (code, documents, reports) directly to your machine, whereas the Claude Desktop app may open some file types in-app. If you need to save Claude's outputs as files, Claude.ai in the browser is the better choice for that workflow.
+
+  ### Status Lights
+
+  The HTTP MCP Server section in Settings shows two status indicators:
+
+* **Internet ●** — green when your PC can reach GitHub (required for subscription checks)
+* **Mobile Subscription ●** — shows your subscription status:
+
+  * 🟢 Green `Active` — subscription paid and current
+  * 🟡 Yellow `Expiring in Xd` — expiring within 30 days
+  * 🟡 Yellow `Unpaid — Xd left` — expired but within the 30-day grace period
+  * 🔴 Red `Access Blocked` — grace period elapsed, renewal required
+  * 🔴 Red `Not Subscribed` — token not registered in the subscription system
+
+  ### Sleep Prevention
+
+  When the HTTP server is running, AI-Prowler automatically prevents Windows from going to sleep using the Windows `SetThreadExecutionState` API. This ensures Claude.ai connections remain active without needing to change your power settings. Sleep is restored automatically when you stop the server or close AI-Prowler.
+
+  ### Cloudflare Tunnel One-Time Setup
+
+  The tunnel requires a one-time setup per machine: Note: Support will create this as part of a subscription.
+
+1. Click **Login** — authenticates with Cloudflare (opens browser once)
+2. Click **Create Tunnel** — creates a named tunnel
+3. Click **Route DNS** — maps your public hostname to the tunnel
+4. Click **Save Config** — saves the tunnel configuration
+
+   After setup, use **Start Tunnel** / **Stop Tunnel** for daily operation. The tunnel can also be installed as a Windows service for automatic startup.
+
+   ### OAuth 2.0 + PKCE Authentication
+
+   The HTTP server implements full OAuth 2.0 + PKCE authentication (required by Claude.ai custom connectors). This means:
+
+* Claude.ai discovers authentication endpoints automatically via RFC 9728 metadata
+* Dynamic client registration is handled automatically (RFC 7591)
+* Authorization codes are exchanged for access tokens at `/token`
+* Your Bearer token is never stored in plain text in the subscription registry (only a short SHA-256 hash is kept)
+
+  \---
+
+  ## 8\. Mobile Subscription Management
+
+  ### Subscription Plans
+
+|Plan|Price|Users|Use Case|
+|-|-|-|-|
+|Individual|$10/month|1|Personal use|
+|Small Business|$30/month|Up to 5|Team deployment|
+|Enterprise|Contact us|6+|Custom deployment|
+
+### How to Subscribe
+
+Email david.vavro1@gmail.com with:
+
+* Your name or company name
+* Which plan you want
+* Your Bearer token (shown in Settings → Remote Access)
+
+Your Bearer token **never changes** between billing periods. No reconfiguration is needed on renewal.
+
+### Grace Period
+
+If your subscription lapses, a 30-day grace period begins:
+
+* Remote access continues working with a warning banner on the login page
+* The subscription light turns yellow showing remaining days
+* After 30 days, access is suspended until renewal
+
+### Subscription Manager GUI
+
+The **Subscription Manager** (`subscription\_manager\_gui.py`) is a separate admin tool for managing subscribers. Run it with the provided `RUN.bat` in your private admin folder. Note: this is not for users, AI-Prowler ADMIN uses this program to manage subscribers via GitHub.
+
+Features:
+
+* List all subscribers with status
+* Add new subscribers
+* Renew subscriptions (no token change needed)
+* Revoke access
+* Check which subscriber owns a token
+* View expiring subscriptions
+
+### Subscription Registry
+
+Subscription data is stored in a public GitHub repository (`ai-prowler-subs`). The repository is public for reading (no authentication needed on subscriber machines) but only the ADMIN can write to it.
+
+Data stored: token hashes (not the tokens themselves), expiry dates, subscriber names. No payment details, no personal information beyond what you enter.
+
+\---
+
+## 9\. Desktop Ask Questions Tab (Optional Local AI)
+
+The Ask Questions tab provides a traditional chat interface for querying your knowledge base. It is not Agentic (Agent based) smart Query based Question and answer and it works independently of Claude Desktop and is useful for fully offline operation and requires that the LLM be downloaded locally or you can access the external LLM via API interface but you will need to get API keys and sign up for the service plans offered by the external LLM providers.
+
+### Ollama (Local AI)
+
+Ollama is not installed automatically. To use local AI:
+
+1. Download and install Ollama from the setting tab -> Install Ollama button [ollama.com](https://ollama.com)
+2. In AI-Prowler, go to **Settings → Start the Ollama server and then Browse \& Install Models**
+3. Select a model appropriate for your hardware
+4. Click Install
+
+**Recommended models by RAM:**
+
+|RAM|Model|Quality|
+|-|-|-|
+|4 GB|llama3.2:1b or qwen2.5:1.5b|Basic|
+|8 GB|llama3.2:3b or qwen2.5:7b|Good|
+|16 GB|llama3.1:8b or qwen2.5:14b|Very good|
+|32 GB+|qwen2.5:32b or llama3.1:70b|Excellent|
+
+### Cloud AI Providers
+
+Add API keys in **Settings → External AI APIs**:
+
+|Provider|Notes|
+|-|-|
+|ChatGPT (OpenAI)|GPT-4o, pay-per-use|
+|Claude (Anthropic)|claude-sonnet-4-6|
+|Gemini (Google)|Free tier available|
+|Grok (xAI)|Limited free|
+|Llama API (Meta)|Free tier available|
+|Mistral Large|Limited free|
+
+### Voice Input
+
+Click the microphone button to speak your question. AI-Prowler uses Whisper (large-v3-turbo model, \~1.6 GB, downloaded on first use) running entirely locally. Voice is never sent to any cloud service.
+
+**Microphone silence timeout** — in Settings, you can adjust the silence detection timeout (default 3.0 seconds). Increase this if your speech is being cut off early; decrease it if there is too much lag after you stop speaking.
+
+### Inline Spell Checker
+
+The question text box includes an inline spell checker powered by `pyspellchecker`:
+
+* Misspelled words are underlined in red as you type
+* Right-click a highlighted word for a correction menu showing up to 8 suggestions
+* Click a suggestion to replace the word
+* The word is also added to your personal dictionary so it won't be flagged again
+
+The spell checker activates automatically if `pyspellchecker` is installed. No configuration is needed.
+
+### File Attachments
+
+Attach images or text files to questions using the paperclip button. Vision support (image analysis) requires a cloud provider with vision capability.
 
 ### File Output Mode
 
-Tick **📄 File Output Mode** to instruct the AI to label every file it produces with a filename. After the answer streams in, the **📁 Files in Answer** panel appears above the answer box.
+When the AI produces code, a 💾 Save button appears automatically. Code is saved to a file with an auto-generated name based on the content. Works with all providers but some local and external AI models don't support this.
 
-Each detected file gets its own row showing:
-- The filename (e.g. `hello_world.py`)
-- A **💾 Save** button — opens a Save dialog with the filename pre-filled
-- A **📋 Copy** button — copies the file content to the clipboard
+\---
 
-This works with all providers. If Ollama doesn't label a file, the fallback auto-names unnamed code blocks (`script_1.py`, `script_1.js`, etc.).
+## 10\. Settings \& Configuration
 
----
+### Remote Access Tab
 
-## 9. Voice Input (Microphone)
+* **Bearer Token** — the password used to authenticate MCP connections from Claude.ai. Enter at least 10 characters of mixed case and numbers, then click **Save Token**. This token never changes between billing periods.
+* **Port** — HTTP server port (default 8000). Only change this if port 8000 is in use by another service; you will also need to update your Cloudflare Tunnel route.
+* **HTTP Server controls** — **▶ Start HTTP Server** / **■ Stop HTTP Server**. The status dot turns green when the server is listening. Starting the server automatically prevents Windows from sleeping (see Sleep Prevention below).
+* **Status lights** — Internet ● (green = GitHub reachable) and Mobile Subscription ● (green = active, yellow = expiring/grace, red = blocked/unregistered)
+* **Cloudflare Tunnel** — one-time setup buttons (Login, Create Tunnel, Route DNS, Save Config) and daily-use buttons (Start Tunnel, Stop Tunnel). See Section 7 for full setup walkthrough.
+* **Install as Windows Service** — installs the Cloudflare Tunnel as a Windows background service that starts automatically at boot, even without AI-Prowler running.
 
-The microphone button (🎤) appears in the Ask Questions tab when `faster-whisper` and `sounddevice` are installed (included in the default install).
+> \*\*Note:\*\* The HTTP server and Cloudflare Tunnel are only needed for Claude.ai web/mobile access. Claude Desktop does \*\*not\*\* use these — it connects via the stdio MCP path configured automatically by the installer.
 
-### First Use
+### Claude Desktop MCP Tab
 
-The Whisper `large-v3-turbo` model (~1.6 GB) downloads automatically the first time you click the mic button. This is a one-time download — subsequent launches load it instantly from cache.
+* **MCP Status** — shows whether AI-Prowler is correctly registered in Claude Desktop's `claude\_desktop\_config.json`
+* **Transport mode note** — confirms that Claude Desktop uses the stdio (local process) path, not the HTTP server. If your config shows an HTTP URL here, click **Auto-configure Claude Desktop** to fix it.
+* **⚙️ Auto-configure Claude Desktop** — writes the correct stdio entry for AI-Prowler into Claude Desktop's config file. Also offers to restart Claude Desktop immediately.
+* **Open Claude Desktop Config** — opens `claude\_desktop\_config.json` in Notepad for manual inspection
+* **View Example Config** — shows a reference configuration you can copy from
+* **Copy Config Path** — copies the config file path to the clipboard
+* **🔬 Run MCP Diagnostics** — runs a full health check and shows a scrollable report covering: MCP SDK version, tool count, config validity, subscription cache, and log tail. Use **📋 Copy Output** to share the report with support.
 
-### Using the Microphone
+### Models Tab
 
-1. Click 🎤 to start recording (button turns red / shows "🔴 Recording…")
-2. Speak your question
-3. Recording stops automatically after the silence threshold (default 3 seconds)
-4. The transcribed text appears in the question box
-5. Click **Ask Question** or press **Ctrl+Enter** to submit
+* **Active model** — switches between installed Ollama models for the Ask Questions tab
+* **Browse \& Install Model** — opens a browser to Ollama's model library; you can then download a model directly from AI-Prowler's Settings
+* **GPU layers** — set how many layers Ollama offloads to GPU (`-1` = auto, `0` = CPU only, `N` = N layers on GPU)
+* **Auto-start Ollama** — when enabled, AI-Prowler launches the Ollama server automatically on startup. Not required if you are using Claude Desktop as your primary interface.
 
-### Append Mode
+### External AI APIs Tab
 
-Tick **Append (add to existing text)** before recording to add the transcription after whatever is already in the question box. Useful for composing long questions across multiple recording sessions.
+* API key fields for each supported cloud provider (ChatGPT, Claude, Gemini, Grok, Llama API, Mistral)
+* **Test Connection** button per provider — verifies your key is valid and the endpoint is reachable
+* Timeout settings — controls how long the Ask Questions tab waits for a cloud response before showing a timeout error
 
-### Adjusting the Silence Threshold
+### Smart Scan Config Tab
 
-Go to **Settings → Microphone / Speech Input** and drag the **Auto-stop after silence** slider:
-- **1–2 seconds** — stops quickly after you finish speaking
-- **4–8 seconds** — waits longer, giving you time to pause mid-sentence
+* **Supported / Skipped extension lists** — add or remove file extensions to control which types are indexed. Drag an extension from Supported to Skipped (or vice versa) to change its status.
+* **Exclude folder patterns** — enter partial path strings (e.g. `node\_modules`, `\\.git`) to skip those directories during indexing
+* When an extension is moved to Skipped, existing chunks for that type are **purged automatically** at the start of the next index run — no manual cleanup needed
+* These settings apply to all indexing operations (initial index, Update Index, and scheduled runs)
 
----
+### Scheduler Tab
 
-## 10. Email Indexing
+* **Update frequency** — Daily, specific days of the week, or custom cron expression
+* **Time** — what time to run the update (default 2:00 AM)
+* **Create Schedule** — registers the task with Windows Task Scheduler
+* **View Schedule** — shows the current scheduled task status and next run time
+* The scheduler runs `update\_tracked\_directories` — only changed files are re-indexed, so scheduled runs are fast
 
-AI Prowler has first-class support for email from every major provider. Indexed emails behave exactly like documents — ask "What did John say about the budget in April?" and get answers citing specific messages.
+### OCR Debug (in Settings toolbar)
+
+* **OCR Debug button** — select any scanned PDF or image file and see the extracted text in a preview window before committing to indexing. Use this to verify OCR quality.
+* **Enable OCR Debug logging** — writes full OCR output to a log file during every index run, useful for diagnosing extraction quality across a large batch.
+
+### GPU Detection
+
+* **🔍 Detect GPU** — shows your GPU model, VRAM, CUDA availability, current embedding device (CPU or CUDA), and Ollama GPU layer allocation if Ollama is running. Run this after install to confirm GPU acceleration is active.
+
+### Voice Input (Mic Settings)
+
+* **Silence timeout** — controls how many seconds of silence trigger end-of-speech detection (default 3.0 s). Increase if your speech is being cut off; decrease to reduce lag after you stop speaking. Found in Settings → Ask Questions options.
+
+\---
+
+## 11\. Supported File Types
+
+AI-Prowler indexes **65+ file formats** by default. Extensions are split into two sets: **Supported** (indexed) and **Skipped** (never indexed). Both sets can be customised in **Settings → Smart Scan Config**.
+
+### Supported Extensions (indexed by default)
+
+|Extension(s)|Category|Reason Indexed|
+|-|-|-|
+|`.txt` `.md` `.rst` `.rtf` `.odt`|Plain text / Docs|Pure text — directly readable, high RAG value|
+|`.pdf`|Document|Most common document format; text extracted via pdfplumber/pypdf|
+|`.docx` `.doc`|Word|Rich text documents; python-docx extracts body and tables|
+|`.xlsx` `.xls`|Excel|Spreadsheet data; openpyxl extracts cell text|
+|`.pptx` `.ppt`|PowerPoint|Slide text content extracted via python-pptx|
+|`.py` `.js` `.ts` `.jsx` `.tsx`|Code|Source code is plain text; highly searchable for developer knowledge bases|
+|`.cs` `.java` `.cpp` `.c` `.h` `.hpp`|Code|Compiled languages — source is still plain text|
+|`.go` `.rs` `.rb` `.php` `.swift` `.kt` `.scala` `.r`|Code|Modern and niche languages — same reasoning|
+|`.html` `.htm` `.xhtml`|Markup|Web content; HTML tags stripped, body text extracted|
+|`.css` `.scss` `.sass` `.less`|Stylesheet|Text-based style rules; useful for front-end knowledge bases|
+|`.xml`|Markup / Data|Structured text; tag-stripped content extracted|
+|`.json` `.yaml` `.yml` `.toml` `.ini` `.cfg` `.conf` `.env`|Config / Data|Human-readable config files — valuable for dev/ops knowledge bases|
+|`.csv` `.tsv`|Data|Tabular text data — directly readable|
+|`.log`|Logs|Plain text; useful for searching error history|
+|`.sql`|Database scripts|Plain text queries and schema definitions|
+|`.jpg` `.jpeg` `.png` `.bmp` `.tiff` `.tif` `.gif`|Images|**OCR via Tesseract** extracts embedded text from scanned docs and screenshots|
+|`.eml` `.msg` `.emlx`|Email (single)|Individual email files; headers and body extracted|
+|`.mbox`|Email (archive)|Gmail Takeout, Thunderbird exports — multiple messages per file|
+|`.rmail` `.babyl` `.mmdf`|Email (legacy)|GNU Emacs / old Unix mail formats|
+|`.sh` `.bash` `.zsh` `.ps1` `.bat` `.cmd`|Scripts|Shell scripts — plain text, useful for ops knowledge bases|
+|`.gitignore` `.dockerignore` `.editorconfig`|Config files|Extensionless-style config — plain text|
+
+### Skipped Extensions (never indexed by default)
+
+|Extension(s)|Category|Reason Skipped|
+|-|-|-|
+|`.exe` `.dll` `.so` `.dylib` `.lib` `.a` `.o` `.obj`|Executables / compiled|Binary — no readable text content|
+|`.class` `.pyc` `.pyd` `.pyo`|Compiled bytecode|Binary compiled output — no source text value|
+|`.pdb` `.ilk` `.exp` `.com` `.scr` `.sys` `.drv` `.ocx` `.ax`|Windows system / debug|Binary system files — no text content|
+|`.zip` `.rar` `.7z` `.tar` `.gz` `.bz2` `.xz` `.tgz`|Archives|Compressed containers — contents must be extracted first|
+|`.jar` `.war` `.ear` `.whl` `.egg` `.nupkg` `.vsix`|Package archives|Language-specific packages — binary containers|
+|`.deb` `.rpm` `.msi` `.pkg` `.dmg` `.iso` `.img`|Installers / disk images|Binary system installers — no indexable text|
+|`.webp` `.ico` `.svg` `.psd` `.ai` `.eps`|Image formats (design)|No OCR value — vector/design formats or low-text web images|
+|`.raw` `.cr2` `.nef` `.orf` `.arw`|Camera RAW|Photo data only — no embedded text worth indexing|
+|`.mp3` `.wav` `.flac` `.aac` `.ogg` `.wma` `.m4a` `.opus` `.aiff`|Audio|No text content extractable|
+|`.mp4` `.avi` `.mkv` `.mov` `.wmv` `.flv` `.webm` `.m4v`|Video|No text content extractable|
+|`.ttf` `.otf` `.woff` `.woff2` `.eot`|Fonts|Binary font data — no text content|
+|`.db` `.sqlite` `.sqlite3` `.mdb` `.accdb`|Database files|Binary database containers — use SQL exports instead|
+|`.vmdk` `.vhd` `.vhdx` `.ova` `.ovf`|VM / disk images|Large binary disk images — no text content|
+|`.tmp` `.temp` `.cache` `.lock` `.bak` `.swp` `.swo`|Temp / cache|Transient files — no stable content worth indexing|
+|`.DS\_Store` `.Thumbs.db`|OS metadata|macOS/Windows filesystem metadata blobs — binary, no value|
+
+### Notes on Special Cases
+
+* **`.svg`** is skipped even though it is technically XML text — it is treated as a design asset rather than a document
+* **Common image formats** (`.jpg`, `.png`, etc.) are **supported** via OCR, but camera RAW formats are skipped since they contain raw photo sensor data, not document text
+* **Email formats** include legacy formats (`.babyl`, `.mmdf`) for unusually thorough coverage of older archives
+* **`.webp`** is skipped (design/web asset), even though `.jpg`/`.png` of the same content would be OCR'd — this is intentional as webp is primarily a web delivery format
+* All extension lists can be customised per-installation in **Settings → Smart Scan Config** without any code changes
+
+### Skipped Directories
+
+AI-Prowler also skips these directory names when walking folder trees:
+
+|Category|Directories|
+|-|-|
+|Version control|`.git` `.svn` `.hg` `.bzr`|
+|Package managers|`node\_modules` `bower\_components` `vendor` `packages` `.nuget`|
+|Python|`\_\_pycache\_\_` `.venv` `venv` `env` `.env` `site-packages`|
+|Build output|`build` `dist` `out` `output` `bin` `obj` `target` `.next` `.nuxt`|
+|IDE / editor|`.idea` `.vscode` `.vs` `.eclipse`|
+|OS / system|`$RECYCLE.BIN` `System Volume Information` `Windows` `Program Files`|
+
+\---
+
+## 12\. OCR — Scanned Documents \& Images
+
+AI-Prowler automatically applies OCR (Optical Character Recognition) to:
+
+* Scanned PDFs (PDFs with no text layer)
+* Standalone image files (`.jpg`, `.jpeg`, `.png`, `.bmp`, `.tiff`, `.tif`, `.gif`)
 
 ### How It Works
 
-**Single-message files** (`.eml`, `.msg`, `.emlx`) are indexed like any other document.
+1. `pdfplumber` attempts to extract the text layer from PDFs
+2. If no text is found (scanned document), `pypdfium2` renders each page to a 300 DPI image
+3. `pytesseract` (Tesseract 5.4) extracts text from the image
+4. The extracted text is chunked and indexed normally
 
-**Multi-message archives** (`.mbox`, `.rmail`, `.babyl`, `.mmdf`) use the **per-email incremental indexer**:
+### OCR Quality Tips
 
-1. Every message is identified by a **stable unique ID** derived from its `Message-ID` header (or a fingerprint of From + Date + Subject when no Message-ID is present)
-2. A local database at `%UserProfile%\.rag_email_index.json` records which IDs have already been indexed
-3. On re-import, only messages with a new ID are processed — a 100,000-message archive that gained 200 new emails processes only those 200
-4. Messages removed from the archive are automatically deleted from ChromaDB
-5. The Stop button responds after every individual message — clicking Stop while processing a 50 GB archive responds within seconds
+* 300 DPI rendering provides high accuracy for most documents
+* Handwritten text has limited accuracy
+* Very small fonts (below 8pt) may have reduced accuracy
+* Clean, horizontal text gives the best results
+
+### OCR Debug Tools
+
+In **Settings**, use the **OCR Debug** button to test OCR on a specific file and see the extracted text before indexing. You can also enable **OCR Debug logging** to write full OCR text output to a log file during every index run — useful for diagnosing extraction quality on a large batch.
+
+\---
+
+## 13\. Email Indexing
 
 ### Supported Formats
 
-| Format | Extension | Providers |
-|--------|-----------|-----------|
-| MBOX archive | `.mbox` | Gmail, Thunderbird, Apple Mail, Yahoo (via bridge) |
-| Single message | `.eml` | Outlook drag-and-drop, Windows Live Mail |
-| Outlook message | `.msg` | Outlook, Exchange |
-| Apple Mail message | `.emlx` | Apple Mail direct folder |
-| GNU RMAIL / Babyl | `.rmail` `.babyl` | GNU Emacs mail formats |
-| MMDF format | `.mmdf` | Legacy Unix mail |
+|Provider|Format|Export Method|
+|-|-|-|
+|Gmail|.mbox|Google Takeout|
+|Apple Mail / iCloud|.mbox|File → Export Mailbox|
+|Thunderbird|.mbox|Direct from profile folder|
+|Yahoo Mail|Via Thunderbird IMAP|Set up IMAP in Thunderbird first|
+|Outlook / Exchange|.eml, .msg|Drag-and-drop or MailStore export|
+|Windows Live Mail|.eml|Point at the Mail folder|
 
-### Exporting From Every Major Provider
+### Incremental Indexing
 
-#### Gmail (Google)
+AI-Prowler uses `Message-ID` headers for deduplication. On re-import, only emails that haven't been seen before are indexed. A 100,000-email archive that gained 200 new messages will only process those 200 on re-import.
 
-Gmail exports in `.mbox` format via Google Takeout.
+### Large Archives
 
-1. Go to [takeout.google.com](https://takeout.google.com) and sign in
-2. Click **Deselect all**, then scroll down and check only **Mail**
-3. Click **All Mail data included** to choose specific labels (Inbox, Sent, a project label) rather than your entire mailbox
-4. Choose delivery: `.zip`, frequency: Export once, size: up to 50 GB per file
-5. Click **Create export** — Google emails a download link when it's ready
-6. Download and extract the `.zip` — inside you will find files like `All mail Including Spam and Trash.mbox` or one `.mbox` per label
-7. Add the `.mbox` file(s) to the AI Prowler index queue
+For very large archives (100,000+ emails), indexing may take several hours on first import. Use Pause / Resume if needed. Progress is shown as `\[Email 4,271/52,000] Subject line`.
 
-> **Re-exporting:** When you export again next month, Google regenerates the `.mbox` from scratch. AI Prowler handles this correctly — it uses `Message-ID` to identify what's new, so only genuinely new messages are processed even though the whole file is new.
+\---
 
-#### Apple Mail and iCloud Mail
+## 14\. Scheduling \& Automation
 
-**Export as .mbox (recommended for large mailboxes):**
-1. Open the Mail app on your Mac
-2. In the sidebar, select the mailbox you want to export
-3. Go to **Mailbox → Export Mailbox…**
-4. Choose a save location and click **Choose**
-5. Apple Mail saves a `.mbox` package — on Windows (after copying) it becomes a standard `.mbox` file
-6. Add it to the AI Prowler index queue
+### Windows Task Scheduler Integration
 
-**Access raw .emlx files directly (no export needed):**
-Apple Mail's internal storage is at `~/Library/Mail/`. Each message is an individual `.emlx` file. Add the `Mail` folder or specific account sub-folders to the AI Prowler queue — smart scan will find and index all `.emlx` files recursively.
+Set up automatic index updates from **Settings → Schedule**:
 
-**iCloud Mail** uses the same Apple Mail client. Make sure your iCloud Mail is synced to the local Mail app first (Mail → Preferences → Accounts → check the account is enabled).
+1. Choose update frequency (daily, specific days, custom)
+2. Set the time (default: 2:00 AM)
+3. Click **Create Schedule**
 
-#### Thunderbird (Mozilla)
+The scheduler runs `update\_tracked\_directories` — only changed files are re-indexed.
 
-Thunderbird stores each folder as a single raw `.mbox` file on disk — **no export step is needed**.
+### Auto-Start Ollama
 
-| OS | Default path |
-|----|-------------|
-| Windows | `C:\Users\YourName\AppData\Roaming\Thunderbird\Profiles\[profile]\Mail\` |
-| macOS | `~/Library/Thunderbird/Profiles/[profile]/Mail/` |
-| Linux | `~/.thunderbird/[profile]/Mail/` |
+Enable **Auto-start Ollama** in Settings to launch the Ollama server automatically when AI-Prowler opens. Not needed if you're using Claude Desktop as your primary interface.
 
-Inside each account folder you will find files named `Inbox`, `Sent`, `Drafts`, etc. with no file extension — these are standard mbox files. Either add the entire `Mail` folder to the queue (smart scan finds them automatically), or copy specific files, rename with a `.mbox` extension, and add those.
+### Cloudflare Tunnel as Windows Service
 
-> **Keeping it current:** Because Thunderbird's mbox files are updated as new mail arrives, you can schedule AI Prowler to re-scan the Thunderbird folder weekly. The incremental indexer picks up only new messages each time.
+For always-on remote access, install the Cloudflare Tunnel as a Windows service. The tunnel starts automatically at boot and runs in the background without AI-Prowler being open.
 
-#### Yahoo Mail
+In **Settings → Cloudflare Tunnel**, click **Install as Windows Service**.
 
-Yahoo does not provide a direct export tool. The recommended path is to use Thunderbird as a bridge.
+\---
 
-**Thunderbird bridge (recommended):**
-1. Add your Yahoo account to Thunderbird using IMAP
-2. Let Thunderbird sync (can take hours for a large mailbox)
-3. Point AI Prowler at the Thunderbird profile folder
+## 15\. GPU Support
 
-**Yahoo IMAP settings:**
-- Server: `imap.mail.yahoo.com` · Port: `993` · SSL/TLS: Yes
-- Use a Yahoo **App Password** — go to [security.yahoo.com](https://security.yahoo.com) → Manage app passwords → Generate one for Thunderbird. Your regular Yahoo password will not work for IMAP.
+### NVIDIA GPUs
 
-**Alternative — MailStore Home (free):**
-Download from [mailstore.com](https://www.mailstore.com/en/products/mailstore-home), add Yahoo via IMAP, export to `.mbox`.
+AI-Prowler detects NVIDIA GPUs automatically. The installer installs the correct PyTorch build:
 
-#### Outlook / Microsoft 365 / Exchange
+* **CUDA 12.8 (cu128)** — for RTX 50xx (Blackwell) and most modern NVIDIA GPUs
+* **CPU-only** — for systems without an NVIDIA GPU
 
-Outlook's native format is `.pst`/`.ost` — a proprietary format that requires conversion.
+### Embedding Acceleration
 
-**Option A — Drag to folder (small batches):**
-1. Open Outlook
-2. Select messages (Ctrl+A to select all in a folder)
-3. Drag and drop them onto a Windows folder — Outlook saves each as an `.eml` file
-4. Add that folder to the AI Prowler queue
+The sentence-transformer embedding model (`all-MiniLM-L6-v2`) uses CUDA automatically when available, significantly speeding up indexing.
 
-**Option B — MailStore Home (large mailboxes, recommended):**
-1. Download MailStore Home (free)
-2. Add your Outlook/Exchange account or import from a `.pst` file
-3. Export to `.mbox` or `.eml` format
-4. Add to the AI Prowler queue
+### GPU Detect Tool
 
-> **Note:** `.pst` and `.ost` files cannot be indexed directly — they use a proprietary binary format. Conversion to `.mbox` or a folder of `.eml` files first is the reliable path.
+**Settings → 🔍 Detect GPU** shows:
 
-#### Windows Live Mail / Windows Mail (legacy)
+* GPU model and VRAM
+* CUDA availability
+* Current embedding device (CPU or CUDA)
+* Ollama GPU layer allocation (if Ollama is running)
 
-These apps stored each message as an individual `.eml` file.
+### Blackwell (RTX 50xx) Note
 
-Default storage location: `C:\Users\YourName\AppData\Local\Microsoft\Windows Live Mail\`
+PyTorch stable does not yet include CUDA 12.8 compute kernels for Blackwell SM 12.0+ architecture. Embeddings run on CPU on RTX 50xx cards even though CUDA is detected. Ollama itself supports Blackwell for inference. This will be resolved in a future PyTorch release.
 
-Add that folder directly to the AI Prowler queue — smart scan finds all `.eml` files recursively.
+### Controlling GPU Layers
 
-#### Other Clients
+In **Settings → GPU Layers**, set how many model layers Ollama offloads to GPU:
 
-| Client | How to export |
-|--------|--------------|
-| **Evolution** (Linux) | File → Save As Mbox |
-| **KMail** (Linux) | Folder → Export → mbox |
-| **Mutt / Neomutt** | Uses mbox or Maildir natively — add the mbox file or folder directly |
-| **Proton Mail** | Use Proton Mail Bridge (IMAP) → Thunderbird → AI Prowler |
-| **Fastmail** | Settings → Export → mbox per folder |
-| **Zoho Mail** | Settings → Data Migration → Export → mbox |
+* `-1` = auto (let Ollama decide)
+* `0` = CPU only
+* `N` = N layers on GPU
 
----
+\---
 
-## 11. OCR — Scanned PDFs & Images
+## 16\. Debugging \& Log Files
 
-AI Prowler automatically OCRs any document where the text layer is missing or too short.
+AI-Prowler maintains comprehensive logs for troubleshooting. This section covers all log files, what they contain, and how to use them.
 
-### What Gets OCRed
+### Log File Locations
 
-- **Scanned PDFs** — contracts, court documents, manuals, old reports, living trusts
-- **Image files** — `.jpg`, `.jpeg`, `.png`, `.bmp`, `.tiff`, `.tif`, `.gif`
+|Log File|Location|Contents|
+|-|-|-|
+|Install log|`%LOCALAPPDATA%\\Temp\\AI-Prowler\\install\_log.txt`|Full installer output, package installs, errors|
+|Uninstall log|`%LOCALAPPDATA%\\Temp\\AI-Prowler\\uninstall\_log.txt`|Uninstall steps and cleanup results|
+|MCP server log|`%LOCALAPPDATA%\\AI-Prowler\\mcp\_server.log`|All MCP server activity (current session)|
+|MCP server log (prev)|`%LOCALAPPDATA%\\AI-Prowler\\mcp\_server.log.1`|Previous session log|
+|MCP server log (older)|`%LOCALAPPDATA%\\AI-Prowler\\mcp\_server.log.2`|Two sessions ago|
+|Subscription cache|`%LOCALAPPDATA%\\AI-Prowler\\subs\_cache.json`|Cached subscription registry|
 
-### How It Works
+Open `%LOCALAPPDATA%` by pressing Win + R and typing `%LOCALAPPDATA%`.
 
-1. `pdfplumber` attempts to extract the text layer from each PDF page
-2. If fewer than 150 characters are found, the page is treated as image-only
-3. `pypdfium2` renders the page at 300 DPI to a PIL image
-4. `pytesseract` (Tesseract 5.4 OCR engine) extracts the text
-5. The extracted text is chunked and indexed normally
+### MCP Server Log
 
-### Verifying OCR Status
+The MCP log (`mcp\_server.log`) is the most useful for debugging Claude Desktop and Claude.ai connection issues. It captures:
 
-Go to **Settings → OCR — Scanned PDFs & Image Files**:
-- ✅ **OCR active — Tesseract detected** — everything is working
-- ⚠️ **Tesseract binary not found** — reinstall AI Prowler to restore Tesseract
-
----
-
-## 12. GPU Acceleration
-
-AI Prowler uses the GPU in two places:
-
-| Component | GPU support |
-|-----------|-------------|
-| Sentence embeddings (indexing & search) | ✅ NVIDIA CUDA — automatic via PyTorch |
-| LLM inference (Ollama) | ✅ NVIDIA CUDA — controlled by GPU Layers setting |
-
-### Checking GPU Status
-
-Go to **Settings → GPU Acceleration** and click **🔍 Detect GPU**. The output shows:
-- GPU model and VRAM
-- Whether the embedding model is using CUDA
-- Whether Ollama's LLM is running on GPU or CPU
-- How much VRAM the loaded model is occupying
-
-### Updating Ollama for New GPUs
-
-If you upgrade your GPU to a newer architecture, run the AI Prowler installer again. It always downloads the latest Ollama, which includes support for newer GPU architectures. After reinstalling, click **✅ Apply & Reload** in Settings to reload the model with GPU support.
-
-### GPU Layers Explained
-
-- **-1 (auto)** — let Ollama decide how many layers fit in VRAM (recommended)
-- **0** — force CPU inference (use if GPU is causing errors)
-- **1–99** — manual partial offload (advanced: tune if VRAM is limited)
-
----
-
-## 13. Supported File Types
-
-### Documents & Text
-`.txt` `.md` `.rst` `.rtf` `.odt` `.pdf` `.docx` `.doc` `.xlsx` `.xls` `.pptx` `.ppt`
-
-### Code & Markup
-`.py` `.js` `.ts` `.jsx` `.tsx` `.cs` `.java` `.cpp` `.c` `.h` `.hpp` `.go` `.rs` `.rb` `.php` `.swift` `.kt` `.scala` `.r` `.html` `.htm` `.css` `.scss` `.sass` `.less` `.xml` `.xhtml`
-
-### Data & Config
-`.json` `.yaml` `.yml` `.toml` `.ini` `.cfg` `.conf` `.env` `.csv` `.tsv` `.log` `.sql`
-
-### Images *(OCR — text is extracted)*
-`.jpg` `.jpeg` `.png` `.bmp` `.tiff` `.tif` `.gif`
-
-### Email
-`.eml` `.msg` `.emlx` `.mbox` `.rmail` `.babyl` `.mmdf`
-
-### Scripts
-`.sh` `.bash` `.zsh` `.ps1` `.bat` `.cmd` `.gitignore` `.dockerignore` `.editorconfig`
-
-### Not Indexed *(skipped by default)*
-Executables, DLLs, archives (`.zip`, `.rar`, `.7z`), audio/video, design files (`.psd`, `.ai`), database files, and other binary formats. Customise the skip list in the **🗂 Smart Scan** tab.
-
----
-
-## 14. Scheduling Automatic Updates
-
-The **⏰ Schedule** tab configures AI Prowler to re-index your documents automatically via Windows Task Scheduler.
-
-### Recommended Schedules
-
-| Use case | Recommended schedule |
-|----------|---------------------|
-| Actively changing documents | Daily at 08:00 weekdays |
-| Stable documents + email | Weekly on Monday at 08:00 |
-| Thunderbird sync | Daily (Thunderbird updates live) |
-| Large Gmail archive | Weekly (re-export monthly, update daily) |
-
-### What the Schedule Runs
-
-The scheduled task calls `rag_preprocessor.py auto-update`, which runs the full change-detection pipeline against all tracked directories. Only changed files are re-processed — unchanged files are skipped instantly, making weekly updates fast even on large collections.
-
----
-
-## 15. Command Line (Advanced)
-
-All core functions are available without the GUI:
-
-```bash
-# Index a directory (recursive by default)
-python "C:\Program Files\AI-Prowler\rag_preprocessor.py" index "C:\Users\YourName\Documents"
-
-# Ask a question
-python "C:\Program Files\AI-Prowler\rag_preprocessor.py" query "What is in my documents?"
-
-# List indexed files
-python "C:\Program Files\AI-Prowler\rag_preprocessor.py" list
-
-# Show database statistics
-python "C:\Program Files\AI-Prowler\rag_preprocessor.py" stats
-
-# Scan a directory for changes without updating
-python "C:\Program Files\AI-Prowler\rag_preprocessor.py" check "C:\Users\YourName\Documents"
-
-# Update only changed files in a directory
-python "C:\Program Files\AI-Prowler\rag_preprocessor.py" update "C:\Users\YourName\Documents"
-
-# Auto-update all tracked directories
-python "C:\Program Files\AI-Prowler\rag_preprocessor.py" auto-update
-
-# Change the active AI model
-python "C:\Program Files\AI-Prowler\rag_preprocessor.py" model llama3.1:8b
-
-# Clear the entire database
-python "C:\Program Files\AI-Prowler\rag_preprocessor.py" clear
+**Startup sequence:**
+
+```
+AI-Prowler MCP server process started
+Python : 3.11.8
+Script : C:\\Program Files\\AI-Prowler\\ai\_prowler\_mcp.py
+Importing MCP SDK (FastMCP)... OK
+Importing rag\_preprocessor... OK
+FastMCP created with instructions= (mcp >= 1.2.0)
 ```
 
-Use `%LocalAppData%\Programs\Python\Python311\python.exe` if `python` is not on your PATH.
+**stdio mode protection (Claude Desktop):**
 
----
+```
+STDIO mode: \_STDIO\_MODE=True — \_capture\_stdout() is now a no-op
+STDIO mode: sys.stdout redirected to devnull — MCP pipe protected
+Starting stdio transport (Claude Desktop mode)
+```
 
-## 16. Privacy & Security
+**Every incoming request (HTTP mode):**
 
-**AI Prowler is local-first. Cloud AI is entirely opt-in.**
+```
+REQUEST  POST /mcp
+HEADERS from Claude.ai (POST /mcp):
+  host: mobile.dvavro-ai-prowler.com
+  authorization: Bearer xxxxxxxx...
+  content-type: application/json
+AUTH OK  -> mcp\_asgi  (POST /mcp)
+FASTMCP RESPONSE: POST /mcp → HTTP 200
+```
 
-| ✅ AI Prowler does | ❌ AI Prowler does NOT |
-|-------------------|----------------------|
-| Run 100% offline by default | Upload your documents anywhere |
-| Store all data on your hard drive | Collect telemetry or usage analytics |
-| Keep API keys in your local config file | Phone home or require an account |
-| Use Ollama for local-only LLM inference | Send original files to cloud providers |
-| Send only question text + excerpts to cloud | Share any data with third parties |
+**Tool calls:**
 
-When you use a cloud AI provider, only these things leave your machine:
-1. Your question text
-2. Short retrieved excerpts from your indexed documents (typically 1–3 paragraphs per chunk)
+```
+Processing request of type ListToolsRequest
+Dispatching request of type CallToolRequest
+Response sent
+```
 
-Your original source files are never transmitted.
+**Subscription checks:**
 
-> **API keys** are stored in `%UserProfile%\.rag_config.json` under your user home folder — not in the AI Prowler installation folder, and not transmitted anywhere other than to the provider you explicitly selected.
+```
+Subscription registry fetched from GitHub OK
+Startup subscription check: Subscription OK — 'ACME Corp', 25 day(s) remaining
+```
 
----
+**Errors:**
 
-## 17. Troubleshooting
+```
+AUTH FAIL: no valid Bearer token for POST /mcp
+SUBSCRIPTION EXPIRED: subscription for 'ACME Corp' expired 5 days ago
+```
 
-### Installation
+### Log Rotation
 
-| Problem | Solution |
-|---------|---------|
-| Install fails / Python not found | Ensure 6 GB free space; run installer as Administrator |
-| Package install failed | Check internet connection and re-run the installer |
-| Ollama not installed | Download from [ollama.com/download/windows](https://ollama.com/download/windows) or re-run the installer |
-| Whisper download failed | Non-critical — model downloads on first mic button use |
-| Any install error | Open `%LocalAppData%\Temp\AI-Prowler\install_log.txt` for the exact error and return codes |
+The MCP log rotates on each server start:
 
-### GUI
+* `mcp\_server.log` — current session
+* `mcp\_server.log.1` — previous session
+* `mcp\_server.log.2` — two sessions ago
 
-| Problem | Solution |
-|---------|---------|
-| GUI won't open | Run `python rag_gui.py` from Command Prompt to see the error message |
-| "Could not import AI Prowler modules" | Ensure `rag_preprocessor.py` is in `C:\Program Files\AI-Prowler\` |
-| Microphone button missing | Packages are installed by default — if missing, run `pip install faster-whisper sounddevice numpy` and restart |
-| Tab appears blank | Try launching via `RAG_RUN.bat` instead of the desktop icon |
-| Status indicator stays grey | Click **⚡ Load AI Model** or check that Ollama is running |
-| Settings not saving | Verify write access to your home folder (`C:\Users\YourName\`) |
+This means restarting the server creates a new log, preserving the last two sessions for comparison.
 
-### Indexing
+### Install Log
 
-| Problem | Solution |
-|---------|---------|
-| Indexing error: Errno 22 Invalid argument | AI Prowler detects this automatically and repairs the model cache on the next run. If it persists, delete `%UserProfile%\.cache\huggingface\hub\models--sentence-transformers--all-MiniLM-L6-v2` and restart |
-| OCR not working / scanned PDFs not indexed | Go to Settings → OCR. If Tesseract not found, reinstall AI Prowler |
-| Large .mbox import is slow | Normal for first import — per-message progress shows in output. Use Stop/Resume to spread across sessions |
-| Stop button slow to respond | Stop responds after each individual message — current message is still processing |
-| Re-importing same .mbox re-indexes everything | Check that the archive file path hasn't changed — the incremental indexer tracks by path + Message-ID |
+The install log captures every step of the installation process with return codes:
 
-### Queries
+```
+\[Python] Installing Python 3.11.8...
+\[Python] Return code: 0  Status: SUCCESS
+\[pip] Installing requirements.txt...
+\[Claude Desktop] Downloading MSIX package...
+\[MCP Config] Writing claude\_desktop\_config.json...
+\[Summary] Install complete
+```
 
-| Problem | Solution |
-|---------|---------|
-| "No documents found. Index some documents first." | Go to Index Documents, add a folder, and click Start Indexing |
-| First query takes 2–3 minutes | Normal — AI model is loading into memory for the first time. Use ⚡ Load AI Model to pre-warm |
-| "Cannot connect to Ollama" | Enable Auto-start Ollama in Settings, or open Command Prompt and run `ollama serve` |
-| Answers are vague or off-topic | Try a larger model or increase Context Chunks; enable Show source references to see what was retrieved |
-| Context chunks ⚠reload is very slow | Expected on CPU-only systems for >6 chunks — use a GPU or limit chunks to 5 or fewer |
+If installation fails, this log shows exactly which step failed and why.
 
-### Cloud AI Providers
+### Debug View in GUI
 
-| Problem | Solution |
-|---------|---------|
-| 🔌 Test shows "Invalid API key" | Double-check the key was copied fully with no spaces; regenerate if needed |
-| Provider returns HTTP 429 | Rate limit reached — AI Prowler notes the timeout and falls back to local Ollama |
-| Image attachments not working | Confirm you are using a cloud provider with vision support (ChatGPT, Claude, Gemini) |
-| Auto-fallback kicked in | The selected provider failed; answer came from local Ollama. Check the status dot in Settings |
+In the Ask Questions tab, enable **Debug View** (toggle in toolbar) to see:
 
-### Ollama Server
+* Which document chunks were retrieved for each query
+* Similarity scores for each chunk
+* The full prompt sent to the LLM
+* Raw LLM response before formatting
 
-| Problem | Solution |
-|---------|---------|
-| No CMD window on startup | Expected when Debug View is OFF — Ollama runs silently in background |
-| Ollama CMD window closed by accident | Re-enable auto-start and restart AI Prowler, or run `ollama serve` manually |
-| "ollama is not recognized as a command" | Use AI Prowler's built-in controls; Ollama installs to LocalAppData, not system PATH |
-| Ollama LLM: Running on CPU (0 bytes in VRAM) | Your Ollama version doesn't support your GPU — re-run the installer and click Apply & Reload |
+### OCR Debug Tool
 
-### Scheduling
+In **Settings**, the **OCR Debug** button lets you test OCR on any file:
 
-| Problem | Solution |
-|---------|---------|
-| Schedule not running | Check the Schedule tab shows "✅ Schedule Active" and verify Task Scheduler is running |
-| Can't create schedule | Right-click AI Prowler → Run as administrator |
-| Schedule shows wrong time | Remove and recreate; check Windows time zone settings |
+1. Click OCR Debug
+2. Select a scanned PDF or image file
+3. The extracted text is displayed in a preview window
+4. Use this to verify OCR quality before indexing
 
----
+### Checking What's in the Knowledge Base
 
-## 18. Tips & Best Practices
+Ask Claude (via MCP):
 
-### Indexing
+```
+Call get\_database\_stats() to show me what's in the knowledge base.
+```
 
-✅ Use **Pre-scan first** on any unfamiliar large folder before committing  
-✅ Start with one focused project folder to test, then expand  
-✅ Use **Pause/Stop freely** — progress is always saved and resumable  
-✅ For email, keep exported archives in a dedicated folder and re-export periodically  
-✅ Schedule weekly re-imports for actively-used mailboxes (Thunderbird especially)  
+Or from the Update Index tab, click **Show Stats**.
 
-❌ Don't index your entire C:\ drive  
-❌ Don't index temp folders, Downloads, or the Recycle Bin  
-❌ Don't run indexing and querying at the same time on low-RAM machines  
+### Common Debug Workflow
 
-### Queries
+**Problem: Claude says it can't find information that should be indexed**
 
-✅ Use complete natural-language questions — not single keywords  
-✅ Reference document names or dates when you know them  
-✅ Keep **Context Chunks at Auto (3)** or 3–5 for everyday use  
-✅ Only increase to ⚠reload chunks when you need broad coverage — be prepared to wait on CPU  
-✅ Use **voice input** for longer or more natural questions  
-✅ Click **⚡ Load AI Model** when you open AI Prowler to pre-warm while you work on another tab  
-✅ Enable **File Output Mode** when asking the AI to write or modify code  
+1. Open `mcp\_server.log` and find the tool call for `search\_documents`
+2. Check the similarity scores returned — if all are below 0.3, the content may not be well-represented
+3. Try `list\_indexed\_documents()` to verify the file is actually indexed
+4. Try `get\_document\_chunks("filename.pdf")` to see the raw extracted text — OCR issues may have degraded the content
 
-❌ Don't ask about content that hasn't been indexed yet  
-❌ Don't use 70b+ models unless you have 32+ GB RAM  
+**Problem: Claude Desktop shows "response was interrupted" on tool calls**
 
-### Cloud AI Providers
+1. Check `mcp\_server.log` for the stdio mode protection lines:
 
-✅ Try **Gemini or Llama API** first — both have free tiers and are easy to set up  
-✅ Use cloud providers for complex multi-document questions that need higher reasoning quality  
-✅ Use **image attachments** with ChatGPT, Claude, or Gemini for screenshot analysis  
-✅ Keep **Auto-fallback ON** so queries always get an answer  
+   * `STDIO mode: \_STDIO\_MODE=True` — should be present
+   * `STDIO mode: sys.stdout redirected to devnull` — should be present
+2. If these lines are missing, the fixed `ai\_prowler\_mcp.py` may not have been deployed
+3. Run **🔬 Run MCP Diagnostics** from the Settings tab for a full health check
+4. Re-write the MCP config and restart Claude Desktop
 
-❌ Don't put API keys anywhere other than the Settings → External AI APIs fields  
-❌ Don't send highly sensitive personal data via cloud providers — use Local Ollama for maximum privacy  
+**Problem: Claude.ai connector shows "not subscribed" even after subscribing**
 
-### Email
+1. Check `mcp\_server.log` for subscription check lines
+2. Look for "Subscription registry fetch failed" — network issue
+3. Check `subs\_cache.json` for the cached data
+4. Verify your Bearer token matches what was registered
 
-✅ Export by label/folder from Gmail rather than "All Mail" if you only need specific content  
-✅ Keep archive files at a stable path — the incremental indexer deduplicates by path + Message-ID  
-✅ Use the per-message progress counter to estimate time for very large archives  
-✅ Schedule **Thunderbird folder** scans daily — new mail arrives continuously  
+**Problem: HTTP server returns 421**
 
-❌ Don't delete and recreate archive files unnecessarily — the incremental engine works best when file paths stay stable  
+This means a header mismatch between Claude.ai and the server. Check `mcp\_server.log` for:
 
----
+* `REWRITE Host` lines — confirm host rewriting is active
+* `INJECT MCP-Protocol-Version` lines — confirms protocol version injection is working
+* `Invalid Host header` — the fix may not have applied
+* `FASTMCP RESPONSE: POST /mcp → HTTP 421` — server version mismatch
 
-## 19. Frequently Asked Questions
+**Problem: Install failed**
 
-**Q: Do I need an API key or account?**  
-No — everything runs locally with no accounts, keys, or registration. Cloud AI providers are entirely optional.
+Open `%LOCALAPPDATA%\\Temp\\AI-Prowler\\install\_log.txt` and search for `Status: FAILURE`. The lines around the failure show the exact command that failed and any error output.
 
-**Q: Does this work offline?**  
-Yes — 100% offline by default. Cloud providers obviously need an internet connection, but local Ollama queries work with no network at all.
+\---
 
-**Q: Is my data private?**  
-Completely private when using local Ollama. When you use a cloud provider, only your question and retrieved excerpts are sent — your original files never leave your computer.
+## 17\. Troubleshooting
 
-**Q: How much does it cost?**  
-The app is free. Local Ollama is free. Cloud providers are billed by the provider — Gemini and Llama API have generous free tiers.
+### Claude Desktop can't see AI-Prowler tools
 
-**Q: Does it need a GPU?**  
-No. The default model runs well on CPU-only hardware. A GPU significantly speeds up larger models.
+1. Check that AI-Prowler is installed in `C:\\Program Files\\AI-Prowler\\`
+2. In AI-Prowler → Settings → Claude Desktop MCP → click **Write MCP Config**
+3. Restart Claude Desktop completely (check Task Manager for `claude.exe`)
+4. Start a **new conversation** (not an existing one)
+5. If still failing, click **🔬 Run MCP Diagnostics** for a detailed health report
 
-**Q: How many documents can I index?**  
-Thousands — limited only by available disk space.
+### Claude Desktop shows "response was interrupted"
 
-**Q: My Gmail export is 8 GB. Will AI Prowler handle it?**  
-Yes. The incremental indexer processes messages one at a time with Stop/Resume support, so you can spread a large initial import over multiple sessions. Future re-imports only process new messages.
+This is caused by stdout corruption on the MCP pipe. Ensure you are running the latest `ai\_prowler\_mcp.py` which includes the stdio protection fix. Confirm by checking `mcp\_server.log` for the two lines:
 
-**Q: Do I need to re-index everything when files change?**  
-No — the Update Index tab re-indexes only new and changed files. For email archives, only new messages are processed.
+```
+STDIO mode: \_STDIO\_MODE=True — \_capture\_stdout() is now a no-op
+STDIO mode: sys.stdout redirected to devnull — MCP pipe protected
+```
 
-**Q: What if my computer is off when a schedule is due?**  
-Windows Task Scheduler runs the task the next time the computer is on and the trigger time is reached.
+If these are absent, copy the latest `ai\_prowler\_mcp.py` to `C:\\Program Files\\AI-Prowler\\` and restart Claude Desktop.
 
-**Q: Can I use a different AI model?**  
-Yes — any Ollama-compatible model works. Install it from Settings → Browse & Install Model.
+### Claude.ai connector fails with "MCP server error"
 
-**Q: What does the Auto-start Ollama option do?**  
-When enabled, AI Prowler automatically launches the Ollama server when you open the app and shuts it down on exit. The server window is hidden by default — enable Debug View in Settings if you need to see it.
+Check the `mcp\_server.log` for the specific error. Common causes:
 
-**Q: What is the ⚡ Load AI Model button for?**  
-It manually triggers the model pre-warm so the AI is ready before you type your first question. The model loads automatically when you switch to the Ask Questions tab, but this button lets you start loading earlier while you're on another tab.
+* HTTP server not running — click Start HTTP Server
+* Cloudflare Tunnel not running — click Start Tunnel
+* Bearer token mismatch — re-enter your token in Settings and in Claude.ai
 
-**Q: What does File Output Mode do?**  
-It instructs the AI to label any code or script files it writes with a filename. AI Prowler then detects those filenames in the answer and shows a 💾 Save button for each one — eliminating copy-paste for code file answers.
+### Indexing is slow
 
-**Q: What context chunks setting should I use?**  
-"Auto (3)" is the best default — it calculates the optimal number for your model. Increase to 5–6 for broader questions. Only use ⚠reload values (7+) when you need wide coverage and can wait for the model to reload on CPU.
+* Enable GPU in Settings if you have an NVIDIA card
+* Reduce the chunk size in Settings (smaller chunks = faster indexing, less context per chunk)
+* Use Smart Scan to skip file types you don't need
 
----
+### OCR produces garbled text
 
-## 20. Uninstalling
+* Check image resolution — very low DPI scans may not OCR well
+* Use OCR Debug to preview the extraction before indexing
+* For critical documents, try re-scanning at higher resolution
 
-Run the AI Prowler uninstaller from **Windows Settings → Apps → AI-Prowler → Uninstall**, or from `C:\Program Files\AI-Prowler\`.
+### Errno 22 / double backslash error on indexing
 
-The uninstaller will:
+This is a known `huggingface\_hub` bug on some Windows 10 builds. The `RAG\_RUN.bat` launcher sets `HF\_HUB\_CACHE` explicitly to prevent this. If it persists after reinstall run the following commands:
 
-| Step | What is removed |
-|------|----------------|
-| 1 | Windows Task Scheduler task |
-| 2 | Desktop shortcut and Start Menu entry |
-| 3 | AI Prowler entry from Windows PATH |
-| 4 | Config files (`.rag_config.json`, tracking files, email index, etc.) |
-| 5 | ChromaDB database — **asks for confirmation before deleting** |
-| 6 | AI Prowler program files from `C:\Program Files\AI-Prowler\` |
-| 7 | Python 3.11 (if installed by AI Prowler) |
-| 8 | Ollama engine and optionally its model files |
-| 9 | Whisper model cache — targets only the AI Prowler model, leaving other HuggingFace models untouched |
+```
+Win + R → type cmd → Enter
+%LOCALAPPDATA%\\Programs\\Python\\Python311\\python.exe -m pip uninstall huggingface-hub
+rmdir /s /q "%USERPROFILE%\\.cache\\huggingface\\hub\\models--sentence-transformers--all-MiniLM-L6-v2"
+%LOCALAPPDATA%\\Programs\\Python\\Python311\\python.exe -m pip install huggingface-hub==0.26.5
+```
 
-Python packages are intentionally kept during uninstall to avoid breaking other programs. Remove Python separately via Settings → Apps if needed.
+### Stale packages from Roaming site-packages
 
-### Manual Removal
+If you see unexpected import errors or wrong package versions after a reinstall, the `PYTHONNOUSERSITE=1` variable in `RAG\_RUN.bat` prevents Python from loading packages from `%APPDATA%\\Roaming\\Python`. This is set automatically. If running the script directly without the bat file, set this variable manually.
 
-If the uninstaller is not available, delete:
-- `C:\Program Files\AI-Prowler\`
-- From your home folder: `.rag_config.json`, `.rag_auto_update_dirs.json`, `.rag_file_tracking.json`, `.rag_email_index.json`, `rag_auto_update.bat`
-- Desktop shortcut: `AI Prowler.lnk`
-- Task Scheduler task: open Task Scheduler from Start menu → find and delete the "AI Prowler Auto-Update" task
-- Whisper cache: `%UserProfile%\.cache\huggingface\hub\models--Systran--faster-whisper-large-v3-turbo\`
+### Voice input not working
 
----
+The Whisper model downloads on first use (\~1.6 GB). Ensure internet access on first mic use. If it fails, check that `sounddevice` is installed: run `pip list | grep sounddevice`. Adjust the silence timeout in Settings if speech is being cut off too early.
 
-## 21. File & Folder Reference
+\---
 
-| File / Folder | Purpose |
-|---------------|---------|
-| `C:\Program Files\AI-Prowler\rag_gui.py` | Main GUI application |
-| `C:\Program Files\AI-Prowler\rag_preprocessor.py` | Core indexing and query engine |
-| `C:\Program Files\AI-Prowler\RAG_RUN.bat` | Launch script (used by the Desktop shortcut) |
-| `C:\Program Files\AI-Prowler\requirements.txt` | Python package list |
-| `C:\Program Files\AI-Prowler\COMPLETE_USER_GUIDE.md` | This document |
-| `%UserProfile%\.rag_config.json` | All settings (model, GPU layers, API keys, etc.) |
-| `%UserProfile%\AI-Prowler\rag_database\` | ChromaDB vector database |
-| `%UserProfile%\.rag_file_tracking.json` | File modification baselines for change detection |
-| `%UserProfile%\.rag_auto_update_dirs.json` | List of tracked directories |
-| `%UserProfile%\.rag_email_index.json` | Per-email Message-ID tracking database |
-| `%UserProfile%\.ollama\models\` | Downloaded Ollama models |
-| `%UserProfile%\.cache\huggingface\hub\` | Sentence-transformer embedding model cache |
-| `%LocalAppData%\Programs\Python\Python311\` | Python runtime |
-| `%LocalAppData%\Programs\Tesseract-OCR\` | Tesseract OCR engine |
-| `%LocalAppData%\Programs\Ollama\` | Ollama engine |
-| `%LocalAppData%\Temp\AI-Prowler\install_log.txt` | Full installer log — first place to look when troubleshooting |
+## 18\. Uninstalling
 
----
+### Using the Uninstaller
 
-## 22. Version History
+Run `UNINSTALL.bat` from `C:\\Program Files\\AI-Prowler\\` or use Windows Settings → Add or Remove Programs → AI-Prowler.
 
-### Version 3.0.0 (Current)
+The uninstaller:
 
-**New features:**
-- 🔧 **Professional Windows installer** — `AI-Prowler_INSTALL.exe` replaces `INSTALL.bat`. Full Inno Setup installer with license agreement, progress bar, Start Menu and Desktop shortcuts. Handles Python, pip, Tesseract OCR, Ollama, and the default model in a single step.
-- 🖨 **Tesseract OCR integration** — scanned PDFs and image files (`.jpg`, `.png`, `.bmp`, `.tiff`, `.gif`) are automatically OCR'd and indexed using Tesseract 5.4 (UB-Mannheim build). No manual setup required — the installer downloads and configures Tesseract automatically.
-- ⚡ **RTX 50xx Blackwell support** — GPU detection now installs CUDA 12.8 / cu128 PyTorch on NVIDIA Blackwell cards (RTX 5060, 5070, 5080, 5090) for full GPU acceleration.
-- 🔑 **`HF_HUB_CACHE` env var fix** — prevents the Windows 10 Errno 22 double-backslash path bug in huggingface_hub that caused indexing to fail silently after install.
-- 🛠 **Self-healing model cache** — if a corrupted model cache is detected at startup (Errno 22), the app automatically deletes it and re-downloads a clean copy. Users see a clear message in the output panel; no manual intervention is required.
-- 📦 **Pinned package versions** — `huggingface-hub==0.26.5`, `sentence-transformers==3.3.1`, and `transformers==4.44.2` are pinned together to prevent the double-backslash path bug and eliminate the 20-version pip backtracking that made installs slow and nondeterministic.
+* Removes all AI-Prowler application files
+* Removes Python (if installed by AI-Prowler)
+* Offers to remove the RAG database (your indexed document data)
+* Offers to remove Ollama and downloaded models
 
----
+The uninstall log is saved to `%LOCALAPPDATA%\\Temp\\AI-Prowler\\uninstall\_log.txt`.
 
-### Version 2.0
+### Manual Cleanup
 
-**New features:**
-- ☁️ **External AI APIs** — six cloud providers integrated: ChatGPT, Claude, Gemini, Grok, Llama API, Mistral Large
-- 🔄 **Auto-fallback** — transparent fallback to local Ollama if a cloud provider fails
-- 📎 **Attachments panel** — attach images and text files to questions
-- 📄 **File Output Mode** — AI-labelled code blocks get per-file 💾 Save buttons
-- 💾 **Save Answer button** — save the full answer to `.txt` or `.md`
-- 🏅 **RAM-aware model selector** — ✅/⚠️ fit badges based on detected system RAM
-- 🔭 **Browse & Install Model** — model browser for downloading new Ollama models from within the app
-- ⚠️ **Context chunks reload warnings** — values ≥7 labelled "⚠reload" to signal model context reload
+If the uninstaller fails, manually delete:
 
----
+* `C:\\Program Files\\AI-Prowler\\` — application files
+* `%LOCALAPPDATA%\\Programs\\Python\\Python311\\` — Python
+* `%USERPROFILE%\\AI-Prowler\\` — database (if you want to keep your index, don't delete this)
+* `%LOCALAPPDATA%\\AI-Prowler\\` — logs and caches
 
-### Version 1.8
+\---
 
-**New features:**
-- 🎤 Voice input with Whisper large-v3-turbo, auto-stop silence detection
-- ⏸ Pause / Resume indexing mid-run
-- 📬 Per-email incremental indexing for `.mbox`, `.rmail`, `.babyl`, `.mmdf` with Message-ID deduplication
-- 🗂 Auto Scan Config tab — live editor for supported/skipped extensions and directories
-- 📁 Multi-folder queue with custom tree browser
-- 🔍 Pre-scan mode — preview what will be indexed before committing
-- ⚡ GPU acceleration controls — Detect GPU, set layers, Apply & Reload without restarting
+## Appendix A — MCP Protocol Version Notes
 
----
+AI-Prowler uses the **Streamable HTTP** MCP transport for Claude.ai connections and **stdio** transport for Claude Desktop. The MCP SDK version installed determines feature support:
 
-## 🎉 You're Ready!
+|Feature|Requires|
+|-|-|
+|Basic tool calls|mcp >= 1.0|
+|`instructions=` in FastMCP constructor|mcp >= 1.2.0|
+|Streamable HTTP transport|mcp >= 1.1.0|
 
-You now know how to index documents, ask questions, export and index email from every major provider, use cloud AI for higher-quality answers, set up scheduled updates, and troubleshoot every common issue.
+To check your version, ask Claude to call `how\_to\_use\_ai\_prowler()` and check the `MCP SDK version` line in the output. Or run **🔬 MCP Diagnostics** from the Settings tab.
 
-**Start exploring your documents with AI!** 🚀
+To upgrade: `pip install --upgrade mcp` in a command prompt.
 
----
+\---
 
-*AI Prowler v3.0.0 — Your Personal AI Knowledge Base*  
-*Local-first · Cloud-optional · 100% Yours*  
-*Copyright © 2026 David Kevin Vavro*
+## Appendix B — Privacy Details
+
+**What stays on your machine:**
+
+* All document content
+* The ChromaDB vector database
+* All embeddings
+* API keys and Bearer tokens
+* The AI-Prowler configuration
+
+**What leaves your machine:**
+
+* When using Claude Desktop MCP: the text of retrieved document chunks (the relevant excerpts Claude found, not your original files) and your questions
+* When using cloud API providers (Ask Questions tab): your question and retrieved document excerpts
+* Subscription check: a connection to GitHub to read the public `subs.json` file (contains only token hashes, not your data)
+
+**What is never sent anywhere:**
+
+* Your original document files
+* Full document content (only the chunks Claude retrieves are shared)
+* Your ChromaDB database
+* Your API keys or Bearer tokens
+
+\---
+
+## Appendix C — Python Dependencies
+
+Key packages and their roles:
+
+|Package|Version|Purpose|
+|-|-|-|
+|chromadb|0.6.3|Vector database for document chunks|
+|sentence-transformers|3.3.1|Embedding model (all-MiniLM-L6-v2)|
+|huggingface-hub|0.26.5|Model downloads — pinned to avoid Errno 22 bug|
+|transformers|4.44.2|Tokenizers — pinned for deterministic installs|
+|pdfplumber|>=0.10.3|PDF text extraction|
+|python-docx|>=1.1.0|Word document extraction|
+|pypdf|>=3.17.4|PDF fallback parsing|
+|pytesseract|>=0.3.10|OCR wrapper for Tesseract|
+|pypdfium2|>=4.0.0|PDF page rendering for OCR (no poppler required)|
+|pillow|>=10.0.0|Image I/O for OCR|
+|extract-msg|>=0.45.0|Outlook .msg email parsing|
+|pyspellchecker|>=0.7.2|Inline spell checking in Ask Questions tab|
+|requests|>=2.31.0|HTTP requests (subscription checks)|
+|uvicorn|>=0.29.0|ASGI server for HTTP MCP transport|
+|faster-whisper|>=1.0.0|Voice-to-text (mic input)|
+|sounddevice|>=0.4.6|Microphone audio capture|
+|numpy|>=1.24.0|Array operations for audio processing|
+|mcp|latest|MCP SDK (FastMCP) for tool server|
+
+Note: `torch` (PyTorch) is intentionally not listed in `requirements.txt`. The installer detects whether an NVIDIA GPU is present and installs the correct build automatically (CUDA or CPU-only).
+
+\---
+
+*AI-Prowler — Your Personal Agentic RAG Knowledge Base*  
+*Copyright © 2026 David Kevin Vavro · david.vavro1@gmail.com*
+

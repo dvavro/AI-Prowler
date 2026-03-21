@@ -24,10 +24,15 @@
 ;     enabling automatic OCR of scanned PDFs and image files
 ;
 ; OLLAMA INTEGRATION:
-;   - Detects existing Ollama installation
-;   - Attempts to stop Ollama service and CLI during uninstall
-;   - Attempts to remove Ollama program folder and data folder
-;   - Attempts to pull the llama3.2:1b model during install (if Ollama is present)
+;   - Ollama is OPTIONAL — NOT installed or downloaded automatically.
+;   - Ollama is available for users who want to run a local LLM for the
+;     desktop Ask Questions tab (fully offline use).
+;   - Users install Ollama and download models manually via the Settings tab
+;     → Browse & Install Model, if they choose to use local AI.
+;   - The primary recommended workflow is Claude Desktop (already installed)
+;     connected via MCP, or Claude.ai via the HTTP remote access feature.
+;   - On uninstall: if Ollama is present, attempts to stop its service and
+;     remove its program folder and data folder.
 ;
 ; LOGGING SYSTEM:
 ;   - Full install and uninstall logs stored in:
@@ -44,14 +49,36 @@
 ;   - Attempts to delete Python, Ollama, and Ollama data folders
 ;   - Prompts user whether to delete the RAG database folder
 ;
+; CLAUDE DESKTOP:
+;   - Checks for an existing Claude_* package folder in %LOCALAPPDATA%\Packages
+;   - If not found, downloads and installs Claude Desktop via MSIX package
+;     (MSIX is used because the standard EXE installer is broken on Windows 11)
+;   - User must sign in to Claude Desktop once after first launch
+;   - MCP auto-config runs after install so AI-Prowler is ready immediately
+;
+;   - Installs ai_prowler_mcp.py alongside the other app files
+;   - Installs the 'mcp' Python package (FastMCP) via pip
+;   - Automatically writes the AI-Prowler entry into
+;       %APPDATA%\Claude\claude_desktop_config.json
+;     using PowerShell JSON merge  -  preserves any other MCP servers.
+;     If Claude Desktop is not yet installed the file is pre-created
+;     so it is ready as soon as the user installs Claude Desktop.
+;   - Kills Claude Desktop before writing so changes take effect on
+;     next launch  -  user does NOT need to edit any config files.
+;   - claude_desktop_config_example.json is kept in {app} as a
+;     reference / fallback for manual repair if ever needed.
+;
 ; FILE ORGANIZATION:
-;   - All source files (RAG_RUN.bat, requirements.txt, python installer)
-;     must reside in the same directory as this .iss file at compile time.
+;   - All source files (RAG_RUN.bat, requirements.txt, python installer,
+;     ai_prowler_mcp.py) must reside in the same directory as this .iss
+;     file at compile time.
 ;
 ; NOTES:
 ;   - Installer requires admin privileges
 ;   - Installer is fully self-contained and does not require internet
-;     except for optional Ollama model pulls
+;     except for the optional Tesseract OCR download and Cloudflare Tunnel
+;   - No AI model download during install — Claude Desktop is the primary
+;     AI engine; local Ollama models can be added later from within the app
 ; ============================================================
 
 [Setup]
@@ -76,12 +103,16 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; --- Application files ---
 Source: "rag_gui.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "rag_preprocessor.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: "ai_prowler_mcp.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: "claude_desktop_config_example.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "RAG_RUN.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "requirements.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "create_shortcut.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "rag_icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "COMPLETE_USER_GUIDE.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "subscription_instructions.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "mcp_diagnostics.py"; DestDir: "{app}"; Flags: ignoreversion
 ; --- Full Python installer bundled into {app} so Exec() can find it ---
 Source: "python-3.11.8-amd64.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; NOTE: Ollama is downloaded from the internet at install time, not bundled here
@@ -168,6 +199,14 @@ const
 
   OLLAMA_URL     = 'https://ollama.com/download/OllamaSetup.exe';
   TESSERACT_URL  = 'https://github.com/UB-Mannheim/tesseract/releases/download/v5.4.0.20240606/tesseract-ocr-w64-setup-5.4.0.20240606.exe';
+  // MSIX is used instead of ClaudeSetup.exe because the EXE installer is
+  // currently broken on Windows 11 (redirects to Store and fails silently).
+  // The MSIX always installs as a Store app under %LOCALAPPDATA%\Packages\Claude_*
+  // which is exactly the path our MCP auto-config already handles.
+  CLAUDE_DESKTOP_URL   = 'https://claude.ai/api/desktop/win32/x64/msix/latest/redirect';
+  // cloudflared: Cloudflare Tunnel client — provides the public HTTPS URL
+  // that lets Claude mobile reach the local HTTP MCP server.
+  CLOUDFLARED_URL      = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe';
 
 
 // ============================================================
@@ -393,6 +432,21 @@ begin
   AppendInstallLog('=== INSTALL START ===');
 end;
 
+// ============================================================
+// HELPER: JsonEscapePath
+// Doubles every backslash in a Windows path so it is valid inside
+// a JSON string literal.  e.g.  C:\foo\bar  ->  C:\\foo\\bar
+// Used when writing claude_desktop_config_snippet.json at install time.
+// ============================================================
+function JsonEscapePath(const Path: String): String;
+var
+  S: String;
+begin
+  S := Path;
+  StringChange(S, '\', '\\');
+  Result := S;
+end;
+
 procedure CurPageChanged(CurPageID: Integer);
 begin
   // Bring every page to the front using the flash-topmost technique.
@@ -506,9 +560,11 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  PyFolder, OllamaFolder, OllamaSetup, ModelPath, TessSetup, TessFolder, TessTask, TessBat, RoamingPython: String;
+  PyFolder, ModelPath, TessSetup, TessFolder, TessTask, TessBat, RoamingPython: String;
   CfgFile: String;
-  Elapsed, WaitSeconds, TessElapsed, TessResultCode: Integer;
+  McpPythonPath, McpScriptPath, McpConfigJson, McpConfigFile: String;
+  PsFile, PsContents: String;
+  WaitSeconds, TessElapsed, TessResultCode: Integer;
   MsgDummy: DWORD;
   PythonReady: Boolean;
 begin
@@ -772,10 +828,234 @@ begin
         ExecPython('[Python] Torchvision', PyFolder,
           '-m pip install torchvision --force-reinstall --no-deps');
       end;
-    end; // end python.exe guard (pip + requirements + torch + torchvision)
+
+      // ----------------------------------------------------------
+      // MCP SDK  (progress 76)
+      // Install the FastMCP package so ai_prowler_mcp.py can run as an
+      // MCP server for Claude Desktop.  The package is small (~a few MB)
+      // and installs quickly.  Skipped automatically if already present.
+      // ----------------------------------------------------------
+      SetProgress(76, 'Installing MCP SDK for Claude Desktop integration...');
+      AppendInstallLog('[MCP] Installing mcp package (FastMCP)...');
+      ExecPython('[MCP] pip install mcp', PyFolder, '-m pip install mcp');
+
+      // uvicorn: ASGI server for the HTTP MCP transport (Remote Access feature)
+      AppendInstallLog('[Remote] Installing uvicorn for HTTP MCP transport...');
+      ExecPython('[Remote] pip install uvicorn', PyFolder, '-m pip install uvicorn>=0.29.0');
+
+      // ----------------------------------------------------------
+      // WRITE CLAUDE DESKTOP CONFIG SNIPPET
+      // Writes claude_desktop_config_snippet.json to {app} with the
+      // exact python.exe path and script path for THIS machine.
+      // The user copies the mcpServers block into:
+      //   %APPDATA%\Claude\claude_desktop_config.json
+      // and restarts Claude Desktop once to enable MCP tools.
+      // ----------------------------------------------------------
+      McpPythonPath := JsonEscapePath(PyFolder + '\python.exe');
+      McpScriptPath := JsonEscapePath(ExpandConstant('{app}') + '\ai_prowler_mcp.py');
+
+      McpConfigJson :=
+        '{' + #13#10 +
+        '  "_readme": "Copy the mcpServers block below into your Claude Desktop config file.",' + #13#10 +
+        '  "_config_location": "%APPDATA%\\\\Claude\\\\claude_desktop_config.json",' + #13#10 +
+        '  "_step1": "Open the config file above (create it if it does not exist).",' + #13#10 +
+        '  "_step2": "Add the AI-Prowler entry inside the mcpServers object.",' + #13#10 +
+        '  "_step3": "Save the file and restart Claude Desktop.",' + #13#10 +
+        '  "mcpServers": {' + #13#10 +
+        '    "AI-Prowler": {' + #13#10 +
+        '      "command": "' + McpPythonPath + '",' + #13#10 +
+        '      "args": ["' + McpScriptPath + '"],' + #13#10 +
+        '      "env": {' + #13#10 +
+        '        "PYTHONNOUSERSITE": "1",' + #13#10 +
+        '        "PYTHONIOENCODING": "utf-8"' + #13#10 +
+        '      }' + #13#10 +
+        '    }' + #13#10 +
+        '  }' + #13#10 +
+        '}';
+
+      McpConfigFile := ExpandConstant('{app}') + '\claude_desktop_config_snippet.json';
+      SaveStringToFile(McpConfigFile, McpConfigJson, False);
+      AppendInstallLog('[MCP] Wrote Claude Desktop config snippet to: ' + McpConfigFile);
+      AppendInstallLog('[MCP] Python path in snippet: ' + PyFolder + '\python.exe');
+      AppendInstallLog('[MCP] Script path in snippet: ' + ExpandConstant('{app}') + '\ai_prowler_mcp.py');
+
+      // ----------------------------------------------------------
+      // AUTO-CONFIGURE CLAUDE DESKTOP  (progress 77)
+      // Uses PowerShell JSON merge to write the AI-Prowler entry
+      // directly into %APPDATA%\Claude\claude_desktop_config.json.
+      // Handles all cases safely:
+      //   - Config file doesn't exist yet  -> creates it
+      //   - Config has no mcpServers key   -> adds it
+      //   - Config has other MCP servers   -> preserves them
+      //   - AI-Prowler entry already there -> updates paths in place
+      // Kills Claude Desktop first so it can't overwrite our edits
+      // on exit.  User just (re)launches Claude Desktop once to activate.
+      // ----------------------------------------------------------
+      SetProgress(77, 'Configuring Claude Desktop MCP integration...');
+      AppendInstallLog('[MCP] Writing AI-Prowler entry into Claude Desktop config...');
+
+      PsFile := MakeTempFile('mcp_config');
+      PsFile := Copy(PsFile, 1, Length(PsFile) - 4) + '.ps1';
+
+      PsContents :=
+        '$ErrorActionPreference = "Continue"' + #13#10 +
+        '# Stop Claude Desktop so our config edit takes effect on next launch' + #13#10 +
+        'Get-Process -Name "Claude" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue' + #13#10 +
+        'Start-Sleep -Milliseconds 500' + #13#10 +
+        '$configDir  = [Environment]::GetFolderPath("ApplicationData") + "\Claude"' + #13#10 +
+        '$configFile = $configDir + "\claude_desktop_config.json"' + #13#10 +
+        '$pythonExe  = "' + PyFolder + '\python.exe"' + #13#10 +
+        '$scriptArg  = "' + ExpandConstant('{app}') + '\ai_prowler_mcp.py"' + #13#10 +
+        'if (-not (Test-Path $configDir)) {' + #13#10 +
+        '    New-Item -ItemType Directory -Path $configDir -Force | Out-Null' + #13#10 +
+        '    Write-Host "Created Claude config directory." }' + #13#10 +
+        'if (Test-Path $configFile) {' + #13#10 +
+        '    try   { $config = Get-Content $configFile -Raw -Encoding UTF8 | ConvertFrom-Json' + #13#10 +
+        '            Write-Host "Loaded existing Claude Desktop config." }' + #13#10 +
+        '    catch { Write-Host "WARNING: Could not parse existing config - creating fresh."' + #13#10 +
+        '            $config = [PSCustomObject]@{} }' + #13#10 +
+        '} else {' + #13#10 +
+        '    $config = [PSCustomObject]@{}' + #13#10 +
+        '    Write-Host "No existing config - creating new." }' + #13#10 +
+        'if (-not $config.PSObject.Properties["mcpServers"]) {' + #13#10 +
+        '    Add-Member -InputObject $config -NotePropertyName "mcpServers" -NotePropertyValue ([PSCustomObject]@{}) }' + #13#10 +
+        '$entry = [PSCustomObject]@{' + #13#10 +
+        '    command = $pythonExe' + #13#10 +
+        '    args    = @($scriptArg)' + #13#10 +
+        '    env     = [PSCustomObject]@{ PYTHONNOUSERSITE = "1"; PYTHONIOENCODING = "utf-8" } }' + #13#10 +
+        'if ($config.mcpServers.PSObject.Properties["AI-Prowler"]) {' + #13#10 +
+        '    $config.mcpServers."AI-Prowler" = $entry' + #13#10 +
+        '    Write-Host "Updated existing AI-Prowler MCP entry." }' + #13#10 +
+        'else {' + #13#10 +
+        '    Add-Member -InputObject $config.mcpServers -NotePropertyName "AI-Prowler" -NotePropertyValue $entry' + #13#10 +
+        '    Write-Host "Added new AI-Prowler MCP entry." }' + #13#10 +
+        '$output = $config | ConvertTo-Json -Depth 10' + #13#10 +
+        '$utf8NoBom = New-Object System.Text.UTF8Encoding $false' + #13#10 +
+        '[System.IO.File]::WriteAllText($configFile, $output, $utf8NoBom)' + #13#10 +
+        'Write-Host "Claude Desktop config updated: $configFile"' + #13#10;
+
+      SaveStringToFile(PsFile, PsContents, False);
+      AppendInstallLog('[MCP] Auto-config script: ' + PsFile);
+      ExecWithLogging(True, '[MCP] Auto-config', 'powershell.exe',
+        '-NoProfile -ExecutionPolicy Bypass -File "' + PsFile + '"');
+      DeleteFileIfExists(PsFile);
+
+    end; // end python.exe guard (pip + requirements + torch + torchvision + mcp)
 
     // ----------------------------------------------------------
-    // TESSERACT OCR  (progress 55 -> 65)
+    // CLAUDE DESKTOP  (progress 78 -> 82)
+    // Downloads and installs Claude Desktop via MSIX if not already
+    // present.  The MSIX is the only reliable silent install on
+    // Windows 11 — the EXE installer is currently broken (redirects
+    // to Store and fails).  MSIX installs as a Store app under
+    // %LOCALAPPDATA%\Packages\Claude_* which our MCP auto-config
+    // already handles.  Skipped if any Claude_* package folder exists.
+    // NOTE: User must sign in to Claude Desktop once after first launch.
+    // ----------------------------------------------------------
+    begin
+      PsFile := MakeTempFile('claude_check');
+      PsFile := Copy(PsFile, 1, Length(PsFile) - 4) + '.ps1';
+      PsContents :=
+        '$found = Get-ChildItem "$env:LOCALAPPDATA\Packages" -Directory -Filter "Claude_*"' +
+          ' -ErrorAction SilentlyContinue | Select-Object -First 1' + #13#10 +
+        'if ($found) { Write-Host "FOUND" } else { Write-Host "NOT_FOUND" }' + #13#10;
+      SaveStringToFile(PsFile, PsContents, False);
+    end;
+
+    begin
+      // Run the check script and read its output to decide whether to install
+      // We re-use the ExecPython pattern but via cmd so we can capture output
+      // Use a simple file-existence check instead: if any Claude_* folder exists skip
+      if not DirExists(ExpandConstant('{%LOCALAPPDATA}') + '\Packages') then
+        AppendInstallLog('[ClaudeDesktop] Packages folder not found - assuming fresh Windows, will install.')
+      else
+        AppendInstallLog('[ClaudeDesktop] Packages folder found - checking for Claude_* ...');
+    end;
+
+    // Use Pascal to check for any Claude_* subfolder
+    begin
+      // FindFirst across Packages\Claude_* — if anything found, skip install
+      // Inno Setup Pascal doesn't have glob FindFirst so we check via a PS one-liner
+      // that writes a flag file we can test
+      PsFile := MakeTempFile('claude_detect');
+      PsFile := Copy(PsFile, 1, Length(PsFile) - 4) + '.ps1';
+      PsContents :=
+        '$pkg = Get-ChildItem "$env:LOCALAPPDATA\Packages" -Directory -Filter "Claude_*"' +
+          ' -ErrorAction SilentlyContinue | Select-Object -First 1' + #13#10 +
+        'if ($pkg) {' + #13#10 +
+        '    Write-Host "Claude Desktop already installed: $($pkg.FullName)"' + #13#10 +
+        '    exit 0 }' + #13#10 +
+        'Write-Host "Claude Desktop not found - installing via MSIX..."' + #13#10 +
+        '$msix = [System.IO.Path]::GetTempFileName() -replace "\.tmp$",".msix"' + #13#10 +
+        '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12' + #13#10 +
+        'try {' + #13#10 +
+        '    $wc = New-Object System.Net.WebClient' + #13#10 +
+        '    Write-Host "Downloading Claude Desktop MSIX..."' + #13#10 +
+        '    $wc.DownloadFile("' + CLAUDE_DESKTOP_URL + '", $msix)' + #13#10 +
+        '    Write-Host "Download complete: $msix ($([math]::Round((Get-Item $msix).Length/1MB,1)) MB)"' + #13#10 +
+        '} catch {' + #13#10 +
+        '    Write-Host "WARNING: Download failed: $_"' + #13#10 +
+        '    exit 1 }' + #13#10 +
+        'try {' + #13#10 +
+        '    Write-Host "Installing MSIX package..."' + #13#10 +
+        '    Add-AppxPackage -Path $msix -ErrorAction Stop' + #13#10 +
+        '    Write-Host "Claude Desktop installed successfully."' + #13#10 +
+        '} catch {' + #13#10 +
+        '    Write-Host "WARNING: MSIX install failed: $_"' + #13#10 +
+        '    Write-Host "User can install Claude Desktop manually from https://claude.ai/download"' + #13#10 +
+        '} finally {' + #13#10 +
+        '    Remove-Item $msix -ErrorAction SilentlyContinue }' + #13#10;
+
+      SaveStringToFile(PsFile, PsContents, False);
+      SetProgress(78, 'Installing Claude Desktop...');
+      AppendInstallLog('[ClaudeDesktop] Running install script: ' + PsFile);
+      ExecWithLogging(True, '[ClaudeDesktop]', 'powershell.exe',
+        '-NoProfile -ExecutionPolicy Bypass -File "' + PsFile + '"');
+      DeleteFileIfExists(PsFile);
+      SetProgress(82, 'Claude Desktop ready.');
+
+      // ----------------------------------------------------------
+      // CLAUDE DESKTOP SHORTCUT
+      // MSIX installs only add to Start Menu — no desktop shortcut.
+      // This PS step finds Claude.exe dynamically inside the Packages
+      // folder and creates a desktop shortcut for the current user.
+      // Also pins to taskbar via the shell verb (best-effort — Windows
+      // removed the reliable pin API in Win10 1809 so we use the
+      // shell verb fallback which works on most machines).
+      // ----------------------------------------------------------
+      AppendInstallLog('[ClaudeDesktop] Creating desktop shortcut...');
+      PsFile := MakeTempFile('claude_shortcut');
+      PsFile := Copy(PsFile, 1, Length(PsFile) - 4) + '.ps1';
+      PsContents :=
+        '$ErrorActionPreference = "Continue"' + #13#10 +
+        '# Find Claude.exe inside the Store package folder' + #13#10 +
+        '$pkg = Get-ChildItem "$env:LOCALAPPDATA\Packages" -Directory -Filter "Claude_*"' +
+          ' -ErrorAction SilentlyContinue | Select-Object -First 1' + #13#10 +
+        'if (-not $pkg) { Write-Host "Claude package folder not found - skipping shortcut."; exit 0 }' + #13#10 +
+        '$claudeExe = Get-ChildItem $pkg.FullName -Recurse -Filter "Claude.exe"' +
+          ' -ErrorAction SilentlyContinue | Select-Object -First 1' + #13#10 +
+        'if (-not $claudeExe) { Write-Host "Claude.exe not found in package - skipping shortcut."; exit 0 }' + #13#10 +
+        'Write-Host "Found Claude.exe: $($claudeExe.FullName)"' + #13#10 +
+        '# Create desktop shortcut' + #13#10 +
+        '$desktop  = [Environment]::GetFolderPath("Desktop")' + #13#10 +
+        '$shortcut = "$desktop\Claude.lnk"' + #13#10 +
+        '$wsh = New-Object -ComObject WScript.Shell' + #13#10 +
+        '$lnk = $wsh.CreateShortcut($shortcut)' + #13#10 +
+        '$lnk.TargetPath      = $claudeExe.FullName' + #13#10 +
+        '$lnk.WorkingDirectory = $claudeExe.DirectoryName' + #13#10 +
+        '$lnk.Description     = "Claude Desktop"' + #13#10 +
+        '$lnk.Save()' + #13#10 +
+        'Write-Host "Desktop shortcut created: $shortcut"' + #13#10;
+
+      SaveStringToFile(PsFile, PsContents, False);
+      AppendInstallLog('[ClaudeDesktop] Shortcut script: ' + PsFile);
+      ExecWithLogging(True, '[ClaudeDesktop] Shortcut', 'powershell.exe',
+        '-NoProfile -ExecutionPolicy Bypass -File "' + PsFile + '"');
+      DeleteFileIfExists(PsFile);
+    end;
+
+    // ----------------------------------------------------------
+    // TESSERACT OCR  (progress 83 -> 87)
     // Download and silently install UB-Mannheim Tesseract 5.x.
     // Required for OCR of scanned PDFs and image files.
     // Skipped if already installed (registry key check).
@@ -784,7 +1064,7 @@ begin
        not RegKeyExists(HKLM, 'SOFTWARE\Tesseract-OCR') and
        not RegKeyExists(HKLM, 'SOFTWARE\WOW6432Node\Tesseract-OCR') then
     begin
-      SetProgress(55, 'Downloading Tesseract OCR...');
+      SetProgress(83, 'Downloading Tesseract OCR...');
       AppendInstallLog('[Tesseract] Not found  -  downloading installer...');
       TessSetup := ExpandConstant('{tmp}\tesseract-setup.exe');
 
@@ -800,7 +1080,7 @@ begin
 
       if FileExists(TessSetup) then
       begin
-        SetProgress(60, 'Installing Tesseract OCR...');
+        SetProgress(85, 'Installing Tesseract OCR...');
         AppendInstallLog('[Tesseract] Running installer silently...');
         // NSIS silent install flags:
         //   /S       = fully silent  -  suppresses ALL pages including license
@@ -882,73 +1162,29 @@ begin
           AppendInstallLog('[Tesseract] OCR of scanned PDFs will be unavailable.');
           AppendInstallLog('[Tesseract] To fix: download and install Tesseract manually from:');
           AppendInstallLog('[Tesseract]   ' + TESSERACT_URL);
-          SetProgress(62, 'Tesseract install failed - OCR unavailable. See install_log.txt.');
+          SetProgress(86, 'Tesseract install failed - OCR unavailable. See install_log.txt.');
         end;
       end
       else
       begin
         AppendInstallLog('[Tesseract] Download FAILED  -  OCR unavailable.');
-        SetProgress(60, 'Tesseract download failed  -  continuing...');
+        SetProgress(86, 'Tesseract download failed  -  continuing...');
       end;
     end
     else
     begin
       AppendInstallLog('[Tesseract] Already installed  -  skipping.');
-      SetProgress(62, 'Tesseract already installed  -  skipping...');
+      SetProgress(86, 'Tesseract already installed  -  skipping...');
     end;
 
     // ----------------------------------------------------------
-    // OLLAMA DOWNLOAD + INSTALL  (progress 75 -> 90)
-    // Always download and run the latest OllamaSetup.exe.
-    // Running it on an existing install performs a silent in-place
-    // upgrade (models are preserved).  This ensures Blackwell/newer
-    // GPU architectures get CUDA support even on reinstall.
+    // OLLAMA — NOT installed automatically.
+    // Ollama is optional. Users who want local AI for the desktop
+    // Ask Questions tab can install it from Settings → Browse & Install Model.
+    // The primary workflow is Claude Desktop (MCP) or Claude.ai (HTTP MCP).
     // ----------------------------------------------------------
-    SetProgress(75, 'Downloading latest Ollama...');
-    OllamaSetup := ExpandConstant('{tmp}\OllamaSetup.exe');
-    AppendInstallLog('[Ollama] Downloading from: ' + OLLAMA_URL);
-
-    // Kill any running Ollama before upgrading so the installer
-    // can replace its files without a file-in-use error.
-    Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM ollama.exe /T',
-      '', SW_HIDE, ewWaitUntilTerminated, Elapsed);
-    Sleep(1000);
-
-    Exec('powershell.exe',
-      '-NoProfile -Command "' +
-        '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; ' +
-        '$wc = New-Object System.Net.WebClient; ' +
-        'Register-ObjectEvent $wc DownloadProgressChanged -Action { ' +
-          'Write-Progress -Activity ''Downloading Ollama'' -Status (''$($EventArgs.ProgressPercentage)% - $([math]::Round($EventArgs.BytesReceived/1MB,1)) MB of $([math]::Round($EventArgs.TotalBytesToReceive/1MB,1)) MB'') ' +
-          '-PercentComplete $EventArgs.ProgressPercentage } | Out-Null; ' +
-        '$task = $wc.DownloadFileTaskAsync(''' + OLLAMA_URL + ''', ''' + OllamaSetup + '''); ' +
-        'while (-not $task.IsCompleted) { Start-Sleep -Milliseconds 200 }; ' +
-        'Write-Progress -Activity ''Downloading Ollama'' -Completed; ' +
-        'Write-Host ''Download complete.''; Start-Sleep 1"',
-      '', SW_SHOWNORMAL, ewWaitUntilTerminated, Elapsed);
-    AppendInstallLog('[Ollama] Download exit code: ' + IntToStr(Elapsed));
-
-    if not FileExists(OllamaSetup) then
-    begin
-      AppendInstallLog('[Ollama] Download FAILED - file not found: ' + OllamaSetup);
-      SetProgress(90, 'Ollama download failed, skipping...');
-    end
-    else
-    begin
-      SetProgress(85, 'Installing / upgrading Ollama...');
-      AppendInstallLog('[Ollama] Running installer (install or upgrade): ' + OllamaSetup);
-      ExecWithLogging(True, '[Ollama] Installer', OllamaSetup, '/SILENT');
-
-      // OllamaSetup is async - poll up to 30s for folder to appear
-      OllamaFolder := ExpandConstant(OLLAMA_FOLDER);
-      Elapsed := 0;
-      while (not DirExists(OllamaFolder)) and (Elapsed < 30000) do
-      begin
-        Sleep(500);
-        Elapsed := Elapsed + 500;
-      end;
-      SetProgress(90, 'Ollama ready, pulling llama3.2:1b model...');
-    end;
+    AppendInstallLog('[Ollama] Skipping automatic Ollama install - optional component.');
+    SetProgress(90, 'Configuring AI-Prowler...');
 
     // ----------------------------------------------------------
     // ----------------------------------------------------------
@@ -963,58 +1199,61 @@ begin
       if not FileExists(CfgFile) then
       begin
         SaveStringToFile(CfgFile,
-          '{"auto_start_ollama": true}',
+          '{"auto_start_ollama": false}',
           False);
-        AppendInstallLog('[Config] Wrote default config: ' + CfgFile);
+        AppendInstallLog('[Config] Wrote default config (Ollama auto-start disabled - user choice): ' + CfgFile);
       end
       else
         AppendInstallLog('[Config] Config already exists, skipping default write: ' + CfgFile);
     end;
 
-    // OLLAMA PULL  (progress 90 -> 99)
-    // Only pull if the model is not already present.
-    // Model manifests live at: %USERPROFILE%\.ollama\models\manifests\...
-    // ----------------------------------------------------------
-    OllamaFolder := ExpandConstant(OLLAMA_FOLDER);
-    if DirExists(OllamaFolder) then
-    begin
-      ModelPath := ExpandConstant('{%USERPROFILE}') +
-        '\.ollama\models\manifests\registry.ollama.ai\library\llama3.2';
-
-      if DirExists(ModelPath) then
-      begin
-        AppendInstallLog('[Ollama] llama3.2:1b model already present at: ' + ModelPath + ' - skipping pull.');
-        SetProgress(99, 'llama3.2:1b model already present, skipping pull.');
-      end
-      else
-      begin
-        // Kill any running Ollama server before pulling.
-        // When no server is running, 'ollama pull' (elevated) starts its own
-        // elevated server — both sides share the same token so the id_ed25519
-        // key check passes, and the original blue Ollama progress window appears.
-        AppendInstallLog('[Ollama] Stopping any running Ollama server before pull...');
-        Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM ollama.exe /T',
-          '', SW_HIDE, ewWaitUntilTerminated, TessResultCode);
-        Sleep(2000);
-
-        SetProgress(90, 'Downloading llama3.2:1b AI model (~1.3 GB) — please wait...');
-        AppendInstallLog('[Ollama] Pulling llama3.2:1b model...');
-        Exec(OllamaFolder + '\ollama.exe', 'pull llama3.2:1b',
-          OllamaFolder, SW_SHOWNORMAL, ewWaitUntilTerminated, TessResultCode);
-        AppendInstallLog('[Ollama] Pull exit code: ' + IntToStr(TessResultCode));
-
-        if DirExists(ModelPath) then
-          AppendInstallLog('[Ollama] llama3.2:1b pulled successfully.')
-        else
-          AppendInstallLog('[Ollama] Pull failed - model can be downloaded later from the Browse & Install tab.');
-      end;
-    end
-    else
-      AppendInstallLog('[Ollama] Folder not found after install attempt, skipping pull.');
+    // Model pull removed — no automatic model download.
+    // Users choose and install models from Settings → Browse & Install Model.
+    AppendInstallLog('[Ollama] Model auto-pull disabled. User installs models manually.');
+    SetProgress(99, 'AI-Prowler ready.');
 
   end
   else if CurStep = ssDone then
   begin
+    // ----------------------------------------------------------
+    // CLOUDFLARED  (progress 93 -> 95)
+    // Download the Cloudflare Tunnel client into the app folder.
+    // Used by the Remote Access feature to expose the HTTP MCP
+    // server via a permanent public HTTPS URL without opening
+    // firewall ports.  Skipped if already present and same size.
+    // ----------------------------------------------------------
+    begin
+      AppendInstallLog('[Cloudflared] Checking for cloudflared.exe...');
+      SetProgress(93, 'Downloading Cloudflare Tunnel client...');
+
+      PsFile := MakeTempFile('cf_download');
+      PsFile := Copy(PsFile, 1, Length(PsFile) - 4) + '.ps1';
+      PsContents :=
+        '$ErrorActionPreference = "Continue"' + #13#10 +
+        '$dest = "' + ExpandConstant('{app}') + '\cloudflared.exe"' + #13#10 +
+        'if (Test-Path $dest) {' + #13#10 +
+        '    Write-Host "cloudflared.exe already present - skipping download."' + #13#10 +
+        '    exit 0 }' + #13#10 +
+        'Write-Host "Downloading cloudflared.exe..."' + #13#10 +
+        '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12' + #13#10 +
+        'try {' + #13#10 +
+        '    $wc = New-Object System.Net.WebClient' + #13#10 +
+        '    $wc.DownloadFile("' + CLOUDFLARED_URL + '", $dest)' + #13#10 +
+        '    $sz = [math]::Round((Get-Item $dest).Length / 1MB, 1)' + #13#10 +
+        '    Write-Host "cloudflared.exe downloaded ($sz MB)"' + #13#10 +
+        '} catch {' + #13#10 +
+        '    Write-Host "WARNING: cloudflared download failed: $_"' + #13#10 +
+        '    Write-Host "Remote Access will not work until cloudflared.exe is present."' + #13#10 +
+        '    Write-Host "Download manually from: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"' + #13#10 +
+        '}' + #13#10;
+      SaveStringToFile(PsFile, PsContents, False);
+      AppendInstallLog('[Cloudflared] Download script: ' + PsFile);
+      ExecWithLogging(True, '[Cloudflared]', 'powershell.exe',
+        '-NoProfile -ExecutionPolicy Bypass -File "' + PsFile + '"');
+      DeleteFileIfExists(PsFile);
+      SetProgress(95, 'Cloudflare Tunnel client ready.');
+    end;
+
     SetProgress(100, 'Installation complete.');
     AppendInstallLog('=== INSTALL FINISHED ===');
   end;
@@ -1133,11 +1372,40 @@ var
   PyUninstallStr: String;
   TessUninstaller: String;
   CurrentPath: String;
+  PsFile, PsContents: String;
 begin
   if CurUninstallStep = usUninstall then
   begin
     LogOllamaState;
     LogPythonState;
+
+    // ----------------------------------------------------------------
+    // MCP: Remove AI-Prowler entry from Claude Desktop config
+    // Preserves any other MCP servers the user may have registered.
+    // ----------------------------------------------------------------
+    AppendUninstallLog('[MCP] Removing AI-Prowler from Claude Desktop config...');
+    PsFile := MakeTempFile('mcp_unconfig');
+    PsFile := Copy(PsFile, 1, Length(PsFile) - 4) + '.ps1';
+    PsContents :=
+      '$ErrorActionPreference = "Continue"' + #13#10 +
+      '$configFile = [Environment]::GetFolderPath("ApplicationData") + "\Claude\claude_desktop_config.json"' + #13#10 +
+      'if (Test-Path $configFile) {' + #13#10 +
+      '    try {' + #13#10 +
+      '        $config = Get-Content $configFile -Raw -Encoding UTF8 | ConvertFrom-Json' + #13#10 +
+      '        if ($config.PSObject.Properties["mcpServers"] -and $config.mcpServers.PSObject.Properties["AI-Prowler"]) {' + #13#10 +
+      '            $config.mcpServers.PSObject.Properties.Remove("AI-Prowler")' + #13#10 +
+      '            $output = $config | ConvertTo-Json -Depth 10' + #13#10 +
+      '            $utf8NoBom = New-Object System.Text.UTF8Encoding $false' + #13#10 +
+      '            [System.IO.File]::WriteAllText($configFile, $output, $utf8NoBom)' + #13#10 +
+      '            Write-Host "AI-Prowler entry removed from Claude Desktop config." }' + #13#10 +
+      '        else { Write-Host "AI-Prowler entry not found - nothing to remove." }' + #13#10 +
+      '    } catch { Write-Host "WARNING: Could not update Claude Desktop config: $_" }' + #13#10 +
+      '} else { Write-Host "Claude Desktop config not found - nothing to remove." }' + #13#10;
+    SaveStringToFile(PsFile, PsContents, False);
+    AppendUninstallLog('[MCP] Unconfig script: ' + PsFile);
+    ExecWithLogging(False, '[MCP] Unconfig', 'powershell.exe',
+      '-NoProfile -ExecutionPolicy Bypass -File "' + PsFile + '"');
+    DeleteFileIfExists(PsFile);
 
     // ----------------------------------------------------------------
     // OLLAMA: Force-kill process first, then stop service, then uninstall

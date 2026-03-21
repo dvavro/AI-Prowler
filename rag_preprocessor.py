@@ -166,6 +166,15 @@ QUERY_STOP    = False
 # Controlled by "Enable debug output" checkbox in Settings → Query Output.
 DEBUG_OUTPUT  = False
 
+# When True, prints the full raw OCR text to output during indexing — useful
+# for verifying that Tesseract is reading scanned PDFs and images correctly.
+# Controlled by the "Log full OCR text" checkbox in Settings → OCR → Debug.
+OCR_DEBUG = False
+
+# Stores the last OCR result so the GUI "View Last OCR Output" dialog can show it.
+_last_ocr_text   = ""
+_last_ocr_source = ""
+
 # GPU_LAYERS: number of model layers to offload to the GPU for Ollama.
 #   0  = CPU only (no GPU)
 #  -1  = offload ALL layers automatically (Ollama decides how many fit in VRAM)
@@ -571,6 +580,11 @@ def test_provider_connection(provider_id: str, api_key: str = None) -> dict:
 # periodic progress lines that are safe for the Tkinter output queue.
 GUI_MODE = False
 
+# When True (set by ai_prowler_mcp.py at startup), query_ollama skips the
+# terminal spinner entirely and returns the answer silently so _capture_stdout
+# gets a clean string instead of spinner escape sequences mixed with tokens.
+_MCP_MODE = False
+
 # Module-level cache for ChromaDB client and embedding model.
 # Populated on first get_chroma_client() call; reused for all subsequent
 # calls so the embedding model (all-MiniLM-L6-v2) is only loaded once.
@@ -583,7 +597,7 @@ CONFIG_FILE = Path.home() / '.rag_config.json'
 def load_config():
     """Load configuration from file"""
     global OLLAMA_MODEL, OLLAMA_URL, CHUNK_SIZE, CHUNK_OVERLAP, SHOW_SOURCES, GPU_LAYERS, DEBUG_OUTPUT
-    global ACTIVE_PROVIDER, PROVIDER_API_KEYS, PROVIDER_TIMEOUTS
+    global ACTIVE_PROVIDER, PROVIDER_API_KEYS, PROVIDER_TIMEOUTS, OCR_DEBUG
 
     config = {}
     if CONFIG_FILE.exists():
@@ -597,6 +611,7 @@ def load_config():
                 SHOW_SOURCES     = config.get('show_sources',    SHOW_SOURCES)
                 GPU_LAYERS       = config.get('gpu_layers',      GPU_LAYERS)
                 DEBUG_OUTPUT     = config.get('debug_output',    DEBUG_OUTPUT)
+                OCR_DEBUG        = config.get('ocr_debug',       OCR_DEBUG)
                 ACTIVE_PROVIDER  = config.get('active_provider', ACTIVE_PROVIDER)
                 PROVIDER_API_KEYS= config.get('provider_api_keys', {})
                 # Load timeouts but discard any that have already expired
@@ -653,7 +668,8 @@ def load_extension_config():
 def save_config(model=None, url=None, chunk_size=None, chunk_overlap=None,
                 show_sources=None, gpu_layers=None, mic_silence_secs=None,
                 debug_output=None, debug_view=None, auto_start_ollama=None,
-                active_provider=None, provider_api_keys=None, provider_timeouts=None):
+                active_provider=None, provider_api_keys=None, provider_timeouts=None,
+                ocr_debug=None):
     """Save configuration to file"""
     config = {}
 
@@ -677,6 +693,7 @@ def save_config(model=None, url=None, chunk_size=None, chunk_overlap=None,
     if active_provider    is not None: config['active_provider']    = active_provider
     if provider_api_keys  is not None: config['provider_api_keys']  = provider_api_keys
     if provider_timeouts  is not None: config['provider_timeouts']  = provider_timeouts
+    if ocr_debug          is not None: config['ocr_debug']          = ocr_debug
 
     try:
         with open(CONFIG_FILE, 'w') as f:
@@ -1157,6 +1174,7 @@ def _ocr_pdf(filepath: str) -> str:
     pypdfium2 renders each page to a PIL Image at 300 DPI — no poppler needed.
     Tesseract then extracts text from each image.
     """
+    global _last_ocr_text, _last_ocr_source
     try:
         pdf_doc = pdfium.PdfDocument(filepath)
         parts   = []
@@ -1166,8 +1184,14 @@ def _ocr_pdf(filepath: str) -> str:
             page_text = pytesseract.image_to_string(page_img, lang='eng')
             if page_text.strip():
                 parts.append(f"--- Page {i + 1} ---\n{page_text.strip()}")
+                if OCR_DEBUG and GUI_MODE:
+                    print(f"   [OCR page {i + 1}/{n_pages}]:\n{page_text.strip()}\n")
         pdf_doc.close()
-        return "\n\n".join(parts)
+        result = "\n\n".join(parts)
+        # Store for "View Last OCR Output" dialog in Settings
+        _last_ocr_text   = result
+        _last_ocr_source = os.path.basename(filepath)
+        return result
     except Exception as e:
         print(f"⚠️  OCR failed for {filepath}: {e}")
         return ""
@@ -1179,10 +1203,17 @@ def load_image_ocr(filepath: str) -> str:
     using Tesseract OCR.  This allows image files to be indexed just like
     any other document.
     """
+    global _last_ocr_text, _last_ocr_source
     try:
         img  = _PILImage.open(filepath)
         text = pytesseract.image_to_string(img, lang='eng')
-        return text.strip()
+        result = text.strip()
+        # Store for "View Last OCR Output" dialog in Settings
+        _last_ocr_text   = result
+        _last_ocr_source = os.path.basename(filepath)
+        if OCR_DEBUG and GUI_MODE:
+            print(f"   [OCR image: {os.path.basename(filepath)}]:\n{result}\n")
+        return result
     except Exception as e:
         print(f"⚠️  OCR failed for image {filepath}: {e}")
         return ""
@@ -1912,25 +1943,39 @@ def get_best_embedding_device() -> str:
     """Return the best available torch device string for the embedding model.
     Returns 'cuda', 'mps', or 'cpu'.
 
-    Validates that CUDA actually works with a small test tensor before
-    returning 'cuda' — torch.cuda.is_available() can return True even when
-    the installed CUDA kernel is incompatible with the GPU driver, which
-    causes a hard crash during collection.add().
+    Validates that CUDA actually works by running a real matrix-multiply
+    (not just allocation) before returning 'cuda'.  torch.cuda.is_available()
+    can return True even when the installed CUDA kernel has no compiled code
+    for the GPU compute capability -- allocation succeeds but the first
+    actual compute op raises cudaErrorUnknown.
+
+    Blackwell GPUs (RTX 50xx, SM 12.0+): PyTorch stable cu128 does not yet
+    ship SM 12.0 compute kernels, so we force CPU for any capability >= (12,0)
+    regardless of the matmul result.
     """
     try:
         import torch
         if torch.cuda.is_available():
             try:
-                # Quick smoke-test: allocate a tiny tensor on the GPU.
-                # If the CUDA kernel is incompatible this raises a RuntimeError
-                # ("no kernel image is available for execution on the device")
-                # before we ever try to embed anything.
-                _t = torch.zeros(1, device='cuda')
-                del _t
+                # Blackwell (SM 12.0+) guard.  Stable PyTorch cu128 does not
+                # include SM 12.0 compute kernels; matmul will crash at runtime
+                # with cudaErrorUnknown even though is_available() returns True.
+                major, _minor = torch.cuda.get_device_capability(0)
+                if major >= 12:
+                    gpu_name = torch.cuda.get_device_name(0)
+                    print(f'\u26a0\ufe0f  Blackwell GPU ({gpu_name}, SM {major}.{_minor}) detected -- '
+                          f'PyTorch stable cu128 lacks SM 12.0 compute kernels. '
+                          f'Embeddings will run on CPU; Ollama still uses the GPU.')
+                    return 'cpu'
+                # Real compute smoke-test: a tiny matmul exercises the CUDA
+                # compute kernels, unlike torch.zeros() which is pure allocation.
+                _a = torch.zeros(4, 4, device='cuda')
+                _b = torch.zeros(4, 4, device='cuda')
+                _  = torch.mm(_a, _b)
+                del _a, _b
                 return 'cuda'
             except Exception:
-                # CUDA reported as available but unusable — fall through to CPU
-                pass
+                print('\u26a0\ufe0f  CUDA compute test failed -- embeddings will run on CPU.')
         if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
             return 'mps'
     except ImportError:
@@ -2003,15 +2048,35 @@ class _SentenceTransformerEmbedding:
 
     def __call__(self, input):          # ChromaDB calls embedding_func(documents)
         import torch
-        with torch.no_grad():
-            vecs = self._model.encode(
-                input,
-                batch_size=self._batch_size,
-                show_progress_bar=False,
-                normalize_embeddings=True,
-                convert_to_numpy=True,
-            )
-        return vecs.tolist()
+        try:
+            with torch.no_grad():
+                vecs = self._model.encode(
+                    input,
+                    batch_size=self._batch_size,
+                    show_progress_bar=False,
+                    normalize_embeddings=True,
+                    convert_to_numpy=True,
+                )
+            return vecs.tolist()
+        except Exception as _enc_err:
+            # If CUDA fails mid-encode (e.g. unsupported compute capability),
+            # automatically retry on CPU so the query still completes.
+            if self._device != 'cpu':
+                print(f'\u26a0\ufe0f  Embedding encode failed on {self._device.upper()}: {_enc_err}')
+                print('    Retrying on CPU...')
+                self._device = 'cpu'
+                self._batch_size = 32
+                self._model.to('cpu')
+                with torch.no_grad():
+                    vecs = self._model.encode(
+                        input,
+                        batch_size=self._batch_size,
+                        show_progress_bar=False,
+                        normalize_embeddings=True,
+                        convert_to_numpy=True,
+                    )
+                return vecs.tolist()
+            raise
 
 def get_chroma_client():
     """
@@ -2242,7 +2307,10 @@ def index_file_list(file_paths: list, label: str = "",
             if (_tracked is not None
                     and abs(_tracked.get('modified', 0) - _stat.st_mtime) < 1.0
                     and _tracked.get('size') == _stat.st_size):
-                print(f"{prefix}{progress} ✓ {os.path.basename(filepath)}  (unchanged — skipping)")
+                _rel = os.path.join(
+                    os.path.basename(os.path.dirname(filepath)),
+                    os.path.basename(filepath))
+                print(f"{prefix}{progress} ✓ {_rel}  (unchanged — skipping)")
                 skipped += 1
                 continue
         except OSError:
@@ -2271,13 +2339,19 @@ def index_file_list(file_paths: list, label: str = "",
         # ── All other file types — normal single-file loader ───────────────────
         file_data = load_file(filepath)
         if not file_data:
+            _rel = os.path.join(
+                os.path.basename(os.path.dirname(filepath)),
+                os.path.basename(filepath))
             print(f"{prefix}{progress} WARNING: SKIPPED "
-                  f"{os.path.basename(filepath)}"
+                  f"{_rel}"
                   f" (empty, unreadable, or format not supported)")
             skipped += 1
             continue
 
-        print(f"{prefix}{progress} {os.path.basename(filepath)}  "
+        _rel = os.path.join(
+            os.path.basename(os.path.dirname(filepath)),
+            os.path.basename(filepath))
+        print(f"{prefix}{progress} {_rel}  "
               f"({file_data['word_count']} words)")
 
         chunks = chunk_text(file_data['content'], CHUNK_SIZE, CHUNK_OVERLAP)
@@ -3010,6 +3084,39 @@ def query_ollama(prompt: str, max_tokens: int = 2000, images_b64: list = None) -
             print(f"\n\n🔬 DEBUG — total query_ollama: {ts}")
         return result['text']
 
+    elif _MCP_MODE:
+        # MCP / headless mode — no spinner, no token printing.
+        # Just accumulate the response and return it cleanly so
+        # _capture_stdout() in the MCP query tool gets a clean string.
+        full = ''
+        try:
+            with requests.post(
+                f"{OLLAMA_URL}/api/generate",
+                json=payload, stream=True, timeout=QUERY_TIMEOUT
+            ) as resp:
+                for raw in resp.iter_lines():
+                    if not raw:
+                        continue
+                    try:
+                        chunk = _json.loads(raw)
+                    except Exception:
+                        continue
+                    tok = chunk.get('response', '')
+                    if QUERY_STOP:
+                        break
+                    if tok:
+                        full += tok
+                    if chunk.get('done', False):
+                        break
+            return full
+        except requests.exceptions.Timeout:
+            return (f"\n\n❌ Timed out after {int(time.time()-start_time)}s.\n"
+                    f"Try fewer Context Chunks in Settings.")
+        except requests.exceptions.ConnectionError:
+            return "\n\n❌ Cannot connect to Ollama. Is it running? (Try: ollama serve)"
+        except Exception as e:
+            return f"\n\n❌ Error: {e}"
+
     else:
         # Terminal: spinner until first token, then print tokens live
         stop_spin = threading.Event()
@@ -3263,8 +3370,10 @@ Answer:"""
             print(f"\n⏱️  Total query time: {time_str}")
         print()
     else:
-        # Clean mode — answer was already streamed token-by-token above
-        pass
+        # Clean mode — in MCP mode the answer comes back via return value;
+        # in GUI mode it was already streamed token-by-token above.
+        if _MCP_MODE:
+            return answer
 
 # ═══════════════════════════════════════════════════════════
 # UTILITIES

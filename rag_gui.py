@@ -553,6 +553,8 @@ class RAGGui:
         self.debug_output_var    = tk.BooleanVar(value=False)
         # Debug View — show DOS/console windows in foreground (default: hidden)
         self.debug_view_var      = tk.BooleanVar(value=False)
+        # OCR debug — log full OCR text during indexing (default: off)
+        self.ocr_debug_var       = tk.BooleanVar(value=False)
 
         # ── Ollama status ────────────────────────────────────────────────────
         self._ollama_ready       = False   # True = model loaded and warmed
@@ -567,7 +569,9 @@ class RAGGui:
         
         # Auto-start Ollama server on startup
         self.auto_start_ollama_var = tk.BooleanVar(value=True)
-        self._ollama_process = None  # Track if we started Ollama
+        self._ollama_process   = None  # Track if we started Ollama
+        self._http_server_proc = None  # HTTP MCP server subprocess
+        self._cloudflared_proc = None  # cloudflared tunnel subprocess
 
         # Microphone / speech-to-text state
         self._mic_recorder  = None
@@ -648,6 +652,9 @@ class RAGGui:
         # Startup prewarm — load model into memory after a 3-second delay so
         # the window finishes drawing first. Silent background thread.
         self.root.after(3000, self._trigger_prewarm)
+
+        # MCP status bar indicator — check once on startup
+        self.root.after(2000, self._refresh_mcp_status_bar)
         
     def load_configuration(self):
         """Load saved configuration"""
@@ -671,6 +678,11 @@ class RAGGui:
                     # Load debug_view — default False (background/hidden windows)
                     debug_view = config.get('debug_view', False)
                     self.debug_view_var.set(debug_view)
+                    # Load ocr_debug — default False
+                    ocr_debug = config.get('ocr_debug', False)
+                    self.ocr_debug_var.set(ocr_debug)
+                    if RAG_AVAILABLE:
+                        _rag_engine.OCR_DEBUG = ocr_debug
                     # Load gpu_layers — default -1 (auto)
                     gpu_layers = config.get('gpu_layers', -1)
                     self.gpu_layers_var.set(gpu_layers)
@@ -761,106 +773,123 @@ Built with Python, ChromaDB, and Ollama"""
     
     def get_quick_start_content(self):
         """Get quick start guide content"""
-        return """AI PROWLER QUICK START GUIDE
+        return """AI-PROWLER QUICK START GUIDE
+Version 4.1.0
 
-🚀 Getting Started in 4 Steps
-================================
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ⭐  RECOMMENDED: AGENTIC RAG WITH CLAUDE DESKTOP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+AI-Prowler is designed around Agentic RAG — letting Claude
+actively research your documents using its full intelligence.
+Claude Desktop (free) is the easiest way to get started.
 
 STEP 1: Index Your Documents
------------------------------
-1. Click "📚 Index Documents" tab
-2. Click "Browse..." button
-3. Select your Documents folder
-4. Click "Start Indexing"
-5. Wait for "INDEXING COMPLETE"
+─────────────────────────────
+1. Click the "📚 Index Documents" tab
+2. Click "Add Directory" and select your Documents folder
+3. Check "Include Subfolders" if needed
+4. Click "Start Indexing" — wait for "INDEXING COMPLETE"
 
 What gets indexed:
-• PDFs, Word documents
-• Text files, code files
-• Emails (.eml, .msg, .mbox)
-• And 50+ more file types!
+  • PDFs, Word, Excel, PowerPoint
+  • Text files, code files, emails (.eml, .msg, .mbox)
+  • Scanned documents and images (OCR via Tesseract)
+  • 65+ file types in total
 
-Time: 2-5 minutes for typical Documents folder
-
-
-STEP 2: Ask Questions
-----------------------
-1. Click "🔍 Ask Questions" tab
-2. Type your question
-3. Press Enter
-4. Read the AI's answer
-
-Example questions:
-• "What projects am I working on?"
-• "Find my flight confirmation"
-• "Summarize my meeting notes from last week"
-
-Time: 10-20 seconds per question
+Tip: Indexing is incremental — only changed files are
+re-processed on subsequent runs. No need to start over.
 
 
-STEP 3: Keep Updated
----------------------
-1. Click "🔄 Update Index" tab
-2. Click "Update All" button
-3. Only changed files are re-indexed
+STEP 2: Connect Claude Desktop (Primary Interface)
+───────────────────────────────────────────────────
+Claude Desktop connects to AI-Prowler via MCP (Model Context
+Protocol) and gets 13 tools to actively research your documents.
 
-Do this weekly or after adding files.
+  1. Click "🚀 Launch Claude Desktop" on this screen
+     (or use Settings → Claude Desktop MCP → Auto-configure)
+  2. In Claude Desktop, start a NEW conversation
+  3. Ask any research question about your documents:
 
-Time: 10-30 seconds (much faster than re-indexing!)
+     "Summarize the key risks in my Q3 contracts"
+     "What does my insurance policy say about flooding?"
+     "Find everything related to Project Alpha"
 
+Claude will automatically call multiple search tools, follow
+leads, expand context, and synthesize a comprehensive answer.
+You don't need to direct it — the agentic loop runs on its own.
 
-STEP 4: Customize (Optional)
------------------------------
-1. Click "⚙️ Settings" tab
-2. Choose different AI model from dropdown
-3. Click "Install Selected Model"
-4. Future queries use new model
-
-Models to try:
-• llama3.2:1b (default, balanced)
-• llama3.1:8b (better quality)
-• qwen2.5:0.5b (ultra-fast)
-
-
-📋 Tips & Best Practices
-=========================
-
-✅ DO:
-• Index organized folders (Documents, Projects)
-• Use natural language in questions
-• Start with "Auto (3)" chunk setting
-• Update weekly for active projects
-
-❌ DON'T:
-• Index entire C: drive (too much!)
-• Close window during indexing
-• Use command syntax in questions
-• Re-index from scratch (use Update instead!)
+  ✅ No HTTP server needed for Claude Desktop
+  ✅ Works with free Claude account
+  ✅ Completely local — no internet required for the connection
 
 
-🚨 Troubleshooting
-==================
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  📱  OPTION 2: MOBILE & WEB ACCESS (Claude.ai)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Problem: No documents found
-Solution: Index documents first (Tab 1)
+Access your knowledge base from your phone, tablet, or any
+browser using Claude.ai — with the same full agentic RAG
+capability as Claude Desktop.
 
-Problem: Slow queries
-Solution: Switch to faster model (Settings tab)
+Requirements:
+  • Active Mobile Access subscription ($10/month Individual)
+  • Claude Pro or Team plan on Claude.ai
 
-Problem: GUI won't start
-Solution: Run INSTALL.bat again
+Setup Steps:
+  1. Go to Settings → Remote Access
+  2. Enter a Bearer token (your password — make it strong)
+  3. Click "▶ Start HTTP Server"
+  4. Click "▶ Start Tunnel" (Cloudflare Tunnel)
+  5. Open Claude.ai → Settings → Connectors → Add connector
+  6. Enter your tunnel URL (e.g. https://your-tunnel.com/mcp)
+  7. Authorize with your Bearer token when prompted
+
+Then click "🌐 Open Claude.ai" on this screen to open Claude.ai
+in your browser and start chatting from any device.
+
+  ⚠  Important: The HTTP server and Cloudflare Tunnel must be
+     running on your PC for Claude.ai to reach your knowledge base.
+
+Subscription info: Help → User Guide → Section 8
+Or email: david.vavro1@gmail.com
 
 
-📞 Need More Help?
-==================
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  💬  OPTION 3: DESKTOP ASK QUESTIONS TAB (Local)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Read the complete guide:
-Help → User Guide
+The Ask Questions tab is a standalone chat mode that works
+with local Ollama models or cloud API keys — no Claude
+subscription required. Best for fully offline use.
 
-Or open: COMPLETE_USER_GUIDE.md
+  1. Install Ollama from Settings → Browse & Install Model
+     (or add an API key for ChatGPT, Gemini, etc.)
+  2. Click "🔍 Ask Questions" tab
+  3. Type your question and press Enter
+
+Note: This mode does NOT use the Agentic RAG tools. It does
+a single retrieval pass and sends chunks to the local model.
+For best results, use Claude Desktop (Option 1 above).
 
 
-That's it! You're ready to use RAG!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  🔄  KEEPING YOUR INDEX CURRENT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+• Click "🔄 Update Index" → "Update All" after adding files
+• Or ask Claude: "Update my knowledge base" — it will call
+  the update_tracked_directories() tool automatically
+• Set up auto-scheduling in Settings → Schedule (runs at 2 AM)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  📞  NEED MORE HELP?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Full documentation:  Help → 📖 User Guide
+MCP diagnostics:     Settings → Claude Desktop MCP → 🔬 Run MCP Diagnostics
+Support email:       david.vavro1@gmail.com
 """
     
     def get_user_guide_content(self):
@@ -946,16 +975,24 @@ or from the Help menu."""
         win_id = canvas.create_window((0, 0), window=inner, anchor='nw')
         canvas.configure(yscrollcommand=vsb.set)
 
-        # Keep inner frame width locked to the visible canvas width so all
-        # child widgets that use fill='x' expand properly on window resize.
-        def _sync_width(e, wid=win_id):
-            canvas.itemconfig(wid, width=e.width)
+        # Keep inner frame width locked to canvas width (fill='x' widgets expand),
+        # and height to max(content, canvas) so expand=True widgets fill the
+        # window when content is shorter than the visible area.
+        def _sync_canvas(e, wid=win_id):
+            content_h = inner.winfo_reqheight()
+            new_h     = max(content_h, e.height)
+            canvas.itemconfig(wid, width=e.width, height=new_h)
+            canvas.configure(scrollregion=canvas.bbox('all'))
 
         # Update scrollregion whenever child content changes height.
         def _sync_scrollregion(e):
+            content_h  = inner.winfo_reqheight()
+            canvas_h   = canvas.winfo_height()
+            new_h      = max(content_h, canvas_h)
+            canvas.itemconfig(win_id, height=new_h)
             canvas.configure(scrollregion=canvas.bbox('all'))
 
-        canvas.bind('<Configure>', _sync_width)
+        canvas.bind('<Configure>', _sync_canvas)
         inner.bind('<Configure>',  _sync_scrollregion)
 
         def _on_mousewheel(event):
@@ -1067,7 +1104,7 @@ or from the Help menu."""
                                           state='disabled')
         self.index_pause_btn.pack(side='left', padx=(0, 6))
 
-        self.index_stop_btn = ttk.Button(btn_row, text="⏹ Stop",
+        self.index_stop_btn = ttk.Button(btn_row, text="⏹ Stop & Save Position",
                                          command=self._index_stop,
                                          state='disabled')
         self.index_stop_btn.pack(side='left', padx=(0, 16))
@@ -1075,6 +1112,12 @@ or from the Help menu."""
         self.index_scan_btn = ttk.Button(btn_row, text="🔍 Scan Queue",
                                          command=self._run_prescan)
         self.index_scan_btn.pack(side='left')
+
+        # Clarify the difference between Pause and Stop for the user
+        ttk.Label(f,
+                  text="⏸ Pause = suspend instantly, click again to resume  |  "
+                       "⏹ Stop = save position & exit — use ▶ Resume Indexing to continue later",
+                  font=('Arial', 8), foreground='gray').pack(anchor='w', padx=20, pady=(0, 4))
 
         # Progress
         prog_row = ttk.Frame(f)
@@ -1093,11 +1136,11 @@ or from the Help menu."""
                   font=('Arial', 9), foreground='gray',
                   width=32, anchor='e').pack(side='right', padx=(8, 0))
 
-        # Output
+        # Output — fill='both' + expand=True so it grows when window is resized
         ttk.Label(f, text="Output:").pack(anchor='w', padx=20)
         self.index_output = scrolledtext.ScrolledText(f, height=14,
                                                       wrap=tk.WORD)
-        self.index_output.pack(fill='x', padx=20, pady=(0, 10))
+        self.index_output.pack(fill='both', expand=True, padx=20, pady=(0, 10))
     
     def create_query_tab(self):
         """Create query tab — fully scrollable pane."""
@@ -1130,18 +1173,158 @@ or from the Help menu."""
         query_frame.bind('<Configure>', _on_frame_resize)
 
         # Mouse-wheel scrolling (Windows & macOS)
+        # Use bind_all so scrolling works wherever the cursor is on this tab,
+        # consistent with all other tabs. The answer box manages its own
+        # internal scroll via Enter/Leave bindings below.
         def _on_mousewheel(e):
             self._query_canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units')
-        self._query_canvas.bind('<MouseWheel>', _on_mousewheel)
-        # Activate canvas scrolling only when the mouse is NOT over the answer box
-        # (so the answer box can still be scrolled internally)
+        self._query_canvas.bind('<Enter>',
+            lambda e: self._query_canvas.bind_all('<MouseWheel>', _on_mousewheel))
+        self._query_canvas.bind('<Leave>',
+            lambda e: self._query_canvas.unbind_all('<MouseWheel>'))
         self._query_scroll_cmd = _on_mousewheel
 
         # Title
         ttk.Label(query_frame, text="Ask Your AI Questions",
                   font=('Arial', 16, 'bold')).pack(pady=10)
 
-        # ── Question input ────────────────────────────────────────────────────
+        # ── Recommended: Claude Desktop Agentic RAG banner ────────────────────
+        _claude_banner = tk.Frame(query_frame, bg='#0f3460',
+                                  highlightthickness=1,
+                                  highlightbackground='#1a5276')
+        _claude_banner.pack(fill='x', padx=20, pady=(0, 8))
+
+        _banner_inner = tk.Frame(_claude_banner, bg='#0f3460')
+        _banner_inner.pack(fill='x', padx=14, pady=10)
+
+        # Left side — star badge + text
+        _badge_col = tk.Frame(_banner_inner, bg='#0f3460')
+        _badge_col.pack(side='left', fill='y')
+        tk.Label(_badge_col, text="⭐ RECOMMENDED",
+                 bg='#1a5c9a', fg='#ffffff',
+                 font=('Arial', 7, 'bold'),
+                 padx=6, pady=2).pack(anchor='w')
+
+        _text_col = tk.Frame(_banner_inner, bg='#0f3460')
+        _text_col.pack(side='left', fill='both', expand=True, padx=(10, 0))
+        tk.Label(_text_col,
+                 text="AI Agent Smart Guided Questions & Answers",
+                 bg='#0f3460', fg='#ffffff',
+                 font=('Arial', 11, 'bold'),
+                 anchor='w').pack(anchor='w')
+        tk.Label(_text_col,
+                 text="Claude Desktop Uses all AI-Prowler tools to actively research your "
+                      "knowledge base — multiple searches, follow-up queries, and full document "
+                      "reading — producing far superior answers compared to the basic Ask tab below.",
+                 bg='#0f3460', fg='#aaccee',
+                 font=('Arial', 8),
+                 wraplength=520, justify='left',
+                 anchor='w').pack(anchor='w', pady=(2, 0))
+
+        # Right side — Launch button
+        def _launch_claude_desktop():
+            """Launch Claude Desktop using confirmed working AUMID command."""
+            if sys.platform == 'win32':
+                try:
+                    # Confirmed working command on this machine:
+                    # start shell:AppsFolder\Claude_pzs8sxrjxfjjc!Claude
+                    # Run via cmd so 'start' shell command works correctly
+                    subprocess.Popen(
+                        ['cmd', '/C', 'start',
+                         'shell:AppsFolder\\Claude_pzs8sxrjxfjjc!Claude'],
+                        creationflags=subprocess.CREATE_NO_WINDOW)
+                    self.status_var.set("Claude Desktop launched")
+                    return
+                except Exception:
+                    pass
+
+                # Fallback: PowerShell dynamic lookup (works after Claude updates)
+                try:
+                    ps = (
+                        '$pkg = Get-AppxPackage | '
+                        'Where-Object {$_.Name -like "*Claude*"} | '
+                        'Select-Object -First 1; '
+                        'if ($pkg) { '
+                        '  $xml = [xml](Get-Content '
+                        '    (Join-Path $pkg.InstallLocation "AppxManifest.xml")); '
+                        '  $id = $xml.Package.Applications.Application[0].Id; '
+                        '  Start-Process ('
+                        '    "shell:AppsFolder\\" + $pkg.PackageFamilyName + "!" + $id); '
+                        '  exit 0 } else { exit 1 }'
+                    )
+                    result = subprocess.run(
+                        ['powershell', '-NoProfile', '-WindowStyle', 'Hidden',
+                         '-Command', ps],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=10)
+                    if result.returncode == 0:
+                        self.status_var.set("Claude Desktop launched")
+                        return
+                except Exception:
+                    pass
+
+                messagebox.showerror(
+                    "Could Not Launch Claude Desktop",
+                    "Claude Desktop could not be found on this machine.\n\n"
+                    "Click '⬇ Download Claude Desktop' to install it.")
+
+            elif sys.platform == 'darwin':
+                try:
+                    subprocess.Popen(['open', '-a', 'Claude'])
+                    self.status_var.set("Claude Desktop launched")
+                except Exception:
+                    messagebox.showerror("Not Found",
+                        "Claude Desktop not found.\n"
+                        "Click '⬇ Download Claude Desktop' to install it.")
+
+        def _download_claude_desktop():
+            """Open the Claude Desktop download page in the browser."""
+            import webbrowser as _wb
+            _wb.open('https://claude.ai/download')
+            self.status_var.set("Browser opened — claude.ai/download")
+
+
+        # Right side buttons — stacked vertically
+        _btn_col = tk.Frame(_banner_inner, bg='#0f3460')
+        _btn_col.pack(side='right', padx=(12, 0))
+
+        tk.Button(_btn_col,
+                  text="🚀  Launch Claude Desktop",
+                  bg='#2980b9', fg='white',
+                  activebackground='#3498db', activeforeground='white',
+                  font=('Arial', 10, 'bold'),
+                  relief='flat', padx=16, pady=5,
+                  cursor='hand2',
+                  command=_launch_claude_desktop).pack(fill='x', pady=(0, 4))
+
+        def _open_claude_ai_web():
+            """Open Claude.ai in the default browser (HTTP / mobile access)."""
+            import webbrowser as _wb
+            _wb.open('https://claude.ai')
+            self.status_var.set("Browser opened — claude.ai")
+
+        tk.Button(_btn_col,
+                  text="🌐  Open Claude.ai (Web / Mobile)",
+                  bg='#1a7a4a', fg='white',
+                  activebackground='#239c5e', activeforeground='white',
+                  font=('Arial', 9, 'bold'),
+                  relief='flat', padx=16, pady=4,
+                  cursor='hand2',
+                  command=_open_claude_ai_web).pack(fill='x', pady=(0, 4))
+
+        tk.Button(_btn_col,
+                  text="⬇  Download Claude Desktop",
+                  bg='#1a5276', fg='#aaccee',
+                  activebackground='#21618c', activeforeground='white',
+                  font=('Arial', 8),
+                  relief='flat', padx=16, pady=3,
+                  cursor='hand2',
+                  command=_download_claude_desktop).pack(fill='x')
+
+        # Divider under the banner
+        ttk.Separator(query_frame, orient='horizontal').pack(
+            fill='x', padx=20, pady=(0, 6))
         question_frame = ttk.LabelFrame(query_frame, text="Your Question", padding=10)
         question_frame.pack(fill='x', padx=20, pady=10)
 
@@ -1158,6 +1341,84 @@ or from the Help menu."""
 
         self.question_text.bind('<Control-Return>', lambda e: self.start_query())
         self.question_text.bind('<Control-KP_Enter>', lambda e: self.start_query())
+
+        # ── Inline spell checker ──────────────────────────────────────────────
+        # Uses pyspellchecker (pip install pyspellchecker) if available.
+        # Red underline on misspelled words; right-click shows suggestions.
+        self._spell_checker = None
+        try:
+            from spellchecker import SpellChecker as _SC
+            self._spell_checker = _SC()
+            self.question_text.tag_configure(
+                'misspelled', underline=True, foreground='red')
+
+            def _spell_check_text(event=None):
+                """Re-scan the question box and underline misspelled words."""
+                if self._spell_checker is None:
+                    return
+                self.question_text.tag_remove('misspelled', '1.0', tk.END)
+                content = self.question_text.get('1.0', 'end-1c')
+                import re as _re
+                for m in _re.finditer(r"\b[a-zA-Z']+\b", content):
+                    word = m.group()
+                    if word.lower() not in self._spell_checker:
+                        start = f"1.0 + {m.start()} chars"
+                        end   = f"1.0 + {m.end()} chars"
+                        self.question_text.tag_add('misspelled', start, end)
+
+            def _spell_popup(event):
+                """Right-click on a misspelled word to get correction suggestions."""
+                if self._spell_checker is None:
+                    return
+                # Identify the word under the cursor
+                try:
+                    idx = self.question_text.index(f"@{event.x},{event.y}")
+                    # Expand selection to word boundaries
+                    word_start = self.question_text.index(f"{idx} wordstart")
+                    word_end   = self.question_text.index(f"{idx} wordend")
+                    word = self.question_text.get(word_start, word_end).strip("'\".,!?;:")
+                except tk.TclError:
+                    return
+                if not word:
+                    return
+                suggestions = list(self._spell_checker.candidates(word) or [])[:8]
+                menu = tk.Menu(self.question_text, tearoff=0)
+                if suggestions:
+                    menu.add_command(
+                        label=f"Misspelled: '{word}'", state='disabled',
+                        font=('Arial', 9, 'italic'))
+                    menu.add_separator()
+                    for sug in sorted(suggestions):
+                        def _replace(s=sug, ws=word_start, we=word_end):
+                            self.question_text.delete(ws, we)
+                            self.question_text.insert(ws, s)
+                            _spell_check_text()
+                        menu.add_command(label=sug, command=_replace)
+                else:
+                    menu.add_command(label=f"No suggestions for '{word}'",
+                                     state='disabled')
+                menu.add_separator()
+                menu.add_command(label="Ignore (add to session)",
+                                 command=lambda w=word: (
+                                     self._spell_checker.word_frequency.load_words([w.lower()]),
+                                     _spell_check_text()))
+                try:
+                    menu.tk_popup(event.x_root, event.y_root)
+                finally:
+                    menu.grab_release()
+
+            # Trigger spell check after each word (space/enter/punctuation)
+            self.question_text.bind('<space>',
+                lambda e: self.root.after(60, _spell_check_text))
+            self.question_text.bind('<Return>',
+                lambda e: self.root.after(60, _spell_check_text))
+            self.question_text.bind('<KeyRelease>',
+                lambda e: self.root.after(300, _spell_check_text))
+            self.question_text.bind('<Button-3>', _spell_popup)
+            self._spell_check_text = _spell_check_text
+
+        except ImportError:
+            self._spell_check_text = lambda: None  # no-op if package missing
 
         ttk.Label(question_frame,
                   text="Tip: press Ctrl+Enter to submit  |  Enter adds a new line",
@@ -1349,13 +1610,14 @@ or from the Help menu."""
                                                        font=('Arial', 11))
         self.answer_output.pack(fill='x', padx=20, pady=5)
 
-        # When mouse is over answer box, let it scroll internally.
-        # When mouse leaves, restore canvas scrolling.
+        # When mouse enters the answer box, let it scroll internally (unbind canvas).
+        # When mouse leaves, restore canvas bind_all scrolling.
         def _bind_answer_scroll(e):
-            self.answer_output.unbind('<MouseWheel>')   # use default Text scrolling
+            self._query_canvas.unbind_all('<MouseWheel>')
         def _unbind_answer_scroll(e):
-            pass  # canvas mousewheel binding already active for everything else
+            self._query_canvas.bind_all('<MouseWheel>', self._query_scroll_cmd)
         self.answer_output.bind('<Enter>', _bind_answer_scroll)
+        self.answer_output.bind('<Leave>', _unbind_answer_scroll)
 
 
     def create_update_tab(self):
@@ -1440,11 +1702,11 @@ or from the Help menu."""
         self.update_progress = ttk.Progressbar(f, mode='indeterminate')
         self.update_progress.pack(fill='x', padx=20, pady=(0, 6))
 
-        # Output
+        # Output — fill='both' + expand=True so it grows when window is resized
         ttk.Label(f, text="Output:").pack(anchor='w', padx=20)
         self.update_output = scrolledtext.ScrolledText(f, height=10,
                                                        wrap=tk.WORD)
-        self.update_output.pack(fill='x', padx=20, pady=(0, 10))
+        self.update_output.pack(fill='both', expand=True, padx=20, pady=(0, 10))
 
         # Load tracked directories
         self.refresh_tracked_dirs()
@@ -1774,25 +2036,36 @@ or from the Help menu."""
                   text="e.g. .iso  .vmdk  .bak",
                   font=('Arial', 8), foreground='gray').pack(anchor='w', pady=(4, 0))
 
+        # ── Bottom action bar — packed first with side='bottom' so the
+        # Skipped Directories frame fills all remaining space above it ─────────
+        action_row = ttk.Frame(f)
+        action_row.pack(side='bottom', fill='x', padx=20, pady=(4, 16))
+
         # ── Bottom panel — Skip Directories ──────────────────────────────────
+        # expand=True + fill='both' lets this frame grow in both axes when the
+        # main window is resized; side='bottom' in action_row ensures it stays
+        # visually anchored at the bottom of the scrollable tab.
         dir_frame = ttk.LabelFrame(f,
                                    text="📂 Skipped Directories  (entire folder ignored)",
                                    padding=8)
-        dir_frame.pack(fill='x', padx=20, pady=(0, 6))
+        dir_frame.pack(fill='both', expand=True, padx=20, pady=(0, 6))
 
-        # Horizontal listbox (2 rows tall, scrollable)
+        # Listbox row — expand=True so it stretches horizontally with the window.
+        # Scrollbar packed first with side='right' so it doesn't get squeezed out
+        # when the listbox claims remaining width via fill='both', expand=True.
         dir_list_row = ttk.Frame(dir_frame)
-        dir_list_row.pack(fill='x')
+        dir_list_row.pack(fill='both', expand=True)
+
+        dir_scroll = ttk.Scrollbar(dir_list_row, orient='vertical')
+        dir_scroll.pack(side='right', fill='y')
 
         self.dir_listbox = tk.Listbox(dir_list_row, height=4,
                                       font=('Courier', 9),
                                       selectmode=tk.SINGLE,
-                                      activestyle='dotbox')
-        dir_scroll = ttk.Scrollbar(dir_list_row, orient='vertical',
-                                   command=self.dir_listbox.yview)
-        self.dir_listbox.configure(yscrollcommand=dir_scroll.set)
-        self.dir_listbox.pack(side='left', fill='x', expand=True)
-        dir_scroll.pack(side='left', fill='y')
+                                      activestyle='dotbox',
+                                      yscrollcommand=dir_scroll.set)
+        dir_scroll.configure(command=self.dir_listbox.yview)
+        self.dir_listbox.pack(side='left', fill='both', expand=True)
 
         for d in sorted(dirs):
             self.dir_listbox.insert(tk.END, d)
@@ -1803,17 +2076,15 @@ or from the Help menu."""
         dir_entry = ttk.Entry(dir_add_row, textvariable=self.dir_add_var, width=24)
         dir_entry.pack(side='left', padx=(0, 4))
         dir_entry.bind('<Return>', lambda e: self._dir_add())
-        ttk.Button(dir_add_row, text="➕ Add",
+        ttk.Button(dir_add_row, text="➕ Add Name",
                    command=self._dir_add).pack(side='left', padx=(0, 4))
+        ttk.Button(dir_add_row, text="📂 Browse Folder…",
+                   command=self._dir_browse_folder).pack(side='left', padx=(0, 4))
         ttk.Button(dir_add_row, text="❌ Remove Selected",
                    command=self._dir_remove).pack(side='left', padx=(0, 16))
         ttk.Label(dir_add_row,
-                  text="e.g. .cache  temp  backup",
+                  text="Type a folder name (e.g. temp) or browse for a full path",
                   font=('Arial', 8), foreground='gray').pack(side='left')
-
-        # ── Bottom action bar ─────────────────────────────────────────────────
-        action_row = ttk.Frame(f)
-        action_row.pack(fill='x', padx=20, pady=(4, 16))
 
         ttk.Button(action_row, text="💾 Save Changes",
                    command=self._scan_cfg_save,
@@ -1911,6 +2182,32 @@ or from the Help menu."""
         self._scan_cfg_autosave()
         self.scan_cfg_status_var.set(f"Removed {name}")
 
+    def _dir_browse_folder(self):
+        """Open a folder-picker dialog and add the chosen path to the skip list.
+
+        The native folder dialog opens so the user can navigate and select any
+        folder on disk.  The full path is stored so that entire real directory
+        trees (not just name fragments) can be excluded from indexing.
+        """
+        path = filedialog.askdirectory(
+            title="Select a folder to exclude from indexing",
+            mustexist=True)
+        if not path:
+            return
+        # Normalise separators
+        path = str(Path(path))
+        existing = list(self.dir_listbox.get(0, tk.END))
+        if path in existing:
+            self.scan_cfg_status_var.set(f"Already in list: {path}")
+            return
+        # Insert in sorted position
+        items = sorted(existing + [path])
+        pos = items.index(path)
+        self.dir_listbox.insert(pos, path)
+        self._sync_ext_sets()
+        self._scan_cfg_autosave()
+        self.scan_cfg_status_var.set(f"✅ Added: {path}")
+
     def _sync_ext_sets(self):
         """Push listbox contents into the live preprocessor sets immediately."""
         if not RAG_AVAILABLE:
@@ -1996,10 +2293,21 @@ or from the Help menu."""
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         
-        # Enable mousewheel scrolling
+        # Enable mousewheel scrolling anywhere inside the Settings tab
+        # (canvas AND inner frame both activate the scroll binding on hover)
         def _on_mousewheel(event):
             canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        def _bind_scroll(e):
+            canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        def _unbind_scroll(e):
+            canvas.unbind_all("<MouseWheel>")
+
+        canvas.bind("<Enter>",           _bind_scroll)
+        canvas.bind("<Leave>",           _unbind_scroll)
+        scrollable_frame.bind("<Enter>", _bind_scroll)
+        scrollable_frame.bind("<Leave>", _unbind_scroll)
         
         # Title
         title = ttk.Label(scrollable_frame, text="Configuration", 
@@ -2377,23 +2685,1465 @@ or from the Help menu."""
                        "each page is rendered at 300 DPI then passed to Tesseract OCR."
                   ).pack(anchor='w')
 
+        # ── OCR Debug controls ────────────────────────────────────────────────
+        ocr_sep = ttk.Separator(ocr_frame, orient='horizontal')
+        ocr_sep.pack(fill='x', pady=(10, 6))
+
+        ttk.Label(ocr_frame, text="🔬 Debug",
+                  font=('Arial', 9, 'bold')).pack(anchor='w', pady=(0, 4))
+
+        ocr_debug_row = ttk.Frame(ocr_frame)
+        ocr_debug_row.pack(fill='x', pady=(0, 4))
+
+        self.ocr_debug_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            ocr_debug_row,
+            text="Log full OCR text to Index Output tab while indexing",
+            variable=self.ocr_debug_var,
+            command=self._on_ocr_debug_change
+        ).pack(side='left')
+
+        ttk.Label(ocr_debug_row,
+                  text="  (enables per-page OCR text in output — useful for checking accuracy)",
+                  font=('Arial', 8), foreground='gray').pack(side='left')
+
+        ocr_log_row = ttk.Frame(ocr_frame)
+        ocr_log_row.pack(fill='x', pady=(2, 0))
+
+        ttk.Button(ocr_log_row, text="📋 View Last OCR Output",
+                   command=self._show_ocr_log).pack(side='left', padx=(0, 8))
+
+        ttk.Label(ocr_log_row,
+                  text="Shows the raw text extracted from the last OCR'd PDF or image",
+                  font=('Arial', 8), foreground='gray').pack(side='left')
+
         # ── Ollama Server ─────────────────────────────────────────────────────
         ollama_frame = ttk.LabelFrame(scrollable_frame, text="Ollama Server", padding=(10, 6))
         ollama_frame.pack(fill='x', padx=20, pady=(5, 10))
-        
+
+        # ── Status light + Start / Stop / Refresh / Install buttons ───────────
+        ollama_ctrl_row = ttk.Frame(ollama_frame)
+        ollama_ctrl_row.pack(fill='x', pady=(2, 6))
+
+        _ollama_dot_canvas = tk.Canvas(ollama_ctrl_row, width=14, height=14,
+                                       bg=self.root.cget('bg'), highlightthickness=0)
+        _ollama_dot_canvas.pack(side='left', padx=(0, 4))
+        _ollama_dot = _ollama_dot_canvas.create_oval(2, 2, 12, 12,
+                                                     fill='#aaaaaa', outline='')
+        _ollama_status_var = tk.StringVar(value="⬤ Checking…")
+        _ollama_status_lbl = ttk.Label(ollama_ctrl_row,
+                                       textvariable=_ollama_status_var,
+                                       font=('Arial', 9, 'bold'),
+                                       foreground='gray')
+        _ollama_status_lbl.pack(side='left', padx=(0, 16))
+
+        def _update_ollama_light():
+            """Check port 11434 synchronously and update dot + label immediately."""
+            import socket as _sk
+            # Show orange "checking" first so user sees instant feedback
+            _ollama_dot_canvas.itemconfig(_ollama_dot, fill='#e67e00')
+            _ollama_status_var.set('⬤ Checking…')
+            _ollama_status_lbl.configure(foreground='#e67e00')
+            self.root.update_idletasks()   # force orange to render before probe
+
+            try:
+                with _sk.create_connection(('127.0.0.1', 11434), timeout=0.5):
+                    running = True
+            except OSError:
+                running = False
+
+            colour = '#27ae60' if running else '#cc0000'
+            text   = '⬤ Running'  if running else '⬤ Stopped'
+            _ollama_dot_canvas.itemconfig(_ollama_dot, fill=colour)
+            _ollama_status_var.set(text)
+            _ollama_status_lbl.configure(foreground=colour)
+
+        def _find_ollama_exe_local():
+            """Return path to ollama.exe or None."""
+            import shutil as _sh, os as _os
+            local_app = _os.environ.get('LOCALAPPDATA', '')
+            if local_app:
+                cand = _os.path.join(local_app, 'Programs', 'Ollama', 'ollama.exe')
+                if _os.path.isfile(cand):
+                    return cand
+            return _sh.which('ollama')
+
+        def _start_ollama_manual():
+            """Start the Ollama server manually."""
+            import socket as _sk2
+            try:
+                with _sk2.create_connection(('127.0.0.1', 11434), timeout=0.5):
+                    already_running = True
+            except OSError:
+                already_running = False
+
+            if already_running:
+                _update_ollama_light()
+                self.status_var.set('Ollama is already running')
+                return
+
+            exe = _find_ollama_exe_local()
+            if not exe:
+                messagebox.showerror(
+                    'Ollama Not Found',
+                    'Ollama is not installed.\n\n'
+                    "Click '\u2b07 Install Ollama' to download and install it,\n"
+                    "then click Start Ollama here.")
+                return
+
+            _ollama_dot_canvas.itemconfig(_ollama_dot, fill='#e67e00')
+            _ollama_status_var.set('\u2b24 Starting\u2026')
+            _ollama_status_lbl.configure(foreground='#e67e00')
+            self.status_var.set('Starting Ollama server\u2026')
+            self.root.update_idletasks()
+
+            try:
+                if sys.platform == 'win32':
+                    # Re-enable the service start type in case Stop previously
+                    # set it to 'demand' — allows sc start to work again
+                    subprocess.run('sc config ollama start= auto',
+                                   shell=True,
+                                   stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL)
+                    _si = subprocess.STARTUPINFO()
+                    _si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    _si.wShowWindow = 0
+                    self._ollama_process = subprocess.Popen(
+                        [exe, 'serve'], startupinfo=_si,
+                        creationflags=subprocess.CREATE_NO_WINDOW)
+                else:
+                    self._ollama_process = subprocess.Popen(
+                        [exe, 'serve'],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+                def _poll(attempts=0):
+                    import socket as _sk3
+                    try:
+                        with _sk3.create_connection(('127.0.0.1', 11434), timeout=0.5):
+                            alive = True
+                    except OSError:
+                        alive = False
+                    if alive:
+                        _update_ollama_light()
+                        self.status_var.set(
+                            f'Ollama started (PID: {self._ollama_process.pid})')
+                    elif attempts < 16:
+                        self.root.after(500, lambda: _poll(attempts + 1))
+                    else:
+                        _ollama_dot_canvas.itemconfig(_ollama_dot, fill='#cc0000')
+                        _ollama_status_var.set('\u2b24 Start timeout')
+                        _ollama_status_lbl.configure(foreground='#cc0000')
+                        self.status_var.set('Ollama did not respond \u2014 check install')
+
+                self.root.after(1000, _poll)
+
+            except Exception as exc:
+                messagebox.showerror('Start Failed', f'Could not start Ollama:\n{exc}')
+                _update_ollama_light()
+
+        def _stop_ollama_manual():
+            """Stop Ollama completely and prevent Windows SCM from restarting it.
+
+            Root cause of restart loop: Ollama registers as a Windows service with
+            failure-action auto-restart. Killing the process alone is not enough —
+            Windows SCM relaunches it immediately. The fix is to change the service
+            start type to 'demand' (manual) BEFORE stopping, so SCM won't restart it.
+            """
+            _ollama_dot_canvas.itemconfig(_ollama_dot, fill='#e67e00')
+            _ollama_status_var.set('\u2b24 Stopping\u2026')
+            _ollama_status_lbl.configure(foreground='#e67e00')
+            self.root.update_idletasks()
+
+            # Terminate our own managed process if any
+            if hasattr(self, '_ollama_process') and self._ollama_process:
+                try:
+                    self._ollama_process.terminate()
+                    self._ollama_process.wait(timeout=3)
+                except Exception:
+                    try:
+                        self._ollama_process.kill()
+                    except Exception:
+                        pass
+                self._ollama_process = None
+
+            if sys.platform == 'win32':
+                import time as _time
+
+                # CRITICAL: Change service to manual start BEFORE stopping.
+                # This prevents Windows SCM from auto-restarting ollama.exe.
+                subprocess.run('sc config ollama start= demand',
+                               shell=True,
+                               stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL)
+
+                # Graceful service stop via SCM
+                subprocess.run('sc stop ollama',
+                               shell=True,
+                               stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL)
+                _time.sleep(0.8)
+
+                # Kill tray app so it cannot relaunch the server
+                for tray_name in ('"ollama app.exe"', 'ollama_app.exe'):
+                    subprocess.run(
+                        f'taskkill /F /T /IM {tray_name}',
+                        shell=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL)
+
+                # Force-kill all ollama.exe processes (entire process tree)
+                subprocess.run('taskkill /F /T /IM ollama.exe',
+                               shell=True,
+                               stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL)
+
+            else:
+                subprocess.run(['pkill', '-f', 'ollama'],
+                               stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL)
+
+            self.status_var.set('Ollama server stopped')
+            self.root.after(2000, _update_ollama_light)
+
+        def _install_ollama_server():
+            """Open the Ollama download page in the browser."""
+            import webbrowser
+            webbrowser.open('https://ollama.com/download')
+            messagebox.showinfo(
+                "Install Ollama",
+                "Your browser will open the Ollama download page.\n\n"
+                "Steps:\n"
+                "  1. Download and run OllamaSetup.exe\n"
+                "  2. Wait for installation to complete\n"
+                "  3. Click '▶ Start Ollama' above to start the server\n"
+                "  4. Go to Browse & Install Model to download an AI model\n\n"
+                "Recommended starter: llama3.2:3b  (~2 GB, good quality)"
+            )
+
+        # Buttons row
+        ttk.Button(ollama_ctrl_row, text="▶ Start Ollama",
+                   command=_start_ollama_manual).pack(side='left', padx=(0, 6))
+        ttk.Button(ollama_ctrl_row, text="■ Stop",
+                   command=_stop_ollama_manual).pack(side='left', padx=(0, 6))
+        ttk.Button(ollama_ctrl_row, text="🔄 Refresh",
+                   command=_update_ollama_light).pack(side='left', padx=(0, 16))
+        ttk.Separator(ollama_ctrl_row, orient='vertical').pack(
+            side='left', fill='y', pady=3, padx=(0, 12))
+        ttk.Button(ollama_ctrl_row, text="⬇ Install Ollama",
+                   command=_install_ollama_server).pack(side='left')
+
+        # Auto-start checkbox
         auto_start_cb = ttk.Checkbutton(
             ollama_frame,
-            text="Auto-start Ollama server (opens separate CMD window)",
+            text="Auto-start Ollama server when AI-Prowler opens",
             variable=self.auto_start_ollama_var,
             command=self._save_auto_start_setting
         )
         auto_start_cb.pack(anchor='w', pady=(2, 4))
-        
+
         ttk.Label(ollama_frame,
                   text="• If enabled: AI Prowler starts Ollama automatically and closes it on exit\n"
-                       "• If disabled: You must start 'ollama serve' manually before using AI Prowler",
+                       "• If disabled: Use the Start/Stop buttons above or run 'ollama serve' manually",
                   foreground='gray', font=('Arial', 9), justify='left').pack(anchor='w')
+
+        # Initial status check after UI settles
+        self.root.after(1200, _update_ollama_light)
         
+        # ── MCP — Claude Desktop Integration ─────────────────────────────────
+        mcp_frame = ttk.LabelFrame(scrollable_frame,
+                                   text="🔌 MCP — Claude Desktop Integration",
+                                   padding=(10, 8))
+        mcp_frame.pack(fill='x', padx=20, pady=(5, 10))
+
+        # Status row: dot + label + Refresh button
+        mcp_top_row = ttk.Frame(mcp_frame)
+        mcp_top_row.pack(fill='x', pady=(0, 6))
+
+        self._mcp_settings_dot_canvas = tk.Canvas(mcp_top_row, width=14, height=14,
+                                                   highlightthickness=0,
+                                                   bg=self.root.cget('bg'))
+        self._mcp_settings_dot_canvas.pack(side='left', padx=(0, 5))
+        self._mcp_settings_dot = self._mcp_settings_dot_canvas.create_oval(
+            1, 1, 13, 13, fill='#aaaaaa', outline='#888888', width=1)
+
+        self._mcp_detail_var = tk.StringVar(value="Click Refresh to check MCP status…")
+        ttk.Label(mcp_top_row, textvariable=self._mcp_detail_var,
+                  font=('Courier', 9), justify='left',
+                  foreground='#333333').pack(side='left', padx=(0, 10))
+
+        def _refresh_mcp_settings():
+            info = self._check_mcp_status()
+            self._mcp_detail_var.set(info['detail'])
+            for canvas, dot in [
+                (self._mcp_settings_dot_canvas, self._mcp_settings_dot),
+                (self._mcp_dot_canvas,           self._mcp_dot),
+            ]:
+                canvas.itemconfig(dot, fill=info['dot_color'],
+                                  outline=info['dot_color'])
+            self._mcp_status_var.set(info['label'])
+            self._mcp_status_lbl.configure(foreground=info['dot_color'])
+
+        ttk.Button(mcp_top_row, text="🔄 Refresh",
+                   command=_refresh_mcp_settings).pack(side='right')
+
+        ttk.Separator(mcp_frame, orient='horizontal').pack(fill='x', pady=(4, 8))
+
+        # ── Transport explanation ─────────────────────────────────────────────
+        transport_frame = tk.Frame(mcp_frame, bg='#e8f4e8', relief='solid', bd=1)
+        transport_frame.pack(fill='x', pady=(0, 8))
+        tk.Label(transport_frame, justify='left', font=('Arial', 9),
+                 bg='#e8f4e8', fg='#1a5c1a', padx=8, pady=6,
+                 text=(
+                     "🖥  Claude Desktop  →  uses STDIO (local process, no internet required, no Bearer token needed)\n"
+                     "📱  Claude.ai web/mobile  →  uses HTTP via Cloudflare Tunnel (requires HTTP server + tunnel + Bearer token)\n\n"
+                     "⚠️  If Claude Desktop only works when the HTTP server is ON, your config is wrong.\n"
+                     "     Click 'Auto-configure Claude Desktop' below to fix it."
+                 )).pack(anchor='w')
+
+        mcp_btn_row = ttk.Frame(mcp_frame)
+        mcp_btn_row.pack(fill='x', pady=(0, 6))
+
+        def _auto_configure_claude_desktop():
+            """
+            Write the correct STDIO entry for AI-Prowler into claude_desktop_config.json.
+
+            This is the ONLY correct way to configure Claude Desktop — it launches
+            ai_prowler_mcp.py as a local subprocess over stdin/stdout (stdio transport).
+            No HTTP server, no internet, no tunnel required.
+
+            Also removes 'AI-Prowler-Remote' if present (HTTP URL entry — wrong for Desktop).
+            """
+            info = self._check_mcp_status()
+            cp   = info.get('config_path')
+            if cp is None:
+                messagebox.showerror("Config Path Unknown",
+                                     "Could not determine the Claude Desktop config path.")
+                return
+
+            # ── Resolve python.exe — NEVER pythonw.exe ───────────────────────
+            # sys.executable may return pythonw.exe when AI-Prowler is launched
+            # via a shortcut or file-association.  pythonw.exe redirects stdout
+            # to NUL which completely destroys the stdio MCP JSON-RPC pipe.
+            # Claude Desktop needs stdout as its communication channel.
+            # Always force python.exe for the MCP server entry.
+            py_exe = sys.executable
+            if sys.platform == 'win32':
+                import re as _re
+                py_exe = _re.sub(r'(?i)pythonw\.exe$', 'python.exe', py_exe)
+
+            mcp_script = str(Path(__file__).parent / 'ai_prowler_mcp.py')
+
+            # Build the correct stdio entry
+            stdio_entry = {
+                "command": py_exe,
+                "args":    [mcp_script],
+                "env": {
+                    "PYTHONNOUSERSITE":  "1",
+                    "PYTHONIOENCODING":  "utf-8",
+                    "PYTHONUNBUFFERED":  "1",
+                    "PYTHONWARNINGS":    "ignore"
+                }
+            }
+
+            # Load existing config (or start fresh)
+            import json as _jcfg
+            try:
+                if cp.exists():
+                    cfg = _jcfg.loads(cp.read_text(encoding='utf-8-sig'))
+                else:
+                    cfg = {}
+            except Exception as _e:
+                messagebox.showerror("Parse Error",
+                                     f"Could not read existing config:\n{_e}\n\n"
+                                     f"Path: {cp}")
+                return
+
+            servers = cfg.setdefault('mcpServers', {})
+
+            # Detect and warn about the wrong HTTP entry
+            removed_remote = False
+            if 'AI-Prowler-Remote' in servers:
+                removed_remote = True
+                del servers['AI-Prowler-Remote']
+
+            already_correct = (
+                servers.get('AI-Prowler', {}).get('command') == py_exe and
+                servers.get('AI-Prowler', {}).get('args') == [mcp_script] and
+                'url' not in servers.get('AI-Prowler', {})
+            )
+
+            servers['AI-Prowler'] = stdio_entry
+
+            # Write back with pretty formatting
+            try:
+                cp.parent.mkdir(parents=True, exist_ok=True)
+                cp.write_text(
+                    _jcfg.dumps(cfg, indent=2, ensure_ascii=False),
+                    encoding='utf-8'
+                )
+            except Exception as _e:
+                messagebox.showerror("Write Error",
+                                     f"Could not write config file:\n{_e}\n\nPath: {cp}")
+                return
+
+            # Compose result message
+            notes = []
+            if removed_remote:
+                notes.append("• Removed 'AI-Prowler-Remote' (HTTP entry — wrong for Desktop)")
+            # Warn if we had to correct pythonw → python
+            raw_exe = sys.executable
+            if sys.platform == 'win32' and py_exe.lower() != raw_exe.lower():
+                notes.append(f"• Fixed: pythonw.exe → python.exe (pythonw breaks stdio MCP)")
+            if already_correct:
+                notes.append("• Entry was already correct — refreshed to ensure it's up to date")
+            else:
+                notes.append("• Added correct stdio entry for Claude Desktop")
+            notes.append(f"\nPython: {py_exe}")
+            notes.append(f"Script: {mcp_script}")
+            notes.append(f"\nConfig path:\n{cp}")
+            notes.append("\nRestart Claude Desktop now to apply the change.")
+
+            messagebox.showinfo("✅ Claude Desktop Configured",
+                                "\n".join(notes))
+
+            _refresh_mcp_settings()
+
+            # Offer to restart Claude Desktop — must kill existing instance first
+            if messagebox.askyesno("Restart Claude Desktop?",
+                                   "Restart Claude Desktop now to apply the new configuration?\n\n"
+                                   "(The existing Claude Desktop window will be closed first.)"):
+                try:
+                    if sys.platform == 'win32':
+                        # Kill existing Claude Desktop process before relaunching
+                        subprocess.run(
+                            'taskkill /F /IM claude.exe',
+                            shell=True,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL
+                        )
+                        import time as _t; _t.sleep(1.5)
+                        subprocess.Popen(
+                            'start shell:AppsFolder\\Claude_pzs8sxrjxfjjc!Claude',
+                            shell=True)
+                    elif sys.platform == 'darwin':
+                        subprocess.run(['pkill', '-x', 'Claude'],
+                                       stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL)
+                        import time as _t; _t.sleep(1.5)
+                        subprocess.Popen(['open', '-a', 'Claude'])
+                except Exception:
+                    messagebox.showinfo("Manual Restart Needed",
+                                       "Please close and reopen Claude Desktop manually.")
+
+        def _open_claude_config():
+            """Open Claude Desktop config in Notepad (or default editor)."""
+            info = self._check_mcp_status()
+            cp = info.get('config_path')
+            if cp is None:
+                messagebox.showinfo("Config Path Unknown",
+                                    "Could not determine the Claude Desktop config path\n"
+                                    "for your platform.")
+                return
+            # Create the file with a skeleton if it doesn't exist yet
+            if not cp.exists():
+                try:
+                    cp.parent.mkdir(parents=True, exist_ok=True)
+                    cp.write_text('{\n  "mcpServers": {}\n}\n', encoding='utf-8')
+                    messagebox.showinfo("Config Created",
+                                        f"Created a new config file at:\n{cp}\n\n"
+                                        f"Click 'Auto-configure Claude Desktop' to write the\n"
+                                        f"correct entry automatically.")
+                except Exception as e:
+                    messagebox.showerror("Error", f"Could not create config file:\n{e}")
+                    return
+            try:
+                if sys.platform == 'win32':
+                    import subprocess as _sp
+                    _sp.Popen(['notepad.exe', str(cp)])
+                elif sys.platform == 'darwin':
+                    import subprocess as _sp
+                    _sp.Popen(['open', str(cp)])
+                else:
+                    import subprocess as _sp
+                    _sp.Popen(['xdg-open', str(cp)])
+            except Exception as e:
+                messagebox.showerror("Error", f"Could not open editor:\n{e}\n\nPath: {cp}")
+
+        def _open_example_config():
+            """Open claude_desktop_config_example.json in Notepad."""
+            example = Path(__file__).parent / 'claude_desktop_config_example.json'
+            if not example.exists():
+                messagebox.showwarning("File Not Found",
+                                       f"claude_desktop_config_example.json not found in:\n"
+                                       f"{Path(__file__).parent}")
+                return
+            try:
+                if sys.platform == 'win32':
+                    import subprocess as _sp
+                    _sp.Popen(['notepad.exe', str(example)])
+                else:
+                    import subprocess as _sp
+                    _sp.Popen(['open' if sys.platform == 'darwin' else 'xdg-open', str(example)])
+            except Exception as e:
+                messagebox.showerror("Error", f"Could not open file:\n{e}")
+
+        def _copy_config_path():
+            """Copy the Claude Desktop config path to clipboard."""
+            info = self._check_mcp_status()
+            cp = info.get('config_path')
+            if cp:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(str(cp))
+                self.status_var.set(f"📋 Copied: {cp}")
+                self.root.after(3000, lambda: self.status_var.set("Ready"))
+
+        # Primary action: auto-configure (prominent, first)
+        ttk.Button(mcp_btn_row, text="⚙️ Auto-configure Claude Desktop",
+                   command=_auto_configure_claude_desktop).pack(side='left', padx=(0, 8))
+
+        # Secondary actions
+        mcp_btn_row2 = ttk.Frame(mcp_frame)
+        mcp_btn_row2.pack(fill='x', pady=(0, 4))
+        ttk.Button(mcp_btn_row2, text="📂 Open Config File",
+                   command=_open_claude_config).pack(side='left', padx=(0, 8))
+        ttk.Button(mcp_btn_row2, text="📋 View Example Config",
+                   command=_open_example_config).pack(side='left', padx=(0, 8))
+        ttk.Button(mcp_btn_row2, text="📌 Copy Config Path",
+                   command=_copy_config_path).pack(side='left', padx=(0, 8))
+        ttk.Button(mcp_btn_row2, text="🔬 Run MCP Diagnostics",
+                   command=self._run_mcp_diagnostics).pack(side='left')
+
+        # Trigger an initial status check
+        self.root.after(1500, _refresh_mcp_settings)
+
+        # ── Remote Access ─────────────────────────────────────────────────────
+        remote_frame = ttk.LabelFrame(scrollable_frame,
+                                      text="📡 Remote Access — Claude on Mobile",
+                                      padding=(10, 8))
+        remote_frame.pack(fill='x', padx=20, pady=(5, 10))
+
+        # Intro
+        ttk.Label(remote_frame, justify='left', font=('Arial', 9),
+                  text=("Query AI-Prowler from Claude on your phone via a Cloudflare Tunnel.\n"
+                        "The HTTP server runs locally on this laptop; Cloudflare provides the secure public URL."),
+                  foreground='gray').pack(anchor='w', pady=(0, 8))
+
+        ttk.Separator(remote_frame, orient='horizontal').pack(fill='x', pady=(0, 8))
+
+        # ── Token ─────────────────────────────────────────────────────────────
+        ttk.Label(remote_frame, text="Bearer Token  (required — you choose the value):",
+                  font=('Arial', 9, 'bold')).pack(anchor='w')
+        ttk.Label(remote_frame, font=('Arial', 8), foreground='gray',
+                  text="Paste this token into Claude mobile's MCP config. Anyone with this token can query your knowledge base.").pack(anchor='w', pady=(0, 4))
+
+        token_row = ttk.Frame(remote_frame)
+        token_row.pack(fill='x', pady=(0, 8))
+
+        _remote_token_var = tk.StringVar()
+        # Load saved token from config
+        try:
+            import json as _jmod
+            _cfg_path = Path.home() / '.ai-prowler' / 'config.json'
+            if _cfg_path.exists():
+                _cfg_data = _jmod.loads(_cfg_path.read_text(encoding='utf-8'))
+                _remote_token_var.set(_cfg_data.get('remote_token', ''))
+        except Exception:
+            pass
+
+        _token_show_var = tk.BooleanVar(value=False)
+        _token_entry = ttk.Entry(token_row, textvariable=_remote_token_var,
+                                 show='●', width=42)
+        _token_entry.pack(side='left', padx=(0, 6))
+
+        def _toggle_token_show():
+            _token_entry.configure(show='' if _token_show_var.get() else '●')
+        ttk.Checkbutton(token_row, text="Show", variable=_token_show_var,
+                        command=_toggle_token_show).pack(side='left', padx=(0, 10))
+
+        def _save_remote_token():
+            tok = _remote_token_var.get().strip()
+            if not tok:
+                messagebox.showwarning("Empty Token",
+                                       "Token cannot be empty. Choose any string — e.g. MySecretToken123")
+                return
+            try:
+                import json as _jmod
+                _cfg_p = Path.home() / '.ai-prowler' / 'config.json'
+                _cfg_p.parent.mkdir(parents=True, exist_ok=True)
+                _cfg_d = {}
+                if _cfg_p.exists():
+                    try:
+                        _cfg_d = _jmod.loads(_cfg_p.read_text(encoding='utf-8'))
+                    except Exception:
+                        pass
+                _cfg_d['remote_token'] = tok
+                _cfg_p.write_text(_jmod.dumps(_cfg_d, indent=2), encoding='utf-8')
+                self.status_var.set("✅ Token saved")
+                self.root.after(3000, lambda: self.status_var.set("Ready"))
+            except Exception as _e:
+                messagebox.showerror("Save Error", str(_e))
+
+        ttk.Button(token_row, text="💾 Save Token",
+                   command=_save_remote_token).pack(side='left')
+
+        ttk.Separator(remote_frame, orient='horizontal').pack(fill='x', pady=(4, 8))
+
+        # ── HTTP MCP Server ────────────────────────────────────────────────────
+        # Header row with internet + subscription indicators
+        http_hdr_row = ttk.Frame(remote_frame)
+        http_hdr_row.pack(fill='x', pady=(0, 2))
+
+        ttk.Label(http_hdr_row, text="HTTP MCP Server  (listens on localhost only):",
+                  font=('Arial', 9, 'bold')).pack(side='left')
+
+        # ── Internet status light ──────────────────────────────────────────────
+        ttk.Label(http_hdr_row, text="  Internet:", font=('Arial', 8),
+                  foreground='gray').pack(side='left', padx=(16, 2))
+        _inet_canvas = tk.Canvas(http_hdr_row, width=14, height=14,
+                                 bg=self.root.cget('bg'), highlightthickness=0)
+        _inet_canvas.pack(side='left', padx=(0, 2))
+        _inet_dot = _inet_canvas.create_oval(2, 2, 12, 12, fill='gray', outline='')
+        _inet_lbl = ttk.Label(http_hdr_row, text="Checking…",
+                              font=('Arial', 8), foreground='gray')
+        _inet_lbl.pack(side='left', padx=(0, 12))
+
+        # ── Subscription status light ──────────────────────────────────────────
+        ttk.Label(http_hdr_row, text="Subscription:", font=('Arial', 8),
+                  foreground='gray').pack(side='left', padx=(0, 2))
+        _sub_canvas = tk.Canvas(http_hdr_row, width=14, height=14,
+                                bg=self.root.cget('bg'), highlightthickness=0)
+        _sub_canvas.pack(side='left', padx=(0, 2))
+        _sub_dot = _sub_canvas.create_oval(2, 2, 12, 12, fill='gray', outline='')
+        _sub_lbl = ttk.Label(http_hdr_row, text="Unknown",
+                             font=('Arial', 8), foreground='gray')
+        _sub_lbl.pack(side='left')
+
+        # ── Shared subscription + internet check logic ─────────────────────────
+        _SUBS_URL   = "https://raw.githubusercontent.com/dvavro/ai-prowler-subs/main/subs.json"
+        _SUBS_CACHE = Path.home() / "AppData" / "Local" / "AI-Prowler" / "subs_cache.json"
+
+        import hashlib as _hashlib, json as _json
+
+        def _token_key(tok):
+            return _hashlib.sha256(tok.encode()).hexdigest()[:16]
+
+        def _check_internet() -> bool:
+            """Quick connectivity check — tries to reach GitHub."""
+            import urllib.request as _ur
+            try:
+                _ur.urlopen("https://github.com", timeout=4)
+                return True
+            except Exception:
+                return False
+
+        def _fetch_subs_gui() -> dict | None:
+            """
+            Fetch subs.json from the public GitHub registry.
+            No authentication needed — repo is public (read-only for everyone,
+            writable only by the repo owner via GitHub credentials).
+            Saves successful fetches to a local cache for offline resilience.
+            """
+            import urllib.request as _ur
+            try:
+                req = _ur.Request(
+                    _SUBS_URL,
+                    headers={"User-Agent":    "AI-Prowler-GUI/1.0",
+                             "Cache-Control": "no-cache"})
+                with _ur.urlopen(req, timeout=8) as resp:
+                    result = _json.loads(resp.read())
+                    # Save to local cache for offline resilience
+                    try:
+                        _SUBS_CACHE.parent.mkdir(parents=True, exist_ok=True)
+                        payload = {
+                            "cached_at": __import__("datetime").date.today().isoformat(),
+                            "data": result
+                        }
+                        _SUBS_CACHE.write_text(
+                            _json.dumps(payload, indent=2), encoding="utf-8")
+                    except Exception:
+                        pass
+                    return result
+            except Exception:
+                pass
+            # Fallback to local cache if network unavailable
+            try:
+                if _SUBS_CACHE.exists():
+                    raw = _json.loads(_SUBS_CACHE.read_text(encoding='utf-8'))
+                    return raw.get('data')
+            except Exception:
+                pass
+            return None
+        def _check_subscription_gui(tok, subs_data) -> dict:
+            """
+            Returns dict with keys: status, name, days_left, message
+            status: 'ok' | 'warning' | 'blocked' | 'unmanaged'
+            """
+            if not subs_data:
+                return {'status': 'unmanaged', 'name': None, 'days_left': None,
+                        'message': 'No registry — unmanaged/local mode'}
+            key  = _token_key(tok)
+            subs = subs_data.get('subscribers', {})
+            if key not in subs:
+                return {'status': 'unmanaged', 'name': None, 'days_left': None,
+                        'message': 'Token not in managed registry — local mode'}
+            entry    = subs[key]
+            name     = entry.get('name', 'Subscriber')
+            exp_str  = entry.get('expires', '')
+            try:
+                import datetime as _dt
+                expiry    = _dt.date.fromisoformat(exp_str)
+                today     = _dt.date.today()
+                days_left = (expiry - today).days
+            except ValueError:
+                return {'status': 'unmanaged', 'name': name, 'days_left': None,
+                        'message': f'Invalid expiry in registry for {name}'}
+
+            _WARN_DAYS  = 30
+            _GRACE_DAYS = 30
+            if days_left >= 0:
+                if days_left <= _WARN_DAYS:
+                    return {'status': 'warning', 'name': name,
+                            'days_left': days_left,
+                            'message': f"Subscription expires in {days_left} day(s) — renewal recommended"}
+                return {'status': 'ok', 'name': name, 'days_left': days_left,
+                        'message': f'Active — {days_left} day(s) remaining'}
+            days_over = -days_left
+            if days_over <= _GRACE_DAYS:
+                return {'status': 'warning', 'name': name, 'days_left': days_left,
+                        'message': (f"Subscription EXPIRED {days_over} day(s) ago — "
+                                    f"{_GRACE_DAYS - days_over} day(s) grace period remaining")}
+            return {'status': 'blocked', 'name': name, 'days_left': days_left,
+                    'message': (f"Remote access BLOCKED — subscription expired "
+                                f"{days_over} day(s) ago and grace period has elapsed")}
+
+        def _show_subscription_popup(sub_result):
+            """Show a subscription info popup, reading instructions from file."""
+            # Read instruction text
+            instr_path = Path(__file__).parent / 'subscription_instructions.txt'
+            try:
+                instr_text = instr_path.read_text(encoding='utf-8')
+            except Exception:
+                instr_text = ("Contact david.vavro1@gmail.com to subscribe or renew.\n"
+                              "Subscription instructions file not found in install folder.")
+
+            status   = sub_result.get('status', 'unknown')
+            name     = sub_result.get('name') or 'Unknown'
+            msg      = sub_result.get('message', '')
+            days_left = sub_result.get('days_left')
+
+            # Choose title and header colour
+            if status == 'blocked':
+                title      = "🔒 Remote Access Blocked"
+                hdr_colour = '#cc0000'
+                hdr_text   = "Remote access is currently blocked."
+            elif status == 'warning':
+                title      = "⚠️  Subscription Expiring"
+                hdr_colour = '#e67e00'
+                hdr_text   = "Your subscription needs attention."
+            else:
+                title      = "ℹ️  Subscription Information"
+                hdr_colour = '#27ae60'
+                hdr_text   = "Subscription & Remote Access Information"
+
+            win = tk.Toplevel(self.root)
+            win.title(title)
+            win.geometry("580x540")
+            win.resizable(True, True)
+            win.grab_set()
+
+            # Status banner
+            banner = tk.Frame(win, bg=hdr_colour)
+            banner.pack(fill='x')
+            tk.Label(banner, text=hdr_text, bg=hdr_colour, fg='white',
+                     font=('Arial', 10, 'bold'), pady=8, padx=16).pack(anchor='w')
+            if msg:
+                tk.Label(banner, text=msg, bg=hdr_colour, fg='#ffe0e0',
+                         font=('Arial', 8), pady=4, padx=16,
+                         wraplength=540, justify='left').pack(anchor='w')
+
+            # Instructions text area
+            import tkinter.scrolledtext as _st
+            txt = _st.ScrolledText(win, wrap='word', font=('Consolas', 9),
+                                   bg='#1a1a1a', fg='#e0e0e0',
+                                   padx=12, pady=10, relief='flat', bd=0)
+            txt.pack(fill='both', expand=True, padx=0, pady=0)
+            txt.insert('1.0', instr_text)
+            txt.config(state='disabled')
+
+            # Bottom buttons
+            btn_row = tk.Frame(win, bg=win.cget('bg'))
+            btn_row.pack(fill='x', pady=8, padx=16)
+            tk.Button(btn_row, text="Close", width=10,
+                      command=win.destroy).pack(side='right')
+            def _open_email():
+                import subprocess as _sp
+                _sp.Popen(['start', 'mailto:david.vavro1@gmail.com'], shell=True)
+            tk.Button(btn_row, text="📧  Email to Subscribe",
+                      command=_open_email,
+                      bg='#0f3460', fg='white',
+                      relief='flat', padx=12).pack(side='right', padx=(0, 8))
+
+        def _update_internet_light(online: bool):
+            colour = '#27ae60' if online else '#cc0000'
+            text   = 'Online' if online else 'Offline'
+            _inet_canvas.itemconfig(_inet_dot, fill=colour)
+            _inet_lbl.config(text=text, foreground=colour)
+
+        def _update_sub_light(sub_result: dict):
+            status    = sub_result.get('status', 'unmanaged')
+            days_left = sub_result.get('days_left')
+
+            if status == 'ok':
+                # Paid and active — green
+                colour = '#27ae60'
+                text   = 'Active'
+
+            elif status == 'warning':
+                # Yellow — expiring soon (pre-expiry) or in 30-day grace countdown
+                colour = '#d4ac0d'
+                if days_left is not None and days_left < 0:
+                    days_over = -days_left
+                    _GRACE_DAYS = 30
+                    remaining  = _GRACE_DAYS - days_over
+                    text = f'Unpaid — {remaining}d left'
+                elif days_left is not None:
+                    text = f'Expiring in {days_left}d'
+                else:
+                    text = 'Expiring Soon'
+
+            elif status == 'blocked':
+                # Red — grace period elapsed, access denied
+                colour = '#cc0000'
+                text   = 'Access Blocked'
+
+            else:
+                # unmanaged — self-hosted / token not in managed registry — allow through
+                colour = '#27ae60'
+                text   = 'Self-hosted'
+
+            _sub_canvas.itemconfig(_sub_dot, fill=colour)
+            _sub_lbl.config(text=text, foreground=colour)
+
+        _current_sub_result = [{'status': 'unmanaged', 'name': None,
+                                  'days_left': None, 'message': 'Not yet checked'}]
+
+        def _run_status_check():
+            """Background thread: check internet + subscription, update lights."""
+            def _worker():
+                online = _check_internet()
+                self.root.after(0, lambda: _update_internet_light(online))
+                tok = _remote_token_var.get().strip()
+                if tok:
+                    subs_data  = _fetch_subs_gui()
+                    sub_result = _check_subscription_gui(tok, subs_data)
+                    _current_sub_result[0] = sub_result
+                    self.root.after(0, lambda: _update_sub_light(sub_result))
+                else:
+                    # No token set — no mobile subscription configured
+                    self.root.after(0, lambda: (
+                        _sub_canvas.itemconfig(_sub_dot, fill='#cc0000'),
+                        _sub_lbl.config(text='Not Subscribed', foreground='#cc0000')
+                    ))
+            threading.Thread(target=_worker, daemon=True).start()
+
+        # Run an initial check after the UI has settled
+        self.root.after(1500, _run_status_check)
+
+        # Re-check every 5 minutes in the background
+        def _schedule_recheck():
+            _run_status_check()
+            self.root.after(300_000, _schedule_recheck)
+        self.root.after(300_000, _schedule_recheck)
+
+        # ── HTTP server controls ───────────────────────────────────────────────
+        http_ctrl_row = ttk.Frame(remote_frame)
+        http_ctrl_row.pack(fill='x', pady=(4, 0))
+
+        ttk.Label(http_ctrl_row, text="Port:").pack(side='left')
+        _http_port_var = tk.StringVar(value='8000')
+        ttk.Entry(http_ctrl_row, textvariable=_http_port_var, width=6).pack(side='left', padx=(4, 12))
+
+        _http_status_var = tk.StringVar(value="⬤ Stopped")
+        _http_status_lbl = ttk.Label(http_ctrl_row, textvariable=_http_status_var,
+                                     foreground='#cc0000', font=('Arial', 9, 'bold'))
+        _http_status_lbl.pack(side='left', padx=(0, 12))
+
+        def _start_http_server():
+            tok = _remote_token_var.get().strip()
+            if not tok:
+                messagebox.showwarning("No Token", "Save a Bearer token first.")
+                return
+            if self._http_server_proc is not None and self._http_server_proc.poll() is None:
+                messagebox.showinfo("Already Running", "HTTP server is already running.")
+                return
+
+            # ── Subscription check before starting ────────────────────────────
+            # Run in background to avoid freezing the UI during network check.
+            # Subscription gate before starting the HTTP server:
+            #   ok        → green,  start server
+            #   warning   → yellow, show popup, start server (grace countdown)
+            #   blocked   → red,    show popup, block server start
+            #   unmanaged → red,    show popup, block server start
+            #                       (token not in registry = no active subscription)
+            def _pre_start_check():
+                online     = _check_internet()
+                subs_data  = _fetch_subs_gui() if online else None
+                sub_result = _check_subscription_gui(tok, subs_data)
+                _current_sub_result[0] = sub_result
+
+                def _on_check_done():
+                    _update_internet_light(online)
+                    _update_sub_light(sub_result)
+                    status = sub_result.get('status', 'unmanaged')
+
+                    if status == 'blocked':
+                        # Red light — subscription explicitly blocked, prevent server start
+                        _http_status_var.set("⬤ Access Blocked")
+                        _http_status_lbl.configure(foreground='#cc0000')
+                        _show_subscription_popup(sub_result)
+                        return
+
+                    if status == 'warning':
+                        # Yellow — show renewal reminder but allow server start
+                        _show_subscription_popup(sub_result)
+
+                    # ok or warning — proceed with server start
+                    _do_start_server(tok)
+
+                self.root.after(0, _on_check_done)
+
+            _http_status_var.set("⬤ Checking…")
+            _http_status_lbl.configure(foreground='#e67e00')
+            threading.Thread(target=_pre_start_check, daemon=True).start()
+
+        def _do_start_server(tok):
+            """Actually launch the HTTP server subprocess after checks pass."""
+            port = _http_port_var.get().strip()
+            try:
+                port = int(port)
+            except ValueError:
+                messagebox.showerror("Bad Port", f"Port must be a number, got: {port}")
+                return
+            import sys as _sys
+            py_exe  = _sys.executable
+            mcp_script = str(Path(__file__).parent / 'ai_prowler_mcp.py')
+            try:
+                import os as _os
+                _env = _os.environ.copy()
+                _env['PYTHONUNBUFFERED'] = '1'
+                _env['PYTHONIOENCODING'] = 'utf-8'
+                # Resolve the public base URL from the saved tunnel_domain
+                _pub_base = ''
+                try:
+                    import json as _jlaunch
+                    _cfg_p = Path.home() / '.ai-prowler' / 'config.json'
+                    if _cfg_p.exists():
+                        _cfg_d = _jlaunch.loads(_cfg_p.read_text(encoding='utf-8'))
+                        _dom   = _cfg_d.get('tunnel_domain', '').strip()
+                        if _dom:
+                            _pub_base = _dom if _dom.startswith('http') else f'https://{_dom}'
+                except Exception:
+                    pass
+                # Also check the live GUI field (may differ from saved config)
+                _gui_domain = _tun_domain_var.get().strip()
+                if _gui_domain and _gui_domain not in ('mcp.yourdomain.com',):
+                    _pub_base = (_gui_domain if _gui_domain.startswith('http')
+                                 else f'https://{_gui_domain}')
+
+                _launch_args = [py_exe, '-u', mcp_script, '--transport', 'http',
+                                '--port', str(port), '--token', tok]
+                if _pub_base:
+                    _launch_args += ['--public-base', _pub_base]
+
+                self._http_server_proc = subprocess.Popen(
+                    _launch_args,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1, env=_env,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                )
+                _http_status_var.set("⬤ Starting…")
+                _http_status_lbl.configure(foreground='#e67e00')
+
+                # --- Primary method: poll after 3 seconds ---
+                # If the process is still alive after 3s the server started OK.
+                # This is more reliable than keyword scanning because uvicorn may
+                # buffer output differently when stdout is a pipe.
+                _proc_ref = self._http_server_proc
+                def _poll_after_start():
+                    if _proc_ref.poll() is None:   # still running = success
+                        _http_status_var.set("⬤ Running")
+                        _http_status_lbl.configure(foreground='#27ae60')
+                        # Prevent Windows sleep while the MCP server is live
+                        self._set_sleep_prevention(True)
+                    # else — process died quickly; _watch_http will set Stopped/error
+                self.root.after(3000, _poll_after_start)
+
+                # --- Fallback method: scan stdout for keywords ---
+                # Also watches for port-in-use errors and process exit.
+                def _watch_http():
+                    port_in_use = False
+                    for line in _proc_ref.stdout:
+                        line = line.rstrip()
+                        # Immediately turn green if we see a ready marker
+                        if any(kw in line for kw in
+                               ('ready', 'Ready', 'running', 'Running',
+                                'started', 'Started', 'StreamableHTTP',
+                                'Application startup', 'Uvicorn running')):
+                            self.root.after(0, lambda: (
+                                _http_status_var.set("⬤ Running"),
+                                _http_status_lbl.configure(foreground='#27ae60')
+                            ))
+                        # Detect port already in use
+                        if ('address already in use' in line.lower() or
+                                'only one usage of each socket' in line.lower() or
+                                'error while attempting to bind' in line.lower()):
+                            port_in_use = True
+                    # Process exited — only update if we didn't already set Running
+                    if port_in_use:
+                        def _show_port_err():
+                            _http_status_var.set("⬤ Port in use — close old server first")
+                            _http_status_lbl.configure(foreground='#cc0000')
+                            messagebox.showerror(
+                                "Port Already In Use",
+                                f"Port {_http_port_var.get()} is already in use.\n\n"
+                                "If you started the server manually in a Command Prompt,\n"
+                                "close that window first, then click Start HTTP Server again.")
+                        self.root.after(0, _show_port_err)
+                    else:
+                        self.root.after(0, lambda: (
+                            _http_status_var.set("⬤ Stopped"),
+                            _http_status_lbl.configure(foreground='#cc0000')
+                        ))
+                threading.Thread(target=_watch_http, daemon=True).start()
+            except Exception as _e:
+                messagebox.showerror("Launch Error", str(_e))
+
+        def _stop_http_server():
+            if self._http_server_proc is None or self._http_server_proc.poll() is not None:
+                _http_status_var.set("⬤ Stopped")
+                _http_status_lbl.configure(foreground='#cc0000')
+                self._set_sleep_prevention(False)   # ensure sleep is re-enabled
+                return
+            try:
+                self._http_server_proc.terminate()
+                self._http_server_proc.wait(timeout=5)
+            except Exception:
+                try:
+                    self._http_server_proc.kill()
+                except Exception:
+                    pass
+            self._http_server_proc = None
+            _http_status_var.set("⬤ Stopped")
+            _http_status_lbl.configure(foreground='#cc0000')
+            # Restore normal Windows sleep/power management
+            self._set_sleep_prevention(False)
+
+        http_btn_row = ttk.Frame(remote_frame)
+        http_btn_row.pack(fill='x', pady=(4, 8))
+        ttk.Button(http_btn_row, text="▶ Start HTTP Server",
+                   command=_start_http_server).pack(side='left', padx=(0, 6))
+        ttk.Button(http_btn_row, text="■ Stop",
+                   command=_stop_http_server).pack(side='left')
+
+        ttk.Separator(remote_frame, orient='horizontal').pack(fill='x', pady=(0, 8))
+
+        # ── Cloudflare Tunnel ──────────────────────────────────────────────────
+        ttk.Label(remote_frame, text="Cloudflare Tunnel  (provides the public HTTPS URL):",
+                  font=('Arial', 9, 'bold')).pack(anchor='w')
+        ttk.Label(remote_frame, font=('Arial', 8), foreground='gray',
+                  text=("Create a free Cloudflare Zero Trust tunnel at dash.cloudflare.com → Networks → Tunnels.\n"
+                        "Enter your tunnel's public hostname and token below, then click Activate.")
+                  ).pack(anchor='w', pady=(0, 6))
+
+        def _cf_exe():
+            return str(Path(__file__).parent / 'cloudflared.exe')
+
+        # ── Load saved tunnel settings ─────────────────────────────────────────
+        _tun_name_var   = tk.StringVar(value='')
+        _tun_domain_var = tk.StringVar(value='')
+        try:
+            import json as _jmod_rc
+            _rc_path = Path.home() / '.ai-prowler' / 'config.json'
+            if _rc_path.exists():
+                _rc_data = _jmod_rc.loads(_rc_path.read_text(encoding='utf-8'))
+                _tun_name_var.set(_rc_data.get('tunnel_name', ''))
+                _tun_domain_var.set(_rc_data.get('tunnel_domain', ''))
+        except Exception:
+            pass
+
+        # ── Activation frame ──────────────────────────────────────────────────
+        act_frame = ttk.LabelFrame(remote_frame,
+                                   text="One-Time Activation  (run once per machine)",
+                                   padding=6)
+        act_frame.pack(fill='x', pady=(0, 6))
+
+        # Public hostname row
+        host_row = ttk.Frame(act_frame)
+        host_row.pack(fill='x', pady=(0, 4))
+        ttk.Label(host_row, text="Public hostname:", width=18, anchor='w').pack(side='left')
+        ttk.Entry(host_row, textvariable=_tun_domain_var, width=36).pack(side='left', padx=(4, 6))
+        ttk.Label(host_row, text="(e.g. myname.mydomain.com)",
+                  font=('Arial', 8), foreground='gray').pack(side='left')
+
+        # Tunnel token row
+        _tun_token_var  = tk.StringVar()
+        _tun_tok_show   = tk.BooleanVar(value=False)
+        # Load saved tunnel token from config
+        try:
+            import json as _jmod_tt
+            _tt_path = Path.home() / '.ai-prowler' / 'config.json'
+            if _tt_path.exists():
+                _tt_data = _jmod_tt.loads(_tt_path.read_text(encoding='utf-8'))
+                _tun_token_var.set(_tt_data.get('tunnel_token', ''))
+        except Exception:
+            pass
+
+        tok_row = ttk.Frame(act_frame)
+        tok_row.pack(fill='x', pady=(0, 6))
+        ttk.Label(tok_row, text="Tunnel token:", width=18, anchor='w').pack(side='left')
+        _tun_tok_entry = ttk.Entry(tok_row, textvariable=_tun_token_var,
+                                   show='●', width=36)
+        _tun_tok_entry.pack(side='left', padx=(4, 6))
+        def _toggle_tun_tok():
+            _tun_tok_entry.configure(show='' if _tun_tok_show.get() else '●')
+        ttk.Checkbutton(tok_row, text="Show", variable=_tun_tok_show,
+                        command=_toggle_tun_tok).pack(side='left', padx=(0, 8))
+        ttk.Label(tok_row, text="(from Cloudflare Zero Trust dashboard → Networks → Tunnels)",
+                  font=('Arial', 8), foreground='gray').pack(side='left')
+
+        # Activate / Uninstall buttons + status
+        act_btn_row = ttk.Frame(act_frame)
+        act_btn_row.pack(fill='x', pady=(2, 0))
+
+        _act_status_var = tk.StringVar(value="")
+        _act_status_lbl = ttk.Label(act_frame, textvariable=_act_status_var,
+                                    font=('Arial', 8), foreground='gray')
+        _act_status_lbl.pack(anchor='w', pady=(4, 0))
+
+        def _save_tunnel_settings(domain, tok):
+            """Persist public hostname and tunnel token to AI-Prowler config."""
+            try:
+                import json as _jmod_sc
+                _sc_path = Path.home() / '.ai-prowler' / 'config.json'
+                _sc_path.parent.mkdir(parents=True, exist_ok=True)
+                _sc_d = {}
+                if _sc_path.exists():
+                    try:
+                        _sc_d = _jmod_sc.loads(_sc_path.read_text(encoding='utf-8'))
+                    except Exception:
+                        pass
+                _sc_d['tunnel_domain'] = domain
+                _sc_d['tunnel_token']  = tok
+                _sc_path.write_text(_jmod_sc.dumps(_sc_d, indent=2), encoding='utf-8')
+            except Exception:
+                pass
+
+        # ── Elevation helper ───────────────────────────────────────────────────
+        def _run_elevated(exe: str, args_str: str, wait_secs: float = 5.0) -> bool:
+            """
+            Launch a command with UAC elevation using ShellExecuteW 'runas'.
+
+            Windows Service Control Manager operations (service install/uninstall,
+            net start/stop) always require Administrator privileges.  Calling them
+            directly from a non-elevated process yields:
+              "Cannot establish a connection to the service control manager: Access is denied."
+
+            This helper triggers a UAC prompt so the user approves elevation once
+            per operation.  Output cannot be captured from an elevated child process,
+            so success/failure is determined afterwards by polling sc query.
+
+            Returns True if the UAC launch was accepted, False if cancelled.
+            wait_secs: how long to sleep while the elevated child runs.
+            """
+            import ctypes, time as _t
+            ret = ctypes.windll.shell32.ShellExecuteW(
+                None,     # parent hwnd
+                "runas",  # verb — triggers UAC elevation prompt
+                exe,      # executable
+                args_str, # arguments
+                None,     # working directory (inherit)
+                0         # SW_HIDE — no extra console window
+            )
+            if ret <= 32:
+                # User cancelled UAC or launch error (codes <= 32 are errors)
+                return False
+            _t.sleep(wait_secs)   # wait for the elevated child to finish
+            return True
+
+        def _activate_tunnel():
+            """Install cloudflared as a Windows service using the tunnel token."""
+            exe    = _cf_exe()
+            domain = _tun_domain_var.get().strip()
+            tok    = _tun_token_var.get().strip()
+
+            if not domain:
+                messagebox.showwarning("Missing Hostname",
+                                       "Enter the public hostname for your Cloudflare tunnel\n"
+                                       "(e.g. myname.mydomain.com)")
+                return
+            if not tok:
+                messagebox.showwarning("Missing Token",
+                                       "Paste your Cloudflare tunnel token.\n\n"
+                                       "Get this from: Cloudflare Zero Trust dashboard\n"
+                                       "→ Networks → Tunnels → your tunnel → Configure → Token")
+                return
+            if not Path(exe).exists():
+                messagebox.showerror("cloudflared not found",
+                                     f"cloudflared.exe not found at:\n{exe}\n\n"
+                                     "Re-run the AI-Prowler installer.")
+                return
+
+            _act_status_var.set("⏳ Installing tunnel service…")
+            _act_status_lbl.configure(foreground='#e67e00')
+
+            def _do_activate():
+                try:
+                    import time as _t
+
+                    # Step 1: If service already exists, stop and uninstall it first
+                    # (sc query does NOT need elevation — read-only)
+                    svc_check = subprocess.run(
+                        ['sc', 'query', 'cloudflared'],
+                        capture_output=True, text=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                    )
+                    if svc_check.returncode == 0 and 'cloudflared' in svc_check.stdout.lower():
+                        self.root.after(0, lambda: _act_status_var.set(
+                            "⏳ Stopping existing service… (approve UAC if prompted)"))
+                        # net stop requires elevation — use cmd.exe via runas
+                        _run_elevated("cmd.exe", '/c "net stop cloudflared"', wait_secs=4)
+                        self.root.after(0, lambda: _act_status_var.set(
+                            "⏳ Removing old service… (approve UAC if prompted)"))
+                        # cloudflared service uninstall requires elevation
+                        _run_elevated(exe, 'service uninstall', wait_secs=3)
+
+                    # Step 2: Fresh install — cloudflared service install requires elevation
+                    self.root.after(0, lambda: _act_status_var.set(
+                        "⏳ Installing tunnel service… (approve UAC if prompted)"))
+                    launched = _run_elevated(exe, f'service install "{tok}"', wait_secs=6)
+
+                    if not launched:
+                        self.root.after(0, lambda: (
+                            _act_status_var.set("❌ Activation cancelled — UAC prompt was denied"),
+                            _act_status_lbl.configure(foreground='#cc0000')
+                        ))
+                        return
+
+                    # Check result by polling sc query (no elevation needed)
+                    svc_result = subprocess.run(
+                        ['sc', 'query', 'cloudflared'],
+                        capture_output=True, text=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                    )
+                    if svc_result.returncode == 0:
+                        _save_tunnel_settings(domain, tok)
+                        self.root.after(0, lambda: (
+                            _act_status_var.set("✅ Tunnel service installed successfully"),
+                            _act_status_lbl.configure(foreground='#27ae60'),
+                            _check_cf_service(),
+                            _refresh_snippet()
+                        ))
+                    else:
+                        self.root.after(0, lambda: (
+                            _act_status_var.set("❌ Activation failed — service not found after install"),
+                            _act_status_lbl.configure(foreground='#cc0000')
+                        ))
+                except Exception as _e:
+                    self.root.after(0, lambda ex=_e: (
+                        _act_status_var.set(f"❌ Error: {str(ex)[:80]}"),
+                        _act_status_lbl.configure(foreground='#cc0000')
+                    ))
+
+            threading.Thread(target=_do_activate, daemon=True).start()
+
+        def _uninstall_tunnel():
+            """Remove the cloudflared Windows service."""
+            exe = _cf_exe()
+            if not Path(exe).exists():
+                messagebox.showerror("cloudflared not found",
+                                     f"cloudflared.exe not found:\n{exe}")
+                return
+            if not messagebox.askyesno("Uninstall Tunnel Service",
+                                       "Remove the AI-Prowler tunnel service?\n\n"
+                                       "You will be prompted to approve administrator access.\n"
+                                       "You can re-activate it any time."):
+                return
+            def _do_uninstall():
+                try:
+                    # Stop the service first (requires elevation)
+                    _act_status_var_local = _act_status_var
+                    self.root.after(0, lambda: (
+                        _act_status_var_local.set("⏳ Stopping service… (approve UAC if prompted)"),
+                        _act_status_lbl.configure(foreground='#e67e00')
+                    ))
+                    _run_elevated("cmd.exe", '/c "net stop cloudflared"', wait_secs=4)
+
+                    # Uninstall (requires elevation)
+                    self.root.after(0, lambda: _act_status_var_local.set(
+                        "⏳ Removing service… (approve UAC if prompted)"))
+                    launched = _run_elevated(exe, 'service uninstall', wait_secs=4)
+
+                    if not launched:
+                        self.root.after(0, lambda: (
+                            _act_status_var_local.set("❌ Uninstall cancelled — UAC prompt was denied"),
+                            _act_status_lbl.configure(foreground='#cc0000')
+                        ))
+                        return
+
+                    # Verify by polling sc query
+                    svc_result = subprocess.run(
+                        ['sc', 'query', 'cloudflared'],
+                        capture_output=True, text=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                    )
+                    if svc_result.returncode != 0:  # non-zero = service not found = success
+                        self.root.after(0, lambda: (
+                            _act_status_var_local.set("🔌 Tunnel service removed"),
+                            _act_status_lbl.configure(foreground='gray'),
+                            _check_cf_service()
+                        ))
+                    else:
+                        self.root.after(0, lambda: (
+                            _act_status_var_local.set("⚠️ Service may still exist — check sc query cloudflared"),
+                            _act_status_lbl.configure(foreground='#e67e00'),
+                            _check_cf_service()
+                        ))
+                except Exception as _e:
+                    self.root.after(0, lambda ex=_e: (
+                        _act_status_var.set(f"❌ Uninstall error: {str(ex)[:80]}"),
+                        _act_status_lbl.configure(foreground='#cc0000')
+                    ))
+            threading.Thread(target=_do_uninstall, daemon=True).start()
+
+        ttk.Button(act_btn_row, text="⚡ Activate Tunnel Service",
+                   command=_activate_tunnel).pack(side='left', padx=(0, 8))
+        ttk.Button(act_btn_row, text="🔌 Uninstall Service",
+                   command=_uninstall_tunnel).pack(side='left')
+
+        # Tunnel start / stop
+        tun_ctrl_row = ttk.Frame(remote_frame)
+        tun_ctrl_row.pack(fill='x', pady=(4, 0))
+
+        _tun_status_var = tk.StringVar(value="⬤ Tunnel stopped")
+        _tun_status_lbl = ttk.Label(tun_ctrl_row, textvariable=_tun_status_var,
+                                    foreground='#cc0000', font=('Arial', 9, 'bold'))
+        _tun_status_lbl.pack(side='left', padx=(0, 12))
+
+        # Check if cloudflared is already running as a Windows service
+        # (installed via "cloudflared.exe service install" — runs automatically)
+        def _check_cf_service():
+            try:
+                result = subprocess.run(
+                    ['sc', 'query', 'cloudflared'],
+                    capture_output=True, text=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                )
+                if 'RUNNING' in result.stdout:
+                    _tun_status_var.set("⬤ Tunnel active (Windows service)")
+                    _tun_status_lbl.configure(foreground='#27ae60')
+                else:
+                    # Service stopped, not found, or query failed
+                    _tun_status_var.set("⬤ Tunnel stopped")
+                    _tun_status_lbl.configure(foreground='#cc0000')
+            except Exception:
+                pass
+        # Check service status after GUI loads
+        self.root.after(1000, _check_cf_service)
+
+        # Poll every 30s to keep status current
+        def _poll_cf_service():
+            _check_cf_service()
+            self.root.after(30000, _poll_cf_service)
+        self.root.after(5000, _poll_cf_service)
+
+        def _start_tunnel():
+            """Start the cloudflared Windows service (requires elevation)."""
+            def _do_start():
+                launched = _run_elevated("cmd.exe", '/c "net start cloudflared"', wait_secs=5)
+                if not launched:
+                    self.root.after(0, lambda: (
+                        _tun_status_var.set("⬤ Start cancelled"),
+                        _tun_status_lbl.configure(foreground='#cc0000')
+                    ))
+                    return
+                self.root.after(0, _check_cf_service)
+            _tun_status_var.set("⬤ Starting… (approve UAC if prompted)")
+            _tun_status_lbl.configure(foreground='#e67e00')
+            threading.Thread(target=_do_start, daemon=True).start()
+
+        def _stop_tunnel():
+            """Stop the cloudflared Windows service (requires elevation)."""
+            def _do_stop():
+                launched = _run_elevated("cmd.exe", '/c "net stop cloudflared"', wait_secs=5)
+                if not launched:
+                    self.root.after(0, lambda: (
+                        _tun_status_var.set("⬤ Stop cancelled"),
+                        _tun_status_lbl.configure(foreground='#cc0000')
+                    ))
+                    return
+                self.root.after(0, _check_cf_service)
+            _tun_status_var.set("⬤ Stopping… (approve UAC if prompted)")
+            _tun_status_lbl.configure(foreground='#e67e00')
+            threading.Thread(target=_do_stop, daemon=True).start()
+
+        tun_btn_row = ttk.Frame(remote_frame)
+        tun_btn_row.pack(fill='x', pady=(4, 8))
+        ttk.Button(tun_btn_row, text="▶ Start Tunnel",
+                   command=_start_tunnel).pack(side='left', padx=(0, 6))
+        ttk.Button(tun_btn_row, text="■ Stop Tunnel",
+                   command=_stop_tunnel).pack(side='left')
+
+        ttk.Separator(remote_frame, orient='horizontal').pack(fill='x', pady=(0, 8))
+
+        # ── Claude Mobile Config snippet ───────────────────────────────────────
+        ttk.Label(remote_frame, text="Claude.ai Web / Mobile Config Snippet:",
+                  font=('Arial', 9, 'bold')).pack(anchor='w')
+        ttk.Label(remote_frame, font=('Arial', 8), foreground='gray',
+                  text=("For Claude.ai web or mobile ONLY — NOT for Claude Desktop.\n"
+                        "In Claude.ai: Settings → MCP Servers → Add Server → paste URL and token.")
+                  ).pack(anchor='w', pady=(0, 4))
+
+        _snippet_text = tk.Text(remote_frame, height=8, font=('Courier', 8),
+                                wrap='none', state='disabled')
+        _snippet_text.pack(fill='x', pady=(0, 4))
+
+        def _refresh_snippet():
+            domain = _tun_domain_var.get().strip()
+            tok    = _remote_token_var.get().strip() or '<your-token>'
+            lines = [
+                "{",
+                '  "mcpServers": {',
+                '    "AI-Prowler-Remote": {',
+                f'      "url": "https://{domain}/mcp",',
+                '      "headers": {',
+                f'        "Authorization": "Bearer {tok}"',
+                '      }',
+                '    }',
+                '  }',
+                "}",
+            ]
+            snippet = "\n".join(lines)
+            _snippet_text.configure(state='normal')
+            _snippet_text.delete('1.0', tk.END)
+            _snippet_text.insert('1.0', snippet)
+            _snippet_text.configure(state='disabled')
+
+        _refresh_snippet()
+
+        snippet_btn_row = ttk.Frame(remote_frame)
+        snippet_btn_row.pack(fill='x', pady=(0, 4))
+        ttk.Button(snippet_btn_row, text="🔄 Refresh Snippet",
+                   command=_refresh_snippet).pack(side='left', padx=(0, 8))
+
+        def _copy_snippet():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(_snippet_text.get('1.0', 'end-1c'))
+            self.status_var.set("📋 Config snippet copied to clipboard")
+            self.root.after(3000, lambda: self.status_var.set("Ready"))
+
+        ttk.Button(snippet_btn_row, text="📋 Copy Snippet",
+                   command=_copy_snippet).pack(side='left')
+
         # About
         about_frame = ttk.LabelFrame(scrollable_frame, text="About", padding=10)
         about_frame.pack(fill='both', expand=True, padx=20, pady=10)
@@ -2414,14 +4164,179 @@ Built with Python, ChromaDB, and Ollama"""
         about_label.pack(pady=10)
     
     def create_status_bar(self):
-        """Create status bar"""
+        """Create status bar with MCP indicator."""
         status_frame = ttk.Frame(self.root, relief='sunken')
         status_frame.pack(side='bottom', fill='x')
-        
+
         self.status_var = tk.StringVar(value="Ready")
         status_label = ttk.Label(status_frame, textvariable=self.status_var,
-                                anchor='w')
+                                 anchor='w')
         status_label.pack(side='left', fill='x', expand=True, padx=5)
+
+        # ── MCP status indicator (right side of status bar) ───────────────────
+        mcp_sep = ttk.Separator(status_frame, orient='vertical')
+        mcp_sep.pack(side='right', fill='y', padx=(4, 0))
+
+        self._mcp_status_var = tk.StringVar(value="MCP: checking…")
+        self._mcp_status_lbl = ttk.Label(status_frame,
+                                         textvariable=self._mcp_status_var,
+                                         font=('Arial', 9), foreground='#888888',
+                                         cursor='hand2')
+        self._mcp_status_lbl.pack(side='right', padx=(0, 6))
+        self._mcp_status_lbl.bind('<Button-1>', lambda e: self._scroll_to_mcp_settings())
+
+        self._mcp_dot_canvas = tk.Canvas(status_frame, width=12, height=12,
+                                         highlightthickness=0,
+                                         bg=self.root.cget('bg'))
+        self._mcp_dot_canvas.pack(side='right', padx=(4, 0))
+        self._mcp_dot = self._mcp_dot_canvas.create_oval(
+            1, 1, 11, 11, fill='#aaaaaa', outline='#888888', width=1)
+
+    # ── MCP status helpers ────────────────────────────────────────────────────
+
+    def _check_mcp_status(self):
+        """Return a dict describing MCP readiness.
+
+        Checks (in order):
+          1. ai_prowler_mcp.py exists alongside rag_gui.py
+          2. 'mcp' Python package is importable
+          3. Claude Desktop config file exists and references AI-Prowler
+
+        Returns dict:
+          state      : 'ready' | 'partial' | 'not_configured'
+          dot_color  : hex colour for the indicator dot
+          label      : short text for status bar
+          detail     : multiline text for the Settings panel
+          config_path: path to Claude Desktop config (may be None)
+        """
+        script_dir   = Path(__file__).parent.resolve()
+        mcp_script   = script_dir / 'ai_prowler_mcp.py'
+
+        # ── Check 1: MCP script present ──────────────────────────────────────
+        script_ok = mcp_script.exists()
+
+        # ── Check 2: mcp package importable ──────────────────────────────────
+        pkg_ok = False
+        try:
+            import importlib
+            importlib.util.find_spec('mcp')
+            pkg_ok = True
+        except Exception:
+            pass
+
+        # ── Check 3: Claude Desktop config ───────────────────────────────────
+        config_path = None
+        config_ok   = False
+        config_note = ''
+        if sys.platform == 'win32':
+            appdata = os.environ.get('APPDATA', '')
+            if appdata:
+                config_path = Path(appdata) / 'Claude' / 'claude_desktop_config.json'
+        elif sys.platform == 'darwin':
+            config_path = Path.home() / 'Library' / 'Application Support' / 'Claude' / 'claude_desktop_config.json'
+        else:
+            config_path = Path.home() / '.config' / 'Claude' / 'claude_desktop_config.json'
+
+        if config_path and config_path.exists():
+            try:
+                import json as _j
+                cfg = _j.loads(config_path.read_text(encoding='utf-8-sig'))
+                servers = cfg.get('mcpServers', {})
+                if 'AI-Prowler' in servers:
+                    entry = servers['AI-Prowler']
+                    if 'url' in entry:
+                        # HTTP URL entry — wrong for Claude Desktop
+                        config_ok   = False
+                        config_note = (
+                            '❌ "AI-Prowler" entry uses HTTP URL (wrong for Desktop)\n'
+                            '   This causes Claude Desktop to require the HTTP server.\n'
+                            '   Click "Auto-configure Claude Desktop" to fix this now.'
+                        )
+                    elif 'command' in entry:
+                        cmd = entry.get('command', '')
+                        if 'pythonw' in cmd.lower():
+                            config_ok   = False
+                            config_note = (
+                                '❌ "AI-Prowler" entry uses pythonw.exe (breaks stdio MCP)\n'
+                                '   pythonw redirects stdout to NUL — MCP pipe is destroyed.\n'
+                                '   Click "Auto-configure Claude Desktop" to fix this now.'
+                            )
+                        else:
+                            config_ok   = True
+                            config_note = '✅ "AI-Prowler" stdio entry found in Claude Desktop config'
+                    else:
+                        config_ok   = False
+                        config_note = (
+                            '⚠️  "AI-Prowler" entry is incomplete (no command or url)\n'
+                            '   Click "Auto-configure Claude Desktop" to write the correct entry.'
+                        )
+                else:
+                    config_note = (
+                        '⚠️  Config file exists but no "AI-Prowler" entry yet\n'
+                        '   Click "Auto-configure Claude Desktop" to add it automatically.'
+                    )
+            except Exception as _ce:
+                config_note = f'⚠️  Could not parse Claude Desktop config: {_ce}'
+        elif config_path:
+            config_note = ('⚠️  Claude Desktop config file not found\n'
+                           f'   Expected: {config_path}\n'
+                           '   Install Claude Desktop, then click "Auto-configure Claude Desktop"')
+        else:
+            config_note = '⚠️  Unsupported platform for auto-detection'
+
+        # ── Determine overall state ───────────────────────────────────────────
+        if script_ok and pkg_ok and config_ok:
+            state     = 'ready'
+            dot_color = '#27ae60'   # green
+            label     = 'MCP: Ready ●'
+        elif script_ok and pkg_ok and 'HTTP URL' in config_note:
+            state     = 'misconfigured'
+            dot_color = '#e74c3c'   # red
+            label     = 'MCP: Wrong config (HTTP) ●'
+        elif script_ok and pkg_ok and 'pythonw' in config_note:
+            state     = 'misconfigured'
+            dot_color = '#e74c3c'   # red
+            label     = 'MCP: Wrong config (pythonw) ●'
+        elif script_ok and pkg_ok:
+            state     = 'partial'
+            dot_color = '#f5a623'   # amber
+            label     = 'MCP: Not configured ●'
+        else:
+            state     = 'not_configured'
+            dot_color = '#e74c3c'   # red
+            label     = 'MCP: Not installed ●'
+
+        script_note = ('✅ ai_prowler_mcp.py found' if script_ok
+                       else f'❌ ai_prowler_mcp.py NOT found in {script_dir}')
+        pkg_note    = ('✅ mcp Python package installed'
+                       if pkg_ok else '❌ mcp package not installed — run: pip install mcp')
+
+        detail = '\n'.join([script_note, pkg_note, config_note])
+        return dict(state=state, dot_color=dot_color, label=label,
+                    detail=detail, config_path=config_path)
+
+    def _refresh_mcp_status_bar(self):
+        """Update the MCP dot + label in the status bar (called once on startup)."""
+        try:
+            info = self._check_mcp_status()
+            self._mcp_dot_canvas.itemconfig(self._mcp_dot,
+                                            fill=info['dot_color'],
+                                            outline=info['dot_color'])
+            self._mcp_status_var.set(info['label'])
+            fg = info['dot_color']
+            self._mcp_status_lbl.configure(foreground=fg)
+            # Also refresh the Settings panel detail text if it exists
+            if hasattr(self, '_mcp_detail_var'):
+                self._mcp_detail_var.set(info['detail'])
+        except Exception:
+            pass
+
+    def _scroll_to_mcp_settings(self):
+        """Switch to the Settings tab when the user clicks the MCP status label."""
+        try:
+            self.notebook.select(self._TAB_INDEX_SETTINGS)
+        except Exception:
+            pass
     
     # ── Ollama Prewarming ────────────────────────────────────────────────────
 
@@ -2856,6 +4771,55 @@ Built with Python, ChromaDB, and Ollama"""
 
     # ── Indexing ──────────────────────────────────────────────────────────────
 
+    def _purge_skipped_extensions(self):
+        """Remove from ChromaDB any chunks whose file extension is now in SKIP_EXTENSIONS.
+
+        Called at the start of every index run so that extensions the user just
+        added to the 'Skipped' list are cleaned out before new files are indexed.
+        Also removes their tracking records so a re-scan won't see them as unchanged.
+        """
+        if not RAG_AVAILABLE:
+            return
+        skip = _rag_engine.SKIP_EXTENSIONS
+        if not skip:
+            return
+        try:
+            from rag_preprocessor import get_chroma_client, create_or_get_collection
+            client, emb_fn = get_chroma_client()
+            col = create_or_get_collection(client, emb_fn)
+            result = col.get(include=['metadatas'])
+            ids_to_del = []
+            for doc_id, meta in zip(result.get('ids', []), result.get('metadatas', [])):
+                src = meta.get('source', meta.get('filepath', ''))
+                if Path(src).suffix.lower() in skip:
+                    ids_to_del.append(doc_id)
+            if ids_to_del:
+                col.delete(ids=ids_to_del)
+                print(f"[Purge] Removed {len(ids_to_del):,} chunks for "
+                      f"newly-skipped extensions: "
+                      f"{', '.join(sorted(skip))}")
+            # Also remove those files from the tracking DB so they fully re-index
+            # if they are ever moved back to 'Supported' in the future.
+            if TRACKING_DB.exists():
+                import json as _json
+                try:
+                    tracking = _json.loads(TRACKING_DB.read_text(encoding='utf-8'))
+                    changed = False
+                    for dir_key, dir_data in tracking.items():
+                        files = dir_data.get('files', {})
+                        to_del = [fp for fp in files
+                                  if Path(fp).suffix.lower() in skip]
+                        for fp in to_del:
+                            del files[fp]
+                            changed = True
+                    if changed:
+                        TRACKING_DB.write_text(
+                            _json.dumps(tracking, indent=2), encoding='utf-8')
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[Purge] Warning: {e}")
+
     def start_indexing(self, resume=False):
         """Start (or resume) the full indexing queue in a background thread."""
         if not resume:
@@ -2879,6 +4843,9 @@ Built with Python, ChromaDB, and Ollama"""
         self._index_stop_event.clear()
         self._index_pause_event.clear()
         self._index_running = True
+
+        # Purge any chunks whose extension was added to the skip list since last run
+        self._purge_skipped_extensions()
 
         self.index_progress.start()
         self.index_progress_var.set("")
@@ -3046,7 +5013,7 @@ Built with Python, ChromaDB, and Ollama"""
 
                 self.output_queue.put((
                     'index_progress',
-                    f"{'File' if is_file else 'Dir'} {dir_idx}/{n_dirs}: {label}"
+                    f"{'File' if is_file else 'Dir'} {dir_idx}/{n_dirs}: {directory}"
                 ))
 
                 print(f"{'─'*60}")
@@ -4186,6 +6153,150 @@ Built with Python, ChromaDB, and Ollama"""
             self.output_queue.put(('gpu_status', f"❌ GPU detection failed: {e}"))
             self.output_queue.put(('status', 'Ready'))
 
+    def _run_mcp_diagnostics(self):
+        """
+        Run mcp_diagnostics.py in a background thread and display the
+        full output in a scrollable popup window.
+        The diagnostics script checks:
+          - mcp package version and instructions= support
+          - FastMCP constructor parameters
+          - All agentic RAG tools present in ai_prowler_mcp.py
+          - Claude Desktop config validity
+          - Subscription cache status
+          - MCP server log tail
+          - rag_preprocessor import and ChromaDB path
+        """
+        import subprocess as _sp, threading as _th
+        import tkinter.scrolledtext as _st
+
+        # ── Build the popup window immediately so user sees feedback ─────────
+        win = tk.Toplevel(self.root)
+        win.title("🔬 MCP Diagnostics")
+        win.geometry("720x560")
+        win.resizable(True, True)
+
+        # Header banner
+        banner = tk.Frame(win, bg='#0f3460')
+        banner.pack(fill='x')
+        tk.Label(banner,
+                 text="AI-Prowler MCP Diagnostics",
+                 bg='#0f3460', fg='white',
+                 font=('Arial', 10, 'bold'),
+                 pady=8, padx=16).pack(anchor='w')
+        tk.Label(banner,
+                 text="Checking MCP configuration, tools, Claude Desktop config and subscription status…",
+                 bg='#0f3460', fg='#aaccee',
+                 font=('Arial', 8),
+                 pady=2, padx=16).pack(anchor='w')
+
+        # Status label shown while running
+        status_var = tk.StringVar(value="⏳  Running diagnostics…")
+        status_lbl = tk.Label(win, textvariable=status_var,
+                              font=('Arial', 9), fg='#e67e00',
+                              anchor='w', padx=16, pady=4)
+        status_lbl.pack(fill='x')
+
+        # Scrollable output area
+        txt = _st.ScrolledText(win,
+                               wrap='word',
+                               font=('Consolas', 9),
+                               bg='#1a1a1a', fg='#e0e0e0',
+                               padx=12, pady=10,
+                               relief='flat', bd=0,
+                               state='disabled')
+        txt.pack(fill='both', expand=True, padx=0, pady=0)
+
+        # Bottom button row
+        btn_row = tk.Frame(win, bg=win.cget('bg'))
+        btn_row.pack(fill='x', pady=6, padx=16)
+
+        def _copy_output():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(txt.get('1.0', tk.END))
+            status_var.set("📋  Output copied to clipboard")
+            win.after(2500, lambda: status_var.set("✅  Diagnostics complete"))
+
+        tk.Button(btn_row, text="📋  Copy Output",
+                  command=_copy_output,
+                  bg='#0f3460', fg='white',
+                  relief='flat', padx=12).pack(side='left')
+        tk.Button(btn_row, text="Close",
+                  width=10,
+                  command=win.destroy).pack(side='right')
+
+        def _append(text):
+            """Append text to the output box — called from main thread via after()."""
+            txt.configure(state='normal')
+            txt.insert(tk.END, text)
+            txt.see(tk.END)
+            txt.configure(state='disabled')
+
+        def _worker():
+            """Background thread: run mcp_diagnostics.py and stream output."""
+            diag_script = Path(__file__).parent / 'mcp_diagnostics.py'
+
+            if not diag_script.exists():
+                self.root.after(0, lambda: _append(
+                    "❌  mcp_diagnostics.py not found in:\n"
+                    f"    {diag_script.parent}\n\n"
+                    "Download it from the AI-Prowler releases page or\n"
+                    "ask support for the latest copy."
+                ))
+                self.root.after(0, lambda: status_var.set("❌  Diagnostics script not found"))
+                return
+
+            try:
+                import re as _re
+                py_exe = sys.executable
+                # Always use python.exe not pythonw.exe — pythonw breaks stdout pipe
+                if sys.platform == 'win32':
+                    py_exe = _re.sub(r'(?i)pythonw\.exe$', 'python.exe', py_exe)
+
+                # Force UTF-8 output from the child process
+                _diag_env = os.environ.copy()
+                _diag_env['PYTHONUTF8']       = '1'
+                _diag_env['PYTHONIOENCODING'] = 'utf-8'
+
+                proc = _sp.Popen(
+                    [py_exe, str(diag_script)],
+                    stdout=_sp.PIPE,
+                    stderr=_sp.STDOUT,
+                    encoding='utf-8',   # read child output as UTF-8 not cp1252
+                    errors='replace',   # replace undecodable bytes instead of crashing
+                    bufsize=1,
+                    env=_diag_env,
+                    creationflags=_sp.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                )
+
+                # Filter noisy but harmless mcp-package telemetry lines
+                _FILTER = (
+                    'Failed to send telemetry',
+                    'capture() takes',
+                    'ClientStartEvent',
+                )
+
+                for line in proc.stdout:
+                    if any(f in line for f in _FILTER):
+                        continue
+                    captured = line
+                    self.root.after(0, lambda l=captured: _append(l))
+
+                proc.wait()
+
+                if proc.returncode == 0:
+                    self.root.after(0, lambda: status_var.set(
+                        "[OK] Diagnostics complete"))
+                else:
+                    self.root.after(0, lambda: status_var.set(
+                        f"[WARN] Diagnostics finished with exit code {proc.returncode}"))
+
+            except Exception as exc:
+                err = str(exc)
+                self.root.after(0, lambda e=err: _append(f"\n[ERR] Failed to run diagnostics: {e}\n"))
+                self.root.after(0, lambda: status_var.set("[ERR] Run failed -- see output"))
+
+        _th.Thread(target=_worker, daemon=True).start()
+
     def _apply_gpu_settings(self):
         """Save GPU layers to config, invalidate cache, retrigger prewarm."""
         try:
@@ -4286,6 +6397,47 @@ Built with Python, ChromaDB, and Ollama"""
                    "Restart AI Prowler to apply.")
         self.status_var.set(msg)
         self.root.after(5000, lambda: self.status_var.set("Ready"))
+
+    def _on_ocr_debug_change(self):
+        """Toggle OCR debug logging in the preprocessor and save to config."""
+        value = self.ocr_debug_var.get()
+        if RAG_AVAILABLE:
+            _rag_engine.OCR_DEBUG = value
+        save_config(ocr_debug=value)
+        label = "ON — OCR text will be logged to Index Output" if value else "OFF"
+        self.status_var.set(f"OCR debug: {label}")
+        self.root.after(3000, lambda: self.status_var.set("Ready"))
+
+    def _show_ocr_log(self):
+        """Open a window showing the last OCR text captured from the preprocessor."""
+        last_ocr = getattr(_rag_engine, '_last_ocr_text', '') if RAG_AVAILABLE else ''
+        last_src = getattr(_rag_engine, '_last_ocr_source', '') if RAG_AVAILABLE else ''
+
+        win = tk.Toplevel(self.root)
+        win.title("Last OCR Output")
+        win.geometry("780x560")
+        win.minsize(500, 300)
+
+        hdr = ttk.Frame(win)
+        hdr.pack(fill='x', padx=10, pady=(8, 4))
+        ttk.Label(hdr, text="Last OCR'd file:", font=('Arial', 9, 'bold')).pack(side='left')
+        ttk.Label(hdr, text=last_src or "(none yet — index a scanned PDF or image first)",
+                  font=('Arial', 9), foreground='gray').pack(side='left', padx=(6, 0))
+
+        txt = scrolledtext.ScrolledText(win, wrap=tk.WORD, font=('Courier', 9))
+        txt.pack(fill='both', expand=True, padx=10, pady=(0, 4))
+        txt.insert('1.0', last_ocr if last_ocr else
+                   "No OCR output captured yet.\n\n"
+                   "Enable 'Log full OCR text' above, then index a scanned PDF or image.\n"
+                   "The raw text Tesseract extracted will appear here.")
+        txt.config(state='disabled')
+
+        btn_row = ttk.Frame(win)
+        btn_row.pack(fill='x', padx=10, pady=(0, 8))
+        ttk.Button(btn_row, text="📋 Copy to Clipboard",
+                   command=lambda: (self.root.clipboard_clear(),
+                                    self.root.clipboard_append(last_ocr))).pack(side='left', padx=(0, 8))
+        ttk.Button(btn_row, text="Close", command=win.destroy).pack(side='left')
 
     # ── Warmup indicator ────────────────────────────────────────────────────
 
@@ -4451,13 +6603,13 @@ Built with Python, ChromaDB, and Ollama"""
         picker = tk.Toplevel(self.root)
         picker.title("Browse & Install Model")
         picker.resizable(True, True)
-        picker.minsize(620, 380)
+        picker.minsize(820, 380)
         picker.transient(self.root)
 
         self.root.update_idletasks()
         rx, ry = self.root.winfo_rootx(), self.root.winfo_rooty()
         rw, rh = self.root.winfo_width(), self.root.winfo_height()
-        pw, ph = 720, 540
+        pw, ph = 860, 560
         picker.geometry(f"{pw}x{ph}+{rx + rw//2 - pw//2}+{ry + rh//2 - ph//2}")
 
         picker.columnconfigure(0, weight=1)
@@ -4465,13 +6617,25 @@ Built with Python, ChromaDB, and Ollama"""
 
         sys_ram = getattr(self, '_system_ram_gb', 0)
 
+        # ── Check if Ollama is installed (even if not running) ────────────────
+        import shutil as _shutil, os as _os
+        _local_app      = _os.environ.get('LOCALAPPDATA', '')
+        _ollama_exe_path = (_os.path.join(_local_app, 'Programs', 'Ollama', 'ollama.exe')
+                            if _local_app else None)
+        ollama_installed = (
+            (_ollama_exe_path and _os.path.isfile(_ollama_exe_path))
+            or bool(_shutil.which('ollama'))
+        )
+
         # ── Query Ollama for already-downloaded models ─────────────────────────
         installed_names = set()
         installed_sizes = {}   # name → size_on_disk bytes
+        ollama_running  = False
         try:
             r = requests.get("http://localhost:11434/api/tags", timeout=3,
                              proxies={"http": None, "https": None})
             if r.status_code == 200:
+                ollama_running = True
                 for m in r.json().get('models', []):
                     raw_name = m.get('name', '')
                     # Normalise: "llama3.1:8b" and "llama3.1:8b-instruct-q4_0" both
@@ -4479,31 +6643,175 @@ Built with Python, ChromaDB, and Ollama"""
                     installed_names.add(raw_name)
                     installed_sizes[raw_name] = m.get('size', 0)
         except Exception:
-            pass   # Ollama not running — no installed badges, that's fine
+            pass   # Ollama not running — fall through to filesystem scan
+
+        # ── Filesystem fallback: detect downloaded models without Ollama running ──
+        # Ollama stores manifests at:
+        #   %USERPROFILE%\.ollama\models\manifests\registry.ollama.ai\library\<name>\<tag>
+        # Each manifest file = one downloaded model variant.
+        if not installed_names:
+            try:
+                _manifests_root = _os.path.join(
+                    _os.environ.get('USERPROFILE', ''),
+                    '.ollama', 'models', 'manifests',
+                    'registry.ollama.ai', 'library'
+                )
+                if _os.path.isdir(_manifests_root):
+                    for _model_dir in _os.scandir(_manifests_root):
+                        if not _model_dir.is_dir():
+                            continue
+                        for _tag_file in _os.scandir(_model_dir.path):
+                            if _tag_file.is_file():
+                                _name = f"{_model_dir.name}:{_tag_file.name}"
+                                installed_names.add(_name)
+            except Exception:
+                pass  # filesystem scan failed — silently ignore
 
         def is_installed(model_name):
-            """True if model_name (or a variant with extra tags) is in Ollama."""
+            """True if model_name (or a variant with extra tags) is in Ollama.
+            Matches exactly OR if an installed name is a more-specific variant of
+            the catalogue name (e.g. 'llama3.1:8b-instruct-q4_0' matches 'llama3.1:8b').
+            Does NOT cross-match different tags (e.g. 'llama3.2:3b' does NOT match 'llama3.2:1b').
+            """
             if model_name in installed_names:
                 return True
-            # Also match on base name before any extra qualifier
-            base = model_name.split(':')[0]
-            return any(n.startswith(base + ':') or n == base for n in installed_names)
+            # Match only if an installed name STARTS WITH the full catalogue name
+            # e.g. 'llama3.1:8b-instruct-q4_0' starts with 'llama3.1:8b'
+            return any(n.startswith(model_name) for n in installed_names)
 
         # ── Header ─────────────────────────────────────────────────────────────
         hdr = ttk.Frame(picker, padding=(12, 8))
         hdr.grid(row=0, column=0, sticky='ew')
         ttk.Label(hdr, text="Browse & Install AI Models",
                   font=('Arial', 13, 'bold')).pack(side='left')
-        ram_text = f"  Your RAM: {sys_ram:.0f} GB  |  " if sys_ram > 0 else "  "
-        ollama_text = f"Ollama: {len(installed_names)} model(s) installed" if installed_names else                       "Ollama: not running (install status unknown)"
-        ttk.Label(hdr, text=ram_text + ollama_text,
-                  font=('Arial', 9), foreground='gray').pack(side='left', padx=8)
+        ram_text = f"  Your RAM: {sys_ram:.0f} GB" if sys_ram > 0 else ""
 
-        ttk.Separator(picker, orient='horizontal').grid(row=1, column=0, sticky='ew')
+        if ollama_running and installed_names:
+            ollama_status_text = f"✅ Ollama running — {len(installed_names)} model(s) installed"
+            ollama_status_colour = '#27ae60'
+        elif ollama_running and not installed_names:
+            ollama_status_text = "✅ Ollama running — no models installed yet"
+            ollama_status_colour = '#27ae60'
+        elif ollama_installed and not ollama_running:
+            ollama_status_text = "⚠️ Ollama installed but not running"
+            ollama_status_colour = '#e67e00'
+        else:
+            ollama_status_text = "❌ Ollama not installed — use button below to install"
+            ollama_status_colour = '#cc0000'
+
+        # RAM label (left side)
+        if ram_text:
+            ttk.Label(hdr, text=ram_text,
+                      font=('Arial', 9), foreground='gray').pack(side='left', padx=(8, 0))
+            ttk.Label(hdr, text="  |  ",
+                      font=('Arial', 9), foreground='gray').pack(side='left')
+
+        # ── Two live indicator lights: Installed + Running ─────────────────────
+        # Use ttk.Label so theme handles bg — avoids silent TclError that kills polling.
+        # Prefix labels make each light's meaning unambiguous.
+        ttk.Label(hdr, text="Ollama:",
+                  font=('Arial', 9), foreground='gray').pack(side='left', padx=(4, 2))
+        _inst_var = tk.StringVar(value='● Installed' if ollama_installed else '● Not installed')
+        _inst_lbl = ttk.Label(hdr, textvariable=_inst_var, font=('Arial', 9, 'bold'),
+                              foreground='#27ae60' if ollama_installed else '#cc0000')
+        _inst_lbl.pack(side='left')
+
+        ttk.Label(hdr, text="  |  Server:",
+                  font=('Arial', 9), foreground='gray').pack(side='left', padx=(4, 2))
+        _run_var  = tk.StringVar(value='● Running' if ollama_running else '● Not running')
+        _run_lbl  = ttk.Label(hdr, textvariable=_run_var, font=('Arial', 9, 'bold'),
+                              foreground='#27ae60' if ollama_running else '#e67e00')
+        _run_lbl.pack(side='left', padx=(0, 8))
+
+        def _refresh_ollama_lights():
+            """Check Ollama state in a background thread; update UI on main thread.
+            Uses a raw socket check for the running state — more reliable than
+            requests.get() in a background thread context."""
+            import threading as _threading, socket as _socket
+            def _check():
+                # Installed check (fast filesystem op)
+                _lo_app   = _os.environ.get('LOCALAPPDATA', '')
+                _lo_exe   = (_os.path.join(_lo_app, 'Programs', 'Ollama', 'ollama.exe')
+                             if _lo_app else None)
+                _now_inst = ((_lo_exe and _os.path.isfile(_lo_exe))
+                             or bool(_shutil.which('ollama')))
+                # Running check via raw TCP socket — avoids requests/proxy issues
+                _now_run = False
+                try:
+                    with _socket.create_connection(('127.0.0.1', 11434), timeout=1):
+                        _now_run = True
+                except Exception:
+                    pass
+                # Schedule UI update back on the main thread
+                def _update():
+                    try:
+                        _inst_var.set('● Installed'  if _now_inst else '● Not installed')
+                        _run_var.set ('● Running'     if _now_run  else '● Not running')
+                        _inst_lbl.configure(foreground='#27ae60' if _now_inst else '#cc0000')
+                        _run_lbl.configure (foreground='#27ae60' if _now_run  else '#e67e00')
+                        picker.after(3000, _refresh_ollama_lights)
+                    except tk.TclError:
+                        pass  # picker closed — stop polling
+                try:
+                    picker.after(0, _update)
+                except tk.TclError:
+                    pass  # picker closed before thread finished
+            _threading.Thread(target=_check, daemon=True).start()
+
+        # Poll at 500 ms so lights are live from the moment the popup opens
+        picker.after(500, _refresh_ollama_lights)
+
+        # ── Ollama not installed banner ────────────────────────────────────────
+        if not ollama_installed:
+            banner = tk.Frame(picker, bg='#1a3a5c', pady=0)
+            banner.grid(row=1, column=0, sticky='ew')
+            banner_inner = tk.Frame(banner, bg='#1a3a5c')
+            banner_inner.pack(fill='x', padx=12, pady=8)
+
+            tk.Label(banner_inner,
+                     text="⚠️  Ollama is not installed",
+                     bg='#1a3a5c', fg='white',
+                     font=('Arial', 10, 'bold')).pack(side='left')
+            tk.Label(banner_inner,
+                     text="   Ollama is required to download and run local AI models.",
+                     bg='#1a3a5c', fg='#aaccee',
+                     font=('Arial', 9)).pack(side='left')
+
+            def _install_ollama():
+                import webbrowser
+                webbrowser.open('https://ollama.com/download')
+                messagebox.showinfo(
+                    "Installing Ollama",
+                    "Your browser will open the Ollama download page.\n\n"
+                    "Steps:\n"
+                    "  1. Download and run OllamaSetup.exe\n"
+                    "  2. Wait for installation to complete\n"
+                    "  3. Close and reopen this Browse & Install window\n"
+                    "  4. Select and install a model\n\n"
+                    "Recommended starter model: llama3.2:3b (~2 GB)",
+                    parent=picker
+                )
+
+            tk.Button(banner_inner,
+                      text="⬇  Download & Install Ollama",
+                      bg='#2980b9', fg='white',
+                      activebackground='#3498db', activeforeground='white',
+                      relief='flat', padx=12, pady=3,
+                      font=('Arial', 9, 'bold'),
+                      command=_install_ollama).pack(side='right')
+
+            ttk.Separator(picker, orient='horizontal').grid(row=2, column=0, sticky='ew')
+            # Shift list_frame and buttons down one row to make room for banner
+            picker.rowconfigure(3, weight=1)
+            _list_row, _sep_row, _desc_row, _sep2_row, _btn_row = 3, 4, 5, 6, 7
+        else:
+            ttk.Separator(picker, orient='horizontal').grid(row=1, column=0, sticky='ew')
+            picker.rowconfigure(2, weight=1)
+            _list_row, _sep_row, _desc_row, _sep2_row, _btn_row = 2, 3, 4, 5, 6
 
         # ── Listbox ─────────────────────────────────────────────────────────────
         list_frame = ttk.Frame(picker, padding=(8, 6))
-        list_frame.grid(row=2, column=0, sticky='nsew')
+        list_frame.grid(row=_list_row, column=0, sticky='nsew')
         list_frame.columnconfigure(0, weight=1)
         list_frame.rowconfigure(0, weight=1)
 
@@ -4545,7 +6853,7 @@ Built with Python, ChromaDB, and Ollama"""
             listbox.insert('end', line)
 
             if inst:
-                listbox.itemconfig('end', foreground='#44bb44', background='#f0fff0')
+                listbox.itemconfig('end', foreground='#44bb44')
             elif sys_ram > 0 and ram > sys_ram:
                 listbox.itemconfig('end', foreground='#888888')
 
@@ -4557,11 +6865,11 @@ Built with Python, ChromaDB, and Ollama"""
             listbox.see(idx)
 
         # ── Description label ──────────────────────────────────────────────────
-        ttk.Separator(picker, orient='horizontal').grid(row=3, column=0, sticky='ew')
+        ttk.Separator(picker, orient='horizontal').grid(row=_sep_row, column=0, sticky='ew')
         desc_var = tk.StringVar(value="Select a model above to see details.")
         desc_lbl = ttk.Label(picker, textvariable=desc_var, font=('Arial', 9),
                              padding=(10, 6), wraplength=pw - 20, anchor='w', justify='left')
-        desc_lbl.grid(row=4, column=0, sticky='ew')
+        desc_lbl.grid(row=_desc_row, column=0, sticky='ew')
 
         def on_select(event=None):
             sel = listbox.curselection()
@@ -4600,9 +6908,9 @@ Built with Python, ChromaDB, and Ollama"""
         listbox.bind('<<ListboxSelect>>', on_select)
 
         # ── Buttons ─────────────────────────────────────────────────────────────
-        ttk.Separator(picker, orient='horizontal').grid(row=5, column=0, sticky='ew')
+        ttk.Separator(picker, orient='horizontal').grid(row=_sep2_row, column=0, sticky='ew')
         btn_frame = ttk.Frame(picker, padding=(8, 6))
-        btn_frame.grid(row=6, column=0, sticky='ew')
+        btn_frame.grid(row=_btn_row, column=0, sticky='ew')
 
         def do_action():
             sel = listbox.curselection()
@@ -4636,6 +6944,28 @@ Built with Python, ChromaDB, and Ollama"""
 
         cancel_btn = ttk.Button(btn_frame, text="Cancel", command=picker.destroy)
         cancel_btn.pack(side='left', padx=4)
+
+        # ── Install Ollama button — only shown when Ollama is not installed ───
+        if not ollama_installed:
+            ttk.Separator(btn_frame, orient='vertical').pack(side='left', fill='y',
+                                                             padx=8, pady=4)
+            def _open_ollama_download():
+                import webbrowser
+                webbrowser.open('https://ollama.com/download')
+                messagebox.showinfo(
+                    "Installing Ollama",
+                    "Your browser will open the Ollama download page.\n\n"
+                    "Steps:\n"
+                    "  1. Download and run OllamaSetup.exe\n"
+                    "  2. Wait for installation to complete\n"
+                    "  3. Close and reopen this Browse & Install window\n"
+                    "  4. Select and install a model\n\n"
+                    "Recommended starter: llama3.2:3b (~2 GB, good quality)",
+                    parent=picker
+                )
+            ttk.Button(btn_frame,
+                       text="⬇  Install Ollama First",
+                       command=_open_ollama_download).pack(side='left', padx=4)
 
         # Legend
         ttk.Label(btn_frame, text="  📦 = installed   ✅ = fits your RAM   ⚠️ = needs more RAM",
@@ -5067,16 +7397,39 @@ Built with Python, ChromaDB, and Ollama"""
             messagebox.showerror("Error", f"Could not retrieve statistics: {e}")
     
     def clear_database(self):
-        """Clear database"""
-        if messagebox.askyesno("Clear Database",
-                              "Are you sure you want to clear the entire database?\n\n"
-                              "This will delete all indexed documents and cannot be undone."):
+        """Clear ChromaDB vectors AND the file-tracking database so all files re-index."""
+        if messagebox.askyesno(
+                "Clear Database",
+                "This will delete ALL indexed data:\n\n"
+                "  • ChromaDB vector store  (all document embeddings)\n"
+                "  • File-tracking timestamps  (so every file re-indexes on next scan)\n\n"
+                "This cannot be undone.\n\nContinue?"):
+            errors = []
+            # 1. Clear the ChromaDB vector store
             try:
                 clear_database(confirm=True)
-                messagebox.showinfo("Success", "Database cleared")
-                self.refresh_tracked_dirs()
             except Exception as e:
-                messagebox.showerror("Error", f"Could not clear database: {e}")
+                errors.append(f"ChromaDB: {e}")
+
+            # 2. Wipe the tracking database so no file appears 'unchanged'
+            try:
+                if RAG_AVAILABLE and TRACKING_DB.exists():
+                    import json as _json
+                    TRACKING_DB.write_text('{}', encoding='utf-8')
+            except Exception as e:
+                errors.append(f"Tracking DB: {e}")
+
+            if errors:
+                messagebox.showerror("Partial Error",
+                                     "Database cleared with errors:\n\n" +
+                                     "\n".join(errors))
+            else:
+                messagebox.showinfo(
+                    "Database Cleared",
+                    "✅ Vector store cleared.\n"
+                    "✅ File-tracking timestamps reset.\n\n"
+                    "All files will be fully re-indexed on the next scan.")
+            self.refresh_tracked_dirs()
     
     def process_output_queue(self):
         """Process output queue from worker threads"""
@@ -5288,6 +7641,29 @@ Built with Python, ChromaDB, and Ollama"""
         # Schedule next check
         self.root.after(100, self.process_output_queue)
     
+    # ── Sleep prevention ──────────────────────────────────────────────────────
+    def _set_sleep_prevention(self, prevent: bool):
+        """
+        Block or restore Windows sleep / screen-off while the HTTP MCP server
+        is running.  Uses SetThreadExecutionState — a standard Windows API
+        available on all modern Windows versions with no extra packages.
+
+        prevent=True  → tell Windows "this thread needs the system awake"
+                        (prevents sleep AND hibernation; does not keep screen on)
+        prevent=False → clear the flag, restoring normal power-management
+        """
+        if sys.platform != 'win32':
+            return  # no-op on non-Windows
+        import ctypes
+        ES_CONTINUOUS      = 0x80000000
+        ES_SYSTEM_REQUIRED = 0x00000001   # prevents sleep/hibernate
+        if prevent:
+            flags = ES_CONTINUOUS | ES_SYSTEM_REQUIRED
+            ctypes.windll.kernel32.SetThreadExecutionState(flags)
+        else:
+            # ES_CONTINUOUS alone clears all previous flags → normal sleep allowed
+            ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+
     def _on_window_close(self):
         """Handle window close event - stop Ollama if we started it."""
         # Stop Ollama if we started it
@@ -5305,6 +7681,21 @@ Built with Python, ChromaDB, and Ollama"""
             except Exception as e:
                 print(f"Error stopping Ollama: {e}")
         
+        # Stop HTTP MCP server if running — also restore sleep prevention
+        if self._http_server_proc is not None:
+            try:
+                self._http_server_proc.terminate()
+                self._http_server_proc.wait(timeout=3)
+            except Exception:
+                pass
+            self._set_sleep_prevention(False)   # always restore on exit
+        # Stop cloudflared tunnel if running
+        if self._cloudflared_proc is not None:
+            try:
+                self._cloudflared_proc.terminate()
+                self._cloudflared_proc.wait(timeout=3)
+            except Exception:
+                pass
         # Close the window
         self.root.destroy()
 

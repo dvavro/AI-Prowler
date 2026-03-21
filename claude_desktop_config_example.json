@@ -1,0 +1,81 @@
+{
+  "_readme": [
+    "==========================================================================",
+    "AI-Prowler — Claude Desktop MCP Configuration Reference",
+    "==========================================================================",
+    "",
+    "IMPORTANT: The AI-Prowler installer writes this entry automatically.",
+    "Use the 'Auto-configure Claude Desktop' button in Settings -> MCP to",
+    "apply the correct config in one click — no manual editing needed.",
+    "",
+    "Only edit this file manually if:",
+    "  - The installer failed to configure Claude Desktop",
+    "  - You installed Claude Desktop AFTER installing AI-Prowler",
+    "  - You need to repair a broken entry",
+    "",
+    "TRANSPORT: Claude Desktop uses STDIO (local process, no internet required).",
+    "  - NO HTTP server needed",
+    "  - NO Cloudflare Tunnel needed",
+    "  - AI-Prowler is launched as a subprocess of Claude Desktop",
+    "",
+    "DO NOT paste the 'AI-Prowler-Remote' HTTP snippet here.",
+    "That entry is for Claude.ai web/mobile ONLY (requires HTTP server + tunnel).",
+    "If you accidentally did this, click 'Auto-configure Claude Desktop' to fix it.",
+    "",
+    "To manually apply: copy the 'mcpServers' block below into:",
+    "  %APPDATA%\\Claude\\claude_desktop_config.json",
+    "then restart Claude Desktop."
+  ],
+
+  "mcpServers": {
+
+    "AI-Prowler": {
+      "_note": [
+        "Replace YOUR_USERNAME with your actual Windows username.",
+        "Or use the 'Auto-configure Claude Desktop' button in AI-Prowler",
+        "Settings -> MCP — it fills in the correct paths automatically."
+      ],
+
+      "command": "C:\\Users\\YOUR_USERNAME\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
+      "args": [
+        "C:\\Program Files\\AI-Prowler\\ai_prowler_mcp.py"
+      ],
+      "env": {
+        "PYTHONNOUSERSITE":  "1",
+        "PYTHONIOENCODING":  "utf-8",
+        "PYTHONUNBUFFERED":  "1",
+        "PYTHONWARNINGS":    "ignore"
+      }
+    }
+
+  },
+
+  "_transport_summary": {
+    "Claude Desktop": "stdio — local subprocess, no network or HTTP server required",
+    "Claude.ai web or mobile": "HTTP via Cloudflare Tunnel — requires HTTP MCP server running + tunnel active"
+  },
+
+  "_tools_exposed": [
+    "how_to_use_ai_prowler        - call first: recommended tool sequence and key facts",
+    "check_status                 - ChromaDB health, chunk count, tracked directories, DB path",
+    "get_knowledge_base_overview  - high-level summary of all indexed documents and topics",
+    "search_documents             - PRIMARY retrieval: semantic search returning raw document chunks",
+    "search_by_multiple_queries   - parallel search across multiple phrasings, auto-deduplicated",
+    "get_chunk_context            - expand context around a specific chunk (neighboring paragraphs)",
+    "get_document_chunks          - read a whole document sequentially by chunk index",
+    "list_indexed_documents       - browse indexed files, filterable by extension or path",
+    "get_database_stats           - total chunks, unique documents, breakdown by file type",
+    "add_and_index_directory      - index all files in a folder, optionally add to auto-update tracking",
+    "update_tracked_directories   - re-scan tracked folders, re-index only changed files",
+    "list_tracked_directories     - list all folders registered for auto-update",
+    "remove_directory             - remove a folder from tracking and delete its chunks from the index"
+  ],
+
+  "_total_tools": 13,
+
+  "_note_no_ollama": [
+    "AI-Prowler v4.0+ is pure Agentic RAG — no Ollama or local LLM required.",
+    "Claude receives raw document chunks directly and synthesizes answers itself.",
+    "All Ollama/local-LLM MCP tools have been removed."
+  ]
+}

@@ -1,0 +1,77 @@
+AI-Prowler Remote Access — Subscription Information
+=====================================================
+
+WHAT IS REMOTE ACCESS?
+-----------------------
+Remote Access allows you to connect your AI-Prowler knowledge base
+to Claude.ai and other MCP-compatible AI tools from anywhere over the internet via HTTP with
+your phone, tablet, or any computer. Without a subscription, AI-Prowler
+works fully as a desktop application only.
+
+
+SUBSCRIPTION PLANS
+------------------
+  Individual Plan       $50 initial connect fee, $10/month
+    For personal use on an device with a web browser and internet connection.
+    Includes: 1 subdomain, 1 active connection, email support.
+
+  Small Business Plan   $50 initial connect fee, $30/month
+    For teams of up to 5 users sharing one deployment.
+    Includes: priority support, commercial use permitted.
+
+  Enterprise Plan       Contact us for pricing
+    For 6+ users, custom server deployments, and SLA support.
+
+
+HOW TO SUBSCRIBE OR RENEW
+--------------------------
+  Email:   david.vavro1@gmail.com
+  Subject: AI-Prowler Subscription
+
+  Include:
+    - Your name or company name
+    - Which plan you want (Individual / Small Business / Enterprise)
+    - Your current Bearer token (shown in Settings → Remote Access)
+
+  You will receive a renewal confirmation within 1 business day.
+  Your Bearer token NEVER changes — no reconfiguration needed.
+
+
+PAYMENT
+-------
+  Payment is accepted via PayPal, Venmo, or bank transfer.
+  Details provided on request by email.
+
+  Monthly billing — cancel anytime with no penalty.
+  Annual billing available at 2 months free (10 months price).
+
+
+WHAT HAPPENS AFTER PAYMENT
+---------------------------
+  1. You email your Bearer token to david.vavro1@gmail.com
+  2. Your subscription is activated in the registry within 24 hours
+  3. Restart AI-Prowler's HTTP server — remote access is restored
+  4. No other changes needed on your machine
+
+
+GRACE PERIOD
+------------
+  If your subscription lapses, you have a 30-day grace period
+  during which remote access continues to work with a warning
+  banner shown on the login page. After 30 days, access is
+  suspended until renewal.
+
+
+DESKTOP FEATURES
+----------------
+  Your AI-Prowler desktop application continues to work fully
+  regardless of your mobile subscription status. Indexing, searching, OCR,
+  and local Claude Desktop integration but the LLM such as Claude requires a Pro
+  subscription  example 20/month that is separate that enables Agent MCP port operation.
+
+
+QUESTIONS?
+----------
+  david.vavro1@gmail.com
+  Response within 2 business days.
+
