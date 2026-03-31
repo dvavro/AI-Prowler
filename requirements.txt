@@ -22,6 +22,32 @@ transformers==4.44.2
 pdfplumber>=0.10.3
 python-docx>=1.1.0
 pypdf>=3.17.4
+# openpyxl: reads modern .xlsx files (XML-based, Excel 2007+).
+# xlrd: reads legacy .xls files (BIFF8 binary format, Excel 97-2003).
+# Both are required for proper Excel indexing in rag_preprocessor.py.
+# Without these, Excel files fall back to raw-binary ingestion which
+# produces unreadable garbage and cannot be searched semantically.
+openpyxl>=3.1.0
+xlrd>=2.0.1
+# python-pptx: reads modern .pptx PowerPoint files (ZIP-of-XML format).
+# Without this, .pptx files cannot be indexed (binary ZIP garbage).
+python-pptx>=0.6.21
+# beautifulsoup4: strips HTML tags from .html/.htm/.xhtml files.
+# Without this, HTML files are indexed with all tag/JS/CSS noise included.
+beautifulsoup4>=4.12.0
+# striprtf: removes RTF control codes from .rtf files.
+# Without this, .rtf files are indexed with \rtf1\ansi\deff0 noise.
+striprtf>=0.0.26
+# odfpy: extracts text from OpenDocument .odt files (also a ZIP of XML).
+# Without this, .odt files produce binary garbage identical to the xls problem.
+odfpy>=1.4.1
+
+# ── Action Tools — Field Service Automation ───────────────────────────────────
+# pywin32: Windows COM automation for QuickBooks Desktop invoice creation.
+# Required only for create_quickbooks_desktop_invoice() MCP tool.
+# Not needed for QuickBooks Online or for any free action tools.
+# Note: installed on Windows only; harmless on other platforms.
+pywin32>=306
 
 # ── OCR — scanned PDFs and image files ────────────────────────────────────────
 # pytesseract: Python wrapper for the Tesseract OCR engine.

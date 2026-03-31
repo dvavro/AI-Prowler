@@ -47,7 +47,23 @@
 ; UNINSTALL BEHAVIOR:
 ;   - Attempts to run Python and Ollama uninstallers if present
 ;   - Attempts to delete Python, Ollama, and Ollama data folders
-;   - Prompts user whether to delete the RAG database folder
+;   - Prompts user whether to delete the RAG database folder,
+;     index tracking files, AND the Job Tracker spreadsheet together
+;     (all three are user data — one combined prompt, default NO)
+;
+; SMALL BUSINESS JOB TRACKER:
+;   - Bundles AI-Prowler_Job_Tracker.xlsx (rename from Cronin_cleaning_tracking.xlsx
+;     before compile — generic name suitable for any SMB customer)
+;   - Deployed to: %USERPROFILE%\Documents\AI-Prowler\AI-Prowler_Job_Tracker.xlsx
+;     (Documents, not Program Files — user needs write access; Excel cannot
+;      save back to UAC-protected Program Files folders)
+;   - onlyifdoesntexist flag: reinstalls NEVER overwrite the user's live data
+;   - Installer writes default_spreadsheet_path into ~/.ai-prowler/config.json
+;     so the Small Business tab in the GUI shows the path pre-filled
+;   - 8 interconnected tabs: Customers, Jobs_Schedule, Route_Planner, Quotes,
+;     Invoices, QB_Daily_Export, Services_Pricing, AI-Prowler_Commands
+;   - Column headers are what update_job_spreadsheet() MCP tool matches on —
+;     do not rename headers or the tool will fail to find rows
 ;
 ; CLAUDE DESKTOP:
 ;   - Checks for an existing Claude_* package folder in %LOCALAPPDATA%\Packages
@@ -96,6 +112,27 @@ PrivilegesRequired=admin
 UninstallDisplayIcon={app}\rag_icon.ico
 LicenseFile=AI-Prowler Setup License.txt
 
+; UsedUserAreasWarning=no — INTENTIONAL, not a suppression of a real bug.
+;
+; Inno Setup warns that {userdocs} is a per-user area used inside an
+; admin-mode installer. This warning exists for IT/enterprise scenarios
+; where an admin installs FOR a different user — in that case {userdocs}
+; would resolve to the admin's Documents folder, not the target user's.
+;
+; AI-Prowler is a self-installed SMB desktop application. The user always
+; installs it for THEMSELVES via UAC elevation of their own session. In
+; this pattern {userdocs} correctly resolves to their own Documents folder,
+; which is exactly the intended destination for the Job Tracker spreadsheet.
+;
+; Admin mode is required solely so the Python MSI and Program Files
+; deployment succeed — not for any multi-user deployment scenario.
+;
+; If AI-Prowler ever supports enterprise/IT deployment (admin installs for
+; another user), the spreadsheet copy should move to a PowerShell script
+; that resolves the target user's %USERPROFILE% at runtime instead of
+; relying on {userdocs} at install time. For now, this suppression is correct.
+UsedUserAreasWarning=no
+
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
@@ -116,6 +153,18 @@ Source: "mcp_diagnostics.py"; DestDir: "{app}"; Flags: ignoreversion
 ; --- Full Python installer bundled into {app} so Exec() can find it ---
 Source: "python-3.11.8-amd64.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; NOTE: Ollama is downloaded from the internet at install time, not bundled here
+
+; --- Small Business Job Tracker template spreadsheet ---
+; Deployed to the user's Documents\AI-Prowler folder (NOT Program Files).
+; onlyifdoesntexist: never overwrites the user's live working copy on reinstall.
+; uninsneveruninstall: the uninstaller does NOT auto-delete it — we ask the user
+;   in CurUninstallStepChanged (same prompt as the RAG database), because this
+;   is the user's live business data and silent deletion would be catastrophic.
+; The source filename is the generic product name; the original
+;   Cronin_cleaning_tracking.xlsx is renamed at compile time by placing a
+;   copy named AI-Prowler_Job_Tracker.xlsx alongside this .iss file.
+Source: "AI-Prowler_Job_Tracker.xlsx"; DestDir: "{userdocs}\AI-Prowler"; \
+  Flags: onlyifdoesntexist uninsneveruninstall
 
 [Icons]
 Name: "{commonprograms}\AI-Prowler"; Filename: "{app}\RAG_RUN.bat"; IconFilename: "{app}\rag_icon.ico"
@@ -196,6 +245,24 @@ const
 
   OLLAMA_DATA_FOLDER = '{%USERPROFILE}\.ollama';
   RAG_DB_FOLDER      = '{%USERPROFILE}\AI-Prowler\rag_database';
+
+  // Job Tracker spreadsheet — deployed to the user's Documents folder.
+  // Using Documents (not Program Files) because:
+  //   1. The user needs write access to edit their own job data
+  //   2. Program Files is UAC-protected — Excel cannot save back to it
+  //   3. Documents is the natural home for business data files
+  // The installer writes this path into ~/.ai-prowler/config.json as
+  // default_spreadsheet_path so the Small Business tab shows it pre-filled.
+  // The installer-side filename is generic (AI-Prowler_Job_Tracker.xlsx) so
+  // it makes sense for any small business, not just a specific customer.
+  SPREADSHEET_DEST_FOLDER = '{userdocs}\AI-Prowler';
+  SPREADSHEET_DEST_FILE   = '{userdocs}\AI-Prowler\AI-Prowler_Job_Tracker.xlsx';
+  AI_PROWLER_CFG_FILE     = '{%USERPROFILE}\.ai-prowler\config.json';
+
+  // Task Scheduler task name for AI-Prowler auto-start on logon.
+  // Flat name (no subfolder) for broadest Windows 10/11 compatibility.
+  // /F on create overwrites stale tasks from previous installs cleanly.
+  STARTUP_TASK_NAME = 'AI-Prowler-AutoStart';
 
   OLLAMA_URL     = 'https://ollama.com/download/OllamaSetup.exe';
   TESSERACT_URL  = 'https://github.com/UB-Mannheim/tesseract/releases/download/v5.4.0.20240606/tesseract-ocr-w64-setup-5.4.0.20240606.exe';
@@ -558,6 +625,289 @@ begin
 end;
 
 
+// ============================================================
+// STARTUP TASK: Register AI-Prowler auto-launch on logon
+//
+// PURPOSE:
+//   Windows Update silently restarts the PC overnight, killing all running
+//   applications including the HTTP MCP server and Cloudflare Tunnel.
+//   This task relaunches AI-Prowler automatically after every reboot/logon
+//   so mobile access (Claude.ai) is always restored without user intervention.
+//
+// DESIGN DECISIONS:
+//   - Written to a temp .bat file first to eliminate cmd.exe quoting issues
+//     with paths that contain spaces (e.g. C:\Program Files\AI-Prowler).
+//   - Task name is flat (no subfolder) for broadest Windows 10/11 compat.
+//     Subfolder creation via schtasks is unreliable on some Win10 builds.
+//   - /RL HIGHEST ensures the HTTP server and Cloudflare Tunnel can bind
+//     their ports correctly, matching the privilege level of a manual launch.
+//   - /DELAY 0001:00 waits 1 minute after logon so the network stack,
+//     Cloudflare DNS, and the desktop are fully ready before the app starts.
+//   - /F overwrites any stale task from a previous install automatically.
+//   - Verification query after create confirms the task actually landed.
+//   - All steps are logged to install_log.txt for troubleshooting.
+// ============================================================
+
+// ============================================================
+// JOB TRACKER SPREADSHEET — Post-deploy configuration
+//
+// The [Files] section copies AI-Prowler_Job_Tracker.xlsx to:
+//     Documents\AI-Prowler\AI-Prowler_Job_Tracker.xlsx
+// with the onlyifdoesntexist flag, so reinstalls never overwrite
+// the user's live working data.
+//
+// This procedure handles everything the [Files] section cannot:
+//   1. Ensures the destination folder exists (ForceDirectories).
+//   2. Verifies the file actually landed on disk after the copy.
+//   3. Writes default_spreadsheet_path into ~/.ai-prowler/config.json
+//      so the Small Business tab shows the path pre-filled without
+//      the user having to browse for it manually.
+//   4. If the config file already contains a different path (user has
+//      customised it), the existing path is preserved — we only write
+//      when the key is absent or empty.
+//   5. All steps are logged to install_log.txt.
+// ============================================================
+procedure InstallJobTrackerSpreadsheet;
+var
+  DestFolder, DestFile, CfgFile, CfgDir: String;
+  ExistingJson, NewJson, ExistingPath: String;
+  ExistingJsonAnsi: AnsiString;   // LoadStringFromFile requires AnsiString
+begin
+  AppendInstallLog('[Spreadsheet] === Job Tracker spreadsheet setup ===');
+
+  DestFolder := ExpandConstant(SPREADSHEET_DEST_FOLDER);
+  DestFile   := ExpandConstant(SPREADSHEET_DEST_FILE);
+  CfgFile    := ExpandConstant(AI_PROWLER_CFG_FILE);
+  CfgDir     := ExpandConstant('{%USERPROFILE}\.ai-prowler');
+
+  // ── Step 1: Ensure destination folder exists ─────────────────────────────
+  // Inno's [Files] section creates the folder automatically, but ForceDirectories
+  // here guarantees it even if the file copy step was somehow skipped.
+  if not DirExists(DestFolder) then
+  begin
+    if ForceDirectories(DestFolder) then
+      AppendInstallLog('[Spreadsheet] Created destination folder: ' + DestFolder)
+    else
+      AppendInstallLog('[Spreadsheet] WARNING: Could not create folder: ' + DestFolder);
+  end
+  else
+    AppendInstallLog('[Spreadsheet] Destination folder already exists: ' + DestFolder);
+
+  // ── Step 2: Verify the file landed on disk ────────────────────────────────
+  if FileExists(DestFile) then
+    AppendInstallLog('[Spreadsheet] File confirmed on disk: ' + DestFile)
+  else
+  begin
+    // onlyifdoesntexist means a reinstall skips the copy — that is correct.
+    // But if this is a FIRST install and the file is missing, something went wrong.
+    // Log it clearly so it is diagnosable from install_log.txt.
+    AppendInstallLog('[Spreadsheet] WARNING: File not found after install step.');
+    AppendInstallLog('[Spreadsheet]   Expected: ' + DestFile);
+    AppendInstallLog('[Spreadsheet]   Possible causes:');
+    AppendInstallLog('[Spreadsheet]     1. AI-Prowler_Job_Tracker.xlsx missing from installer package');
+    AppendInstallLog('[Spreadsheet]     2. Destination folder creation failed above');
+    AppendInstallLog('[Spreadsheet]   The Small Business tab Browse button can be used to locate it manually.');
+    // Non-fatal — continue and write the config path anyway so the user
+    // at least sees where the file should be when they open the tab.
+  end;
+
+  // ── Step 3: Write default_spreadsheet_path to ~/.ai-prowler/config.json ──
+  // Ensure the config directory exists.
+  if not DirExists(CfgDir) then
+  begin
+    if ForceDirectories(CfgDir) then
+      AppendInstallLog('[Spreadsheet] Created config directory: ' + CfgDir)
+    else
+    begin
+      AppendInstallLog('[Spreadsheet] WARNING: Could not create config directory: ' + CfgDir);
+      AppendInstallLog('[Spreadsheet]   Skipping config write.');
+      Exit;
+    end;
+  end;
+
+  // Read existing config (may already have QBO tokens from a previous run).
+  ExistingJson := '';
+  if FileExists(CfgFile) then
+  begin
+    if LoadStringFromFile(CfgFile, ExistingJsonAnsi) then
+    begin
+      ExistingJson := ExistingJsonAnsi;   // widen AnsiString → String safely
+      AppendInstallLog('[Spreadsheet] Loaded existing config: ' + CfgFile)
+    end
+    else
+    begin
+      AppendInstallLog('[Spreadsheet] WARNING: Could not read existing config — will create fresh.');
+      ExistingJson := '';
+    end;
+  end
+  else
+    AppendInstallLog('[Spreadsheet] No existing config — will create.');
+
+  // Check whether default_spreadsheet_path already has a value.
+  // Simple string search — avoids needing a JSON parser in Pascal.
+  // If the key already exists AND has a non-empty value, leave it alone.
+  if (Pos('"default_spreadsheet_path"', ExistingJson) > 0) and
+     (Pos('"default_spreadsheet_path": ""', ExistingJson) = 0) then
+  begin
+    AppendInstallLog('[Spreadsheet] default_spreadsheet_path already set — preserving user value.');
+    Exit;
+  end;
+
+  // Build the JSON path string: backslashes must be doubled for JSON.
+  ExistingPath := DestFile;
+  StringChange(ExistingPath, '\', '\\');
+
+  // Merge the new key into the config.
+  // Strategy: if no existing config, create minimal JSON.
+  //           if existing config, insert the key before the closing brace.
+  // This is deliberately simple — the Small Business tab and the MCP server
+  // both use Python's json.load() which handles any valid JSON, so as long
+  // as the file is valid we are fine.
+  if ExistingJson = '' then
+  begin
+    NewJson :=
+      '{' + #13#10 +
+      '  "default_spreadsheet_path": "' + ExistingPath + '"' + #13#10 +
+      '}';
+  end
+  else
+  begin
+    // Insert before the last closing brace.
+    // Trim trailing whitespace/newlines first for a clean insertion point.
+    NewJson := TrimRight(ExistingJson);
+    // Remove trailing '}'
+    if (Length(NewJson) > 0) and (NewJson[Length(NewJson)] = '}') then
+      NewJson := Copy(NewJson, 1, Length(NewJson) - 1);
+    // Append the new key and close the object.
+    // The leading comma handles both "last key" and "only key" cases.
+    NewJson := NewJson +
+      ',' + #13#10 +
+      '  "default_spreadsheet_path": "' + ExistingPath + '"' + #13#10 +
+      '}';
+  end;
+
+  if SaveStringToFile(CfgFile, NewJson, False) then
+  begin
+    AppendInstallLog('[Spreadsheet] Wrote default_spreadsheet_path to config:');
+    AppendInstallLog('[Spreadsheet]   File:  ' + CfgFile);
+    AppendInstallLog('[Spreadsheet]   Path:  ' + DestFile);
+  end
+  else
+    AppendInstallLog('[Spreadsheet] WARNING: Could not write config file: ' + CfgFile);
+
+  AppendInstallLog('[Spreadsheet] === Job Tracker setup complete ===');
+end;
+
+procedure RegisterStartupTask(const AppDir: String);
+var
+  BatFile, BatContents, AppBat: String;
+  ResultCode: Integer;
+begin
+  AppendInstallLog('[StartupTask] === Registering logon startup task ===');
+
+  AppBat  := AppDir + '\RAG_RUN.bat';
+  BatFile := MakeTempFile('task_create');
+  BatFile := Copy(BatFile, 1, Length(BatFile) - 4) + '.bat';
+
+  // Build a clean batch file.
+  // Embedding the schtasks command here (instead of in a cmd /C "..." string)
+  // avoids the double-quoting problem: the .bat file's own quoting rules are
+  // simple and predictable even when AppDir contains spaces.
+  //
+  // /SC ONLOGON  — trigger: every time THIS user logs on
+  // /RU          — run as the current (non-system) user so it can access
+  //               the user's AppData, Cloudflare config, and network shares
+  // /RL HIGHEST  — elevated token so the HTTP server can bind its port
+  // /DELAY 0001:00 — wait 1 minute after logon for network + desktop ready
+  // /F           — force-overwrite stale task from any previous install
+  BatContents :=
+    '@echo off' + #13#10 +
+    'schtasks /Create /F' +
+    ' /RU "' + GetEnv('USERNAME') + '"' +
+    ' /SC ONLOGON' +
+    ' /TN "' + STARTUP_TASK_NAME + '"' +
+    ' /TR "\"' + AppBat + '\""' +
+    ' /RL HIGHEST' +
+    ' /DELAY 0001:00' + #13#10;
+
+  SaveStringToFile(BatFile, BatContents, False);
+  AppendInstallLog('[StartupTask] Temp batch file: ' + BatFile);
+  AppendInstallLog('[StartupTask] Batch contents: ' + BatContents);
+
+  // Execute the batch — Exec passes the .bat directly to cmd so quoting is
+  // handled by the batch file itself, not by our string construction.
+  Exec(ExpandConstant('{cmd}'), '/C "' + BatFile + '"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  AppendInstallLog('[StartupTask] schtasks /Create exit code: ' + IntToStr(ResultCode));
+
+  if ResultCode = 0 then
+    AppendInstallLog('[StartupTask] SUCCESS - startup task created: ' + STARTUP_TASK_NAME)
+  else
+    AppendInstallLog('[StartupTask] WARNING: Exit code ' + IntToStr(ResultCode) +
+      ' - task may not have been created. Verify manually in Task Scheduler.');
+
+  // --- VERIFICATION ---
+  // Query the task back to confirm it actually landed in the scheduler.
+  // schtasks /Query returns 0 if found, non-zero if not found.
+  Exec(ExpandConstant('{sys}\schtasks.exe'),
+    '/Query /TN "' + STARTUP_TASK_NAME + '"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  if ResultCode = 0 then
+    AppendInstallLog('[StartupTask] Verification: task CONFIRMED in Task Scheduler.')
+  else
+    AppendInstallLog('[StartupTask] Verification: task NOT found after create (code ' +
+      IntToStr(ResultCode) + '). ' +
+      'If the user declines the UAC prompt for schtasks, the task will not be created. ' +
+      'The user can create it manually: ' +
+      'schtasks /Create /TN "' + STARTUP_TASK_NAME + '" /SC ONLOGON /TR "' + AppBat + '" /RL HIGHEST');
+
+  DeleteFileIfExists(BatFile);
+  AppendInstallLog('[StartupTask] === Startup task registration complete ===');
+end;
+
+// ============================================================
+// STARTUP TASK: Remove AI-Prowler auto-launch task on uninstall
+//
+// Called from CurUninstallStepChanged so the Task Scheduler entry
+// is always cleaned up when the user removes AI-Prowler.
+// A missing task (exit code 1) is treated as success — it means
+// the task was already removed or was never created, both fine.
+// ============================================================
+procedure RemoveStartupTask;
+var
+  ResultCode: Integer;
+begin
+  AppendUninstallLog('[StartupTask] === Removing logon startup task ===');
+  AppendUninstallLog('[StartupTask] Task name: ' + STARTUP_TASK_NAME);
+
+  Exec(ExpandConstant('{sys}\schtasks.exe'),
+    '/Delete /F /TN "' + STARTUP_TASK_NAME + '"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  AppendUninstallLog('[StartupTask] schtasks /Delete exit code: ' + IntToStr(ResultCode));
+
+  if ResultCode = 0 then
+    AppendUninstallLog('[StartupTask] SUCCESS - startup task deleted.')
+  else if ResultCode = 1 then
+    // Exit code 1 = task not found — already gone, treat as success
+    AppendUninstallLog('[StartupTask] Task not found (already removed or never created) - no action needed.')
+  else
+    AppendUninstallLog('[StartupTask] WARNING: Unexpected exit code ' + IntToStr(ResultCode) +
+      '. If task still appears in Task Scheduler, delete "' + STARTUP_TASK_NAME + '" manually.');
+
+  // --- VERIFICATION ---
+  // If the query still finds it, something prevented deletion.
+  Exec(ExpandConstant('{sys}\schtasks.exe'),
+    '/Query /TN "' + STARTUP_TASK_NAME + '"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  if ResultCode <> 0 then
+    AppendUninstallLog('[StartupTask] Verification: task confirmed REMOVED from Task Scheduler.')
+  else
+    AppendUninstallLog('[StartupTask] WARNING: Task still present after delete. ' +
+      'Open Task Scheduler and manually delete "' + STARTUP_TASK_NAME + '".');
+
+  AppendUninstallLog('[StartupTask] === Startup task removal complete ===');
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   PyFolder, ModelPath, TessSetup, TessFolder, TessTask, TessBat, RoamingPython: String;
@@ -842,6 +1192,49 @@ begin
       // uvicorn: ASGI server for the HTTP MCP transport (Remote Access feature)
       AppendInstallLog('[Remote] Installing uvicorn for HTTP MCP transport...');
       ExecPython('[Remote] pip install uvicorn', PyFolder, '-m pip install uvicorn>=0.29.0');
+
+      // ----------------------------------------------------------
+      // EXCEL SUPPORT
+      // openpyxl handles modern .xlsx files (Excel 2007+).
+      // xlrd handles legacy .xls files (BIFF8, Excel 97-2003).
+      // Both are required for proper spreadsheet indexing.
+      // Without them, Excel files produce unreadable binary garbage.
+      // ----------------------------------------------------------
+      SetProgress(77, 'Installing Excel support (openpyxl, xlrd)...');
+      AppendInstallLog('[Excel] Installing openpyxl for .xlsx support...');
+      ExecPython('[Excel] pip install openpyxl', PyFolder, '-m pip install openpyxl>=3.1.0');
+      AppendInstallLog('[Excel] Installing xlrd for .xls support...');
+      ExecPython('[Excel] pip install xlrd', PyFolder, '-m pip install xlrd>=2.0.1');
+
+      // ----------------------------------------------------------
+      // DOCUMENT FORMAT SUPPORT
+      // python-pptx : modern .pptx PowerPoint files
+      // beautifulsoup4: strips HTML tags for clean .html indexing
+      // striprtf      : removes RTF control codes from .rtf files
+      // odfpy         : extracts text from .odt OpenDocument files
+      // Without these, the above formats produce unreadable garbage
+      // or heavy noise that degrades search quality.
+      // ----------------------------------------------------------
+      SetProgress(78, 'Installing document format support (pptx, html, rtf, odt)...');
+      AppendInstallLog('[Formats] Installing python-pptx for .pptx support...');
+      ExecPython('[Formats] pip install python-pptx', PyFolder, '-m pip install python-pptx>=0.6.21');
+      AppendInstallLog('[Formats] Installing beautifulsoup4 for .html support...');
+      ExecPython('[Formats] pip install beautifulsoup4', PyFolder, '-m pip install beautifulsoup4>=4.12.0');
+      AppendInstallLog('[Formats] Installing striprtf for .rtf support...');
+      ExecPython('[Formats] pip install striprtf', PyFolder, '-m pip install striprtf>=0.0.26');
+      AppendInstallLog('[Formats] Installing odfpy for .odt support...');
+      ExecPython('[Formats] pip install odfpy', PyFolder, '-m pip install odfpy>=1.4.1');
+
+      // ----------------------------------------------------------
+      // ACTION TOOLS — FIELD SERVICE AUTOMATION
+      // pywin32: Windows COM automation for QuickBooks Desktop.
+      // Required for create_quickbooks_desktop_invoice() MCP tool.
+      // Free tools (weather, routing, maps URL) need no extra packages.
+      // QuickBooks Online uses OAuth tokens stored in config — no package.
+      // ----------------------------------------------------------
+      SetProgress(79, 'Installing QuickBooks Desktop support (pywin32)...');
+      AppendInstallLog('[Action] Installing pywin32 for QuickBooks Desktop COM automation...');
+      ExecPython('[Action] pip install pywin32', PyFolder, '-m pip install pywin32>=306');
 
       // ----------------------------------------------------------
       // WRITE CLAUDE DESKTOP CONFIG SNIPPET
@@ -1210,6 +1603,28 @@ begin
     // Model pull removed — no automatic model download.
     // Users choose and install models from Settings → Browse & Install Model.
     AppendInstallLog('[Ollama] Model auto-pull disabled. User installs models manually.');
+
+    // ----------------------------------------------------------
+    // JOB TRACKER SPREADSHEET  (progress 97)
+    // Ensures the bundled spreadsheet landed in Documents\AI-Prowler
+    // and writes its path into ~/.ai-prowler/config.json so the
+    // Small Business tab shows it pre-filled without user action.
+    // onlyifdoesntexist in [Files] protects live data on reinstall.
+    // ----------------------------------------------------------
+    SetProgress(97, 'Setting up Job Tracker spreadsheet...');
+    InstallJobTrackerSpreadsheet;
+
+    // ----------------------------------------------------------
+    // STARTUP TASK  (progress 98)
+    // Register a Task Scheduler logon task so AI-Prowler restarts
+    // automatically after Windows Update forced reboots. Without this,
+    // the HTTP MCP server and Cloudflare Tunnel stay down until the user
+    // manually relaunches the app after every unattended system restart.
+    // See RegisterStartupTask procedure for full design notes.
+    // ----------------------------------------------------------
+    SetProgress(98, 'Registering startup task (auto-launch after reboot)...');
+    RegisterStartupTask(ExpandConstant('{app}'));
+
     SetProgress(99, 'AI-Prowler ready.');
 
   end
@@ -1373,6 +1788,8 @@ var
   TessUninstaller: String;
   CurrentPath: String;
   PsFile, PsContents: String;
+  PsFileXl, PsContentsXl: String;
+  TaskQueryCode: Integer;
 begin
   if CurUninstallStep = usUninstall then
   begin
@@ -1623,14 +2040,23 @@ begin
     // after reinstall the app knows the database is already up to date
     // and does not re-index everything from scratch.
     // If they delete the database, those files are meaningless and go too.
+    // The Job Tracker spreadsheet lives in the same Documents\AI-Prowler
+    // folder — we ask about it in the same prompt so the user can make
+    // one informed decision about all their AI-Prowler data at once.
     // ----------------------------------------------------------------
     DeleteRagDB := MsgBox(
-      'Delete the AI-Prowler RAG database and index tracking files?' + #13#10 +
+      'Delete AI-Prowler data files?' + #13#10 +
       '' + #13#10 +
-      'YES - delete the database and all tracking files (clean slate)' + #13#10 +
-      'NO  - keep the database and tracking files (faster re-index after reinstall)' + #13#10 +
+      'This includes:' + #13#10 +
+      '  • RAG vector database (re-indexing required after reinstall)' + #13#10 +
+      '  • Index tracking files (.rag_file_tracking.json, etc.)' + #13#10 +
+      '  • Job Tracker spreadsheet (AI-Prowler_Job_Tracker.xlsx)' + #13#10 +
       '' + #13#10 +
-      'Database folder: ' + ExpandConstant(RAG_DB_FOLDER),
+      'YES - delete all data files (clean slate — your job data will be lost)' + #13#10 +
+      'NO  - keep all data files (safe for reinstall — your jobs are preserved)' + #13#10 +
+      '' + #13#10 +
+      'RAG database:       ' + ExpandConstant(RAG_DB_FOLDER) + #13#10 +
+      'Job Tracker folder: ' + ExpandConstant(SPREADSHEET_DEST_FOLDER),
       mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES;
 
     if DeleteRagDB then
@@ -1655,15 +2081,61 @@ begin
       AppendUninstallLog('[RAG] Deleted .rag_email_index.json');
       DeleteFileIfExists(ExpandConstant('{%USERPROFILE}\.rag_auto_update_dirs.json'));
       AppendUninstallLog('[RAG] Deleted .rag_auto_update_dirs.json');
+
+      // ── Job Tracker spreadsheet ──────────────────────────────────────────
+      // uninsneveruninstall in [Files] means Inno will NOT auto-delete the
+      // spreadsheet.  We handle it explicitly here so deletion is tied to
+      // the user's informed YES choice above.
+      // Delete the file first, then remove the folder only if it is now empty
+      // (the user may have added other files there we should not touch).
+      DeleteFileIfExists(ExpandConstant(SPREADSHEET_DEST_FILE));
+      AppendUninstallLog('[Spreadsheet] Deleted: ' + ExpandConstant(SPREADSHEET_DEST_FILE));
+      // Only remove the folder if empty — RemoveDir fails silently if non-empty.
+      if DirExists(ExpandConstant(SPREADSHEET_DEST_FOLDER)) then
+      begin
+        if RemoveDir(ExpandConstant(SPREADSHEET_DEST_FOLDER)) then
+          AppendUninstallLog('[Spreadsheet] Removed empty folder: ' + ExpandConstant(SPREADSHEET_DEST_FOLDER))
+        else
+          AppendUninstallLog('[Spreadsheet] Folder not empty — left in place: ' + ExpandConstant(SPREADSHEET_DEST_FOLDER));
+      end;
+
+      // Remove default_spreadsheet_path from ~/.ai-prowler/config.json
+      // We do this with a PowerShell one-liner to avoid hand-rolling JSON
+      // manipulation in Pascal for the uninstall path.
+      PsFileXl := MakeTempFile('xl_uncfg');
+      PsFileXl := Copy(PsFileXl, 1, Length(PsFileXl) - 4) + '.ps1';
+      PsContentsXl :=
+        '$ErrorActionPreference = "Continue"' + #13#10 +
+        '$cfg = "' + ExpandConstant(AI_PROWLER_CFG_FILE) + '"' + #13#10 +
+        'if (Test-Path $cfg) {' + #13#10 +
+        '    try {' + #13#10 +
+        '        $j = Get-Content $cfg -Raw | ConvertFrom-Json' + #13#10 +
+        '        $j.PSObject.Properties.Remove("default_spreadsheet_path")' + #13#10 +
+        '        $j | ConvertTo-Json -Depth 10 | Set-Content $cfg -Encoding UTF8' + #13#10 +
+        '        Write-Host "Removed default_spreadsheet_path from config." }' + #13#10 +
+        '    catch { Write-Host "Could not update config: $_" }' + #13#10 +
+        '} else { Write-Host "Config not found — nothing to update." }' + #13#10;
+      SaveStringToFile(PsFileXl, PsContentsXl, False);
+      ExecWithLogging(False, '[Spreadsheet] RemoveCfgPath', 'powershell.exe',
+        '-NoProfile -ExecutionPolicy Bypass -File "' + PsFileXl + '"');
+      DeleteFileIfExists(PsFileXl);
     end
     else
     begin
-      AppendUninstallLog('[RAG] User chose to keep database and tracking files.');
+      AppendUninstallLog('[RAG] User chose to keep data files.');
       AppendUninstallLog('[RAG]   Kept: ' + ExpandConstant(RAG_DB_FOLDER));
       AppendUninstallLog('[RAG]   Kept: .rag_file_tracking.json');
       AppendUninstallLog('[RAG]   Kept: .rag_email_index.json');
       AppendUninstallLog('[RAG]   Kept: .rag_auto_update_dirs.json');
+      AppendUninstallLog('[Spreadsheet]   Kept: ' + ExpandConstant(SPREADSHEET_DEST_FILE));
     end;
+
+    // ----------------------------------------------------------------
+    // STARTUP TASK: Remove logon task so no broken task is left behind
+    // after uninstall. A stale task pointing at a deleted RAG_RUN.bat
+    // would show an error every time the user logs on.
+    // ----------------------------------------------------------------
+    RemoveStartupTask;
 
     AppendUninstallLog('=== UNINSTALL SUMMARY ===');
 
@@ -1703,6 +2175,21 @@ begin
       AppendUninstallLog('[Summary] AI-Prowler registry key: STILL PRESENT')
     else
       AppendUninstallLog('[Summary] AI-Prowler registry key: REMOVED');
+
+    // Startup task summary — query task to confirm it was removed
+    Exec(ExpandConstant('{sys}\schtasks.exe'),
+      '/Query /TN "' + STARTUP_TASK_NAME + '"',
+      '', SW_HIDE, ewWaitUntilTerminated, TaskQueryCode);
+    if TaskQueryCode <> 0 then
+      AppendUninstallLog('[Summary] Startup task (' + STARTUP_TASK_NAME + '): REMOVED')
+    else
+      AppendUninstallLog('[Summary] Startup task (' + STARTUP_TASK_NAME + '): STILL PRESENT - remove manually via Task Scheduler');
+
+    // Spreadsheet summary
+    if FileExists(ExpandConstant(SPREADSHEET_DEST_FILE)) then
+      AppendUninstallLog('[Summary] Job Tracker spreadsheet: KEPT (user chose NO)')
+    else
+      AppendUninstallLog('[Summary] Job Tracker spreadsheet: REMOVED or NOT FOUND');
 
     AppendUninstallLog('=== UNINSTALL FINISHED ===');
   end

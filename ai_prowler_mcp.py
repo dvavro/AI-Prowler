@@ -1215,8 +1215,1267 @@ def search_by_multiple_queries(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Entry point
+# ░░  ACTION TOOLS — Field Service Automation  ░░
+#
+# All free-tier tools use no API key:
+#   • Weather    : Open-Meteo  (https://open-meteo.com)
+#   • Geocoding  : Nominatim / OpenStreetMap (https://nominatim.openstreetmap.org)
+#   • Routing    : OSRM public server (http://router.project-osrm.org)
+#                  OSRM's /trip endpoint solves TSP natively — no OR-Tools needed
+#   • Maps URL   : Google Maps URL scheme (free, no key, tap-to-navigate)
+#
+# QuickBooks tools use stored OAuth tokens (QB Online) or COM automation (QB Desktop).
+# Spreadsheet update uses openpyxl (already installed).
 # ══════════════════════════════════════════════════════════════════════════════
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 1 — get_weather
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def get_weather(location: str, days: int = 3) -> str:
+    """
+    Get current weather conditions and a multi-day forecast for any location.
+    Uses Open-Meteo for weather data and Nominatim for geocoding.
+    Both are completely free with no API key required.
+
+    Use this before planning outdoor field service schedules to flag rain risk.
+    Rain probability >= 50% is flagged with a warning symbol.
+
+    Args:
+        location: City name, address, or zip code.
+                  Examples: "Orlando FL", "32801", "Chicago Illinois"
+        days:     Number of forecast days to return (1-7, default 3).
+
+    Returns:
+        Current conditions plus a daily forecast with high/low temps,
+        weather description, and rain probability. Rain-risk days are flagged.
+    """
+    import requests as _req
+    import time as _time
+
+    # ── Step 1: Geocode the location via Nominatim ────────────────────────────
+    try:
+        geo = _req.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": location, "format": "json", "limit": 1},
+            headers={"User-Agent": "AI-Prowler/5.0 (field-service-tool)"},
+            timeout=10,
+        ).json()
+        if not geo:
+            return f"❌ Could not geocode '{location}'. Try a more specific address."
+        lat        = float(geo[0]["lat"])
+        lon        = float(geo[0]["lon"])
+        place_name = geo[0].get("display_name", location).split(",")[0]
+    except Exception as exc:
+        return f"❌ Geocoding failed: {exc}"
+
+    # ── Step 2: Fetch forecast from Open-Meteo ───────────────────────────────
+    days = max(1, min(7, days))
+    try:
+        wx = _req.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude":            lat,
+                "longitude":           lon,
+                "current_weather":     True,
+                "daily":               ",".join([
+                    "temperature_2m_max",
+                    "temperature_2m_min",
+                    "precipitation_probability_max",
+                    "weathercode",
+                ]),
+                "temperature_unit":    "fahrenheit",
+                "wind_speed_unit":     "mph",
+                "precipitation_unit":  "inch",
+                "timezone":            "auto",
+                "forecast_days":       days,
+            },
+            timeout=10,
+        ).json()
+    except Exception as exc:
+        return f"❌ Weather fetch failed: {exc}"
+
+    # WMO weather code descriptions (simplified subset)
+    _WMO = {
+        0: "Clear sky",       1: "Mainly clear",    2: "Partly cloudy",
+        3: "Overcast",        45: "Foggy",           48: "Icy fog",
+        51: "Light drizzle",  53: "Drizzle",         55: "Heavy drizzle",
+        61: "Light rain",     63: "Rain",            65: "Heavy rain",
+        71: "Light snow",     73: "Snow",            75: "Heavy snow",
+        80: "Light showers",  81: "Rain showers",    82: "Heavy showers",
+        95: "Thunderstorm",   96: "Hail storm",      99: "Heavy hailstorm",
+    }
+
+    cur     = wx.get("current_weather", {})
+    daily   = wx.get("daily", {})
+    dates   = daily.get("time", [])
+    highs   = daily.get("temperature_2m_max", [])
+    lows    = daily.get("temperature_2m_min", [])
+    rain    = daily.get("precipitation_probability_max", [])
+    codes   = daily.get("weathercode", [])
+
+    lines = [
+        f"🌤️  Weather for {place_name}",
+        "─" * 45,
+        f"Now:  {cur.get('temperature','?')}°F  "
+        f"{'  ' + _WMO.get(int(cur.get('weathercode',0)), 'Unknown')}"
+        f"  Wind: {cur.get('windspeed','?')} mph",
+        "",
+    ]
+    for i, date in enumerate(dates):
+        desc      = _WMO.get(int(codes[i]) if i < len(codes) else 0, "Unknown")
+        rain_pct  = int(rain[i]) if i < len(rain) else 0
+        rain_flag = "  ⚠️  RAIN RISK — consider rescheduling outdoor jobs" if rain_pct >= 50 else ""
+        lines.append(
+            f"  {date}:  "
+            f"High {highs[i] if i < len(highs) else '?'}°F  "
+            f"Low {lows[i]  if i < len(lows)  else '?'}°F  "
+            f"{desc}  Rain: {rain_pct}%{rain_flag}"
+        )
+
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 2 — geocode_address
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def geocode_address(address: str) -> str:
+    """
+    Convert a street address to GPS coordinates (latitude/longitude).
+    Uses Nominatim / OpenStreetMap — free, no API key required.
+
+    Useful for verifying that a job address can be geocoded before running
+    route optimization, or for looking up coordinates manually.
+
+    Args:
+        address: Full street address.
+                 Example: "1203 Pine Ave, Orlando FL 32801"
+
+    Returns:
+        Latitude, longitude, and display name for the matched location.
+    """
+    import requests as _req
+
+    try:
+        data = _req.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": address, "format": "json", "limit": 1},
+            headers={"User-Agent": "AI-Prowler/5.0 (field-service-tool)"},
+            timeout=10,
+        ).json()
+    except Exception as exc:
+        return f"❌ Geocoding request failed: {exc}"
+
+    if not data:
+        return (
+            f"❌ Address not found: '{address}'\n"
+            "Try including city and state for better results."
+        )
+
+    r = data[0]
+    return (
+        f"📍 {r.get('display_name', address)}\n"
+        f"   Latitude:  {r['lat']}\n"
+        f"   Longitude: {r['lon']}\n"
+        f"   Type:      {r.get('type', 'unknown')}"
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 3 — get_route_optimization
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def get_route_optimization(
+    stops: list[str],
+    origin: str,
+    optimize_for: str = "time",
+    departure_hour: int = 7,
+    return_to_origin: bool = True,
+) -> str:
+    """
+    Calculate the optimal driving route for a list of job stops (Traveling Salesman).
+    Returns stops in the best visit order with estimated arrival times for each.
+
+    Uses:
+    - Nominatim (OpenStreetMap) for geocoding — free, no API key
+    - OSRM public routing server for TSP optimization — free, no API key
+      OSRM's /trip endpoint solves the Traveling Salesman Problem natively.
+      Routing is via real streets with real drive times — not straight-line distance.
+
+    Note: Nominatim requires a small delay between requests (0.3s per address).
+    Geocoding 20 addresses takes about 6 seconds. This is a free service courtesy
+    limitation — not a bug.
+
+    Args:
+        stops:            List of job addresses to visit (any order — the tool
+                          reorders them into the optimal sequence).
+        origin:           Starting address (your home base or depot).
+        optimize_for:     "time" to minimize total drive time (recommended),
+                          "distance" to minimize total miles driven.
+        departure_hour:   Hour to leave origin in 24h format (default 7 = 7:00 AM).
+                          Used to calculate estimated arrival times per stop.
+        return_to_origin: If True (default), route ends back at origin (round trip).
+
+    Returns:
+        Optimized stop sequence with estimated arrival time, drive time, and
+        distance for each leg. Includes totals and a hint to call build_maps_url().
+    """
+    import requests as _req
+    import datetime  as _dt
+    import time      as _time
+
+    all_addresses = [origin] + list(stops)
+
+    # ── Step 1: Geocode all addresses via Nominatim ───────────────────────────
+    coords  = []
+    failed  = []
+    for addr in all_addresses:
+        _time.sleep(0.35)  # Nominatim courtesy rate limit: max 1 req/s
+        try:
+            geo = _req.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={"q": addr, "format": "json", "limit": 1},
+                headers={"User-Agent": "AI-Prowler/5.0 (field-service-tool)"},
+                timeout=10,
+            ).json()
+            if geo:
+                coords.append({
+                    "address": addr,
+                    "lat":     float(geo[0]["lat"]),
+                    "lon":     float(geo[0]["lon"]),
+                    "short":   geo[0].get("display_name", addr).split(",")[0],
+                })
+            else:
+                failed.append(addr)
+                coords.append(None)
+        except Exception as exc:
+            failed.append(f"{addr} (error: {exc})")
+            coords.append(None)
+
+    valid = [c for c in coords if c is not None]
+    if len(valid) < 2:
+        return (
+            f"❌ Could not geocode enough addresses to build a route.\n"
+            f"Failed addresses: {failed}"
+        )
+
+    # ── Step 2: Call OSRM /trip endpoint (solves TSP natively) ───────────────
+    # Format: lon,lat;lon,lat;...
+    coord_str = ";".join(f"{c['lon']},{c['lat']}" for c in valid)
+    destination_param = "any" if return_to_origin else "last"
+    try:
+        osrm_resp = _req.get(
+            f"http://router.project-osrm.org/trip/v1/driving/{coord_str}",
+            params={
+                "roundtrip":   "true" if return_to_origin else "false",
+                "source":      "first",
+                "destination": destination_param,
+                "annotations": "false",
+            },
+            timeout=30,
+        ).json()
+    except Exception as exc:
+        return f"❌ Route optimization request failed: {exc}"
+
+    if osrm_resp.get("code") != "Ok":
+        return (
+            f"❌ OSRM routing error: {osrm_resp.get('message', 'Unknown error')}\n"
+            "The OSRM public server may be temporarily overloaded. Try again in a moment."
+        )
+
+    trips     = osrm_resp.get("trips",     [])
+    waypoints = osrm_resp.get("waypoints", [])
+    if not trips or not waypoints:
+        return "❌ No route returned. Check that addresses are valid street addresses."
+
+    trip          = trips[0]
+    total_dur_s   = trip.get("duration", 0)   # seconds
+    total_dist_m  = trip.get("distance",  0)  # meters
+    total_miles   = total_dist_m / 1609.34
+    total_mins    = total_dur_s  / 60.0
+    legs          = trip.get("legs", [])
+
+    # OSRM returns waypoints sorted by trip visit order via trips_index/waypoint_index
+    sorted_wps = sorted(
+        waypoints,
+        key=lambda w: w.get("trips_index", 0) * 1000 + w.get("waypoint_index", 0)
+    )
+
+    # ── Step 3: Build human-readable schedule ────────────────────────────────
+    now        = _dt.datetime(2026, 1, 1, departure_hour, 0, 0)
+    cur_time   = now
+
+    lines = [
+        "🗺️  Optimized Route Plan",
+        "─" * 50,
+        f"  Stops:          {len(stops)}",
+        f"  Total drive:    {total_mins:.0f} min  ({total_miles:.1f} miles)",
+        f"  Departure:      {now.strftime('%I:%M %p')}",
+        f"  Optimized for:  {optimize_for}",
+        "",
+    ]
+
+    if failed:
+        lines.append(f"⚠️  Could not geocode (excluded from route): {', '.join(failed)}")
+        lines.append("")
+
+    lines.append("OPTIMIZED SEQUENCE:")
+    lines.append("")
+
+    for i, wp in enumerate(sorted_wps):
+        wp_idx = wp.get("waypoint_index", i)
+        if wp_idx >= len(valid):
+            continue
+        info = valid[wp_idx]
+
+        if i == 0:
+            lines.append(f"  🏠 ORIGIN")
+            lines.append(f"     {info['address']}")
+            lines.append(f"     Depart: {cur_time.strftime('%I:%M %p')}")
+        else:
+            leg_idx  = i - 1
+            if leg_idx < len(legs):
+                leg_s    = legs[leg_idx].get("duration", 0)
+                leg_m    = legs[leg_idx].get("distance", 0) / 1609.34
+                leg_mins = leg_s / 60.0
+                cur_time += _dt.timedelta(seconds=leg_s)
+            else:
+                leg_mins = 0.0
+                leg_m    = 0.0
+            lines.append(f"  ▼  Drive {leg_mins:.0f} min  ({leg_m:.1f} mi)")
+            lines.append(f"  {i}. {info['address']}")
+            lines.append(f"     Arrive: {cur_time.strftime('%I:%M %p')}")
+        lines.append("")
+
+    if return_to_origin and legs:
+        last_leg  = legs[-1] if legs else {}
+        last_s    = last_leg.get("duration", 0)
+        last_m    = last_leg.get("distance", 0) / 1609.34
+        cur_time += _dt.timedelta(seconds=last_s)
+        lines.append(f"  ▼  Drive {last_s/60:.0f} min  ({last_m:.1f} mi)")
+        lines.append(f"  🏠 Return to Origin")
+        lines.append(f"     Arrive: {cur_time.strftime('%I:%M %p')}")
+        lines.append("")
+
+    lines += [
+        "─" * 50,
+        f"✅ Route total: {total_mins:.0f} min drive,  {total_miles:.1f} miles",
+        "",
+        "Next step: call build_maps_url(stops_in_order, origin) to generate",
+        "a tap-to-navigate Google Maps link for your phone.",
+    ]
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 4 — build_maps_url
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def build_maps_url(
+    stops: list[str],
+    origin: str,
+    app: str = "google",
+) -> str:
+    """
+    Build a tap-to-navigate multi-stop directions URL.
+    The user taps the link on their phone and Google Maps (or Apple Maps) opens
+    immediately in navigation mode with all stops pre-loaded in the correct order.
+
+    Google Maps supports 9 waypoints per URL. For larger routes the tool
+    automatically splits the day into legs (each with its own tap-to-navigate
+    link) so no stops are lost.
+
+    No API key required — uses the public Google Maps and Apple Maps URL schemes.
+    Works on iPhone, Android, CarPlay, Android Auto, and desktop Chrome.
+
+    Args:
+        stops:  Job addresses in the OPTIMIZED visit order
+                (use the sequence returned by get_route_optimization()).
+        origin: Starting address (home base or depot).
+        app:    "google" (default, all devices) or "apple" (iPhone/iPad only).
+
+    Returns:
+        One or more tap-to-navigate URLs. For routes > 9 stops, multiple
+        leg links are provided — tap each when the previous leg is complete.
+    """
+    import urllib.parse as _up
+
+    def _enc(s: str) -> str:
+        return _up.quote(s.replace(" ", "+"), safe="+")
+
+    GOOGLE_MAX = 9  # Google Maps URL waypoint limit per link
+
+    if app.lower() == "apple":
+        lines = [
+            f"📍 Apple Maps Navigation Links  ({len(stops)} stops)",
+            "(iPhone / iPad only — opens Apple Maps)",
+            "",
+        ]
+        for i, stop in enumerate(stops, 1):
+            url = (
+                "http://maps.apple.com/?saddr=Current+Location"
+                f"&daddr={_enc(stop)}&dirflg=d"
+            )
+            lines.append(f"  Stop {i}: {stop}")
+            lines.append(f"  {url}")
+            lines.append("")
+        return "\n".join(lines)
+
+    # ── Google Maps ───────────────────────────────────────────────────────────
+    def _google_url(orig: str, dest: str, waypoints: list[str]) -> str:
+        base   = "https://www.google.com/maps/dir/?api=1"
+        params = f"&origin={_enc(orig)}&destination={_enc(dest)}&travelmode=driving"
+        if waypoints:
+            params += "&waypoints=" + "|".join(_enc(w) for w in waypoints)
+        return base + params
+
+    if len(stops) <= GOOGLE_MAX:
+        url = _google_url(
+            orig      = origin,
+            dest      = origin,
+            waypoints = stops,
+        )
+        return (
+            f"📍 TAP TO NAVIGATE  —  {len(stops)} stops loaded\n\n"
+            f"{url}\n\n"
+            f"Opens Google Maps with all {len(stops)} stops in optimized order.\n"
+            f"Works on: iPhone (Google Maps app), Android, CarPlay, Android Auto,\n"
+            f"          and desktop Chrome.\n"
+            f"Tap 'Start' in Maps for turn-by-turn navigation."
+        )
+
+    # Split into legs of GOOGLE_MAX stops each
+    leg_groups = [stops[i:i + GOOGLE_MAX] for i in range(0, len(stops), GOOGLE_MAX)]
+    total_legs  = len(leg_groups)
+    lines = [
+        f"📍 NAVIGATION ROUTE  —  {len(stops)} stops  ({total_legs} legs)",
+        f"   Google Maps limit is {GOOGLE_MAX} waypoints per link.",
+        f"   Tap each leg link when you finish the previous leg.",
+        "",
+    ]
+
+    leg_origin = origin
+    for leg_num, group in enumerate(leg_groups, 1):
+        is_last_leg = leg_num == total_legs
+        leg_dest    = origin if is_last_leg else group[-1]
+        leg_wps     = group  if is_last_leg else group[:-1]
+
+        stop_start = (leg_num - 1) * GOOGLE_MAX + 1
+        stop_end   = min(leg_num * GOOGLE_MAX, len(stops))
+        url = _google_url(leg_origin, leg_dest, leg_wps)
+
+        lines.append(f"  LEG {leg_num}/{total_legs}  (stops {stop_start}–{stop_end}):")
+        lines.append(f"  {url}")
+        lines.append(f"  Tap when Leg {leg_num - 1 if leg_num > 1 else 0} is complete.")
+        lines.append("")
+        leg_origin = leg_dest
+
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 5 — create_quickbooks_online_invoice
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def create_quickbooks_online_invoice(
+    customer_name:       str,
+    service_description: str,
+    amount:              float,
+    job_date:            str,
+    memo:                str  = "",
+    send_email:          bool = True,
+) -> str:
+    """
+    Create an invoice in QuickBooks Online for a completed job and optionally
+    email it to the customer automatically.
+
+    Requires a one-time OAuth 2.0 setup in AI-Prowler → Settings → Action Tools.
+    After the initial setup, tokens refresh silently — no repeated login needed.
+
+    Args:
+        customer_name:       Client name exactly as it appears in QuickBooks Online.
+        service_description: Description of work performed.
+                             Example: "Exterior window washing — 12 windows, eco solution"
+        amount:              Total invoice amount in dollars (e.g. 426.00).
+        job_date:            Date work was performed in YYYY-MM-DD format.
+        memo:                Optional internal memo or reference number.
+        send_email:          If True (default), QuickBooks emails the invoice
+                             to the customer's address on file automatically.
+
+    Returns:
+        Invoice number, QuickBooks link to view the invoice, and email status.
+    """
+    import requests as _req
+
+    cfg = load_config()
+    access_token = cfg.get("qbo_access_token",   "").strip()
+    realm_id     = cfg.get("qbo_realm_id",        "").strip()
+
+    if not access_token or not realm_id:
+        return (
+            "❌ QuickBooks Online not configured.\n\n"
+            "One-time setup required:\n"
+            "  AI-Prowler → Settings → Action Tools → QuickBooks Online → Connect\n"
+            "After connecting, this tool works automatically without further login."
+        )
+
+    hdrs = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type":  "application/json",
+        "Accept":        "application/json",
+    }
+    base = f"https://quickbooks.api.intuit.com/v3/company/{realm_id}"
+
+    # ── Step 1: Find customer by name ────────────────────────────────────────
+    try:
+        qr = _req.get(
+            f"{base}/query",
+            params={"query": f"SELECT * FROM Customer WHERE DisplayName = '{customer_name}'"},
+            headers=hdrs,
+            timeout=15,
+        ).json()
+        customers = qr.get("QueryResponse", {}).get("Customer", [])
+        if not customers:
+            return (
+                f"❌ Customer '{customer_name}' not found in QuickBooks Online.\n"
+                "Check the exact display name matches your QuickBooks customer list."
+            )
+        customer_id    = customers[0]["Id"]
+        customer_email = customers[0].get("PrimaryEmailAddr", {}).get("Address", "")
+    except Exception as exc:
+        return f"❌ QuickBooks customer lookup failed: {exc}"
+
+    # ── Step 2: Build invoice payload ────────────────────────────────────────
+    inv_payload: dict = {
+        "CustomerRef":    {"value": customer_id},
+        "TxnDate":        job_date,
+        "PrivateNote":    memo,
+        "CustomerMemo":   {"value": service_description},
+        "Line": [{
+            "Amount":     round(float(amount), 2),
+            "DetailType": "SalesItemLineDetail",
+            "Description": service_description,
+            "SalesItemLineDetail": {
+                "ItemRef":  {"name": "Services"},
+                "Qty":       1,
+                "UnitPrice": round(float(amount), 2),
+            },
+        }],
+    }
+
+    if send_email and customer_email:
+        inv_payload["BillEmail"]    = {"Address": customer_email}
+        inv_payload["EmailStatus"]  = "NeedToSend"
+
+    # ── Step 3: POST invoice ─────────────────────────────────────────────────
+    try:
+        resp   = _req.post(f"{base}/invoice", json={"Invoice": inv_payload},
+                           headers=hdrs, timeout=15)
+        result = resp.json()
+    except Exception as exc:
+        return f"❌ Invoice creation request failed: {exc}"
+
+    if "Invoice" not in result:
+        fault  = result.get("Fault", {})
+        errors = fault.get("Error", [{}])
+        detail = errors[0].get("Detail", str(result)) if errors else str(result)
+        return f"❌ QuickBooks Online error: {detail}"
+
+    inv     = result["Invoice"]
+    inv_num = inv.get("DocNumber", "N/A")
+    inv_id  = inv.get("Id", "")
+
+    if send_email and customer_email:
+        email_line = f"\n📧 Invoice emailed to: {customer_email}"
+    elif send_email and not customer_email:
+        email_line = "\n⚠️  No email on file — invoice not emailed. Add email in QuickBooks."
+    else:
+        email_line = ""
+
+    return (
+        f"✅ Invoice #{inv_num} created in QuickBooks Online\n"
+        f"   Customer:    {customer_name}\n"
+        f"   Amount:      ${float(amount):.2f}\n"
+        f"   Date:        {job_date}\n"
+        f"   Description: {service_description}"
+        + (f"\n   Memo:        {memo}" if memo else "")
+        + email_line
+        + f"\n\n🔗 View: https://app.qbo.intuit.com/app/invoice?txnId={inv_id}"
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 6 — create_quickbooks_desktop_invoice
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def create_quickbooks_desktop_invoice(
+    customer_name:       str,
+    service_description: str,
+    amount:              float,
+    job_date:            str,
+    memo:                str = "",
+    item_name:           str = "Services",
+) -> str:
+    """
+    Create an invoice in QuickBooks Desktop (the installed Windows version).
+    Uses Windows COM automation (QBSDK) — no internet or OAuth needed.
+    QuickBooks Desktop must be running with a company file open.
+
+    Args:
+        customer_name:       Customer name exactly as it appears in QuickBooks Desktop.
+        service_description: Description of work performed.
+        amount:              Total invoice amount in dollars.
+        job_date:            Date work was performed in YYYY-MM-DD format.
+        memo:                Optional memo field on the invoice.
+        item_name:           QuickBooks service item name (default "Services").
+                             Must exist in your QuickBooks item list.
+
+    Returns:
+        Invoice reference number and confirmation, or an error with steps to fix.
+    """
+    try:
+        import win32com.client as _win32
+    except ImportError:
+        return (
+            "❌ QuickBooks Desktop integration requires the pywin32 package.\n\n"
+            "Install it with:\n"
+            "   pip install pywin32\n\n"
+            "Then restart AI-Prowler."
+        )
+
+    import xml.etree.ElementTree as _ET
+    import re as _re
+
+    # ── Connect to QB Desktop via QBSDK COM ──────────────────────────────────
+    try:
+        qb     = _win32.Dispatch("QBXMLRP2.RequestProcessor")
+        qb.OpenConnection("", "AI-Prowler")
+        ticket = qb.BeginSession("", 1)  # 1 = currently open company file
+    except Exception as exc:
+        return (
+            f"❌ Cannot connect to QuickBooks Desktop: {exc}\n\n"
+            "Make sure:\n"
+            "  1. QuickBooks Desktop is open\n"
+            "  2. A company file is loaded\n"
+            "  3. You allow AI-Prowler in the QB access confirmation dialog"
+        )
+
+    # ── Build QBXML invoice request ──────────────────────────────────────────
+    xml_req = f"""<?xml version="1.0" encoding="utf-8"?>
+<?qbxml version="16.0"?>
+<QBXML>
+  <QBXMLMsgsRq onError="stopOnError">
+    <InvoiceAddRq>
+      <InvoiceAdd>
+        <CustomerRef>
+          <FullName>{customer_name}</FullName>
+        </CustomerRef>
+        <TxnDate>{job_date}</TxnDate>
+        <Memo>{memo}</Memo>
+        <InvoiceLineAdd>
+          <ItemRef>
+            <FullName>{item_name}</FullName>
+          </ItemRef>
+          <Desc>{service_description}</Desc>
+          <Quantity>1</Quantity>
+          <Rate>{round(float(amount), 2)}</Rate>
+          <Amount>{round(float(amount), 2)}</Amount>
+        </InvoiceLineAdd>
+      </InvoiceAdd>
+    </InvoiceAddRq>
+  </QBXMLMsgsRq>
+</QBXML>"""
+
+    try:
+        response = qb.ProcessRequest(ticket, xml_req)
+    except Exception as exc:
+        return f"❌ QuickBooks Desktop request failed: {exc}"
+    finally:
+        try:
+            qb.EndSession(ticket)
+            qb.CloseConnection()
+        except Exception:
+            pass
+
+    # ── Parse response ───────────────────────────────────────────────────────
+    inv_num  = "N/A"
+    match    = _re.search(r"<RefNumber>(.*?)</RefNumber>", response)
+    if match:
+        inv_num = match.group(1)
+
+    success = 'statusCode="0"' in response or "statusCode='0'" in response
+
+    if success:
+        return (
+            f"✅ Invoice #{inv_num} created in QuickBooks Desktop\n"
+            f"   Customer:    {customer_name}\n"
+            f"   Amount:      ${float(amount):.2f}\n"
+            f"   Date:        {job_date}\n"
+            f"   Description: {service_description}"
+            + (f"\n   Memo:        {memo}" if memo else "")
+        )
+
+    # Non-zero status — extract QB error message
+    err_match = _re.search(r'statusMessage="([^"]+)"', response)
+    err_msg   = err_match.group(1) if err_match else response[:400]
+    return f"❌ QuickBooks Desktop error: {err_msg}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 7 — update_job_spreadsheet
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _get_default_spreadsheet_path() -> str:
+    """Read the default spreadsheet path from ~/.ai-prowler/config.json."""
+    try:
+        _cfg_path = Path.home() / '.ai-prowler' / 'config.json'
+        if _cfg_path.exists():
+            import json as _jcfg
+            cfg = _jcfg.loads(_cfg_path.read_text(encoding='utf-8'))
+            return cfg.get('default_spreadsheet_path', '').strip()
+    except Exception as _e:
+        _log.warning("Could not read default_spreadsheet_path from config: %s", _e)
+    return ''
+
+
+def _backup_spreadsheet(fp: str, keep_days: int = 30) -> str:
+    """
+    Copy fp into a _backups subfolder next to the file, timestamped.
+    Prunes backups older than keep_days days.
+
+    Returns a short status string (success path or warning message).
+    """
+    import shutil as _shutil
+    import datetime as _dt
+
+    src = Path(fp)
+    backup_dir = src.parent / '_backups'
+    try:
+        backup_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        return f"⚠️  Could not create backup folder: {exc}"
+
+    ts  = _dt.datetime.now().strftime('%Y-%m-%d_%H%M%S')
+    dst = backup_dir / f"{src.stem}_{ts}{src.suffix}"
+    try:
+        _shutil.copy2(str(src), str(dst))
+    except Exception as exc:
+        return f"⚠️  Backup copy failed: {exc}"
+
+    # Prune old backups
+    cutoff = _dt.datetime.now() - _dt.timedelta(days=keep_days)
+    pruned = 0
+    try:
+        for old in backup_dir.glob(f"{src.stem}_*{src.suffix}"):
+            if old == dst:
+                continue
+            try:
+                mtime = _dt.datetime.fromtimestamp(old.stat().st_mtime)
+                if mtime < cutoff:
+                    old.unlink()
+                    pruned += 1
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    msg = f"💾 Backup saved: _backups/{dst.name}"
+    if pruned:
+        msg += f"  ({pruned} old backup(s) pruned)"
+    return msg
+
+
+@mcp.tool()
+def update_job_spreadsheet(
+    job_identifier: str,
+    updates:        dict,
+    filepath:       str = "",
+    id_column:      str = "Customer",
+    sheet_name:     str = "",
+    backup:         bool = True,
+) -> str:
+    """
+    Update a row in a job tracking spreadsheet after a job is completed.
+
+    Finds the correct row by matching job_identifier against id_column
+    (e.g. customer name), then writes new values to specified columns
+    (e.g. marks job complete, records invoice number, updates last service date).
+
+    Uses openpyxl — already installed, no new package needed.
+    Works only on .xlsx files. For .xls, convert to .xlsx first.
+
+    If filepath is omitted, the default spreadsheet path configured in
+    AI-Prowler Settings → Small Business → Default Spreadsheet Path is used
+    automatically — no need to specify the path every time.
+
+    Args:
+        job_identifier: Value to search for in id_column.
+                        Example: "Crabby's Daytona" (partial matches accepted)
+        updates:        Dict of {column_header: new_value} pairs to write.
+                        Example: {"Job\\nStatus": "Complete",
+                                  "Last Service\\nDate": "2026-03-31",
+                                  "Actual\\nDuration (min)": 45,
+                                  "Actual\\nAmount ($)": 150.00}
+        filepath:       Full path to the Excel spreadsheet (.xlsx).
+                        If omitted, uses the path saved in AI-Prowler Settings.
+                        Example: "C:/Users/Dave/Documents/jobs.xlsx"
+        id_column:      Column header to search in (default "Customer").
+        sheet_name:     Sheet to use (default: first/active sheet).
+        backup:         If True (default), a timestamped backup copy of the
+                        spreadsheet is saved in a _backups subfolder next to
+                        the file before any changes are written.
+                        Backups older than 30 days are pruned automatically.
+                        Set to False to skip the backup (faster, no disk use).
+
+    Returns:
+        Confirmation listing exactly which cells were updated, backup status,
+        or an error if the file, row, or column was not found.
+    """
+    try:
+        import openpyxl as _opx
+    except ImportError:
+        return "❌ openpyxl not installed. Run: pip install openpyxl"
+
+    # Resolve filepath — use default from config if not supplied
+    if not filepath:
+        filepath = _get_default_spreadsheet_path()
+    if not filepath:
+        return (
+            "❌ No spreadsheet path provided and no default path configured.\n"
+            "Set one in AI-Prowler → Settings → Small Business → Default Spreadsheet Path,\n"
+            "or pass the full filepath argument explicitly."
+        )
+
+    fp = filepath.replace("\\", "/")
+    if not os.path.exists(fp):
+        return f"❌ Spreadsheet not found: {fp}"
+    if not fp.lower().endswith(".xlsx"):
+        return (
+            "❌ Only .xlsx files are supported for updates.\n"
+            "Save the spreadsheet as .xlsx in Excel first."
+        )
+
+    # ── Backup before modifying ───────────────────────────────────────────────
+    backup_msg = ""
+    if backup:
+        backup_msg = _backup_spreadsheet(fp)
+        if backup_msg.startswith("⚠️") or backup_msg.startswith("❌"):
+            # Backup failed — abort to protect the file
+            return (
+                f"{backup_msg}\n"
+                "Spreadsheet was NOT modified. Fix the backup issue or pass backup=False to skip."
+            )
+
+    try:
+        wb = _opx.load_workbook(fp)
+    except Exception as exc:
+        return f"❌ Could not open spreadsheet: {exc}"
+
+    ws = (wb[sheet_name] if sheet_name and sheet_name in wb.sheetnames
+          else wb.active)
+
+    # ── Detect header row (skip title/banner rows, same logic as read tool) ───
+    # Scans the first 5 rows and uses the first row that has ≥ 3 non-empty
+    # cells as the real header row.  This handles decorative title rows like
+    # "📅 JOBS & SCHEDULE — All Service Appointments" in row 1.
+    header_row_num: int | None = None
+    headers: dict[str, int] = {}
+    for r in ws.iter_rows(min_row=1, max_row=5):
+        non_empty = [c for c in r if c.value is not None]
+        if len(non_empty) >= 3:
+            header_row_num = r[0].row
+            for col_idx, cell in enumerate(r, 1):
+                if cell.value is not None:
+                    raw = str(cell.value).strip()
+                    headers[raw] = col_idx
+                    # Register a newline-normalised alias so callers can pass
+                    # either "Job\nStatus" or "Job Status" and both resolve.
+                    normalised = raw.replace('\n', ' ')
+                    if normalised != raw:
+                        headers.setdefault(normalised, col_idx)
+            break
+
+    if header_row_num is None or not headers:
+        return (
+            "❌ Could not detect a header row in the spreadsheet.\n"
+            "Expected a row with at least 3 non-empty cells in the first 5 rows."
+        )
+
+    if id_column not in headers:
+        avail = [k for k in headers.keys() if '\n' not in k][:15]
+        return (
+            f"❌ Column '{id_column}' not found in headers (detected on row {header_row_num}).\n"
+            f"Available columns: {', '.join(avail)}"
+        )
+
+    id_col_idx = headers[id_column]
+
+    # ── Find matching row ─────────────────────────────────────────────────────
+    found_row = None
+    for row in ws.iter_rows(min_row=header_row_num + 1):
+        cell_val = row[id_col_idx - 1].value
+        if cell_val and job_identifier.lower() in str(cell_val).lower():
+            found_row = row
+            break
+
+    if found_row is None:
+        return (
+            f"❌ No row found where {id_column} contains '{job_identifier}'.\n"
+            "Check the spelling — partial matches are accepted."
+        )
+
+    # ── Apply updates ─────────────────────────────────────────────────────────
+    updated:    list[str] = []
+    not_found:  list[str] = []
+
+    for col_name, new_val in updates.items():
+        if col_name in headers:
+            found_row[headers[col_name] - 1].value = new_val
+            updated.append(f"{col_name} → {new_val}")
+        else:
+            not_found.append(col_name)
+
+    # ── Save ──────────────────────────────────────────────────────────────────
+    try:
+        wb.save(fp)
+    except Exception as exc:
+        return f"❌ Could not save spreadsheet: {exc}"
+
+    row_num = found_row[0].row
+    lines   = [
+        f"✅ Spreadsheet updated: {os.path.basename(fp)}",
+        f"   Row:     {row_num}  ({id_column}: {job_identifier})",
+        f"   Updated: {', '.join(updated)}",
+    ]
+    if backup_msg:
+        lines.append(f"   {backup_msg}")
+    if not_found:
+        lines.append(
+            f"   ⚠️  Columns not found (check spelling): {', '.join(not_found)}"
+        )
+    lines.append(
+        "\n📑 Re-index the spreadsheet to keep AI-Prowler search results current:\n"
+        "   Call update_tracked_directories() after updating the file."
+    )
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 8 — read_job_spreadsheet
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def read_job_spreadsheet(
+    filepath:    str = "",
+    sheet_name:  str = "",
+    filter_date: str = "",
+    max_rows:    int = 200,
+) -> str:
+    """
+    Read job data from the AI-Prowler job tracking spreadsheet.
+
+    Returns rows from the Jobs_Schedule sheet (or any named sheet) as
+    structured text so Claude can answer questions like:
+      - "What jobs do I have scheduled for today?"
+      - "Which jobs are still open?"
+      - "Show me everything scheduled this week."
+      - "What customers haven't been serviced yet?"
+
+    If filepath is omitted, the default spreadsheet path configured in
+    AI-Prowler Settings -> Small Business -> Default Spreadsheet Path is used
+    automatically.
+
+    Args:
+        filepath:    Full path to the .xlsx spreadsheet.
+                     If omitted, uses the path saved in AI-Prowler Settings.
+        sheet_name:  Sheet to read (default: "Jobs_Schedule").
+                     Use "Customers" to read the customer master list.
+                     Leave blank to default to Jobs_Schedule.
+        filter_date: Optional date string to filter rows by Service Date.
+                     Examples: "2026-03-31", "03/31/2026", "today"
+                     Leave blank to return all rows.
+        max_rows:    Maximum data rows to return (default 200, max 500).
+
+    Returns:
+        A formatted table of rows with all column values, or a message
+        if no matching rows are found.
+    """
+    try:
+        import openpyxl as _opx
+    except ImportError:
+        return "❌ openpyxl not installed. Run: pip install openpyxl"
+
+    if not filepath:
+        filepath = _get_default_spreadsheet_path()
+    if not filepath:
+        return (
+            "❌ No spreadsheet path provided and no default path configured.\n"
+            "Set one in AI-Prowler -> Settings -> Small Business -> Default Spreadsheet Path,\n"
+            "or pass the full filepath argument explicitly."
+        )
+
+    fp = filepath.replace("\\", "/")
+    if not os.path.exists(fp):
+        return f"❌ Spreadsheet not found: {fp}"
+    if not fp.lower().endswith(".xlsx"):
+        return "❌ Only .xlsx files are supported. Save as .xlsx first."
+
+    try:
+        wb = _opx.load_workbook(fp, data_only=True)
+    except Exception as exc:
+        return f"❌ Could not open spreadsheet: {exc}"
+
+    target_sheet = sheet_name.strip() if sheet_name.strip() else "Jobs_Schedule"
+    if target_sheet not in wb.sheetnames:
+        if sheet_name.strip():
+            avail = ", ".join(wb.sheetnames)
+            return f"❌ Sheet '{target_sheet}' not found.\nAvailable sheets: {avail}"
+        target_sheet = wb.sheetnames[0]
+
+    ws = wb[target_sheet]
+
+    # Detect header row (skip title banner rows)
+    header_row_idx = None
+    headers: list = []
+    for r in ws.iter_rows(min_row=1, max_row=5):
+        non_empty = [c for c in r if c.value is not None]
+        if len(non_empty) >= 3:
+            header_row_idx = r[0].row
+            headers = [str(c.value).strip().replace('\n', ' ') if c.value else '' for c in r]
+            break
+
+    if header_row_idx is None or not headers:
+        return f"❌ Could not detect a header row in sheet '{target_sheet}'."
+
+    import datetime as _dt
+    date_filter = None
+    if filter_date:
+        fd = filter_date.strip().lower()
+        if fd == 'today':
+            date_filter = _dt.date.today()
+        else:
+            for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y', '%d/%m/%Y'):
+                try:
+                    date_filter = _dt.datetime.strptime(fd, fmt).date()
+                    break
+                except ValueError:
+                    continue
+            if date_filter is None:
+                return f"❌ Could not parse filter_date '{filter_date}'. Use YYYY-MM-DD or MM/DD/YYYY."
+
+    svc_date_col = None
+    if date_filter:
+        for idx, h in enumerate(headers):
+            if 'service' in h.lower() and 'date' in h.lower():
+                svc_date_col = idx
+                break
+
+    max_rows = min(max_rows, 500)
+    rows_out: list = []
+
+    for row in ws.iter_rows(min_row=header_row_idx + 1):
+        vals = [c.value for c in row]
+        if all(v is None or str(v).strip() == '' for v in vals):
+            continue
+        if date_filter is not None and svc_date_col is not None:
+            cell_val = vals[svc_date_col]
+            if cell_val is None:
+                continue
+            if isinstance(cell_val, (_dt.datetime, _dt.date)):
+                cell_date = cell_val.date() if isinstance(cell_val, _dt.datetime) else cell_val
+            else:
+                cell_date = None
+                for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y', '%d/%m/%Y'):
+                    try:
+                        cell_date = _dt.datetime.strptime(str(cell_val).strip(), fmt).date()
+                        break
+                    except ValueError:
+                        continue
+            if cell_date != date_filter:
+                continue
+        rows_out.append(vals)
+        if len(rows_out) >= max_rows:
+            break
+
+    if not rows_out:
+        msg = f"📋 No rows found in sheet '{target_sheet}'"
+        if date_filter:
+            msg += f" for date {date_filter.strftime('%Y-%m-%d')}"
+        return msg + "."
+
+    # Trim to last used column
+    max_col_used = 0
+    for row in rows_out:
+        for i in range(len(row) - 1, -1, -1):
+            if row[i] is not None and str(row[i]).strip():
+                if i > max_col_used:
+                    max_col_used = i
+                break
+    headers_trimmed = headers[:max_col_used + 1]
+
+    lines = [
+        f"📋 {target_sheet}  —  {os.path.basename(fp)}",
+        f"   {len(rows_out)} row(s)" + (f" for {date_filter.strftime('%Y-%m-%d')}" if date_filter else ""),
+        "─" * 60,
+    ]
+    for row_vals in rows_out:
+        lines.append("")
+        for col_idx, col_name in enumerate(headers_trimmed):
+            if not col_name:
+                continue
+            val = row_vals[col_idx] if col_idx < len(row_vals) else None
+            if val is None or str(val).strip() == '':
+                continue
+            if isinstance(val, _dt.datetime):
+                val = val.strftime('%Y-%m-%d')
+            elif isinstance(val, _dt.date):
+                val = val.strftime('%Y-%m-%d')
+            lines.append(f"  {col_name}: {val}")
+    lines.append("")
+    lines.append("─" * 60)
+    lines.append("✅ Read complete. Use update_job_spreadsheet() to write changes back.")
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 9 — get_action_tools_status
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def get_action_tools_status() -> str:
+    """
+    Check which AI-Prowler Action Tools are ready to use and which need setup.
+
+    Returns a full status report covering:
+    - Free tools (weather, geocoding, routing, navigation URLs)
+    - QuickBooks Online connection status
+    - QuickBooks Desktop package availability
+    - Spreadsheet update tool readiness
+
+    Call this tool first when planning to use action tools, to confirm
+    everything is configured before starting a workflow.
+
+    Returns:
+        Status report with ✅/⚠️/❌ for each tool and setup instructions
+        for anything that needs configuration.
+    """
+    lines = [
+        "🔧 AI-Prowler Action Tools Status",
+        "─" * 50,
+        "",
+        "FREE TOOLS  (no API key, no setup required):",
+        "",
+    ]
+
+    # Check requests
+    try:
+        import requests  # noqa: F401
+        req_ok = True
+    except ImportError:
+        req_ok = False
+
+    lines += [
+        f"  {'✅' if req_ok else '❌'} get_weather(location, days)",
+        f"     Open-Meteo + Nominatim geocoding — free, no key",
+        "",
+        f"  {'✅' if req_ok else '❌'} geocode_address(address)",
+        f"     Nominatim / OpenStreetMap — free, no key",
+        "",
+        f"  {'✅' if req_ok else '❌'} get_route_optimization(stops, origin, ...)",
+        f"     OSRM public server — TSP solver, real streets, free, no key",
+        "",
+        f"  ✅ build_maps_url(stops, origin, app)",
+        f"     Google Maps URL builder — tap-to-navigate, free, no key",
+        "",
+        "─" * 50,
+        "",
+        "QUICKBOOKS TOOLS:",
+        "",
+    ]
+
+    if not req_ok:
+        lines.append("  ❌ requests package missing — run: pip install requests")
+        lines.append("")
+
+    # QB Online
+    cfg        = load_config()
+    qbo_token  = cfg.get("qbo_access_token", "").strip()
+    qbo_realm  = cfg.get("qbo_realm_id",     "").strip()
+    qbo_ready  = bool(qbo_token and qbo_realm)
+
+    lines += [
+        f"  {'✅ Connected' if qbo_ready else '⚠️  Not configured'}"
+        f"   create_quickbooks_online_invoice(...)",
+    ]
+    if not qbo_ready:
+        lines.append(
+            "     Setup: AI-Prowler → Settings → Action Tools → "
+            "QuickBooks Online → Connect"
+        )
+    lines.append("")
+
+    # QB Desktop
+    try:
+        import win32com.client  # noqa: F401
+        win32_ok = True
+    except ImportError:
+        win32_ok = False
+
+    lines += [
+        f"  {'✅ pywin32 installed' if win32_ok else '⚠️  pywin32 missing'}"
+        f"   create_quickbooks_desktop_invoice(...)",
+    ]
+    if not win32_ok:
+        lines.append("     Install: pip install pywin32")
+    else:
+        lines.append("     Note: QuickBooks Desktop must be open when invoicing.")
+    lines.append("")
+
+    lines += [
+        "─" * 50,
+        "",
+        "SPREADSHEET TOOLS:",
+        "",
+    ]
+
+    try:
+        import openpyxl  # noqa: F401
+        opx_ok = True
+    except ImportError:
+        opx_ok = False
+
+    default_xl = _get_default_spreadsheet_path()
+    xl_status  = f"✅ Default path: {default_xl}" if default_xl else "⚠️  No default path set"
+
+    lines += [
+        f"  {'✅' if opx_ok else '❌'} read_job_spreadsheet(filepath?, sheet?, date?, max_rows?)",
+        f"     openpyxl — reads Jobs_Schedule or any sheet; supports date filtering",
+        f"     {xl_status}",
+        "",
+        f"  {'✅' if opx_ok else '❌'} update_job_spreadsheet(job_id, updates, filepath?)",
+        f"     openpyxl — updates .xlsx job tracking files in place",
+        f"     {xl_status}",
+        "",
+        "     💡 Set a default path once in Settings → Small Business → Default",
+        "        Spreadsheet Path so you never need to specify it in conversation.",
+        "",
+        "─" * 50,
+        "",
+        "All FREE tools work immediately with no configuration.",
+        "QuickBooks Online requires one-time OAuth setup in Settings.",
+        "QuickBooks Desktop requires pywin32 and QB Desktop to be running.",
+        "Spreadsheet tools use the default path from Settings if filepath is omitted.",
+    ]
+
+    return "\n".join(lines)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # HTTP transport with Bearer-token auth (launched by GUI or manually)

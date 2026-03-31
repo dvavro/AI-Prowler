@@ -4,8 +4,8 @@ AI Prowler Document Preprocessor
 Indexes local files and allows semantic search + LLM queries
 
 Author: David
-Version: 1.8 (with per-email incremental indexing for all email types)
-Date: February 2026
+Version: 5.0.0 (Excel/PPTX/HTML/RTF/ODT/CSV format support; .doc/.ppt removed)
+Date: March 2026
 """
 
 # CRITICAL: Set environment variables BEFORE any imports to suppress warnings
@@ -86,6 +86,77 @@ except ImportError as e:
     print(f"❌ Missing dependency: {e}")
     print("Please run: pip install -r requirements.txt")
     sys.exit(1)
+
+# ── Excel support — optional but strongly recommended ─────────────────────────
+# openpyxl handles modern .xlsx files; xlrd handles legacy .xls (BIFF8) files.
+# Both are listed in requirements.txt. If missing, Excel files fall back to the
+# raw-bytes loader which produces unreadable binary garbage — so we warn loudly.
+try:
+    with suppress_stderr():
+        import openpyxl
+    _OPENPYXL_AVAILABLE = True
+except ImportError:
+    _OPENPYXL_AVAILABLE = False
+    print("⚠️  openpyxl not installed — .xlsx files will not be indexed properly.")
+    print("   Run: pip install openpyxl")
+
+try:
+    with suppress_stderr():
+        import xlrd
+    _XLRD_AVAILABLE = True
+except ImportError:
+    _XLRD_AVAILABLE = False
+    print("⚠️  xlrd not installed — .xls files will not be indexed properly.")
+    print("   Run: pip install xlrd")
+
+# ── PowerPoint / presentation support ─────────────────────────────────────────
+# python-pptx handles modern .pptx files. Without it .pptx files fall back to
+# empty (the ZIP-of-XML binary is not useful as raw text).
+try:
+    with suppress_stderr():
+        from pptx import Presentation as _PptxPresentation
+    _PPTX_AVAILABLE = True
+except ImportError:
+    _PPTX_AVAILABLE = False
+    print("⚠️  python-pptx not installed — .pptx files will not be indexed.")
+    print("   Run: pip install python-pptx")
+
+# ── HTML tag stripping ─────────────────────────────────────────────────────────
+# beautifulsoup4 strips HTML tags so only readable text is indexed.
+# Without it, .html files are indexed with all tags/JS/CSS as noise.
+try:
+    with suppress_stderr():
+        from bs4 import BeautifulSoup as _BeautifulSoup
+    _BS4_AVAILABLE = True
+except ImportError:
+    _BS4_AVAILABLE = False
+    print("⚠️  beautifulsoup4 not installed — .html files will be indexed with raw tags.")
+    print("   Run: pip install beautifulsoup4")
+
+# ── RTF stripping ──────────────────────────────────────────────────────────────
+# striprtf removes RTF control codes so only clean text is indexed.
+# Without it, .rtf files are flooded with \rtf1\ansi\deff0 noise.
+try:
+    with suppress_stderr():
+        from striprtf.striprtf import rtf_to_text as _rtf_to_text
+    _STRIPRTF_AVAILABLE = True
+except ImportError:
+    _STRIPRTF_AVAILABLE = False
+    print("⚠️  striprtf not installed — .rtf files will be indexed with RTF control codes.")
+    print("   Run: pip install striprtf")
+
+# ── OpenDocument (.odt) support ───────────────────────────────────────────────
+# odfpy extracts text from .odt files. Without it .odt produces binary garbage
+# (it's a ZIP of XML, not readable as plain text).
+try:
+    with suppress_stderr():
+        from odf.opendocument import load as _odf_load
+        from odf.text import P as _OdfP
+    _ODFPY_AVAILABLE = True
+except ImportError:
+    _ODFPY_AVAILABLE = False
+    print("⚠️  odfpy not installed — .odt files will not be indexed.")
+    print("   Run: pip install odfpy")
 
 # ── OCR — required (not optional) ─────────────────────────────────────────────
 # pytesseract wraps the Tesseract binary; pypdfium2 renders PDF pages to images
@@ -920,8 +991,13 @@ validate_model_config()
 # Supported file extensions — content-bearing files worth indexing
 SUPPORTED_EXTENSIONS = {
     # Documents
-    '.txt', '.md', '.rst', '.rtf', '.odt',
-    '.pdf', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt',
+    '.txt', '.md', '.rst',
+    '.pdf', '.docx', '.xlsx', '.xls', '.pptx', '.odt', '.rtf',
+    # NOTE: .doc (legacy Word binary) and .ppt (legacy PowerPoint binary) are
+    # intentionally NOT listed here. Both are OLE compound binary formats that
+    # produce unreadable garbage when read as text. They require external
+    # binaries (antiword, LibreOffice) with no pure-Python alternative.
+    # Users with .doc/.ppt files should convert them to .docx/.pptx first.
     # Code / markup
     '.py', '.js', '.ts', '.jsx', '.tsx', '.cs', '.java', '.cpp', '.c', '.h',
     '.hpp', '.go', '.rs', '.rb', '.php', '.swift', '.kt', '.scala', '.r',
@@ -945,6 +1021,10 @@ SUPPORTED_EXTENSIONS = {
 
 # Extensions to always skip — binary, compiled, executable, media, archive
 SKIP_EXTENSIONS = {
+    # Legacy Office binary formats — OLE compound documents with no pure-Python
+    # text extractor. Indexed as raw bytes = unreadable garbage. Skip them and
+    # let users convert to .docx / .pptx before indexing.
+    '.doc', '.ppt',
     # Executables & compiled binaries
     '.exe', '.dll', '.so', '.dylib', '.lib', '.a', '.o', '.obj',
     '.class', '.pyc', '.pyd', '.pyo', '.pdb', '.ilk', '.exp',
@@ -1257,14 +1337,317 @@ def load_pdf(filepath: str) -> str:
         return text   # return whatever pdfplumber got (may be empty)
 
 def load_docx(filepath: str) -> str:
-    """Extract text from Word document"""
+    """Extract text from Word document including table contents.
+
+    The original implementation only read doc.paragraphs, silently dropping
+    all table content (financial tables, schedules, data grids, etc.).
+    This version reads paragraphs first, then appends all table rows as
+    pipe-separated lines so no content is missed.
+    """
     try:
         doc = DocxDocument(filepath)
-        paragraphs = [para.text for para in doc.paragraphs if para.text.strip()]
-        return "\n".join(paragraphs)
+        parts = []
+        # Body paragraphs
+        for para in doc.paragraphs:
+            if para.text.strip():
+                parts.append(para.text)
+        # Tables — previously silently dropped; now extracted as pipe-separated rows
+        for table in doc.tables:
+            for row in table.rows:
+                cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                if cells:
+                    parts.append(" | ".join(cells))
+        return "\n".join(parts)
     except Exception as e:
         print(f"⚠️  Error reading DOCX {filepath}: {e}")
         return ""
+
+def load_pptx(filepath: str) -> str:
+    """
+    Extract text from modern PowerPoint (.pptx) files using python-pptx.
+
+    Each slide is rendered as a labelled section so chunk boundaries never
+    lose slide context.  Text frames (titles, body text, text boxes) are all
+    included; charts and SmartArt text is included where accessible.
+    Returns empty string with a warning if python-pptx is not installed.
+    """
+    if not _PPTX_AVAILABLE:
+        print(f"⚠️  python-pptx missing — skipping .pptx: {filepath}")
+        return ""
+    try:
+        prs = _PptxPresentation(filepath)
+        parts = []
+        for slide_num, slide in enumerate(prs.slides, 1):
+            slide_texts = []
+            for shape in slide.shapes:
+                if shape.has_text_frame:
+                    for para in shape.text_frame.paragraphs:
+                        text = para.text.strip()
+                        if text:
+                            slide_texts.append(text)
+            if slide_texts:
+                parts.append(f"[Slide {slide_num}]")
+                parts.extend(slide_texts)
+        return "\n".join(parts)
+    except Exception as e:
+        print(f"⚠️  Error reading PPTX {filepath}: {e}")
+        return ""
+
+
+def load_csv_tsv(filepath: str) -> str:
+    """
+    Extract text from CSV and TSV files using key=value per-row format.
+
+    Uses the same approach as load_xlsx/load_xls — the header row is glued to
+    every data row so that every chunk is self-contained and Claude can always
+    tell which column a value belongs to, regardless of where the word-based
+    splitter cuts the file.
+
+    No new package required — uses Python's built-in csv module.
+    Auto-detects encoding (utf-8, latin-1, cp1252).
+    """
+    import csv as _csv
+    ext = Path(filepath).suffix.lower()
+    delimiter = '\t' if ext == '.tsv' else ','
+    encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
+    for encoding in encodings:
+        try:
+            with open(filepath, 'r', encoding=encoding, newline='') as f:
+                reader = _csv.reader(f, delimiter=delimiter)
+                rows = list(reader)
+            if not rows:
+                return ""
+            headers = [h.strip() or f"Col{i+1}" for i, h in enumerate(rows[0])]
+            parts = []
+            for row_idx, row in enumerate(rows[1:], 1):
+                cells = [c.strip() for c in row]
+                if not any(cells):
+                    continue
+                block = [f"[Row {row_idx}]"]
+                for header, value in zip(headers, cells):
+                    if value:
+                        block.append(f"{header}: {value}")
+                parts.append("\n".join(block))
+            return "\n\n".join(parts)
+        except UnicodeDecodeError:
+            continue
+        except Exception as e:
+            print(f"⚠️  Error reading CSV/TSV {filepath}: {e}")
+            return ""
+    print(f"⚠️  Could not decode {filepath} with any encoding")
+    return ""
+
+
+def load_html(filepath: str) -> str:
+    """
+    Extract readable text from HTML/HTM/XHTML files using BeautifulSoup.
+
+    Strips all tags, <script>, <style>, and <head> blocks — returns only the
+    human-readable text content.  Without this, every chunk is flooded with
+    HTML tag noise that degrades embedding quality.
+    Falls back to load_text_file() with a warning if beautifulsoup4 is missing
+    (raw-tag fallback is noisy but better than nothing).
+    """
+    if not _BS4_AVAILABLE:
+        print(f"⚠️  beautifulsoup4 missing — indexing {filepath} as raw HTML (tags included).")
+        return load_text_file(filepath)
+    try:
+        raw = load_text_file(filepath)
+        if not raw:
+            return ""
+        soup = _BeautifulSoup(raw, 'html.parser')
+        for tag in soup(['script', 'style', 'noscript', 'head']):
+            tag.decompose()
+        text = soup.get_text(separator='\n')
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        return text.strip()
+    except Exception as e:
+        print(f"⚠️  Error reading HTML {filepath}: {e}")
+        return load_text_file(filepath)
+
+
+def load_rtf(filepath: str) -> str:
+    """
+    Extract plain text from RTF files using striprtf.
+
+    Without this loader, RTF files are indexed with their raw control codes
+    (\\rtf1\\ansi\\deff0{\\fonttbl...}) which pollute every chunk with noise
+    and make the content unsearchable.
+    Falls back to load_text_file() with a warning if striprtf is missing.
+    """
+    if not _STRIPRTF_AVAILABLE:
+        print(f"⚠️  striprtf missing — indexing {filepath} as raw RTF (control codes included).")
+        return load_text_file(filepath)
+    try:
+        raw = load_text_file(filepath)
+        if not raw:
+            return ""
+        text = _rtf_to_text(raw)
+        return text.strip()
+    except Exception as e:
+        print(f"⚠️  Error reading RTF {filepath}: {e}")
+        return load_text_file(filepath)
+
+
+def load_odt(filepath: str) -> str:
+    """
+    Extract text from OpenDocument Text (.odt) files using odfpy.
+
+    .odt is a ZIP of XML — without a dedicated loader it produces binary
+    garbage identical to the original .xls problem.  odfpy unpacks and
+    parses the XML, extracting all paragraph text in reading order.
+    Returns empty string with a warning if odfpy is not installed.
+    """
+    if not _ODFPY_AVAILABLE:
+        print(f"⚠️  odfpy missing — skipping .odt file: {filepath}")
+        return ""
+    try:
+        doc = _odf_load(filepath)
+        parts = []
+        for para in doc.getElementsByType(_OdfP):
+            text = ''.join(
+                node.data for node in para.childNodes
+                if hasattr(node, 'data')
+            ).strip()
+            if text:
+                parts.append(text)
+        return "\n".join(parts)
+    except Exception as e:
+        print(f"⚠️  Error reading ODT {filepath}: {e}")
+        return ""
+
+
+def load_xlsx(filepath: str) -> str:
+    """
+    Extract text from a modern Excel workbook (.xlsx) using openpyxl.
+
+    Each data row is rendered as a self-contained block of "Column: Value" pairs
+    so that every chunk — regardless of where the word-based splitter cuts —
+    carries full column context for every value it contains.  This lets the
+    embedding model (and Claude) answer "what is column X for row Y?" reliably
+    even across very large spreadsheets.
+
+    Format:
+        [Sheet: Sheet1] [Row 2]
+        User ID: 5687710
+        Invoice Text: Windows are clean and pressure washing completed
+        ...
+
+    Rows where every cell is blank/None are skipped.
+    Sheets with no data rows (after the header) are skipped.
+    Falls back to load_text_file() with a warning if openpyxl is not installed.
+    """
+    if not _OPENPYXL_AVAILABLE:
+        print(f"⚠️  openpyxl missing — skipping proper .xlsx extraction for {filepath}")
+        return load_text_file(filepath)
+    try:
+        wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
+        parts = []
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            rows = list(ws.iter_rows(values_only=True))
+            if not rows:
+                continue
+
+            # First non-empty row is treated as the header row
+            headers = [str(c).strip() if c is not None else f"Col{i+1}"
+                       for i, c in enumerate(rows[0])]
+
+            row_number = 1   # human-readable row counter (1 = first data row)
+            for raw_row in rows[1:]:
+                # openpyxl returns Python datetime/date objects for date cells.
+                # Format those as YYYY-MM-DD; leave all other values (including
+                # floats such as 5.30 or 426.00) as-is so financial data is
+                # never silently altered.
+                import datetime as _dt
+                def _fmt_xlsx(c):
+                    if c is None:
+                        return ""
+                    if isinstance(c, (_dt.datetime, _dt.date)):
+                        return c.strftime('%Y-%m-%d')
+                    return str(c).strip()
+                cells = [_fmt_xlsx(c) for c in raw_row]
+                # Skip fully blank rows
+                if not any(cells):
+                    continue
+                block = [f"[Sheet: {sheet_name}] [Row {row_number}]"]
+                for header, value in zip(headers, cells):
+                    if value:   # omit empty cells to keep chunks concise
+                        block.append(f"{header}: {value}")
+                parts.append("\n".join(block))
+                row_number += 1
+
+        wb.close()
+        return "\n\n".join(parts)
+    except Exception as e:
+        print(f"⚠️  Error reading XLSX {filepath}: {e}")
+        return ""
+
+
+def load_xls(filepath: str) -> str:
+    """
+    Extract text from a legacy Excel workbook (.xls / BIFF8) using xlrd.
+
+    Uses the same key=value per-row format as load_xlsx() so that every chunk
+    is self-contained and carries full column context regardless of where the
+    word-based splitter cuts the text.
+
+    Format:
+        [Sheet: Sheet1] [Row 2]
+        User ID: 5687710
+        Invoice Text: Windows are clean and pressure washing completed
+        ...
+
+    The first row of each sheet is assumed to be the header row.
+    Rows where every cell is blank are skipped.
+    Falls back to empty string with a warning if xlrd is not installed.
+    """
+    if not _XLRD_AVAILABLE:
+        print(f"⚠️  xlrd missing — skipping proper .xls extraction for {filepath}")
+        return ""
+    try:
+        wb = xlrd.open_workbook(filepath)
+        parts = []
+        for sheet_name in wb.sheet_names():
+            ws = wb.sheet_by_name(sheet_name)
+            if ws.nrows < 2:   # need at least a header + one data row
+                continue
+
+            # Row 0 = headers
+            headers = [str(ws.cell_value(0, col)).strip() or f"Col{col+1}"
+                       for col in range(ws.ncols)]
+
+            for row_idx in range(1, ws.nrows):
+                # xlrd stores dates as serial float numbers internally.
+                # Use cell_type() to detect XL_CELL_DATE and convert with
+                # xlrd.xldate_as_datetime() so dates read as YYYY-MM-DD.
+                # All other numeric values (floats, currency, hours) are left
+                # exactly as xlrd returns them so financial data is preserved.
+                import datetime as _dt
+                def _fmt_xls(col):
+                    ctype = ws.cell_type(row_idx, col)
+                    cval  = ws.cell_value(row_idx, col)
+                    if ctype == xlrd.XL_CELL_DATE:
+                        try:
+                            return xlrd.xldate_as_datetime(cval, wb.datemode).strftime('%Y-%m-%d')
+                        except Exception:
+                            return str(cval).strip()
+                    return str(cval).strip()
+                cells = [_fmt_xls(col) for col in range(ws.ncols)]
+                # Skip fully blank rows
+                if not any(cells):
+                    continue
+                block = [f"[Sheet: {sheet_name}] [Row {row_idx}]"]
+                for header, value in zip(headers, cells):
+                    if value:   # omit empty cells to keep chunks concise
+                        block.append(f"{header}: {value}")
+                parts.append("\n".join(block))
+
+        return "\n\n".join(parts)
+    except Exception as e:
+        print(f"⚠️  Error reading XLS {filepath}: {e}")
+        return ""
+
 
 def clean_email_text(text: str) -> str:
     """Clean up email text by removing excessive whitespace"""
@@ -1803,6 +2186,20 @@ def load_file(filepath: str) -> Optional[Dict[str, str]]:
         content = load_pdf(filepath)
     elif ext == '.docx':
         content = load_docx(filepath)
+    elif ext == '.xlsx':
+        content = load_xlsx(filepath)
+    elif ext == '.xls':
+        content = load_xls(filepath)
+    elif ext == '.pptx':
+        content = load_pptx(filepath)
+    elif ext == '.odt':
+        content = load_odt(filepath)
+    elif ext == '.rtf':
+        content = load_rtf(filepath)
+    elif ext in ('.csv', '.tsv'):
+        content = load_csv_tsv(filepath)
+    elif ext in ('.html', '.htm', '.xhtml'):
+        content = load_html(filepath)
     elif ext == '.eml':
         content = load_eml(filepath)
     elif ext == '.msg':
@@ -3811,135 +4208,211 @@ def command_check(directory, recursive=True):
         print()
 
 def command_update(directory, recursive=True, auto_confirm=False):
-    """Check for changes and update index with new/modified files"""
-    
+    """Check for changes and update index with new/modified files, and
+    automatically purge deleted files from ChromaDB.
+
+    Handles three classes of change atomically:
+      NEW      — file on disk, not in tracking DB  -> index it
+      MODIFIED — file on disk, newer mtime          -> re-index it
+      DELETED  — file in tracking DB, gone from disk -> purge from ChromaDB
+
+    The purge pass runs unconditionally whenever deleted files are detected,
+    even when there are no new/modified files (previously caused early-return
+    before ChromaDB was ever opened, leaving stale chunks in the vector DB).
+
+    Called by:
+      • GUI  -> Update Selected button  (update_directory_worker)
+      • GUI  -> Update All button       (update_all_worker)
+      • MCP  -> update_tracked_directories tool
+      • BAT  -> rag_auto_update.bat scheduled task
+    Fixing it here covers all four entry-points simultaneously.
+    """
+
     print("=" * 70)
     print("🔍 CHECKING FOR CHANGES")
     print("=" * 70)
     print()
-    
+
     result = scan_directory_for_changes(directory, recursive)
-    
+
     if result is None:
         return
-    
+
     results, tracking_db, dir_key = result
-    
+
     # Print report
     print_scan_report(results)
-    
+
     changes = len(results['new_files']) + len(results['modified_files'])
-    
-    if changes == 0:
-        print("✅ No changes detected - index is up to date!")
+    deleted = len(results['deleted_files'])
+
+    # ── True no-op: nothing changed at all ───────────────────────────────────
+    # Previously returned here even when deleted > 0, leaving stale ChromaDB
+    # chunks behind. Now we only skip when there is genuinely nothing to do.
+    if changes == 0 and deleted == 0:
+        print("✅ No changes detected - your index is up to date!")
         print()
-        # Still update tracking database
         if save_tracking_database(tracking_db):
             print("✅ Tracking database updated")
         return
-    
-    # Ask for confirmation unless auto-confirmed
+
+    # ── Confirmation prompt (CLI / non-auto mode only) ────────────────────────
     if not auto_confirm:
         print()
         print("=" * 70)
-        response = input(f"Update index with {changes} changed file(s)? (y/n): ")
+        parts = []
+        if changes: parts.append(f"{changes} file(s) to index")
+        if deleted: parts.append(f"{deleted} deleted file(s) to purge")
+        response = input(f"Proceed? ({', '.join(parts)}) (y/n): ")
         if response.lower() != 'y':
             print("\nUpdate cancelled.")
             return
-    
-    print()
-    print("=" * 70)
-    print(f"🚀 UPDATING INDEX ({changes} files)")
-    print("=" * 70)
-    print()
-    
-    # Initialize database once for all updates
+
+    # ── Open ChromaDB once for all operations ────────────────────────────────
     client, embedding_func = get_chroma_client()
     collection = create_or_get_collection(client, embedding_func)
-    
-    # Index only the specific changed/new files — not entire directories
-    changed_files = results['new_files'] + results['modified_files']
-    updated = 0
-    failed = 0
-    
-    for i, file_info in enumerate(changed_files, 1):
-        filepath = normalise_path(file_info['path'])
-        filename = file_info['name']
-        ext      = Path(filepath).suffix.lower()
-        status   = file_info.get('status', '')
-        
-        print(f"[{i}/{changes}] [{status}] {filename}")
 
-        # ── Email archive — incremental per-message update ─────────────────────
-        if ext in EMAIL_ARCHIVE_EXTENSIONS:
-            arc_stats = index_email_archive(filepath)
-            if arc_stats["processed"] > 0 or arc_stats.get("removed", 0) > 0:
-                print(f"  ✅ {arc_stats['processed']} new message(s) indexed, "
-                      f"{arc_stats.get('removed', 0)} removed, "
-                      f"{arc_stats['skipped']} unchanged")
-                updated += 1
-            else:
-                print(f"  ℹ️  No email changes (all messages already indexed)")
-            print()
-            continue
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PASS 1 — PURGE DELETED FILES
+    # Runs first so stale chunks are gone before we (optionally) re-index.
+    # collection.delete(where={"filepath": ...}) is a no-op if the file was
+    # never indexed, so it is always safe to call.
+    # ═══════════════════════════════════════════════════════════════════════════
+    purged       = 0
+    purge_errors = 0
 
-        # ── Normal file ────────────────────────────────────────────────────────
-        file_data = load_file(filepath)
-        if not file_data:
-            print(f"  ⚠️  Could not load file — skipping")
-            failed += 1
-            continue
-        
-        chunks = chunk_text(file_data['content'], CHUNK_SIZE, CHUNK_OVERLAP)
-        if not chunks:
-            print(f"  ⚠️  Empty file — skipping")
-            failed += 1
-            continue
-        
-        ids = [f"{filepath}__chunk_{j}" for j in range(len(chunks))]
-        metadatas = [{
-            'filepath': filepath,
-            'filename': file_data['filename'],
-            'chunk_index': j,
-            'total_chunks': len(chunks),
-            'extension': file_data['extension'],
-            'indexed_date': datetime.now().isoformat()
-        } for j in range(len(chunks))]
-        
-        try:
-            # Remove stale chunks for this file before re-adding
-            collection.delete(where={"filepath": filepath})
-            collection.add(ids=ids, documents=chunks, metadatas=metadatas)
-            print(f"  ✅ Indexed {len(chunks)} chunk(s)")
-            updated += 1
-        except Exception as e:
-            print(f"  ❌ Error: {e}")
-            failed += 1
+    if deleted > 0:
         print()
-    
-    print(f"{'='*70}")
-    print(f"✨ UPDATE COMPLETE: {updated} file(s) indexed, {failed} skipped")
-    print(f"{'='*70}")
-    print()
-    
-    # Update tracking database
+        print("=" * 70)
+        print(f"🗑️  PURGING DELETED FILES ({deleted} file(s))")
+        print("=" * 70)
+        print()
+
+        for i, file_info in enumerate(results['deleted_files'], 1):
+            filepath = normalise_path(file_info['path'])
+            filename = Path(filepath).name
+            print(f"[{i}/{deleted}] [DELETED] {filename}")
+
+            try:
+                collection.delete(where={"filepath": filepath})
+                print(f"  ✅ Chunks purged from ChromaDB")
+                purged += 1
+            except Exception as exc:
+                print(f"  ❌ Purge error: {exc}")
+                purge_errors += 1
+            print()
+
+        print(f"{'='*70}")
+        print(f"🗑️  PURGE COMPLETE: {purged} file(s) purged"
+              + (f", {purge_errors} error(s)" if purge_errors else ""))
+        print(f"{'='*70}")
+        print()
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PASS 2 — INDEX NEW / MODIFIED FILES
+    # Unchanged from original logic — skip if nothing new to add.
+    # ═══════════════════════════════════════════════════════════════════════════
+    updated = 0
+    failed  = 0
+
+    if changes > 0:
+        print()
+        print("=" * 70)
+        print(f"🚀 UPDATING INDEX ({changes} file(s))")
+        print("=" * 70)
+        print()
+
+        changed_files = results['new_files'] + results['modified_files']
+
+        for i, file_info in enumerate(changed_files, 1):
+            filepath = normalise_path(file_info['path'])
+            filename = file_info['name']
+            ext      = Path(filepath).suffix.lower()
+            status   = file_info.get('status', '')
+
+            print(f"[{i}/{changes}] [{status}] {filename}")
+
+            # ── Email archive — incremental per-message update ─────────────
+            if ext in EMAIL_ARCHIVE_EXTENSIONS:
+                arc_stats = index_email_archive(filepath)
+                if arc_stats["processed"] > 0 or arc_stats.get("removed", 0) > 0:
+                    print(f"  ✅ {arc_stats['processed']} new message(s) indexed, "
+                          f"{arc_stats.get('removed', 0)} removed, "
+                          f"{arc_stats['skipped']} unchanged")
+                    updated += 1
+                else:
+                    print(f"  ℹ️  No email changes (all messages already indexed)")
+                print()
+                continue
+
+            # ── Normal file ────────────────────────────────────────────────
+            file_data = load_file(filepath)
+            if not file_data:
+                print(f"  ⚠️  Could not load file — skipping")
+                failed += 1
+                continue
+
+            chunks = chunk_text(file_data['content'], CHUNK_SIZE, CHUNK_OVERLAP)
+            if not chunks:
+                print(f"  ⚠️  Empty file — skipping")
+                failed += 1
+                continue
+
+            ids = [f"{filepath}__chunk_{j}" for j in range(len(chunks))]
+            metadatas = [{
+                'filepath':     filepath,
+                'filename':     file_data['filename'],
+                'chunk_index':  j,
+                'total_chunks': len(chunks),
+                'extension':    file_data['extension'],
+                'indexed_date': datetime.now().isoformat()
+            } for j in range(len(chunks))]
+
+            try:
+                # Remove stale chunks before re-adding (handles re-index of modified)
+                collection.delete(where={"filepath": filepath})
+                collection.add(ids=ids, documents=chunks, metadatas=metadatas)
+                print(f"  ✅ Indexed {len(chunks)} chunk(s)")
+                updated += 1
+            except Exception as exc:
+                print(f"  ❌ Error: {exc}")
+                failed += 1
+            print()
+
+        print(f"{'='*70}")
+        print(f"✨ UPDATE COMPLETE: {updated} file(s) indexed, {failed} skipped")
+        print(f"{'='*70}")
+        print()
+
+    # ── Combined summary ──────────────────────────────────────────────────────
+    summary_parts = []
+    if updated:               summary_parts.append(f"{updated} indexed")
+    if purged:                summary_parts.append(f"{purged} purged")
+    if failed or purge_errors: summary_parts.append(f"{failed + purge_errors} error(s)")
+    if summary_parts:
+        print(f"📊 Session total: {', '.join(summary_parts)}")
+        print()
+
+    # ── Update tracking database ──────────────────────────────────────────────
+    # Rebuild the file map, omitting DELETED entries so tracking DB stays in
+    # sync with both disk state and ChromaDB.
     tracking_db[dir_key]['files'] = {}
     for file_info in results['all_files']:
         if file_info.get('status') != 'DELETED':
             tracking_db[dir_key]['files'][normalise_path(file_info['path'])] = {
-                'modified': file_info['modified'],
+                'modified':       file_info['modified'],
                 'modified_human': file_info['modified_human'],
-                'size': file_info['size']
+                'size':           file_info['size']
             }
-    
+
     tracking_db[dir_key]['last_scan'] = results['scan_time']
-    
+
     if save_tracking_database(tracking_db):
         print("✅ Tracking database updated")
-    
+
     # Regenerate auto-update script with latest directory list
     generate_auto_update_script()
-    
+
     print()
     print("✅ Index update complete!")
     print()

@@ -1,6 +1,6 @@
 AI-Prowler Software License
 ============================
-Version 4.0 — Effective March 2026
+Version 5.0 — Effective March 2026
 
 Copyright (C) 2026 David Kevin Vavro. All rights reserved.
 Contact: david.vavro1@gmail.com

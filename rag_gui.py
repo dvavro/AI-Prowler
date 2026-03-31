@@ -519,8 +519,8 @@ class MultiFolderDialog:
 class RAGGui:
     def __init__(self, root):
         self.root = root
-        self.root.title("AI Prowler - Personal AI Knowledge Base")
-        self.root.geometry("1000x700")
+        self.root.title("AI-Prowler — Agentic RAG Knowledge Base v5.0.0")
+        self.root.geometry("1200x700")
         
         # Set icon (if available)
         try:
@@ -732,22 +732,36 @@ class RAGGui:
     
     def show_about(self):
         """Show about dialog"""
-        about_text = """AI Prowler - Personal AI Knowledge Base
-Version 1.8
+        about_text = """AI-Prowler — Agentic RAG Knowledge Base
+Version 5.0.0
 
 Your personal AI assistant that answers questions about YOUR documents.
 
-Features:
-• Multi-model support (15+ AI models)
-• Smart chunking optimization
-• Automatic file tracking
-• Email support (.eml, .msg, .mbox)
-• Intelligent auto-updates
-• Professional GUI interface
+Core Features:
+• Agentic RAG with Claude Desktop & Claude.ai (13 MCP tools)
+• 65+ file types: PDF, Word (.docx), Excel (.xlsx/.xls), PowerPoint, HTML, RTF, ODT, CSV, email, images & more
+• Smart chunking — full Column: Value context for spreadsheet and tabular data
+• .docx tables fully extracted (financial tables, schedules, grids)
+• Automatic OCR for scanned PDFs and image files
+• Incremental indexing — only changed files reprocessed
+• Auto-purge deleted files from ChromaDB on every update run
+• Email support (.eml, .msg, .mbox) with deduplication
+• Voice input via local Whisper model
+• Remote access via Cloudflare Tunnel + OAuth 2.0
+• Auto-start after Windows reboot via Task Scheduler
+
+Small Business Service Tools (🏢 tab):
+• Route optimization & tap-to-navigate links (free)
+• Weather forecasts for job scheduling (free)
+• QuickBooks Online invoicing (OAuth)
+• QuickBooks Desktop invoicing (COM)
+• Job spreadsheet updater (.xlsx)
+
+⚠  .doc and .xls (legacy OLE binary) are NOT supported — convert to .docx / .xlsx first.
 
 100% Local • 100% Private • 100% Yours
 
-Built with Python, ChromaDB, and Ollama"""
+Built with Python, ChromaDB, and Claude"""
         
         messagebox.showinfo("About AI Prowler", about_text)
     
@@ -774,7 +788,7 @@ Built with Python, ChromaDB, and Ollama"""
     def get_quick_start_content(self):
         """Get quick start guide content"""
         return """AI-PROWLER QUICK START GUIDE
-Version 4.1.0
+Version 5.0.0
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   ⭐  RECOMMENDED: AGENTIC RAG WITH CLAUDE DESKTOP
@@ -938,20 +952,22 @@ or from the Help menu."""
         self.notebook.pack(fill='both', expand=True, padx=5, pady=5)
         
         # Create tabs — ORDER MATTERS: _TAB_INDEX_* constants must match insertion order
-        self.create_query_tab()       # 0  ← Ask Questions (prewarmed on switch)
-        self.create_index_tab()       # 1
-        self.create_update_tab()      # 2
-        self.create_scan_config_tab() # 3
-        self.create_scheduling_tab()  # 4
-        self.create_settings_tab()    # 5
+        self.create_query_tab()            # 0  ← Ask Questions (prewarmed on switch)
+        self.create_index_tab()            # 1
+        self.create_update_tab()           # 2
+        self.create_scan_config_tab()      # 3
+        self.create_scheduling_tab()       # 4
+        self.create_settings_tab()         # 5
+        self.create_small_business_tab()   # 6  ← Small Business Service Tools
 
         # Named tab index constants — change here if tabs are ever reordered
-        self._TAB_INDEX_QUERY    = 0   # Ask Questions tab — triggers Ollama prewarm
-        self._TAB_INDEX_INDEX    = 1
-        self._TAB_INDEX_UPDATE   = 2
-        self._TAB_INDEX_SCAN     = 3
-        self._TAB_INDEX_SCHEDULE = 4
-        self._TAB_INDEX_SETTINGS = 5
+        self._TAB_INDEX_QUERY        = 0   # Ask Questions tab — triggers Ollama prewarm
+        self._TAB_INDEX_INDEX        = 1
+        self._TAB_INDEX_UPDATE       = 2
+        self._TAB_INDEX_SCAN         = 3
+        self._TAB_INDEX_SCHEDULE     = 4
+        self._TAB_INDEX_SETTINGS     = 5
+        self._TAB_INDEX_SMALL_BIZ    = 6   # Small Business Service Tools
         
         # Status bar
         self.create_status_bar()
@@ -1008,7 +1024,7 @@ or from the Help menu."""
     def create_index_tab(self):
         """Create indexing tab with multi-directory queue and smart scan mode."""
         index_frame = ttk.Frame(self.notebook)
-        self.notebook.add(index_frame, text="📚 Index Documents")
+        self.notebook.add(index_frame, text="📚 Index Docs")
         f = self._make_scrollable_tab(index_frame)
 
         # Title
@@ -4148,21 +4164,515 @@ or from the Help menu."""
         about_frame = ttk.LabelFrame(scrollable_frame, text="About", padding=10)
         about_frame.pack(fill='both', expand=True, padx=20, pady=10)
         
-        about_text = """AI Prowler - Personal AI Knowledge Base
-Version 1.8
+        about_text = """AI-Prowler — Agentic RAG Knowledge Base
+Version 5.0.0
 
-Features:
-• Multi-model support (15+ AI models)
-• Smart chunking optimization
-• Automatic file tracking
-• Email support (.eml, .msg, .mbox)
-• Intelligent auto-updates
+Core:
+• Agentic RAG — 13 MCP tools for Claude Desktop & Claude.ai
+• 65+ file types: PDF, Word (.docx), Excel (.xlsx/.xls), PPTX, HTML, RTF, ODT, CSV, email, images
+• Smart chunking — Column: Value context for all tabular data
+• .docx tables fully extracted (was silently dropped in v4)
+• Auto-purge deleted files from ChromaDB on every update run
+• Automatic OCR for scanned PDFs and images
+• Email indexing with deduplication
+• Auto-start after Windows reboot (Task Scheduler)
 
-Built with Python, ChromaDB, and Ollama"""
+Small Business (🏢 tab):
+• 8 action tools: weather, routing, maps, QBO/QBD invoicing, spreadsheet updater
+• Job Tracker spreadsheet pre-installed in Documents\AI-Prowler\
+
+⚠  .doc / legacy .xls not supported — convert to .docx / .xlsx
+
+Built with Python, ChromaDB, and Claude"""
         
         about_label = ttk.Label(about_frame, text=about_text, justify='left')
         about_label.pack(pady=10)
-    
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 6 — SMALL BUSINESS SERVICE TOOLS
+    # ══════════════════════════════════════════════════════════════════════════
+    def create_small_business_tab(self):
+        """
+        Dedicated tab for the 8 Small Business / Field Service MCP action tools.
+
+        Sections (in order):
+          1. Overview banner — what these tools do and how to invoke them
+          2. Free Tools panel — weather, geocode, route, maps URL (no setup)
+          3. QuickBooks Online panel — OAuth config, status light, save/test
+          4. QuickBooks Desktop panel — pywin32 status, default item, test
+          5. Job Spreadsheet Updater panel — usage guide + open-file shortcut
+          6. Route & Navigation panel — OSRM/Nominatim notes + open Google Maps
+
+        Configuration is read from / written to:
+            ~/.ai-prowler/config.json
+        (same file as the Settings tab uses for QBO tokens)
+        """
+        import json as _json
+
+        outer = ttk.Frame(self.notebook)
+        self.notebook.add(outer, text="🏢 Small Business")
+        f = self._make_scrollable_tab(outer)
+
+        # ── Config helpers (shared across all sub-panels) ─────────────────────
+        _cfg_path = (
+            __import__('pathlib').Path.home() / '.ai-prowler' / 'config.json'
+        )
+
+        def _load_cfg() -> dict:
+            try:
+                if _cfg_path.exists():
+                    return _json.loads(_cfg_path.read_text(encoding='utf-8'))
+            except Exception:
+                pass
+            return {}
+
+        def _save_cfg(updates: dict):
+            _cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            d = _load_cfg()
+            d.update(updates)
+            _cfg_path.write_text(_json.dumps(d, indent=2), encoding='utf-8')
+
+        # ── 1. OVERVIEW BANNER ────────────────────────────────────────────────
+        banner = ttk.LabelFrame(f, text="🔧 Small Business Service Tools — Overview",
+                                padding=(12, 8))
+        banner.pack(fill='x', padx=16, pady=(10, 6))
+
+        ttk.Label(banner, justify='left', font=('Arial', 9),
+                  text=(
+                      "8 MCP tools that let Claude act as your field-service assistant.\n"
+                      "Ask Claude in a conversation — no forms to fill out, no menus to navigate.\n\n"
+                      "Free tools (weather, routing, maps) work immediately — no setup.\n"
+                      "QuickBooks tools need one-time configuration in the panels below."
+                  )).pack(anchor='w')
+
+        # Claude prompt examples
+        ex_frame = ttk.LabelFrame(banner, text="Example prompts to use with Claude",
+                                  padding=(8, 4))
+        ex_frame.pack(fill='x', pady=(8, 0))
+
+        examples = [
+            ("🌤  Weather",      '"What is the weather forecast for New Smyrna Beach for the next 3 days?"'),
+            ("🗺  Route",        '"Optimize my route for these 6 jobs today and give me a Google Maps link."'),
+            ("🧾  QBO Invoice",  '"Create a QuickBooks invoice for Miller Windows, window washing, $312, today."'),
+            ("🖥  QB Desktop",   '"Create a QB Desktop invoice for Sam Cronin, pressure washing, $215, today."'),
+            ("📊  Spreadsheet",  '"Mark the Miller Windows job complete in my jobs.xlsx and record invoice #1048."'),
+            ("🔍  Status check", '"Call get_action_tools_status() and tell me what is ready to use."'),
+        ]
+        for icon_label, prompt in examples:
+            row = ttk.Frame(ex_frame)
+            row.pack(fill='x', pady=1)
+            ttk.Label(row, text=icon_label, font=('Arial', 8, 'bold'),
+                      width=16, anchor='w').pack(side='left')
+            ttk.Label(row, text=prompt, font=('Arial', 8),
+                      foreground='#555555', anchor='w').pack(side='left')
+
+        ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
+
+        # ── 2. FREE TOOLS PANEL ───────────────────────────────────────────────
+        free_frame = ttk.LabelFrame(f,
+                                    text="✅ Free Tools — No API Key or Setup Required",
+                                    padding=(12, 8))
+        free_frame.pack(fill='x', padx=16, pady=(0, 6))
+
+        free_tools = [
+            ("get_weather(location, days)",
+             "Current conditions + multi-day forecast via Open-Meteo.\n"
+             "Flags rain ≥ 50 % with ⚠️. Use before scheduling outdoor jobs.",
+             "Open-Meteo + Nominatim — free, no key"),
+
+            ("geocode_address(address)",
+             "Convert a street address to GPS coordinates (lat/lon).\n"
+             "Useful for verifying job addresses before route planning.",
+             "Nominatim / OpenStreetMap — free, no key"),
+
+            ("get_route_optimization(stops, origin, …)",
+             "Traveling Salesman solver — reorders your stops into the fastest\n"
+             "driving sequence with estimated arrival times per stop.\n"
+             "Geocodes ~20 addresses in ~6 s (0.35 s/address courtesy delay).",
+             "OSRM public server + Nominatim — free, no key"),
+
+            ("build_maps_url(stops, origin, app)",
+             "Tap-to-navigate Google Maps (or Apple Maps) URL.\n"
+             "Auto-splits routes > 9 stops into legs.\n"
+             "Works on iPhone, Android, CarPlay, Android Auto.",
+             "Google/Apple Maps URL scheme — free, no key"),
+        ]
+
+        for tool_name, description, backend in free_tools:
+            tool_row = ttk.Frame(free_frame)
+            tool_row.pack(fill='x', pady=(0, 8))
+            ttk.Label(tool_row, text=f"✅  {tool_name}",
+                      font=('Courier New', 9, 'bold'), foreground='#1a7a1a'
+                      ).pack(anchor='w')
+            ttk.Label(tool_row, text=description,
+                      font=('Arial', 8), justify='left', foreground='#333333'
+                      ).pack(anchor='w', padx=(20, 0))
+            ttk.Label(tool_row, text=f"  {backend}",
+                      font=('Arial', 8), foreground='gray'
+                      ).pack(anchor='w', padx=(20, 0))
+
+        ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
+
+        # ── 3. QUICKBOOKS ONLINE ──────────────────────────────────────────────
+        qbo_outer = ttk.LabelFrame(f,
+                                   text="🧾 QuickBooks Online  —  create_quickbooks_online_invoice()",
+                                   padding=(12, 8))
+        qbo_outer.pack(fill='x', padx=16, pady=(0, 6))
+
+        ttk.Label(qbo_outer, justify='left', font=('Arial', 8), foreground='gray',
+                  text=("One-time OAuth 2.0 setup — after connecting, tokens refresh automatically.\n"
+                        "Requires an active QuickBooks Online subscription.")
+                  ).pack(anchor='w', pady=(0, 6))
+
+        # Status light row
+        qbo_status_row = ttk.Frame(qbo_outer)
+        qbo_status_row.pack(fill='x', pady=(0, 6))
+        ttk.Label(qbo_status_row, text="Connection status:",
+                  font=('Arial', 9)).pack(side='left')
+        _qbo_dot_cv = tk.Canvas(qbo_status_row, width=14, height=14,
+                                bg=self.root.cget('bg'), highlightthickness=0)
+        _qbo_dot_cv.pack(side='left', padx=(8, 4))
+        _qbo_dot = _qbo_dot_cv.create_oval(2, 2, 12, 12, fill='gray', outline='')
+        _qbo_status_lbl = ttk.Label(qbo_status_row, text="Not configured",
+                                    font=('Arial', 9), foreground='gray')
+        _qbo_status_lbl.pack(side='left')
+
+        def _refresh_qbo_status():
+            cfg = _load_cfg()
+            tok = cfg.get('qbo_access_token', '').strip()
+            rid = cfg.get('qbo_realm_id',     '').strip()
+            if tok and rid:
+                _qbo_dot_cv.itemconfig(_qbo_dot, fill='#2ecc71')
+                _qbo_status_lbl.config(text="✅  Connected", foreground='#2ecc71')
+                _qbo_realm_var.set(rid)
+            else:
+                _qbo_dot_cv.itemconfig(_qbo_dot, fill='gray')
+                _qbo_status_lbl.config(text="Not configured", foreground='gray')
+
+        # Company (Realm) ID
+        realm_row = ttk.Frame(qbo_outer)
+        realm_row.pack(fill='x', pady=(0, 4))
+        ttk.Label(realm_row, text="Company ID (Realm ID):",
+                  font=('Arial', 9), width=24, anchor='w').pack(side='left')
+        _qbo_realm_var = tk.StringVar()
+        ttk.Entry(realm_row, textvariable=_qbo_realm_var, width=30
+                  ).pack(side='left', padx=4)
+        ttk.Label(realm_row, text="Found in your QBO URL after /app/",
+                  font=('Arial', 8), foreground='gray').pack(side='left')
+
+        # Access token
+        token_row = ttk.Frame(qbo_outer)
+        token_row.pack(fill='x', pady=(0, 4))
+        ttk.Label(token_row, text="OAuth Access Token:",
+                  font=('Arial', 9), width=24, anchor='w').pack(side='left')
+        _qbo_tok_var = tk.StringVar()
+        _qbo_tok_entry = ttk.Entry(token_row, textvariable=_qbo_tok_var,
+                                   width=44, show='●')
+        _qbo_tok_entry.pack(side='left', padx=4)
+        _qbo_show_var = tk.BooleanVar(value=False)
+        def _toggle_qbo():
+            _qbo_tok_entry.configure(show='' if _qbo_show_var.get() else '●')
+        ttk.Checkbutton(token_row, text="Show",
+                        variable=_qbo_show_var,
+                        command=_toggle_qbo).pack(side='left')
+
+        # Refresh token
+        ref_row = ttk.Frame(qbo_outer)
+        ref_row.pack(fill='x', pady=(0, 4))
+        ttk.Label(ref_row, text="OAuth Refresh Token:",
+                  font=('Arial', 9), width=24, anchor='w').pack(side='left')
+        _qbo_ref_var = tk.StringVar()
+        _qbo_ref_entry = ttk.Entry(ref_row, textvariable=_qbo_ref_var,
+                                   width=44, show='●')
+        _qbo_ref_entry.pack(side='left', padx=4)
+        _qbo_ref_show = tk.BooleanVar(value=False)
+        def _toggle_ref():
+            _qbo_ref_entry.configure(show='' if _qbo_ref_show.get() else '●')
+        ttk.Checkbutton(ref_row, text="Show",
+                        variable=_qbo_ref_show,
+                        command=_toggle_ref).pack(side='left')
+
+        # Populate from saved config
+        _init_cfg = _load_cfg()
+        _qbo_realm_var.set(_init_cfg.get('qbo_realm_id',      ''))
+        _qbo_tok_var.set(  _init_cfg.get('qbo_access_token',  ''))
+        _qbo_ref_var.set(  _init_cfg.get('qbo_refresh_token', ''))
+
+        def _save_qbo():
+            tok = _qbo_tok_var.get().strip()
+            rid = _qbo_realm_var.get().strip()
+            ref = _qbo_ref_var.get().strip()
+            if not (tok and rid):
+                messagebox.showwarning(
+                    "Missing Fields",
+                    "Company ID and Access Token are both required.\n\n"
+                    "Company ID:   found in your QuickBooks Online URL\n"
+                    "              e.g. https://app.qbo.intuit.com/app/homepage\n"
+                    "              → the number after /company/ is your Realm ID\n\n"
+                    "Access Token: generated in the Intuit Developer portal\n"
+                    "              (OAuth 2.0 — expires every 60 minutes)"
+                )
+                return
+            _save_cfg({'qbo_access_token':  tok,
+                       'qbo_realm_id':      rid,
+                       'qbo_refresh_token': ref})
+            _refresh_qbo_status()
+            self.status_var.set("✅  QuickBooks Online credentials saved")
+            self.root.after(3000, lambda: self.status_var.set("Ready"))
+
+        def _clear_qbo():
+            if messagebox.askyesno("Clear QBO Credentials",
+                                   "Remove saved QuickBooks Online tokens?"):
+                _save_cfg({'qbo_access_token': '', 'qbo_realm_id': '',
+                           'qbo_refresh_token': ''})
+                _qbo_realm_var.set('')
+                _qbo_tok_var.set('')
+                _qbo_ref_var.set('')
+                _refresh_qbo_status()
+                self.status_var.set("QBO credentials cleared")
+                self.root.after(3000, lambda: self.status_var.set("Ready"))
+
+        qbo_btn_row = ttk.Frame(qbo_outer)
+        qbo_btn_row.pack(fill='x', pady=(8, 0))
+        ttk.Button(qbo_btn_row, text="💾  Save QBO Credentials",
+                   command=_save_qbo).pack(side='left', padx=(0, 8))
+        ttk.Button(qbo_btn_row, text="🗑  Clear Credentials",
+                   command=_clear_qbo).pack(side='left', padx=(0, 8))
+        ttk.Button(qbo_btn_row, text="🌐  Open QuickBooks Online",
+                   command=lambda: webbrowser.open("https://app.qbo.intuit.com")
+                   ).pack(side='left')
+
+        ttk.Label(qbo_outer, font=('Arial', 8), foreground='gray',
+                  justify='left',
+                  text=("\nHow to get your tokens:\n"
+                        "  1. Sign in to developer.intuit.com\n"
+                        "  2. Create an app → OAuth 2.0 → Generate tokens\n"
+                        "  3. Paste the access token above (valid 60 min — use refresh token for auto-renewal)\n"
+                        "  4. Company ID is the number in your QBO URL: .../company/12345678/...")
+                  ).pack(anchor='w', pady=(4, 0))
+
+        _refresh_qbo_status()
+
+        ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
+
+        # ── 4. QUICKBOOKS DESKTOP ─────────────────────────────────────────────
+        qbd_outer = ttk.LabelFrame(f,
+                                   text="🖥  QuickBooks Desktop  —  create_quickbooks_desktop_invoice()",
+                                   padding=(12, 8))
+        qbd_outer.pack(fill='x', padx=16, pady=(0, 6))
+
+        ttk.Label(qbd_outer, justify='left', font=('Arial', 8), foreground='gray',
+                  text=("Uses Windows COM automation (QBSDK) — no internet or OAuth needed.\n"
+                        "QuickBooks Desktop must be open with a company file loaded when invoicing.")
+                  ).pack(anchor='w', pady=(0, 6))
+
+        # pywin32 status
+        try:
+            import win32com.client as _test_win32  # noqa: F401
+            _win32_ok = True
+        except ImportError:
+            _win32_ok = False
+
+        qbd_status_row = ttk.Frame(qbd_outer)
+        qbd_status_row.pack(fill='x', pady=(0, 6))
+        _qbd_dot_cv = tk.Canvas(qbd_status_row, width=14, height=14,
+                                bg=self.root.cget('bg'), highlightthickness=0)
+        _qbd_dot_cv.pack(side='left', padx=(0, 4))
+        _qbd_dot_cv.create_oval(2, 2, 12, 12,
+                                fill='#2ecc71' if _win32_ok else '#e74c3c',
+                                outline='')
+        ttk.Label(qbd_status_row,
+                  text=("✅  pywin32 installed — ready for QuickBooks Desktop"
+                        if _win32_ok else
+                        "❌  pywin32 not installed — run:  pip install pywin32"),
+                  font=('Arial', 9),
+                  foreground='#2ecc71' if _win32_ok else '#e74c3c'
+                  ).pack(side='left')
+
+        # Default service item name
+        item_row = ttk.Frame(qbd_outer)
+        item_row.pack(fill='x', pady=(0, 4))
+        ttk.Label(item_row, text="Default service item name:",
+                  font=('Arial', 9), width=26, anchor='w').pack(side='left')
+        _qbd_item_var = tk.StringVar()
+        _qbd_item_var.set(_load_cfg().get('qbd_default_item', 'Services'))
+        ttk.Entry(item_row, textvariable=_qbd_item_var, width=24
+                  ).pack(side='left', padx=4)
+        ttk.Label(item_row, text="Must exist in your QuickBooks item list",
+                  font=('Arial', 8), foreground='gray').pack(side='left')
+
+        def _save_qbd():
+            _save_cfg({'qbd_default_item': _qbd_item_var.get().strip() or 'Services'})
+            self.status_var.set("✅  QuickBooks Desktop settings saved")
+            self.root.after(3000, lambda: self.status_var.set("Ready"))
+
+        def _test_qbd():
+            if not _win32_ok:
+                messagebox.showerror(
+                    "pywin32 Required",
+                    "Install pywin32 first:\n\n"
+                    "  pip install pywin32\n\n"
+                    "Then restart AI-Prowler."
+                )
+                return
+            try:
+                import win32com.client as _w32
+                qb     = _w32.Dispatch("QBXMLRP2.RequestProcessor")
+                qb.OpenConnection("", "AI-Prowler Test")
+                ticket = qb.BeginSession("", 1)
+                qb.EndSession(ticket)
+                qb.CloseConnection()
+                messagebox.showinfo(
+                    "QB Desktop Connected ✅",
+                    "Successfully connected to QuickBooks Desktop.\n"
+                    "AI-Prowler can create invoices automatically."
+                )
+            except Exception as exc:
+                messagebox.showerror(
+                    "QB Desktop Connection Failed",
+                    f"{exc}\n\n"
+                    "Make sure:\n"
+                    "  1. QuickBooks Desktop is open\n"
+                    "  2. A company file is loaded\n"
+                    "  3. Allow AI-Prowler access in the QB confirmation dialog"
+                )
+
+        qbd_btn_row = ttk.Frame(qbd_outer)
+        qbd_btn_row.pack(fill='x', pady=(8, 0))
+        ttk.Button(qbd_btn_row, text="💾  Save Settings",
+                   command=_save_qbd).pack(side='left', padx=(0, 8))
+        ttk.Button(qbd_btn_row, text="🔗  Test QB Desktop Connection",
+                   command=_test_qbd).pack(side='left', padx=(0, 8))
+
+        if not _win32_ok:
+            def _install_pywin32():
+                import subprocess as _sp
+                from pathlib import Path as _P
+                py = str(_P.home() / "AppData" / "Local" / "Programs"
+                         / "Python" / "Python311" / "python.exe")
+                try:
+                    _sp.Popen([py, "-m", "pip", "install", "pywin32>=306"],
+                              creationflags=_sp.CREATE_NEW_CONSOLE)
+                    messagebox.showinfo(
+                        "Installing pywin32",
+                        "pip install is running in a new window.\n"
+                        "Restart AI-Prowler when it completes."
+                    )
+                except Exception as exc:
+                    messagebox.showerror("Install Failed", str(exc))
+            ttk.Button(qbd_btn_row, text="⬇️  Install pywin32 Now",
+                       command=_install_pywin32).pack(side='left')
+
+        ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
+
+        # ── 5. JOB SPREADSHEET UPDATER ────────────────────────────────────────
+        xl_outer = ttk.LabelFrame(f,
+                                  text="📊 Job Spreadsheet Updater  —  update_job_spreadsheet()",
+                                  padding=(12, 8))
+        xl_outer.pack(fill='x', padx=16, pady=(0, 6))
+
+        ttk.Label(xl_outer, justify='left', font=('Arial', 8), foreground='gray',
+                  text=("Finds a customer row in your .xlsx job tracker by name and writes new\n"
+                        "values to any columns (status, invoice #, amount, last service date, etc.).\n"
+                        "Uses openpyxl — already installed, no extra packages needed.")
+                  ).pack(anchor='w', pady=(0, 6))
+
+        # Usage example
+        usage_frame = ttk.LabelFrame(xl_outer, text="Example Claude prompt", padding=(8, 4))
+        usage_frame.pack(fill='x', pady=(0, 6))
+        usage_text = (
+            '"Update my jobs spreadsheet C:/Users/Dave/Documents/jobs.xlsx:\n'
+            ' Find the Miller Windows row and set Status = Complete,\n'
+            ' Last Service = 2026-03-30, Invoice # = 1048, Amount = 312.00"'
+        )
+        ttk.Label(usage_frame, text=usage_text, font=('Arial', 8),
+                  foreground='#444444', justify='left').pack(anchor='w')
+
+        # Default spreadsheet path config
+        xl_path_row = ttk.Frame(xl_outer)
+        xl_path_row.pack(fill='x', pady=(4, 0))
+        ttk.Label(xl_path_row, text="Default spreadsheet path:",
+                  font=('Arial', 9), width=26, anchor='w').pack(side='left')
+        _xl_path_var = tk.StringVar()
+        _xl_path_var.set(_load_cfg().get('default_spreadsheet_path', ''))
+        ttk.Entry(xl_path_row, textvariable=_xl_path_var, width=44
+                  ).pack(side='left', padx=4)
+
+        def _browse_xl():
+            from tkinter import filedialog as _fd
+            path = _fd.askopenfilename(
+                title="Select default job spreadsheet",
+                filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+            )
+            if path:
+                _xl_path_var.set(path.replace('/', '\\'))
+
+        ttk.Button(xl_path_row, text="Browse…",
+                   command=_browse_xl).pack(side='left')
+
+        xl_hint = ttk.Label(xl_outer,
+                            text="Setting a default path lets you just say 'update my jobs spreadsheet' without specifying the full path.",
+                            font=('Arial', 8), foreground='gray', justify='left')
+        xl_hint.pack(anchor='w', pady=(2, 0))
+
+        def _save_xl():
+            _save_cfg({'default_spreadsheet_path': _xl_path_var.get().strip()})
+            self.status_var.set("✅  Default spreadsheet path saved")
+            self.root.after(3000, lambda: self.status_var.set("Ready"))
+
+        def _open_xl():
+            path = _xl_path_var.get().strip()
+            if path and __import__('os').path.exists(path):
+                __import__('os').startfile(path)
+            else:
+                messagebox.showinfo("No Spreadsheet",
+                                    "Set and save a default spreadsheet path first,\n"
+                                    "or open your spreadsheet manually from File Explorer.")
+
+        xl_btn_row = ttk.Frame(xl_outer)
+        xl_btn_row.pack(fill='x', pady=(8, 0))
+        ttk.Button(xl_btn_row, text="💾  Save Default Path",
+                   command=_save_xl).pack(side='left', padx=(0, 8))
+        ttk.Button(xl_btn_row, text="📂  Open Spreadsheet Now",
+                   command=_open_xl).pack(side='left')
+
+        ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
+
+        # ── 6. ROUTE & NAVIGATION NOTES ──────────────────────────────────────
+        route_outer = ttk.LabelFrame(f,
+                                     text="🗺  Route Optimization & Navigation  —  Free, No Key",
+                                     padding=(12, 8))
+        route_outer.pack(fill='x', padx=16, pady=(0, 10))
+
+        route_info = (
+            "get_route_optimization(stops, origin, optimize_for, departure_hour, return_to_origin)\n"
+            "  • Geocoding:   Nominatim / OpenStreetMap  (0.35 s/address courtesy delay)\n"
+            "  • TSP solver:  OSRM public /trip endpoint — real street routing, free, no key\n"
+            "  • Returns:     optimised stop order with estimated arrival time per stop\n"
+            "  • Tip: 20 stops takes ~7 seconds to geocode — this is normal, not a bug\n\n"
+            "build_maps_url(stops, origin, app='google')\n"
+            "  • Generates a Google Maps URL with all stops pre-loaded in optimised order\n"
+            "  • Auto-splits routes > 9 stops into legs (Google Maps URL limit)\n"
+            "  • Works on iPhone (Google Maps app), Android, CarPlay, Android Auto\n"
+            "  • Pass app='apple' for Apple Maps — iPhone/iPad only\n\n"
+            "Typical workflow:\n"
+            "  1. Tell Claude: \"Optimize my route for today's jobs\"\n"
+            "  2. Claude calls get_route_optimization() → get optimised order\n"
+            "  3. Claude calls build_maps_url() → tap-to-navigate link\n"
+            "  4. Tap the link on your phone — Google Maps opens in navigation mode"
+        )
+        ttk.Label(route_outer, text=route_info, font=('Arial', 8),
+                  foreground='#333333', justify='left').pack(anchor='w')
+
+        route_btn_row = ttk.Frame(route_outer)
+        route_btn_row.pack(fill='x', pady=(10, 0))
+        ttk.Button(route_btn_row, text="🌐  Open Google Maps",
+                   command=lambda: webbrowser.open("https://maps.google.com")
+                   ).pack(side='left', padx=(0, 8))
+        ttk.Button(route_btn_row, text="🍎  Open Apple Maps",
+                   command=lambda: webbrowser.open("https://maps.apple.com")
+                   ).pack(side='left')
+
     def create_status_bar(self):
         """Create status bar with MCP indicator."""
         status_frame = ttk.Frame(self.root, relief='sunken')
@@ -5771,7 +6281,7 @@ Built with Python, ChromaDB, and Ollama"""
         
         self.update_output.delete('1.0', tk.END)
         self.update_progress.start()
-        self.status_var.set("Updating...")
+        self.status_var.set("Updating index + purging deleted...")
         
         thread = threading.Thread(target=self.update_directory_worker,
                                   args=(directory,))
@@ -5782,7 +6292,7 @@ Built with Python, ChromaDB, and Ollama"""
         """Update all tracked directories"""
         self.update_output.delete('1.0', tk.END)
         self.update_progress.start()
-        self.status_var.set("Updating all...")
+        self.status_var.set("Updating all + purging deleted...")
         
         thread = threading.Thread(target=self.update_all_worker)
         thread.daemon = True
@@ -5794,7 +6304,7 @@ Built with Python, ChromaDB, and Ollama"""
         try:
             sys.stdout = TextRedirector(self.output_queue, 'update')
             command_update(directory, recursive=True, auto_confirm=True)
-            self.output_queue.put(('status', 'Update complete!'))
+            self.output_queue.put(('status', 'Update complete — index synced & stale chunks purged'))
             self.output_queue.put(('done', 'update'))
         except Exception as e:
             self.output_queue.put(('error', f"Error: {str(e)}"))
@@ -5817,7 +6327,7 @@ Built with Python, ChromaDB, and Ollama"""
                     self.output_queue.put(('update', f"\n[{i}/{len(dirs)}] Updating: {dir_name}\n"))
                     command_update(directory, recursive=True, auto_confirm=True)
                 self.output_queue.put(('update', "\n✅ All directories updated.\n"))
-            self.output_queue.put(('status', 'Update complete!'))
+            self.output_queue.put(('status', 'Update complete — index synced & stale chunks purged'))
             self.output_queue.put(('done', 'update'))
         except Exception as e:
             self.output_queue.put(('error', f"Error: {str(e)}"))

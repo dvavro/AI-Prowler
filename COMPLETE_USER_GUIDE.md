@@ -1,6 +1,6 @@
 # AI-Prowler — Complete User Guide
 
-**Version 4.1.0**
+**Version 5.0.0**
 
 \---
 
@@ -14,16 +14,17 @@
 6. [MCP Tools Reference](#6-mcp-tools-reference)
 7. [Remote Access — Claude.ai on Mobile and Web](#7-remote-access--claudeai-on-mobile-and-web)
 8. [Mobile Subscription Management](#8-mobile-subscription-management)
-9. [Desktop Ask Questions Tab (Optional Local AI)](#9-desktop-ask-questions-tab-optional-local-ai)
-10. [Settings \& Configuration](#10-settings--configuration)
-11. [Supported File Types](#11-supported-file-types)
-12. [OCR — Scanned Documents \& Images](#12-ocr--scanned-documents--images)
-13. [Email Indexing](#13-email-indexing)
-14. [Scheduling \& Automation](#14-scheduling--automation)
-15. [GPU Support](#15-gpu-support)
-16. [Debugging \& Log Files](#16-debugging--log-files)
-17. [Troubleshooting](#17-troubleshooting)
-18. [Uninstalling](#18-uninstalling)
+9. [Small Business Service Tools](#9-small-business-service-tools)
+10. [Desktop Ask Questions Tab (Optional Local AI)](#10-desktop-ask-questions-tab-optional-local-ai)
+11. [Settings \& Configuration](#11-settings--configuration)
+12. [Supported File Types](#12-supported-file-types)
+13. [OCR — Scanned Documents \& Images](#13-ocr--scanned-documents--images)
+14. [Email Indexing](#14-email-indexing)
+15. [Scheduling \& Automation](#15-scheduling--automation)
+16. [GPU Support](#16-gpu-support)
+17. [Debugging \& Log Files](#17-debugging--log-files)
+18. [Troubleshooting](#18-troubleshooting)
+19. [Uninstalling](#19-uninstalling)
 
 \---
 
@@ -51,7 +52,7 @@ This produces dramatically better results — equivalent to having a skilled res
 
 ### Quick Start
 
-1. Download `AI-Prowler\_INSTALL.exe` from the [Releases page](https://github.com/dvavro/AI-Prowler/releases)
+1. Download `AI-Prowler\\\_INSTALL.exe` from the [Releases page](https://github.com/dvavro/AI-Prowler/releases)
 2. Double-click and follow the prompts (admin rights required)
 3. The installer automatically sets up:
 
@@ -75,7 +76,7 @@ This makes installation significantly faster — typically under 10 minutes vs 3
 The full installation log is saved to:
 
 ```
-%LOCALAPPDATA%\\Temp\\AI-Prowler\\install\_log.txt
+%LOCALAPPDATA%\\\\Temp\\\\AI-Prowler\\\\install\\\_log.txt
 ```
 
 This is useful for diagnosing installation failures.
@@ -91,10 +92,10 @@ After install, AI-Prowler opens automatically. Claude Desktop is also installed.
 
 ### Launch Script (RAG\_RUN.bat)
 
-AI-Prowler is launched via `RAG\_RUN.bat`, which sets two important environment variables before starting the GUI:
+AI-Prowler is launched via `RAG\\\_RUN.bat`, which sets two important environment variables before starting the GUI:
 
 * **`PYTHONNOUSERSITE=1`** — prevents Python from loading stale package versions from the Roaming site-packages folder. This fixes a class of "wrong version" bugs that can occur after reinstalls.
-* **`HF\_HUB\_CACHE`** — sets the HuggingFace cache path explicitly to avoid the Errno 22 / double-backslash bug on some Windows 10 builds (see Section 17).
+* **`HF\\\_HUB\\\_CACHE`** — sets the HuggingFace cache path explicitly to avoid the Errno 22 / double-backslash bug on some Windows 10 builds (see Section 17).
 
 These are set automatically; no user action is required.
 
@@ -109,7 +110,7 @@ Claude Desktop connects to AI-Prowler via the MCP (Model Context Protocol) — a
 The installer automatically writes AI-Prowler's entry into Claude Desktop's configuration file:
 
 ```
-%APPDATA%\\Claude\\claude\_desktop\_config.json
+%APPDATA%\\\\Claude\\\\claude\\\_desktop\\\_config.json
 ```
 
 When Claude Desktop starts, it connects to AI-Prowler and discovers all available tools automatically. No manual configuration is needed. Note if mobile is configured, only mobile access will be used for all Claude MCP connections going forward. This includes when in Claude Desktop application.
@@ -122,7 +123,7 @@ Open Claude Desktop and start a new conversation. You should see a tools indicat
 What AI-Prowler tools do you have available?
 ```
 
-Claude will list all 13 tools. If you see `get\_knowledge\_base\_overview` and `search\_documents`, the connection is working.
+Claude will list all 14 tools. If you see `get\\\_knowledge\\\_base\\\_overview` and `search\\\_documents`, the connection is working.
 
 ### If Claude Desktop Loses the Connection
 
@@ -140,14 +141,14 @@ If you need to add AI-Prowler to Claude Desktop manually, the config entry looks
 {
   "mcpServers": {
     "AI-Prowler": {
-      "command": "C:\\\\Users\\\\YourName\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python311\\\\python.exe",
-      "args": \["C:\\\\Program Files\\\\AI-Prowler\\\\ai\_prowler\_mcp.py"]
+      "command": "C:\\\\\\\\Users\\\\\\\\YourName\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Programs\\\\\\\\Python\\\\\\\\Python311\\\\\\\\python.exe",
+      "args": \\\["C:\\\\\\\\Program Files\\\\\\\\AI-Prowler\\\\\\\\ai\\\_prowler\\\_mcp.py"]
     }
   }
 }
 ```
 
-A pre-filled example is in `C:\\Program Files\\AI-Prowler\\claude\_desktop\_config\_example.json`.
+A pre-filled example is in `C:\\\\Program Files\\\\AI-Prowler\\\\claude\\\_desktop\\\_config\\\_example.json`.
 
 ### MCP Diagnostics Tool
 
@@ -159,7 +160,7 @@ If tools are not appearing or tool calls are failing in Claude Desktop, use the 
 
    * MCP SDK version and `instructions=` support status
    * FastMCP constructor parameters
-   * Whether all 13 agentic RAG tools are present in `ai\_prowler\_mcp.py`
+   * Whether all 13 agentic RAG tools are present in `ai\\\_prowler\\\_mcp.py`
    * Claude Desktop config validity
    * Subscription cache status
    * MCP server log tail
@@ -170,7 +171,7 @@ If tools are not appearing or tool calls are failing in Claude Desktop, use the 
 
 If AI-Prowler is not configured for Mobile, When Claude Desktop launches AI-Prowler's MCP server, it communicates over the stdio pipe (standard input/output). The server includes a critical protection mechanism:
 
-* **`\_STDIO\_MODE` flag** — set to `True` before `mcp.run()` is called; this disables all internal stdout redirection so no tool call can accidentally corrupt the MCP pipe
+* **`\\\_STDIO\\\_MODE` flag** — set to `True` before `mcp.run()` is called; this disables all internal stdout redirection so no tool call can accidentally corrupt the MCP pipe
 * **stdout sealed to devnull** — immediately before the MCP server starts, `sys.stdout` is redirected to `os.devnull`, ensuring that any stray `print()` from third-party libraries cannot corrupt the JSON-RPC stream
 
 This prevents the "Claude's response was interrupted" error that can occur when tool calls try to capture print output.
@@ -203,7 +204,15 @@ There is no practical limit on index size. A 10,000-document collection with 500
 
 ### Tracking Directories
 
-Directories added for indexing are tracked automatically. The **Update Index** tab re-scans all tracked directories and indexes only what has changed. Set up scheduling (see Section 14) for fully automatic updates.
+Directories added for indexing are tracked automatically. The **Update Index** tab re-scans all tracked directories and indexes only what has changed. Set up scheduling (see Section 15) for fully automatic updates.
+
+### Automatic Purge of Deleted Files
+
+When you delete a file from a tracked folder and then run **Update Selected** or **Update All** in the Update Index tab, AI-Prowler automatically purges that file's chunks from ChromaDB. This keeps the vector database in sync with your file system — no manual cleanup required.
+
+Previously, deleted files were detected by the scan and removed from the tracking database but their chunks remained in ChromaDB, causing the knowledge base to return stale results for files that no longer existed. This is fixed in v5.0.0: the update run now performs a **purge pass first** (removing all ChromaDB chunks for deleted files), then the **index pass** (adding new and modified files). The output panel shows a `🗑️ PURGING DELETED FILES` section whenever purged files are found.
+
+This same auto-purge fires across all entry points: the GUI Update buttons, the MCP `update\_tracked\_directories` tool, and the scheduled `.bat` task.
 
 ### Automatic Purge of Skipped Extensions
 
@@ -216,7 +225,7 @@ The indexing progress display shows:
 * A progress bar that grows as files are processed
 * An elapsed-time counter updated every second
 * Per-file status messages in the output panel
-* File counts (e.g., `\[File 47/312] report.pdf`)
+* File counts (e.g., `\\\[File 47/312] report.pdf`)
 
 \---
 
@@ -230,25 +239,25 @@ When you ask Claude a question with AI-Prowler connected, Claude follows this pa
 
 ```
 Step 1 — Orient
-  Claude calls: get\_knowledge\_base\_overview()
+  Claude calls: get\\\_knowledge\\\_base\\\_overview()
   Claude learns: what documents are indexed, file types, topics covered
 
 Step 2 — Explore
-  Claude calls: list\_indexed\_documents(filter\_ext="pdf")
+  Claude calls: list\\\_indexed\\\_documents(filter\\\_ext="pdf")
   Claude learns: which specific files might be relevant
 
 Step 3 — Search
-  Claude calls: search\_documents("your main topic")
-  Claude calls: search\_documents("related angle or synonym")
-  Claude calls: search\_by\_multiple\_queries(\["term1", "term2", "term3"])
+  Claude calls: search\\\_documents("your main topic")
+  Claude calls: search\\\_documents("related angle or synonym")
+  Claude calls: search\\\_by\\\_multiple\\\_queries(\\\["term1", "term2", "term3"])
   Claude gathers: relevant chunks from multiple angles
 
 Step 4 — Expand
-  Claude calls: get\_chunk\_context("file.pdf", 12)
+  Claude calls: get\\\_chunk\\\_context("file.pdf", 12)
   Claude reads: the paragraphs around a promising but incomplete result
 
 Step 5 — Deep Read
-  Claude calls: get\_document\_chunks("contract.pdf", start\_chunk=0)
+  Claude calls: get\\\_document\\\_chunks("contract.pdf", start\\\_chunk=0)
   Claude reads: an entire document sequentially when needed
 
 Step 6 — Synthesize
@@ -270,11 +279,11 @@ Step 6 — Synthesize
 You can also direct Claude explicitly:
 
 ```
-Call search\_documents("Q3 financial results") and show me the raw chunks.
+Call search\\\_documents("Q3 financial results") and show me the raw chunks.
 ```
 
 ```
-Use get\_document\_chunks to read the entire executive summary document.
+Use get\\\_document\\\_chunks to read the entire executive summary document.
 ```
 
 This is useful when you want to see what's in the knowledge base before asking Claude to interpret it.
@@ -283,93 +292,146 @@ This is useful when you want to see what's in the knowledge base before asking C
 
 ## 6\. MCP Tools Reference
 
-AI-Prowler exposes **13 tools** to Claude. They fall into two categories.
+AI-Prowler exposes **14 tools** to Claude. They fall into two categories.
 
 ### Agentic RAG Tools (Primary)
 
 These tools require no local LLM. Claude does all reasoning directly.
 
-#### `how\_to\_use\_ai\_prowler()`
+#### `how\\\_to\\\_use\\\_ai\\\_prowler()`
 
 Returns the recommended workflow and tool sequence. Claude calls this automatically at the start of research sessions. You can also call it explicitly to see usage guidance and confirm the MCP connection is active. Also reports the active MCP SDK version and whether the `instructions=` parameter is supported.
 
-#### `get\_knowledge\_base\_overview()`
+#### `get\\\_knowledge\\\_base\\\_overview()`
 
 Returns a summary of the entire knowledge base: document count, file types, chunk count, database location, and tracked directories. Call this to orient Claude at the start of a research task.
 
-#### `search\_documents(query, n\_results, min\_similarity)`
+#### `search\\\_documents(query, n\\\_results, min\\\_similarity)`
 
 The primary retrieval tool. Performs semantic vector search and returns raw document chunks with source metadata and similarity scores. Claude calls this multiple times with different query phrasings to gather comprehensive context.
 
 Parameters:
 
 * `query` — natural language search query
-* `n\_results` — chunks to return (default 8, max 20)
-* `min\_similarity` — filter threshold 0.0–1.0 (default 0.0)
+* `n\\\_results` — chunks to return (default 8, max 20)
+* `min\\\_similarity` — filter threshold 0.0–1.0 (default 0.0)
 
-#### `search\_by\_multiple\_queries(queries, n\_results\_each, min\_similarity)`
+#### `search\\\_by\\\_multiple\\\_queries(queries, n\\\_results\\\_each, min\\\_similarity)`
 
-Runs 2–6 search queries in parallel and returns deduplicated results ranked by best similarity. More efficient than calling `search\_documents` repeatedly when a topic has multiple angles or synonyms.
+Runs 2–6 search queries in parallel and returns deduplicated results ranked by best similarity. More efficient than calling `search\\\_documents` repeatedly when a topic has multiple angles or synonyms.
 
-#### `get\_chunk\_context(filename, chunk\_index, window)`
+#### `get\\\_chunk\\\_context(filename, chunk\\\_index, window)`
 
 Retrieves the chunks immediately before and after a specific chunk, providing fuller context around a result that may be cut off at a chunk boundary.
 
 Parameters:
 
 * `filename` — filename from a search result (partial match accepted)
-* `chunk\_index` — zero-based index from the search result
+* `chunk\\\_index` — zero-based index from the search result
 * `window` — chunks before and after to include (default 2, max 5)
 
-#### `get\_document\_chunks(filename, start\_chunk, max\_chunks)`
+#### `get\\\_document\\\_chunks(filename, start\\\_chunk, max\\\_chunks)`
 
 Retrieves chunks from a specific document in reading order. Use for full document summaries or when a user asks "what does this document say?"
 
 Parameters:
 
 * `filename` — filename to retrieve (partial match accepted)
-* `start\_chunk` — zero-based starting position (default 0)
-* `max\_chunks` — chunks per call (default 10, max 30)
+* `start\\\_chunk` — zero-based starting position (default 0)
+* `max\\\_chunks` — chunks per call (default 10, max 30)
 
-#### `list\_indexed\_documents(filter\_ext, filter\_path, limit)`
+#### `list\\\_indexed\\\_documents(filter\\\_ext, filter\\\_path, limit)`
 
 Lists all indexed documents grouped by file type. Use to browse available content before searching.
 
 Parameters:
 
-* `filter\_ext` — show only this type, e.g. "pdf", "docx"
-* `filter\_path` — show only files whose path contains this string
+* `filter\\\_ext` — show only this type, e.g. "pdf", "docx"
+* `filter\\\_path` — show only files whose path contains this string
 * `limit` — max documents shown (default 50)
 
 ### Knowledge Base Management Tools
 
 These tools let Claude help you manage your knowledge base from a conversation.
 
-#### `add\_and\_index\_directory(directory, recursive, track)`
+#### `add\\\_and\\\_index\\\_directory(directory, recursive, track)`
 
 Indexes all documents in a folder and optionally adds it to the auto-update tracking list.
 
-#### `update\_tracked\_directories(directory)`
+#### `update\\\_tracked\\\_directories(directory)`
 
 Re-scans tracked directories and indexes only changed files. Omit `directory` to update all tracked folders.
 
-#### `get\_database\_stats()`
+#### `get\\\_database\\\_stats()`
 
 Returns statistics: chunk count, unique document count, breakdown by file type, and database location. Queries ChromaDB directly for accurate counts.
 
-#### `list\_tracked\_directories()`
+#### `list\\\_tracked\\\_directories()`
 
 Lists all directories currently registered for auto-update tracking.
 
-#### `remove\_directory(directory)`
+#### `remove\\\_directory(directory)`
 
 Removes a directory from tracking and deletes all its chunks from ChromaDB. Destructive — requires re-indexing to restore.
 
 ### Status Tool
 
-#### `check\_status()`
+#### `check\\\_status()`
 
 Checks ChromaDB connectivity, reports the chunk count, database path, embedding model status, and tracked directories. No Ollama or local LLM is involved.
+
+### Small Business Action Tools
+
+Nine tools for field service automation. Free tools require no setup; QuickBooks tools need one-time configuration in **Settings → Small Business** tab (see Section 9).
+
+#### `get\\\_weather(location, days)`
+
+Current conditions and a multi-day forecast for any location. Uses Open-Meteo and Nominatim — free, no API key. Rain probability ≥ 50% is flagged with ⚠️. Use before scheduling outdoor jobs.
+
+#### `geocode\\\_address(address)`
+
+Converts a street address to GPS coordinates (latitude/longitude) via Nominatim / OpenStreetMap — free, no key. Useful before running route optimization to verify addresses can be geocoded.
+
+#### `get\\\_route\\\_optimization(stops, origin, optimize\\\_for, departure\\\_hour, return\\\_to\\\_origin)`
+
+Solves the Traveling Salesman Problem for a list of job stops. Geocodes addresses via Nominatim (0.35 s/address courtesy delay), routes via OSRM public server using real street distances. Returns the optimal stop sequence with estimated arrival time per stop.
+
+#### `build\\\_maps\\\_url(stops, origin, app)`
+
+Generates a tap-to-navigate Google Maps (or Apple Maps) URL with all stops pre-loaded in optimized order. Auto-splits routes longer than 9 stops into legs (Google Maps URL limit). Works on iPhone, Android, CarPlay, and Android Auto — free, no key.
+
+#### `create\\\_quickbooks\\\_online\\\_invoice(customer\\\_name, service\\\_description, amount, job\\\_date, memo, send\\\_email)`
+
+Creates an invoice in QuickBooks Online and optionally emails it to the customer. Requires one-time OAuth 2.0 setup in **Settings → Small Business → QuickBooks Online**. Tokens refresh automatically after setup.
+
+#### `create\\\_quickbooks\\\_desktop\\\_invoice(customer\\\_name, service\\\_description, amount, job\\\_date, memo, item\\\_name)`
+
+Creates an invoice in QuickBooks Desktop using Windows COM automation (QBSDK). No internet or OAuth needed — requires QuickBooks Desktop open with a company file loaded. Requires `pywin32` package (installed automatically).
+
+#### `update\\\_job\\\_spreadsheet(filepath, job\\\_identifier, updates, id\\\_column, sheet\\\_name, backup)`
+
+Updates a row in an `.xlsx` job tracking spreadsheet after a job is completed. Finds the customer row by name match, writes new values to specified columns (status, invoice number, amount, last service date, etc.). Uses `openpyxl` — no new packages needed.
+
+The `backup` parameter (default `True`) saves a timestamped copy of the spreadsheet to a `\_backups` subfolder next to the file before any changes are written. Backups older than 30 days are pruned automatically. Pass `backup=False` to skip the backup step.
+
+Column headers with embedded newlines (e.g. `"Job\\nStatus"`) can be passed either with the newline or with a space (`"Job Status"`) — the tool normalises both forms automatically.
+
+#### `read\\\_job\\\_spreadsheet(filepath, sheet\\\_name, filter\\\_date, max\\\_rows)`
+
+Reads job data from the AI-Prowler job tracking spreadsheet and returns it as structured text. Use this to answer scheduling questions, review open jobs, or check what's planned for a specific date.
+
+Parameters:
+
+* `filepath` — full path to the `.xlsx` spreadsheet (omit to use the configured default)
+* `sheet\_name` — sheet to read (default: `Jobs\_Schedule`; use `"Customers"` for the customer master list)
+* `filter\_date` — optional date filter: `"today"`, `"2026-03-31"`, `"03/31/2026"`, etc.
+* `max\_rows` — maximum data rows to return (default 200, max 500)
+
+Both spreadsheet tools auto-detect the real header row by scanning the first five rows and using the first row with three or more non-empty cells. This correctly skips decorative title/banner rows at the top of the sheet.
+
+#### `get\\\_action\\\_tools\\\_status()`
+
+Returns a full status report for all nine action tools: which are ready, which need configuration, and setup instructions for anything missing. Call this first when troubleshooting the Small Business tools.
 
 \---
 
@@ -421,7 +483,7 @@ To connect Claude.ai to your knowledge base:
    https://mobile.dvavro-ai-prowler.com/mcp
    ```
 
-   (Replace with your actual Cloudflare Tunnel hostname)
+(Replace with your actual Cloudflare Tunnel hostname)
 
 6. Claude.ai redirects you to your AI-Prowler authorization page
 7. Enter your Bearer token and click **Connect**
@@ -505,7 +567,7 @@ If your subscription lapses, a 30-day grace period begins:
 
 ### Subscription Manager GUI
 
-The **Subscription Manager** (`subscription\_manager\_gui.py`) is a separate admin tool for managing subscribers. Run it with the provided `RUN.bat` in your private admin folder. Note: this is not for users, AI-Prowler ADMIN uses this program to manage subscribers via GitHub.
+The **Subscription Manager** (`subscription\\\_manager\\\_gui.py`) is a separate admin tool for managing subscribers. Run it with the provided `RUN.bat` in your private admin folder. Note: this is not for users, AI-Prowler ADMIN uses this program to manage subscribers via GitHub.
 
 Features:
 
@@ -524,7 +586,86 @@ Data stored: token hashes (not the tokens themselves), expiry dates, subscriber 
 
 \---
 
-## 9\. Desktop Ask Questions Tab (Optional Local AI)
+## 9\. Small Business Service Tools
+
+The Small Business tab (the last tab in AI-Prowler) provides configuration and quick-reference for the nine field service automation MCP tools. These tools let Claude act as your field service assistant from a conversation — no forms or menus needed. Note: This tool is designed for a service orientated small business to make scheduling and servicing and updating automatically QuickBooks easy with the help of your local Data and Claude AI.
+
+### Accessing the Tab
+
+Click the **🏢 Small Business** tab in AI-Prowler. If you are in the Settings tab, a **➜ Go to Small Business Service Tools** button links directly to it.
+
+### Free Tools Panel
+
+Four tools require no setup and work immediately:
+
+* **get\_weather** — Open-Meteo + Nominatim (no API key)
+* **geocode\_address** — Nominatim / OpenStreetMap (no API key)
+* **get\_route\_optimization** — OSRM public routing server (no API key)
+* **build\_maps\_url** — Google Maps / Apple Maps URL scheme (no API key)
+
+### QuickBooks Online Setup
+
+1. Sign in to [developer.intuit.com](https://developer.intuit.com) and create an OAuth 2.0 app
+2. Generate an access token and note your Company (Realm) ID from your QBO URL
+3. Enter both in the **QuickBooks Online** panel and click **💾 Save QBO Credentials**
+4. The status dot turns green when credentials are saved
+
+Access tokens expire every 60 minutes. Enter your refresh token as well to enable automatic renewal.
+
+### QuickBooks Desktop Setup
+
+QuickBooks Desktop uses Windows COM automation — no internet or OAuth needed.
+
+1. Open QuickBooks Desktop with a company file loaded
+2. Click **🔗 Test QB Desktop Connection** — QuickBooks will prompt you to allow AI-Prowler access
+3. Set your default service item name (must exist in your QB item list; default: `Services`)
+4. Click **💾 Save Settings**
+
+If `pywin32` is not installed, an **⬇️ Install pywin32 Now** button installs it automatically.
+
+### Job Tracker Spreadsheet
+
+The installer deploys a pre-built `AI-Prowler\_Job\_Tracker.xlsx` to your `Documents\\AI-Prowler\\` folder. This spreadsheet has eight interconnected tabs designed to work with the `update\_job\_spreadsheet` MCP tool:
+
+|Tab|Purpose|
+|-|-|
+|Customers|Customer master list with addresses, service type, frequency|
+|Jobs\_Schedule|All service appointments with route and weather columns|
+|Route\_Planner|Daily route optimization — AI fills lat/lon and map URLs|
+|Quotes|Estimates sent to customers|
+|Invoices|Billing and payment tracking|
+|QB\_Daily\_Export|Ready-to-import QuickBooks sync rows|
+|Services\_Pricing|Service catalog with pricing|
+|AI-Prowler\_Commands|Quick reference for Claude prompts|
+
+> \*\*Important:\*\* Do not rename column headers in the Job Tracker. The `update\_job\_spreadsheet` tool matches rows by the column header text. Renamed headers will cause the tool to fail to find the correct column. Column headers with embedded newlines (e.g. `"Job\\nStatus"`) can be passed either with the newline or with a space — the tool normalises both automatically.
+
+> \*\*Backup:\*\* Every `update\_job\_spreadsheet` call automatically saves a timestamped backup to a `\_backups` folder next to the spreadsheet file before writing changes. Backups older than 30 days are pruned automatically. Pass `backup=False` if you want to skip this step.
+
+The default spreadsheet path is written to `\~/.ai-prowler/config.json` during installation and pre-filled in the Small Business tab's Browse field.
+
+### Route \& Navigation Notes
+
+* **Nominatim geocoding delay:** 0.35 seconds per address is required by OpenStreetMap's terms of service. Geocoding 20 addresses takes approximately 7 seconds — this is normal, not a bug.
+* **Google Maps URL limit:** Google Maps supports 9 waypoints per URL. Routes longer than 9 stops are automatically split into legs.
+* **Apple Maps option:** Pass `app='apple'` to `build\_maps\_url` for iPhone/iPad-only navigation links.
+
+### Example Claude Prompts
+
+```
+"What is the weather forecast for New Smyrna Beach for the next 3 days?"
+"Optimize my route for these 6 jobs today and give me a Google Maps link."
+"Create a QuickBooks Online invoice for Miller Windows, window washing, $312, today."
+"Mark the Miller Windows job complete in my jobs spreadsheet and record invoice #1048."
+"What jobs do I have scheduled for today?"
+"Show me all open jobs in my spreadsheet this week."
+"Read the Customers sheet and tell me who is on a monthly schedule."
+"Call get\_action\_tools\_status() and tell me what needs to be configured."
+```
+
+\---
+
+## 10\. Desktop Ask Questions Tab (Optional Local AI)
 
 The Ask Questions tab provides a traditional chat interface for querying your knowledge base. It is not Agentic (Agent based) smart Query based Question and answer and it works independently of Claude Desktop and is useful for fully offline operation and requires that the LLM be downloaded locally or you can access the external LLM via API interface but you will need to get API keys and sign up for the service plans offered by the external LLM providers.
 
@@ -586,7 +727,7 @@ When the AI produces code, a 💾 Save button appears automatically. Code is sav
 
 \---
 
-## 10\. Settings \& Configuration
+## 11\. Settings \& Configuration
 
 ### Remote Access Tab
 
@@ -597,14 +738,14 @@ When the AI produces code, a 💾 Save button appears automatically. Code is sav
 * **Cloudflare Tunnel** — one-time setup buttons (Login, Create Tunnel, Route DNS, Save Config) and daily-use buttons (Start Tunnel, Stop Tunnel). See Section 7 for full setup walkthrough.
 * **Install as Windows Service** — installs the Cloudflare Tunnel as a Windows background service that starts automatically at boot, even without AI-Prowler running.
 
-> \*\*Note:\*\* The HTTP server and Cloudflare Tunnel are only needed for Claude.ai web/mobile access. Claude Desktop does \*\*not\*\* use these — it connects via the stdio MCP path configured automatically by the installer.
+> \\\*\\\*Note:\\\*\\\* The HTTP server and Cloudflare Tunnel are only needed for Claude.ai web/mobile access. Claude Desktop does \\\*\\\*not\\\*\\\* use these — it connects via the stdio MCP path configured automatically by the installer.
 
 ### Claude Desktop MCP Tab
 
-* **MCP Status** — shows whether AI-Prowler is correctly registered in Claude Desktop's `claude\_desktop\_config.json`
+* **MCP Status** — shows whether AI-Prowler is correctly registered in Claude Desktop's `claude\\\_desktop\\\_config.json`
 * **Transport mode note** — confirms that Claude Desktop uses the stdio (local process) path, not the HTTP server. If your config shows an HTTP URL here, click **Auto-configure Claude Desktop** to fix it.
 * **⚙️ Auto-configure Claude Desktop** — writes the correct stdio entry for AI-Prowler into Claude Desktop's config file. Also offers to restart Claude Desktop immediately.
-* **Open Claude Desktop Config** — opens `claude\_desktop\_config.json` in Notepad for manual inspection
+* **Open Claude Desktop Config** — opens `claude\\\_desktop\\\_config.json` in Notepad for manual inspection
 * **View Example Config** — shows a reference configuration you can copy from
 * **Copy Config Path** — copies the config file path to the clipboard
 * **🔬 Run MCP Diagnostics** — runs a full health check and shows a scrollable report covering: MCP SDK version, tool count, config validity, subscription cache, and log tail. Use **📋 Copy Output** to share the report with support.
@@ -625,9 +766,18 @@ When the AI produces code, a 💾 Save button appears automatically. Code is sav
 ### Smart Scan Config Tab
 
 * **Supported / Skipped extension lists** — add or remove file extensions to control which types are indexed. Drag an extension from Supported to Skipped (or vice versa) to change its status.
-* **Exclude folder patterns** — enter partial path strings (e.g. `node\_modules`, `\\.git`) to skip those directories during indexing
+* **Exclude folder patterns** — enter partial path strings (e.g. `node\\\_modules`, `\\\\.git`) to skip those directories during indexing
 * When an extension is moved to Skipped, existing chunks for that type are **purged automatically** at the start of the next index run — no manual cleanup needed
 * These settings apply to all indexing operations (initial index, Update Index, and scheduled runs)
+
+### Small Business Tab
+
+* **Free Tools panel** — overview and backend attribution for weather, routing, geocoding, and maps URL tools (all free, no setup)
+* **QuickBooks Online** — Company ID (Realm ID) and OAuth access/refresh token entry, status indicator dot, Save/Clear/Open QBO buttons
+* **QuickBooks Desktop** — pywin32 status indicator, default service item name field, Test Connection and Install pywin32 buttons
+* **Job Spreadsheet Updater** — default `.xlsx` path with Browse button, pre-filled from installation; Save/Open Spreadsheet buttons
+* **Route \& Navigation** — OSRM and Nominatim notes, typical 4-step workflow, Open Google Maps and Open Apple Maps shortcuts
+* Configuration is stored in `\~/.ai-prowler/config.json` alongside QuickBooks Online tokens
 
 ### Scheduler Tab
 
@@ -635,7 +785,7 @@ When the AI produces code, a 💾 Save button appears automatically. Code is sav
 * **Time** — what time to run the update (default 2:00 AM)
 * **Create Schedule** — registers the task with Windows Task Scheduler
 * **View Schedule** — shows the current scheduled task status and next run time
-* The scheduler runs `update\_tracked\_directories` — only changed files are re-indexed, so scheduled runs are fast
+* The scheduler runs `update\\\_tracked\\\_directories` — only changed files are re-indexed, so scheduled runs are fast
 
 ### OCR Debug (in Settings toolbar)
 
@@ -652,40 +802,48 @@ When the AI produces code, a 💾 Save button appears automatically. Code is sav
 
 \---
 
-## 11\. Supported File Types
+## 12\. Supported File Types
 
 AI-Prowler indexes **65+ file formats** by default. Extensions are split into two sets: **Supported** (indexed) and **Skipped** (never indexed). Both sets can be customised in **Settings → Smart Scan Config**.
 
+### How File Content Is Extracted
+
+Each supported format has a dedicated loader that converts its content into clean, searchable text before chunking. The table below shows which loader is used and any special processing notes relevant to search quality.
+
 ### Supported Extensions (indexed by default)
 
-|Extension(s)|Category|Reason Indexed|
-|-|-|-|
-|`.txt` `.md` `.rst` `.rtf` `.odt`|Plain text / Docs|Pure text — directly readable, high RAG value|
-|`.pdf`|Document|Most common document format; text extracted via pdfplumber/pypdf|
-|`.docx` `.doc`|Word|Rich text documents; python-docx extracts body and tables|
-|`.xlsx` `.xls`|Excel|Spreadsheet data; openpyxl extracts cell text|
-|`.pptx` `.ppt`|PowerPoint|Slide text content extracted via python-pptx|
-|`.py` `.js` `.ts` `.jsx` `.tsx`|Code|Source code is plain text; highly searchable for developer knowledge bases|
-|`.cs` `.java` `.cpp` `.c` `.h` `.hpp`|Code|Compiled languages — source is still plain text|
-|`.go` `.rs` `.rb` `.php` `.swift` `.kt` `.scala` `.r`|Code|Modern and niche languages — same reasoning|
-|`.html` `.htm` `.xhtml`|Markup|Web content; HTML tags stripped, body text extracted|
-|`.css` `.scss` `.sass` `.less`|Stylesheet|Text-based style rules; useful for front-end knowledge bases|
-|`.xml`|Markup / Data|Structured text; tag-stripped content extracted|
-|`.json` `.yaml` `.yml` `.toml` `.ini` `.cfg` `.conf` `.env`|Config / Data|Human-readable config files — valuable for dev/ops knowledge bases|
-|`.csv` `.tsv`|Data|Tabular text data — directly readable|
-|`.log`|Logs|Plain text; useful for searching error history|
-|`.sql`|Database scripts|Plain text queries and schema definitions|
-|`.jpg` `.jpeg` `.png` `.bmp` `.tiff` `.tif` `.gif`|Images|**OCR via Tesseract** extracts embedded text from scanned docs and screenshots|
-|`.eml` `.msg` `.emlx`|Email (single)|Individual email files; headers and body extracted|
-|`.mbox`|Email (archive)|Gmail Takeout, Thunderbird exports — multiple messages per file|
-|`.rmail` `.babyl` `.mmdf`|Email (legacy)|GNU Emacs / old Unix mail formats|
-|`.sh` `.bash` `.zsh` `.ps1` `.bat` `.cmd`|Scripts|Shell scripts — plain text, useful for ops knowledge bases|
-|`.gitignore` `.dockerignore` `.editorconfig`|Config files|Extensionless-style config — plain text|
+|Extension(s)|Category|Extractor|Notes|
+|-|-|-|-|
+|`.txt` `.md` `.rst`|Plain text / Markup|Built-in text reader / Markdown stripper|`.md`/`.rst` syntax (headers, links, code fences) is stripped so only prose is indexed|
+|`.pdf`|Document|pdfplumber + Tesseract OCR|Text layer extracted first; if insufficient text is found the page is rendered at 300 DPI and OCR'd automatically — see Section 12|
+|`.docx`|Word (modern)|python-docx|Body paragraphs **and table cells** are both extracted. Tables are rendered as pipe-separated rows so financial tables, schedules, and data grids are fully indexed|
+|`.xlsx`|Excel (modern)|openpyxl|Each data row is rendered as self-contained `Column: Value` pairs. Dates are formatted as `YYYY-MM-DD`. All numeric values (currency, hours, decimals) are preserved exactly as stored. Every chunk carries full column context regardless of where the chunk boundary falls.|
+|`.xls`|Excel (legacy BIFF8)|xlrd|Same `Column: Value` per-row format as `.xlsx`. Date serial numbers are converted to `YYYY-MM-DD` using xlrd's cell-type detection. Numeric values preserved as-is.|
+|`.pptx`|PowerPoint (modern)|python-pptx|Each slide extracted as a labelled section `\[Slide N]`. All text frames, titles, body text, and text boxes included.|
+|`.odt`|OpenDocument Text|odfpy|All paragraph text extracted in reading order.|
+|`.rtf`|Rich Text Format|striprtf|RTF control codes (`\\rtf1\\ansi\\deff0…`) stripped; only readable prose indexed.|
+|`.html` `.htm` `.xhtml`|Web / Markup|beautifulsoup4|All tags, `<script>`, `<style>`, and `<head>` blocks stripped. Only human-readable body text is indexed.|
+|`.csv` `.tsv`|Tabular data|Built-in csv module|Same `Column: Value` per-row format as Excel. Header row is detected automatically and attached to every data row so column context is preserved across all chunks.|
+|`.py` `.js` `.ts` `.jsx` `.tsx`|Code|Plain text|Source code is plain text — highly searchable for developer knowledge bases|
+|`.cs` `.java` `.cpp` `.c` `.h` `.hpp`|Code|Plain text|Compiled languages — source is still plain text|
+|`.go` `.rs` `.rb` `.php` `.swift` `.kt` `.scala` `.r`|Code|Plain text|Modern and niche languages — same reasoning|
+|`.css` `.scss` `.sass` `.less`|Stylesheet|Plain text|Text-based style rules; useful for front-end knowledge bases|
+|`.xml`|Markup / Data|Plain text|Structured text; content is readable as-is|
+|`.json` `.yaml` `.yml` `.toml` `.ini` `.cfg` `.conf` `.env`|Config / Data|Plain text|Human-readable config files — valuable for dev/ops knowledge bases|
+|`.log`|Logs|Plain text|Useful for searching error history|
+|`.sql`|Database scripts|Plain text|Plain text queries and schema definitions|
+|`.jpg` `.jpeg` `.png` `.bmp` `.tiff` `.tif` `.gif`|Images|Tesseract OCR|**OCR via Tesseract** extracts embedded text from scanned documents and screenshots — see Section 12|
+|`.eml` `.msg` `.emlx`|Email (single)|email / extract-msg|Individual email files; headers, sender, recipient, subject, and body extracted|
+|`.mbox`|Email (archive)|mailbox|Gmail Takeout, Thunderbird exports — multiple messages per file, incrementally indexed|
+|`.rmail` `.babyl` `.mmdf`|Email (legacy)|mailbox|GNU Emacs / old Unix mail formats|
+|`.sh` `.bash` `.zsh` `.ps1` `.bat` `.cmd`|Scripts|Plain text|Shell scripts — plain text, useful for ops knowledge bases|
+|`.gitignore` `.dockerignore` `.editorconfig`|Config files|Plain text|Extensionless-style config — plain text|
 
 ### Skipped Extensions (never indexed by default)
 
 |Extension(s)|Category|Reason Skipped|
 |-|-|-|
+|`.doc` `.ppt`|Legacy Office binary|OLE compound binary format with no pure-Python text extractor. Produces unreadable garbage when read as text. **Convert to `.docx` / `.pptx` before indexing.**|
 |`.exe` `.dll` `.so` `.dylib` `.lib` `.a` `.o` `.obj`|Executables / compiled|Binary — no readable text content|
 |`.class` `.pyc` `.pyd` `.pyo`|Compiled bytecode|Binary compiled output — no source text value|
 |`.pdb` `.ilk` `.exp` `.com` `.scr` `.sys` `.drv` `.ocx` `.ax`|Windows system / debug|Binary system files — no text content|
@@ -700,15 +858,41 @@ AI-Prowler indexes **65+ file formats** by default. Extensions are split into tw
 |`.db` `.sqlite` `.sqlite3` `.mdb` `.accdb`|Database files|Binary database containers — use SQL exports instead|
 |`.vmdk` `.vhd` `.vhdx` `.ova` `.ovf`|VM / disk images|Large binary disk images — no text content|
 |`.tmp` `.temp` `.cache` `.lock` `.bak` `.swp` `.swo`|Temp / cache|Transient files — no stable content worth indexing|
-|`.DS\_Store` `.Thumbs.db`|OS metadata|macOS/Windows filesystem metadata blobs — binary, no value|
+|`.DS\\\_Store` `.Thumbs.db`|OS metadata|macOS/Windows filesystem metadata blobs — binary, no value|
+
+### Excel, Word, and Legacy Office Format Notes
+
+#### .xlsx and .xls — Modern and Legacy Excel
+
+`.xlsx` files (Excel 2007 and later) are extracted using `openpyxl`. Each data row is rendered as a series of `Column: Value` pairs so Claude always knows which column a value came from, even across chunk boundaries. Dates are formatted as `YYYY-MM-DD`; numeric values (currency, hours, floats) are preserved exactly as stored.
+
+`.xls` files (Excel 97–2003, BIFF8 binary format) are extracted using `xlrd`. The same `Column: Value` per-row format is applied.
+
+> \*\*Note on `.xls`:\*\* The legacy `.xls` format is supported for read-only extraction only. If you edit `.xls` files regularly, save them as `.xlsx` in Excel first for best results.
+
+#### .docx — Word Documents
+
+`.docx` files are extracted using `python-docx`. Both paragraph text and table content are extracted. Table cells are converted to readable `Row N | Column: Value` format so financial tables, schedules, and structured grids inside Word documents are fully searchable.
+
+#### .doc and .xls — Legacy Formats Not Supported
+
+`.doc` (Word 97–2003 OLE binary) and the related legacy `.xls` with OLE compound document structure are **not supported for indexing** and are excluded from the default Supported extensions list.
+
+These formats use a proprietary binary structure with no reliable pure-Python extractor. Attempting to index them produces unreadable binary garbage that pollutes the knowledge base with noise rather than content.
+
+**What to do:** Open the file in Microsoft Word or Excel and use **File → Save As → .docx / .xlsx** to convert it. The converted file will index correctly and fully.
+
+If AI-Prowler encounters a `.doc` or `.xls` file during indexing, it logs a warning and skips the file rather than indexing corrupt content. You can verify which files were skipped in the indexing output panel.
 
 ### Notes on Special Cases
 
-* **`.svg`** is skipped even though it is technically XML text — it is treated as a design asset rather than a document
-* **Common image formats** (`.jpg`, `.png`, etc.) are **supported** via OCR, but camera RAW formats are skipped since they contain raw photo sensor data, not document text
-* **Email formats** include legacy formats (`.babyl`, `.mmdf`) for unusually thorough coverage of older archives
-* **`.webp`** is skipped (design/web asset), even though `.jpg`/`.png` of the same content would be OCR'd — this is intentional as webp is primarily a web delivery format
-* All extension lists can be customised per-installation in **Settings → Smart Scan Config** without any code changes
+* **`.doc` and `.ppt`** are intentionally skipped. These are OLE compound binary formats (Word 97–2003 and PowerPoint 97–2003) that have no pure-Python text extractor. Reading them as plain text produces binary garbage identical to the original Excel problem. Convert to `.docx` / `.pptx` using Word, PowerPoint, LibreOffice, or any online converter before indexing.
+* **`.xlsx` / `.xls` column context** — each data row is a self-contained chunk entry. This means Claude can always answer "what is column X for row Y?" even when a large spreadsheet spans many chunks, because the column header is embedded in every row entry rather than appearing once at the top of the file.
+* **`.docx` tables** — table content was silently dropped in earlier versions. v5.0.0 extracts both paragraph text and table cells, so financial tables, parenting schedules, and any structured data inside Word documents is now fully searchable.
+* **`.svg`** is skipped even though it is technically XML text — it is treated as a design asset rather than a document.
+* **Common image formats** (`.jpg`, `.png`, etc.) are **supported** via OCR, but camera RAW formats are skipped since they contain raw photo sensor data, not document text.
+* **`.webp`** is skipped (web delivery format), even though `.jpg`/`.png` of the same content would be OCR'd — this is intentional.
+* All extension lists can be customised per-installation in **Settings → Smart Scan Config** without any code changes.
 
 ### Skipped Directories
 
@@ -717,15 +901,15 @@ AI-Prowler also skips these directory names when walking folder trees:
 |Category|Directories|
 |-|-|
 |Version control|`.git` `.svn` `.hg` `.bzr`|
-|Package managers|`node\_modules` `bower\_components` `vendor` `packages` `.nuget`|
-|Python|`\_\_pycache\_\_` `.venv` `venv` `env` `.env` `site-packages`|
+|Package managers|`node\\\_modules` `bower\\\_components` `vendor` `packages` `.nuget`|
+|Python|`\\\_\\\_pycache\\\_\\\_` `.venv` `venv` `env` `.env` `site-packages`|
 |Build output|`build` `dist` `out` `output` `bin` `obj` `target` `.next` `.nuxt`|
 |IDE / editor|`.idea` `.vscode` `.vs` `.eclipse`|
 |OS / system|`$RECYCLE.BIN` `System Volume Information` `Windows` `Program Files`|
 
 \---
 
-## 12\. OCR — Scanned Documents \& Images
+## 13\. OCR — Scanned Documents \& Images
 
 AI-Prowler automatically applies OCR (Optical Character Recognition) to:
 
@@ -752,7 +936,7 @@ In **Settings**, use the **OCR Debug** button to test OCR on a specific file and
 
 \---
 
-## 13\. Email Indexing
+## 14\. Email Indexing
 
 ### Supported Formats
 
@@ -771,11 +955,11 @@ AI-Prowler uses `Message-ID` headers for deduplication. On re-import, only email
 
 ### Large Archives
 
-For very large archives (100,000+ emails), indexing may take several hours on first import. Use Pause / Resume if needed. Progress is shown as `\[Email 4,271/52,000] Subject line`.
+For very large archives (100,000+ emails), indexing may take several hours on first import. Use Pause / Resume if needed. Progress is shown as `\\\[Email 4,271/52,000] Subject line`.
 
 \---
 
-## 14\. Scheduling \& Automation
+## 15\. Scheduling \& Automation
 
 ### Windows Task Scheduler Integration
 
@@ -785,7 +969,7 @@ Set up automatic index updates from **Settings → Schedule**:
 2. Set the time (default: 2:00 AM)
 3. Click **Create Schedule**
 
-The scheduler runs `update\_tracked\_directories` — only changed files are re-indexed.
+The scheduler runs `update\\\_tracked\\\_directories` — only changed files are re-indexed.
 
 ### Auto-Start Ollama
 
@@ -799,7 +983,7 @@ In **Settings → Cloudflare Tunnel**, click **Install as Windows Service**.
 
 \---
 
-## 15\. GPU Support
+## 16\. GPU Support
 
 ### NVIDIA GPUs
 
@@ -835,7 +1019,7 @@ In **Settings → GPU Layers**, set how many model layers Ollama offloads to GPU
 
 \---
 
-## 16\. Debugging \& Log Files
+## 17\. Debugging \& Log Files
 
 AI-Prowler maintains comprehensive logs for troubleshooting. This section covers all log files, what they contain, and how to use them.
 
@@ -843,34 +1027,34 @@ AI-Prowler maintains comprehensive logs for troubleshooting. This section covers
 
 |Log File|Location|Contents|
 |-|-|-|
-|Install log|`%LOCALAPPDATA%\\Temp\\AI-Prowler\\install\_log.txt`|Full installer output, package installs, errors|
-|Uninstall log|`%LOCALAPPDATA%\\Temp\\AI-Prowler\\uninstall\_log.txt`|Uninstall steps and cleanup results|
-|MCP server log|`%LOCALAPPDATA%\\AI-Prowler\\mcp\_server.log`|All MCP server activity (current session)|
-|MCP server log (prev)|`%LOCALAPPDATA%\\AI-Prowler\\mcp\_server.log.1`|Previous session log|
-|MCP server log (older)|`%LOCALAPPDATA%\\AI-Prowler\\mcp\_server.log.2`|Two sessions ago|
-|Subscription cache|`%LOCALAPPDATA%\\AI-Prowler\\subs\_cache.json`|Cached subscription registry|
+|Install log|`%LOCALAPPDATA%\\\\Temp\\\\AI-Prowler\\\\install\\\_log.txt`|Full installer output, package installs, errors|
+|Uninstall log|`%LOCALAPPDATA%\\\\Temp\\\\AI-Prowler\\\\uninstall\\\_log.txt`|Uninstall steps and cleanup results|
+|MCP server log|`%LOCALAPPDATA%\\\\AI-Prowler\\\\mcp\\\_server.log`|All MCP server activity (current session)|
+|MCP server log (prev)|`%LOCALAPPDATA%\\\\AI-Prowler\\\\mcp\\\_server.log.1`|Previous session log|
+|MCP server log (older)|`%LOCALAPPDATA%\\\\AI-Prowler\\\\mcp\\\_server.log.2`|Two sessions ago|
+|Subscription cache|`%LOCALAPPDATA%\\\\AI-Prowler\\\\subs\\\_cache.json`|Cached subscription registry|
 
 Open `%LOCALAPPDATA%` by pressing Win + R and typing `%LOCALAPPDATA%`.
 
 ### MCP Server Log
 
-The MCP log (`mcp\_server.log`) is the most useful for debugging Claude Desktop and Claude.ai connection issues. It captures:
+The MCP log (`mcp\\\_server.log`) is the most useful for debugging Claude Desktop and Claude.ai connection issues. It captures:
 
 **Startup sequence:**
 
 ```
 AI-Prowler MCP server process started
 Python : 3.11.8
-Script : C:\\Program Files\\AI-Prowler\\ai\_prowler\_mcp.py
+Script : C:\\\\Program Files\\\\AI-Prowler\\\\ai\\\_prowler\\\_mcp.py
 Importing MCP SDK (FastMCP)... OK
-Importing rag\_preprocessor... OK
+Importing rag\\\_preprocessor... OK
 FastMCP created with instructions= (mcp >= 1.2.0)
 ```
 
 **stdio mode protection (Claude Desktop):**
 
 ```
-STDIO mode: \_STDIO\_MODE=True — \_capture\_stdout() is now a no-op
+STDIO mode: \\\_STDIO\\\_MODE=True — \\\_capture\\\_stdout() is now a no-op
 STDIO mode: sys.stdout redirected to devnull — MCP pipe protected
 Starting stdio transport (Claude Desktop mode)
 ```
@@ -883,7 +1067,7 @@ HEADERS from Claude.ai (POST /mcp):
   host: mobile.dvavro-ai-prowler.com
   authorization: Bearer xxxxxxxx...
   content-type: application/json
-AUTH OK  -> mcp\_asgi  (POST /mcp)
+AUTH OK  -> mcp\\\_asgi  (POST /mcp)
 FASTMCP RESPONSE: POST /mcp → HTTP 200
 ```
 
@@ -913,23 +1097,50 @@ SUBSCRIPTION EXPIRED: subscription for 'ACME Corp' expired 5 days ago
 
 The MCP log rotates on each server start:
 
-* `mcp\_server.log` — current session
-* `mcp\_server.log.1` — previous session
-* `mcp\_server.log.2` — two sessions ago
+* `mcp\\\_server.log` — current session
+* `mcp\\\_server.log.1` — previous session
+* `mcp\\\_server.log.2` — two sessions ago
 
 This means restarting the server creates a new log, preserving the last two sessions for comparison.
+
+### Log Timestamps and Stderr Capture
+
+The MCP server log uses **millisecond-precision timestamps** (e.g. `2026-03-31 12:04:22.847`) for all entries — useful for diagnosing timing issues like slow startup or tool call delays. Stderr output (Python tracebacks and third-party library errors) is also captured into the same log file via a `\_StderrToLog` redirect, so crashes that don't reach the normal log handlers are still visible.
+
+### MCP Server Startup Performance
+
+The v5.0.0 MCP server includes several startup speed improvements that are logged and worth understanding when reading `mcp\_server.log`:
+
+**HuggingFace offline mode** — On startup the server sets `HF\_HUB\_OFFLINE=1` and `TRANSFORMERS\_OFFLINE=1` before any imports. This prevents sentence-transformers from making unnecessary network update-check calls on every load, saving 4–5 seconds per startup. The model is cached locally; no network access is needed.
+
+**requests timeout patch** — During `rag\_preprocessor` import the server temporarily patches `requests.Session.request` to cap all HTTP timeouts to 0.8 seconds. This prevents the Ollama connectivity probe (which runs at import time) from blocking the MCP startup for the full requests default timeout. The patch is removed immediately after import and confirmed in the log:
+
+```
+requests.Session.request patched: timeout capped to 0.8s during import
+requests patch removed — normal timeouts restored
+```
+
+**Background prewarm thread** — In stdio mode (Claude Desktop), loading ChromaDB and the embedding model is offloaded to a background thread so `mcp.run()` starts immediately and Claude Desktop's initialize handshake is never delayed. Tool handlers that need ChromaDB wait on `\_prewarm\_event` (max 60 seconds) before proceeding. You will see these lines in the log:
+
+```
+PREWARM: background thread started — loading ChromaDB + embedding model...
+PREWARM: done — 12,450 chunks indexed, model cached, asyncio-safe
+PREWARM: complete, tool handlers unblocked
+```
+
+If a tool call returns "AI-Prowler is still initializing" it means the prewarm hasn't finished yet. Wait a few seconds and retry.
 
 ### Install Log
 
 The install log captures every step of the installation process with return codes:
 
 ```
-\[Python] Installing Python 3.11.8...
-\[Python] Return code: 0  Status: SUCCESS
-\[pip] Installing requirements.txt...
-\[Claude Desktop] Downloading MSIX package...
-\[MCP Config] Writing claude\_desktop\_config.json...
-\[Summary] Install complete
+\\\[Python] Installing Python 3.11.8...
+\\\[Python] Return code: 0  Status: SUCCESS
+\\\[pip] Installing requirements.txt...
+\\\[Claude Desktop] Downloading MSIX package...
+\\\[MCP Config] Writing claude\\\_desktop\\\_config.json...
+\\\[Summary] Install complete
 ```
 
 If installation fails, this log shows exactly which step failed and why.
@@ -957,7 +1168,7 @@ In **Settings**, the **OCR Debug** button lets you test OCR on any file:
 Ask Claude (via MCP):
 
 ```
-Call get\_database\_stats() to show me what's in the knowledge base.
+Call get\\\_database\\\_stats() to show me what's in the knowledge base.
 ```
 
 Or from the Update Index tab, click **Show Stats**.
@@ -966,31 +1177,31 @@ Or from the Update Index tab, click **Show Stats**.
 
 **Problem: Claude says it can't find information that should be indexed**
 
-1. Open `mcp\_server.log` and find the tool call for `search\_documents`
+1. Open `mcp\\\_server.log` and find the tool call for `search\\\_documents`
 2. Check the similarity scores returned — if all are below 0.3, the content may not be well-represented
-3. Try `list\_indexed\_documents()` to verify the file is actually indexed
-4. Try `get\_document\_chunks("filename.pdf")` to see the raw extracted text — OCR issues may have degraded the content
+3. Try `list\\\_indexed\\\_documents()` to verify the file is actually indexed
+4. Try `get\\\_document\\\_chunks("filename.pdf")` to see the raw extracted text — OCR issues may have degraded the content
 
 **Problem: Claude Desktop shows "response was interrupted" on tool calls**
 
-1. Check `mcp\_server.log` for the stdio mode protection lines:
+1. Check `mcp\\\_server.log` for the stdio mode protection lines:
 
-   * `STDIO mode: \_STDIO\_MODE=True` — should be present
+   * `STDIO mode: \\\_STDIO\\\_MODE=True` — should be present
    * `STDIO mode: sys.stdout redirected to devnull` — should be present
-2. If these lines are missing, the fixed `ai\_prowler\_mcp.py` may not have been deployed
+2. If these lines are missing, the fixed `ai\\\_prowler\\\_mcp.py` may not have been deployed
 3. Run **🔬 Run MCP Diagnostics** from the Settings tab for a full health check
 4. Re-write the MCP config and restart Claude Desktop
 
 **Problem: Claude.ai connector shows "not subscribed" even after subscribing**
 
-1. Check `mcp\_server.log` for subscription check lines
+1. Check `mcp\\\_server.log` for subscription check lines
 2. Look for "Subscription registry fetch failed" — network issue
-3. Check `subs\_cache.json` for the cached data
+3. Check `subs\\\_cache.json` for the cached data
 4. Verify your Bearer token matches what was registered
 
 **Problem: HTTP server returns 421**
 
-This means a header mismatch between Claude.ai and the server. Check `mcp\_server.log` for:
+This means a header mismatch between Claude.ai and the server. Check `mcp\\\_server.log` for:
 
 * `REWRITE Host` lines — confirm host rewriting is active
 * `INJECT MCP-Protocol-Version` lines — confirms protocol version injection is working
@@ -999,15 +1210,15 @@ This means a header mismatch between Claude.ai and the server. Check `mcp\_serve
 
 **Problem: Install failed**
 
-Open `%LOCALAPPDATA%\\Temp\\AI-Prowler\\install\_log.txt` and search for `Status: FAILURE`. The lines around the failure show the exact command that failed and any error output.
+Open `%LOCALAPPDATA%\\\\Temp\\\\AI-Prowler\\\\install\\\_log.txt` and search for `Status: FAILURE`. The lines around the failure show the exact command that failed and any error output.
 
 \---
 
-## 17\. Troubleshooting
+## 18\. Troubleshooting
 
 ### Claude Desktop can't see AI-Prowler tools
 
-1. Check that AI-Prowler is installed in `C:\\Program Files\\AI-Prowler\\`
+1. Check that AI-Prowler is installed in `C:\\\\Program Files\\\\AI-Prowler\\\\`
 2. In AI-Prowler → Settings → Claude Desktop MCP → click **Write MCP Config**
 3. Restart Claude Desktop completely (check Task Manager for `claude.exe`)
 4. Start a **new conversation** (not an existing one)
@@ -1015,18 +1226,18 @@ Open `%LOCALAPPDATA%\\Temp\\AI-Prowler\\install\_log.txt` and search for `Status
 
 ### Claude Desktop shows "response was interrupted"
 
-This is caused by stdout corruption on the MCP pipe. Ensure you are running the latest `ai\_prowler\_mcp.py` which includes the stdio protection fix. Confirm by checking `mcp\_server.log` for the two lines:
+This is caused by stdout corruption on the MCP pipe. Ensure you are running the latest `ai\\\_prowler\\\_mcp.py` which includes the stdio protection fix. Confirm by checking `mcp\\\_server.log` for the two lines:
 
 ```
-STDIO mode: \_STDIO\_MODE=True — \_capture\_stdout() is now a no-op
+STDIO mode: \\\_STDIO\\\_MODE=True — \\\_capture\\\_stdout() is now a no-op
 STDIO mode: sys.stdout redirected to devnull — MCP pipe protected
 ```
 
-If these are absent, copy the latest `ai\_prowler\_mcp.py` to `C:\\Program Files\\AI-Prowler\\` and restart Claude Desktop.
+If these are absent, copy the latest `ai\\\_prowler\\\_mcp.py` to `C:\\\\Program Files\\\\AI-Prowler\\\\` and restart Claude Desktop.
 
 ### Claude.ai connector fails with "MCP server error"
 
-Check the `mcp\_server.log` for the specific error. Common causes:
+Check the `mcp\\\_server.log` for the specific error. Common causes:
 
 * HTTP server not running — click Start HTTP Server
 * Cloudflare Tunnel not running — click Start Tunnel
@@ -1046,18 +1257,18 @@ Check the `mcp\_server.log` for the specific error. Common causes:
 
 ### Errno 22 / double backslash error on indexing
 
-This is a known `huggingface\_hub` bug on some Windows 10 builds. The `RAG\_RUN.bat` launcher sets `HF\_HUB\_CACHE` explicitly to prevent this. If it persists after reinstall run the following commands:
+This is a known `huggingface\\\_hub` bug on some Windows 10 builds. The `RAG\\\_RUN.bat` launcher sets `HF\\\_HUB\\\_CACHE` explicitly to prevent this. If it persists after reinstall run the following commands:
 
 ```
 Win + R → type cmd → Enter
-%LOCALAPPDATA%\\Programs\\Python\\Python311\\python.exe -m pip uninstall huggingface-hub
-rmdir /s /q "%USERPROFILE%\\.cache\\huggingface\\hub\\models--sentence-transformers--all-MiniLM-L6-v2"
-%LOCALAPPDATA%\\Programs\\Python\\Python311\\python.exe -m pip install huggingface-hub==0.26.5
+%LOCALAPPDATA%\\\\Programs\\\\Python\\\\Python311\\\\python.exe -m pip uninstall huggingface-hub
+rmdir /s /q "%USERPROFILE%\\\\.cache\\\\huggingface\\\\hub\\\\models--sentence-transformers--all-MiniLM-L6-v2"
+%LOCALAPPDATA%\\\\Programs\\\\Python\\\\Python311\\\\python.exe -m pip install huggingface-hub==0.26.5
 ```
 
 ### Stale packages from Roaming site-packages
 
-If you see unexpected import errors or wrong package versions after a reinstall, the `PYTHONNOUSERSITE=1` variable in `RAG\_RUN.bat` prevents Python from loading packages from `%APPDATA%\\Roaming\\Python`. This is set automatically. If running the script directly without the bat file, set this variable manually.
+If you see unexpected import errors or wrong package versions after a reinstall, the `PYTHONNOUSERSITE=1` variable in `RAG\\\_RUN.bat` prevents Python from loading packages from `%APPDATA%\\\\Roaming\\\\Python`. This is set automatically. If running the script directly without the bat file, set this variable manually.
 
 ### Voice input not working
 
@@ -1065,29 +1276,30 @@ The Whisper model downloads on first use (\~1.6 GB). Ensure internet access on f
 
 \---
 
-## 18\. Uninstalling
+## 19\. Uninstalling
 
 ### Using the Uninstaller
 
-Run `UNINSTALL.bat` from `C:\\Program Files\\AI-Prowler\\` or use Windows Settings → Add or Remove Programs → AI-Prowler.
+Run `UNINSTALL.bat` from `C:\\\\Program Files\\\\AI-Prowler\\\\` or use Windows Settings → Add or Remove Programs → AI-Prowler.
 
 The uninstaller:
 
 * Removes all AI-Prowler application files
 * Removes Python (if installed by AI-Prowler)
-* Offers to remove the RAG database (your indexed document data)
+* Offers to remove the RAG database, index tracking files, AND the Job Tracker spreadsheet in one combined prompt (default: keep all — safe for reinstall)
 * Offers to remove Ollama and downloaded models
 
-The uninstall log is saved to `%LOCALAPPDATA%\\Temp\\AI-Prowler\\uninstall\_log.txt`.
+The uninstall log is saved to `%LOCALAPPDATA%\\\\Temp\\\\AI-Prowler\\\\uninstall\\\_log.txt`.
 
 ### Manual Cleanup
 
 If the uninstaller fails, manually delete:
 
-* `C:\\Program Files\\AI-Prowler\\` — application files
-* `%LOCALAPPDATA%\\Programs\\Python\\Python311\\` — Python
-* `%USERPROFILE%\\AI-Prowler\\` — database (if you want to keep your index, don't delete this)
-* `%LOCALAPPDATA%\\AI-Prowler\\` — logs and caches
+* `C:\\\\Program Files\\\\AI-Prowler\\\\` — application files
+* `%LOCALAPPDATA%\\\\Programs\\\\Python\\\\Python311\\\\` — Python
+* `%USERPROFILE%\\\\AI-Prowler\\\\` — database (if you want to keep your index, don't delete this)
+* `%USERPROFILE%\\\\Documents\\\\AI-Prowler\\\\AI-Prowler\\\_Job\\\_Tracker.xlsx` — Job Tracker spreadsheet (keep if you have live job data)
+* `%LOCALAPPDATA%\\\\AI-Prowler\\\\` — logs and caches
 
 \---
 
@@ -1101,7 +1313,7 @@ AI-Prowler uses the **Streamable HTTP** MCP transport for Claude.ai connections 
 |`instructions=` in FastMCP constructor|mcp >= 1.2.0|
 |Streamable HTTP transport|mcp >= 1.1.0|
 
-To check your version, ask Claude to call `how\_to\_use\_ai\_prowler()` and check the `MCP SDK version` line in the output. Or run **🔬 MCP Diagnostics** from the Settings tab.
+To check your version, ask Claude to call `how\\\_to\\\_use\\\_ai\\\_prowler()` and check the `MCP SDK version` line in the output. Or run **🔬 MCP Diagnostics** from the Settings tab.
 
 To upgrade: `pip install --upgrade mcp` in a command prompt.
 
@@ -1143,12 +1355,18 @@ Key packages and their roles:
 |huggingface-hub|0.26.5|Model downloads — pinned to avoid Errno 22 bug|
 |transformers|4.44.2|Tokenizers — pinned for deterministic installs|
 |pdfplumber|>=0.10.3|PDF text extraction|
-|python-docx|>=1.1.0|Word document extraction|
+|python-docx|>=1.1.0|Word `.docx` extraction — paragraphs and tables|
 |pypdf|>=3.17.4|PDF fallback parsing|
+|openpyxl|>=3.1.0|Modern `.xlsx` Excel extraction — `Column: Value` per-row format|
+|xlrd|>=2.0.1|Legacy `.xls` Excel extraction (BIFF8) — date serial conversion included|
+|python-pptx|>=0.6.21|PowerPoint `.pptx` extraction — per-slide labelled sections|
+|beautifulsoup4|>=4.12.0|HTML tag stripping for `.html`/`.htm`/`.xhtml` files|
+|striprtf|>=0.0.26|RTF control code removal for `.rtf` files|
+|odfpy|>=1.4.1|OpenDocument `.odt` text extraction|
 |pytesseract|>=0.3.10|OCR wrapper for Tesseract|
 |pypdfium2|>=4.0.0|PDF page rendering for OCR (no poppler required)|
 |pillow|>=10.0.0|Image I/O for OCR|
-|extract-msg|>=0.45.0|Outlook .msg email parsing|
+|extract-msg|>=0.45.0|Outlook `.msg` email parsing|
 |pyspellchecker|>=0.7.2|Inline spell checking in Ask Questions tab|
 |requests|>=2.31.0|HTTP requests (subscription checks)|
 |uvicorn|>=0.29.0|ASGI server for HTTP MCP transport|
@@ -1156,8 +1374,11 @@ Key packages and their roles:
 |sounddevice|>=0.4.6|Microphone audio capture|
 |numpy|>=1.24.0|Array operations for audio processing|
 |mcp|latest|MCP SDK (FastMCP) for tool server|
+|pywin32|>=306|Windows COM automation for QuickBooks Desktop invoice creation|
 
 Note: `torch` (PyTorch) is intentionally not listed in `requirements.txt`. The installer detects whether an NVIDIA GPU is present and installs the correct build automatically (CUDA or CPU-only).
+
+**Packages new in v5.0.0:** `openpyxl`, `xlrd`, `python-pptx`, `beautifulsoup4`, `striprtf`, `odfpy`, `pywin32` — all installed automatically by the installer. No manual action required.
 
 \---
 

@@ -1,5 +1,5 @@
 # 🐾 AI-Prowler — Agentic RAG Knowledge Base
-**Version 4.1.0** · Free for Windows 10/11 · Local-first · Agent-powered
+**Version 5.0.0** · Free for Windows 10/11 · Local-first · Agent-powered
 
 **Connect your personal document library to Claude — and let AI actively research it for you.**
 
@@ -116,6 +116,23 @@ All tools are automatically available when Claude connects — no configuration 
 
 Claude also has tools to manage your knowledge base: add directories, update the index, check status, and more — all from a Claude conversation.
 
+### Small Business Service Tools (🏢 Tab)
+Nine field service automation tools — configure once in the Small Business tab, then just ask Claude:
+
+| Tool | What it does |
+|---|---|
+| `get_weather` | Forecast for any location — flags rain risk for outdoor jobs |
+| `geocode_address` | Street address → GPS coordinates (Nominatim, free) |
+| `get_route_optimization` | Traveling Salesman solver — real street routing via OSRM (free) |
+| `build_maps_url` | Tap-to-navigate Google/Apple Maps link for your phone |
+| `create_quickbooks_online_invoice` | Creates & emails invoices via QBO OAuth |
+| `create_quickbooks_desktop_invoice` | Creates invoices via QB Desktop COM automation |
+| `read_job_spreadsheet` | Reads any sheet in your .xlsx job tracker with optional date filter |
+| `update_job_spreadsheet` | Updates rows in your .xlsx job tracker post-job with auto-backup |
+| `get_action_tools_status` | Health check for all 9 action tools |
+
+A pre-built **Job Tracker spreadsheet** (`AI-Prowler_Job_Tracker.xlsx`) is deployed to your `Documents\AI-Prowler\` folder during installation. It has 8 tabs — Customers, Jobs_Schedule, Route_Planner, Quotes, Invoices, QB_Daily_Export, Services_Pricing, and AI-Prowler_Commands — designed to work with the action tools out of the box.
+
 ### Remote Access (Mobile Subscription)
 - 🌐 **Cloudflare Tunnel** — secure HTTPS without opening firewall ports
 - 🔐 **OAuth 2.0 + PKCE** — secure login flow compatible with Claude.ai connectors
@@ -153,6 +170,8 @@ Claude also has tools to manage your knowledge base: add directories, update the
 | GPU | Not required | NVIDIA (any) for local Ollama |
 | Internet | Install only | Claude Desktop works locally |
 | Claude account | Required for MCP | Claude Pro for Claude.ai connector |
+| QB Online | Optional | Active QBO subscription for online invoicing |
+| QB Desktop | Optional | QB Desktop installed + pywin32 for desktop invoicing |
 
 > **RAM note:** Without local Ollama, AI-Prowler needs only 4 GB RAM. The embedding model (sentence-transformers) uses ~400 MB. Local Ollama models require additional RAM per model.
 
@@ -168,6 +187,7 @@ Claude also has tools to manage your knowledge base: add directories, update the
 | PyTorch (auto-detected) | ~200 MB – 2.5 GB | Embeddings (CPU or CUDA build) |
 | Claude Desktop | ~200 MB | Primary AI interface via MCP |
 | Cloudflare Tunnel | ~30 MB | Remote access for mobile/Claude.ai |
+| Job Tracker spreadsheet | <1 MB | Pre-built 8-tab .xlsx for Small Business tools |
 | **Total (no Ollama)** | **~1–3 GB** | Fast install, no model download |
 
 **Ollama and AI models are NOT downloaded during install.** Add them later from Settings → Browse & Install Model if you want local offline AI.
@@ -184,6 +204,7 @@ AI-Prowler/
 ├── rag_gui.py                      ← Main GUI application
 ├── rag_preprocessor.py             ← Core indexing & retrieval engine
 ├── ai_prowler_mcp.py               ← MCP server (Claude Desktop & Claude.ai)
+├── AI-Prowler_Job_Tracker.xlsx     ← Pre-built 8-tab job tracking spreadsheet
 ├── subscription_instructions.txt  ← Mobile subscription info (editable)
 ├── requirements.txt                ← Python package list
 ├── rag_icon.ico                    ← Application icon
@@ -241,7 +262,28 @@ Found a bug? Open an **[Issue](https://github.com/dvavro/AI-Prowler/issues)** an
 
 ## 📝 Changelog
 
-### v4.1.0 (current)
+### v5.0.0 (current)
+- 🏢 **Small Business Service Tools tab** — dedicated tab with 9 field service MCP tools: weather, geocoding, route optimization, navigation URLs (all free), QuickBooks Online invoicing (OAuth), QuickBooks Desktop invoicing (COM), job spreadsheet reader, job spreadsheet updater, and status checker. All configured in one place.
+- 📋 **Job Tracker spreadsheet** — `AI-Prowler_Job_Tracker.xlsx` deployed to `Documents\AI-Prowler\` during install. 8-tab workbook (Customers, Jobs_Schedule, Route_Planner, Quotes, Invoices, QB_Daily_Export, Services_Pricing, AI-Prowler_Commands) pre-wired for action tool workflows.
+- 📖 **`read_job_spreadsheet` MCP tool** — new action tool for reading the Job Tracker spreadsheet with optional date filtering (`"today"`, `"2026-03-31"`, etc.). Claude can answer scheduling questions like "what jobs do I have today?" directly from your spreadsheet.
+- 💾 **Spreadsheet auto-backup** — `update_job_spreadsheet` saves a timestamped backup to a `_backups` subfolder before every write. Backups older than 30 days are pruned automatically.
+- 🧠 **Smart header detection** — both spreadsheet tools detect the real header row by skipping decorative title/banner rows (any row with fewer than 3 non-empty cells in the first 5 rows is skipped). No configuration required.
+- 🔤 **Column name normalization** — column headers with embedded newlines (`"Job\nStatus"`) can be passed with either a newline or a space — both resolve correctly.
+- ⚡ **MCP startup speed** — `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` prevent unnecessary HuggingFace network checks on startup (saves 4–5 seconds). `requests.Session.request` is temporarily patched during import to cap the Ollama connectivity probe to 0.8 seconds, confirmed in log output.
+- 🧵 **Background prewarm thread** — in stdio mode (Claude Desktop), ChromaDB and the embedding model load in a background thread so `mcp.run()` starts immediately. Claude Desktop's initialize handshake is never blocked. Tool handlers wait on `_prewarm_event` and are unblocked as soon as the model is ready.
+- 📝 **Millisecond-precision logging** — MCP server log entries include millisecond timestamps for timing diagnosis. Stderr output (tracebacks, library errors) captured to the same log via `_StderrToLog`.
+- 🗑️ **Auto-purge deleted files from ChromaDB** — Update Selected / Update All / MCP `update_tracked_directories` / scheduled task all now purge stale vector chunks for deleted files automatically. Tracking DB and ChromaDB stay in sync.
+- 🖥️ **Auto-start after reboot** — installer registers a Windows Task Scheduler logon task so AI-Prowler restarts automatically after forced Windows Update reboots. Uninstaller cleans the task.
+- 📊 **Excel extraction overhaul** — `.xlsx` and `.xls` now use `openpyxl`/`xlrd` for proper cell extraction; each row is rendered as self-contained `Column: Value` pairs so Claude always knows which column a value belongs to, even across chunk boundaries. Dates are formatted as `YYYY-MM-DD`; all numeric values (currency, hours, floats) are preserved exactly as stored.
+- 📑 **PowerPoint support** — `.pptx` files now properly extracted per slide using `python-pptx`; slide labels preserved in chunks
+- 🌐 **HTML tag stripping** — `.html`/`.htm`/`.xhtml` files now strip all tags, scripts, and styles via `beautifulsoup4`; only readable text is indexed
+- 📄 **RTF support** — `.rtf` files now strip RTF control codes via `striprtf`; previously produced `\rtf1\ansi\deff0` noise
+- 📝 **ODT support** — `.odt` OpenDocument files properly extracted via `odfpy`; previously binary garbage
+- 📋 **CSV/TSV extraction** — tabular files now use `Column: Value` per-row format matching the Excel treatment; column context preserved across all chunks
+- 📝 **DOCX table extraction** — Word documents now extract table content (previously silently dropped); financial tables, schedules, and data grids are now fully indexed
+- 🚫 **`.doc` and `.ppt` removed from supported types** — legacy OLE binary formats with no pure-Python extractor; produce unreadable garbage. Users should convert to `.docx`/`.pptx` before indexing.
+
+### v4.1.0
 - 🌐 **Open Claude.ai button** — one-click launch of Claude.ai in the browser next to Launch Claude Desktop
 - 🚀 **Agentic RAG Quick Start** — Help → Quick Start rewritten to lead with Agentic RAG + Claude Desktop as primary workflow; mobile subscription path as Option 2
 - 📖 **Connector setup guide** — User Guide now includes step-by-step instructions for adding AI-Prowler as a Claude.ai connector
