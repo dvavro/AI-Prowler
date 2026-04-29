@@ -296,6 +296,95 @@ else:
     )
 _log.info("FastMCP server object created OK")
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Telemetry — track tool call counts per tool name on every successful
+# invocation. Read by rag_gui.py's heartbeat sender, which resets the counter
+# after a successful POST to the Cloudflare Worker.
+#
+# Counter file format (v2):
+#     {"tool_calls": {"check_status": 12, "search_documents": 3, ...}}
+#
+# v1 -> v2 migration is automatic on first read; old single-int totals are
+# discarded (they aren't recoverable as per-tool buckets).
+#
+# Failure modes are all silent — telemetry must NEVER cause a tool call to
+# fail. If the counter file is locked, missing, corrupted, or in a path the
+# process can't write to, we just skip the increment and the user never sees
+# anything go wrong.
+# ══════════════════════════════════════════════════════════════════════════════
+_TELEMETRY_COUNTER_PATH = (
+    Path.home() / '.ai-prowler' / 'telemetry_counter.json')
+_telemetry_lock = threading.Lock()
+
+
+def _telemetry_increment_tool_count(tool_name='_unknown'):
+    """Bump tool_calls[tool_name] by 1. Concurrency-safe, fail-silent."""
+    try:
+        with _telemetry_lock:
+            data = {'tool_calls': {}}
+            try:
+                if _TELEMETRY_COUNTER_PATH.exists():
+                    raw = _TELEMETRY_COUNTER_PATH.read_text(encoding='utf-8')
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, dict):
+                        # v1 -> v2 migration: drop old single-int field
+                        if 'tool_calls' in parsed and isinstance(
+                                parsed['tool_calls'], dict):
+                            data = parsed
+                        else:
+                            data = {'tool_calls': {}}
+            except Exception:
+                pass
+
+            tc = data.setdefault('tool_calls', {})
+            if not isinstance(tc, dict):
+                tc = {}
+                data['tool_calls'] = tc
+            current = int(tc.get(tool_name, 0))
+            tc[tool_name] = current + 1
+
+            try:
+                _TELEMETRY_COUNTER_PATH.parent.mkdir(
+                    parents=True, exist_ok=True)
+            except Exception:
+                pass
+
+            tmp = _TELEMETRY_COUNTER_PATH.with_suffix('.tmp')
+            tmp.write_text(json.dumps(data), encoding='utf-8')
+            os.replace(str(tmp), str(_TELEMETRY_COUNTER_PATH))
+    except Exception as _e:
+        _log.debug("telemetry counter update skipped: %s", _e)
+
+
+# ── Monkeypatch mcp.tool() ───────────────────────────────────────────────────
+import functools as _functools
+
+_orig_mcp_tool = mcp.tool
+
+
+def _counting_mcp_tool(*tool_args, **tool_kwargs):
+    """Wrap mcp.tool() so each registered tool increments the per-tool
+    counter on successful return. Uses fn.__name__ as the tool key."""
+    real_decorator = _orig_mcp_tool(*tool_args, **tool_kwargs)
+
+    def _outer(fn):
+        _tool_name = getattr(fn, '__name__', '_unknown')
+
+        @_functools.wraps(fn)
+        def _inner(*args, **kwargs):
+            result = fn(*args, **kwargs)
+            _telemetry_increment_tool_count(_tool_name)
+            return result
+        return real_decorator(_inner)
+
+    return _outer
+
+
+mcp.tool = _counting_mcp_tool
+_log.info("Monkeypatched mcp.tool() — all subsequent @mcp.tool decorators "
+          "will increment ~/.ai-prowler/telemetry_counter.json by tool name "
+          "on success")
+
 # Module-level event set by the background prewarm thread when ChromaDB and
 # the embedding model are fully loaded.  Tool handlers that need ChromaDB
 # wait on this event (max 60s) before proceeding.
@@ -343,29 +432,65 @@ def how_to_use_ai_prowler() -> str:
 
         "  STEP 1  get_knowledge_base_overview()\n"
         "    Orient yourself: see what documents are indexed, file types,\n"
-        "    topics covered, and tracked source directories.\n\n"
+        "    topics covered, tracked directories, and directory tree.\n\n"
 
         "  STEP 2  list_indexed_documents(filter_ext, filter_path)\n"
         "    Browse specific files when the user asks about a particular\n"
         "    document, company, or topic area.\n\n"
 
-        "  STEP 3  search_documents(query, n_results)\n"
+        "  STEP 3  list_directories()\n"
+        "    See the directory tree of all indexed content. Use this to\n"
+        "    identify the right scope for targeted searches.\n\n"
+
+        "  STEP 4  search_documents(query, n_results)\n"
         "    PRIMARY retrieval. Call MULTIPLE TIMES with different\n"
         "    phrasings to gather full context. Example:\n"
         "      search_documents('refund policy')\n"
         "      search_documents('money back guarantee')\n\n"
 
-        "  STEP 4  search_by_multiple_queries(queries)\n"
+        "  STEP 5  search_within_directory(query, directory, n_results)\n"
+        "    TARGETED retrieval. Use when the user asks about a specific\n"
+        "    case, project, client, or folder. Restricts search to only\n"
+        "    chunks from that directory tree — prevents cross-contamination.\n"
+        "    Example:\n"
+        "      search_within_directory('summary of damages', 'Smith_v_Jones')\n\n"
+
+        "  STEP 6  search_by_multiple_queries(queries)\n"
         "    Parallel search when a topic has synonyms or multiple angles.\n"
         "    More efficient than calling search_documents() repeatedly.\n\n"
 
-        "  STEP 5  get_chunk_context(filename, chunk_index)\n"
+        "  STEP 7  get_chunk_context(filename, chunk_index)\n"
         "    Expand around a result that appears cut off or references\n"
         "    content in the surrounding paragraphs.\n\n"
 
-        "  STEP 6  get_document_chunks(filename, start_chunk)\n"
+        "  STEP 8  get_document_chunks(filename, start_chunk)\n"
         "    Read a whole document sequentially for full summaries or\n"
         "    when the user asks about a specific document's contents.\n\n"
+
+        "DOCUMENT PROVENANCE — CRITICAL\n"
+        + "-" * 30 + "\n"
+        "  Every search result includes rich provenance metadata:\n"
+        "    - parent_directory: immediate folder name\n"
+        "    - directory_chain: breadcrumb path from root to file\n"
+        "    - document_id: SHA-256 content fingerprint (unique per file)\n"
+        "    - doc_title: extracted document title (from PDF/DOCX/PPTX)\n"
+        "    - file_modified: last modification date of the source file\n"
+        "    - [SOURCE: ...] header embedded in every chunk's text\n\n"
+
+        "  RULES FOR ANSWERING:\n"
+        "  1. ALWAYS verify that ALL chunks you cite come from the SAME\n"
+        "     document or directory group before synthesizing an answer.\n"
+        "  2. If chunks from DIFFERENT parent_directory values appear in\n"
+        "     results, explicitly tell the user which source each piece\n"
+        "     of information comes from.\n"
+        "  3. NEVER blend facts from chunks with different document_id or\n"
+        "     parent_directory values into a single statement without\n"
+        "     clear attribution.\n"
+        "  4. If the user asks about a specific case/project/client, use\n"
+        "     search_within_directory() to restrict search to that scope.\n"
+        "  5. When multiple files share the same name (e.g. 'complaint.pdf'\n"
+        "     in different case folders), use parent_directory and\n"
+        "     directory_chain to distinguish them for the user.\n\n"
 
         "KEY FACTS\n"
         + "-" * 30 + "\n"
@@ -747,6 +872,7 @@ def get_knowledge_base_overview() -> str:
 
     unique_files = {}
     ext_counts   = {}
+    dir_counts   = {}   # parent_directory → set of filepaths
     for m in metadatas:
         fp  = m.get('filepath', '')
         fn  = m.get('filename', fp)
@@ -755,6 +881,15 @@ def get_knowledge_base_overview() -> str:
             unique_files[fp] = {'filename': fn, 'extension': ext,
                                 'total_chunks': m.get('total_chunks', 1)}
         ext_counts[ext] = ext_counts.get(ext, 0) + 1
+
+        # Build directory tree from provenance metadata
+        parent_dir = m.get('parent_directory', '')
+        dir_chain  = m.get('directory_chain', '')
+        tree_key   = dir_chain if dir_chain else parent_dir
+        if tree_key:
+            if tree_key not in dir_counts:
+                dir_counts[tree_key] = set()
+            dir_counts[tree_key].add(fp)
 
     tracked_dirs = load_auto_update_list() or []
 
@@ -771,6 +906,13 @@ def get_knowledge_base_overview() -> str:
         pct = cnt / total_chunks * 100
         lines.append(f"  {ext:12s}  {cnt:5,} chunks  ({pct:.1f}%)")
 
+    if dir_counts:
+        lines.append("")
+        lines.append("Directory tree (by content location):")
+        for chain in sorted(dir_counts.keys()):
+            n_files = len(dir_counts[chain])
+            lines.append(f"  📁 {chain}  ({n_files} file{'s' if n_files != 1 else ''})")
+
     if tracked_dirs:
         lines.append("")
         lines.append("Tracked source directories:")
@@ -778,7 +920,11 @@ def get_knowledge_base_overview() -> str:
             lines.append(f"  - {d}")
 
     lines.append("")
-    lines.append("Next step: use search_documents(query) to find relevant content.")
+    lines.append(
+        "Next steps: search_documents(query) for broad search | "
+        "search_within_directory(query, dir) for targeted search | "
+        "list_directories() for full directory tree"
+    )
     return "\n".join(lines)
 
 
@@ -850,21 +996,38 @@ def search_documents(
         ext       = meta.get('extension', '')
         sim       = chunk.get('similarity', 0.0)
         content   = chunk.get('content', '').strip()
+
+        # ── Provenance fields (graceful fallback for pre-upgrade chunks) ──
+        dir_chain   = meta.get('directory_chain', '')
+        doc_id      = meta.get('document_id', '')
+        doc_title   = meta.get('doc_title', '')
+        file_mod    = meta.get('file_modified', '')
+        parent_dir  = meta.get('parent_directory', '')
+
         lines.append(
             f"[{i}] {filename}  chunk {chunk_idx+1}/{total_ch}  "
             f"similarity: {sim:.3f}  type: {ext}"
         )
-        if filepath and filepath != filename:
-            lines.append(f"     Path: {filepath}")
+        if dir_chain:
+            lines.append(f"    📁 {dir_chain}")
+        elif filepath and filepath != filename:
+            lines.append(f"    Path: {filepath}")
+        if doc_id:
+            lines.append(f"    📄 Document ID: {doc_id}")
+        if doc_title and doc_title != Path(filename).stem:
+            lines.append(f"    📝 Title: {doc_title}")
+        if file_mod:
+            lines.append(f"    ⏱  Modified: {file_mod[:10]}")
         lines.append("")
         lines.append(content)
         lines.append("")
         lines.append("-" * 55)
         lines.append("")
     lines.append(
-        "Tips: call search_documents() again with different query | "
+        "Tips: search_documents() again with different query | "
+        "search_within_directory(query, dir) for targeted results | "
         "get_chunk_context(filename, chunk_index) to expand | "
-        "get_document_chunks(filename) to read whole document"
+        "list_directories() to see indexed folder tree"
     )
     return "\n".join(lines)
 
@@ -1192,6 +1355,12 @@ def search_by_multiple_queries(
         also     = chunk.get('also_found_by', [])
         content  = chunk.get('content', '').strip()
 
+        # ── Provenance fields ──
+        dir_chain   = meta.get('directory_chain', '')
+        doc_id      = meta.get('document_id', '')
+        doc_title   = meta.get('doc_title', '')
+        file_mod    = meta.get('file_modified', '')
+
         found_note = f'found by: "{found_by}"'
         if also:
             found_note += f' (also: {", ".join(also)})'
@@ -1200,8 +1369,16 @@ def search_by_multiple_queries(
             f"[{i}] {fn}  chunk {cidx+1}/{total}  "
             f"similarity: {sim:.3f}  {found_note}"
         )
-        if fp and fp != fn:
-            lines.append(f"     Path: {fp}")
+        if dir_chain:
+            lines.append(f"    📁 {dir_chain}")
+        elif fp and fp != fn:
+            lines.append(f"    Path: {fp}")
+        if doc_id:
+            lines.append(f"    📄 Document ID: {doc_id}")
+        if doc_title and doc_title != Path(fn).stem:
+            lines.append(f"    📝 Title: {doc_title}")
+        if file_mod:
+            lines.append(f"    ⏱  Modified: {file_mod[:10]}")
         lines.append("")
         lines.append(content)
         lines.append("")
@@ -1209,7 +1386,259 @@ def search_by_multiple_queries(
         lines.append("")
 
     lines.append(
-        "Call get_chunk_context(filename, chunk_index) to expand any result."
+        "Tips: search_within_directory(query, dir) for targeted results | "
+        "get_chunk_context(filename, chunk_index) to expand any result."
+    )
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOL — search_within_directory  (Provenance-Aware Scoped Search)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def search_within_directory(
+    query: str,
+    directory: str,
+    n_results: int = 8,
+    min_similarity: float = 0.0,
+) -> str:
+    """
+    AGENTIC RAG - Directory-scoped search to prevent cross-contamination.
+    Searches ONLY within a specific directory tree, filtering by the
+    parent_directory or directory_chain metadata. Use this when the user
+    asks about a specific case, project, client, or folder and you need
+    to ensure results come only from that scope.
+    No Ollama required.
+
+    Args:
+        query:          Natural language search query.
+        directory:      Directory name or path fragment to restrict search to.
+                        Matches against parent_directory and directory_chain.
+                        Examples: 'Smith_v_Jones', '2024', 'Contracts'
+        n_results:      Number of chunks to return (default 8, max 20).
+        min_similarity: Filter chunks below this score 0.0-1.0 (default 0.0).
+
+    Returns:
+        Numbered list of matching chunks — all guaranteed to be from the
+        specified directory tree.
+    """
+    if not query.strip():
+        return "Query cannot be empty."
+    if not directory.strip():
+        return "Directory cannot be empty. Use search_documents() for unscoped search."
+
+    if not _prewarm_event.wait(timeout=60):
+        return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
+
+    n_results = min(max(1, n_results), 20)
+    dir_lower = directory.strip().lower()
+
+    try:
+        collection = _get_collection()
+    except RuntimeError as e:
+        return str(e)
+
+    # ── Strategy: fetch more results than requested, then filter by directory ──
+    # ChromaDB's `where` filter supports exact match on metadata fields.
+    # We try parent_directory exact match first (fastest).  If that yields
+    # too few results, fall back to a broader search + client-side filter
+    # on directory_chain (substring match).
+    try:
+        # Attempt 1: exact match on parent_directory
+        results = collection.query(
+            query_texts=[query],
+            n_results=min(n_results * 3, 60),
+            where={"parent_directory": directory.strip()}
+        )
+        chunks_raw = []
+        for i in range(len(results['documents'][0])):
+            chunks_raw.append({
+                'content':    results['documents'][0][i],
+                'metadata':   results['metadatas'][0][i],
+                'distance':   results['distances'][0][i],
+                'similarity': 1 - results['distances'][0][i],
+            })
+    except Exception:
+        chunks_raw = []
+
+    # Attempt 2: if exact match found nothing, do a broad search and
+    # filter client-side on directory_chain (case-insensitive substring)
+    if not chunks_raw:
+        try:
+            results = collection.query(
+                query_texts=[query],
+                n_results=min(n_results * 5, 100),
+            )
+            for i in range(len(results['documents'][0])):
+                meta = results['metadatas'][0][i]
+                chain = meta.get('directory_chain', '').lower()
+                parent = meta.get('parent_directory', '').lower()
+                fp = meta.get('filepath', '').lower()
+                if (dir_lower in chain or dir_lower in parent
+                        or dir_lower in fp):
+                    chunks_raw.append({
+                        'content':    results['documents'][0][i],
+                        'metadata':   meta,
+                        'distance':   results['distances'][0][i],
+                        'similarity': 1 - results['distances'][0][i],
+                    })
+        except Exception as exc:
+            return f"Search failed: {exc}"
+
+    if min_similarity > 0.0:
+        chunks_raw = [c for c in chunks_raw if c['similarity'] >= min_similarity]
+
+    # Limit to requested count
+    chunks_raw = chunks_raw[:n_results]
+
+    if not chunks_raw:
+        return (
+            f"No results found for '{query}' within directory '{directory}'.\n"
+            "Possible causes:\n"
+            f"  - No documents indexed from a directory matching '{directory}'\n"
+            "  - Try a broader search with search_documents() first\n"
+            "  - Call list_directories() to see available directory trees"
+        )
+
+    lines = [
+        f"Scoped search for: \"{query}\"",
+        f"Directory filter: \"{directory}\"",
+        f"Returning {len(chunks_raw)} chunk(s)",
+        "-" * 55, "",
+    ]
+    for i, chunk in enumerate(chunks_raw, 1):
+        meta      = chunk['metadata']
+        filename  = meta.get('filename', 'unknown')
+        chunk_idx = meta.get('chunk_index', 0)
+        total_ch  = meta.get('total_chunks', 1)
+        ext       = meta.get('extension', '')
+        sim       = chunk['similarity']
+        content   = chunk['content'].strip()
+        dir_chain = meta.get('directory_chain', '')
+        doc_id    = meta.get('document_id', '')
+        doc_title = meta.get('doc_title', '')
+        file_mod  = meta.get('file_modified', '')
+
+        lines.append(
+            f"[{i}] {filename}  chunk {chunk_idx+1}/{total_ch}  "
+            f"similarity: {sim:.3f}  type: {ext}"
+        )
+        if dir_chain:
+            lines.append(f"    📁 {dir_chain}")
+        if doc_id:
+            lines.append(f"    📄 Document ID: {doc_id}")
+        if doc_title and doc_title != Path(filename).stem:
+            lines.append(f"    📝 Title: {doc_title}")
+        if file_mod:
+            lines.append(f"    ⏱  Modified: {file_mod[:10]}")
+        lines.append("")
+        lines.append(content)
+        lines.append("")
+        lines.append("-" * 55)
+        lines.append("")
+
+    lines.append(
+        "All results are from the specified directory scope. "
+        "Use get_chunk_context(filename, chunk_index) to expand."
+    )
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOL — list_directories  (Directory Tree Discovery)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def list_directories() -> str:
+    """
+    AGENTIC RAG - Directory tree discovery.
+    Lists all indexed directory trees with document counts per directory.
+    Use this to understand the knowledge base structure and identify the
+    right directory scope for search_within_directory().
+    No Ollama required.
+
+    Returns:
+        Directory tree with file counts, sorted alphabetically.
+    """
+    if not _prewarm_event.wait(timeout=60):
+        return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
+
+    try:
+        collection = _get_collection()
+    except RuntimeError as e:
+        return str(e)
+
+    total_chunks = collection.count()
+    if total_chunks == 0:
+        return "Knowledge base is empty — no documents indexed yet."
+
+    try:
+        sample = collection.get(
+            limit=min(5000, total_chunks),
+            include=["metadatas"]
+        )
+        metadatas = sample.get('metadatas', [])
+    except Exception as exc:
+        return f"Could not read knowledge base: {exc}"
+
+    # Build directory tree: directory_chain → set of unique filepaths
+    dir_tree = {}       # chain → set(filepath)
+    parent_dirs = {}    # parent_directory → set(filepath)
+    for m in metadatas:
+        fp    = m.get('filepath', '')
+        chain = m.get('directory_chain', '')
+        pdir  = m.get('parent_directory', '')
+
+        if chain:
+            if chain not in dir_tree:
+                dir_tree[chain] = set()
+            dir_tree[chain].add(fp)
+
+        if pdir:
+            if pdir not in parent_dirs:
+                parent_dirs[pdir] = set()
+            parent_dirs[pdir].add(fp)
+
+    if not dir_tree and not parent_dirs:
+        return (
+            "No directory provenance metadata found.\n"
+            "This likely means the documents were indexed before the\n"
+            "provenance system was added.  Re-index your directories\n"
+            "to add directory_chain metadata to all chunks."
+        )
+
+    lines = [
+        "AI-Prowler — Indexed Directory Tree",
+        "=" * 50,
+        "",
+    ]
+
+    if dir_tree:
+        lines.append("Directory chains (full breadcrumb paths):")
+        lines.append("-" * 40)
+        total_files = 0
+        for chain in sorted(dir_tree.keys()):
+            n = len(dir_tree[chain])
+            total_files += n
+            lines.append(f"  📁 {chain}  ({n} file{'s' if n != 1 else ''})")
+        lines.append("")
+        lines.append(f"Total: {len(dir_tree)} directories, {total_files} files")
+    elif parent_dirs:
+        lines.append("Parent directories (immediate folder names):")
+        lines.append("-" * 40)
+        total_files = 0
+        for pdir in sorted(parent_dirs.keys()):
+            n = len(parent_dirs[pdir])
+            total_files += n
+            lines.append(f"  📁 {pdir}  ({n} file{'s' if n != 1 else ''})")
+        lines.append("")
+        lines.append(f"Total: {len(parent_dirs)} directories, {total_files} files")
+
+    lines.append("")
+    lines.append(
+        "Use search_within_directory(query, directory_name) to search "
+        "within a specific directory."
     )
     return "\n".join(lines)
 
@@ -2764,26 +3193,50 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
 
     PUBLIC_BASE = public_base.rstrip("/")   # passed in from CLI / config.json
 
+    def _get_public_base(request: Request = None, scope: dict = None) -> str:
+        """Derive the public base URL dynamically from the request.
+
+        If a Request or ASGI scope is provided, use the Host header so that
+        OAuth endpoints always point back to the URL Claude is actually
+        connecting through — whether that's a Named Tunnel, Quick Tunnel,
+        or localhost.  Falls back to the configured PUBLIC_BASE if the
+        Host header isn't available.
+        """
+        host = ''
+        if request is not None:
+            host = request.headers.get('host', '') or request.headers.get('x-forwarded-host', '')
+        elif scope is not None:
+            headers = {k.lower(): v for k, v in scope.get("headers", [])}
+            host = (headers.get(b"host", b"")
+                    or headers.get(b"x-forwarded-host", b"")).decode("utf-8", errors="ignore")
+        if host:
+            # Use https for any non-localhost host
+            scheme = "http" if host.startswith("127.") or host.startswith("localhost") else "https"
+            return f"{scheme}://{host}"
+        return PUBLIC_BASE
+
     # ── OAuth discovery endpoints ─────────────────────────────────────────────
     async def oauth_protected_resource(request: Request):
         """RFC 9728 — OAuth 2.0 Protected Resource Metadata.
         Claude.ai fetches THIS endpoint first when it receives a 401.
         It tells Claude where the authorization server lives.
         """
+        base = _get_public_base(request)
         return JSONResponse({
-            "resource": f"{PUBLIC_BASE}/mcp",
-            "authorization_servers": [PUBLIC_BASE],
+            "resource": f"{base}/mcp",
+            "authorization_servers": [base],
         })
 
     async def oauth_metadata(request: Request):
         """RFC 8414 — OAuth 2.0 Authorization Server Metadata.
         Claude.ai fetches this second, using the AS URL from above.
         """
+        base = _get_public_base(request)
         return JSONResponse({
-            "issuer": PUBLIC_BASE,
-            "authorization_endpoint": f"{PUBLIC_BASE}/authorize",
-            "token_endpoint": f"{PUBLIC_BASE}/token",
-            "registration_endpoint": f"{PUBLIC_BASE}/register",
+            "issuer": base,
+            "authorization_endpoint": f"{base}/authorize",
+            "token_endpoint": f"{base}/token",
+            "registration_endpoint": f"{base}/register",
             "response_types_supported": ["code"],
             "grant_types_supported": ["authorization_code"],
             "code_challenge_methods_supported": ["S256", "plain"],
@@ -2991,11 +3444,13 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
             tok  = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
 
             if tok not in _access_tokens:
-                # Return 401 without touching the downstream app at all
+                # Return 401 — derive public base from the Host header
+                # so Claude discovers OAuth endpoints at the correct URL
+                _dyn_base = _get_public_base(scope=scope)
                 body = b'{"error":"unauthorized","error_description":"Invalid or missing Bearer token"}'
                 www_auth = (
-                    f'Bearer realm="{PUBLIC_BASE}", '
-                    f'resource_metadata="{PUBLIC_BASE}/.well-known/oauth-protected-resource"'
+                    f'Bearer realm="{_dyn_base}", '
+                    f'resource_metadata="{_dyn_base}/.well-known/oauth-protected-resource"'
                 ).encode()
                 await send({"type": "http.response.start", "status": 401,
                             "headers": [

@@ -5,7 +5,7 @@ Modern GUI for AI Prowler Document Indexing and Querying
 """
 
 import tkinter as tk
-from tkinter import ttk, filedialog, scrolledtext, messagebox
+from tkinter import ttk, filedialog, scrolledtext, messagebox, simpledialog
 import threading
 import time
 import subprocess
@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 import queue
 import os
+from datetime import datetime
 
 # ── Errno 22 / double-backslash HuggingFace path fix ─────────────────────────
 # MUST be set before ANY import that could transitively pull in huggingface_hub
@@ -37,6 +38,32 @@ import webbrowser
 # Ensure script directory is on sys.path so rag_preprocessor.py is always found
 # even when launched via desktop icon
 sys.path.insert(0, str(Path(__file__).parent.resolve()))
+
+# ── pythonw.exe stdout/stderr safety ──────────────────────────────────────
+# pythonw.exe sets sys.stdout and sys.stderr to None, which causes print()
+# and any logging to crash with AttributeError.  Redirect to devnull.
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, 'w')
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, 'w')
+
+# ── Application version ──────────────────────────────────────────────────────
+# Single source of truth for the app version. Bump this one line when releasing
+# a new version; all UI labels, About dialogs, help text, and update checks
+# read from here.
+APP_VERSION = "6.0.0"
+
+# ── Telemetry ────────────────────────────────────────────────────────────────
+# Anonymous heartbeat phone-home. See cloudflare-worker/ for the receiver.
+# The endpoint can be overridden in ~/.ai-prowler/config.json under the key
+# "telemetry_endpoint". Telemetry can be turned off in Settings.
+_TELEMETRY_DEFAULT_ENDPOINT = (
+    "https://ai-prowler-telemetry.david-vavro1.workers.dev"
+)
+_TELEMETRY_HEARTBEAT_INTERVAL_SEC = 24 * 3600   # daily
+_TELEMETRY_FIRST_DELAY_SEC = 5 * 60             # wait 5 min after launch
+_TELEMETRY_RETRY_DELAY_SEC = 60 * 60            # 1h backoff on failure
+
 
 # ── Optional speech-to-text packages ────────────────────────────────────────
 # Both packages are optional — if missing the mic button is simply hidden.
@@ -308,6 +335,7 @@ class MultiFolderDialog:
 
         self._tree.bind('<Double-1>', self._on_double_click)
         self._tree.bind('<Return>',   self._on_enter_key)
+        self._tree.bind('<<TreeviewOpen>>', self._on_tree_open)
 
         # Right: selection staging list
         right = ttk.Frame(pane)
@@ -451,6 +479,21 @@ class MultiFolderDialog:
         """Enter key: same as double-click."""
         self._on_double_click(event)
 
+    def _on_tree_open(self, event):
+        """Fired when a tree node is expanded via the arrow toggle.
+
+        Replaces the lazy '…' placeholder with actual folder/file entries
+        so files are always visible when a folder is opened — whether by
+        double-click, arrow click, or keyboard expand.
+        """
+        iid = self._tree.focus()
+        if not iid:
+            return
+        # Check if children are still just the '…' placeholder
+        children = self._tree.get_children(iid)
+        if len(children) == 1 and self._tree.item(children[0], 'text') == '…':
+            self._expand_node(iid)
+
     def _go_up(self):
         """Navigate to the parent of the currently focused tree node."""
         iid = self._tree.focus()
@@ -519,14 +562,15 @@ class MultiFolderDialog:
 class RAGGui:
     def __init__(self, root):
         self.root = root
-        self.root.title("AI-Prowler — Agentic RAG Knowledge Base v5.0.0")
-        self.root.geometry("1200x700")
+        self.root.title(f"AI-Prowler — Agentic RAG Knowledge Base v{APP_VERSION}")
+        self.root.geometry("1200x980")
         
         # Set icon (if available)
         try:
-            # self.root.iconbitmap('icon.ico')
-            pass
-        except:
+            _icon_path = Path(__file__).parent / 'rag_icon.ico'
+            if _icon_path.exists():
+                self.root.iconbitmap(str(_icon_path))
+        except Exception:
             pass
         
         # Set up window close handler to stop Ollama if we started it
@@ -712,6 +756,12 @@ class RAGGui:
         """Create menu bar"""
         menubar = tk.Menu(self.root)
         self.root.config(menu=menubar)
+
+        # File menu
+        file_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="File", menu=file_menu)
+        file_menu.add_command(label="🚪 Exit AI-Prowler",
+                              command=self._on_window_close)
         
         # Help menu
         help_menu = tk.Menu(menubar, tearoff=0)
@@ -719,6 +769,14 @@ class RAGGui:
         
         help_menu.add_command(label="📖 User Guide", command=self.show_user_guide)
         help_menu.add_command(label="🚀 Quick Start", command=self.show_quick_start)
+        help_menu.add_separator()
+        help_menu.add_command(label="☁️ Cloudflare Tunnel Setup",
+                              command=self.show_cloudflare_setup_guide)
+        help_menu.add_command(label="🔌 Connect Claude.ai",
+                              command=self.show_claude_connector_guide)
+        help_menu.add_separator()
+        help_menu.add_command(label="🔔 Notifications Status",
+                              command=self.show_notifications_status)
         help_menu.add_separator()
         help_menu.add_command(label="ℹ️ About AI Prowler", command=self.show_about)
     
@@ -732,8 +790,8 @@ class RAGGui:
     
     def show_about(self):
         """Show about dialog"""
-        about_text = """AI-Prowler — Agentic RAG Knowledge Base
-Version 5.0.0
+        about_text = f"""AI-Prowler — Agentic RAG Knowledge Base
+Version {APP_VERSION}
 
 Your personal AI assistant that answers questions about YOUR documents.
 
@@ -764,7 +822,583 @@ Small Business Service Tools (🏢 tab):
 Built with Python, ChromaDB, and Claude"""
         
         messagebox.showinfo("About AI Prowler", about_text)
-    
+
+    def show_notifications_status(self):
+        """Display a diagnostic popup with cached notifications, dismissed
+        IDs, and source URL — plus refresh / clear-dismissed buttons.
+
+        This is a status / debugging tool, not a normal user feature.
+        Useful for verifying that the notification fetch is working and
+        for un-dismissing test banners.
+        """
+        win = tk.Toplevel(self.root)
+        win.title("Notifications Status")
+        win.geometry("820x620")
+
+        text_widget = scrolledtext.ScrolledText(
+            win, wrap=tk.WORD, font=('Consolas', 9))
+        text_widget.pack(fill='both', expand=True, padx=10, pady=(10, 6))
+
+        # Configure text tags for color-coded sections
+        text_widget.tag_configure('header',
+                                   font=('Consolas', 11, 'bold'),
+                                   foreground='#003366')
+        text_widget.tag_configure('label',
+                                   font=('Consolas', 9, 'bold'))
+        text_widget.tag_configure('ok', foreground='#006600')
+        text_widget.tag_configure('warn', foreground='#aa6600')
+        text_widget.tag_configure('err', foreground='#aa0000')
+        text_widget.tag_configure('dim', foreground='#666666')
+
+        def _render():
+            """Build the popup contents from current files on disk."""
+            text_widget.config(state='normal')
+            text_widget.delete('1.0', tk.END)
+
+            # ── Source URL ────────────────────────────────────────
+            text_widget.insert(tk.END, "Source\n", 'header')
+            text_widget.insert(tk.END, "  URL:   ", 'label')
+            text_widget.insert(tk.END,
+                f"{getattr(self, '_notif_url', '(not set)')}\n")
+            text_widget.insert(tk.END, "  Cache: ", 'label')
+            text_widget.insert(tk.END, f"{self._notif_cache_path}\n")
+            text_widget.insert(tk.END, "  Dismissed: ", 'label')
+            text_widget.insert(tk.END, f"{self._dismissed_path}\n\n")
+
+            # ── Cache file status ────────────────────────────────
+            text_widget.insert(tk.END, "Cache File\n", 'header')
+            cache_data = None
+            if self._notif_cache_path.exists():
+                try:
+                    mtime = datetime.fromtimestamp(
+                        self._notif_cache_path.stat().st_mtime)
+                    age_sec = (datetime.now() - mtime).total_seconds()
+                    if age_sec < 60:
+                        age_str = f"{int(age_sec)}s ago"
+                    elif age_sec < 3600:
+                        age_str = f"{int(age_sec / 60)}m ago"
+                    elif age_sec < 86400:
+                        age_str = f"{int(age_sec / 3600)}h ago"
+                    else:
+                        age_str = f"{int(age_sec / 86400)}d ago"
+
+                    text_widget.insert(tk.END, "  Last fetch: ", 'label')
+                    text_widget.insert(tk.END,
+                        f"{mtime.strftime('%Y-%m-%d %H:%M:%S')} "
+                        f"({age_str})\n", 'ok')
+
+                    with open(self._notif_cache_path, 'r',
+                              encoding='utf-8') as f:
+                        cache_data = json.load(f)
+
+                    text_widget.insert(tk.END, "  Size: ", 'label')
+                    text_widget.insert(tk.END,
+                        f"{self._notif_cache_path.stat().st_size} bytes\n")
+
+                    latest_v = cache_data.get('latest_version', '')
+                    if latest_v:
+                        text_widget.insert(tk.END,
+                            "  Latest version (from server): ", 'label')
+                        # Highlight if newer than running version
+                        try:
+                            from packaging.version import Version
+                            is_newer = (
+                                Version(latest_v) > Version(APP_VERSION))
+                        except Exception:
+                            is_newer = latest_v != APP_VERSION
+                        tag = 'warn' if is_newer else 'ok'
+                        suffix = (
+                            f"  (running: v{APP_VERSION}"
+                            f"{' — UPDATE AVAILABLE' if is_newer else ''})")
+                        text_widget.insert(tk.END,
+                            f"v{latest_v}{suffix}\n", tag)
+                except Exception as e:
+                    text_widget.insert(tk.END,
+                        f"  ERROR reading cache: {e}\n", 'err')
+            else:
+                text_widget.insert(tk.END,
+                    "  (no cache file — fetch has never succeeded)\n",
+                    'warn')
+            text_widget.insert(tk.END, "\n")
+
+            # ── Dismissed list ───────────────────────────────────
+            text_widget.insert(tk.END, "Dismissed Notifications\n",
+                                'header')
+            dismissed = set()
+            if self._dismissed_path.exists():
+                try:
+                    dismissed = set(json.loads(
+                        self._dismissed_path.read_text(encoding='utf-8')))
+                except Exception as e:
+                    text_widget.insert(tk.END,
+                        f"  ERROR reading dismissed list: {e}\n", 'err')
+            if dismissed:
+                for d_id in sorted(dismissed):
+                    text_widget.insert(tk.END, f"  • {d_id}\n", 'dim')
+            else:
+                text_widget.insert(tk.END, "  (none)\n", 'dim')
+            text_widget.insert(tk.END, "\n")
+
+            # ── Notifications in cache ───────────────────────────
+            text_widget.insert(tk.END, "Cached Notifications\n", 'header')
+            if not cache_data:
+                text_widget.insert(tk.END,
+                    "  (no cache available)\n", 'dim')
+            else:
+                notifs = cache_data.get('notifications', [])
+                if not notifs:
+                    text_widget.insert(tk.END,
+                        "  (cache file present but no notifications)\n",
+                        'dim')
+                else:
+                    today_str = datetime.now().strftime('%Y-%m-%d')
+                    for i, n in enumerate(notifs, 1):
+                        nid = n.get('id', '(no id)')
+                        title = n.get('title', '(no title)')
+                        body = n.get('body', '')
+                        # Accept both schemas — start_date/end_date (current)
+                        # and show_after/show_until (legacy)
+                        start = (n.get('start_date', '')
+                                 or n.get('show_after', ''))
+                        end = (n.get('end_date', '')
+                               or n.get('show_until', ''))
+                        show_once = n.get('show_once', False)
+
+                        # Determine current display state
+                        states = []
+                        if nid in dismissed:
+                            states.append(('dismissed', 'dim'))
+                        if start and today_str < start:
+                            states.append(('not-yet-active', 'warn'))
+                        if end and today_str > end:
+                            states.append(('expired', 'dim'))
+                        if not states:
+                            states.append(('SHOWING', 'ok'))
+
+                        text_widget.insert(tk.END,
+                            f"  [{i}] {title}\n", 'label')
+                        text_widget.insert(tk.END, f"      id:     ",
+                                            'dim')
+                        text_widget.insert(tk.END, f"{nid}\n")
+                        if body:
+                            text_widget.insert(tk.END, f"      body:   ",
+                                                'dim')
+                            text_widget.insert(tk.END, f"{body}\n")
+                        text_widget.insert(tk.END, f"      dates:  ",
+                                            'dim')
+                        text_widget.insert(tk.END,
+                            f"{start or '(open)'} → {end or '(open)'}"
+                            f"   show_once={show_once}\n")
+                        text_widget.insert(tk.END, f"      state:  ",
+                                            'dim')
+                        for label, tag in states:
+                            text_widget.insert(tk.END, f"{label} ", tag)
+                        text_widget.insert(tk.END, "\n\n")
+
+            text_widget.config(state='disabled')
+
+        def _refresh_now():
+            """Trigger a fresh fetch and re-render after a brief delay."""
+            try:
+                self._refresh_welcome_ad()
+                # Give the daemon thread ~1.5s to write the cache, then
+                # re-render. The fetch is async, so this isn't perfect,
+                # but it's close enough for a manual debug tool.
+                win.after(1500, _render)
+            except Exception as e:
+                messagebox.showerror("Refresh failed", str(e), parent=win)
+
+        def _clear_dismissed():
+            """Wipe the dismissed-IDs file so all banners reappear."""
+            if not messagebox.askyesno(
+                    "Clear dismissed list?",
+                    "Reset the dismissed-notifications list?\n\n"
+                    "All banners you've dismissed with the X button "
+                    "will reappear on the Welcome tab.",
+                    parent=win):
+                return
+            try:
+                if self._dismissed_path.exists():
+                    self._dismissed_path.unlink()
+                # Re-display from cache so the Welcome tab updates too
+                if self._notif_cache_path.exists():
+                    with open(self._notif_cache_path, 'r',
+                              encoding='utf-8') as f:
+                        self._display_notifications(json.load(f))
+                _render()
+            except Exception as e:
+                messagebox.showerror("Clear failed", str(e), parent=win)
+
+        # ── Button row ─────────────────────────────────────────────
+        btn_row = ttk.Frame(win)
+        btn_row.pack(fill='x', padx=10, pady=(0, 10))
+
+        ttk.Button(btn_row, text="🔄 Refresh Now",
+                   command=_refresh_now).pack(side='left')
+        ttk.Button(btn_row, text="🗑 Clear Dismissed",
+                   command=_clear_dismissed).pack(side='left', padx=(8, 0))
+        ttk.Button(btn_row, text="Close",
+                   command=win.destroy).pack(side='right')
+
+        _render()
+
+    # ════════════════════════════════════════════════════════════════════════
+    # Visual setup guides — Cloudflare Tunnel + Claude.ai Connector
+    # ════════════════════════════════════════════════════════════════════════
+
+    def _open_guide_window(self, title, sections, deep_links=None,
+                           extra_buttons=None, width=820, height=640):
+        """Generic guide-window factory used by both Cloudflare and Claude
+        connector guides.
+
+        sections: list of (heading, body_lines) tuples — body_lines is a list
+                  of strings, where strings starting with a digit + '.' are
+                  rendered as numbered steps.
+        deep_links: list of (label, url) tuples — rendered as buttons that
+                    open in the user's default browser.
+        extra_buttons: list of (label, callable) tuples — additional helper
+                       buttons (e.g. "Copy Bearer Token").
+        """
+        win = tk.Toplevel(self.root)
+        win.title(title)
+        win.geometry(f"{width}x{height}")
+
+        text_widget = scrolledtext.ScrolledText(
+            win, wrap=tk.WORD, font=('Arial', 10), padx=8, pady=8)
+        text_widget.pack(fill='both', expand=True, padx=10, pady=(10, 6))
+
+        # Style tags
+        text_widget.tag_configure('title',
+                                   font=('Arial', 12, 'bold'),
+                                   foreground='#003366',
+                                   spacing3=8)
+        text_widget.tag_configure('heading',
+                                   font=('Arial', 10, 'bold'),
+                                   foreground='#004488',
+                                   spacing1=10, spacing3=4)
+        text_widget.tag_configure('step',
+                                   font=('Arial', 10),
+                                   lmargin1=20, lmargin2=40,
+                                   spacing3=4)
+        text_widget.tag_configure('note',
+                                   font=('Arial', 9, 'italic'),
+                                   foreground='#666666',
+                                   lmargin1=20, lmargin2=20,
+                                   spacing3=6)
+        text_widget.tag_configure('mono',
+                                   font=('Consolas', 9),
+                                   background='#f0f0f0')
+        text_widget.tag_configure('warn',
+                                   font=('Arial', 9, 'bold'),
+                                   foreground='#aa6600',
+                                   lmargin1=20, lmargin2=20)
+
+        # Render sections
+        text_widget.insert(tk.END, f"{title}\n", 'title')
+        for heading, body_lines in sections:
+            text_widget.insert(tk.END, f"\n{heading}\n", 'heading')
+            for line in body_lines:
+                stripped = line.lstrip()
+                if stripped.startswith('NOTE:'):
+                    text_widget.insert(tk.END,
+                        stripped[5:].lstrip() + "\n", 'note')
+                elif stripped.startswith('WARN:'):
+                    text_widget.insert(tk.END,
+                        "⚠  " + stripped[5:].lstrip() + "\n", 'warn')
+                else:
+                    text_widget.insert(tk.END, line + "\n", 'step')
+
+        text_widget.config(state='disabled')
+
+        # Deep-link buttons row (above bottom buttons)
+        if deep_links:
+            link_row = ttk.Frame(win)
+            link_row.pack(fill='x', padx=10, pady=(0, 4))
+            ttk.Label(link_row, text="Open in browser:",
+                      font=('Arial', 9, 'bold')
+                      ).pack(side='left', padx=(0, 8))
+            for label, url in deep_links:
+                ttk.Button(link_row, text=label,
+                           command=lambda u=url: webbrowser.open(u)
+                           ).pack(side='left', padx=(0, 6))
+
+        # Bottom button row (helpers + close)
+        btn_row = ttk.Frame(win)
+        btn_row.pack(fill='x', padx=10, pady=(4, 10))
+
+        if extra_buttons:
+            for label, cmd in extra_buttons:
+                ttk.Button(btn_row, text=label,
+                           command=cmd).pack(side='left', padx=(0, 6))
+
+        ttk.Button(btn_row, text="Close",
+                   command=win.destroy).pack(side='right')
+
+        return win
+
+    def show_cloudflare_setup_guide(self):
+        """Visual guide for creating a free Cloudflare account + Named Tunnel
+        and obtaining the public hostname + tunnel token to paste into the
+        Settings tab."""
+
+        sections = [
+            ("Why Named Tunnels?", [
+                "A Named Tunnel gives you a permanent URL like",
+                "    https://ai-prowler.yourdomain.com/mcp",
+                "that survives restarts. Quick Tunnel URLs change every time.",
+                "",
+                "NOTE: Free Cloudflare accounts and free tier tunnels are sufficient.",
+                "NOTE: You will need a domain name. Cloudflare Registrar sells",
+                "      domains at cost (~$10/year for .com), or you can transfer",
+                "      an existing domain.",
+            ]),
+
+            ("Step 1 — Create a Cloudflare account (free)", [
+                "1. Open dash.cloudflare.com (button below).",
+                "2. Click 'Sign Up' and create a free account with email + password.",
+                "3. Verify your email.",
+            ]),
+
+            ("Step 2 — Add or register a domain", [
+                "1. After login, click 'Add a site' on the dashboard.",
+                "2. Enter a domain you own — or click 'Register a domain' to buy",
+                "   one from Cloudflare Registrar at cost.",
+                "3. Choose the Free plan when prompted.",
+                "4. If you brought an existing domain, follow Cloudflare's",
+                "   instructions to update your nameservers at your registrar.",
+                "   Cloudflare emails you when DNS propagates (usually <1 hour).",
+                "",
+                "NOTE: You can skip this step if you don't want a custom domain —",
+                "      use the Quick Tunnel option in Settings instead.",
+            ]),
+
+            ("Step 3 — Open Cloudflare Zero Trust", [
+                "1. From the main Cloudflare dashboard, click 'Zero Trust' in the",
+                "   left sidebar (or open one.dash.cloudflare.com directly).",
+                "2. If prompted, choose the Free plan and enter a team name",
+                "   (any name; this is just for your dashboard).",
+                "3. You may be asked for a payment method — Cloudflare Zero Trust",
+                "   Free tier supports up to 50 users at $0/month, but a card",
+                "   on file is required to confirm you're not a bot.",
+            ]),
+
+            ("Step 4 — Create a tunnel", [
+                "1. In Zero Trust, click 'Networks' → 'Tunnels' in the left menu.",
+                "2. Click 'Create a tunnel'.",
+                "3. Choose connector type: 'Cloudflared'.",
+                "4. Name your tunnel (e.g. 'ai-prowler-' + your name).",
+                "5. Click 'Save tunnel'.",
+            ]),
+
+            ("Step 5 — Copy the tunnel token", [
+                "1. On the 'Install and run a connector' screen, find the",
+                "   command that looks like:",
+                "       cloudflared.exe service install eyJ...long-string...",
+                "2. The long string after 'install' is your TUNNEL TOKEN.",
+                "3. Copy ONLY that string (not the whole command).",
+                "4. Paste it into the Settings tab → 'Tunnel token' field in",
+                "   AI-Prowler.",
+                "",
+                "WARN: Treat this token like a password. Anyone with it can",
+                "      impersonate your tunnel.",
+            ]),
+
+            ("Step 6 — Configure the public hostname", [
+                "1. Click 'Next' on the connector screen.",
+                "2. Under 'Public Hostname', set:",
+                "       Subdomain:  ai-prowler  (or any name you like)",
+                "       Domain:     yourdomain.com  (the one from Step 2)",
+                "       Path:       (leave blank)",
+                "3. Under 'Service', set:",
+                "       Type:  HTTP",
+                "       URL:   localhost:8080  (or whatever port AI-Prowler",
+                "                               uses — check Settings tab)",
+                "4. Click 'Save tunnel'.",
+                "5. Your full hostname is now: ai-prowler.yourdomain.com",
+                "6. Paste this into the Settings tab → 'Public hostname' field",
+                "   in AI-Prowler.",
+            ]),
+
+            ("Step 7 — Activate in AI-Prowler", [
+                "1. Back in AI-Prowler Settings → Remote Access:",
+                "   • Public hostname: ai-prowler.yourdomain.com",
+                "   • Tunnel token:    eyJ...your-token...",
+                "2. Click 'Activate' to install cloudflared as a Windows service.",
+                "   (You'll see a UAC prompt — this is normal.)",
+                "3. The status indicator should turn green.",
+                "4. Now click 'How to Connect Claude →' to finish the setup",
+                "   on Claude.ai.",
+            ]),
+        ]
+
+        deep_links = [
+            ("Cloudflare Dashboard",
+             "https://dash.cloudflare.com/sign-up"),
+            ("Zero Trust",
+             "https://one.dash.cloudflare.com/"),
+            ("Tunnels",
+             "https://one.dash.cloudflare.com/?to=/:account/networks/tunnels"),
+        ]
+
+        extra_buttons = [
+            ("📖 Next: Connect Claude.ai →",
+             self.show_claude_connector_guide),
+        ]
+
+        self._open_guide_window(
+            "Cloudflare Tunnel Setup Guide",
+            sections, deep_links=deep_links,
+            extra_buttons=extra_buttons,
+            width=860, height=680)
+
+    def show_claude_connector_guide(self):
+        """Visual guide for adding the AI-Prowler MCP connector to Claude.ai
+        — uses the saved tunnel hostname and bearer token from config to
+        offer one-click copy."""
+
+        # Load current config to surface the URL + token
+        url = ""
+        token = ""
+        try:
+            cfg_path = Path.home() / '.ai-prowler' / 'config.json'
+            if cfg_path.exists():
+                cfg = json.loads(cfg_path.read_text(encoding='utf-8'))
+                domain = cfg.get('tunnel_domain', '').strip()
+                if domain:
+                    # Strip protocol/path if user pasted full URL
+                    domain = domain.replace('https://', '').replace(
+                        'http://', '').rstrip('/')
+                    url = f"https://{domain}/mcp"
+                token = cfg.get('remote_token', '')
+        except Exception:
+            pass
+
+        # Body that adapts based on what's configured
+        url_line = url if url else "(not yet configured — see Step 1 below)"
+        token_status = "✓ saved" if token else "✗ not yet set"
+
+        sections = [
+            ("Your connection details", [
+                f"URL:           {url_line}",
+                f"Bearer Token:  {token_status}",
+                "",
+                "NOTE: Use the buttons at the bottom to copy URL and token to",
+                "      your clipboard right before pasting into Claude.ai.",
+            ]),
+
+            ("Step 0 — Prerequisites", [
+                "Before connecting Claude, make sure:",
+                "1. AI-Prowler HTTP server is running (Settings → Start HTTP Server).",
+                "2. A tunnel is active — either Quick Tunnel or Named Tunnel.",
+                "3. Your Bearer Token is saved (Settings → Bearer Token field).",
+                "",
+                "NOTE: If you haven't set up a tunnel yet, click",
+                "      'Setup Cloudflare Tunnel' in Settings first.",
+            ]),
+
+            ("Step 1 — Open Claude.ai settings", [
+                "1. Click 'Open Claude.ai' below — it takes you to the right page.",
+                "2. Sign in with your Claude Pro account.",
+                "3. Look for 'Connectors' in the left sidebar of Settings.",
+                "",
+                "NOTE: Claude Pro ($20/month) is required for MCP connectors.",
+                "      Free Claude accounts cannot use custom connectors.",
+            ]),
+
+            ("Step 2 — Add a custom connector", [
+                "1. Scroll to the bottom of the Connectors list.",
+                "2. Click 'Add custom connector'  (or 'Add MCP server' depending",
+                "   on the Claude.ai version).",
+                "3. A dialog will open asking for connector details.",
+            ]),
+
+            ("Step 3 — Fill in the connector form", [
+                "Name:           AI-Prowler",
+                "Description:    My personal knowledge base",
+                "MCP Server URL: (click 'Copy URL' below, then paste)",
+                "",
+                "When prompted for authentication:",
+                "  Authentication type:  Bearer Token  (or 'API Key')",
+                "  Token:                (click 'Copy Bearer Token' below,",
+                "                         then paste)",
+                "",
+                "WARN: The token is sent to Claude's servers. This is normal",
+                "      and required for Claude to authenticate with your tunnel.",
+            ]),
+
+            ("Step 4 — Save and verify", [
+                "1. Click 'Save' or 'Connect'.",
+                "2. Claude will attempt to connect to your tunnel.",
+                "3. If successful, you'll see 'Connected' or a green indicator.",
+                "4. The 22 AI-Prowler tools will be listed (search_documents,",
+                "   add_and_index_directory, get_route_optimization, etc.).",
+            ]),
+
+            ("Step 5 — Test it", [
+                "Open a new chat with Claude and try one of these:",
+                "",
+                "  • 'What documents do I have indexed in AI-Prowler?'",
+                "  • 'Search my documents for [topic].'",
+                "  • 'Show me the chunks containing [keyword].'",
+                "",
+                "Claude should respond using your local knowledge base.",
+            ]),
+
+            ("Troubleshooting", [
+                "Connection fails / 401 Unauthorized:",
+                "  → Bearer token mismatch. Re-copy from AI-Prowler Settings.",
+                "",
+                "Connection fails / 502 Bad Gateway:",
+                "  → Tunnel running but HTTP server not started, or tunnel",
+                "    pointing to wrong port. Check Settings → Server Status.",
+                "",
+                "Connection fails / DNS error:",
+                "  → Named Tunnel hostname not yet propagated (wait 5 min)",
+                "    or typo in hostname. For Quick Tunnel, the URL changes",
+                "    every restart — re-copy it.",
+                "",
+                "Claude doesn't see the connector:",
+                "  → MCP connectors require Claude Pro. Free accounts don't",
+                "    have this feature.",
+            ]),
+        ]
+
+        deep_links = [
+            ("Open Claude.ai", "https://claude.ai/"),
+            ("Claude Settings", "https://claude.ai/settings/connectors"),
+        ]
+
+        # Helper buttons that copy to clipboard with feedback
+        def _copy_to_clipboard(text, label):
+            if not text:
+                messagebox.showwarning(
+                    f"{label} not set",
+                    f"No {label.lower()} is configured yet.\n\n"
+                    "Set it up in Settings tab first.")
+                return
+            try:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(text)
+                self.root.update()  # required on Windows for clipboard to stick
+                self.status_var.set(f"{label} copied to clipboard")
+                self.root.after(3000,
+                                lambda: self.status_var.set("Ready"))
+            except Exception as e:
+                messagebox.showerror("Copy failed", str(e))
+
+        extra_buttons = [
+            ("📋 Copy URL",
+             lambda: _copy_to_clipboard(url, "URL")),
+            ("📋 Copy Bearer Token",
+             lambda: _copy_to_clipboard(token, "Bearer Token")),
+        ]
+
+        self._open_guide_window(
+            "Connect Claude.ai to AI-Prowler",
+            sections, deep_links=deep_links,
+            extra_buttons=extra_buttons,
+            width=860, height=680)
+
     def show_help_window(self, title, content):
         """Show help content in new window"""
         help_window = tk.Toplevel(self.root)
@@ -787,8 +1421,8 @@ Built with Python, ChromaDB, and Claude"""
     
     def get_quick_start_content(self):
         """Get quick start guide content"""
-        return """AI-PROWLER QUICK START GUIDE
-Version 5.0.0
+        return f"""AI-PROWLER QUICK START GUIDE
+Version {APP_VERSION}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   ⭐  RECOMMENDED: AGENTIC RAG WITH CLAUDE DESKTOP
@@ -952,22 +1586,24 @@ or from the Help menu."""
         self.notebook.pack(fill='both', expand=True, padx=5, pady=5)
         
         # Create tabs — ORDER MATTERS: _TAB_INDEX_* constants must match insertion order
-        self.create_query_tab()            # 0  ← Ask Questions (prewarmed on switch)
-        self.create_index_tab()            # 1
-        self.create_update_tab()           # 2
-        self.create_scan_config_tab()      # 3
-        self.create_scheduling_tab()       # 4
-        self.create_settings_tab()         # 5
-        self.create_small_business_tab()   # 6  ← Small Business Service Tools
+        self.create_welcome_tab()          # 0  ← Welcome / Info / Ad Space
+        self.create_query_tab()            # 1  ← Ask Questions (prewarmed on switch)
+        self.create_index_tab()            # 2
+        self.create_update_tab()           # 3
+        self.create_scan_config_tab()      # 4
+        self.create_scheduling_tab()       # 5
+        self.create_settings_tab()         # 6
+        self.create_small_business_tab()   # 7  ← Small Business Service Tools
 
         # Named tab index constants — change here if tabs are ever reordered
-        self._TAB_INDEX_QUERY        = 0   # Ask Questions tab — triggers Ollama prewarm
-        self._TAB_INDEX_INDEX        = 1
-        self._TAB_INDEX_UPDATE       = 2
-        self._TAB_INDEX_SCAN         = 3
-        self._TAB_INDEX_SCHEDULE     = 4
-        self._TAB_INDEX_SETTINGS     = 5
-        self._TAB_INDEX_SMALL_BIZ    = 6   # Small Business Service Tools
+        self._TAB_INDEX_WELCOME      = 0   # Welcome / Info / Ad Space
+        self._TAB_INDEX_QUERY        = 1   # Ask Questions tab — triggers Ollama prewarm
+        self._TAB_INDEX_INDEX        = 2
+        self._TAB_INDEX_UPDATE       = 3
+        self._TAB_INDEX_SCAN         = 4
+        self._TAB_INDEX_SCHEDULE     = 5
+        self._TAB_INDEX_SETTINGS     = 6
+        self._TAB_INDEX_SMALL_BIZ    = 7   # Small Business Service Tools
         
         # Status bar
         self.create_status_bar()
@@ -1021,6 +1657,905 @@ or from the Help menu."""
         vsb.grid(row=0, column=1, sticky='ns')
         return inner
 
+    def create_welcome_tab(self):
+        """Create the Welcome / Home tab with large icon, branding, and ad space.
+
+        Ad content is refreshed:
+          - Immediately on startup (background thread)
+          - Once every 24 hours while AI-Prowler is running (configurable)
+
+        When fresh content arrives from GitHub, the Welcome tab updates
+        live — no restart needed.
+
+        Ad content loading priority:
+          1. GitHub raw URL (fetched in background)
+          2. Local cache (~/.ai-prowler/welcome_ad_cache.json)
+          3. Local override (~/.ai-prowler/welcome_config.json)
+          4. Built-in defaults
+        """
+        import json as _json
+
+        welcome_frame = ttk.Frame(self.notebook)
+        self.notebook.add(welcome_frame, text="🏠 Home")
+
+        # ── Default ad content ────────────────────────────────────────────────
+        self._ad_defaults = {
+            'headline':  'Welcome to AI-Prowler',
+            'body': (
+                'Your Professional Agentic RAG Knowledge Base for Claude.\n\n'
+                'AI-Prowler indexes your local documents and makes them '
+                'searchable through Claude — on desktop, web, and mobile.\n\n'
+                '• Index documents from any folder on your PC\n'
+                '• Search with full provenance tracking\n'
+                '• Connect via Claude Desktop (local) or Claude.ai (remote)\n'
+                '• Smart scan skips binaries and system files automatically\n\n'
+                'Get started: click the Index Docs tab to add your first folder.'
+            ),
+            'link_text': 'Visit AI-Prowler on GitHub',
+            'link_url':  'https://github.com/dvavro/AI-Prowler',
+            'footer':    'AI-Prowler — Free for personal use',
+        }
+
+        # Paths
+        self._ad_cache_path = Path.home() / '.ai-prowler' / 'welcome_ad_cache.json'
+        self._ad_local_path = Path.home() / '.ai-prowler' / 'welcome_config.json'
+        self._ad_url = (
+            "https://raw.githubusercontent.com/"
+            "dvavro/ai-prowler-public/main/welcome_ad.json"
+        )
+
+        # ── Load initial ad content from cache/local/defaults ─────────────────
+        ad = self._load_ad_content()
+
+        # Write default local config if it doesn't exist
+        if not self._ad_local_path.exists():
+            try:
+                self._ad_local_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(self._ad_local_path, 'w', encoding='utf-8') as f:
+                    _json.dump(self._ad_defaults, f, indent=2)
+            except Exception:
+                pass
+
+        # ── Build the Welcome tab layout ──────────────────────────────────────
+        container = ttk.Frame(welcome_frame, padding=(30, 15))
+        container.pack(fill='both', expand=True)
+
+        # ── Large Icon — centered at top ──────────────────────────────────────
+        icon_frame = ttk.Frame(container)
+        icon_frame.pack(fill='x', pady=(10, 5))
+
+        self._welcome_icon_ref = None
+        try:
+            _icon_path = Path(__file__).parent / 'rag_icon.ico'
+            if _icon_path.exists():
+                from PIL import Image, ImageTk
+                img = Image.open(str(_icon_path))
+                img = img.resize((256, 256), Image.LANCZOS)
+                self._welcome_icon_ref = ImageTk.PhotoImage(img)
+                icon_label = ttk.Label(icon_frame,
+                                       image=self._welcome_icon_ref)
+                icon_label.pack(anchor='center')
+        except Exception:
+            ttk.Label(icon_frame, text="🔍",
+                      font=('Arial', 56)).pack(anchor='center')
+
+        ttk.Separator(container, orient='horizontal').pack(fill='x', pady=(12, 12))
+
+        # ── Notification banner area (populated by _refresh_notifications) ────
+        self._notif_frame = ttk.Frame(container)
+        self._notif_frame.pack(fill='x', pady=(0, 6))
+        self._notif_widgets = []  # track notification widgets for clearing
+
+        # Debug label — hidden by default, only shown if notification
+        # fetch fails. Helper methods _show_notif_debug / _hide_notif_debug
+        # control visibility.
+        self._notif_debug_var = tk.StringVar(value="")
+        self._notif_debug_label = ttk.Label(container,
+                                             textvariable=self._notif_debug_var,
+                                             font=('Arial', 8),
+                                             foreground='red')
+        # Note: NOT packed — stays hidden until _show_notif_debug() is called
+
+        # ── Generate install_id on first launch (anonymous tracking) ──────────
+        self._install_id_path = Path.home() / '.ai-prowler' / 'install_id'
+        if not self._install_id_path.exists():
+            try:
+                import uuid, hashlib
+                _raw_id = hashlib.sha256(str(uuid.uuid4()).encode()).hexdigest()[:16]
+                self._install_id_path.parent.mkdir(parents=True, exist_ok=True)
+                self._install_id_path.write_text(_raw_id, encoding='utf-8')
+            except Exception:
+                pass
+
+        # ── Telemetry state ───────────────────────────────────────────────────
+        # tools_called_24h is incremented by MCP server on each tool call,
+        # via the local counter file. Reset to 0 after each successful POST.
+        self._telemetry_counter_path = (
+            Path.home() / '.ai-prowler' / 'telemetry_counter.json')
+        self._telemetry_last_path = (
+            Path.home() / '.ai-prowler' / 'telemetry_last_success.txt')
+        self._telemetry_lock_path = (
+            Path.home() / '.ai-prowler' / 'telemetry_lock.txt')
+        # Schedule the first heartbeat after mainloop is up. After that the
+        # method reschedules itself.
+        self.root.after(_TELEMETRY_FIRST_DELAY_SEC * 1000,
+                        self._telemetry_tick)
+
+        # ── Dismissed notifications tracking ──────────────────────────────────
+        self._dismissed_path = Path.home() / '.ai-prowler' / 'dismissed_notifications.json'
+        self._notif_cache_path = Path.home() / '.ai-prowler' / 'notifications_cache.json'
+        self._notif_url = (
+            "https://raw.githubusercontent.com/"
+            "dvavro/ai-prowler-public/main/notifications.json"
+        )
+
+        # ── Ad / Promo content area (labels stored for live update) ───────────
+        ad_frame = ttk.LabelFrame(container, text="", padding=(24, 16))
+        ad_frame.pack(fill='both', expand=True)
+
+        self._ad_headline_label = ttk.Label(ad_frame, text=ad['headline'],
+                                             font=('Arial', 14, 'bold'))
+        self._ad_headline_label.pack(anchor='w', pady=(0, 8))
+
+        body_text = ad['body'].replace('\\n', '\n')
+        self._ad_body_label = ttk.Label(ad_frame, text=body_text,
+                                         font=('Arial', 10), wraplength=800,
+                                         justify='left')
+        self._ad_body_label.pack(anchor='w', fill='x', pady=(0, 10))
+
+        self._ad_link_frame = ttk.Frame(ad_frame)
+        self._ad_link_frame.pack(anchor='w', pady=(4, 0))
+        if ad.get('link_url'):
+            self._ad_link_btn = ttk.Button(
+                self._ad_link_frame,
+                text=f"🔗 {ad.get('link_text', 'Learn More')}",
+                command=lambda url=ad['link_url']: webbrowser.open(url)
+            )
+            self._ad_link_btn.pack(side='left')
+        else:
+            self._ad_link_btn = None
+
+        self._ad_footer_label = ttk.Label(container, text=ad.get('footer', ''),
+                                           font=('Arial', 8), foreground='gray')
+        self._ad_footer_label.pack(anchor='center', pady=(10, 0))
+
+        # Store current ad data and link URL for updates
+        self._current_ad = dict(ad)
+
+        # ── Fetch ad + notifications from GitHub, schedule daily refresh ────
+        # Defer the first fetch until after mainloop() is running. Calling
+        # _refresh_welcome_ad() directly here means the daemon thread spawns
+        # while the main thread is still synchronously building tabs; its
+        # root.after(0, ...) callbacks can race with widget construction and
+        # silently fail to deliver, leaving the Welcome tab empty until the
+        # user manually triggers a refresh. Scheduling via after() guarantees
+        # the call runs from the Tk event loop, after all tabs exist.
+        self.root.after(150, self._refresh_welcome_ad)
+        self._schedule_ad_refresh()
+
+    def _load_ad_content(self) -> dict:
+        """Load ad content from local defaults → GitHub cache (cache wins)."""
+        import json as _json
+        ad = dict(self._ad_defaults)
+
+        # Load local config first (lowest priority after defaults)
+        try:
+            if self._ad_local_path.exists():
+                with open(self._ad_local_path, 'r', encoding='utf-8') as f:
+                    local_cfg = _json.load(f)
+                for key in self._ad_defaults:
+                    if key in local_cfg and local_cfg[key]:
+                        ad[key] = local_cfg[key]
+        except Exception:
+            pass
+
+        # GitHub cache overrides local config (highest priority)
+        try:
+            if self._ad_cache_path.exists():
+                with open(self._ad_cache_path, 'r', encoding='utf-8') as f:
+                    cached = _json.load(f)
+                for key in self._ad_defaults:
+                    if key in cached and cached[key]:
+                        ad[key] = cached[key]
+        except Exception:
+            pass
+
+        return ad
+
+    # ════════════════════════════════════════════════════════════════════════
+    # Telemetry — anonymous daily heartbeat
+    # ════════════════════════════════════════════════════════════════════════
+
+    def _telemetry_load_config(self):
+        """Read telemetry-related settings from ~/.ai-prowler/config.json.
+
+        Returns a dict with keys: enabled (bool), endpoint (str).
+        Defaults to enabled=True and the baked-in endpoint.
+        """
+        cfg = {
+            'enabled': True,
+            'endpoint': _TELEMETRY_DEFAULT_ENDPOINT,
+        }
+        try:
+            cfg_path = Path.home() / '.ai-prowler' / 'config.json'
+            if cfg_path.exists():
+                data = json.loads(cfg_path.read_text(encoding='utf-8'))
+                if 'telemetry_enabled' in data:
+                    cfg['enabled'] = bool(data['telemetry_enabled'])
+                if data.get('telemetry_endpoint'):
+                    cfg['endpoint'] = str(data['telemetry_endpoint'])
+        except Exception:
+            pass
+        return cfg
+
+    def _telemetry_save_config(self, *, enabled=None, endpoint=None):
+        """Write enabled/endpoint into config.json. Either field optional."""
+        try:
+            cfg_path = Path.home() / '.ai-prowler' / 'config.json'
+            cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            data = {}
+            if cfg_path.exists():
+                try:
+                    data = json.loads(cfg_path.read_text(encoding='utf-8'))
+                except Exception:
+                    data = {}
+            if enabled is not None:
+                data['telemetry_enabled'] = bool(enabled)
+            if endpoint is not None:
+                data['telemetry_endpoint'] = str(endpoint)
+            cfg_path.write_text(
+                json.dumps(data, indent=2), encoding='utf-8')
+        except Exception:
+            pass
+
+    def _telemetry_get_counter(self):
+        """Return per-tool call counter as a dict {tool_name: count}.
+        Handles v2 (dict) format and the legacy v1 (single int) format —
+        v1 data isn't recoverable as per-tool buckets so it's discarded."""
+        try:
+            if self._telemetry_counter_path.exists():
+                d = json.loads(
+                    self._telemetry_counter_path.read_text(encoding='utf-8'))
+                if isinstance(d, dict):
+                    tc = d.get('tool_calls')
+                    if isinstance(tc, dict):
+                        out = {}
+                        for k, v in tc.items():
+                            try:
+                                out[str(k)] = int(v)
+                            except (ValueError, TypeError):
+                                pass
+                        return out
+        except Exception:
+            pass
+        return {}
+
+    def _telemetry_get_counter_total(self):
+        """Sum of all per-tool counters (used for the legacy
+        tools_called_24h integer field in the heartbeat payload)."""
+        try:
+            return sum(self._telemetry_get_counter().values())
+        except Exception:
+            return 0
+
+    def _telemetry_reset_counter(self):
+        """Reset counter (clear the per-tool dict) after a successful
+        heartbeat."""
+        try:
+            self._telemetry_counter_path.parent.mkdir(
+                parents=True, exist_ok=True)
+            self._telemetry_counter_path.write_text(
+                json.dumps({'tool_calls': {}}), encoding='utf-8')
+        except Exception:
+            pass
+
+    def _telemetry_count_chunks(self):
+        """Best-effort count of chunks indexed in the active collection.
+        Returns 0 if anything fails — never raises into the heartbeat path."""
+        try:
+            if hasattr(self, 'collection') and self.collection is not None:
+                return int(self.collection.count())
+        except Exception:
+            pass
+        return 0
+
+    def _telemetry_compose_payload(self):
+        """Build the heartbeat dict. No PII. Returns None if install_id
+        can't be read (something is wrong with the user's home dir)."""
+        try:
+            install_id = self._install_id_path.read_text(
+                encoding='utf-8').strip()
+        except Exception:
+            return None
+        if not install_id:
+            return None
+
+        # OS string — match the worker's allowed prefixes
+        os_str = "unknown"
+        try:
+            import platform
+            sys_name = platform.system()
+            release = platform.release()
+            if sys_name and release:
+                os_str = f"{sys_name}-{release}"[:50]
+        except Exception:
+            pass
+
+        tool_calls = self._telemetry_get_counter()
+        # Total is derived as sum of per-tool counts. The Worker still
+        # accepts tools_called_24h as a flat integer for backwards
+        # compatibility with the existing aggregations.
+        total = sum(tool_calls.values()) if tool_calls else 0
+
+        return {
+            'install_id': install_id,
+            'version': APP_VERSION,
+            'edition': 'home',
+            'os': os_str,
+            'chunks_indexed': self._telemetry_count_chunks(),
+            'tools_called_24h': total,
+            # New: per-tool breakdown (v2 schema)
+            'tool_calls': tool_calls,
+        }
+
+    def _telemetry_tick(self):
+        """Tk-thread entry point. Decides whether to fire a heartbeat right
+        now, fires it on a daemon thread, and reschedules itself."""
+        try:
+            cfg = self._telemetry_load_config()
+            if not cfg['enabled']:
+                # Honoured immediately. Reschedule a check in case the user
+                # toggles it back on later.
+                self.root.after(_TELEMETRY_HEARTBEAT_INTERVAL_SEC * 1000,
+                                self._telemetry_tick)
+                return
+
+            # Cheap dedup — multiple AI-Prowler instances running on the
+            # same machine shouldn't all phone home. Whoever wins the
+            # 60-second lock window goes first.
+            if self._telemetry_lock_active():
+                self.root.after(_TELEMETRY_RETRY_DELAY_SEC * 1000,
+                                self._telemetry_tick)
+                return
+
+            payload = self._telemetry_compose_payload()
+            if payload is None:
+                self.root.after(_TELEMETRY_RETRY_DELAY_SEC * 1000,
+                                self._telemetry_tick)
+                return
+
+            threading.Thread(
+                target=self._telemetry_send,
+                args=(payload, cfg['endpoint']),
+                daemon=True
+            ).start()
+        except Exception as e:
+            print(f"[telemetry] tick error: {e}", flush=True)
+        finally:
+            # Always reschedule, even if we fired one.
+            self.root.after(_TELEMETRY_HEARTBEAT_INTERVAL_SEC * 1000,
+                            self._telemetry_tick)
+
+    def _telemetry_lock_active(self):
+        """Return True if another instance phoned home in the last 60s
+        (prevents thundering-herd from multiple GUIs on the same box)."""
+        try:
+            if self._telemetry_lock_path.exists():
+                ts = float(
+                    self._telemetry_lock_path.read_text(encoding='utf-8'))
+                return (time.time() - ts) < 60
+        except Exception:
+            pass
+        return False
+
+    def _telemetry_set_lock(self):
+        try:
+            self._telemetry_lock_path.parent.mkdir(
+                parents=True, exist_ok=True)
+            self._telemetry_lock_path.write_text(
+                str(time.time()), encoding='utf-8')
+        except Exception:
+            pass
+
+    def _telemetry_send(self, payload, endpoint, force=False):
+        """Daemon-thread network call. Failure is silent — telemetry must
+        never be visible to the user as a problem.
+
+        If force=True, append ?force=true and an admin bearer header to
+        bypass the Worker's 12h throttle. The bearer must match the
+        Worker's ADMIN_TOKEN. The token comes from
+        ~/.ai-prowler/config.json under 'telemetry_admin_token' if set.
+        Without a valid token, force=true requests are rejected (401)
+        and we fall through silently — no harm done.
+        """
+        import urllib.request, urllib.error
+        self._telemetry_set_lock()
+        url = endpoint.rstrip('/') + '/heartbeat'
+        headers = {
+            'Content-Type': 'application/json',
+            'User-Agent': f'AI-Prowler/{APP_VERSION}',
+        }
+
+        if force:
+            url = url + '?force=true'
+            # Pull admin token from config.json if available
+            try:
+                cfg_path = Path.home() / '.ai-prowler' / 'config.json'
+                if cfg_path.exists():
+                    cfg = json.loads(cfg_path.read_text(encoding='utf-8'))
+                    tok = cfg.get('telemetry_admin_token', '')
+                    if tok:
+                        headers['Authorization'] = f'Bearer {tok}'
+            except Exception:
+                pass
+
+        try:
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode('utf-8'),
+                headers=headers,
+                method='POST',
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                raw = resp.read().decode('utf-8', errors='replace')
+                # Parse the response so we can distinguish "row written"
+                # from "throttled, ignored". We only reset the local
+                # counter if the row was actually written — otherwise the
+                # tool counts would be lost without ever reaching D1.
+                throttled = False
+                try:
+                    data = json.loads(raw)
+                    throttled = bool(data.get('throttled', False))
+                except Exception:
+                    pass
+
+                if resp.status == 200 and not throttled:
+                    self._telemetry_reset_counter()
+                    try:
+                        self._telemetry_last_path.write_text(
+                            datetime.utcnow().isoformat() + 'Z',
+                            encoding='utf-8')
+                    except Exception:
+                        pass
+                    print(f"[telemetry] heartbeat written: {url}",
+                          flush=True)
+                elif resp.status == 200 and throttled:
+                    # Worker accepted the request but didn't write — local
+                    # counter stays intact so tool counts will be sent on
+                    # the next non-throttled heartbeat.
+                    print(f"[telemetry] heartbeat throttled (12h window) "
+                          f"— counter preserved", flush=True)
+        except urllib.error.HTTPError as e:
+            print(f"[telemetry] HTTP {e.code}: {e.reason}", flush=True)
+        except Exception as e:
+            print(f"[telemetry] send failed: "
+                  f"{type(e).__name__}: {e}", flush=True)
+
+    def _show_notif_debug(self, msg: str):
+        """Show the red notification debug label with the given message.
+        Called only when something goes wrong with notification fetch."""
+        try:
+            self._notif_debug_var.set(msg)
+            # pack_info() returns {} if not currently packed
+            if not self._notif_debug_label.pack_info():
+                self._notif_debug_label.pack(anchor='w', pady=(0, 4))
+        except Exception:
+            pass
+
+    def _hide_notif_debug(self):
+        """Hide the debug label (used when fetch succeeds)."""
+        try:
+            self._notif_debug_label.pack_forget()
+            self._notif_debug_var.set("")
+        except Exception:
+            pass
+
+    def _refresh_welcome_ad(self):
+        """Fetch latest ad AND notifications from GitHub in one thread."""
+
+        def _fetch_and_update():
+            import urllib.request
+            import traceback
+            try:
+                # ── Fetch welcome ad ──────────────────────────────
+                try:
+                    req = urllib.request.Request(
+                        self._ad_url,
+                        headers={
+                            "User-Agent": "AI-Prowler/6.0",
+                            "Cache-Control": "no-cache",
+                        }
+                    )
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        raw = resp.read().decode("utf-8")
+                        data = json.loads(raw)
+
+                    self._ad_cache_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(self._ad_cache_path, 'w', encoding='utf-8') as f:
+                        json.dump(data, f, indent=2)
+
+                    self.root.after(0, self._update_welcome_labels, data)
+                except Exception as ad_err:
+                    print(f"[notif] ad fetch failed: "
+                          f"{type(ad_err).__name__}: {ad_err}", flush=True)
+
+                # ── Fetch notifications (same thread, same urllib) ────
+                try:
+                    req2 = urllib.request.Request(
+                        self._notif_url,
+                        headers={
+                            "User-Agent": "AI-Prowler/6.0",
+                            "Cache-Control": "no-cache",
+                        }
+                    )
+                    with urllib.request.urlopen(req2, timeout=10) as resp2:
+                        raw2 = resp2.read().decode("utf-8")
+                        notif_data = json.loads(raw2)
+
+                    self._notif_cache_path.parent.mkdir(
+                        parents=True, exist_ok=True)
+                    with open(self._notif_cache_path, 'w',
+                              encoding='utf-8') as f:
+                        json.dump(notif_data, f, indent=2)
+
+                    try:
+                        self._check_for_update(notif_data)
+                    except Exception:
+                        pass
+
+                    n = len(notif_data.get('notifications', []))
+                    print(f"[notif] {n} notifications fetched OK", flush=True)
+                    # Success — make sure the debug label stays hidden
+                    self.root.after(0, self._hide_notif_debug)
+                    self.root.after(0, self._display_notifications, notif_data)
+                    return
+                except Exception as fetch_err:
+                    err_msg = f"{type(fetch_err).__name__}: {fetch_err}"
+                    print(f"[notif] fetch failed: {err_msg}", flush=True)
+                    # Surface the error on-screen so the user can see what's wrong
+                    self.root.after(0, self._show_notif_debug,
+                                    f"[Notifications: {err_msg}]")
+
+                # ── Fallback: try cached notifications ────────────────
+                try:
+                    if self._notif_cache_path.exists():
+                        with open(self._notif_cache_path, 'r',
+                                  encoding='utf-8') as f:
+                            notif_data = json.load(f)
+                        self.root.after(0, self._display_notifications,
+                                        notif_data)
+                        self.root.after(0, self._show_notif_debug,
+                                        "[Notifications: using cache]")
+                        return
+                except Exception as cache_err:
+                    print(f"[notif] cache read failed: "
+                          f"{type(cache_err).__name__}: {cache_err}",
+                          flush=True)
+
+                self.root.after(0, self._show_notif_debug,
+                                "[Notifications: fetch failed, no cache]")
+
+            except Exception as outer:
+                # Catches early crashes (missing attributes, etc.) so the
+                # daemon thread doesn't die silently.
+                traceback.print_exc()
+                msg = f"{type(outer).__name__}: {outer}"
+                try:
+                    self.root.after(0, self._show_notif_debug,
+                                    f"[Notifications: CRASH {msg}]")
+                except Exception:
+                    pass
+
+        threading.Thread(target=_fetch_and_update, daemon=True).start()
+
+    def _check_for_update(self, notif_data):
+        """Check if a newer version is available and offer to download."""
+        latest = notif_data.get("latest_version", "")
+        update_url = notif_data.get("update_url", "")
+        update_notes = notif_data.get("update_notes", "")
+
+        if not latest or not update_url:
+            return
+
+        # Compare versions — try packaging.version first, fall back to
+        # simple tuple comparison
+        is_newer = False
+        try:
+            from packaging.version import Version
+            is_newer = Version(latest) > Version(APP_VERSION)
+        except ImportError:
+            # packaging not installed — compare as tuples of ints
+            try:
+                _latest = tuple(int(x) for x in latest.split('.'))
+                _current = tuple(int(x) for x in APP_VERSION.split('.'))
+                is_newer = _latest > _current
+            except (ValueError, AttributeError):
+                pass
+
+        if is_newer:
+            self.root.after(0, self._show_update_banner,
+                            latest, update_url, update_notes)
+
+    def _show_update_banner(self, version, url, notes):
+        """Display an update available banner at the top of notifications."""
+        update_frame = tk.Frame(self._notif_frame, bg='#d4edda',
+                                relief='ridge', bd=1)
+        update_frame.pack(fill='x', pady=(0, 4))
+
+        tk.Label(update_frame,
+                 text=f"🆕 AI-Prowler™ v{version} is available!",
+                 bg='#d4edda', fg='#155724',
+                 font=('Arial', 10, 'bold')).pack(side='left', padx=(10, 6),
+                                                    pady=6)
+        if notes:
+            tk.Label(update_frame, text=notes, bg='#d4edda', fg='#155724',
+                     font=('Arial', 9)).pack(side='left', padx=(0, 10), pady=6)
+
+        ttk.Button(update_frame, text="📥 Download Update",
+                   command=lambda u=url: self._download_update(u, version)
+                   ).pack(side='right', padx=(6, 10), pady=4)
+        ttk.Button(update_frame, text="🔗 View Release",
+                   command=lambda u=url: webbrowser.open(u)
+                   ).pack(side='right', padx=(0, 4), pady=4)
+
+        self._notif_widgets.append(update_frame)
+
+    def _download_update(self, url, version):
+        """Download update files from GitHub release and stage them for install.
+
+        Files are downloaded to %LOCALAPPDATA%/AI-Prowler/pending_update/.
+        A flag file update_ready.txt is written when complete.
+        On next launch, RAG_RUN.bat applies the update before starting.
+        """
+        import json as _json
+
+        staging_dir = Path.home().parent.parent / 'AppData' / 'Local' / 'AI-Prowler' / 'pending_update'
+        # Use the proper LOCALAPPDATA path
+        _local_app = os.environ.get('LOCALAPPDATA',
+                                     str(Path.home() / 'AppData' / 'Local'))
+        staging_dir = Path(_local_app) / 'AI-Prowler' / 'pending_update'
+        flag_file = Path(_local_app) / 'AI-Prowler' / 'update_ready.txt'
+
+        answer = messagebox.askyesno(
+            "Download Update",
+            f"AI-Prowler™ v{version} is available.\n\n"
+            f"Download now? The update will be applied\n"
+            f"automatically the next time you start AI-Prowler."
+        )
+        if not answer:
+            return
+
+        def _do_download():
+            try:
+                self.status_var.set(f"Downloading AI-Prowler v{version}...")
+
+                # For GitHub releases, the URL points to the release page.
+                # We need to fetch the release API to get asset download URLs.
+                # For simplicity, download the source files directly from the
+                # repo's main branch (same files that are in the release).
+                _base = ("https://raw.githubusercontent.com/"
+                         "dvavro/AI-Prowler/main/")
+                _files = [
+                    'rag_gui.py',
+                    'rag_preprocessor.py',
+                    'ai_prowler_mcp.py',
+                    'RAG_RUN.bat',
+                    'mcp_diagnostics.py',
+                ]
+
+                staging_dir.mkdir(parents=True, exist_ok=True)
+
+                import urllib.request
+                downloaded = 0
+                for fname in _files:
+                    try:
+                        _url = f"{_base}{fname}"
+                        req = urllib.request.Request(
+                            _url,
+                            headers={"User-Agent": "AI-Prowler/6.0"})
+                        with urllib.request.urlopen(req, timeout=30) as resp:
+                            content = resp.read()
+                        out_path = staging_dir / fname
+                        out_path.write_bytes(content)
+                        downloaded += 1
+                        print(f"[UPDATE] Downloaded: {fname}")
+                    except Exception as exc:
+                        print(f"[UPDATE] Failed to download {fname}: {exc}")
+
+                if downloaded > 0:
+                    # Write the flag file so RAG_RUN.bat knows to apply
+                    flag_file.write_text(
+                        f"AI-Prowler update v{version}\n"
+                        f"Downloaded: {downloaded} files\n"
+                        f"Date: {datetime.now().isoformat()}\n",
+                        encoding='utf-8'
+                    )
+                    self.root.after(0, lambda: messagebox.showinfo(
+                        "Update Downloaded",
+                        f"AI-Prowler™ v{version} downloaded successfully.\n\n"
+                        f"{downloaded} file(s) staged for install.\n\n"
+                        f"The update will be applied automatically\n"
+                        f"the next time you start AI-Prowler.\n\n"
+                        f"Go to File → Exit to restart now."
+                    ))
+                    self.root.after(0, lambda: self.status_var.set(
+                        f"✅ Update v{version} ready — restart to apply"))
+                else:
+                    self.root.after(0, lambda: messagebox.showwarning(
+                        "Download Failed",
+                        "No files could be downloaded.\n"
+                        "Check your internet connection and try again."
+                    ))
+                    self.root.after(0, lambda: self.status_var.set("Ready"))
+
+            except Exception as exc:
+                print(f"[UPDATE] Download error: {exc}")
+                self.root.after(0, lambda: self.status_var.set("Ready"))
+
+        threading.Thread(target=_do_download, daemon=True).start()
+
+    def _display_notifications(self, data):
+        """Display active notification banners on the Welcome tab."""
+        import json as _json
+
+        # Load dismissed notifications
+        dismissed = set()
+        try:
+            if self._dismissed_path.exists():
+                dismissed = set(_json.loads(
+                    self._dismissed_path.read_text(encoding='utf-8')))
+        except Exception:
+            pass
+
+        # Clear existing notification widgets
+        for w in self._notif_widgets:
+            try:
+                w.destroy()
+            except Exception:
+                pass
+        self._notif_widgets.clear()
+
+        notifications = data.get('notifications', [])
+        today = datetime.now().strftime('%Y-%m-%d')
+
+        shown_count = 0
+        skipped_reasons = []
+
+        for notif in notifications:
+            nid = notif.get('id', '')
+            if not nid:
+                skipped_reasons.append("no-id")
+                continue
+
+            # Skip dismissed show_once notifications
+            if notif.get('show_once') and nid in dismissed:
+                skipped_reasons.append(f"{nid}:dismissed")
+                continue
+
+            # Check date range
+            # Accept both naming conventions: start_date/end_date (current
+            # notifications.json schema) and show_after/show_until (legacy).
+            # Whichever is set, use it; if both are set, start_date wins.
+            show_after = (notif.get('start_date', '')
+                          or notif.get('show_after', ''))
+            show_until = (notif.get('end_date', '')
+                          or notif.get('show_until', ''))
+            if show_after and today < show_after:
+                skipped_reasons.append(
+                    f"{nid}:before-start({show_after})")
+                continue
+            if show_until and today > show_until:
+                skipped_reasons.append(
+                    f"{nid}:after-end({show_until})")
+                continue
+
+            # Determine banner color based on type
+            ntype = notif.get('type', 'info')
+            priority = notif.get('priority', 'normal')
+            if ntype == 'upsell':
+                bg, fg = '#cce5ff', '#004085'
+            elif ntype == 'release':
+                bg, fg = '#d4edda', '#155724'
+            elif priority == 'high':
+                bg, fg = '#fff3cd', '#856404'
+            else:
+                bg, fg = '#e2e3e5', '#383d41'
+
+            # Build banner
+            banner = tk.Frame(self._notif_frame, bg=bg, relief='ridge', bd=1)
+            banner.pack(fill='x', pady=(0, 4))
+
+            title = notif.get('title', '')
+            body = notif.get('body', '')
+            link_text = notif.get('link_text', '')
+            link_url = notif.get('link_url', '')
+
+            tk.Label(banner, text=f"📢 {title}", bg=bg, fg=fg,
+                     font=('Arial', 9, 'bold')).pack(side='left',
+                                                       padx=(10, 6), pady=4)
+            if body:
+                tk.Label(banner, text=body, bg=bg, fg=fg,
+                         font=('Arial', 8)).pack(side='left',
+                                                   padx=(0, 10), pady=4)
+
+            if link_url:
+                ttk.Button(banner, text=f"🔗 {link_text or 'Learn More'}",
+                           command=lambda u=link_url: webbrowser.open(u)
+                           ).pack(side='right', padx=(0, 10), pady=2)
+
+            # Dismiss button for show_once notifications
+            if notif.get('show_once'):
+                def _dismiss(n_id=nid, b=banner):
+                    b.destroy()
+                    self._notif_widgets.remove(b)
+                    dismissed.add(n_id)
+                    try:
+                        self._dismissed_path.parent.mkdir(
+                            parents=True, exist_ok=True)
+                        self._dismissed_path.write_text(
+                            _json.dumps(list(dismissed)), encoding='utf-8')
+                    except Exception:
+                        pass
+
+                ttk.Button(banner, text="✕",
+                           command=_dismiss, width=3
+                           ).pack(side='right', padx=(0, 4), pady=2)
+
+            self._notif_widgets.append(banner)
+            shown_count += 1
+
+        # Debug summary — to console only, not on-screen
+        print(
+            f"[notif] {len(notifications)} total, {shown_count} shown, "
+            f"{len(skipped_reasons)} skipped: "
+            f"{', '.join(skipped_reasons) or 'none'}  "
+            f"today={today}  dismissed={list(dismissed)}",
+            flush=True
+        )
+
+    def _update_welcome_labels(self, ad: dict):
+        """Update the Welcome tab labels with new ad content (runs on main thread)."""
+        try:
+            if ad.get('headline'):
+                self._ad_headline_label.config(text=ad['headline'])
+
+            if ad.get('body'):
+                body_text = ad['body'].replace('\\n', '\n')
+                self._ad_body_label.config(text=body_text)
+
+            # Update link button
+            if ad.get('link_url'):
+                # Remove old button if it exists
+                if self._ad_link_btn:
+                    self._ad_link_btn.destroy()
+                url = ad['link_url']
+                self._ad_link_btn = ttk.Button(
+                    self._ad_link_frame,
+                    text=f"🔗 {ad.get('link_text', 'Learn More')}",
+                    command=lambda u=url: webbrowser.open(u)
+                )
+                self._ad_link_btn.pack(side='left')
+
+            if ad.get('footer'):
+                self._ad_footer_label.config(text=ad['footer'])
+
+            self._current_ad = dict(ad)
+        except Exception:
+            pass  # GUI widget may have been destroyed during shutdown
+
+    def _schedule_ad_refresh(self):
+        """Schedule the next ad refresh — every 24 hours (86,400,000 ms)."""
+        _REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000  # 24 hours in milliseconds
+        try:
+            self.root.after(_REFRESH_INTERVAL_MS, self._ad_refresh_tick)
+        except Exception:
+            pass
+
+    def _ad_refresh_tick(self):
+        """Called by the timer — refresh ad + notifications and reschedule."""
+        self._refresh_welcome_ad()
+        self._schedule_ad_refresh()
+
     def create_index_tab(self):
         """Create indexing tab with multi-directory queue and smart scan mode."""
         index_frame = ttk.Frame(self.notebook)
@@ -1044,18 +2579,11 @@ or from the Help menu."""
         dir_entry.pack(side='left', fill='x', expand=True, padx=(0, 6))
         dir_entry.bind('<Return>', lambda e: self._queue_add_directory())
 
-        # Create a menu for the browse button
-        self.browse_menu = tk.Menu(entry_row, tearoff=0)
-        self.browse_menu.add_command(label="📄 Browse Files (multi-select)...", 
-                                      command=self.browse_files_multi)
-        self.browse_menu.add_command(label="📁 Browse Folder...", 
-                                      command=self.browse_folder_single)
-        
-        browse_btn = ttk.Button(entry_row, text="📂 Browse... ▼",
-                               command=lambda: self.browse_menu.post(
-                                   browse_btn.winfo_rootx(),
-                                   browse_btn.winfo_rooty() + browse_btn.winfo_height()))
-        browse_btn.pack(side='left', padx=(0, 6))
+        # Browse buttons — two clear options, no dropdown menu needed
+        ttk.Button(entry_row, text="📂 Browse Files...",
+                   command=self.browse_all).pack(side='left', padx=(0, 4))
+        ttk.Button(entry_row, text="📁 Add Folder...",
+                   command=self.browse_folder_single).pack(side='left', padx=(0, 6))
         
         ttk.Button(entry_row, text="➕ Add to Queue",
                    command=self._queue_add_directory).pack(side='left')
@@ -3763,16 +5291,224 @@ or from the Help menu."""
 
         ttk.Separator(remote_frame, orient='horizontal').pack(fill='x', pady=(0, 8))
 
-        # ── Cloudflare Tunnel ──────────────────────────────────────────────────
-        ttk.Label(remote_frame, text="Cloudflare Tunnel  (provides the public HTTPS URL):",
-                  font=('Arial', 9, 'bold')).pack(anchor='w')
-        ttk.Label(remote_frame, font=('Arial', 8), foreground='gray',
-                  text=("Create a free Cloudflare Zero Trust tunnel at dash.cloudflare.com → Networks → Tunnels.\n"
-                        "Enter your tunnel's public hostname and token below, then click Activate.")
-                  ).pack(anchor='w', pady=(0, 6))
-
+        # ── cloudflared executable path helper ────────────────────────────────
         def _cf_exe():
             return str(Path(__file__).parent / 'cloudflared.exe')
+
+        # ══════════════════════════════════════════════════════════════════════
+        # Quick Tunnel  (Free, No Account Needed)
+        # ══════════════════════════════════════════════════════════════════════
+        qt_frame = ttk.LabelFrame(remote_frame,
+                                   text="🚀 Quick Tunnel  (free, no Cloudflare account needed)",
+                                   padding=(10, 8))
+        qt_frame.pack(fill='x', pady=(0, 8))
+
+        ttk.Label(qt_frame, font=('Arial', 8), foreground='gray', justify='left',
+                  text=("One-click remote access — generates a temporary public URL.\n"
+                        "URL changes each time you restart, but setup takes seconds. Great for testing or casual use.")
+                  ).pack(anchor='w', pady=(0, 6))
+
+        # Quick Tunnel controls row
+        qt_ctrl_row = ttk.Frame(qt_frame)
+        qt_ctrl_row.pack(fill='x', pady=(0, 4))
+
+        _qt_status_var = tk.StringVar(value="⬤ Stopped")
+        _qt_status_lbl = ttk.Label(qt_ctrl_row, textvariable=_qt_status_var,
+                                    foreground='#cc0000', font=('Arial', 9, 'bold'))
+        _qt_status_lbl.pack(side='left', padx=(0, 12))
+
+        def _start_quick_tunnel():
+            """Start a cloudflared Quick Tunnel pointing at the HTTP server.
+
+            When the Quick Tunnel URL is captured, the HTTP server is
+            automatically restarted with the tunnel URL as --public-base
+            so the OAuth authorization endpoint matches what Claude sees.
+            """
+            # Check HTTP server is running
+            if self._http_server_proc is None or self._http_server_proc.poll() is not None:
+                messagebox.showwarning("HTTP Server Not Running",
+                    "Start the HTTP server first (above), then click Quick Tunnel.")
+                return
+            # Check cloudflared exists
+            cf_path = _cf_exe()
+            if not Path(cf_path).exists():
+                messagebox.showerror("cloudflared not found",
+                    f"cloudflared.exe not found at:\n{cf_path}\n\n"
+                    "Re-run the AI-Prowler installer or download cloudflared.exe\n"
+                    "from https://developers.cloudflare.com/cloudflare-one/"
+                    "connections/connect-apps/install-and-setup/installation/")
+                return
+            # Kill any existing quick tunnel
+            if self._cloudflared_proc is not None and self._cloudflared_proc.poll() is None:
+                try:
+                    self._cloudflared_proc.terminate()
+                    self._cloudflared_proc.wait(timeout=5)
+                except Exception:
+                    pass
+
+            port = _http_port_var.get().strip() or '8000'
+            _qt_status_var.set("⬤ Starting…")
+            _qt_status_lbl.configure(foreground='#e67e00')
+            _qt_url_var.set("Waiting for Cloudflare to assign URL…")
+
+            def _run_quick_tunnel():
+                try:
+                    import os as _os
+                    _env = _os.environ.copy()
+                    self._cloudflared_proc = subprocess.Popen(
+                        [cf_path, 'tunnel', '--url', f'http://localhost:{port}',
+                         '--no-autoupdate', '--config', ''],
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        text=True, bufsize=1, env=_env,
+                        creationflags=(subprocess.CREATE_NO_WINDOW
+                                       if sys.platform == 'win32' else 0)
+                    )
+                    # Scan output for the generated URL
+                    url_found = False
+                    for line in self._cloudflared_proc.stdout:
+                        line = line.strip()
+                        # cloudflared prints the URL like:
+                        #   | https://random-words.trycloudflare.com |
+                        if ('trycloudflare.com' in line
+                                or '.cfargotunnel.com' in line):
+                            import re
+                            url_match = re.search(
+                                r'(https://[a-zA-Z0-9\-]+\.trycloudflare\.com)',
+                                line)
+                            if not url_match:
+                                url_match = re.search(
+                                    r'(https://[a-zA-Z0-9\-]+\.cfargotunnel\.com)',
+                                    line)
+                            if url_match:
+                                tunnel_url = url_match.group(1)
+                                mcp_url = f"{tunnel_url}/mcp"
+                                url_found = True
+                                self.root.after(0, lambda u=mcp_url: (
+                                    _qt_url_var.set(u),
+                                    _qt_status_var.set("⬤ Running"),
+                                    _qt_status_lbl.configure(
+                                        foreground='#27ae60'),
+                                ))
+                        if self._cloudflared_proc.poll() is not None:
+                            break
+
+                    if not url_found:
+                        self.root.after(0, lambda: (
+                            _qt_status_var.set("⬤ Failed"),
+                            _qt_status_lbl.configure(foreground='#cc0000'),
+                            _qt_url_var.set(
+                                "Quick Tunnel failed to start. "
+                                "Check internet connection."),
+                        ))
+                    else:
+                        self._cloudflared_proc.wait()
+                        self.root.after(0, lambda: (
+                            _qt_status_var.set("⬤ Stopped"),
+                            _qt_status_lbl.configure(foreground='#cc0000'),
+                            _qt_url_var.set("Quick Tunnel stopped."),
+                        ))
+                except Exception as exc:
+                    self.root.after(0, lambda e=str(exc): (
+                        _qt_status_var.set("⬤ Error"),
+                        _qt_status_lbl.configure(foreground='#cc0000'),
+                        _qt_url_var.set(f"Error: {e}"),
+                    ))
+
+            threading.Thread(target=_run_quick_tunnel, daemon=True).start()
+
+        def _stop_quick_tunnel():
+            """Stop the Quick Tunnel and restore the HTTP server's public-base
+            to the Named Tunnel domain so switching back works seamlessly."""
+            if (self._cloudflared_proc is None
+                    or self._cloudflared_proc.poll() is not None):
+                _qt_status_var.set("⬤ Stopped")
+                _qt_status_lbl.configure(foreground='#cc0000')
+                return
+            try:
+                self._cloudflared_proc.terminate()
+                self._cloudflared_proc.wait(timeout=5)
+            except Exception:
+                try:
+                    self._cloudflared_proc.kill()
+                except Exception:
+                    pass
+            _qt_status_var.set("⬤ Stopped")
+            _qt_status_lbl.configure(foreground='#cc0000')
+            _qt_url_var.set("Quick Tunnel stopped.")
+
+        ttk.Button(qt_ctrl_row, text="▶ Start Quick Tunnel",
+                   command=_start_quick_tunnel).pack(side='left', padx=(0, 6))
+        ttk.Button(qt_ctrl_row, text="⏹ Stop",
+                   command=_stop_quick_tunnel).pack(side='left', padx=(0, 6))
+
+        # URL display + copy button
+        qt_url_frame = ttk.Frame(qt_frame)
+        qt_url_frame.pack(fill='x', pady=(4, 2))
+
+        ttk.Label(qt_url_frame, text="Your MCP URL:",
+                  font=('Arial', 9, 'bold')).pack(side='left', padx=(0, 6))
+
+        _qt_url_var = tk.StringVar(value="Not started")
+        _qt_url_entry = ttk.Entry(qt_url_frame, textvariable=_qt_url_var,
+                                   width=55, state='readonly')
+        _qt_url_entry.pack(side='left', padx=(0, 6))
+
+        def _copy_qt_url():
+            url = _qt_url_var.get()
+            if url and url.startswith('https://'):
+                self.root.clipboard_clear()
+                self.root.clipboard_append(url)
+                self.status_var.set("✅ MCP URL copied to clipboard")
+                self.root.after(3000, lambda: self.status_var.set("Ready"))
+            else:
+                messagebox.showinfo("Not Ready",
+                                    "Start the Quick Tunnel first.")
+
+        ttk.Button(qt_url_frame, text="📋 Copy URL",
+                   command=_copy_qt_url).pack(side='left', padx=(0, 6))
+
+        # Instructions + visual guide button
+        instructions_row = ttk.Frame(qt_frame)
+        instructions_row.pack(fill='x', pady=(4, 0))
+        ttk.Label(instructions_row, font=('Arial', 8), foreground='gray',
+                  justify='left',
+                  text=("Steps: 1) Save Bearer Token above  "
+                        "2) Start HTTP Server  3) Start Quick Tunnel\n"
+                        "4) Copy URL  5) Paste into Claude.ai → Settings → "
+                        "Connectors → Add MCP")
+                  ).pack(side='left')
+        ttk.Button(instructions_row,
+                   text="📖 Connect Claude.ai →",
+                   command=self.show_claude_connector_guide
+                   ).pack(side='right', padx=(8, 0))
+
+        ttk.Separator(remote_frame, orient='horizontal').pack(fill='x',
+                                                               pady=(4, 8))
+
+        # ══════════════════════════════════════════════════════════════════════
+        # Named Tunnel  (Persistent URL, Requires Cloudflare Account)
+        # ══════════════════════════════════════════════════════════════════════
+        ttk.Label(remote_frame,
+                  text="Named Tunnel  (persistent URL, requires Cloudflare account):",
+                  font=('Arial', 9, 'bold')).pack(anchor='w')
+        ttk.Label(remote_frame, font=('Arial', 8), foreground='gray',
+                  text=("Create a free Cloudflare Zero Trust tunnel at "
+                        "dash.cloudflare.com → Networks → Tunnels.\n"
+                        "Enter your tunnel's public hostname and token below, "
+                        "then click Activate.")
+                  ).pack(anchor='w', pady=(0, 4))
+
+        # ── Visual setup guides — text walkthroughs with deep links ──────────
+        guide_row = ttk.Frame(remote_frame)
+        guide_row.pack(fill='x', pady=(0, 6))
+        ttk.Button(guide_row,
+                   text="📖 Setup Cloudflare Tunnel  (step-by-step)",
+                   command=self.show_cloudflare_setup_guide
+                   ).pack(side='left', padx=(0, 6))
+        ttk.Button(guide_row,
+                   text="📖 Connect Claude.ai  (after tunnel is active)",
+                   command=self.show_claude_connector_guide
+                   ).pack(side='left')
 
         # ── Load saved tunnel settings ─────────────────────────────────────────
         _tun_name_var   = tk.StringVar(value='')
@@ -4160,12 +5896,149 @@ or from the Help menu."""
         ttk.Button(snippet_btn_row, text="📋 Copy Snippet",
                    command=_copy_snippet).pack(side='left')
 
+        # ══════════════════════════════════════════════════════════════════════
+        # Privacy & Analytics — anonymous heartbeat opt-out toggle
+        # ══════════════════════════════════════════════════════════════════════
+        privacy_frame = ttk.LabelFrame(scrollable_frame,
+                                       text="Privacy & Analytics",
+                                       padding=10)
+        privacy_frame.pack(fill='x', padx=20, pady=10)
+
+        ttk.Label(privacy_frame, justify='left',
+                  text=(
+                    "AI-Prowler sends an anonymous daily heartbeat so I can "
+                    "see how many people are using it and which versions are "
+                    "in the wild.\n\n"
+                    "What's sent: a random install ID, the AI-Prowler version, "
+                    "your OS (e.g. 'Windows-11'), how many chunks are indexed, "
+                    "and how many MCP tool calls happened in the last day.\n\n"
+                    "What's NEVER sent: your name, email, IP, document content, "
+                    "queries, file paths, anything identifying.\n\n"
+                    "You can turn this off below. AI-Prowler keeps working "
+                    "the same either way."
+                  ),
+                  wraplength=900,
+                  font=('Arial', 9), foreground='#444444'
+                  ).pack(anchor='w', pady=(0, 8))
+
+        # Load current state
+        _tel_cfg = self._telemetry_load_config()
+        _tel_enabled_var = tk.BooleanVar(value=_tel_cfg['enabled'])
+
+        def _on_tel_toggle():
+            self._telemetry_save_config(enabled=_tel_enabled_var.get())
+            _tel_status_var.set(
+                "✓ Saved." if _tel_enabled_var.get()
+                else "✗ Disabled. No heartbeats will be sent.")
+
+        ttk.Checkbutton(privacy_frame,
+                        text="Send anonymous usage heartbeat (recommended)",
+                        variable=_tel_enabled_var,
+                        command=_on_tel_toggle
+                        ).pack(anchor='w')
+
+        # Endpoint row — read-only display unless user clicks Edit
+        ep_row = ttk.Frame(privacy_frame)
+        ep_row.pack(fill='x', pady=(8, 4))
+        ttk.Label(ep_row, text="Endpoint:", width=10, anchor='w'
+                  ).pack(side='left')
+        _tel_ep_var = tk.StringVar(value=_tel_cfg['endpoint'])
+        _tel_ep_entry = ttk.Entry(ep_row, textvariable=_tel_ep_var,
+                                   state='readonly', width=70)
+        _tel_ep_entry.pack(side='left', padx=(4, 6))
+
+        def _edit_endpoint():
+            new = simpledialog.askstring(
+                "Telemetry endpoint",
+                "Cloudflare Worker URL (no trailing slash):",
+                initialvalue=_tel_ep_var.get(),
+                parent=self.root)
+            if new and new.strip():
+                _tel_ep_var.set(new.strip())
+                self._telemetry_save_config(endpoint=new.strip())
+                _tel_status_var.set("✓ Endpoint updated.")
+
+        ttk.Button(ep_row, text="Edit", command=_edit_endpoint
+                   ).pack(side='left')
+
+        # Last-success indicator + Send Now (debug)
+        info_row = ttk.Frame(privacy_frame)
+        info_row.pack(fill='x', pady=(4, 4))
+
+        _tel_last_var = tk.StringVar()
+        def _refresh_tel_last():
+            try:
+                if self._telemetry_last_path.exists():
+                    ts = self._telemetry_last_path.read_text(
+                        encoding='utf-8').strip()
+                    _tel_last_var.set(f"Last successful heartbeat: {ts}")
+                else:
+                    _tel_last_var.set("Last successful heartbeat: never")
+            except Exception:
+                _tel_last_var.set("Last successful heartbeat: unknown")
+        _refresh_tel_last()
+        ttk.Label(info_row, textvariable=_tel_last_var,
+                  font=('Arial', 8), foreground='#666666'
+                  ).pack(side='left')
+
+        def _send_now():
+            cfg = self._telemetry_load_config()
+            if not cfg['enabled']:
+                messagebox.showinfo(
+                    "Telemetry disabled",
+                    "Enable the checkbox above first.")
+                return
+            payload = self._telemetry_compose_payload()
+            if payload is None:
+                messagebox.showerror(
+                    "Cannot send",
+                    "install_id not available. Restart AI-Prowler "
+                    "and try again.")
+                return
+            # If the user has set telemetry_admin_token in config, use
+            # ?force=true to bypass the Worker's 12h throttle. Otherwise
+            # send normally — the Worker will silently throttle if needed
+            # and the local counter will be preserved.
+            try:
+                cfg_path = Path.home() / '.ai-prowler' / 'config.json'
+                has_admin = False
+                if cfg_path.exists():
+                    full_cfg = json.loads(cfg_path.read_text(encoding='utf-8'))
+                    has_admin = bool(full_cfg.get('telemetry_admin_token'))
+            except Exception:
+                has_admin = False
+
+            threading.Thread(
+                target=self._telemetry_send,
+                args=(payload, cfg['endpoint']),
+                kwargs={'force': has_admin},
+                daemon=True).start()
+            self.root.after(2000, _refresh_tel_last)
+            if has_admin:
+                _tel_status_var.set(
+                    "Sent (force=true; throttle bypassed). "
+                    "Check console for the result.")
+            else:
+                _tel_status_var.set(
+                    "Sent. (Throttle may apply; set "
+                    "'telemetry_admin_token' in config.json to bypass.) "
+                    "Check console for the result.")
+
+        ttk.Button(info_row, text="📡 Send Heartbeat Now",
+                   command=_send_now
+                   ).pack(side='right')
+
+        _tel_status_var = tk.StringVar()
+        ttk.Label(privacy_frame, textvariable=_tel_status_var,
+                  font=('Arial', 8), foreground='#006600'
+                  ).pack(anchor='w', pady=(2, 0))
+
         # About
         about_frame = ttk.LabelFrame(scrollable_frame, text="About", padding=10)
         about_frame.pack(fill='both', expand=True, padx=20, pady=10)
         
-        about_text = """AI-Prowler — Agentic RAG Knowledge Base
-Version 5.0.0
+        about_text = f"""AI-Prowler — Agentic RAG Knowledge Base
+Version {APP_VERSION}
 
 Core:
 • Agentic RAG — 13 MCP tools for Claude Desktop & Claude.ai
@@ -5104,8 +6977,37 @@ Built with Python, ChromaDB, and Claude"""
         if directory:
             self.index_dir_var.set(directory)
 
+    def browse_all(self):
+        """Open the native file browser showing all files — Ctrl/Shift for multi-select.
+
+        This is the primary browse option.  The native Windows file dialog
+        shows files AND folders.  The user can navigate into any folder to
+        see its contents, then either:
+          - Select individual files (Ctrl-click / Shift-click for multiple)
+          - Copy the folder path from the address bar and paste it into the
+            path entry box to add the whole folder to the queue.
+
+        Supported file types are shown by default; 'All files' is also available.
+        """
+        if RAG_AVAILABLE:
+            exts = sorted(_rag_engine.SUPPORTED_EXTENSIONS)
+            ext_str = ' '.join(f'*{e}' for e in exts)
+            filetypes = [
+                ('Supported files', ext_str),
+                ('All files', '*.*'),
+            ]
+        else:
+            filetypes = [('All files', '*.*')]
+
+        files = filedialog.askopenfilenames(
+            title='Select files to index  (Ctrl/Shift for multiple)',
+            filetypes=filetypes
+        )
+        if files:
+            self._queue_add_paths(list(files))
+
     def browse_folder_single(self):
-        """Open native Windows folder browser and add selected folder to queue."""
+        """Open the native Windows folder picker to add a whole folder to the queue."""
         directory = filedialog.askdirectory(
             title='Select a folder to index'
         )
@@ -5559,7 +7461,8 @@ Built with Python, ChromaDB, and Claude"""
                         label=f"{dir_idx}/{n_dirs}",
                         stop_event=self._index_stop_event,
                         pause_event=self._index_pause_event,
-                        start_from=start_from
+                        start_from=start_from,
+                        root_directory=str(Path(directory).parent) if is_file else directory,
                     )
 
                     # Register for tracking — use parent dir when a single file
@@ -5576,6 +7479,7 @@ Built with Python, ChromaDB, and Claude"""
                             label=f"{dir_idx}/{n_dirs}",
                             stop_event=self._index_stop_event,
                             pause_event=self._index_pause_event,
+                            root_directory=str(Path(directory).parent),
                         )
                     else:
                         index_directory(directory, recursive=recursive, quiet=False)
@@ -8206,8 +10110,13 @@ Built with Python, ChromaDB, and Claude"""
                 self._cloudflared_proc.wait(timeout=3)
             except Exception:
                 pass
-        # Close the window
+        # Close the window and terminate the process (including the CMD window)
         self.root.destroy()
+        # os._exit() terminates the Python process immediately, which also
+        # kills the parent CMD/batch window that launched AI-Prowler.
+        # Without this, the DOS prompt stays open after the GUI closes.
+        import os as _os
+        _os._exit(0)
 
 class FilteredTextRedirector:
     """

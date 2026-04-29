@@ -2269,6 +2269,282 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE,
     return chunks
 
 # ═══════════════════════════════════════════════════════════
+# DOCUMENT PROVENANCE — Rich Metadata for Agentic RAG
+# ═══════════════════════════════════════════════════════════
+#
+# These functions build provenance metadata that is stored with every chunk
+# in ChromaDB.  The goal is to give Claude (or any MCP client) enough
+# structural context to NEVER confuse content from one document/case/project
+# with another, even when filenames are identical across directories.
+#
+# Four helpers:
+#   build_chunk_header()       — one-line identity stamp prepended to chunk text
+#   extract_document_title()   — pull embedded title from PDF / DOCX / PPTX
+#   compute_document_id()      — SHA-256 content fingerprint (first 16 hex chars)
+#   build_directory_chain()    — human-readable breadcrumb from root to file
+#
+# Plus one utility for building the full rich metadata dict:
+#   build_rich_metadata()      — assembles all provenance fields in one call
+
+import hashlib as _hashlib_mod   # module-level import for provenance helpers
+
+
+def build_chunk_header(filepath: str, filename: str,
+                       chunk_idx: int, total_chunks: int,
+                       file_modified: str = '') -> str:
+    """Build a one-line provenance header that is prepended to chunk text.
+
+    The header is embedded IN the stored chunk content so Claude always sees
+    it, even if it ignores metadata fields.  Format:
+
+        [SOURCE: ParentDir/filename.pdf | chunk 3/12 | modified 2024-06-15]
+
+    Args:
+        filepath:      Full normalised path of the source file.
+        filename:      Basename of the source file.
+        chunk_idx:     Zero-based chunk index.
+        total_chunks:  Total number of chunks for this file.
+        file_modified: ISO timestamp string of file's last modification
+                       (only the date portion is shown).
+
+    Returns:
+        Single-line header string (no trailing newline).
+    """
+    parent = Path(filepath).parent.name or 'root'
+    mod_str = ''
+    if file_modified:
+        # Show only the date portion (YYYY-MM-DD)
+        mod_str = f' | modified {file_modified[:10]}'
+    return (f"[SOURCE: {parent}/{filename} | "
+            f"chunk {chunk_idx + 1}/{total_chunks}{mod_str}]")
+
+
+def extract_document_title(filepath: str) -> str:
+    """Extract an embedded document title from PDF, DOCX, or PPTX metadata.
+
+    Falls back to the filename (without extension) if no title is found or
+    if the file type doesn't support embedded titles.
+
+    Args:
+        filepath: Full path to the source file.
+
+    Returns:
+        Title string — either extracted metadata or the filename stem.
+    """
+    ext = Path(filepath).suffix.lower()
+    fallback = Path(filepath).stem
+
+    try:
+        if ext == '.pdf':
+            import pdfplumber
+            with pdfplumber.open(filepath) as pdf:
+                info = pdf.metadata or {}
+                title = (info.get('Title') or info.get('title') or '').strip()
+                if title and title.lower() not in ('untitled', 'microsoft word', ''):
+                    return title
+
+        elif ext == '.docx':
+            from docx import Document as _DocxDoc
+            doc = _DocxDoc(filepath)
+            title = (doc.core_properties.title or '').strip()
+            if title:
+                return title
+
+        elif ext == '.pptx':
+            from pptx import Presentation as _PptxPres
+            prs = _PptxPres(filepath)
+            title = (prs.core_properties.title or '').strip()
+            if title:
+                return title
+
+    except Exception:
+        pass  # Any failure → fall back to filename
+
+    return fallback
+
+
+def compute_document_id(filepath: str) -> str:
+    """Compute a unique document fingerprint from file content.
+
+    Uses SHA-256 of the first 1 MB of the file, truncated to 16 hex chars.
+    This is fast enough for large files while still being unique in practice.
+
+    Args:
+        filepath: Full path to the source file.
+
+    Returns:
+        String like 'sha256:a3f8c1d2e4b5f6a7' or 'sha256:unknown' on error.
+    """
+    try:
+        h = _hashlib_mod.sha256()
+        with open(filepath, 'rb') as f:
+            # Read first 1 MB — enough for uniqueness, fast for large files
+            data = f.read(1024 * 1024)
+            h.update(data)
+        return f"sha256:{h.hexdigest()[:16]}"
+    except Exception:
+        return "sha256:unknown"
+
+
+def build_directory_chain(filepath: str, root_directory: str = '') -> str:
+    """Build a human-readable breadcrumb from the root directory to the file.
+
+    Example:
+        filepath:       'C:/Cases/2024/Smith_v_Jones/complaint.pdf'
+        root_directory: 'C:/Cases'
+        result:         'Cases > 2024 > Smith_v_Jones'
+
+    If root_directory is empty or doesn't match, the chain is built from the
+    last 3 directory levels above the file.
+
+    Args:
+        filepath:       Full normalised path of the source file.
+        root_directory: The top-level directory that was originally indexed.
+
+    Returns:
+        Breadcrumb string like 'Cases > 2024 > Smith_v_Jones'.
+    """
+    fp = Path(filepath)
+    parent_dir = fp.parent
+
+    if root_directory:
+        root = Path(root_directory)
+        try:
+            # Get the relative path from root to the file's parent
+            rel = parent_dir.relative_to(root)
+            parts = [root.name] + list(rel.parts)
+            # Filter out empty parts
+            parts = [p for p in parts if p and p != '.']
+            if parts:
+                return ' > '.join(parts)
+        except ValueError:
+            pass  # filepath is not under root_directory — fall through
+
+    # Fallback: last 3 directory levels
+    parts = list(parent_dir.parts)
+    if len(parts) > 3:
+        parts = parts[-3:]
+    return ' > '.join(parts) if parts else 'root'
+
+
+def build_rich_metadata(filepath: str, filename: str, chunk_idx: int,
+                        total_chunks: int, extension: str,
+                        root_directory: str = '',
+                        doc_title: str = '',
+                        document_id: str = '',
+                        file_modified: str = '',
+                        file_size_bytes: int = 0,
+                        extra: dict = None) -> dict:
+    """Assemble the full rich metadata dict for a single chunk.
+
+    This is called by every indexing path to ensure consistent metadata.
+
+    Args:
+        filepath:       Normalised full path.
+        filename:       Basename of the file.
+        chunk_idx:      Zero-based chunk index.
+        total_chunks:   Total chunks for this file.
+        extension:      File extension (e.g. '.pdf').
+        root_directory: Top-level indexed directory (for directory_chain).
+        doc_title:      Extracted or fallback document title.
+        document_id:    SHA-256 content hash string.
+        file_modified:  ISO timestamp of file's last modification.
+        file_size_bytes: File size in bytes.
+        extra:          Optional dict of additional fields (e.g. email_uid).
+
+    Returns:
+        Dict ready to pass as a ChromaDB metadata entry.
+    """
+    parent_dir = Path(filepath).parent.name or 'root'
+    chain = build_directory_chain(filepath, root_directory)
+
+    meta = {
+        # ── Identity (original fields) ──
+        'filepath':         filepath,
+        'filename':         filename,
+        'chunk_index':      chunk_idx,
+        'total_chunks':     total_chunks,
+        'extension':        extension,
+        'indexed_date':     datetime.now().isoformat(),
+        # ── Provenance (new) ──
+        'parent_directory': parent_dir,
+        'directory_chain':  chain,
+        'root_directory':   root_directory or Path(filepath).parts[0] if Path(filepath).parts else '',
+        # ── Document identity (new) ──
+        'document_id':      document_id,
+        'file_size_bytes':  file_size_bytes,
+        'file_modified':    file_modified,
+        # ── Content context (new) ──
+        'doc_title':        doc_title,
+        'chunk_header':     build_chunk_header(filepath, filename, chunk_idx,
+                                               total_chunks, file_modified),
+    }
+
+    if extra:
+        meta.update(extra)
+
+    return meta
+
+
+def prepend_source_headers(chunks: list, filepath: str, filename: str,
+                           file_modified: str = '') -> list:
+    """Prepend a [SOURCE: ...] header line to each chunk's text.
+
+    The header is added AFTER chunking (so chunk boundaries are unaffected)
+    but BEFORE storage in ChromaDB (so it becomes part of the searchable and
+    retrievable text).
+
+    Args:
+        chunks:        List of chunk text strings from chunk_text().
+        filepath:      Full normalised path.
+        filename:      Basename of the file.
+        file_modified: ISO timestamp of file modification.
+
+    Returns:
+        New list of chunk strings, each with a header prepended.
+    """
+    total = len(chunks)
+    result = []
+    for j, chunk in enumerate(chunks):
+        header = build_chunk_header(filepath, filename, j, total, file_modified)
+        result.append(f"{header}\n{chunk}")
+    return result
+
+
+def get_file_provenance(filepath: str, root_directory: str = '') -> dict:
+    """Gather all per-file provenance info in one call.
+
+    This is called once per file (not per chunk) and the results are reused
+    for every chunk of that file.  Avoids repeated disk reads for the hash,
+    title extraction, and stat() calls.
+
+    Args:
+        filepath:       Full normalised path.
+        root_directory: The top-level indexed directory.
+
+    Returns:
+        Dict with keys: doc_title, document_id, file_modified, file_size_bytes.
+    """
+    doc_title = extract_document_title(filepath)
+    document_id = compute_document_id(filepath)
+
+    try:
+        stat = os.stat(filepath)
+        file_modified = datetime.fromtimestamp(stat.st_mtime).isoformat()
+        file_size_bytes = stat.st_size
+    except OSError:
+        file_modified = ''
+        file_size_bytes = 0
+
+    return {
+        'doc_title':        doc_title,
+        'document_id':      document_id,
+        'file_modified':    file_modified,
+        'file_size_bytes':  file_size_bytes,
+    }
+
+
+# ═══════════════════════════════════════════════════════════
 # GPU DETECTION
 # ═══════════════════════════════════════════════════════════
 
@@ -2639,7 +2915,8 @@ def _get_flat_file_tracking() -> dict:
 
 def index_file_list(file_paths: list, label: str = "",
                     stop_event=None, pause_event=None,
-                    start_from: int = 0) -> dict:
+                    start_from: int = 0,
+                    root_directory: str = "") -> dict:
     """
     Index a specific pre-built list of file paths.
 
@@ -2654,6 +2931,9 @@ def index_file_list(file_paths: list, label: str = "",
         stop_event:  threading.Event — if set, stop after current file/message
         pause_event: threading.Event — if set, block until cleared
         start_from:  File index to resume from (skip already-indexed files)
+        root_directory: Top-level directory being indexed (used for provenance
+                       metadata — directory_chain breadcrumbs).  If empty, the
+                       parent directory of each file is used as a fallback.
 
     Returns dict with keys: processed, skipped, chunks, words, stopped_at
       stopped_at = 1-based index of next unprocessed file (0 if completed)
@@ -2721,6 +3001,7 @@ def index_file_list(file_paths: list, label: str = "",
                 filepath,
                 stop_event=stop_event,
                 pause_event=pause_event,
+                root_directory=root_directory,
             )
             processed    += arc_stats["processed"]
             skipped      += arc_stats["skipped"]
@@ -2757,15 +3038,25 @@ def index_file_list(file_paths: list, label: str = "",
             skipped += 1
             continue
 
+        # ── Rich provenance metadata ──────────────────────────────────────────
+        prov = get_file_provenance(filepath, root_directory)
+        chunks = prepend_source_headers(chunks, filepath,
+                                        file_data['filename'],
+                                        prov['file_modified'])
+
         ids = [f"{filepath}__chunk_{j}" for j in range(len(chunks))]
-        metadatas = [{
-            'filepath':     filepath,
-            'filename':     file_data['filename'],
-            'chunk_index':  j,
-            'total_chunks': len(chunks),
-            'extension':    file_data['extension'],
-            'indexed_date': datetime.now().isoformat()
-        } for j in range(len(chunks))]
+        metadatas = [build_rich_metadata(
+            filepath=filepath,
+            filename=file_data['filename'],
+            chunk_idx=j,
+            total_chunks=len(chunks),
+            extension=file_data['extension'],
+            root_directory=root_directory,
+            doc_title=prov['doc_title'],
+            document_id=prov['document_id'],
+            file_modified=prov['file_modified'],
+            file_size_bytes=prov['file_size_bytes'],
+        ) for j in range(len(chunks))]
 
         try:
             collection.delete(where={"filepath": filepath})
@@ -2793,7 +3084,8 @@ def index_file_list(file_paths: list, label: str = "",
 
 def index_email_archive(filepath: str,
                         stop_event=None,
-                        pause_event=None) -> dict:
+                        pause_event=None,
+                        root_directory: str = "") -> dict:
     """
     Incrementally index a multi-message email archive file.
 
@@ -2907,18 +3199,30 @@ def index_email_archive(filepath: str,
             skipped += 1
             continue
 
+        # ── Rich provenance metadata (email) ──────────────────────────────────
+        # For emails the "file_modified" is the archive mtime and document_id
+        # is per-archive (not per-message), but parent_directory and
+        # directory_chain still provide useful scoping.
+        prov = get_file_provenance(filepath_norm, root_directory)
+        chunks = prepend_source_headers(chunks, filepath_norm, fname,
+                                        prov['file_modified'])
+
         # Use uid-based chunk IDs so they are stable across re-runs
         ids       = [f"{filepath_norm}__email_{uid}__chunk_{j}"
                      for j in range(len(chunks))]
-        metadatas = [{
-            "filepath":      filepath_norm,
-            "filename":      fname,
-            "email_uid":     uid,
-            "chunk_index":   j,
-            "total_chunks":  len(chunks),
-            "extension":     ext,
-            "indexed_date":  datetime.now().isoformat(),
-        } for j in range(len(chunks))]
+        metadatas = [build_rich_metadata(
+            filepath=filepath_norm,
+            filename=fname,
+            chunk_idx=j,
+            total_chunks=len(chunks),
+            extension=ext,
+            root_directory=root_directory,
+            doc_title=prov['doc_title'],
+            document_id=prov['document_id'],
+            file_modified=prov['file_modified'],
+            file_size_bytes=prov['file_size_bytes'],
+            extra={"email_uid": uid},
+        ) for j in range(len(chunks))]
 
         try:
             collection.add(ids=ids, documents=chunks, metadatas=metadatas)
@@ -3048,16 +3352,26 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False)
             skipped_files += 1
             continue
         
+        # ── Rich provenance metadata ──────────────────────────────────────────
+        prov = get_file_provenance(filepath, directory)
+        chunks = prepend_source_headers(chunks, filepath,
+                                        file_data['filename'],
+                                        prov['file_modified'])
+
         # Prepare for database
         ids = [f"{filepath}__chunk_{j}" for j in range(len(chunks))]
-        metadatas = [{
-            'filepath': filepath,
-            'filename': file_data['filename'],
-            'chunk_index': j,
-            'total_chunks': len(chunks),
-            'extension': file_data['extension'],
-            'indexed_date': datetime.now().isoformat()
-        } for j in range(len(chunks))]
+        metadatas = [build_rich_metadata(
+            filepath=filepath,
+            filename=file_data['filename'],
+            chunk_idx=j,
+            total_chunks=len(chunks),
+            extension=file_data['extension'],
+            root_directory=directory,
+            doc_title=prov['doc_title'],
+            document_id=prov['document_id'],
+            file_modified=prov['file_modified'],
+            file_size_bytes=prov['file_size_bytes'],
+        ) for j in range(len(chunks))]
         
         # Remove any existing chunks for this file before re-adding
         # This prevents ghost chunks from shorter re-processed files and
@@ -4334,7 +4648,8 @@ def command_update(directory, recursive=True, auto_confirm=False):
 
             # ── Email archive — incremental per-message update ─────────────
             if ext in EMAIL_ARCHIVE_EXTENSIONS:
-                arc_stats = index_email_archive(filepath)
+                arc_stats = index_email_archive(filepath,
+                                                root_directory=directory)
                 if arc_stats["processed"] > 0 or arc_stats.get("removed", 0) > 0:
                     print(f"  ✅ {arc_stats['processed']} new message(s) indexed, "
                           f"{arc_stats.get('removed', 0)} removed, "
@@ -4358,15 +4673,25 @@ def command_update(directory, recursive=True, auto_confirm=False):
                 failed += 1
                 continue
 
+            # ── Rich provenance metadata ──────────────────────────────────
+            prov = get_file_provenance(filepath, directory)
+            chunks = prepend_source_headers(chunks, filepath,
+                                            file_data['filename'],
+                                            prov['file_modified'])
+
             ids = [f"{filepath}__chunk_{j}" for j in range(len(chunks))]
-            metadatas = [{
-                'filepath':     filepath,
-                'filename':     file_data['filename'],
-                'chunk_index':  j,
-                'total_chunks': len(chunks),
-                'extension':    file_data['extension'],
-                'indexed_date': datetime.now().isoformat()
-            } for j in range(len(chunks))]
+            metadatas = [build_rich_metadata(
+                filepath=filepath,
+                filename=file_data['filename'],
+                chunk_idx=j,
+                total_chunks=len(chunks),
+                extension=file_data['extension'],
+                root_directory=directory,
+                doc_title=prov['doc_title'],
+                document_id=prov['document_id'],
+                file_modified=prov['file_modified'],
+                file_size_bytes=prov['file_size_bytes'],
+            ) for j in range(len(chunks))]
 
             try:
                 # Remove stale chunks before re-adding (handles re-index of modified)
