@@ -1,6 +1,6 @@
 # AI-Prowler — Complete User Guide
 
-**Version 5.0.0**
+**Version 5.1.0**
 
 \---
 
@@ -25,6 +25,9 @@
 17. [Debugging \& Log Files](#17-debugging--log-files)
 18. [Troubleshooting](#18-troubleshooting)
 19. [Uninstalling](#19-uninstalling)
+20. [Self-Learning System](#20-self-learning-system)
+21. [Welcome Page \& Update Notifications](#21-welcome-page--update-notifications)
+22. [Heartbeats \& Analytics](#22-heartbeats--analytics)
 
 \---
 
@@ -45,6 +48,8 @@ Traditional RAG retrieves a chunk, hands it to a small local model, and gets a m
 This produces dramatically better results — equivalent to having a skilled research assistant who knows your entire document library.
 
 **Hardware requirements are minimal.** Because Claude does the reasoning, AI-Prowler only needs to run the embedding model (\~400 MB RAM) and ChromaDB. No GPU is required. No large local AI model is needed.
+
+**New in v5.1.0 — Self-Learning:** AI-Prowler now includes a RAG-based self-learning system. Claude can record business lessons, fact corrections, project insights, and process improvements into a structured knowledge base — and check that knowledge before answering future questions. Learnings are instant (no GPU training required) and managed through a dedicated 🧠 Learnings tab in the GUI. See Section 20 for full details.
 
 \---
 
@@ -123,7 +128,7 @@ Open Claude Desktop and start a new conversation. You should see a tools indicat
 What AI-Prowler tools do you have available?
 ```
 
-Claude will list all 14 tools. If you see `get\\\_knowledge\\\_base\\\_overview` and `search\\\_documents`, the connection is working.
+Claude will list all available tools. If you see `get\\\_knowledge\\\_base\\\_overview` and `search\\\_documents`, the connection is working.
 
 ### If Claude Desktop Loses the Connection
 
@@ -160,7 +165,7 @@ If tools are not appearing or tool calls are failing in Claude Desktop, use the 
 
    * MCP SDK version and `instructions=` support status
    * FastMCP constructor parameters
-   * Whether all 13 agentic RAG tools are present in `ai\\\_prowler\\\_mcp.py`
+   * Whether all agentic RAG tools are present in `ai\\\_prowler\\\_mcp.py`
    * Claude Desktop config validity
    * Subscription cache status
    * MCP server log tail
@@ -292,7 +297,7 @@ This is useful when you want to see what's in the knowledge base before asking C
 
 ## 6\. MCP Tools Reference
 
-AI-Prowler exposes **14 tools** to Claude. They fall into two categories.
+AI-Prowler exposes **19 tools** to Claude. They fall into three categories.
 
 ### Agentic RAG Tools (Primary)
 
@@ -382,7 +387,7 @@ Checks ChromaDB connectivity, reports the chunk count, database path, embedding 
 
 ### Small Business Action Tools
 
-Nine tools for field service automation. Free tools require no setup; QuickBooks tools need one-time configuration in **Settings → Small Business** tab (see Section 9).
+Seven tools for field service automation. Free tools require no setup; spreadsheet tools use the default path from Settings.
 
 #### `get\\\_weather(location, days)`
 
@@ -399,14 +404,6 @@ Solves the Traveling Salesman Problem for a list of job stops. Geocodes addresse
 #### `build\\\_maps\\\_url(stops, origin, app)`
 
 Generates a tap-to-navigate Google Maps (or Apple Maps) URL with all stops pre-loaded in optimized order. Auto-splits routes longer than 9 stops into legs (Google Maps URL limit). Works on iPhone, Android, CarPlay, and Android Auto — free, no key.
-
-#### `create\\\_quickbooks\\\_online\\\_invoice(customer\\\_name, service\\\_description, amount, job\\\_date, memo, send\\\_email)`
-
-Creates an invoice in QuickBooks Online and optionally emails it to the customer. Requires one-time OAuth 2.0 setup in **Settings → Small Business → QuickBooks Online**. Tokens refresh automatically after setup.
-
-#### `create\\\_quickbooks\\\_desktop\\\_invoice(customer\\\_name, service\\\_description, amount, job\\\_date, memo, item\\\_name)`
-
-Creates an invoice in QuickBooks Desktop using Windows COM automation (QBSDK). No internet or OAuth needed — requires QuickBooks Desktop open with a company file loaded. Requires `pywin32` package (installed automatically).
 
 #### `update\\\_job\\\_spreadsheet(filepath, job\\\_identifier, updates, id\\\_column, sheet\\\_name, backup)`
 
@@ -431,7 +428,35 @@ Both spreadsheet tools auto-detect the real header row by scanning the first fiv
 
 #### `get\\\_action\\\_tools\\\_status()`
 
-Returns a full status report for all nine action tools: which are ready, which need configuration, and setup instructions for anything missing. Call this first when troubleshooting the Small Business tools.
+Returns a full status report for all action tools: which are ready, which need configuration, and setup instructions for anything missing. Call this first when troubleshooting the Small Business tools.
+
+### Self-Learning Tools
+
+Six tools for RAG-based knowledge accumulation. See Section 20 for full details.
+
+#### `record\\\_learning(title, content, category, context, source, confidence, tags, supersedes\\\_id, outcome, auto\\\_detected)`
+
+Records a new learning (fact, lesson, insight) into the self-learning knowledge base. Instantly indexed in ChromaDB. Categories include: `fact\_correction`, `business\_lesson`, `project\_insight`, `process\_improvement`, `mistake\_learned`, `best\_practice`, `client\_preference`, `technical\_note`, and `general`. The `auto\_detected` flag controls whether Claude shows a prominent confirmation banner (auto-detected) or a concise confirmation (operator-requested). Claude calls this automatically when it detects corrections, project outcomes, or process improvements in conversation.
+
+#### `check\\\_learned(query, n\\\_results, category, include\\\_deprecated)`
+
+Semantic search across the self-learning knowledge base. Claude calls this proactively before answering questions about clients, projects, scheduling, or procedures. Returns matching learnings ranked by relevance with confidence scores, context, and metadata. Also increments the `applied\_count` on each returned learning for usage tracking.
+
+#### `list\\\_learnings(category, status, tag, limit)`
+
+Browses all learnings with exact-match filters (category, status, tag). Unlike `check\_learned` (semantic search), this lists by recency. Use to audit the knowledge base or review all learnings in a category.
+
+#### `update\\\_learning(learning\\\_id, updates)`
+
+Modifies fields on an existing learning: title, content, context, category, confidence, tags, status, or outcome. Used after the confirmation protocol when the user corrects a recorded learning.
+
+#### `delete\\\_learning(learning\\\_id)`
+
+Permanently removes a learning from both the JSON file and ChromaDB index. Destructive — consider archiving with `update\_learning(id, {status: "archived"})` instead.
+
+#### `get\\\_learning\\\_stats()`
+
+Returns summary statistics: total count, breakdown by category/source/outcome/status, most frequently applied learnings, and file path.
 
 \---
 
@@ -453,7 +478,7 @@ AI-Prowler HTTP Server (on your PC)
 ChromaDB (your local documents)
 ```
 
-### Setup Steps
+### Setup Steps (Quick Start)
 
 **1. Set a Bearer Token**
 
@@ -463,40 +488,13 @@ In AI-Prowler, go to **Settings → Remote Access**. Enter a Bearer token — th
 
 Click **▶ Start HTTP Server**. The status light turns green when running. You will also see the internet and subscription status lights update.
 
-**3. Start the Cloudflare Tunnel**
+**3. Start a Cloudflare Tunnel**
 
-Click **▶ Start Tunnel**. The tunnel provides a permanent public HTTPS URL (e.g. `https://mobile.dvavro-ai-prowler.com/mcp`).
+For quick testing, use **🚀 Quick Tunnel** (temporary URL, changes on restart). For permanent daily use, set up a **Named Tunnel** with your own domain. See the detailed guides below.
 
-**4. Add AI-Prowler as a Connector in Claude.ai**
+**4. Connect Claude.ai**
 
-The HTTP/Cloudflare path is exclusively for Claude.ai (web and mobile). **Do not add this URL to Claude Desktop** — Claude Desktop uses the stdio path configured automatically by the installer. Adding the HTTP URL to Claude Desktop's config is a common misconfiguration that causes Claude Desktop to require the HTTP server to be running. Use **Settings → Claude Desktop MCP → Auto-configure Claude Desktop** if you need to fix this.
-
-To connect Claude.ai to your knowledge base:
-
-1. Open [claude.ai](https://claude.ai) in a browser and sign in (Claude Pro or Team required)
-2. Click your profile icon (top right) → **Settings**
-3. In the left sidebar, click **Connectors**
-4. Click **Add custom connector** (or **+ Add** depending on your plan)
-5. In the **MCP Server URL** field, enter your tunnel URL followed by `/mcp`:
-
-```
-   https://mobile.dvavro-ai-prowler.com/mcp
-   ```
-
-(Replace with your actual Cloudflare Tunnel hostname)
-
-6. Claude.ai redirects you to your AI-Prowler authorization page
-7. Enter your Bearer token and click **Connect**
-8. Claude.ai redirects back — AI-Prowler now appears in your Connectors list with a green status dot
-
-   **To use the connector in a conversation:**
-
-* Start a new conversation on Claude.ai
-* In the chat toolbar, click the **Connectors** or **Tools** button (puzzle-piece icon)
-* Select **AI-Prowler** to enable it for that conversation
-* Ask any research question — Claude will call your knowledge base tools automatically
-
-  **Tip:** Claude.ai in the browser supports downloading any files that Claude produces (code, documents, reports) directly to your machine, whereas the Claude Desktop app may open some file types in-app. If you need to save Claude's outputs as files, Claude.ai in the browser is the better choice for that workflow.
+Add your tunnel URL as a custom connector in Claude.ai Settings → Connectors. See "Connecting Claude.ai to Your Knowledge Base" below for step-by-step instructions.
 
   ### Status Lights
 
@@ -515,25 +513,81 @@ To connect Claude.ai to your knowledge base:
 
   When the HTTP server is running, AI-Prowler automatically prevents Windows from going to sleep using the Windows `SetThreadExecutionState` API. This ensures Claude.ai connections remain active without needing to change your power settings. Sleep is restored automatically when you stop the server or close AI-Prowler.
 
-  ### Cloudflare Tunnel One-Time Setup
+  ### Cloudflare Tunnel — Quick Tunnel (Testing)
 
-  The tunnel requires a one-time setup per machine: Note: Support will create this as part of a subscription.
+  For quick testing without permanent DNS setup, use the **Quick Tunnel** option:
 
-1. Click **Login** — authenticates with Cloudflare (opens browser once)
-2. Click **Create Tunnel** — creates a named tunnel
-3. Click **Route DNS** — maps your public hostname to the tunnel
-4. Click **Save Config** — saves the tunnel configuration
+1. Click **▶ Start HTTP Server** to start the MCP server
+2. Click **🚀 Quick Tunnel** — this creates a temporary Cloudflare Tunnel with an auto-generated URL (e.g. `https://random-words.trycloudflare.com`)
+3. Copy the URL shown in the status area
+4. Add it as a custom connector in Claude.ai (append `/mcp` to the URL)
+5. The tunnel lasts as long as AI-Prowler is running — the URL changes every time you restart
 
-   After setup, use **Start Tunnel** / **Stop Tunnel** for daily operation. The tunnel can also be installed as a Windows service for automatic startup.
+  Quick Tunnels are ideal for initial testing, demos, or temporary access. For permanent daily use, set up a Named Tunnel instead.
 
-   ### OAuth 2.0 + PKCE Authentication
+  ### Cloudflare Tunnel — Named Tunnel Setup (Permanent)
 
-   The HTTP server implements full OAuth 2.0 + PKCE authentication (required by Claude.ai custom connectors). This means:
+  A Named Tunnel gives you a permanent, branded URL (e.g. `https://mobile.your-company.com/mcp`) that never changes. This is the recommended setup for daily use.
 
-* Claude.ai discovers authentication endpoints automatically via RFC 9728 metadata
-* Dynamic client registration is handled automatically (RFC 7591)
-* Authorization codes are exchanged for access tokens at `/token`
-* Your Bearer token is never stored in plain text in the subscription registry (only a short SHA-256 hash is kept)
+  **Prerequisites:**
+  * A free Cloudflare account at [dash.cloudflare.com](https://dash.cloudflare.com)
+  * A domain name added to your Cloudflare account (free domains work fine)
+
+  **Step-by-step setup:**
+
+  1. **Login** — Click the **Login** button in Settings → Remote Access → Cloudflare Tunnel. This opens your browser to authenticate with Cloudflare. After login, a certificate file is saved locally. You only need to do this once per machine.
+
+  2. **Create Tunnel** — Click **Create Tunnel**. Enter a name for your tunnel (e.g. `ai-prowler`). AI-Prowler creates the tunnel in your Cloudflare account and saves the tunnel credentials locally.
+
+  3. **Route DNS** — Click **Route DNS**. Enter the hostname you want to use (e.g. `mobile.your-company.com`). AI-Prowler creates a CNAME record in your Cloudflare DNS that points to the tunnel. This is what makes the URL permanent.
+
+  4. **Save Config** — Click **Save Config**. This writes the tunnel configuration file that tells `cloudflared` how to route traffic from your public URL to the local HTTP server.
+
+  5. **Start Tunnel** — Click **▶ Start Tunnel**. The tunnel connects to Cloudflare and your public URL is now live. The status indicator turns green.
+
+  After this one-time setup, daily operation is just two clicks: **Start HTTP Server** → **Start Tunnel**.
+
+  ### Installing Tunnel as a Windows Service
+
+  For always-on access (e.g. accessing your knowledge base from your phone without opening AI-Prowler):
+
+  * Click **Install as Windows Service** — this registers `cloudflared` as a Windows background service
+  * The tunnel starts automatically at boot, even without logging in
+  * AI-Prowler's HTTP server must still be running for Claude.ai to reach your knowledge base
+
+  ### Connecting Claude.ai to Your Knowledge Base — Step by Step
+
+  The HTTP/Cloudflare path is exclusively for Claude.ai (web and mobile). **Do not add this URL to Claude Desktop** — Claude Desktop uses the stdio path configured automatically by the installer.
+
+1. Open [claude.ai](https://claude.ai) in a browser and sign in (Claude Pro or Team required)
+2. Click your profile icon (top right) → **Settings**
+3. In the left sidebar, click **Connectors**
+4. Click **Add custom connector** (or **+ Add** depending on your plan)
+5. In the **MCP Server URL** field, enter your tunnel URL followed by `/mcp`:
+
+```
+   https://mobile.your-company.com/mcp
+   ```
+
+6. Claude.ai redirects you to your AI-Prowler authorization page
+7. Enter your Bearer token and click **Connect**
+8. Claude.ai redirects back — AI-Prowler now appears in your Connectors list with a green status dot
+
+   **To use the connector in a conversation:**
+
+* Start a new conversation on Claude.ai
+* In the chat toolbar, click the **Connectors** or **Tools** button (puzzle-piece icon)
+* Select **AI-Prowler** to enable it for that conversation
+* Ask any research question — Claude will call your knowledge base tools automatically
+
+  **Tip:** Claude.ai in the browser supports downloading any files that Claude produces (code, documents, reports) directly to your machine, whereas the Claude Desktop app may open some file types in-app. If you need to save Claude's outputs as files, Claude.ai in the browser is the better choice for that workflow.
+
+  **Troubleshooting the connection:**
+
+* If the connector shows a red dot, check that both the HTTP server and tunnel are running in AI-Prowler
+* If authentication fails, verify your Bearer token matches exactly between AI-Prowler Settings and the Claude.ai authorization page
+* After any configuration change, remove and re-add the connector in Claude.ai Settings
+* Start a **new conversation** after reconnecting — existing conversations do not pick up reconnected tools
 
   \---
 
@@ -588,7 +642,7 @@ Data stored: token hashes (not the tokens themselves), expiry dates, subscriber 
 
 ## 9\. Small Business Service Tools
 
-The Small Business tab (the last tab in AI-Prowler) provides configuration and quick-reference for the nine field service automation MCP tools. These tools let Claude act as your field service assistant from a conversation — no forms or menus needed. Note: This tool is designed for a service orientated small business to make scheduling and servicing and updating automatically QuickBooks easy with the help of your local Data and Claude AI.
+The Small Business tab (the last tab before 🧠 Learnings in AI-Prowler) provides configuration and quick-reference for the field service automation MCP tools. These tools let Claude act as your field service assistant from a conversation — no forms or menus needed. Note: This tool is designed for a service orientated small business to make scheduling, servicing, and tracking jobs easy with the help of your local data and Claude AI.
 
 ### Accessing the Tab
 
@@ -603,26 +657,6 @@ Four tools require no setup and work immediately:
 * **get\_route\_optimization** — OSRM public routing server (no API key)
 * **build\_maps\_url** — Google Maps / Apple Maps URL scheme (no API key)
 
-### QuickBooks Online Setup
-
-1. Sign in to [developer.intuit.com](https://developer.intuit.com) and create an OAuth 2.0 app
-2. Generate an access token and note your Company (Realm) ID from your QBO URL
-3. Enter both in the **QuickBooks Online** panel and click **💾 Save QBO Credentials**
-4. The status dot turns green when credentials are saved
-
-Access tokens expire every 60 minutes. Enter your refresh token as well to enable automatic renewal.
-
-### QuickBooks Desktop Setup
-
-QuickBooks Desktop uses Windows COM automation — no internet or OAuth needed.
-
-1. Open QuickBooks Desktop with a company file loaded
-2. Click **🔗 Test QB Desktop Connection** — QuickBooks will prompt you to allow AI-Prowler access
-3. Set your default service item name (must exist in your QB item list; default: `Services`)
-4. Click **💾 Save Settings**
-
-If `pywin32` is not installed, an **⬇️ Install pywin32 Now** button installs it automatically.
-
 ### Job Tracker Spreadsheet
 
 The installer deploys a pre-built `AI-Prowler\_Job\_Tracker.xlsx` to your `Documents\\AI-Prowler\\` folder. This spreadsheet has eight interconnected tabs designed to work with the `update\_job\_spreadsheet` MCP tool:
@@ -634,7 +668,7 @@ The installer deploys a pre-built `AI-Prowler\_Job\_Tracker.xlsx` to your `Docum
 |Route\_Planner|Daily route optimization — AI fills lat/lon and map URLs|
 |Quotes|Estimates sent to customers|
 |Invoices|Billing and payment tracking|
-|QB\_Daily\_Export|Ready-to-import QuickBooks sync rows|
+|QB\_Daily\_Export|Daily export rows for accounting software import|
 |Services\_Pricing|Service catalog with pricing|
 |AI-Prowler\_Commands|Quick reference for Claude prompts|
 
@@ -655,7 +689,6 @@ The default spreadsheet path is written to `\~/.ai-prowler/config.json` during i
 ```
 "What is the weather forecast for New Smyrna Beach for the next 3 days?"
 "Optimize my route for these 6 jobs today and give me a Google Maps link."
-"Create a QuickBooks Online invoice for Miller Windows, window washing, $312, today."
 "Mark the Miller Windows job complete in my jobs spreadsheet and record invoice #1048."
 "What jobs do I have scheduled for today?"
 "Show me all open jobs in my spreadsheet this week."
@@ -773,11 +806,21 @@ When the AI produces code, a 💾 Save button appears automatically. Code is sav
 ### Small Business Tab
 
 * **Free Tools panel** — overview and backend attribution for weather, routing, geocoding, and maps URL tools (all free, no setup)
-* **QuickBooks Online** — Company ID (Realm ID) and OAuth access/refresh token entry, status indicator dot, Save/Clear/Open QBO buttons
-* **QuickBooks Desktop** — pywin32 status indicator, default service item name field, Test Connection and Install pywin32 buttons
 * **Job Spreadsheet Updater** — default `.xlsx` path with Browse button, pre-filled from installation; Save/Open Spreadsheet buttons
 * **Route \& Navigation** — OSRM and Nominatim notes, typical 4-step workflow, Open Google Maps and Open Apple Maps shortcuts
-* Configuration is stored in `\~/.ai-prowler/config.json` alongside QuickBooks Online tokens
+* Configuration is stored in `\~/.ai-prowler/config.json`
+
+### 🧠 Learnings Tab
+
+The Learnings tab provides a desktop GUI for viewing and managing Claude's self-learning knowledge base. See Section 20 for full details.
+
+* **Overview banner** — explains self-learning and shows example prompts
+* **Statistics panel** — live counts: total, active, deprecated, archived, total applied, plus category breakdown
+* **Learnings table** — sortable, filterable Treeview with columns for title, category, status, confidence, outcome, applied count, created date, and source. Filter by category, status, or free-text search. Click any row to expand details.
+* **Detail panel** — full content, "why this was learned" context box, supersession chain info, copyable learning ID
+* **Action buttons** — Refresh, Archive Selected, Delete Selected, Rebuild ChromaDB Index, Export to CSV, Open JSON File, Open Learnings Folder
+* Data source: `~/.ai-prowler/learnings/self\_learning\_data.json`
+* Works in view-only mode if `self\_learning.py` is not present (reads JSON directly)
 
 ### Scheduler Tab
 
@@ -1286,7 +1329,7 @@ The uninstaller:
 
 * Removes all AI-Prowler application files
 * Removes Python (if installed by AI-Prowler)
-* Offers to remove the RAG database, index tracking files, AND the Job Tracker spreadsheet in one combined prompt (default: keep all — safe for reinstall)
+* Offers to remove the RAG database, index tracking files, self-learning knowledge base, AND the Job Tracker spreadsheet in one combined prompt (default: keep all — safe for reinstall)
 * Offers to remove Ollama and downloaded models
 
 The uninstall log is saved to `%LOCALAPPDATA%\\\\Temp\\\\AI-Prowler\\\\uninstall\\\_log.txt`.
@@ -1299,7 +1342,148 @@ If the uninstaller fails, manually delete:
 * `%LOCALAPPDATA%\\\\Programs\\\\Python\\\\Python311\\\\` — Python
 * `%USERPROFILE%\\\\AI-Prowler\\\\` — database (if you want to keep your index, don't delete this)
 * `%USERPROFILE%\\\\Documents\\\\AI-Prowler\\\\AI-Prowler\\\_Job\\\_Tracker.xlsx` — Job Tracker spreadsheet (keep if you have live job data)
+* `%USERPROFILE%\\\\.ai-prowler\\\\learnings\\\\` — Self-learning knowledge base (keep if you want to preserve learnings across reinstall)
 * `%LOCALAPPDATA%\\\\AI-Prowler\\\\` — logs and caches
+
+\---
+
+## 20\. Self-Learning System
+
+### Overview
+
+The Self-Learning System adds RAG-based knowledge accumulation to AI-Prowler. Instead of training LoRA adapters (which would take 30+ minutes and require a GPU), learnings are written to a structured JSON file and semantically indexed in ChromaDB — making new knowledge instantly available to Claude through the existing MCP toolchain.
+
+This is useful for business operations where you want Claude to remember: what went wrong on a project, client communication preferences, process improvements discovered over time, corrected facts, and best practices.
+
+### How It Works
+
+Learnings are stored in two places simultaneously:
+
+* **JSON file** (`~/.ai-prowler/learnings/self\_learning\_data.json`) — human-readable, easy to backup, read directly by the GUI
+* **ChromaDB collection** (`ai\_prowler\_learnings`) — separate from the main document knowledge base, enables semantic search
+
+When Claude records a learning, it is instantly available for retrieval. No training, no GPU, no restart required.
+
+### Three Operational Modes
+
+**Mode 1 — Proactive Checking:** Claude calls `check\_learned()` before answering questions about clients, projects, scheduling, procedures, or any topic where stored corrections might exist. This is instructed via the MCP instructions block in `ai\_prowler\_mcp.py`.
+
+**Mode 2 — Recording:** When the user says "learn this" or "remember that", Claude calls `record\_learning()` with all metadata. Claude also auto-records when it detects fact corrections, project outcomes, client preferences, or process improvements in conversation — always with confirmation.
+
+**Mode 3 — Post-Operation Analysis:** When asked to review a completed project or job, Claude follows a structured workflow: gathers project docs via `search\_documents()`, checks existing learnings via `check\_learned()`, identifies what went right/wrong, records each insight as a separate learning with `record\_learning()`, and presents all recorded learnings to the user for confirmation.
+
+### Confirmation Protocol
+
+Claude never records silently. Every learning gets a confirmation message:
+
+* **Operator-requested** (user said "learn this"): concise confirmation with title, summary, and "Does this look right?"
+* **Auto-detected** (Claude initiated): prominent banner with "🧠 AUTO-LEARNING" header, explains WHAT was recorded and WHY, asks "Is this correct?" explicitly
+
+If the user says the learning is wrong, Claude immediately calls `update\_learning()` or `delete\_learning()` to fix it.
+
+### Auto-Detection Triggers
+
+Claude automatically records learnings (with `auto\_detected=True`) when it detects:
+
+* User corrects a fact ("actually, the number is 555-0200")
+* User shares a project outcome ("the Smith job went over budget by 40%")
+* User mentions a client preference ("they hate phone calls")
+* Post-op review reveals a process gap
+* New information contradicts an existing active learning
+* User describes a better approach ("next time we should submit permits earlier")
+
+### Learning Categories
+
+|Category|When to use|
+|-|-|
+|`fact\_correction`|Correcting an outdated or wrong fact|
+|`business\_lesson`|What worked or didn't in business|
+|`project\_insight`|Lessons from a specific project|
+|`process\_improvement`|A better way to do something|
+|`mistake\_learned`|Something went wrong — learn from it|
+|`best\_practice`|Proven approach to adopt|
+|`client\_preference`|Client-specific preferences|
+|`technical\_note`|Technical fact or configuration gotcha|
+|`general`|Catch-all|
+
+### Supersession Chain
+
+When a learning is replaced by newer information, the old learning is automatically marked as `deprecated` and linked to the new one. Claude sees the chain and knows to prefer the newer fact. The GUI detail panel shows supersession info when you select a learning.
+
+### 🧠 Learnings Tab (Desktop GUI)
+
+The Learnings tab in AI-Prowler provides a visual interface for managing the knowledge base without needing Claude. It reads directly from the JSON file — click **↻ Refresh** to reload. See Section 11 for the full panel breakdown.
+
+### Managing Learnings
+
+* **Archive** — hides a learning from Claude's search but keeps it for history. Use the GUI's **📦 Archive Selected** button or ask Claude: `"Archive the learning about X"`
+* **Delete** — permanently removes from both JSON and ChromaDB. Use the GUI's **🗑 Delete Selected** button or ask Claude: `"Delete learning [ID]"`
+* **Export** — click **💾 Export to CSV** in the GUI for a spreadsheet-friendly backup of all learnings
+* **Rebuild Index** — click **🔄 Rebuild ChromaDB Index** in the GUI if the search index gets out of sync with the JSON file. Safe — no data is lost.
+
+### Example Prompts
+
+```
+"Remember: always submit permits 2 weeks before job start"
+"What do we know about Client X?"
+"Analyze the Johnson project — what went right and wrong?"
+"Show me all business lessons we have learned"
+"How many learnings do we have and which are most applied?"
+```
+
+### File Locations
+
+* **Learnings data:** `~/.ai-prowler/learnings/self\_learning\_data.json`
+* **ChromaDB collection:** `ai\_prowler\_learnings` (inside the main RAG database folder)
+* **Engine module:** `C:\\Program Files\\AI-Prowler\\self\_learning.py`
+
+\---
+
+## 21\. Welcome Page \& Update Notifications
+
+### Welcome Tab
+
+The Welcome tab (tab index 0) is the first screen when AI-Prowler launches. It provides:
+
+* **Version information** — the current AI-Prowler version displayed prominently
+* **What's New** — a summary of new features and changes in the current release
+* **Quick Start links** — shortcuts to common tasks (Index Documents, Start HTTP Server, etc.)
+* **Update notifications** — when a new version of AI-Prowler is available, a notification banner appears on the Welcome tab with a download link
+
+### Update Push Notifications
+
+AI-Prowler checks for updates on launch by reading a version file from the public GitHub repository. If a newer version is available:
+
+* A notification banner appears on the Welcome tab
+* The notification includes the new version number and a brief changelog summary
+* A download link opens the Releases page where the latest installer can be downloaded
+* No automatic updating occurs — the user must download and run the new installer manually
+
+This is a read-only check (no data is sent from your machine). The check can be disabled in Settings if desired.
+
+\---
+
+## 22\. Heartbeats \& Analytics
+
+### MCP Server Heartbeat
+
+The HTTP MCP server includes a heartbeat mechanism to monitor connection health:
+
+* The server sends periodic heartbeat signals to confirm the Cloudflare Tunnel connection is active
+* If the heartbeat detects a lost connection, it logs the event and can optionally attempt reconnection
+* Heartbeat status is visible in the MCP server log (`mcp\_server.log`)
+* Useful for diagnosing intermittent connection drops when using Claude.ai remotely
+
+### Analytics Dashboard
+
+AI-Prowler tracks basic usage metrics locally (never sent externally):
+
+* **Tool call counts** — how many times each MCP tool has been called since the server started
+* **Self-learning statistics** — total learnings, active vs deprecated, most applied learnings, breakdown by category and source (accessible via `get\_learning\_stats()` or the 🧠 Learnings tab)
+* **Indexing metrics** — total documents, chunks, file types, tracked directories (accessible via `get\_database\_stats()` or `check\_status()`)
+* **Applied count tracking** — every time `check\_learned()` returns a learning, its `applied\_count` increments, providing visibility into which knowledge is actually being used
+
+All analytics data stays on your machine. No telemetry is sent to Anthropic, Cloudflare, or any external service.
 
 \---
 
@@ -1328,12 +1512,14 @@ To upgrade: `pip install --upgrade mcp` in a command prompt.
 * All embeddings
 * API keys and Bearer tokens
 * The AI-Prowler configuration
+* Self-learning knowledge base (JSON file + ChromaDB learnings collection)
 
 **What leaves your machine:**
 
 * When using Claude Desktop MCP: the text of retrieved document chunks (the relevant excerpts Claude found, not your original files) and your questions
 * When using cloud API providers (Ask Questions tab): your question and retrieved document excerpts
 * Subscription check: a connection to GitHub to read the public `subs.json` file (contains only token hashes, not your data)
+* Update check: a read-only version check against the GitHub repository (no data is sent)
 
 **What is never sent anywhere:**
 
@@ -1341,6 +1527,7 @@ To upgrade: `pip install --upgrade mcp` in a command prompt.
 * Full document content (only the chunks Claude retrieves are shared)
 * Your ChromaDB database
 * Your API keys or Bearer tokens
+* Your self-learning data (learnings stay entirely local)
 
 \---
 
@@ -1374,11 +1561,12 @@ Key packages and their roles:
 |sounddevice|>=0.4.6|Microphone audio capture|
 |numpy|>=1.24.0|Array operations for audio processing|
 |mcp|latest|MCP SDK (FastMCP) for tool server|
-|pywin32|>=306|Windows COM automation for QuickBooks Desktop invoice creation|
 
 Note: `torch` (PyTorch) is intentionally not listed in `requirements.txt`. The installer detects whether an NVIDIA GPU is present and installs the correct build automatically (CUDA or CPU-only).
 
-**Packages new in v5.0.0:** `openpyxl`, `xlrd`, `python-pptx`, `beautifulsoup4`, `striprtf`, `odfpy`, `pywin32` — all installed automatically by the installer. No manual action required.
+**Packages new in v5.0.0:** `openpyxl`, `xlrd`, `python-pptx`, `beautifulsoup4`, `striprtf`, `odfpy` — all installed automatically by the installer. No manual action required.
+
+**New in v5.1.0:** `self\_learning.py` is a new module installed alongside the other app files. It uses only stdlib plus ChromaDB and sentence-transformers (already installed) — no new pip packages required.
 
 \---
 

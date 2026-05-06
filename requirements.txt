@@ -42,13 +42,6 @@ striprtf>=0.0.26
 # Without this, .odt files produce binary garbage identical to the xls problem.
 odfpy>=1.4.1
 
-# ── Action Tools — Field Service Automation ───────────────────────────────────
-# pywin32: Windows COM automation for QuickBooks Desktop invoice creation.
-# Required only for create_quickbooks_desktop_invoice() MCP tool.
-# Not needed for QuickBooks Online or for any free action tools.
-# Note: installed on Windows only; harmless on other platforms.
-pywin32>=306
-
 # ── OCR — scanned PDFs and image files ────────────────────────────────────────
 # pytesseract: Python wrapper for the Tesseract OCR engine.
 #   Requires the Tesseract binary — installed automatically by AI-Prowler-Setup.iss

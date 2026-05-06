@@ -22,6 +22,20 @@ Author: AI-Prowler project
 import os
 import sys
 
+# ── Windows console UTF-8 fix ────────────────────────────────────────────────
+# Force stdout/stderr to UTF-8 so non-ASCII characters in learnings (em-dashes,
+# emoji, smart quotes) don't trigger UnicodeEncodeError when ChromaDB or our
+# logging code writes them. Critical on Windows where the default codepage is
+# cp1252. errors='replace' ensures we never crash on stray bad characters —
+# we'd rather lose a glyph than fail a delete or index operation.
+try:
+    if sys.stdout is not None and hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if sys.stderr is not None and hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 os.environ.setdefault('TOKENIZERS_PARALLELISM', 'false')
 os.environ.setdefault('HF_HUB_DISABLE_TELEMETRY', '1')
 os.environ.setdefault('HF_HUB_DISABLE_PROGRESS_BARS', '1')
@@ -262,23 +276,112 @@ def _capture_stdout():
 # We extract the text into _INSTRUCTIONS and detect support at runtime so the
 # server starts cleanly on older installs and upgrades automatically benefit.
 _INSTRUCTIONS = (
-    "AI-Prowler is an Agentic RAG knowledge base. "
-    "Claude retrieves raw document chunks directly and synthesizes answers "
-    "using its own intelligence — no local LLM or Ollama required.\n\n"
-    "Preferred tool order for any research or question-answering task:\n"
-    "  1. get_knowledge_base_overview  — call FIRST to orient yourself: "
-         "what documents are indexed, what file types, what topics.\n"
-    "  2. list_indexed_documents       — browse specific files when the user "
-         "asks about a particular document or topic area.\n"
-    "  3. search_documents             — PRIMARY retrieval. Call MULTIPLE TIMES "
-         "with different phrasings to gather full context before answering.\n"
-    "  4. search_by_multiple_queries   — when a topic has synonyms or multiple "
-         "angles; runs parallel searches and deduplicates automatically.\n"
-    "  5. get_chunk_context            — expand around a promising result "
-         "that appears cut off or references nearby content.\n"
-    "  6. get_document_chunks          — read a whole document in sequence "
-         "for summaries or full-document review tasks.\n\n"
-    "Use check_status() to verify the knowledge base is healthy and reachable."
+    "AI-Prowler is an Agentic RAG knowledge base WITH a self-learning memory layer. "
+    "Claude retrieves raw chunks AND stored learnings directly, then synthesizes "
+    "answers — no local LLM required.\n\n"
+
+    "═══════════════════════════════════════════════════════════════\n"
+    " MANDATORY SEARCH ORDER FOR EVERY USER QUESTION\n"
+    "═══════════════════════════════════════════════════════════════\n"
+    "For ANY question that could touch the user's work, clients, projects, "
+    "procedures, technical setup, or business — which is most questions — "
+    "you MUST run BOTH searches before answering. Do them in this order:\n\n"
+
+    "  STEP 1 (FIRST, ALWAYS):  check_learned(query=...)\n"
+    "    Self-learning is the AUTHORITATIVE override layer. It contains the\n"
+    "    user's deliberate corrections, preferences, and lessons. These are\n"
+    "    newer and more curated than anything in the document index.\n"
+    "    Run check_learned BEFORE any document search.\n\n"
+
+    "  STEP 2 (SECOND, ALSO ALWAYS):  search_documents(query=...)\n"
+    "    Document RAG provides the broader factual context — install notes,\n"
+    "    case files, manuals, spreadsheets, contracts. It supplements but\n"
+    "    does NOT override learnings.\n"
+    "    Run this even if check_learned returned a hit, because docs may\n"
+    "    add useful surrounding context.\n\n"
+
+    "  BLEND BOTH SOURCES IN YOUR ANSWER (when they don't conflict):\n"
+    "    If a learning and a document chunk are about the same topic but\n"
+    "    cover different aspects, COMBINE them in your response. Do not\n"
+    "    pick one and discard the other.\n"
+    "    Example — user asks 'how do I reach Rick?':\n"
+    "      • Learning says: 'Rick prefers email; phone and Slack are secondary'\n"
+    "      • Doc chunk says: 'Rick's email is rick@austin-underground.com,\n"
+    "        cell is 555-0100, available on DWService for installs'\n"
+    "      → Answer: 'Rick can be reached by email at rick@austin-underground.com\n"
+    "        (his preferred channel — fastest response), or by phone at 555-0100\n"
+    "        as backup. For installs, DWService remote sessions work well.'\n"
+    "    The learning shapes the recommendation; the docs supply the specifics.\n\n"
+
+    "  CONFLICT RESOLUTION (when sources actually disagree):\n"
+    "    If a learning and a document chunk give CONTRADICTORY information,\n"
+    "    THE LEARNING WINS. Surface both to the user, but apply the learning.\n"
+    "    Example: a doc says 'invoice on Friday' but a learning says 'Crabby's\n"
+    "    only processes invoices on Mondays' — recommend Monday and mention\n"
+    "    the doc as outdated background.\n\n"
+
+    "  RELEVANCE INTERPRETATION:\n"
+    "    Relevance labels on check_learned results are now calibrated:\n"
+    "      🟢 HIGH (≥ 0.70)     — near-identical phrasing match; trust fully\n"
+    "      🟡 MODERATE (0.40+)  — solid semantic match; APPLY THIS\n"
+    "      🟠 LOW (< 0.40)      — likely irrelevant; ignore unless title\n"
+    "                             is obviously on-topic\n"
+    "    Most legitimate matches will land in MODERATE — that band is\n"
+    "    trustworthy. Do NOT skip a MODERATE result just because it isn't\n"
+    "    HIGH. Only treat LOW as a signal to ignore, and even then check\n"
+    "    the title before discarding.\n\n"
+
+    "  ONLY skip the dual-search when the question is purely about Claude's\n"
+    "  general world knowledge with no link to the user's work (e.g. 'what\n"
+    "  is a regex', 'translate this Latin phrase'). When in doubt, search.\n\n"
+
+    "═══════════════════════════════════════════════════════════════\n"
+    " DOCUMENT RAG — Detailed Tool Reference\n"
+    "═══════════════════════════════════════════════════════════════\n"
+    "After running check_learned (Step 1), use these for Step 2 and beyond:\n"
+    "  • get_knowledge_base_overview — orient: what's indexed, what topics\n"
+    "  • list_indexed_documents      — browse files for a topic area\n"
+    "  • search_documents            — PRIMARY document retrieval\n"
+    "  • search_by_multiple_queries  — parallel searches across synonyms\n"
+    "  • search_within_directory     — restrict to a specific case/project\n"
+    "  • get_chunk_context           — expand a cut-off result\n"
+    "  • get_document_chunks         — read a document sequentially\n\n"
+    "Use check_status() to verify the knowledge base is healthy.\n\n"
+
+    "═══════════════════════════════════════════════════════════════\n"
+    " SELF-LEARNING — Capture, Review, and Override\n"
+    "═══════════════════════════════════════════════════════════════\n"
+
+    "  AUTO-RECORDING — record WITHOUT being asked when you detect:\n"
+    "    • User corrects a fact you stated or that exists in learnings\n"
+    "    • User shares a project outcome, success, or failure\n"
+    "    • User mentions a client preference or complaint\n"
+    "    • A post-operation review reveals what went right or wrong\n"
+    "    • New information contradicts an existing active learning\n"
+    "      (in this case, ALSO pass supersedes_id with the old learning's UUID)\n"
+    "    • User describes a process improvement or better approach\n"
+    "    When auto-recording, ALWAYS set auto_detected=True so the\n"
+    "    confirmation message flags this as your initiative.\n\n"
+
+    "  CONFIRMATION PROTOCOL — ALWAYS follow after recording:\n"
+    "    1. Tell the user WHAT you recorded (title + one-line summary)\n"
+    "    2. Tell the user WHY you recorded it (the trigger you detected)\n"
+    "    3. Ask: 'Is that correct, or should I adjust it?'\n"
+    "    4. If the user says no or corrects you → call update_learning()\n"
+    "       or delete_learning() immediately\n"
+    "    NEVER record silently. The user must always see what was captured.\n\n"
+
+    "  POST-OPERATION ANALYSIS workflow:\n"
+    "    When asked to review/analyze a completed project or job:\n"
+    "    1. Call check_learned() FIRST to see existing learnings for this topic\n"
+    "    2. Call search_within_directory() or search_documents() for full context\n"
+    "    3. Identify: what went wrong, what went right, process gaps\n"
+    "    4. For EACH insight, call record_learning() with proper category\n"
+    "       and auto_detected=True\n"
+    "    5. Present ALL recorded learnings to the user for confirmation\n"
+    "    6. Adjust any the user disagrees with\n\n"
+
+    "Tool sequence: check_learned → search_documents → (record_learning if new info)"
 )
 
 import inspect as _inspect
@@ -426,7 +529,32 @@ def how_to_use_ai_prowler() -> str:
         "AI-Prowler — Agentic RAG Knowledge Base\n"
         + "=" * 50 + "\n\n"
 
-        "PREFERRED TOOL SEQUENCE\n"
+        "TOOL CATEGORIES (28 tools total)\n"
+        + "-" * 30 + "\n"
+        "AI-Prowler exposes four tool families. Most question-answering\n"
+        "tasks use the first two; the others are for actions and admin.\n\n"
+
+        "  • Knowledge retrieval (RAG over indexed documents):\n"
+        "      get_knowledge_base_overview, list_indexed_documents,\n"
+        "      list_directories, search_documents, search_within_directory,\n"
+        "      search_by_multiple_queries, get_chunk_context,\n"
+        "      get_document_chunks\n\n"
+
+        "  • Self-learning memory (corrections, post-mortems, preferences):\n"
+        "      check_learned, record_learning, list_learnings,\n"
+        "      update_learning, delete_learning, get_learning_stats\n\n"
+
+        "  • Field service actions (free public APIs, no key needed):\n"
+        "      geocode_address, get_weather, get_route_optimization,\n"
+        "      build_maps_url, read_job_spreadsheet, update_job_spreadsheet,\n"
+        "      get_action_tools_status\n\n"
+
+        "  • Indexing & admin:\n"
+        "      add_and_index_directory, update_tracked_directories,\n"
+        "      list_tracked_directories, remove_directory,\n"
+        "      get_database_stats, check_status\n\n"
+
+        "PREFERRED TOOL SEQUENCE — KNOWLEDGE RETRIEVAL\n"
         + "-" * 30 + "\n"
         "Use these tools in order for any research or question-answering task:\n\n"
 
@@ -467,6 +595,38 @@ def how_to_use_ai_prowler() -> str:
         "    Read a whole document sequentially for full summaries or\n"
         "    when the user asks about a specific document's contents.\n\n"
 
+        "SELF-LEARNING WORKFLOW — PERSISTENT MEMORY\n"
+        + "-" * 30 + "\n"
+        "Stored learnings are corrections, post-mortems, and preferences\n"
+        "captured from prior sessions. They override built-in knowledge\n"
+        "and represent the operator's verified ground truth. Use them.\n\n"
+
+        "  STEP A  check_learned(query)\n"
+        "    Call BEFORE answering questions about clients, projects,\n"
+        "    procedures, or any business-specific facts. If a learning\n"
+        "    contradicts your built-in knowledge, prefer the learning.\n"
+        "    Triggers:\n"
+        "      - User says 'what did we learn about...', 'do you remember...'\n"
+        "      - User mentions a client, project, or case by name\n"
+        "      - You're about to make a business recommendation\n"
+        "      - You're about to state a fact that may have been corrected\n\n"
+
+        "  STEP B  record_learning(category, content, ...)\n"
+        "    Auto-record (without being asked) when the user:\n"
+        "      - Corrects a fact you stated\n"
+        "      - Shares a project outcome or post-mortem\n"
+        "      - States a client preference or standing instruction\n"
+        "      - Says 'next time we should...' or similar\n"
+        "      - Provides info that contradicts an existing active learning\n\n"
+
+        "  STEP C  list_learnings() / get_learning_stats()\n"
+        "    Browse stored learnings when the user asks for an overview\n"
+        "    of what's remembered, or before bulk updates.\n\n"
+
+        "  STEP D  update_learning(id, ...) / delete_learning(id)\n"
+        "    Refine or retire learnings when the user provides better\n"
+        "    information. Always confirm destructive actions first.\n\n"
+
         "DOCUMENT PROVENANCE — CRITICAL\n"
         + "-" * 30 + "\n"
         "  Every search result includes rich provenance metadata:\n"
@@ -497,7 +657,10 @@ def how_to_use_ai_prowler() -> str:
         "  - NO Ollama required — no local LLM involved at all.\n"
         "  - Claude receives RAW CHUNKS and synthesizes answers directly.\n"
         "  - For complex questions, always search multiple times before answering.\n"
+        "  - Stored learnings outrank built-in knowledge — always check_learned\n"
+        "    before answering business-specific questions.\n"
         "  - Use check_status() to verify the knowledge base is healthy.\n"
+        "  - Use get_action_tools_status() to verify field-service tools.\n"
         "  - Re-call this tool any time you need a reminder of the workflow.\n\n"
 
         f"MCP SDK version       : {mcp_version}\n"
@@ -517,34 +680,57 @@ def add_and_index_directory(
     track: bool = True,
 ) -> str:
     """
-    Index all supported documents inside a local folder and (optionally)
-    add it to the auto-update tracking list.
+    Index all supported documents inside a local folder OR a single file
+    and (optionally) add it to the auto-update tracking list.
+
+    Accepts either:
+      • A directory path — every supported file inside is indexed (subject
+        to smart-scan extension/directory filters). Recursion controlled by
+        the `recursive` argument.
+      • An individual file path — that one file is indexed regardless of
+        the smart-scan extension filters. Per-file tracking is explicit
+        user opt-in, so SKIP_EXTENSIONS does not apply.
 
     Supported formats: PDF, Word, Excel, PowerPoint, plain text, code,
     Markdown, HTML, email (.msg / .eml / .mbox), images (OCR), and many more.
 
     Args:
-        directory:  Absolute path to the folder you want to index.
-                    Example: "C:/Users/David/Documents/ProjectDocs"
-        recursive:  Include sub-folders (default True).
-        track:      Add the directory to the auto-update list so future
+        directory:  Absolute path to the folder OR file you want to index.
+                    Examples:
+                      "C:/Users/David/Documents/ProjectDocs"
+                      "C:/Program Files/AI-Prowler/COMPLETE_USER_GUIDE.md"
+        recursive:  Include sub-folders when indexing a directory (default True).
+                    Ignored for single-file targets.
+        track:      Add the path to the auto-update list so future
                     `update_tracked_directories` calls will pick up changes
                     (default True).
 
     Returns:
         Summary of how many files were indexed and any errors encountered.
     """
-    dir_path = Path(directory)
-    if not dir_path.exists():
-        return f"❌ Directory not found: {directory}"
-    if not dir_path.is_dir():
-        return f"❌ Path is not a directory: {directory}"
+    target = Path(directory)
+    if not target.exists():
+        return f"❌ Path not found: {directory}"
 
     load_config()
 
+    is_file = target.is_file()
+
     with _capture_stdout() as buf:
         try:
-            index_directory(str(dir_path), recursive=recursive)
+            if is_file:
+                # Single-file path — bypass SKIP_EXTENSIONS smart-scan filter
+                from rag_preprocessor import index_file_list, normalise_path
+                fp = normalise_path(str(target.resolve()))
+                stats = index_file_list(
+                    [fp],
+                    label="1/1",
+                    root_directory=str(target.parent),
+                )
+                chunks = stats.get('chunks', 0) if stats else 0
+                print(f"✅ Indexed file: {target.name} — {chunks} chunk(s)")
+            else:
+                index_directory(str(target), recursive=recursive)
         except Exception as exc:
             return f"❌ Indexing failed: {exc}"
 
@@ -552,11 +738,15 @@ def add_and_index_directory(
 
     if track:
         try:
-            added = add_to_auto_update_list(str(dir_path))
+            # For directories, index_directory already adds to the auto-update
+            # list via add_to_auto_update_list(). Calling it again is a no-op
+            # (returns False) but ensures file targets are added too.
+            added = add_to_auto_update_list(str(target.resolve()))
+            kind = "File" if is_file else "Directory"
             note = (
-                "\n✅ Directory added to auto-update tracking."
+                f"\n✅ {kind} added to auto-update tracking."
                 if added
-                else "\nℹ️  Directory was already in the tracking list."
+                else f"\nℹ️  {kind} was already in the tracking list."
             )
             output += note
         except Exception as exc:
@@ -572,12 +762,13 @@ def add_and_index_directory(
 @mcp.tool()
 def update_tracked_directories(directory: Optional[str] = None) -> str:
     """
-    Re-scan tracked directories for new or modified files and update the
-    index incrementally (only changed files are re-indexed).
+    Re-scan all tracked paths (directories AND individually-tracked files) for
+    new, modified, or deleted files and update the index incrementally — only
+    changed files are re-indexed.
 
     Args:
-        directory:  If provided, update only this specific directory.
-                    If omitted, update ALL tracked directories.
+        directory:  If provided, update only this specific path (directory
+                    or file). If omitted, update ALL tracked paths.
 
     Returns:
         A summary of changes detected and files re-indexed.
@@ -592,8 +783,8 @@ def update_tracked_directories(directory: Optional[str] = None) -> str:
 
     if not dirs_to_update:
         return (
-            "ℹ️  No tracked directories found.\n"
-            "Use add_and_index_directory first to index a folder and add it to tracking."
+            "ℹ️  No tracked paths found.\n"
+            "Use add_and_index_directory first to index a folder or file and add it to tracking."
         )
 
     with _capture_stdout() as buf:
@@ -603,7 +794,7 @@ def update_tracked_directories(directory: Optional[str] = None) -> str:
             except Exception as exc:
                 print(f"⚠️  Error updating {d}: {exc}")
 
-    return buf.getvalue().strip() or "✅ All tracked directories are up to date."
+    return buf.getvalue().strip() or "✅ All tracked paths are up to date."
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -675,21 +866,28 @@ def get_database_stats() -> str:
 @mcp.tool()
 def list_tracked_directories() -> str:
     """
-    List all directories currently registered for auto-update tracking.
+    List all paths (directories AND individually-tracked files) currently
+    registered for auto-update tracking.
+
+    Each entry is annotated with its type — 📁 for directories, 📄 for files —
+    so it's clear which entries are watched as folders vs. as single files.
 
     Returns:
-        A newline-separated list of directory paths, or a message if none
-        are registered yet.
+        A formatted list of tracked paths, or a message if none are registered.
     """
     dirs = load_auto_update_list()
     if not dirs:
         return (
-            "ℹ️  No directories are currently tracked.\n"
-            "Use add_and_index_directory to index a folder and add it to tracking."
+            "ℹ️  No paths are currently tracked.\n"
+            "Use add_and_index_directory to index a folder or file and add it to tracking."
         )
-    lines = ["📁 Tracked directories:"]
+    lines = ["📁 Tracked paths:"]
     for i, d in enumerate(dirs, 1):
-        lines.append(f"  {i}. {d}")
+        try:
+            icon = "📄" if Path(d).is_file() else ("📁" if Path(d).exists() else "❓")
+        except Exception:
+            icon = "❓"
+        lines.append(f"  {i}. {icon} {d}")
     return "\n".join(lines)
 
 
@@ -700,14 +898,15 @@ def list_tracked_directories() -> str:
 @mcp.tool()
 def remove_directory(directory: str) -> str:
     """
-    Remove a directory from the tracking list AND delete all of its indexed
-    chunks from the ChromaDB knowledge base.
+    Remove a tracked path (directory OR individually-tracked file) from the
+    tracking list AND delete all of its indexed chunks from the ChromaDB
+    knowledge base.
 
-    This is a destructive operation — the documents from this directory
-    will no longer be searchable until you re-index them.
+    This is a destructive operation — the documents from this path will no
+    longer be searchable until you re-index them.
 
     Args:
-        directory:  Absolute path to the directory to remove.
+        directory:  Absolute path to the directory or file to remove.
 
     Returns:
         A summary of what was removed.
@@ -716,14 +915,14 @@ def remove_directory(directory: str) -> str:
         try:
             result = remove_directory_from_index(directory)
         except Exception as exc:
-            return f"❌ Failed to remove directory: {exc}"
+            return f"❌ Failed to remove path: {exc}"
 
     output = buf.getvalue().strip()
     if isinstance(result, dict):
         chunks = result.get('chunks_removed', 'unknown')
         files  = result.get('files_removed', 'unknown')
         output += f"\n✅ Removed {chunks} chunk(s) from {files} file(s)."
-    return output or f"✅ Directory removed: {directory}"
+    return output or f"✅ Path removed: {directory}"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -791,14 +990,24 @@ def check_status() -> str:
     else:
         lines.append("   Embedding model: loaded (no detail available)")
 
-    # ── Tracked directories ───────────────────────────────────────────────────
+    # ── Tracked paths (directories + individually-tracked files) ─────────────
     try:
         from rag_preprocessor import load_auto_update_list
         tracked = load_auto_update_list() or []
+        n_files = sum(1 for p in tracked if Path(p).is_file())
+        n_dirs  = sum(1 for p in tracked if Path(p).is_dir())
         lines.append("")
-        lines.append(f"📁 Tracked directories : {len(tracked)}")
+        suffix_parts = []
+        if n_dirs:  suffix_parts.append(f"{n_dirs} dir(s)")
+        if n_files: suffix_parts.append(f"{n_files} file(s)")
+        suffix = f" ({', '.join(suffix_parts)})" if suffix_parts else ""
+        lines.append(f"📁 Tracked paths : {len(tracked)}{suffix}")
         for d in tracked[:5]:
-            lines.append(f"   - {d}")
+            try:
+                icon = "📄" if Path(d).is_file() else ("📁" if Path(d).exists() else "❓")
+            except Exception:
+                icon = "❓"
+            lines.append(f"   {icon} {d}")
         if len(tracked) > 5:
             lines.append(f"   ... and {len(tracked) - 5} more")
     except Exception:
@@ -1653,7 +1862,6 @@ def list_directories() -> str:
 #                  OSRM's /trip endpoint solves TSP natively — no OR-Tools needed
 #   • Maps URL   : Google Maps URL scheme (free, no key, tap-to-navigate)
 #
-# QuickBooks tools use stored OAuth tokens (QB Online) or COM automation (QB Desktop).
 # Spreadsheet update uses openpyxl (already installed).
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -2109,257 +2317,7 @@ def build_maps_url(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ACTION TOOL 5 — create_quickbooks_online_invoice
-# ══════════════════════════════════════════════════════════════════════════════
-
-@mcp.tool()
-def create_quickbooks_online_invoice(
-    customer_name:       str,
-    service_description: str,
-    amount:              float,
-    job_date:            str,
-    memo:                str  = "",
-    send_email:          bool = True,
-) -> str:
-    """
-    Create an invoice in QuickBooks Online for a completed job and optionally
-    email it to the customer automatically.
-
-    Requires a one-time OAuth 2.0 setup in AI-Prowler → Settings → Action Tools.
-    After the initial setup, tokens refresh silently — no repeated login needed.
-
-    Args:
-        customer_name:       Client name exactly as it appears in QuickBooks Online.
-        service_description: Description of work performed.
-                             Example: "Exterior window washing — 12 windows, eco solution"
-        amount:              Total invoice amount in dollars (e.g. 426.00).
-        job_date:            Date work was performed in YYYY-MM-DD format.
-        memo:                Optional internal memo or reference number.
-        send_email:          If True (default), QuickBooks emails the invoice
-                             to the customer's address on file automatically.
-
-    Returns:
-        Invoice number, QuickBooks link to view the invoice, and email status.
-    """
-    import requests as _req
-
-    cfg = load_config()
-    access_token = cfg.get("qbo_access_token",   "").strip()
-    realm_id     = cfg.get("qbo_realm_id",        "").strip()
-
-    if not access_token or not realm_id:
-        return (
-            "❌ QuickBooks Online not configured.\n\n"
-            "One-time setup required:\n"
-            "  AI-Prowler → Settings → Action Tools → QuickBooks Online → Connect\n"
-            "After connecting, this tool works automatically without further login."
-        )
-
-    hdrs = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type":  "application/json",
-        "Accept":        "application/json",
-    }
-    base = f"https://quickbooks.api.intuit.com/v3/company/{realm_id}"
-
-    # ── Step 1: Find customer by name ────────────────────────────────────────
-    try:
-        qr = _req.get(
-            f"{base}/query",
-            params={"query": f"SELECT * FROM Customer WHERE DisplayName = '{customer_name}'"},
-            headers=hdrs,
-            timeout=15,
-        ).json()
-        customers = qr.get("QueryResponse", {}).get("Customer", [])
-        if not customers:
-            return (
-                f"❌ Customer '{customer_name}' not found in QuickBooks Online.\n"
-                "Check the exact display name matches your QuickBooks customer list."
-            )
-        customer_id    = customers[0]["Id"]
-        customer_email = customers[0].get("PrimaryEmailAddr", {}).get("Address", "")
-    except Exception as exc:
-        return f"❌ QuickBooks customer lookup failed: {exc}"
-
-    # ── Step 2: Build invoice payload ────────────────────────────────────────
-    inv_payload: dict = {
-        "CustomerRef":    {"value": customer_id},
-        "TxnDate":        job_date,
-        "PrivateNote":    memo,
-        "CustomerMemo":   {"value": service_description},
-        "Line": [{
-            "Amount":     round(float(amount), 2),
-            "DetailType": "SalesItemLineDetail",
-            "Description": service_description,
-            "SalesItemLineDetail": {
-                "ItemRef":  {"name": "Services"},
-                "Qty":       1,
-                "UnitPrice": round(float(amount), 2),
-            },
-        }],
-    }
-
-    if send_email and customer_email:
-        inv_payload["BillEmail"]    = {"Address": customer_email}
-        inv_payload["EmailStatus"]  = "NeedToSend"
-
-    # ── Step 3: POST invoice ─────────────────────────────────────────────────
-    try:
-        resp   = _req.post(f"{base}/invoice", json={"Invoice": inv_payload},
-                           headers=hdrs, timeout=15)
-        result = resp.json()
-    except Exception as exc:
-        return f"❌ Invoice creation request failed: {exc}"
-
-    if "Invoice" not in result:
-        fault  = result.get("Fault", {})
-        errors = fault.get("Error", [{}])
-        detail = errors[0].get("Detail", str(result)) if errors else str(result)
-        return f"❌ QuickBooks Online error: {detail}"
-
-    inv     = result["Invoice"]
-    inv_num = inv.get("DocNumber", "N/A")
-    inv_id  = inv.get("Id", "")
-
-    if send_email and customer_email:
-        email_line = f"\n📧 Invoice emailed to: {customer_email}"
-    elif send_email and not customer_email:
-        email_line = "\n⚠️  No email on file — invoice not emailed. Add email in QuickBooks."
-    else:
-        email_line = ""
-
-    return (
-        f"✅ Invoice #{inv_num} created in QuickBooks Online\n"
-        f"   Customer:    {customer_name}\n"
-        f"   Amount:      ${float(amount):.2f}\n"
-        f"   Date:        {job_date}\n"
-        f"   Description: {service_description}"
-        + (f"\n   Memo:        {memo}" if memo else "")
-        + email_line
-        + f"\n\n🔗 View: https://app.qbo.intuit.com/app/invoice?txnId={inv_id}"
-    )
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ACTION TOOL 6 — create_quickbooks_desktop_invoice
-# ══════════════════════════════════════════════════════════════════════════════
-
-@mcp.tool()
-def create_quickbooks_desktop_invoice(
-    customer_name:       str,
-    service_description: str,
-    amount:              float,
-    job_date:            str,
-    memo:                str = "",
-    item_name:           str = "Services",
-) -> str:
-    """
-    Create an invoice in QuickBooks Desktop (the installed Windows version).
-    Uses Windows COM automation (QBSDK) — no internet or OAuth needed.
-    QuickBooks Desktop must be running with a company file open.
-
-    Args:
-        customer_name:       Customer name exactly as it appears in QuickBooks Desktop.
-        service_description: Description of work performed.
-        amount:              Total invoice amount in dollars.
-        job_date:            Date work was performed in YYYY-MM-DD format.
-        memo:                Optional memo field on the invoice.
-        item_name:           QuickBooks service item name (default "Services").
-                             Must exist in your QuickBooks item list.
-
-    Returns:
-        Invoice reference number and confirmation, or an error with steps to fix.
-    """
-    try:
-        import win32com.client as _win32
-    except ImportError:
-        return (
-            "❌ QuickBooks Desktop integration requires the pywin32 package.\n\n"
-            "Install it with:\n"
-            "   pip install pywin32\n\n"
-            "Then restart AI-Prowler."
-        )
-
-    import xml.etree.ElementTree as _ET
-    import re as _re
-
-    # ── Connect to QB Desktop via QBSDK COM ──────────────────────────────────
-    try:
-        qb     = _win32.Dispatch("QBXMLRP2.RequestProcessor")
-        qb.OpenConnection("", "AI-Prowler")
-        ticket = qb.BeginSession("", 1)  # 1 = currently open company file
-    except Exception as exc:
-        return (
-            f"❌ Cannot connect to QuickBooks Desktop: {exc}\n\n"
-            "Make sure:\n"
-            "  1. QuickBooks Desktop is open\n"
-            "  2. A company file is loaded\n"
-            "  3. You allow AI-Prowler in the QB access confirmation dialog"
-        )
-
-    # ── Build QBXML invoice request ──────────────────────────────────────────
-    xml_req = f"""<?xml version="1.0" encoding="utf-8"?>
-<?qbxml version="16.0"?>
-<QBXML>
-  <QBXMLMsgsRq onError="stopOnError">
-    <InvoiceAddRq>
-      <InvoiceAdd>
-        <CustomerRef>
-          <FullName>{customer_name}</FullName>
-        </CustomerRef>
-        <TxnDate>{job_date}</TxnDate>
-        <Memo>{memo}</Memo>
-        <InvoiceLineAdd>
-          <ItemRef>
-            <FullName>{item_name}</FullName>
-          </ItemRef>
-          <Desc>{service_description}</Desc>
-          <Quantity>1</Quantity>
-          <Rate>{round(float(amount), 2)}</Rate>
-          <Amount>{round(float(amount), 2)}</Amount>
-        </InvoiceLineAdd>
-      </InvoiceAdd>
-    </InvoiceAddRq>
-  </QBXMLMsgsRq>
-</QBXML>"""
-
-    try:
-        response = qb.ProcessRequest(ticket, xml_req)
-    except Exception as exc:
-        return f"❌ QuickBooks Desktop request failed: {exc}"
-    finally:
-        try:
-            qb.EndSession(ticket)
-            qb.CloseConnection()
-        except Exception:
-            pass
-
-    # ── Parse response ───────────────────────────────────────────────────────
-    inv_num  = "N/A"
-    match    = _re.search(r"<RefNumber>(.*?)</RefNumber>", response)
-    if match:
-        inv_num = match.group(1)
-
-    success = 'statusCode="0"' in response or "statusCode='0'" in response
-
-    if success:
-        return (
-            f"✅ Invoice #{inv_num} created in QuickBooks Desktop\n"
-            f"   Customer:    {customer_name}\n"
-            f"   Amount:      ${float(amount):.2f}\n"
-            f"   Date:        {job_date}\n"
-            f"   Description: {service_description}"
-            + (f"\n   Memo:        {memo}" if memo else "")
-        )
-
-    # Non-zero status — extract QB error message
-    err_match = _re.search(r'statusMessage="([^"]+)"', response)
-    err_msg   = err_match.group(1) if err_match else response[:400]
-    return f"❌ QuickBooks Desktop error: {err_msg}"
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ACTION TOOL 7 — update_job_spreadsheet
+# ACTION TOOL 5 — update_job_spreadsheet
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _get_default_spreadsheet_path() -> str:
@@ -2598,7 +2556,7 @@ def update_job_spreadsheet(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ACTION TOOL 8 — read_job_spreadsheet
+# ACTION TOOL 6 — read_job_spreadsheet
 # ══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
@@ -2775,7 +2733,7 @@ def read_job_spreadsheet(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ACTION TOOL 9 — get_action_tools_status
+# ACTION TOOL 7 — get_action_tools_status
 # ══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
@@ -2785,8 +2743,6 @@ def get_action_tools_status() -> str:
 
     Returns a full status report covering:
     - Free tools (weather, geocoding, routing, navigation URLs)
-    - QuickBooks Online connection status
-    - QuickBooks Desktop package availability
     - Spreadsheet update tool readiness
 
     Call this tool first when planning to use action tools, to confirm
@@ -2826,54 +2782,13 @@ def get_action_tools_status() -> str:
         "",
         "─" * 50,
         "",
-        "QUICKBOOKS TOOLS:",
+        "SPREADSHEET TOOLS:",
         "",
     ]
 
     if not req_ok:
         lines.append("  ❌ requests package missing — run: pip install requests")
         lines.append("")
-
-    # QB Online
-    cfg        = load_config()
-    qbo_token  = cfg.get("qbo_access_token", "").strip()
-    qbo_realm  = cfg.get("qbo_realm_id",     "").strip()
-    qbo_ready  = bool(qbo_token and qbo_realm)
-
-    lines += [
-        f"  {'✅ Connected' if qbo_ready else '⚠️  Not configured'}"
-        f"   create_quickbooks_online_invoice(...)",
-    ]
-    if not qbo_ready:
-        lines.append(
-            "     Setup: AI-Prowler → Settings → Action Tools → "
-            "QuickBooks Online → Connect"
-        )
-    lines.append("")
-
-    # QB Desktop
-    try:
-        import win32com.client  # noqa: F401
-        win32_ok = True
-    except ImportError:
-        win32_ok = False
-
-    lines += [
-        f"  {'✅ pywin32 installed' if win32_ok else '⚠️  pywin32 missing'}"
-        f"   create_quickbooks_desktop_invoice(...)",
-    ]
-    if not win32_ok:
-        lines.append("     Install: pip install pywin32")
-    else:
-        lines.append("     Note: QuickBooks Desktop must be open when invoicing.")
-    lines.append("")
-
-    lines += [
-        "─" * 50,
-        "",
-        "SPREADSHEET TOOLS:",
-        "",
-    ]
 
     try:
         import openpyxl  # noqa: F401
@@ -2899,11 +2814,689 @@ def get_action_tools_status() -> str:
         "─" * 50,
         "",
         "All FREE tools work immediately with no configuration.",
-        "QuickBooks Online requires one-time OAuth setup in Settings.",
-        "QuickBooks Desktop requires pywin32 and QB Desktop to be running.",
         "Spreadsheet tools use the default path from Settings if filepath is omitted.",
     ]
 
+    return "\n".join(lines)
+
+# ── Import the self-learning engine ──────────────────────────────────────────
+try:
+    import self_learning as _sl
+    _log.info("self_learning module imported OK — Self-Learning Tools active")
+    _SELF_LEARNING_AVAILABLE = True
+except ImportError as _sl_err:
+    _log.warning("self_learning module not found: %s — "
+                 "Self-Learning Tools will be disabled", _sl_err)
+    _SELF_LEARNING_AVAILABLE = False
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOL — record_learning
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def record_learning(
+    title: str,
+    content: str,
+    category: str = "general",
+    context: str = "",
+    source: str = "operator",
+    confidence: float = 0.8,
+    tags: str = "",
+    supersedes_id: str = "",
+    outcome: str = "unknown",
+    auto_detected: bool = False,
+) -> str:
+    """
+    Record a new learning into AI-Prowler's self-learning knowledge base.
+
+    Use this when the operator says "remember this", "learn this", or when
+    Claude detects new information that supersedes previously known facts.
+    Also use after project reviews, post-mortems, or when documenting
+    what went right or wrong in business activities.
+
+    The learning is instantly indexed into ChromaDB for semantic retrieval —
+    no training or GPU required.  Future calls to check_learned() will
+    find and apply this knowledge automatically.
+
+    ── CONFIRMATION PROTOCOL ──────────────────────────────────────────────
+    CRITICAL: After calling this tool, Claude MUST ALWAYS present the
+    returned confirmation summary to the user. NEVER record silently.
+
+    If auto_detected=True (Claude initiated the recording without being
+    asked), the confirmation is MORE PROMINENT — it tells the user WHY
+    Claude decided to record this and explicitly asks for approval.
+
+    If the user says the learning is wrong or needs adjustment:
+      → Call update_learning() to fix specific fields, OR
+      → Call delete_learning() to remove it entirely
+    ───────────────────────────────────────────────────────────────────────
+
+    AUTO-DETECTION TRIGGERS — set auto_detected=True and call WITHOUT
+    being asked when you detect any of these in conversation:
+      • User corrects a fact ("actually, the number is 555-0200")
+      • User shares a project outcome ("the Smith job went over budget")
+      • User mentions a client preference ("they hate phone calls")
+      • Post-op review reveals a process gap or lesson
+      • New information contradicts an existing active learning
+      • User describes a better way ("next time we should...")
+
+    CATEGORIES (pick the best fit):
+      fact_correction      — Correcting an outdated or wrong fact
+      business_lesson      — What worked or didn't in a business context
+      project_insight      — Lessons from a specific project
+      process_improvement  — A better way to do something
+      mistake_learned      — Something that went wrong and why
+      best_practice        — Proven approach to adopt going forward
+      client_preference    — Client-specific preferences or requirements
+      technical_note       — Technical fact, configuration, or gotcha
+      general              — Catch-all (default)
+
+    SOURCES (how the learning originated):
+      operator             — Explicitly told by the user (default)
+      claude_detected      — Claude identified superseding information
+      project_review       — Post-project review or retrospective
+      post_mortem          — After-incident analysis
+      research             — From web search or document research
+      observation          — Noticed pattern across conversations
+
+    OUTCOMES (for business lessons and project insights):
+      positive   — This approach led to a good result
+      negative   — This approach led to a bad result
+      neutral    — Mixed or no clear impact
+      unknown    — Outcome not yet determined (default)
+
+    Args:
+        title:          Short descriptive title for the learning (required).
+                        Example: "Client X prefers email over phone calls"
+        content:        The actual learned fact, lesson, or insight (required).
+                        Be specific and actionable.
+                        Example: "After 3 failed phone attempts, switching to
+                        email resulted in same-day response from Client X.
+                        Always use email as primary contact method for them."
+        category:       One of the categories listed above (default: general).
+        context:        WHY this learning was created — the situation or trigger.
+                        Example: "Discovered during the March 2026 HVAC project
+                        when we couldn't reach Client X for 2 days by phone."
+        source:         How this learning originated (default: operator).
+        confidence:     How confident we are in this learning, 0.0 to 1.0
+                        (default: 0.8).  Use lower values for uncertain insights,
+                        higher for verified facts.
+        tags:           Comma-separated tags for filtering.
+                        Example: "client-x, communication, hvac"
+        supersedes_id:  If this learning REPLACES an older one, provide the
+                        old learning's ID here.  The old learning will be
+                        automatically marked as deprecated.
+        outcome:        For business lessons — was the result positive, negative,
+                        neutral, or unknown? (default: unknown)
+        auto_detected:  Set to True when Claude is auto-recording a learning
+                        it detected (not explicitly asked by the operator).
+                        This changes the confirmation message to clearly flag
+                        that Claude initiated this and to ask for approval.
+                        Default: False (operator explicitly asked).
+
+    Returns:
+        Confirmation with the learning details for the user to verify.
+        If auto_detected=True, includes a prominent verification prompt.
+    """
+    if not _SELF_LEARNING_AVAILABLE:
+        return ("❌ Self-Learning module not available.\n"
+                "Ensure self_learning.py is in the same directory as "
+                "ai_prowler_mcp.py.")
+
+    if not title.strip() or not content.strip():
+        return "❌ Both title and content are required."
+
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+
+    try:
+        learning = _sl.record_learning(
+            title=title,
+            content=content,
+            category=category,
+            context=context,
+            source=source,
+            confidence=confidence,
+            tags=tag_list,
+            supersedes_id=supersedes_id,
+            outcome=outcome,
+        )
+    except Exception as exc:
+        return f"❌ Failed to record learning: {exc}"
+
+    # ── Build confirmation message ───────────────────────────────────────
+    # Two styles depending on who initiated the recording.
+    #
+    # AUTO-DETECTED  → prominent banner, explains WHY Claude recorded it,
+    #                   explicit "Is this correct?" approval prompt.
+    #                   The user must see and acknowledge this.
+    #
+    # OPERATOR-ASKED → concise confirmation, still asks for verification
+    #                   but less prominently since the user initiated it.
+    # ─────────────────────────────────────────────────────────────────────
+
+    # Helper: truncate long strings for the banner display, but make truncation
+    # visible to the user with "..." rather than silently cutting off mid-word.
+    # The full content is always stored in the JSON / ChromaDB regardless.
+    def _truncate(text: str, limit: int) -> str:
+        if not text:
+            return ""
+        if len(text) <= limit:
+            return text
+        # Try to break at the last whitespace before the limit so we don't
+        # chop mid-word. Fall back to a hard cut if there's no whitespace.
+        cut = text.rfind(" ", 0, limit)
+        if cut < limit - 80:   # too far back, just hard-cut at limit
+            cut = limit
+        return text[:cut].rstrip() + " ..."
+
+    if auto_detected:
+        # ── AUTO-DETECTED: Claude initiated — needs explicit approval ────
+        lines = [
+            "🧠 AUTO-LEARNING — I detected something worth remembering "
+            "and recorded it:",
+            "═" * 50,
+            "",
+            f"  📌 \"{learning['title']}\"",
+            "",
+            f"  What I recorded:",
+            f"    {_truncate(learning['content'], 600)}",
+            "",
+            f"  Why I recorded it:",
+            f"    {_truncate(learning.get('context', 'No context provided'), 400)}",
+            "",
+            f"  Category   : {learning['category']}",
+            f"  Confidence : {learning['confidence']:.0%}",
+        ]
+        if learning.get("outcome", "unknown") != "unknown":
+            lines.append(f"  Outcome    : {learning['outcome']}")
+        if learning.get("tags"):
+            lines.append(f"  Tags       : {', '.join(learning['tags'])}")
+        if learning.get("supersedes"):
+            lines.append(f"  Replaces   : {learning['supersedes']}")
+            lines.append("  ↳ Previous version automatically deprecated")
+        lines.append(f"  ID         : {learning['id']}")
+        lines.append("")
+        lines.append("═" * 50)
+        lines.append(
+            "⚡ Is this correct? If anything is off, tell me what to "
+            "change and I'll update or remove it immediately."
+        )
+    else:
+        # ── OPERATOR-REQUESTED: user asked, concise confirmation ─────────
+        lines = [
+            "✅ Learning recorded and indexed",
+            "─" * 45,
+            f"  📌 {learning['title']}",
+            f"  → {_truncate(learning['content'], 300)}",
+            "",
+            f"  Category   : {learning['category']}",
+            f"  Confidence : {learning['confidence']:.0%}",
+            f"  Source     : {learning['source']}",
+        ]
+        if learning.get("outcome", "unknown") != "unknown":
+            lines.append(f"  Outcome    : {learning['outcome']}")
+        if learning.get("tags"):
+            lines.append(f"  Tags       : {', '.join(learning['tags'])}")
+        if learning.get("supersedes"):
+            lines.append(f"  Replaces   : {learning['supersedes']}")
+            lines.append("  ↳ Previous version automatically deprecated")
+        lines.append(f"  ID         : {learning['id']}")
+        lines.append("")
+        lines.append(
+            "Does this look right? I can adjust the wording, confidence, "
+            "or category if needed."
+        )
+
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOL — check_learned
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def check_learned(
+    query: str,
+    n_results: int = 5,
+    category: str = "",
+    include_deprecated: bool = False,
+) -> str:
+    """
+    Check the self-learning knowledge base for relevant learnings before
+    answering a question or making a decision.
+
+    WHEN TO USE THIS TOOL — call PROACTIVELY, without being asked:
+    - BEFORE answering questions about clients, projects, or procedures
+    - BEFORE making scheduling or business recommendations
+    - When the user asks about a topic that may have stored corrections
+    - When the user says "what did we learn about..." or "do you remember..."
+    - When you're about to state a fact that might have been updated
+    - At the START of post-operation analysis workflows
+
+    The tool searches semantically — you don't need exact keyword matches.
+    For example, searching "client communication preferences" will find
+    a learning titled "Client X prefers email over phone calls".
+
+    IMPORTANT: If check_learned() returns relevant results, you MUST
+    apply them to your response. If a learning contradicts your built-in
+    knowledge, prefer the learning (it was recorded more recently and
+    with specific context from the operator).
+
+    Args:
+        query:              Natural language search query describing what
+                            you're looking for.
+                            Example: "best way to contact Client X"
+        n_results:          Max learnings to return (1-20, default 5).
+        category:           Filter by category (optional). Same categories
+                            as record_learning: fact_correction, business_lesson,
+                            project_insight, etc.
+        include_deprecated: If True, also return deprecated learnings
+                            (useful to see the history of a superseded fact).
+
+    Returns:
+        Matching learnings with confidence scores, context, and metadata.
+        Returns "No learnings found" if the knowledge base is empty or
+        no matches exist for the query.
+    """
+    if not _SELF_LEARNING_AVAILABLE:
+        return ("❌ Self-Learning module not available.\n"
+                "Ensure self_learning.py is in the same directory as "
+                "ai_prowler_mcp.py.")
+
+    if not query.strip():
+        return "❌ Query cannot be empty."
+
+    try:
+        matches = _sl.check_learned(
+            query=query,
+            n_results=n_results,
+            category=category,
+            active_only=not include_deprecated,
+        )
+    except Exception as exc:
+        return f"❌ check_learned failed: {exc}"
+
+    if not matches:
+        return (
+            f"No learnings found for: \"{query}\"\n\n"
+            "The self-learning knowledge base has no matching entries.\n"
+            "Use record_learning() to add new knowledge, or try different "
+            "search terms."
+        )
+
+    lines = [
+        f"🧠 Self-Learning Results for: \"{query}\"",
+        f"Found {len(matches)} relevant learning(s)",
+        "─" * 55,
+        "",
+    ]
+
+    for i, m in enumerate(matches, 1):
+        sim   = m.get("similarity", 0.0)
+        conf  = m.get("confidence", 0.0)
+        stars = "★" * round(conf * 5) + "☆" * (5 - round(conf * 5))
+
+        # Relevance indicator
+        if sim >= 0.7:
+            rel = "🟢 HIGH"
+        elif sim >= 0.4:
+            rel = "🟡 MODERATE"
+        else:
+            rel = "🟠 LOW"
+
+        status = m.get("status", "active")
+        status_icon = "✅" if status == "active" else "⚠️" if status == "deprecated" else "📦"
+
+        lines.append(f"[{i}] {status_icon} {m.get('title', 'Untitled')}")
+        lines.append(f"    Relevance  : {rel} ({sim:.3f})")
+        lines.append(f"    Confidence : {stars} ({conf:.0%})")
+        lines.append(f"    Category   : {m.get('category', 'general')}")
+        lines.append(f"    Source     : {m.get('source', 'unknown')}")
+        lines.append(f"    Created    : {m.get('created_at', '?')}")
+
+        outcome = m.get("outcome", "unknown")
+        if outcome != "unknown":
+            outcome_icon = {"positive": "✅", "negative": "❌", "neutral": "➖"}.get(outcome, "❓")
+            lines.append(f"    Outcome    : {outcome_icon} {outcome}")
+
+        tags = m.get("tags", "")
+        if tags:
+            lines.append(f"    Tags       : {tags}")
+
+        if m.get("supersedes"):
+            lines.append(f"    Supersedes : {m['supersedes']}")
+        if m.get("superseded_by"):
+            lines.append(f"    ⚠️  SUPERSEDED BY: {m['superseded_by']}")
+            lines.append(f"        This learning has been replaced — "
+                         f"check the newer version.")
+
+        lines.append(f"    ID         : {m.get('learning_id', '?')}")
+        lines.append("")
+        lines.append(f"    {m.get('content', '').strip()}")
+        lines.append("")
+        lines.append("─" * 55)
+        lines.append("")
+
+    lines.append(
+        "💡 Apply these learnings to your response. If a learning is "
+        "marked SUPERSEDED, prefer the newer version.\n"
+        "Use record_learning() to add new knowledge based on this conversation."
+    )
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOL — list_learnings
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def list_learnings(
+    category: str = "",
+    status: str = "active",
+    tag: str = "",
+    limit: int = 25,
+) -> str:
+    """
+    Browse all learnings in the self-learning knowledge base with optional
+    filters.  Unlike check_learned (which does semantic search), this tool
+    lists learnings by recency with exact-match filters.
+
+    Use this to:
+    - See all business lessons learned
+    - Review all learnings for a specific category
+    - Find deprecated learnings to understand what changed
+    - Audit the knowledge base
+
+    Args:
+        category:   Filter by category (optional). Valid values:
+                    fact_correction, business_lesson, project_insight,
+                    process_improvement, mistake_learned, best_practice,
+                    client_preference, technical_note, general
+        status:     Filter by status: active (default), deprecated, archived.
+                    Pass empty string "" to see all statuses.
+        tag:        Filter by tag (optional, single tag, case-insensitive).
+        limit:      Max learnings to return (default 25).
+
+    Returns:
+        Numbered list of learnings sorted by date (newest first).
+    """
+    if not _SELF_LEARNING_AVAILABLE:
+        return ("❌ Self-Learning module not available.\n"
+                "Ensure self_learning.py is in the same directory as "
+                "ai_prowler_mcp.py.")
+
+    try:
+        results = _sl.list_learnings(
+            category=category,
+            status=status,
+            tag=tag,
+            limit=limit,
+        )
+    except Exception as exc:
+        return f"❌ list_learnings failed: {exc}"
+
+    if not results:
+        filters = []
+        if category:
+            filters.append(f"category={category}")
+        if status:
+            filters.append(f"status={status}")
+        if tag:
+            filters.append(f"tag={tag}")
+        filter_note = f" (filters: {', '.join(filters)})" if filters else ""
+        return f"No learnings found{filter_note}."
+
+    lines = [
+        f"📚 Learnings{f' — {category}' if category else ''}"
+        f"{f' [{status}]' if status else ' [all]'}",
+        f"Showing {len(results)} learning(s)",
+        "─" * 55,
+        "",
+    ]
+
+    for i, l in enumerate(results, 1):
+        status_icon = {"active": "✅", "deprecated": "⚠️",
+                       "archived": "📦"}.get(l.get("status"), "❓")
+        outcome = l.get("outcome", "unknown")
+        outcome_icon = {"positive": "✅", "negative": "❌",
+                        "neutral": "➖", "unknown": "❓"}.get(outcome, "❓")
+
+        lines.append(
+            f"[{i}] {status_icon} {l.get('title', 'Untitled')}"
+        )
+        lines.append(
+            f"    {l.get('category', 'general')} | "
+            f"{outcome_icon} {outcome} | "
+            f"confidence: {l.get('confidence', 0):.0%} | "
+            f"applied: {l.get('applied_count', 0)}x"
+        )
+        lines.append(f"    Created: {l.get('created_at', '?')}")
+        lines.append(f"    ID: {l['id']}")
+
+        # Show first 120 chars of content
+        content = l.get("content", "")
+        if len(content) > 120:
+            content = content[:117] + "..."
+        lines.append(f"    → {content}")
+        lines.append("")
+
+    lines.append(
+        "Use check_learned(query) for semantic search | "
+        "update_learning(id, updates) to modify | "
+        "record_learning() to add new"
+    )
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOL — update_learning
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def update_learning(
+    learning_id: str,
+    updates: dict,
+) -> str:
+    """
+    Update an existing learning's fields.
+
+    Use this to refine a learning after new information becomes available,
+    change its confidence level, update the outcome after seeing results,
+    or archive/deprecate it manually.
+
+    IMPORTANT: Also use this when the user says a recorded learning is
+    wrong or needs adjustment after seeing a confirmation message.
+    This is part of the Confirmation Protocol — if the user corrects
+    a learning, call this immediately.
+
+    Args:
+        learning_id:  The UUID of the learning to update.
+                      Get this from list_learnings or check_learned results.
+        updates:      Dict of field:value pairs to update. Allowed fields:
+                      title, content, context, category, confidence,
+                      tags (list), status (active/deprecated/archived),
+                      outcome (positive/negative/neutral/unknown)
+                      Example: {"confidence": 0.95, "outcome": "positive",
+                                "status": "active"}
+
+    Returns:
+        Confirmation of updated fields, or error if learning not found.
+    """
+    if not _SELF_LEARNING_AVAILABLE:
+        return ("❌ Self-Learning module not available.\n"
+                "Ensure self_learning.py is in the same directory as "
+                "ai_prowler_mcp.py.")
+
+    if not learning_id.strip():
+        return "❌ learning_id is required."
+    if not updates:
+        return "❌ No updates provided."
+
+    try:
+        result = _sl.update_learning(learning_id.strip(), updates)
+    except Exception as exc:
+        return f"❌ update_learning failed: {exc}"
+
+    if result is None:
+        return f"❌ Learning not found: {learning_id}"
+
+    lines = [
+        "✅ Learning updated",
+        "─" * 45,
+        f"  ID      : {result['id']}",
+        f"  Title   : {result['title']}",
+        f"  Status  : {result['status']}",
+        f"  Updated : {result['updated_at']}",
+        "",
+        "  Changed fields:",
+    ]
+    for key, val in updates.items():
+        lines.append(f"    {key} → {val}")
+
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOL — delete_learning
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def delete_learning(learning_id: str) -> str:
+    """
+    Permanently delete a learning from both the JSON file and ChromaDB index.
+
+    ⚠️  This is DESTRUCTIVE — the learning cannot be recovered.
+    Consider using update_learning with status='archived' instead if you
+    want to keep it for historical reference.
+
+    Use this when the user rejects a learning after seeing the confirmation
+    message and says to remove it entirely (part of Confirmation Protocol).
+
+    Args:
+        learning_id:  The UUID of the learning to delete.
+
+    Returns:
+        Confirmation or error if not found.
+    """
+    if not _SELF_LEARNING_AVAILABLE:
+        return ("❌ Self-Learning module not available.\n"
+                "Ensure self_learning.py is in the same directory as "
+                "ai_prowler_mcp.py.")
+
+    if not learning_id.strip():
+        return "❌ learning_id is required."
+
+    try:
+        deleted = _sl.delete_learning(learning_id.strip())
+    except _sl.ChromaIndexError as exc:
+        # JSON delete may have succeeded; ChromaDB cleanup failed.
+        # Report this clearly so the user knows there's an orphan.
+        return (
+            f"⚠️ Partial delete for learning {learning_id}.\n"
+            f"JSON file was updated, but the ChromaDB index could not be\n"
+            f"cleaned up: {exc}\n\n"
+            "A stale embedding remains in the search index. To clean it up,\n"
+            "use the GUI's '🔄 Rebuild ChromaDB Index' button or call\n"
+            "reindex_all_learnings() from self_learning.py."
+        )
+    except Exception as exc:
+        return f"❌ delete_learning failed: {exc}"
+
+    if deleted:
+        return (
+            f"✅ Learning {learning_id} permanently deleted.\n"
+            "The learning has been removed from both the JSON file "
+            "and the ChromaDB index."
+        )
+    else:
+        # JSON had no entry for this ID. ChromaDB cleanup was still
+        # attempted (idempotent on missing IDs). Either the ID never
+        # existed, or it was already deleted from the source of truth
+        # — either way, no further action is needed.
+        return (
+            f"ℹ️ No JSON entry found for learning {learning_id}.\n"
+            "(ChromaDB cleanup was attempted regardless, in case of "
+            "orphan embeddings.)"
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOL — get_learning_stats
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def get_learning_stats() -> str:
+    """
+    Get summary statistics about the self-learning knowledge base.
+
+    Shows total learnings, breakdown by category/source/outcome/status,
+    most frequently applied learnings, and file location.
+
+    Use this to understand the health and coverage of the learning system.
+
+    Returns:
+        Formatted statistics report.
+    """
+    if not _SELF_LEARNING_AVAILABLE:
+        return ("❌ Self-Learning module not available.\n"
+                "Ensure self_learning.py is in the same directory as "
+                "ai_prowler_mcp.py.")
+
+    try:
+        stats = _sl.get_learning_stats()
+    except Exception as exc:
+        return f"❌ get_learning_stats failed: {exc}"
+
+    lines = [
+        "🧠 Self-Learning Knowledge Base Statistics",
+        "═" * 50,
+        "",
+        f"  Total learnings  : {stats['total']}",
+        f"  Active           : {stats['active']}",
+        f"  Deprecated       : {stats['deprecated']}",
+        f"  Archived         : {stats['archived']}",
+        "",
+    ]
+
+    if stats["by_category"]:
+        lines.append("  By category:")
+        for cat, count in sorted(stats["by_category"].items(),
+                                 key=lambda x: -x[1]):
+            lines.append(f"    {cat:24s} : {count}")
+        lines.append("")
+
+    if stats["by_source"]:
+        lines.append("  By source:")
+        for src, count in sorted(stats["by_source"].items(),
+                                 key=lambda x: -x[1]):
+            lines.append(f"    {src:24s} : {count}")
+        lines.append("")
+
+    if stats["by_outcome"]:
+        lines.append("  By outcome:")
+        for out, count in sorted(stats["by_outcome"].items(),
+                                 key=lambda x: -x[1]):
+            icon = {"positive": "✅", "negative": "❌",
+                    "neutral": "➖", "unknown": "❓"}.get(out, "❓")
+            lines.append(f"    {icon} {out:20s} : {count}")
+        lines.append("")
+
+    if stats["most_applied"]:
+        lines.append("  Most applied learnings:")
+        for ma in stats["most_applied"]:
+            lines.append(
+                f"    {ma['applied_count']:3d}x  {ma['title']}"
+            )
+        lines.append("")
+
+    lines.append(f"  📁 Storage: {stats['file_path']}")
+    lines.append("")
+    lines.append(
+        "Use check_learned(query) to search | "
+        "list_learnings() to browse | "
+        "record_learning() to add new"
+    )
     return "\n".join(lines)
 
 # ══════════════════════════════════════════════════════════════════════════════

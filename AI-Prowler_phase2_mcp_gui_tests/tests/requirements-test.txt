@@ -1,0 +1,18 @@
+# Test-only dependencies for AI-Prowler 6.0.0 functional + MCP + GUI tests.
+#
+# The actual code under test imports many heavyweight things (chromadb,
+# sentence-transformers, pdfplumber, ...). Those should already be present
+# from your normal AI-Prowler install — this file only lists what the test
+# harness ITSELF needs on top.
+
+pytest>=7.4
+pytest-timeout>=2.1     # safety net so a hanging test can't run forever
+
+# MCP tests need the SDK to be importable — same SDK ai_prowler_mcp.py uses.
+# Already installed if you've ever run the MCP server, but pinning here so a
+# fresh test box is one pip-install away.
+mcp>=1.0
+
+# GUI tests use Tkinter (stdlib) directly — no extra packages needed for the
+# in-process test driver. If you ever switch to pywinauto-style external
+# automation, add pywinauto here for Windows.

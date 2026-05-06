@@ -23,6 +23,17 @@
 ;   - Downloads and silently installs Tesseract OCR 5.x (UB-Mannheim build)
 ;     enabling automatic OCR of scanned PDFs and image files
 ;
+; SELF-LEARNING SYSTEM:
+;   - Installs self_learning.py alongside the other app files
+;   - Provides RAG-based knowledge accumulation — Claude records
+;     learnings (facts, business lessons, project insights) into
+;     a structured JSON file + ChromaDB index, instantly available
+;     without GPU training
+;   - Data stored at: %USERPROFILE%\.ai-prowler\learnings\
+;   - MCP tools (record_learning, check_learned, etc.) are built into
+;     ai_prowler_mcp.py; desktop GUI tab (🧠 Learnings) is built into rag_gui.py
+;   - Learnings folder is included in the uninstall data-deletion prompt
+;
 ; OLLAMA INTEGRATION:
 ;   - Ollama is OPTIONAL — NOT installed or downloaded automatically.
 ;   - Ollama is available for users who want to run a local LLM for the
@@ -99,7 +110,7 @@
 
 [Setup]
 AppName=AI-Prowler
-AppVersion=3.0.0
+AppVersion=3.1.0
 DefaultDirName={autopf}\AI-Prowler
 DefaultGroupName=AI-Prowler
 OutputBaseFilename=AI-Prowler_INSTALL
@@ -150,6 +161,7 @@ Source: "COMPLETE_USER_GUIDE.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "subscription_instructions.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "mcp_diagnostics.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: "self_learning.py"; DestDir: "{app}"; Flags: ignoreversion
 ; --- Full Python installer bundled into {app} so Exec() can find it ---
 Source: "python-3.11.8-amd64.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; NOTE: Ollama is downloaded from the internet at install time, not bundled here
@@ -258,6 +270,7 @@ const
   SPREADSHEET_DEST_FOLDER = '{userdocs}\AI-Prowler';
   SPREADSHEET_DEST_FILE   = '{userdocs}\AI-Prowler\AI-Prowler_Job_Tracker.xlsx';
   AI_PROWLER_CFG_FILE     = '{%USERPROFILE}\.ai-prowler\config.json';
+  LEARNINGS_FOLDER        = '{%USERPROFILE}\.ai-prowler\learnings';
 
   // Task Scheduler task name for AI-Prowler auto-start on logon.
   // Flat name (no subfolder) for broadest Windows 10/11 compatibility.
@@ -725,7 +738,7 @@ begin
     end;
   end;
 
-  // Read existing config (may already have QBO tokens from a previous run).
+  // Read existing config (may already have settings from a previous run).
   ExistingJson := '';
   if FileExists(CfgFile) then
   begin
@@ -1227,14 +1240,9 @@ begin
 
       // ----------------------------------------------------------
       // ACTION TOOLS — FIELD SERVICE AUTOMATION
-      // pywin32: Windows COM automation for QuickBooks Desktop.
-      // Required for create_quickbooks_desktop_invoice() MCP tool.
       // Free tools (weather, routing, maps URL) need no extra packages.
-      // QuickBooks Online uses OAuth tokens stored in config — no package.
+      // Spreadsheet tools use openpyxl (installed via requirements.txt).
       // ----------------------------------------------------------
-      SetProgress(79, 'Installing QuickBooks Desktop support (pywin32)...');
-      AppendInstallLog('[Action] Installing pywin32 for QuickBooks Desktop COM automation...');
-      ExecPython('[Action] pip install pywin32', PyFolder, '-m pip install pywin32>=306');
 
       // ----------------------------------------------------------
       // WRITE CLAUDE DESKTOP CONFIG SNIPPET
@@ -2050,12 +2058,14 @@ begin
       'This includes:' + #13#10 +
       '  • RAG vector database (re-indexing required after reinstall)' + #13#10 +
       '  • Index tracking files (.rag_file_tracking.json, etc.)' + #13#10 +
+      '  • Self-Learning knowledge base (all recorded learnings)' + #13#10 +
       '  • Job Tracker spreadsheet (AI-Prowler_Job_Tracker.xlsx)' + #13#10 +
       '' + #13#10 +
-      'YES - delete all data files (clean slate — your job data will be lost)' + #13#10 +
-      'NO  - keep all data files (safe for reinstall — your jobs are preserved)' + #13#10 +
+      'YES - delete all data files (clean slate — your data will be lost)' + #13#10 +
+      'NO  - keep all data files (safe for reinstall — your data is preserved)' + #13#10 +
       '' + #13#10 +
       'RAG database:       ' + ExpandConstant(RAG_DB_FOLDER) + #13#10 +
+      'Learnings folder:   ' + ExpandConstant(LEARNINGS_FOLDER) + #13#10 +
       'Job Tracker folder: ' + ExpandConstant(SPREADSHEET_DEST_FOLDER),
       mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES;
 
@@ -2081,6 +2091,23 @@ begin
       AppendUninstallLog('[RAG] Deleted .rag_email_index.json');
       DeleteFileIfExists(ExpandConstant('{%USERPROFILE}\.rag_auto_update_dirs.json'));
       AppendUninstallLog('[RAG] Deleted .rag_auto_update_dirs.json');
+
+      // ── Self-Learning knowledge base ──────────────────────────────────────
+      // The learnings JSON file and folder live under ~/.ai-prowler/learnings/
+      // Deleting this removes all recorded learnings (facts, business lessons,
+      // project insights, etc.) — the ChromaDB learnings collection in the RAG
+      // database folder is already handled by the database deletion above.
+      Folder := ExpandConstant(LEARNINGS_FOLDER);
+      if DirExists(Folder) then
+      begin
+        AppendUninstallLog('[Learnings] Deleting learnings folder: ' + Folder);
+        if DelTree(Folder, True, True, True) then
+          AppendUninstallLog('[Learnings] Learnings folder deleted.')
+        else
+          AppendUninstallLog('[Learnings] DelTree returned FALSE for: ' + Folder);
+      end
+      else
+        AppendUninstallLog('[Learnings] Learnings folder not found: ' + Folder);
 
       // ── Job Tracker spreadsheet ──────────────────────────────────────────
       // uninsneveruninstall in [Files] means Inno will NOT auto-delete the
@@ -2127,6 +2154,7 @@ begin
       AppendUninstallLog('[RAG]   Kept: .rag_file_tracking.json');
       AppendUninstallLog('[RAG]   Kept: .rag_email_index.json');
       AppendUninstallLog('[RAG]   Kept: .rag_auto_update_dirs.json');
+      AppendUninstallLog('[Learnings]   Kept: ' + ExpandConstant(LEARNINGS_FOLDER));
       AppendUninstallLog('[Spreadsheet]   Kept: ' + ExpandConstant(SPREADSHEET_DEST_FILE));
     end;
 
@@ -2163,6 +2191,11 @@ begin
       AppendUninstallLog('[Summary] RAG database folder: STILL PRESENT')
     else
       AppendUninstallLog('[Summary] RAG database folder: REMOVED or NOT FOUND');
+
+    if DirExists(ExpandConstant(LEARNINGS_FOLDER)) then
+      AppendUninstallLog('[Summary] Learnings folder: STILL PRESENT')
+    else
+      AppendUninstallLog('[Summary] Learnings folder: REMOVED or NOT FOUND');
 
     // Registry summary
     if RegKeyExists(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Uninstall\Python 3.11.8 (64-bit)') then

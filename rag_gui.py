@@ -16,6 +16,47 @@ import queue
 import os
 from datetime import datetime
 
+# ── Bulletproof stdout/stderr UTF-8 fix ──────────────────────────────────────
+# Tkinter apps on Windows can have stdout/stderr in any of three broken states:
+#   1. None        — when launched via pythonw.exe (no console)
+#   2. cp1252      — default Windows codepage; crashes on emoji / em-dashes
+#   3. proxy       — some launchers wrap the stream and break reconfigure()
+#
+# A simple sys.stdout.reconfigure() only handles case 2. The earlier version
+# of this fix silently failed on cases 1 and 3 because of the try/except: pass
+# wrapper, which is what allowed cp1252 errors to surface in the GUI delete
+# path. This implementation falls through several strategies and never crashes.
+def _make_safe_text_stream(name):
+    import io as _io
+    cur = getattr(sys, name, None)
+    if cur is None:
+        return _io.TextIOWrapper(_io.BytesIO(), encoding="utf-8",
+                                 errors="replace", write_through=True)
+    enc = (getattr(cur, "encoding", "") or "").lower().replace("-", "")
+    if enc in ("utf8", "utf8sig"):
+        return cur
+    if hasattr(cur, "reconfigure"):
+        try:
+            cur.reconfigure(encoding="utf-8", errors="replace")
+            return cur
+        except Exception:
+            pass
+    buf = getattr(cur, "buffer", None)
+    if buf is not None:
+        try:
+            return _io.TextIOWrapper(buf, encoding="utf-8",
+                                     errors="replace", write_through=True)
+        except Exception:
+            pass
+    return _io.TextIOWrapper(_io.BytesIO(), encoding="utf-8",
+                             errors="replace", write_through=True)
+
+try:
+    sys.stdout = _make_safe_text_stream("stdout")
+    sys.stderr = _make_safe_text_stream("stderr")
+except Exception:
+    pass
+
 # ── Errno 22 / double-backslash HuggingFace path fix ─────────────────────────
 # MUST be set before ANY import that could transitively pull in huggingface_hub
 # (including faster_whisper, sentence_transformers, and transformers below).
@@ -52,6 +93,32 @@ if sys.stderr is None:
 # a new version; all UI labels, About dialogs, help text, and update checks
 # read from here.
 APP_VERSION = "6.0.0"
+
+# ── UI feature flags ─────────────────────────────────────────────────────────
+# Toggle visibility of advanced/legacy GUI sections without removing any
+# underlying functionality. The Python functions, MCP integration, telemetry,
+# OCR, speech, and Ollama-LLM code paths are all still present and callable —
+# these flags just hide their UI surfaces for the average user.
+#
+# Flip to True (and restart the GUI) to expose:
+#
+#   SUPPORT_LOCAL_HW_LLM — local-hardware LLM features:
+#     • Ask Questions tab: Your-Question input box, attachments, Ask Question
+#       button, microphone button. (Smart Guided Questions panel always shown.)
+#     • Settings tab:      AI Model section, External AI APIs section,
+#                          Microphone / Speech Input section, Ollama Server
+#                          section.
+#
+#   DEBUG_EN — power-user / field-debug surfaces:
+#     • Settings tab:      Query Output section, OCR scanned-PDF debug display,
+#                          MCP Claude Desktop Integration section + auto-config
+#                          buttons, claude.ai Web/Mobile config snippet,
+#                          Privacy & Analytics section.
+#
+# Defaults (False) target the typical AI-Prowler user whose workflow is
+# Claude Desktop / claude.ai → MCP → AI-Prowler RAG. No knobs, no clutter.
+SUPPORT_LOCAL_HW_LLM = False
+DEBUG_EN             = False
 
 # ── Telemetry ────────────────────────────────────────────────────────────────
 # Anonymous heartbeat phone-home. See cloudflare-worker/ for the receiver.
@@ -119,6 +186,16 @@ except Exception as e:
     EXTERNAL_PROVIDERS = {}
 else:
     _RAG_ERROR = ""
+
+# ── Self-Learning engine import ──────────────────────────────────────────────
+SELF_LEARNING_AVAILABLE = False
+try:
+    import self_learning as _sl_engine
+    SELF_LEARNING_AVAILABLE = True
+except ImportError:
+    print("Note: self_learning.py not found — Learnings tab will be view-only")
+except Exception as _sl_e:
+    print(f"Warning: self_learning import error: {_sl_e}")
 
 # ── Speech Recorder ──────────────────────────────────────────────────────────
 
@@ -699,6 +776,59 @@ class RAGGui:
 
         # MCP status bar indicator — check once on startup
         self.root.after(2000, self._refresh_mcp_status_bar)
+
+        # Auto-start HTTP MCP server after UI has settled —
+        # silently starts the server if a Bearer token is configured.
+        # This is optional — only needed for mobile/web access via Claude.ai.
+        # Delay of 6s allows the Settings tab to finish building and
+        # the subscription status check to complete first.
+        self.root.after(6000, self._auto_start_http_server)
+
+    def _auto_start_http_server(self):
+        """
+        Silently start the HTTP MCP server on launch if a Bearer token
+        is configured.  Called via root.after() from __init__ with a 5-second
+        delay so the Settings tab is fully built first.
+
+        Unlike the manual Start button, this does NOT show messageboxes
+        on failure (no token, subscription issues, etc.) — it just logs
+        to the status bar and lets the user start manually if needed.
+        """
+        # Guard: _start_http_server_fn is set during Settings tab creation.
+        # If the Settings tab hasn't built yet (shouldn't happen with 5s delay),
+        # silently skip.
+        fn = getattr(self, '_start_http_server_fn', None)
+        if fn is None:
+            return
+
+        # Only auto-start if a Bearer token is saved in config
+        try:
+            from pathlib import Path as _P
+            import json as _j
+            cfg_path = _P.home() / '.ai-prowler' / 'config.json'
+            if cfg_path.exists():
+                cfg = _j.loads(cfg_path.read_text(encoding='utf-8'))
+                token = cfg.get('remote_token', '').strip()
+                if not token:
+                    self.status_var.set(
+                        "HTTP auto-start skipped — no Bearer token configured")
+                    return
+            else:
+                return
+        except Exception:
+            return
+
+        # Don't auto-start if already running
+        if (self._http_server_proc is not None
+                and self._http_server_proc.poll() is None):
+            return
+
+        # Call the same function the Start button uses
+        try:
+            self.status_var.set("Auto-starting HTTP MCP server...")
+            fn()
+        except Exception as exc:
+            self.status_var.set(f"HTTP auto-start failed: {exc}")
         
     def load_configuration(self):
         """Load saved configuration"""
@@ -811,8 +941,6 @@ Core Features:
 Small Business Service Tools (🏢 tab):
 • Route optimization & tap-to-navigate links (free)
 • Weather forecasts for job scheduling (free)
-• QuickBooks Online invoicing (OAuth)
-• QuickBooks Desktop invoicing (COM)
 • Job spreadsheet updater (.xlsx)
 
 ⚠  .doc and .xls (legacy OLE binary) are NOT supported — convert to .docx / .xlsx first.
@@ -1594,6 +1722,7 @@ or from the Help menu."""
         self.create_scheduling_tab()       # 5
         self.create_settings_tab()         # 6
         self.create_small_business_tab()   # 7  ← Small Business Service Tools
+        self.create_learnings_tab()        # 8  ← Self-Learning Knowledge Base
 
         # Named tab index constants — change here if tabs are ever reordered
         self._TAB_INDEX_WELCOME      = 0   # Welcome / Info / Ad Space
@@ -1604,6 +1733,7 @@ or from the Help menu."""
         self._TAB_INDEX_SCHEDULE     = 5
         self._TAB_INDEX_SETTINGS     = 6
         self._TAB_INDEX_SMALL_BIZ    = 7   # Small Business Service Tools
+        self._TAB_INDEX_LEARNINGS    = 8   # Self-Learning Knowledge Base
         
         # Status bar
         self.create_status_bar()
@@ -2869,7 +2999,20 @@ or from the Help menu."""
         # Divider under the banner
         ttk.Separator(query_frame, orient='horizontal').pack(
             fill='x', padx=20, pady=(0, 6))
-        question_frame = ttk.LabelFrame(query_frame, text="Your Question", padding=10)
+
+        # ── Local-LLM input controls ─────────────────────────────────────────
+        # When SUPPORT_LOCAL_HW_LLM is False, all of the input/attachment/
+        # provider/answer widgets below are constructed but never packed —
+        # they live in an off-screen "hidden_root" Frame. Back-end code can
+        # still reference self.question_text, self.answer_output, etc. without
+        # AttributeError; the user just never sees them. Flip the constant at
+        # the top of this file to expose the full Q&A workflow again.
+        if SUPPORT_LOCAL_HW_LLM:
+            _llm_parent = query_frame
+        else:
+            _llm_parent = tk.Frame(query_frame)   # built but never packed
+
+        question_frame = ttk.LabelFrame(_llm_parent, text="Your Question", padding=10)
         question_frame.pack(fill='x', padx=20, pady=10)
 
         text_frame = ttk.Frame(question_frame)
@@ -2991,7 +3134,7 @@ or from the Help menu."""
                       font=('Arial', 9), foreground='gray').pack(anchor='w', padx=6)
 
         # ── Attachments area ──────────────────────────────────────────────────
-        attach_lf = ttk.LabelFrame(query_frame,
+        attach_lf = ttk.LabelFrame(_llm_parent,
                                    text="📎 Attachments  (images, code, text files)",
                                    padding=(8, 4))
         attach_lf.pack(fill='x', padx=20, pady=(0, 6))
@@ -3022,7 +3165,7 @@ or from the Help menu."""
                   font=('Arial', 8), foreground='gray').pack(anchor='w', pady=(2, 0))
 
         # ── Context chunks + provider selector ───────────────────────────────
-        options_frame = ttk.Frame(query_frame)
+        options_frame = ttk.Frame(_llm_parent)
         options_frame.pack(fill='x', padx=20, pady=5)
 
         ttk.Label(options_frame, text="Context chunks:").pack(side='left', padx=5)
@@ -3079,7 +3222,7 @@ or from the Help menu."""
         self.root.after(500, self._refresh_provider_light)
 
         # ── Action row ───────────────────────────────────────────────────────
-        action_row = ttk.Frame(query_frame)
+        action_row = ttk.Frame(_llm_parent)
         action_row.pack(fill='x', padx=20, pady=(8, 4))
 
         query_btn = ttk.Button(action_row, text="Ask Question",
@@ -3111,7 +3254,7 @@ or from the Help menu."""
         self._ollama_status_lbl.pack(side='left')
 
         # ── Progress bar + elapsed timer ──────────────────────────────────────
-        progress_row = ttk.Frame(query_frame)
+        progress_row = ttk.Frame(_llm_parent)
         progress_row.pack(fill='x', padx=20, pady=(5, 0))
 
         self.query_progress = ttk.Progressbar(progress_row, mode='indeterminate')
@@ -3128,7 +3271,7 @@ or from the Help menu."""
         # ── Detected files panel ──────────────────────────────────────────────
         # Container is ALWAYS packed here — never moved.
         # Only the LabelFrame inside is shown/hidden so pack order is preserved.
-        self._detected_files_container = ttk.Frame(query_frame)
+        self._detected_files_container = ttk.Frame(_llm_parent)
         self._detected_files_container.pack(fill='x', padx=20)
 
         self._detected_files_frame = ttk.LabelFrame(
@@ -3148,8 +3291,8 @@ or from the Help menu."""
 
         # ── Answer box ────────────────────────────────────────────────────────
         # Fixed height (scrollable internally); outer canvas scrolls the whole tab
-        ttk.Label(query_frame, text="Answer:").pack(anchor='w', padx=20)
-        self.answer_output = scrolledtext.ScrolledText(query_frame, height=22,
+        ttk.Label(_llm_parent, text="Answer:").pack(anchor='w', padx=20)
+        self.answer_output = scrolledtext.ScrolledText(_llm_parent, height=22,
                                                        wrap=tk.WORD,
                                                        font=('Arial', 11))
         self.answer_output.pack(fill='x', padx=20, pady=5)
@@ -3196,7 +3339,7 @@ or from the Help menu."""
 
         # Tracked directories
         tracked_frame = ttk.LabelFrame(f,
-                                       text="Tracked Directories", padding=10)
+                                       text="Tracked Directories & Files", padding=10)
         tracked_frame.pack(fill='x', padx=20, pady=(0, 6))
 
         # Listbox with scrollbar
@@ -3857,9 +4000,20 @@ or from the Help menu."""
         title = ttk.Label(scrollable_frame, text="Configuration", 
                          font=('Arial', 16, 'bold'))
         title.pack(pady=10)
-        
+
+        # ── Visibility-controlled parent frames ──────────────────────────────
+        # Sections that are hidden when their feature flag is off get parented
+        # to a Frame that's never packed onto the canvas. The widgets are still
+        # created (so callbacks, vars, and .configure() calls don't break), but
+        # the user never sees them. Flip the flags at the top of this file to
+        # make the sections reappear without code changes.
+        _llm_settings_parent   = (scrollable_frame if SUPPORT_LOCAL_HW_LLM
+                                  else tk.Frame(scrollable_frame))
+        _debug_settings_parent = (scrollable_frame if DEBUG_EN
+                                  else tk.Frame(scrollable_frame))
+
         # Model selection
-        model_frame = ttk.LabelFrame(scrollable_frame, text="AI Model", padding=10)
+        model_frame = ttk.LabelFrame(_llm_settings_parent, text="AI Model", padding=10)
         model_frame.pack(fill='x', padx=20, pady=10)
         
         ttk.Label(model_frame,
@@ -3957,7 +4111,7 @@ or from the Help menu."""
         install_btn.pack(pady=5)
 
         # ── External AI APIs ──────────────────────────────────────────────────
-        ext_frame = ttk.LabelFrame(scrollable_frame, text="External AI APIs", padding=10)
+        ext_frame = ttk.LabelFrame(_llm_settings_parent, text="External AI APIs", padding=10)
         ext_frame.pack(fill='x', padx=20, pady=10)
 
         ttk.Label(ext_frame,
@@ -4078,7 +4232,7 @@ or from the Help menu."""
         clear_btn.pack(side='left', padx=5)
 
         # ── Query Output ──────────────────────────────────────────────────────
-        output_frame = ttk.LabelFrame(scrollable_frame, text="Query Output", padding=(10, 6))
+        output_frame = ttk.LabelFrame(_debug_settings_parent, text="Query Output", padding=(10, 6))
         output_frame.pack(fill='x', padx=20, pady=(10, 5))
 
         # Two checkboxes side-by-side: Show Sources  |  Enable Debug
@@ -4119,7 +4273,7 @@ or from the Help menu."""
 
         # ── Microphone Settings ───────────────────────────────────────────────
         if SPEECH_AVAILABLE:
-            mic_frame = ttk.LabelFrame(scrollable_frame, text="Microphone / Speech Input", padding=(10, 6))
+            mic_frame = ttk.LabelFrame(_llm_settings_parent, text="Microphone / Speech Input", padding=(10, 6))
             mic_frame.pack(fill='x', padx=20, pady=(5, 5))
 
             silence_row = ttk.Frame(mic_frame)
@@ -4199,7 +4353,7 @@ or from the Help menu."""
         self._refresh_gpu_layers_desc()
         
         # ── OCR — Scanned PDF & Image Indexing ───────────────────────────────
-        ocr_frame = ttk.LabelFrame(scrollable_frame,
+        ocr_frame = ttk.LabelFrame(_debug_settings_parent,
                                    text="📄 OCR — Scanned PDFs & Image Files",
                                    padding=(10, 8))
         ocr_frame.pack(fill='x', padx=20, pady=(5, 10))
@@ -4262,7 +4416,7 @@ or from the Help menu."""
                   font=('Arial', 8), foreground='gray').pack(side='left')
 
         # ── Ollama Server ─────────────────────────────────────────────────────
-        ollama_frame = ttk.LabelFrame(scrollable_frame, text="Ollama Server", padding=(10, 6))
+        ollama_frame = ttk.LabelFrame(_llm_settings_parent, text="Ollama Server", padding=(10, 6))
         ollama_frame.pack(fill='x', padx=20, pady=(5, 10))
 
         # ── Status light + Start / Stop / Refresh / Install buttons ───────────
@@ -4494,7 +4648,7 @@ or from the Help menu."""
         self.root.after(1200, _update_ollama_light)
         
         # ── MCP — Claude Desktop Integration ─────────────────────────────────
-        mcp_frame = ttk.LabelFrame(scrollable_frame,
+        mcp_frame = ttk.LabelFrame(_debug_settings_parent,
                                    text="🔌 MCP — Claude Desktop Integration",
                                    padding=(10, 8))
         mcp_frame.pack(fill='x', padx=20, pady=(5, 10))
@@ -4832,6 +4986,61 @@ or from the Help menu."""
 
         ttk.Separator(remote_frame, orient='horizontal').pack(fill='x', pady=(4, 8))
 
+        # ── License Key (subscription validation) ────────────────────────────
+        ttk.Label(remote_frame, text="License Key  (provided by your AI-Prowler subscription):",
+                  font=('Arial', 9, 'bold')).pack(anchor='w')
+        ttk.Label(remote_frame, font=('Arial', 8), foreground='gray',
+                  text="Enter the license key given to you by your AI-Prowler provider. "
+                       "This controls remote access subscription status.").pack(anchor='w', pady=(0, 4))
+
+        license_row = ttk.Frame(remote_frame)
+        license_row.pack(fill='x', pady=(0, 8))
+
+        _license_key_var = tk.StringVar()
+        # Load saved license key from config
+        try:
+            import json as _jmod2
+            _cfg_path2 = Path.home() / '.ai-prowler' / 'config.json'
+            if _cfg_path2.exists():
+                _cfg_data2 = _jmod2.loads(_cfg_path2.read_text(encoding='utf-8'))
+                _license_key_var.set(_cfg_data2.get('license_key', ''))
+        except Exception:
+            pass
+
+        _lk_entry = ttk.Entry(license_row, textvariable=_license_key_var, width=30)
+        _lk_entry.pack(side='left', padx=(0, 6))
+
+        def _save_license_key():
+            lk = _license_key_var.get().strip()
+            if not lk:
+                messagebox.showwarning("Empty Key",
+                                       "License key cannot be empty.\n"
+                                       "Enter the key provided by your AI-Prowler subscription provider.")
+                return
+            try:
+                import json as _jmod2
+                _cfg_p2 = Path.home() / '.ai-prowler' / 'config.json'
+                _cfg_p2.parent.mkdir(parents=True, exist_ok=True)
+                _cfg_d2 = {}
+                if _cfg_p2.exists():
+                    try:
+                        _cfg_d2 = _jmod2.loads(_cfg_p2.read_text(encoding='utf-8'))
+                    except Exception:
+                        pass
+                _cfg_d2['license_key'] = lk
+                _cfg_p2.write_text(_jmod2.dumps(_cfg_d2, indent=2), encoding='utf-8')
+                self.status_var.set("✅ License key saved")
+                self.root.after(3000, lambda: self.status_var.set("Ready"))
+                # Re-run subscription check with new key
+                self.root.after(500, _run_status_check)
+            except Exception as _e:
+                messagebox.showerror("Save Error", str(_e))
+
+        ttk.Button(license_row, text="💾 Save Key",
+                   command=_save_license_key).pack(side='left')
+
+        ttk.Separator(remote_frame, orient='horizontal').pack(fill='x', pady=(4, 8))
+
         # ── HTTP MCP Server ────────────────────────────────────────────────────
         # Header row with internet + subscription indicators
         http_hdr_row = ttk.Frame(remote_frame)
@@ -5076,17 +5285,17 @@ or from the Help menu."""
             def _worker():
                 online = _check_internet()
                 self.root.after(0, lambda: _update_internet_light(online))
-                tok = _remote_token_var.get().strip()
-                if tok:
+                lk = _license_key_var.get().strip()
+                if lk:
                     subs_data  = _fetch_subs_gui()
-                    sub_result = _check_subscription_gui(tok, subs_data)
+                    sub_result = _check_subscription_gui(lk, subs_data)
                     _current_sub_result[0] = sub_result
                     self.root.after(0, lambda: _update_sub_light(sub_result))
                 else:
-                    # No token set — no mobile subscription configured
+                    # No license key set — no subscription configured
                     self.root.after(0, lambda: (
                         _sub_canvas.itemconfig(_sub_dot, fill='#cc0000'),
-                        _sub_lbl.config(text='Not Subscribed', foreground='#cc0000')
+                        _sub_lbl.config(text='No License Key', foreground='#cc0000')
                     ))
             threading.Thread(target=_worker, daemon=True).start()
 
@@ -5123,16 +5332,18 @@ or from the Help menu."""
 
             # ── Subscription check before starting ────────────────────────────
             # Run in background to avoid freezing the UI during network check.
-            # Subscription gate before starting the HTTP server:
+            # Subscription gate uses the LICENSE KEY (not bearer token).
             #   ok        → green,  start server
             #   warning   → yellow, show popup, start server (grace countdown)
             #   blocked   → red,    show popup, block server start
-            #   unmanaged → red,    show popup, block server start
-            #                       (token not in registry = no active subscription)
+            #   unmanaged → green,  allow (self-hosted / no registry)
+            lk = _license_key_var.get().strip()
             def _pre_start_check():
                 online     = _check_internet()
                 subs_data  = _fetch_subs_gui() if online else None
-                sub_result = _check_subscription_gui(tok, subs_data)
+                sub_result = _check_subscription_gui(lk, subs_data) if lk else {
+                    'status': 'unmanaged', 'name': None, 'days_left': None,
+                    'message': 'No license key — self-hosted mode'}
                 _current_sub_result[0] = sub_result
 
                 def _on_check_done():
@@ -5261,6 +5472,9 @@ or from the Help menu."""
                 threading.Thread(target=_watch_http, daemon=True).start()
             except Exception as _e:
                 messagebox.showerror("Launch Error", str(_e))
+
+        # Store reference for auto-start on launch (see __init__)
+        self._start_http_server_fn = _start_http_server
 
         def _stop_http_server():
             if self._http_server_proc is None or self._http_server_proc.poll() is not None:
@@ -5845,17 +6059,25 @@ or from the Help menu."""
         ttk.Button(tun_btn_row, text="■ Stop Tunnel",
                    command=_stop_tunnel).pack(side='left')
 
-        ttk.Separator(remote_frame, orient='horizontal').pack(fill='x', pady=(0, 8))
-
         # ── Claude Mobile Config snippet ───────────────────────────────────────
-        ttk.Label(remote_frame, text="Claude.ai Web / Mobile Config Snippet:",
+        # Hidden when DEBUG_EN is False (most users don't paste config snippets
+        # by hand). Widgets are still constructed so _refresh_snippet and
+        # _copy_snippet bindings stay live, but they're parented to an unpacked
+        # frame so the user never sees them.
+        if DEBUG_EN:
+            _snippet_parent = remote_frame
+            ttk.Separator(remote_frame, orient='horizontal').pack(fill='x', pady=(0, 8))
+        else:
+            _snippet_parent = tk.Frame(remote_frame)   # never packed
+
+        ttk.Label(_snippet_parent, text="Claude.ai Web / Mobile Config Snippet:",
                   font=('Arial', 9, 'bold')).pack(anchor='w')
-        ttk.Label(remote_frame, font=('Arial', 8), foreground='gray',
+        ttk.Label(_snippet_parent, font=('Arial', 8), foreground='gray',
                   text=("For Claude.ai web or mobile ONLY — NOT for Claude Desktop.\n"
                         "In Claude.ai: Settings → MCP Servers → Add Server → paste URL and token.")
                   ).pack(anchor='w', pady=(0, 4))
 
-        _snippet_text = tk.Text(remote_frame, height=8, font=('Courier', 8),
+        _snippet_text = tk.Text(_snippet_parent, height=8, font=('Courier', 8),
                                 wrap='none', state='disabled')
         _snippet_text.pack(fill='x', pady=(0, 4))
 
@@ -5882,7 +6104,7 @@ or from the Help menu."""
 
         _refresh_snippet()
 
-        snippet_btn_row = ttk.Frame(remote_frame)
+        snippet_btn_row = ttk.Frame(_snippet_parent)
         snippet_btn_row.pack(fill='x', pady=(0, 4))
         ttk.Button(snippet_btn_row, text="🔄 Refresh Snippet",
                    command=_refresh_snippet).pack(side='left', padx=(0, 8))
@@ -5899,7 +6121,7 @@ or from the Help menu."""
         # ══════════════════════════════════════════════════════════════════════
         # Privacy & Analytics — anonymous heartbeat opt-out toggle
         # ══════════════════════════════════════════════════════════════════════
-        privacy_frame = ttk.LabelFrame(scrollable_frame,
+        privacy_frame = ttk.LabelFrame(_debug_settings_parent,
                                        text="Privacy & Analytics",
                                        padding=10)
         privacy_frame.pack(fill='x', padx=20, pady=10)
@@ -6051,7 +6273,7 @@ Core:
 • Auto-start after Windows reboot (Task Scheduler)
 
 Small Business (🏢 tab):
-• 8 action tools: weather, routing, maps, QBO/QBD invoicing, spreadsheet updater
+• 6 action tools: weather, routing, maps, spreadsheet updater
 • Job Tracker spreadsheet pre-installed in Documents\AI-Prowler\
 
 ⚠  .doc / legacy .xls not supported — convert to .docx / .xlsx
@@ -6066,19 +6288,16 @@ Built with Python, ChromaDB, and Claude"""
     # ══════════════════════════════════════════════════════════════════════════
     def create_small_business_tab(self):
         """
-        Dedicated tab for the 8 Small Business / Field Service MCP action tools.
+        Dedicated tab for the Small Business / Field Service MCP action tools.
 
         Sections (in order):
           1. Overview banner — what these tools do and how to invoke them
           2. Free Tools panel — weather, geocode, route, maps URL (no setup)
-          3. QuickBooks Online panel — OAuth config, status light, save/test
-          4. QuickBooks Desktop panel — pywin32 status, default item, test
-          5. Job Spreadsheet Updater panel — usage guide + open-file shortcut
-          6. Route & Navigation panel — OSRM/Nominatim notes + open Google Maps
+          3. Job Spreadsheet Updater panel — usage guide + open-file shortcut
+          4. Route & Navigation panel — OSRM/Nominatim notes + open Google Maps
 
         Configuration is read from / written to:
             ~/.ai-prowler/config.json
-        (same file as the Settings tab uses for QBO tokens)
         """
         import json as _json
 
@@ -6112,10 +6331,10 @@ Built with Python, ChromaDB, and Claude"""
 
         ttk.Label(banner, justify='left', font=('Arial', 9),
                   text=(
-                      "8 MCP tools that let Claude act as your field-service assistant.\n"
+                      "6 MCP tools that let Claude act as your field-service assistant.\n"
                       "Ask Claude in a conversation — no forms to fill out, no menus to navigate.\n\n"
                       "Free tools (weather, routing, maps) work immediately — no setup.\n"
-                      "QuickBooks tools need one-time configuration in the panels below."
+                      "Spreadsheet tools use the default path from Settings if filepath is omitted."
                   )).pack(anchor='w')
 
         # Claude prompt examples
@@ -6126,8 +6345,6 @@ Built with Python, ChromaDB, and Claude"""
         examples = [
             ("🌤  Weather",      '"What is the weather forecast for New Smyrna Beach for the next 3 days?"'),
             ("🗺  Route",        '"Optimize my route for these 6 jobs today and give me a Google Maps link."'),
-            ("🧾  QBO Invoice",  '"Create a QuickBooks invoice for Miller Windows, window washing, $312, today."'),
-            ("🖥  QB Desktop",   '"Create a QB Desktop invoice for Sam Cronin, pressure washing, $215, today."'),
             ("📊  Spreadsheet",  '"Mark the Miller Windows job complete in my jobs.xlsx and record invoice #1048."'),
             ("🔍  Status check", '"Call get_action_tools_status() and tell me what is ready to use."'),
         ]
@@ -6186,259 +6403,7 @@ Built with Python, ChromaDB, and Claude"""
 
         ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
 
-        # ── 3. QUICKBOOKS ONLINE ──────────────────────────────────────────────
-        qbo_outer = ttk.LabelFrame(f,
-                                   text="🧾 QuickBooks Online  —  create_quickbooks_online_invoice()",
-                                   padding=(12, 8))
-        qbo_outer.pack(fill='x', padx=16, pady=(0, 6))
-
-        ttk.Label(qbo_outer, justify='left', font=('Arial', 8), foreground='gray',
-                  text=("One-time OAuth 2.0 setup — after connecting, tokens refresh automatically.\n"
-                        "Requires an active QuickBooks Online subscription.")
-                  ).pack(anchor='w', pady=(0, 6))
-
-        # Status light row
-        qbo_status_row = ttk.Frame(qbo_outer)
-        qbo_status_row.pack(fill='x', pady=(0, 6))
-        ttk.Label(qbo_status_row, text="Connection status:",
-                  font=('Arial', 9)).pack(side='left')
-        _qbo_dot_cv = tk.Canvas(qbo_status_row, width=14, height=14,
-                                bg=self.root.cget('bg'), highlightthickness=0)
-        _qbo_dot_cv.pack(side='left', padx=(8, 4))
-        _qbo_dot = _qbo_dot_cv.create_oval(2, 2, 12, 12, fill='gray', outline='')
-        _qbo_status_lbl = ttk.Label(qbo_status_row, text="Not configured",
-                                    font=('Arial', 9), foreground='gray')
-        _qbo_status_lbl.pack(side='left')
-
-        def _refresh_qbo_status():
-            cfg = _load_cfg()
-            tok = cfg.get('qbo_access_token', '').strip()
-            rid = cfg.get('qbo_realm_id',     '').strip()
-            if tok and rid:
-                _qbo_dot_cv.itemconfig(_qbo_dot, fill='#2ecc71')
-                _qbo_status_lbl.config(text="✅  Connected", foreground='#2ecc71')
-                _qbo_realm_var.set(rid)
-            else:
-                _qbo_dot_cv.itemconfig(_qbo_dot, fill='gray')
-                _qbo_status_lbl.config(text="Not configured", foreground='gray')
-
-        # Company (Realm) ID
-        realm_row = ttk.Frame(qbo_outer)
-        realm_row.pack(fill='x', pady=(0, 4))
-        ttk.Label(realm_row, text="Company ID (Realm ID):",
-                  font=('Arial', 9), width=24, anchor='w').pack(side='left')
-        _qbo_realm_var = tk.StringVar()
-        ttk.Entry(realm_row, textvariable=_qbo_realm_var, width=30
-                  ).pack(side='left', padx=4)
-        ttk.Label(realm_row, text="Found in your QBO URL after /app/",
-                  font=('Arial', 8), foreground='gray').pack(side='left')
-
-        # Access token
-        token_row = ttk.Frame(qbo_outer)
-        token_row.pack(fill='x', pady=(0, 4))
-        ttk.Label(token_row, text="OAuth Access Token:",
-                  font=('Arial', 9), width=24, anchor='w').pack(side='left')
-        _qbo_tok_var = tk.StringVar()
-        _qbo_tok_entry = ttk.Entry(token_row, textvariable=_qbo_tok_var,
-                                   width=44, show='●')
-        _qbo_tok_entry.pack(side='left', padx=4)
-        _qbo_show_var = tk.BooleanVar(value=False)
-        def _toggle_qbo():
-            _qbo_tok_entry.configure(show='' if _qbo_show_var.get() else '●')
-        ttk.Checkbutton(token_row, text="Show",
-                        variable=_qbo_show_var,
-                        command=_toggle_qbo).pack(side='left')
-
-        # Refresh token
-        ref_row = ttk.Frame(qbo_outer)
-        ref_row.pack(fill='x', pady=(0, 4))
-        ttk.Label(ref_row, text="OAuth Refresh Token:",
-                  font=('Arial', 9), width=24, anchor='w').pack(side='left')
-        _qbo_ref_var = tk.StringVar()
-        _qbo_ref_entry = ttk.Entry(ref_row, textvariable=_qbo_ref_var,
-                                   width=44, show='●')
-        _qbo_ref_entry.pack(side='left', padx=4)
-        _qbo_ref_show = tk.BooleanVar(value=False)
-        def _toggle_ref():
-            _qbo_ref_entry.configure(show='' if _qbo_ref_show.get() else '●')
-        ttk.Checkbutton(ref_row, text="Show",
-                        variable=_qbo_ref_show,
-                        command=_toggle_ref).pack(side='left')
-
-        # Populate from saved config
-        _init_cfg = _load_cfg()
-        _qbo_realm_var.set(_init_cfg.get('qbo_realm_id',      ''))
-        _qbo_tok_var.set(  _init_cfg.get('qbo_access_token',  ''))
-        _qbo_ref_var.set(  _init_cfg.get('qbo_refresh_token', ''))
-
-        def _save_qbo():
-            tok = _qbo_tok_var.get().strip()
-            rid = _qbo_realm_var.get().strip()
-            ref = _qbo_ref_var.get().strip()
-            if not (tok and rid):
-                messagebox.showwarning(
-                    "Missing Fields",
-                    "Company ID and Access Token are both required.\n\n"
-                    "Company ID:   found in your QuickBooks Online URL\n"
-                    "              e.g. https://app.qbo.intuit.com/app/homepage\n"
-                    "              → the number after /company/ is your Realm ID\n\n"
-                    "Access Token: generated in the Intuit Developer portal\n"
-                    "              (OAuth 2.0 — expires every 60 minutes)"
-                )
-                return
-            _save_cfg({'qbo_access_token':  tok,
-                       'qbo_realm_id':      rid,
-                       'qbo_refresh_token': ref})
-            _refresh_qbo_status()
-            self.status_var.set("✅  QuickBooks Online credentials saved")
-            self.root.after(3000, lambda: self.status_var.set("Ready"))
-
-        def _clear_qbo():
-            if messagebox.askyesno("Clear QBO Credentials",
-                                   "Remove saved QuickBooks Online tokens?"):
-                _save_cfg({'qbo_access_token': '', 'qbo_realm_id': '',
-                           'qbo_refresh_token': ''})
-                _qbo_realm_var.set('')
-                _qbo_tok_var.set('')
-                _qbo_ref_var.set('')
-                _refresh_qbo_status()
-                self.status_var.set("QBO credentials cleared")
-                self.root.after(3000, lambda: self.status_var.set("Ready"))
-
-        qbo_btn_row = ttk.Frame(qbo_outer)
-        qbo_btn_row.pack(fill='x', pady=(8, 0))
-        ttk.Button(qbo_btn_row, text="💾  Save QBO Credentials",
-                   command=_save_qbo).pack(side='left', padx=(0, 8))
-        ttk.Button(qbo_btn_row, text="🗑  Clear Credentials",
-                   command=_clear_qbo).pack(side='left', padx=(0, 8))
-        ttk.Button(qbo_btn_row, text="🌐  Open QuickBooks Online",
-                   command=lambda: webbrowser.open("https://app.qbo.intuit.com")
-                   ).pack(side='left')
-
-        ttk.Label(qbo_outer, font=('Arial', 8), foreground='gray',
-                  justify='left',
-                  text=("\nHow to get your tokens:\n"
-                        "  1. Sign in to developer.intuit.com\n"
-                        "  2. Create an app → OAuth 2.0 → Generate tokens\n"
-                        "  3. Paste the access token above (valid 60 min — use refresh token for auto-renewal)\n"
-                        "  4. Company ID is the number in your QBO URL: .../company/12345678/...")
-                  ).pack(anchor='w', pady=(4, 0))
-
-        _refresh_qbo_status()
-
-        ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
-
-        # ── 4. QUICKBOOKS DESKTOP ─────────────────────────────────────────────
-        qbd_outer = ttk.LabelFrame(f,
-                                   text="🖥  QuickBooks Desktop  —  create_quickbooks_desktop_invoice()",
-                                   padding=(12, 8))
-        qbd_outer.pack(fill='x', padx=16, pady=(0, 6))
-
-        ttk.Label(qbd_outer, justify='left', font=('Arial', 8), foreground='gray',
-                  text=("Uses Windows COM automation (QBSDK) — no internet or OAuth needed.\n"
-                        "QuickBooks Desktop must be open with a company file loaded when invoicing.")
-                  ).pack(anchor='w', pady=(0, 6))
-
-        # pywin32 status
-        try:
-            import win32com.client as _test_win32  # noqa: F401
-            _win32_ok = True
-        except ImportError:
-            _win32_ok = False
-
-        qbd_status_row = ttk.Frame(qbd_outer)
-        qbd_status_row.pack(fill='x', pady=(0, 6))
-        _qbd_dot_cv = tk.Canvas(qbd_status_row, width=14, height=14,
-                                bg=self.root.cget('bg'), highlightthickness=0)
-        _qbd_dot_cv.pack(side='left', padx=(0, 4))
-        _qbd_dot_cv.create_oval(2, 2, 12, 12,
-                                fill='#2ecc71' if _win32_ok else '#e74c3c',
-                                outline='')
-        ttk.Label(qbd_status_row,
-                  text=("✅  pywin32 installed — ready for QuickBooks Desktop"
-                        if _win32_ok else
-                        "❌  pywin32 not installed — run:  pip install pywin32"),
-                  font=('Arial', 9),
-                  foreground='#2ecc71' if _win32_ok else '#e74c3c'
-                  ).pack(side='left')
-
-        # Default service item name
-        item_row = ttk.Frame(qbd_outer)
-        item_row.pack(fill='x', pady=(0, 4))
-        ttk.Label(item_row, text="Default service item name:",
-                  font=('Arial', 9), width=26, anchor='w').pack(side='left')
-        _qbd_item_var = tk.StringVar()
-        _qbd_item_var.set(_load_cfg().get('qbd_default_item', 'Services'))
-        ttk.Entry(item_row, textvariable=_qbd_item_var, width=24
-                  ).pack(side='left', padx=4)
-        ttk.Label(item_row, text="Must exist in your QuickBooks item list",
-                  font=('Arial', 8), foreground='gray').pack(side='left')
-
-        def _save_qbd():
-            _save_cfg({'qbd_default_item': _qbd_item_var.get().strip() or 'Services'})
-            self.status_var.set("✅  QuickBooks Desktop settings saved")
-            self.root.after(3000, lambda: self.status_var.set("Ready"))
-
-        def _test_qbd():
-            if not _win32_ok:
-                messagebox.showerror(
-                    "pywin32 Required",
-                    "Install pywin32 first:\n\n"
-                    "  pip install pywin32\n\n"
-                    "Then restart AI-Prowler."
-                )
-                return
-            try:
-                import win32com.client as _w32
-                qb     = _w32.Dispatch("QBXMLRP2.RequestProcessor")
-                qb.OpenConnection("", "AI-Prowler Test")
-                ticket = qb.BeginSession("", 1)
-                qb.EndSession(ticket)
-                qb.CloseConnection()
-                messagebox.showinfo(
-                    "QB Desktop Connected ✅",
-                    "Successfully connected to QuickBooks Desktop.\n"
-                    "AI-Prowler can create invoices automatically."
-                )
-            except Exception as exc:
-                messagebox.showerror(
-                    "QB Desktop Connection Failed",
-                    f"{exc}\n\n"
-                    "Make sure:\n"
-                    "  1. QuickBooks Desktop is open\n"
-                    "  2. A company file is loaded\n"
-                    "  3. Allow AI-Prowler access in the QB confirmation dialog"
-                )
-
-        qbd_btn_row = ttk.Frame(qbd_outer)
-        qbd_btn_row.pack(fill='x', pady=(8, 0))
-        ttk.Button(qbd_btn_row, text="💾  Save Settings",
-                   command=_save_qbd).pack(side='left', padx=(0, 8))
-        ttk.Button(qbd_btn_row, text="🔗  Test QB Desktop Connection",
-                   command=_test_qbd).pack(side='left', padx=(0, 8))
-
-        if not _win32_ok:
-            def _install_pywin32():
-                import subprocess as _sp
-                from pathlib import Path as _P
-                py = str(_P.home() / "AppData" / "Local" / "Programs"
-                         / "Python" / "Python311" / "python.exe")
-                try:
-                    _sp.Popen([py, "-m", "pip", "install", "pywin32>=306"],
-                              creationflags=_sp.CREATE_NEW_CONSOLE)
-                    messagebox.showinfo(
-                        "Installing pywin32",
-                        "pip install is running in a new window.\n"
-                        "Restart AI-Prowler when it completes."
-                    )
-                except Exception as exc:
-                    messagebox.showerror("Install Failed", str(exc))
-            ttk.Button(qbd_btn_row, text="⬇️  Install pywin32 Now",
-                       command=_install_pywin32).pack(side='left')
-
-        ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
-
-        # ── 5. JOB SPREADSHEET UPDATER ────────────────────────────────────────
+        # ── 3. JOB SPREADSHEET UPDATER ────────────────────────────────────────
         xl_outer = ttk.LabelFrame(f,
                                   text="📊 Job Spreadsheet Updater  —  update_job_spreadsheet()",
                                   padding=(12, 8))
@@ -6511,7 +6476,7 @@ Built with Python, ChromaDB, and Claude"""
 
         ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
 
-        # ── 6. ROUTE & NAVIGATION NOTES ──────────────────────────────────────
+        # ── 4. ROUTE & NAVIGATION NOTES ──────────────────────────────────────
         route_outer = ttk.LabelFrame(f,
                                      text="🗺  Route Optimization & Navigation  —  Free, No Key",
                                      padding=(12, 8))
@@ -6545,6 +6510,1435 @@ Built with Python, ChromaDB, and Claude"""
         ttk.Button(route_btn_row, text="🍎  Open Apple Maps",
                    command=lambda: webbrowser.open("https://maps.apple.com")
                    ).pack(side='left')
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # 🧠  SELF-LEARNING TAB
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def create_learnings_tab(self):
+        """
+        Dedicated tab for viewing and managing the Self-Learning knowledge base.
+
+        Sections:
+          1. Overview banner — what self-learning is and how Claude uses it
+          2. Stats panel — live counts by category, status, outcome
+          3. Learnings table — Treeview with all learnings, click to expand
+          4. Detail panel — shows full content of selected learning
+          5. Action buttons — refresh, archive, delete, export, reindex
+
+        Data source:  ~/.ai-prowler/learnings/self_learning_data.json
+        """
+        import json as _json
+        from pathlib import Path as _Path
+
+        outer = ttk.Frame(self.notebook)
+        self.notebook.add(outer, text="🧠 Learnings")
+        f = self._make_scrollable_tab(outer)
+
+        _learnings_file = _Path.home() / '.ai-prowler' / 'learnings' / 'self_learning_data.json'
+
+        # ── Helper: load learnings from JSON ─────────────────────────────────
+        def _load_learnings() -> list:
+            try:
+                if _learnings_file.exists():
+                    data = _json.loads(_learnings_file.read_text(encoding='utf-8'))
+                    if isinstance(data, dict) and 'learnings' in data:
+                        return data['learnings']
+            except Exception as exc:
+                print(f"Warning: Could not read learnings file: {exc}")
+            return []
+
+        # ── 1. OVERVIEW BANNER ───────────────────────────────────────────────
+        banner = ttk.LabelFrame(f, text="🧠 Self-Learning Knowledge Base — Overview",
+                                padding=(12, 8))
+        banner.pack(fill='x', padx=16, pady=(10, 6))
+
+        ttk.Label(banner, justify='left', font=('Arial', 9),
+                  text=(
+                      "Claude automatically records learnings from your conversations — "
+                      "business lessons,\nfact corrections, project insights, client preferences, "
+                      "and process improvements.\n\n"
+                      "Learnings are stored in a JSON file and indexed in ChromaDB for "
+                      "instant semantic retrieval.\n"
+                      "Claude checks this knowledge base BEFORE answering questions, "
+                      "and records new learnings\nautomatically when it detects corrections, "
+                      "outcomes, or improvements — always with confirmation."
+                  )).pack(anchor='w')
+
+        ex_frame = ttk.LabelFrame(banner, text="Example prompts that trigger self-learning",
+                                  padding=(8, 4))
+        ex_frame.pack(fill='x', pady=(8, 0))
+
+        examples = [
+            ("🔍  Check",      '"What do we know about Client X?"  →  Claude calls check_learned()'),
+            ("📝  Record",     '"Remember: always submit permits 2 weeks before job start"'),
+            ("📊  Post-Op",    '"Analyze the Johnson project — what went right and wrong?"'),
+            ("🔄  Correct",    '"Actually, the correct phone number is 555-0200"'),
+            ("📋  Browse",     '"Show me all business lessons we have learned"'),
+            ("📈  Stats",      '"How many learnings do we have and which are most applied?"'),
+        ]
+        for icon_label, prompt in examples:
+            row = ttk.Frame(ex_frame)
+            row.pack(fill='x', pady=1)
+            ttk.Label(row, text=icon_label, font=('Arial', 8, 'bold'),
+                      width=14, anchor='w').pack(side='left')
+            ttk.Label(row, text=prompt, font=('Arial', 8),
+                      foreground='#555555', anchor='w').pack(side='left')
+
+        ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
+
+        # ── 2. STATS PANEL ───────────────────────────────────────────────────
+        stats_frame = ttk.LabelFrame(f, text="📊 Knowledge Base Statistics",
+                                     padding=(12, 8))
+        stats_frame.pack(fill='x', padx=16, pady=(0, 6))
+
+        stats_grid = ttk.Frame(stats_frame)
+        stats_grid.pack(fill='x')
+
+        self._sl_stat_total      = tk.StringVar(value="—")
+        self._sl_stat_active     = tk.StringVar(value="—")
+        self._sl_stat_deprecated = tk.StringVar(value="—")
+        self._sl_stat_archived   = tk.StringVar(value="—")
+        self._sl_stat_applied    = tk.StringVar(value="—")
+
+        stat_items = [
+            ("Total",      self._sl_stat_total),
+            ("Active",     self._sl_stat_active),
+            ("Deprecated", self._sl_stat_deprecated),
+            ("Archived",   self._sl_stat_archived),
+            ("Total Applied", self._sl_stat_applied),
+        ]
+        for col, (label, var) in enumerate(stat_items):
+            sf = ttk.Frame(stats_grid)
+            sf.grid(row=0, column=col, padx=12, pady=4)
+            ttk.Label(sf, textvariable=var, font=('Arial', 16, 'bold'),
+                      foreground='#2563EB').pack()
+            ttk.Label(sf, text=label, font=('Arial', 8),
+                      foreground='#666666').pack()
+
+        self._sl_stat_categories = tk.StringVar(value="")
+        ttk.Label(stats_frame, textvariable=self._sl_stat_categories,
+                  font=('Arial', 8), foreground='#444444',
+                  justify='left').pack(anchor='w', pady=(6, 0))
+
+        ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
+
+        # ── 3. LEARNINGS TABLE ───────────────────────────────────────────────
+        table_frame = ttk.LabelFrame(f, text="📚 All Learnings",
+                                     padding=(12, 8))
+        table_frame.pack(fill='x', padx=16, pady=(0, 6))
+
+        # Filter row
+        filter_row = ttk.Frame(table_frame)
+        filter_row.pack(fill='x', pady=(0, 6))
+
+        ttk.Label(filter_row, text="Category:", font=('Arial', 8)).pack(side='left')
+        self._sl_filter_cat = tk.StringVar(value="All")
+        cat_combo = ttk.Combobox(filter_row, textvariable=self._sl_filter_cat,
+                                 width=18, state='readonly',
+                                 values=["All", "fact_correction", "business_lesson",
+                                         "project_insight", "process_improvement",
+                                         "mistake_learned", "best_practice",
+                                         "client_preference", "technical_note", "general"])
+        cat_combo.pack(side='left', padx=(4, 12))
+
+        ttk.Label(filter_row, text="Status:", font=('Arial', 8)).pack(side='left')
+        self._sl_filter_status = tk.StringVar(value="active")
+        status_combo = ttk.Combobox(filter_row, textvariable=self._sl_filter_status,
+                                    width=12, state='readonly',
+                                    values=["All", "active", "deprecated", "archived"])
+        status_combo.pack(side='left', padx=(4, 12))
+
+        ttk.Label(filter_row, text="Search:", font=('Arial', 8)).pack(side='left')
+        self._sl_filter_search = tk.StringVar(value="")
+        search_entry = ttk.Entry(filter_row, textvariable=self._sl_filter_search, width=24)
+        search_entry.pack(side='left', padx=(4, 8))
+
+        # Semantic search toggle — when on, the search box runs through
+        # ChromaDB so "client emails" matches a learning titled "phone vs
+        # email contact preferences" even though the words don't overlap.
+        # When off, falls back to the substring matcher in _refresh_table.
+        self._sl_semantic_search = tk.BooleanVar(value=False)
+        ttk.Checkbutton(filter_row, text="🧠 Semantic",
+                        variable=self._sl_semantic_search,
+                        command=lambda: _refresh_table()).pack(side='left',
+                                                               padx=(0, 8))
+
+        ttk.Button(filter_row, text="🔍 Filter",
+                   command=lambda: _refresh_table()).pack(side='left', padx=(0, 4))
+        ttk.Button(filter_row, text="↻ Reset",
+                   command=lambda: _reset_filters()).pack(side='left')
+
+        # Treeview
+        columns = ('title', 'category', 'status', 'confidence', 'outcome',
+                   'applied', 'created', 'source')
+        tree_scroll = ttk.Scrollbar(table_frame, orient='vertical')
+        self._sl_tree = ttk.Treeview(table_frame, columns=columns,
+                                     show='headings', height=12,
+                                     yscrollcommand=tree_scroll.set,
+                                     selectmode='browse')
+        tree_scroll.config(command=self._sl_tree.yview)
+
+        col_cfg = [
+            ('title',      'Title',      220, 'w'),
+            ('category',   'Category',   120, 'w'),
+            ('status',     'Status',     75,  'center'),
+            ('confidence', 'Conf.',      55,  'center'),
+            ('outcome',    'Outcome',    70,  'center'),
+            ('applied',    'Applied',    55,  'center'),
+            ('created',    'Created',    85,  'center'),
+            ('source',     'Source',     90,  'w'),
+        ]
+        for col_id, heading, width, anchor in col_cfg:
+            self._sl_tree.heading(col_id, text=heading,
+                                  command=lambda c=col_id: _sort_column(c))
+            self._sl_tree.column(col_id, width=width, anchor=anchor,
+                                 minwidth=40)
+
+        self._sl_tree.pack(side='left', fill='both', expand=True)
+        tree_scroll.pack(side='right', fill='y')
+
+        self._sl_sort_col = 'created'
+        self._sl_sort_rev = True
+        self._sl_data_map = {}
+
+        ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
+
+        # ── 4. DETAIL PANEL ──────────────────────────────────────────────────
+        detail_frame = ttk.LabelFrame(f, text="📄 Learning Detail — select a row above",
+                                      padding=(12, 8))
+        detail_frame.pack(fill='x', padx=16, pady=(0, 6))
+
+        self._sl_detail_title = tk.StringVar(value="")
+        ttk.Label(detail_frame, textvariable=self._sl_detail_title,
+                  font=('Arial', 10, 'bold'), foreground='#1E40AF',
+                  wraplength=700).pack(anchor='w')
+
+        self._sl_detail_meta = tk.StringVar(
+            value="Select a learning from the table above to see its full details.")
+        ttk.Label(detail_frame, textvariable=self._sl_detail_meta,
+                  font=('Arial', 8), foreground='#666666',
+                  wraplength=700, justify='left').pack(anchor='w', pady=(4, 6))
+
+        ttk.Label(detail_frame, text="Content:", font=('Arial', 8, 'bold'),
+                  foreground='#333333').pack(anchor='w')
+        self._sl_detail_content = scrolledtext.ScrolledText(
+            detail_frame, height=5, wrap='word', font=('Arial', 9),
+            state='disabled', bg='#F9FAFB', relief='flat',
+            borderwidth=1)
+        self._sl_detail_content.pack(fill='x', pady=(2, 6))
+
+        ttk.Label(detail_frame, text="Context (why this was learned):",
+                  font=('Arial', 8, 'bold'), foreground='#333333').pack(anchor='w')
+        self._sl_detail_context = scrolledtext.ScrolledText(
+            detail_frame, height=3, wrap='word', font=('Arial', 9),
+            state='disabled', bg='#FFFBEB', relief='flat',
+            borderwidth=1)
+        self._sl_detail_context.pack(fill='x', pady=(2, 6))
+
+        self._sl_detail_supersession = tk.StringVar(value="")
+        ttk.Label(detail_frame, textvariable=self._sl_detail_supersession,
+                  font=('Arial', 8), foreground='#D97706',
+                  wraplength=700).pack(anchor='w')
+
+        id_row = ttk.Frame(detail_frame)
+        id_row.pack(fill='x', pady=(4, 0))
+        ttk.Label(id_row, text="ID:", font=('Arial', 8, 'bold'),
+                  foreground='#999999').pack(side='left')
+        self._sl_detail_id = tk.StringVar(value="")
+        id_entry = ttk.Entry(id_row, textvariable=self._sl_detail_id,
+                             state='readonly', font=('Arial', 8), width=40)
+        id_entry.pack(side='left', padx=(4, 8))
+        ttk.Button(id_row, text="📋 Copy ID",
+                   command=lambda: _copy_id()).pack(side='left')
+
+        ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
+
+        # ── 5. ACTION BUTTONS ────────────────────────────────────────────────
+        actions_frame = ttk.LabelFrame(f, text="⚡ Actions",
+                                       padding=(12, 8))
+        actions_frame.pack(fill='x', padx=16, pady=(0, 6))
+
+        btn_row1 = ttk.Frame(actions_frame)
+        btn_row1.pack(fill='x', pady=(0, 6))
+
+        ttk.Button(btn_row1, text="↻  Refresh",
+                   command=lambda: _refresh_all()).pack(side='left', padx=(0, 8))
+        ttk.Button(btn_row1, text="📦  Archive Selected",
+                   command=lambda: _archive_selected()).pack(side='left', padx=(0, 8))
+        ttk.Button(btn_row1, text="🗑  Delete Selected",
+                   command=lambda: _delete_selected()).pack(side='left', padx=(0, 8))
+        ttk.Button(btn_row1, text="🔄  Rebuild ChromaDB Index",
+                   command=lambda: _reindex()).pack(side='left', padx=(0, 8))
+
+        btn_row2 = ttk.Frame(actions_frame)
+        btn_row2.pack(fill='x')
+
+        ttk.Button(btn_row2, text="💾  Export to CSV",
+                   command=lambda: _export_csv()).pack(side='left', padx=(0, 8))
+        ttk.Button(btn_row2, text="📂  Open JSON File",
+                   command=lambda: _open_json_file()).pack(side='left', padx=(0, 8))
+        ttk.Button(btn_row2, text="📂  Open Learnings Folder",
+                   command=lambda: _open_folder()).pack(side='left')
+
+        # ── Row 3: editing, conflict detection, learning packs ──────────────
+        btn_row3 = ttk.Frame(actions_frame)
+        btn_row3.pack(fill='x', pady=(6, 0))
+
+        ttk.Button(btn_row3, text="➕  New Learning",
+                   command=lambda: _open_editor(None)).pack(side='left', padx=(0, 8))
+        ttk.Button(btn_row3, text="✏️  Edit Selected",
+                   command=lambda: _edit_selected()).pack(side='left', padx=(0, 8))
+        ttk.Button(btn_row3, text="🚦  Detect Conflicts",
+                   command=lambda: _open_conflict_dialog()).pack(side='left', padx=(0, 8))
+        ttk.Button(btn_row3, text="📤  Export Pack",
+                   command=lambda: _export_pack()).pack(side='left', padx=(0, 8))
+        ttk.Button(btn_row3, text="📥  Import Pack",
+                   command=lambda: _import_pack()).pack(side='left')
+
+        ttk.Label(actions_frame, text=f"Storage: {_learnings_file}",
+                  font=('Arial', 7), foreground='#999999').pack(anchor='w', pady=(6, 0))
+
+        # ── Internal functions ───────────────────────────────────────────────
+
+        def _reset_filters():
+            self._sl_filter_cat.set("All")
+            self._sl_filter_status.set("active")
+            self._sl_filter_search.set("")
+            self._sl_semantic_search.set(False)
+            _refresh_table()
+
+        def _refresh_all():
+            _update_stats()
+            _refresh_table()
+
+        def _update_stats():
+            learnings = _load_learnings()
+            total     = len(learnings)
+            active    = sum(1 for l in learnings if l.get('status') == 'active')
+            dep       = sum(1 for l in learnings if l.get('status') == 'deprecated')
+            arch      = sum(1 for l in learnings if l.get('status') == 'archived')
+            applied   = sum(l.get('applied_count', 0) for l in learnings)
+
+            self._sl_stat_total.set(str(total))
+            self._sl_stat_active.set(str(active))
+            self._sl_stat_deprecated.set(str(dep))
+            self._sl_stat_archived.set(str(arch))
+            self._sl_stat_applied.set(str(applied))
+
+            cats = {}
+            for l in learnings:
+                c = l.get('category', 'general')
+                cats[c] = cats.get(c, 0) + 1
+            if cats:
+                parts = [f"{c}: {n}" for c, n in
+                         sorted(cats.items(), key=lambda x: -x[1])]
+                self._sl_stat_categories.set("By category:  " + "  |  ".join(parts))
+            else:
+                self._sl_stat_categories.set("")
+
+        def _refresh_table():
+            learnings = _load_learnings()
+
+            cat_filter    = self._sl_filter_cat.get()
+            status_filter = self._sl_filter_status.get()
+            search_text   = self._sl_filter_search.get().strip()
+            semantic_on   = (self._sl_semantic_search.get()
+                             and bool(search_text)
+                             and SELF_LEARNING_AVAILABLE)
+
+            # Similarity scores get attached when semantic search ran.
+            similarity_by_id: dict = {}
+
+            if semantic_on:
+                # Run the query through ChromaDB. We don't track applications
+                # for GUI browsing — just because a user scrolls past a
+                # learning doesn't mean it was 'applied'.
+                try:
+                    matches = _sl_engine.check_learned(
+                        search_text,
+                        n_results=50,
+                        active_only=(status_filter == "active"),
+                        track_application=False,
+                    )
+                    similarity_by_id = {m["learning_id"]: m["similarity"]
+                                        for m in matches}
+                except Exception as exc:
+                    print(f"Warning: semantic search failed: {exc}")
+                    similarity_by_id = {}
+
+            filtered = []
+            for l in learnings:
+                if cat_filter != "All" and l.get('category', 'general') != cat_filter:
+                    continue
+                if status_filter != "All" and l.get('status', 'active') != status_filter:
+                    continue
+                if semantic_on:
+                    # Only keep rows that the semantic search hit
+                    if l['id'] not in similarity_by_id:
+                        continue
+                elif search_text:
+                    haystack = (
+                        f"{l.get('title', '')} {l.get('content', '')} "
+                        f"{l.get('context', '')} {' '.join(l.get('tags', []))}"
+                    ).lower()
+                    if search_text.lower() not in haystack:
+                        continue
+                filtered.append(l)
+
+            if semantic_on:
+                # In semantic mode the natural sort order is similarity desc,
+                # overriding the column-based sort.
+                filtered.sort(
+                    key=lambda l: similarity_by_id.get(l['id'], 0),
+                    reverse=True)
+            else:
+                col = self._sl_sort_col
+                rev = self._sl_sort_rev
+                def sort_key(l):
+                    if col == 'confidence':
+                        return l.get('confidence', 0)
+                    if col == 'applied':
+                        return l.get('applied_count', 0)
+                    return str(l.get(col, '')).lower()
+                filtered.sort(key=sort_key, reverse=rev)
+
+            self._sl_tree.delete(*self._sl_tree.get_children())
+            self._sl_data_map.clear()
+
+            status_icons = {'active': '✅', 'deprecated': '⚠️', 'archived': '📦'}
+            outcome_icons = {'positive': '✅', 'negative': '❌',
+                             'neutral': '➖', 'unknown': '❓'}
+
+            for l in filtered:
+                created = l.get('created_at', '')[:10]
+                conf = f"{l.get('confidence', 0):.0%}"
+                status_txt = status_icons.get(l.get('status', 'active'), '❓')
+                outcome_txt = outcome_icons.get(l.get('outcome', 'unknown'), '❓')
+
+                # In semantic mode, prefix the title with the similarity score
+                # so the user sees how strong the match is at a glance.
+                title_txt = l.get('title', 'Untitled')
+                if semantic_on and l['id'] in similarity_by_id:
+                    sim_pct = int(round(similarity_by_id[l['id']] * 100))
+                    title_txt = f"[{sim_pct}%]  {title_txt}"
+
+                iid = self._sl_tree.insert('', 'end', values=(
+                    title_txt,
+                    l.get('category', 'general'),
+                    status_txt,
+                    conf,
+                    outcome_txt,
+                    l.get('applied_count', 0),
+                    created,
+                    l.get('source', 'operator'),
+                ))
+                self._sl_data_map[iid] = l
+
+        def _sort_column(col):
+            if self._sl_sort_col == col:
+                self._sl_sort_rev = not self._sl_sort_rev
+            else:
+                self._sl_sort_col = col
+                self._sl_sort_rev = col == 'created'
+            _refresh_table()
+
+        def _on_select(event):
+            sel = self._sl_tree.selection()
+            if not sel:
+                return
+            iid = sel[0]
+            l = self._sl_data_map.get(iid)
+            if not l:
+                return
+
+            self._sl_detail_title.set(f"📌 {l.get('title', 'Untitled')}")
+
+            tags_str = ', '.join(l.get('tags', []))
+            meta_parts = [
+                f"Category: {l.get('category', 'general')}",
+                f"Status: {l.get('status', 'active')}",
+                f"Source: {l.get('source', 'operator')}",
+                f"Confidence: {l.get('confidence', 0):.0%}",
+                f"Outcome: {l.get('outcome', 'unknown')}",
+                f"Applied: {l.get('applied_count', 0)}x",
+                f"Created: {l.get('created_at', '?')}",
+                f"Updated: {l.get('updated_at', '?')}",
+            ]
+            if tags_str:
+                meta_parts.append(f"Tags: {tags_str}")
+            self._sl_detail_meta.set("  |  ".join(meta_parts))
+
+            self._sl_detail_content.config(state='normal')
+            self._sl_detail_content.delete('1.0', 'end')
+            self._sl_detail_content.insert('1.0', l.get('content', ''))
+            self._sl_detail_content.config(state='disabled')
+
+            self._sl_detail_context.config(state='normal')
+            self._sl_detail_context.delete('1.0', 'end')
+            self._sl_detail_context.insert('1.0',
+                                           l.get('context', '(no context recorded)'))
+            self._sl_detail_context.config(state='disabled')
+
+            sup_parts = []
+            if l.get('supersedes'):
+                sup_parts.append(f"↻ Supersedes: {l['supersedes'][:12]}…")
+            if l.get('superseded_by'):
+                sup_parts.append(
+                    f"⚠ SUPERSEDED BY: {l['superseded_by'][:12]}… "
+                    f"— prefer the newer version")
+            self._sl_detail_supersession.set("  |  ".join(sup_parts))
+
+            self._sl_detail_id.set(l.get('id', ''))
+
+        self._sl_tree.bind('<<TreeviewSelect>>', _on_select)
+
+        def _copy_id():
+            lid = self._sl_detail_id.get()
+            if lid:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(lid)
+                self.status_var.set(f"Copied learning ID: {lid[:12]}…")
+
+        def _archive_selected():
+            sel = self._sl_tree.selection()
+            if not sel:
+                messagebox.showinfo("No Selection",
+                                    "Select a learning from the table first.")
+                return
+            l = self._sl_data_map.get(sel[0])
+            if not l:
+                return
+            if not messagebox.askyesno(
+                    "Archive Learning",
+                    f"Archive \"{l.get('title', 'Untitled')}\"?\n\n"
+                    "It will be hidden from Claude's search results "
+                    "but kept for historical reference."):
+                return
+            if SELF_LEARNING_AVAILABLE:
+                try:
+                    _sl_engine.update_learning(l['id'], {'status': 'archived'})
+                    self.status_var.set(f"Archived: {l.get('title', '')[:40]}")
+                    _refresh_all()
+                except Exception as exc:
+                    messagebox.showerror("Error", f"Failed to archive: {exc}")
+            else:
+                messagebox.showinfo(
+                    "Unavailable",
+                    "self_learning.py not found — cannot modify learnings "
+                    "from the GUI.\nUse Claude: "
+                    "update_learning(id, {status: 'archived'})")
+
+        def _delete_selected():
+            sel = self._sl_tree.selection()
+            if not sel:
+                messagebox.showinfo("No Selection",
+                                    "Select a learning from the table first.")
+                return
+            l = self._sl_data_map.get(sel[0])
+            if not l:
+                return
+            if not messagebox.askyesno(
+                    "Delete Learning",
+                    f"PERMANENTLY delete \"{l.get('title', 'Untitled')}\"?\n\n"
+                    "This cannot be undone. Consider archiving instead.",
+                    icon='warning'):
+                return
+            if SELF_LEARNING_AVAILABLE:
+                # Two-phase delete: JSON cleanup then ChromaDB cleanup.
+                # delete_learning() raises ChromaIndexError if the second
+                # phase fails — JSON state is already saved at that point,
+                # so we warn the user about the orphan and offer reindex.
+                try:
+                    _sl_engine.delete_learning(l['id'])
+                    self.status_var.set(f"Deleted: {l.get('title', '')[:40]}")
+                    _refresh_all()
+                except _sl_engine.ChromaIndexError as exc:
+                    # JSON delete succeeded, ChromaDB delete failed.
+                    # The learning is gone from the source of truth, but
+                    # an orphan embedding remains in the search index.
+                    self.status_var.set(
+                        f"Deleted (orphan in index): "
+                        f"{l.get('title', '')[:30]}")
+                    _refresh_all()
+                    self._show_partial_delete_dialog(str(exc))
+                except Exception as exc:
+                    messagebox.showerror("Error", f"Failed to delete: {exc}")
+            else:
+                messagebox.showinfo(
+                    "Unavailable",
+                    "self_learning.py not found — cannot delete learnings "
+                    "from the GUI.\nUse Claude: delete_learning(id)")
+
+        def _reindex():
+            if not SELF_LEARNING_AVAILABLE:
+                messagebox.showinfo("Unavailable",
+                                    "self_learning.py not found — cannot reindex.")
+                return
+            if not messagebox.askyesno(
+                    "Rebuild Index",
+                    "Rebuild the ChromaDB learnings index from the JSON file?\n\n"
+                    "This is safe — it wipes and rebuilds the search index.\n"
+                    "No learnings are deleted."):
+                return
+            try:
+                count = _sl_engine.reindex_all_learnings()
+                messagebox.showinfo("Reindex Complete",
+                                    f"Rebuilt ChromaDB index with {count} "
+                                    f"active learnings.")
+                self.status_var.set(f"Reindexed {count} learnings")
+            except Exception as exc:
+                messagebox.showerror("Reindex Failed", str(exc))
+
+        def _export_csv():
+            learnings = _load_learnings()
+            if not learnings:
+                messagebox.showinfo("Empty", "No learnings to export.")
+                return
+            dest = filedialog.asksaveasfilename(
+                defaultextension='.csv',
+                filetypes=[('CSV files', '*.csv'), ('All files', '*.*')],
+                initialfile='ai_prowler_learnings.csv')
+            if not dest:
+                return
+            try:
+                import csv
+                with open(dest, 'w', newline='', encoding='utf-8') as fh:
+                    writer = csv.writer(fh)
+                    writer.writerow([
+                        'ID', 'Title', 'Content', 'Category', 'Context',
+                        'Source', 'Confidence', 'Tags', 'Status',
+                        'Outcome', 'Applied Count', 'Created', 'Updated',
+                        'Supersedes', 'Superseded By'])
+                    for l in learnings:
+                        writer.writerow([
+                            l.get('id', ''),
+                            l.get('title', ''),
+                            l.get('content', ''),
+                            l.get('category', ''),
+                            l.get('context', ''),
+                            l.get('source', ''),
+                            l.get('confidence', ''),
+                            ','.join(l.get('tags', [])),
+                            l.get('status', ''),
+                            l.get('outcome', ''),
+                            l.get('applied_count', 0),
+                            l.get('created_at', ''),
+                            l.get('updated_at', ''),
+                            l.get('supersedes', ''),
+                            l.get('superseded_by', ''),
+                        ])
+                self.status_var.set(
+                    f"Exported {len(learnings)} learnings to {dest}")
+                messagebox.showinfo(
+                    "Export Complete",
+                    f"Exported {len(learnings)} learnings to:\n{dest}")
+            except Exception as exc:
+                messagebox.showerror("Export Failed", str(exc))
+
+        def _open_json_file():
+            if _learnings_file.exists():
+                import subprocess as _sp
+                import platform as _pf
+                if _pf.system() == 'Windows':
+                    os.startfile(str(_learnings_file))
+                elif _pf.system() == 'Darwin':
+                    _sp.Popen(['open', str(_learnings_file)])
+                else:
+                    _sp.Popen(['xdg-open', str(_learnings_file)])
+            else:
+                messagebox.showinfo(
+                    "Not Found",
+                    f"Learnings file does not exist yet:\n{_learnings_file}\n\n"
+                    "It will be created the first time Claude records a learning.")
+
+        def _open_folder():
+            folder = _learnings_file.parent
+            folder.mkdir(parents=True, exist_ok=True)
+            import subprocess as _sp
+            import platform as _pf
+            if _pf.system() == 'Windows':
+                os.startfile(str(folder))
+            elif _pf.system() == 'Darwin':
+                _sp.Popen(['open', str(folder)])
+            else:
+                _sp.Popen(['xdg-open', str(folder)])
+
+        # ════════════════════════════════════════════════════════════════════
+        # NEW FEATURES — inline editing, conflict detection, packs
+        # ════════════════════════════════════════════════════════════════════
+
+        # Constants for the editor — kept in one place so the form schema
+        # stays in lockstep with what self_learning.update_learning accepts.
+        _CATEGORIES = ["fact_correction", "business_lesson", "project_insight",
+                       "process_improvement", "mistake_learned", "best_practice",
+                       "client_preference", "technical_note", "general"]
+        _STATUSES   = ["active", "deprecated", "archived"]
+        _OUTCOMES   = ["positive", "negative", "neutral", "unknown"]
+        _SOURCES    = ["operator", "claude_detected", "project_review",
+                       "post_mortem", "research", "observation"]
+
+        def _edit_selected():
+            """Edit the learning currently selected in the table."""
+            sel = self._sl_tree.selection()
+            if not sel:
+                messagebox.showinfo("No Selection",
+                                    "Select a learning from the table first.")
+                return
+            l = self._sl_data_map.get(sel[0])
+            if not l:
+                return
+            _open_editor(l)
+
+        def _open_editor(existing_learning):
+            """
+            Open the modal editor. Pass an existing learning dict to edit it,
+            or None to create a new one.
+            """
+            if not SELF_LEARNING_AVAILABLE:
+                messagebox.showinfo(
+                    "Unavailable",
+                    "self_learning.py not found — cannot create or edit "
+                    "learnings from the GUI.")
+                return
+
+            is_new = existing_learning is None
+            dlg = tk.Toplevel(self.root)
+            dlg.title("New Learning" if is_new else "Edit Learning")
+            dlg.transient(self.root)
+            dlg.grab_set()
+            dlg.geometry("680x600")
+
+            outer = ttk.Frame(dlg, padding=12)
+            outer.pack(fill='both', expand=True)
+
+            ttk.Label(outer,
+                      text=("Create a new learning" if is_new
+                            else "Edit this learning"),
+                      font=('Arial', 12, 'bold')).pack(anchor='w', pady=(0, 8))
+
+            # ── Form fields ──────────────────────────────────────────────────
+            form = ttk.Frame(outer)
+            form.pack(fill='both', expand=True)
+
+            # Title
+            ttk.Label(form, text="Title:",
+                      font=('Arial', 9, 'bold')).grid(row=0, column=0,
+                                                       sticky='w', pady=4)
+            title_var = tk.StringVar(value=(existing_learning or {}).get('title', ''))
+            ttk.Entry(form, textvariable=title_var, width=70).grid(
+                row=0, column=1, sticky='ew', padx=(8, 0), pady=4)
+
+            # Content
+            ttk.Label(form, text="Content:",
+                      font=('Arial', 9, 'bold')).grid(row=1, column=0,
+                                                       sticky='nw', pady=4)
+            content_text = scrolledtext.ScrolledText(form, height=6, wrap='word',
+                                                     font=('Arial', 9))
+            content_text.grid(row=1, column=1, sticky='ew', padx=(8, 0), pady=4)
+            content_text.insert('1.0', (existing_learning or {}).get('content', ''))
+
+            # Context
+            ttk.Label(form, text="Context:",
+                      font=('Arial', 9, 'bold')).grid(row=2, column=0,
+                                                       sticky='nw', pady=4)
+            context_text = scrolledtext.ScrolledText(form, height=3, wrap='word',
+                                                     font=('Arial', 9))
+            context_text.grid(row=2, column=1, sticky='ew', padx=(8, 0), pady=4)
+            context_text.insert('1.0', (existing_learning or {}).get('context', ''))
+
+            # Category / Status row
+            cat_row = ttk.Frame(form)
+            cat_row.grid(row=3, column=1, sticky='ew', padx=(8, 0), pady=4)
+
+            ttk.Label(cat_row, text="Category:", font=('Arial', 9)).pack(side='left')
+            cat_var = tk.StringVar(
+                value=(existing_learning or {}).get('category', 'general'))
+            ttk.Combobox(cat_row, textvariable=cat_var, values=_CATEGORIES,
+                         width=20, state='readonly').pack(side='left', padx=(4, 12))
+
+            ttk.Label(cat_row, text="Status:", font=('Arial', 9)).pack(side='left')
+            status_var = tk.StringVar(
+                value=(existing_learning or {}).get('status', 'active'))
+            ttk.Combobox(cat_row, textvariable=status_var, values=_STATUSES,
+                         width=12, state='readonly').pack(side='left', padx=(4, 0))
+
+            # Outcome / Confidence row
+            out_row = ttk.Frame(form)
+            out_row.grid(row=4, column=1, sticky='ew', padx=(8, 0), pady=4)
+
+            ttk.Label(out_row, text="Outcome:", font=('Arial', 9)).pack(side='left')
+            outcome_var = tk.StringVar(
+                value=(existing_learning or {}).get('outcome', 'unknown'))
+            ttk.Combobox(out_row, textvariable=outcome_var, values=_OUTCOMES,
+                         width=12, state='readonly').pack(side='left', padx=(4, 12))
+
+            ttk.Label(out_row, text="Confidence:",
+                      font=('Arial', 9)).pack(side='left')
+            conf_var = tk.DoubleVar(
+                value=float((existing_learning or {}).get('confidence', 0.8)))
+            conf_scale = ttk.Scale(out_row, from_=0.0, to=1.0, orient='horizontal',
+                                   variable=conf_var, length=160)
+            conf_scale.pack(side='left', padx=(4, 4))
+            conf_label = ttk.Label(out_row, text=f"{conf_var.get():.0%}",
+                                   width=6, font=('Arial', 9, 'bold'))
+            conf_label.pack(side='left')
+            def _update_conf(*_):
+                conf_label.config(text=f"{conf_var.get():.0%}")
+            conf_var.trace_add('write', _update_conf)
+
+            # Source (only editable when creating new — source is metadata
+            # about how the learning entered the system, not the user's
+            # business preference)
+            if is_new:
+                src_row = ttk.Frame(form)
+                src_row.grid(row=5, column=1, sticky='ew', padx=(8, 0), pady=4)
+                ttk.Label(src_row, text="Source:",
+                          font=('Arial', 9)).pack(side='left')
+                source_var = tk.StringVar(value='operator')
+                ttk.Combobox(src_row, textvariable=source_var, values=_SOURCES,
+                             width=18, state='readonly').pack(side='left',
+                                                              padx=(4, 0))
+            else:
+                source_var = tk.StringVar(
+                    value=(existing_learning or {}).get('source', 'operator'))
+
+            # Tags
+            ttk.Label(form, text="Tags:",
+                      font=('Arial', 9, 'bold')).grid(row=6, column=0,
+                                                       sticky='w', pady=4)
+            tags_var = tk.StringVar(
+                value=', '.join((existing_learning or {}).get('tags', [])))
+            ttk.Entry(form, textvariable=tags_var, width=70).grid(
+                row=6, column=1, sticky='ew', padx=(8, 0), pady=4)
+            ttk.Label(form, text="(comma-separated)",
+                      font=('Arial', 8), foreground='#888888').grid(
+                row=7, column=1, sticky='w', padx=(8, 0))
+
+            form.columnconfigure(1, weight=1)
+
+            # Read-only metadata for existing learnings
+            if not is_new:
+                meta_frame = ttk.LabelFrame(outer, text="Metadata (read-only)",
+                                            padding=(8, 4))
+                meta_frame.pack(fill='x', pady=(8, 0))
+                meta_lines = [
+                    f"ID: {existing_learning.get('id', '')}",
+                    f"Created: {existing_learning.get('created_at', '?')}",
+                    f"Updated: {existing_learning.get('updated_at', '?')}",
+                    f"Applied: {existing_learning.get('applied_count', 0)}x",
+                    f"Source:  {existing_learning.get('source', 'operator')}",
+                ]
+                ttk.Label(meta_frame, text=' | '.join(meta_lines),
+                          font=('Arial', 8), foreground='#666666').pack(anchor='w')
+
+            # ── Buttons ──────────────────────────────────────────────────────
+            btn_row = ttk.Frame(outer)
+            btn_row.pack(fill='x', pady=(12, 0))
+
+            def _do_save():
+                title_v   = title_var.get().strip()
+                content_v = content_text.get('1.0', 'end-1c').strip()
+                if not title_v or not content_v:
+                    messagebox.showwarning(
+                        "Incomplete",
+                        "Title and Content are required.",
+                        parent=dlg)
+                    return
+                tags_list = [t.strip().lower() for t in tags_var.get().split(',')
+                             if t.strip()]
+
+                try:
+                    if is_new:
+                        _sl_engine.record_learning(
+                            title=title_v,
+                            content=content_v,
+                            category=cat_var.get(),
+                            context=context_text.get('1.0', 'end-1c').strip(),
+                            source=source_var.get(),
+                            confidence=float(conf_var.get()),
+                            tags=tags_list,
+                            outcome=outcome_var.get(),
+                        )
+                        self.status_var.set(f"Created: {title_v[:40]}")
+                    else:
+                        _sl_engine.update_learning(
+                            existing_learning['id'],
+                            {
+                                'title':      title_v,
+                                'content':    content_v,
+                                'category':   cat_var.get(),
+                                'context':    context_text.get('1.0', 'end-1c').strip(),
+                                'confidence': float(conf_var.get()),
+                                'tags':       tags_list,
+                                'status':     status_var.get(),
+                                'outcome':    outcome_var.get(),
+                            })
+                        self.status_var.set(f"Updated: {title_v[:40]}")
+                    dlg.destroy()
+                    _refresh_all()
+                except Exception as exc:
+                    messagebox.showerror("Save Failed", str(exc), parent=dlg)
+
+            ttk.Button(btn_row,
+                       text=("Create" if is_new else "Save Changes"),
+                       command=_do_save,
+                       style='Accent.TButton').pack(side='right', padx=(8, 0))
+            ttk.Button(btn_row, text="Cancel",
+                       command=dlg.destroy).pack(side='right')
+
+        # ────────────────────────────────────────────────────────────────────
+        # CONFLICT DETECTION DIALOG
+        # ────────────────────────────────────────────────────────────────────
+
+        def _open_conflict_dialog():
+            """Open the conflict detection modal with adjustable threshold."""
+            if not SELF_LEARNING_AVAILABLE:
+                messagebox.showinfo(
+                    "Unavailable",
+                    "self_learning.py not found — cannot detect conflicts.")
+                return
+
+            dlg = tk.Toplevel(self.root)
+            dlg.title("Detect Conflicts")
+            dlg.transient(self.root)
+            dlg.grab_set()
+            dlg.geometry("860x680")
+
+            outer = ttk.Frame(dlg, padding=12)
+            outer.pack(fill='both', expand=True)
+
+            ttk.Label(outer, text="🚦  Conflict Detection",
+                      font=('Arial', 14, 'bold')).pack(anchor='w')
+            ttk.Label(outer, font=('Arial', 9), foreground='#444444',
+                      justify='left',
+                      text=("Finds pairs of active learnings that look like they "
+                            "might contradict each other,\nbased on how similar "
+                            "their meaning is. Adjust the slider to tune sensitivity.")
+                      ).pack(anchor='w', pady=(2, 10))
+
+            # ── Sensitivity slider ───────────────────────────────────────────
+            slider_frame = ttk.LabelFrame(outer, text="Sensitivity threshold",
+                                          padding=(10, 8))
+            slider_frame.pack(fill='x', pady=(0, 10))
+
+            current_threshold = _sl_engine.get_conflict_threshold()
+            thresh_var = tk.DoubleVar(value=current_threshold)
+
+            slider_row = ttk.Frame(slider_frame)
+            slider_row.pack(fill='x')
+
+            ttk.Label(slider_row, text="Loose\n(more flags)",
+                      font=('Arial', 8), foreground='#666666',
+                      justify='center').pack(side='left', padx=(0, 8))
+
+            sens_scale = ttk.Scale(
+                slider_row,
+                from_=_sl_engine.MIN_CONFLICT_THRESHOLD,
+                to=_sl_engine.MAX_CONFLICT_THRESHOLD,
+                orient='horizontal', variable=thresh_var, length=380)
+            sens_scale.pack(side='left', fill='x', expand=True)
+
+            ttk.Label(slider_row, text="Strict\n(near-duplicates)",
+                      font=('Arial', 8), foreground='#666666',
+                      justify='center').pack(side='left', padx=(8, 0))
+
+            value_lbl = ttk.Label(slider_frame,
+                                  text=f"Threshold: {thresh_var.get():.2f}",
+                                  font=('Arial', 10, 'bold'),
+                                  foreground='#1E40AF')
+            value_lbl.pack(anchor='center', pady=(4, 0))
+
+            ttk.Label(slider_frame, font=('Arial', 8),
+                      foreground='#555555', justify='left',
+                      wraplength=780,
+                      text=(
+                          "Recommended: 0.75 — flags learnings that talk about "
+                          "the same subject and likely contradict each other.   "
+                          "Lower (~0.60): catches subtler overlaps but produces "
+                          "more false positives — pairs that are merely related.   "
+                          "Higher (~0.85): only near-duplicates. Use when your "
+                          "knowledge base is large and you only want clear conflicts."
+                      )).pack(anchor='w', pady=(8, 0))
+
+            # ── Pairs list ───────────────────────────────────────────────────
+            pairs_frame = ttk.LabelFrame(outer, text="Flagged pairs", padding=(8, 6))
+            pairs_frame.pack(fill='both', expand=True, pady=(4, 0))
+
+            pairs_status = tk.StringVar(value="Click 'Re-scan' to detect conflicts.")
+            ttk.Label(pairs_frame, textvariable=pairs_status,
+                      font=('Arial', 9), foreground='#444444').pack(anchor='w',
+                                                                    pady=(0, 6))
+
+            # Scrollable canvas for pair rows
+            list_canvas = tk.Canvas(pairs_frame, highlightthickness=0)
+            list_scroll = ttk.Scrollbar(pairs_frame, orient='vertical',
+                                        command=list_canvas.yview)
+            list_canvas.configure(yscrollcommand=list_scroll.set)
+            list_canvas.pack(side='left', fill='both', expand=True)
+            list_scroll.pack(side='right', fill='y')
+
+            pairs_inner = ttk.Frame(list_canvas)
+            list_canvas.create_window((0, 0), window=pairs_inner, anchor='nw')
+
+            def _resize_inner(_):
+                list_canvas.configure(scrollregion=list_canvas.bbox("all"))
+            pairs_inner.bind('<Configure>', _resize_inner)
+
+            current_pairs = []  # holds the most recent scan result
+
+            def _render_pairs():
+                # Clear and re-render based on the current threshold filter
+                for child in pairs_inner.winfo_children():
+                    child.destroy()
+                threshold = thresh_var.get()
+                visible = [p for p in current_pairs
+                           if p['similarity'] >= threshold]
+                if not visible:
+                    if current_pairs:
+                        pairs_status.set(
+                            f"No pairs at or above {threshold:.2f}. "
+                            f"({len(current_pairs)} pair(s) below threshold — "
+                            "lower the slider to see them.)")
+                    else:
+                        pairs_status.set("No conflicts found. ✅")
+                    return
+                pairs_status.set(
+                    f"Showing {len(visible)} pair(s) at or above {threshold:.2f}.")
+
+                for pair in visible:
+                    _render_one_pair(pair)
+
+            def _render_one_pair(pair):
+                a = pair['a']; b = pair['b']; sim = pair['similarity']
+                row = ttk.LabelFrame(pairs_inner,
+                                     text=f"Similarity: {sim:.0%}",
+                                     padding=(8, 6))
+                row.pack(fill='x', padx=4, pady=4)
+
+                cols = ttk.Frame(row)
+                cols.pack(fill='x')
+
+                def _side(parent, learning, label):
+                    box = ttk.Frame(parent, padding=(6, 4),
+                                    relief='solid', borderwidth=1)
+                    box.pack(side='left', fill='both', expand=True, padx=4)
+                    ttk.Label(box, text=label, font=('Arial', 8, 'bold'),
+                              foreground='#1E40AF').pack(anchor='w')
+                    ttk.Label(box, text=learning.get('title', 'Untitled'),
+                              font=('Arial', 9, 'bold'),
+                              wraplength=320, justify='left').pack(anchor='w')
+                    ttk.Label(box, text=learning.get('content', '')[:280] +
+                              ('…' if len(learning.get('content', '')) > 280 else ''),
+                              font=('Arial', 8), foreground='#444444',
+                              wraplength=320, justify='left').pack(anchor='w',
+                                                                   pady=(2, 0))
+                    ttk.Label(box,
+                              text=f"category: {learning.get('category', 'general')}  •  "
+                                   f"created: {learning.get('created_at', '')[:10]}",
+                              font=('Arial', 7),
+                              foreground='#888888').pack(anchor='w',
+                                                         pady=(4, 0))
+
+                _side(cols, a, "A")
+                _side(cols, b, "B")
+
+                # Per-pair actions
+                act_row = ttk.Frame(row)
+                act_row.pack(fill='x', pady=(6, 0))
+
+                def _supersede(winner, loser):
+                    """Mark loser as deprecated, link superseded_by → winner.id."""
+                    if not messagebox.askyesno(
+                            "Confirm Supersede",
+                            f"Keep \"{winner.get('title', '?')}\" as the active "
+                            f"learning, and mark \"{loser.get('title', '?')}\" "
+                            "as deprecated?",
+                            parent=dlg):
+                        return
+                    try:
+                        _sl_engine.update_learning(
+                            loser['id'],
+                            {'status': 'deprecated'})
+                        # Manually patch the supersedes/superseded_by linkage
+                        # by reading + writing the JSON file directly. The
+                        # update_learning API doesn't accept those fields.
+                        import json as _j
+                        f = _learnings_file
+                        data = _j.loads(f.read_text(encoding='utf-8'))
+                        for ll in data['learnings']:
+                            if ll['id'] == loser['id']:
+                                ll['superseded_by'] = winner['id']
+                            elif ll['id'] == winner['id']:
+                                if not ll.get('supersedes'):
+                                    ll['supersedes'] = loser['id']
+                        f.write_text(_j.dumps(data, indent=2,
+                                              ensure_ascii=False),
+                                     encoding='utf-8')
+                        # Reindex both so ChromaDB metadata stays in sync
+                        _sl_engine._index_learning(
+                            next(ll for ll in data['learnings']
+                                 if ll['id'] == loser['id']))
+                        _sl_engine._index_learning(
+                            next(ll for ll in data['learnings']
+                                 if ll['id'] == winner['id']))
+                        _do_rescan()
+                        _refresh_all()
+                    except Exception as exc:
+                        messagebox.showerror("Supersede Failed", str(exc),
+                                             parent=dlg)
+
+                def _dismiss_pair():
+                    try:
+                        _sl_engine.dismiss_conflict(a['id'], b['id'])
+                        _do_rescan()
+                    except Exception as exc:
+                        messagebox.showerror("Dismiss Failed", str(exc),
+                                             parent=dlg)
+
+                def _edit_a():
+                    _open_editor(a); _do_rescan(); _refresh_all()
+                def _edit_b():
+                    _open_editor(b); _do_rescan(); _refresh_all()
+
+                ttk.Button(act_row, text="A supersedes B",
+                           command=lambda: _supersede(a, b)).pack(
+                               side='left', padx=(0, 4))
+                ttk.Button(act_row, text="B supersedes A",
+                           command=lambda: _supersede(b, a)).pack(
+                               side='left', padx=(0, 4))
+                ttk.Button(act_row, text="✏️  Edit A",
+                           command=_edit_a).pack(side='left', padx=(0, 4))
+                ttk.Button(act_row, text="✏️  Edit B",
+                           command=_edit_b).pack(side='left', padx=(0, 4))
+                ttk.Button(act_row, text="Not a conflict",
+                           command=_dismiss_pair).pack(side='left', padx=(8, 0))
+
+            def _do_rescan():
+                pairs_status.set("Scanning…")
+                dlg.update_idletasks()
+                try:
+                    pairs = _sl_engine.find_conflicts(
+                        threshold=_sl_engine.MIN_CONFLICT_THRESHOLD)
+                    # Always pull at the floor so the slider can filter live
+                    # without re-querying.
+                    current_pairs.clear()
+                    current_pairs.extend(pairs)
+                    _render_pairs()
+                except Exception as exc:
+                    pairs_status.set(f"Scan failed: {exc}")
+
+            # Live re-render when slider moves (no re-scan needed)
+            def _on_slider(*_):
+                value_lbl.config(text=f"Threshold: {thresh_var.get():.2f}")
+                _render_pairs()
+            thresh_var.trace_add('write', _on_slider)
+
+            def _save_default():
+                saved = _sl_engine.set_conflict_threshold(thresh_var.get())
+                self.status_var.set(
+                    f"Default conflict threshold saved: {saved:.2f}")
+
+            # ── Bottom button row ────────────────────────────────────────────
+            btm = ttk.Frame(outer)
+            btm.pack(fill='x', pady=(10, 0))
+            ttk.Button(btm, text="🔍  Re-scan",
+                       command=_do_rescan).pack(side='left')
+            ttk.Button(btm, text="💾  Save as default",
+                       command=_save_default).pack(side='left', padx=(8, 0))
+            ttk.Button(btm, text="Close",
+                       command=dlg.destroy).pack(side='right')
+
+            # Initial scan
+            dlg.after(50, _do_rescan)
+
+        # ────────────────────────────────────────────────────────────────────
+        # EXPORT / IMPORT LEARNING PACKS
+        # ────────────────────────────────────────────────────────────────────
+
+        def _export_pack():
+            if not SELF_LEARNING_AVAILABLE:
+                messagebox.showinfo(
+                    "Unavailable",
+                    "self_learning.py not found — cannot export pack.")
+                return
+
+            # Quick options dialog
+            opt = tk.Toplevel(self.root)
+            opt.title("Export Learning Pack")
+            opt.transient(self.root)
+            opt.grab_set()
+            opt.geometry("460x230")
+
+            box = ttk.Frame(opt, padding=14)
+            box.pack(fill='both', expand=True)
+
+            ttk.Label(box, text="📤  Export Learning Pack",
+                      font=('Arial', 12, 'bold')).pack(anchor='w', pady=(0, 6))
+            ttk.Label(box, font=('Arial', 9), foreground='#444444',
+                      wraplength=420, justify='left',
+                      text=("Saves your learnings as a single .aiplearn file "
+                            "you can share with another AI-Prowler instance "
+                            "or keep as a backup.")
+                      ).pack(anchor='w', pady=(0, 10))
+
+            include_inactive_var = tk.BooleanVar(value=False)
+            ttk.Checkbutton(box,
+                            text="Include deprecated and archived learnings (full history backup)",
+                            variable=include_inactive_var).pack(anchor='w')
+
+            def _do_export():
+                opt.destroy()
+                from datetime import datetime as _dt
+                stamp = _dt.now().strftime("%Y%m%d_%H%M%S")
+                dest = filedialog.asksaveasfilename(
+                    defaultextension=".aiplearn",
+                    initialfile=f"ai_prowler_learnings_{stamp}.aiplearn",
+                    filetypes=[("AI-Prowler learning pack", "*.aiplearn"),
+                               ("JSON files", "*.json"),
+                               ("All files", "*.*")])
+                if not dest:
+                    return
+                try:
+                    result = _sl_engine.export_learnings(
+                        dest,
+                        include_inactive=include_inactive_var.get())
+                    self.status_var.set(
+                        f"Exported {result['exported']} learnings to {dest}")
+                    messagebox.showinfo(
+                        "Export Complete",
+                        f"Exported {result['exported']} learning(s) to:\n{dest}")
+                except Exception as exc:
+                    messagebox.showerror("Export Failed", str(exc))
+
+            btn_row = ttk.Frame(box)
+            btn_row.pack(fill='x', pady=(14, 0))
+            ttk.Button(btn_row, text="Choose location…",
+                       command=_do_export,
+                       style='Accent.TButton').pack(side='right', padx=(8, 0))
+            ttk.Button(btn_row, text="Cancel",
+                       command=opt.destroy).pack(side='right')
+
+        def _import_pack():
+            if not SELF_LEARNING_AVAILABLE:
+                messagebox.showinfo(
+                    "Unavailable",
+                    "self_learning.py not found — cannot import pack.")
+                return
+
+            src = filedialog.askopenfilename(
+                title="Select learning pack to import",
+                filetypes=[("AI-Prowler learning pack", "*.aiplearn"),
+                           ("JSON files", "*.json"),
+                           ("All files", "*.*")])
+            if not src:
+                return
+
+            # Options dialog
+            opt = tk.Toplevel(self.root)
+            opt.title("Import Learning Pack")
+            opt.transient(self.root)
+            opt.grab_set()
+            opt.geometry("560x340")
+
+            box = ttk.Frame(opt, padding=14)
+            box.pack(fill='both', expand=True)
+
+            ttk.Label(box, text="📥  Import Learning Pack",
+                      font=('Arial', 12, 'bold')).pack(anchor='w', pady=(0, 6))
+            ttk.Label(box, text=f"Source:  {src}",
+                      font=('Arial', 8), foreground='#666666',
+                      wraplength=520, justify='left').pack(anchor='w', pady=(0, 10))
+
+            mode_var = tk.StringVar(value='merge')
+
+            ttk.Label(box, text="How should existing learnings be handled?",
+                      font=('Arial', 9, 'bold')).pack(anchor='w')
+
+            ttk.Radiobutton(box, variable=mode_var, value='merge',
+                            text="Merge (recommended): add new learnings, "
+                                 "ask before overwriting existing ones"
+                            ).pack(anchor='w', pady=(4, 0))
+            ttk.Radiobutton(box, variable=mode_var, value='append',
+                            text="Append: copy in with fresh IDs, never "
+                                 "overwrite existing data"
+                            ).pack(anchor='w', pady=(2, 0))
+            ttk.Radiobutton(box, variable=mode_var, value='replace',
+                            text="⚠ Replace: WIPE existing learnings, "
+                                 "use only the imported pack"
+                            ).pack(anchor='w', pady=(2, 0))
+
+            ttk.Label(box, font=('Arial', 8), foreground='#888888',
+                      wraplength=520, justify='left',
+                      text=("Merge: per-ID conflicts open a dialog so you can "
+                            "pick keep-mine, take-theirs, or keep-both.   "
+                            "Append: safe but you can't merge updates by ID later.   "
+                            "Replace: last resort — there's no undo.")
+                      ).pack(anchor='w', pady=(8, 0))
+
+            def _resolver(local, incoming):
+                """Per-collision dialog — runs in the import thread."""
+                pick = {'val': 'keep_local'}
+                d = tk.Toplevel(opt)
+                d.title("ID Collision")
+                d.transient(opt); d.grab_set()
+                d.geometry("700x420")
+                p = ttk.Frame(d, padding=12); p.pack(fill='both', expand=True)
+                ttk.Label(p, text="ID collision — same learning ID exists locally",
+                          font=('Arial', 11, 'bold')).pack(anchor='w')
+                ttk.Label(p, text=f"ID: {local.get('id', '')}",
+                          font=('Arial', 8), foreground='#888888').pack(anchor='w',
+                                                                        pady=(0, 8))
+
+                def _show_one(parent, lr, label):
+                    fr = ttk.LabelFrame(parent, text=label, padding=(8, 4))
+                    fr.pack(fill='x', pady=4)
+                    ttk.Label(fr, text=lr.get('title', 'Untitled'),
+                              font=('Arial', 10, 'bold')).pack(anchor='w')
+                    ttk.Label(fr, text=lr.get('content', '')[:240] +
+                              ('…' if len(lr.get('content', '')) > 240 else ''),
+                              font=('Arial', 9), foreground='#444444',
+                              wraplength=620, justify='left').pack(anchor='w')
+                    ttk.Label(fr,
+                              text=f"category: {lr.get('category', 'general')}  •  "
+                                   f"updated: {lr.get('updated_at', '?')}",
+                              font=('Arial', 7),
+                              foreground='#888888').pack(anchor='w', pady=(4, 0))
+
+                _show_one(p, local, "Local (current)")
+                _show_one(p, incoming, "Incoming (from pack)")
+
+                br = ttk.Frame(p); br.pack(fill='x', pady=(10, 0))
+
+                def _set(v):
+                    pick['val'] = v
+                    d.destroy()
+
+                ttk.Button(br, text="Keep local",
+                           command=lambda: _set('keep_local')).pack(side='left')
+                ttk.Button(br, text="Take incoming",
+                           command=lambda: _set('take_incoming')).pack(side='left',
+                                                                        padx=(8, 0))
+                ttk.Button(br, text="Keep both (supersede)",
+                           command=lambda: _set('supersede')).pack(side='left',
+                                                                    padx=(8, 0))
+                d.wait_window()
+                return pick['val']
+
+            def _do_import():
+                mode = mode_var.get()
+                if mode == 'replace':
+                    if not messagebox.askyesno(
+                            "Confirm Replace",
+                            "REPLACE will permanently delete every learning "
+                            "currently in your knowledge base and use only the "
+                            "imported pack.\n\nThis cannot be undone. Continue?",
+                            icon='warning', parent=opt):
+                        return
+                opt.destroy()
+                try:
+                    result = _sl_engine.import_learnings(
+                        src, mode=mode,
+                        on_conflict='ask',
+                        conflict_resolver=_resolver)
+                    parts = []
+                    if result.get('added'):       parts.append(f"{result['added']} added")
+                    if result.get('updated'):     parts.append(f"{result['updated']} updated")
+                    if result.get('superseded'):  parts.append(f"{result['superseded']} superseded")
+                    if result.get('skipped'):     parts.append(f"{result['skipped']} skipped")
+                    if result.get('replaced_total') is not None:
+                        parts.append(f"{result['replaced_total']} total after replace")
+                    summary_txt = ", ".join(parts) if parts else "no changes"
+                    self.status_var.set(f"Import: {summary_txt}")
+                    msg = f"Import complete: {summary_txt}."
+                    if result.get('errors'):
+                        msg += "\n\nWarnings:\n" + "\n".join(result['errors'][:8])
+                    messagebox.showinfo("Import Complete", msg)
+                    _refresh_all()
+                except Exception as exc:
+                    messagebox.showerror("Import Failed", str(exc))
+
+            btn_row = ttk.Frame(box)
+            btn_row.pack(fill='x', side='bottom', pady=(14, 0))
+            ttk.Button(btn_row, text="Import",
+                       command=_do_import,
+                       style='Accent.TButton').pack(side='right', padx=(8, 0))
+            ttk.Button(btn_row, text="Cancel",
+                       command=opt.destroy).pack(side='right')
+
+        # ── Initial load ─────────────────────────────────────────────────────
+        _refresh_all()
+
+    def _show_partial_delete_dialog(self, error_text: str):
+        """
+        Show a partial-delete diagnostic dialog with a scrollable, selectable
+        text area for the full traceback. Used when JSON delete succeeded
+        but ChromaDB cleanup failed.
+
+        The standard messagebox.showwarning truncates long messages and is
+        not selectable, which loses the diagnostic information we need to
+        actually fix the underlying issue.
+        """
+        import tkinter.scrolledtext as _st
+
+        win = tk.Toplevel(self.root)
+        win.title("Partial Delete — Index Cleanup Failed")
+        win.geometry("760x560")
+        win.transient(self.root)
+        win.grab_set()
+
+        # ── Header ──────────────────────────────────────────────────────────
+        header = ttk.Frame(win, padding=(15, 12, 15, 6))
+        header.pack(fill='x')
+        ttk.Label(
+            header,
+            text="⚠️  Deleted from JSON file successfully, "
+                 "but ChromaDB index cleanup failed.",
+            font=('Segoe UI', 10, 'bold'),
+            foreground='#a05a00',
+        ).pack(anchor='w')
+        ttk.Label(
+            header,
+            text="The learning is gone from the source of truth, but a stale\n"
+                 "embedding remains in the search index. Diagnostic details\n"
+                 "below — copy this if you need to investigate further.",
+            justify='left',
+        ).pack(anchor='w', pady=(4, 0))
+
+        # ── Diagnostic text area (scrollable, selectable) ───────────────────
+        body = ttk.Frame(win, padding=(15, 6, 15, 6))
+        body.pack(fill='both', expand=True)
+        ttk.Label(body, text="Diagnostic details:",
+                  font=('Segoe UI', 9, 'bold')).pack(anchor='w')
+        text_widget = _st.ScrolledText(
+            body, wrap='word', height=18,
+            font=('Consolas', 9),
+            background='#fafafa',
+        )
+        text_widget.pack(fill='both', expand=True, pady=(4, 0))
+        text_widget.insert('1.0', error_text)
+        text_widget.configure(state='normal')   # keep editable so user can copy
+
+        # ── Action buttons ──────────────────────────────────────────────────
+        btn_frame = ttk.Frame(win, padding=(15, 6, 15, 12))
+        btn_frame.pack(fill='x')
+
+        def _copy_to_clipboard():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(error_text)
+            self.status_var.set("Diagnostic details copied to clipboard")
+
+        ttk.Label(
+            btn_frame,
+            text="To fix the orphan embedding now:\n"
+                 "Click '🔄 Rebuild ChromaDB Index' on the Learnings tab.",
+            justify='left',
+        ).pack(side='left')
+
+        ttk.Button(btn_frame, text="📋 Copy Details",
+                   command=_copy_to_clipboard).pack(side='right', padx=(0, 6))
+        ttk.Button(btn_frame, text="Close",
+                   command=win.destroy).pack(side='right')
 
     def create_status_bar(self):
         """Create status bar with MCP indicator."""
@@ -7304,30 +8698,37 @@ Built with Python, ChromaDB, and Claude"""
 
     def _register_directory_for_tracking(self, directory: str, recursive: bool):
         """
-        Register a directory in the auto-update tracking list and establish
-        the file-change baseline. Called after smart-scan index_file_list completes.
+        Register a directory OR individual file in the auto-update tracking
+        list and establish the file-change baseline.
 
-        Crucially: populates tracking_db[dir_key]['files'] with current file
-        timestamps BEFORE saving, so the next Update All correctly sees all
-        files as UNCHANGED and only re-indexes genuinely new/modified ones.
+        Baseline-write responsibility:
+          • Directories — written here via scan_directory_for_changes(), which
+            walks the tree and records every supported file's mtime/size.
+          • Individual files — written by rag_preprocessor.index_file_list()
+            itself as it indexes each file. We deliberately do NOT scan the
+            file's parent directory here, because the user only opted to
+            track that one file, not its siblings.
         """
+        is_file = Path(directory).is_file()
+
         try:
             added = add_to_auto_update_list(directory)
             if added:
-                print(f"   ✅ Added to Update Index tracking list")
+                kind = "file" if is_file else "directory"
+                print(f"   ✅ Added {kind} to Update Index tracking list")
             else:
                 print(f"   ℹ️  Already in tracking list")
 
-            # scan_directory_for_changes returns results + tracking_db, but
-            # tracking_db[dir_key]['files'] is still empty — it is only filled
-            # by command_update after a real update run. We need to fill it here
-            # ourselves with the current file timestamps so the baseline is set.
+            # Directories: scan-and-baseline the whole tree.
+            # Files: skip — index_file_list writes the per-file baseline
+            # as a side effect of indexing.
+            if is_file:
+                return
+
             result = scan_directory_for_changes(directory, recursive, quiet=True)
             if result:
                 results, tracking_db, dir_key = result
 
-                # Write current file timestamps into the tracking baseline
-                # Use normalise_path so keys match what was stored in ChromaDB
                 tracking_db[dir_key]['files'] = {}
                 for file_info in results['all_files']:
                     tracking_db[dir_key]['files'][_rag_engine.normalise_path(file_info['path'])] = {
@@ -7465,11 +8866,11 @@ Built with Python, ChromaDB, and Claude"""
                         root_directory=str(Path(directory).parent) if is_file else directory,
                     )
 
-                    # Register for tracking — use parent dir when a single file
-                    # was queued directly so the whole folder gets watched.
+                    # Register for tracking — use the file itself when a
+                    # single file was queued, not the parent directory.
                     stopped_mid = stats.get('stopped_at', 0) > 0
                     if not stopped_mid:
-                        track_path = str(Path(directory).parent) if is_file else directory
+                        track_path = directory if is_file else directory
                         self._register_directory_for_tracking(track_path, recursive)
                 else:
                     if is_file:
@@ -8098,7 +9499,7 @@ Built with Python, ChromaDB, and Claude"""
             else:
                 self.tracked_listbox.insert(
                     tk.END,
-                    "(No tracked directories yet — index a directory first)"
+                    "(No tracked items yet — index a directory or file first)"
                 )
         except Exception as e:
             self.tracked_listbox.insert(tk.END, f"(Error loading list: {e})")
@@ -8116,15 +9517,15 @@ Built with Python, ChromaDB, and Claude"""
             return
 
         if not messagebox.askyesno(
-                "Remove Directory from Tracking",
-                f"Remove this directory from tracking?\n\n"
+                "Remove from Tracking",
+                f"Remove this item from tracking?\n\n"
                 f"{directory}\n\n"
                 f"This will:\n"
                 f"  • Remove it from the tracked list\n"
                 f"  • Delete all its indexed chunks and vectors from ChromaDB\n"
                 f"  • Remove its file-change history\n\n"
                 f"The actual files on disk are NOT touched.\n"
-                f"You can re-index this directory later if needed."):
+                f"You can re-index this item later if needed."):
             return
 
         self.update_output.delete("1.0", tk.END)
@@ -8139,11 +9540,13 @@ Built with Python, ChromaDB, and Claude"""
         thread.start()
 
     def _remove_tracked_worker(self, directory):
-        """Background thread: untrack directory and purge its ChromaDB vectors."""
+        """Background thread: untrack directory/file and purge its ChromaDB vectors."""
         old_stdout = sys.stdout
         sys.stdout = TextRedirector(self.output_queue, "update")
+        is_file = Path(directory).is_file() or not Path(directory).is_dir()
+        kind = "file" if is_file else "directory"
         try:
-            print(f"🗑  Removing directory from index:")
+            print(f"🗑  Removing {kind} from index:")
             print(f"   {directory}\n")
 
             result = remove_directory_from_index(directory)
@@ -8153,19 +9556,19 @@ Built with Python, ChromaDB, and Claude"""
             if chunks > 0:
                 print(f"✅ Removed {chunks:,} chunk(s) from ChromaDB")
             else:
-                print(f"ℹ️  No chunks found in ChromaDB for this directory")
+                print(f"ℹ️  No chunks found in ChromaDB for this {kind}")
                 print(f"   (may have been wiped when you cleared the database)")
 
-            print(f"✅ Removed from tracked directory list")
+            print(f"✅ Removed from tracked list")
             print(f"✅ Removed from file-change history")
 
             if errors:
                 for err in errors:
                     print(f"⚠️  {err}")
 
-            print(f"\n✅ Done — directory is no longer tracked.")
+            print(f"\n✅ Done — {kind} is no longer tracked.")
 
-            self.output_queue.put(("status", "Directory removed from tracking"))
+            self.output_queue.put(("status", f"{kind.title()} removed from tracking"))
             self.output_queue.put(("done", "remove_tracked"))
 
         except Exception as e:
@@ -8175,10 +9578,11 @@ Built with Python, ChromaDB, and Claude"""
             sys.stdout = old_stdout
 
     def update_selected(self):
-        """Update selected directory"""
+        """Update selected directory or file."""
         selection = self.tracked_listbox.curselection()
         if not selection:
-            messagebox.showwarning("No Selection", "Please select a directory")
+            messagebox.showwarning("No Selection",
+                                   "Please select a directory or file")
             return
         
         directory = self.tracked_listbox.get(selection[0])
@@ -8193,7 +9597,7 @@ Built with Python, ChromaDB, and Claude"""
         thread.start()
     
     def update_all(self):
-        """Update all tracked directories"""
+        """Update all tracked directories and files."""
         self.update_output.delete('1.0', tk.END)
         self.update_progress.start()
         self.status_var.set("Updating all + purging deleted...")
@@ -8202,12 +9606,83 @@ Built with Python, ChromaDB, and Claude"""
         thread.daemon = True
         thread.start()
     
+    def _tracked_file_is_unchanged(self, file_path):
+        """Compare a tracked file's current mtime/size to the tracking DB record.
+
+        Returns:
+            True  — file is present in the tracking DB and mtime+size match
+                    the on-disk file (i.e. nothing to re-index).
+            False — file differs from the stored record, OR the tracking DB
+                    has no record for it, OR anything went wrong reading the
+                    DB (in which case we err on the side of re-indexing).
+        """
+        try:
+            if not TRACKING_DB.exists():
+                return False
+            import json as _json
+            tracking = _json.loads(TRACKING_DB.read_text(encoding='utf-8'))
+
+            p          = Path(file_path)
+            parent_key = normalise_path(str(p.parent))
+            file_key   = normalise_path(str(p))
+
+            # The dir_key in tracking can be stored under various forms
+            # (the file's parent dir, or sometimes the file path itself
+            # if it was registered as an individual tracked file).
+            # Search both shapes.
+            candidates = [parent_key, file_key]
+            for dir_key, dir_data in tracking.items():
+                if normalise_path(dir_key) in candidates:
+                    files = dir_data.get('files', {}) or {}
+                    rec = files.get(file_key)
+                    if not rec:
+                        # try a case-insensitive lookup for Windows safety
+                        for fk, fv in files.items():
+                            if normalise_path(fk).lower() == file_key.lower():
+                                rec = fv
+                                break
+                    if not rec:
+                        continue
+                    try:
+                        stored_mtime = float(rec.get('modified', 0))
+                        stored_size  = int(rec.get('size', -1))
+                    except (TypeError, ValueError):
+                        return False
+                    current_mtime = p.stat().st_mtime
+                    current_size  = p.stat().st_size
+                    # Allow a small float tolerance on mtime (filesystems vary)
+                    if (abs(current_mtime - stored_mtime) < 1.0
+                            and current_size == stored_size):
+                        return True
+                    return False
+            return False
+        except Exception:
+            return False
+
     def update_directory_worker(self, directory):
-        """Worker thread: update a single directory using Python functions directly"""
+        """Worker thread: update a single directory or file."""
         old_stdout = sys.stdout
         try:
             sys.stdout = TextRedirector(self.output_queue, 'update')
-            command_update(directory, recursive=True, auto_confirm=True)
+            is_file = Path(directory).is_file()
+
+            if is_file:
+                # Individual tracked file — check mtime before re-indexing
+                fname = Path(directory).name
+                if self._tracked_file_is_unchanged(directory):
+                    print(f"⏭  Unchanged, skipping: {fname}")
+                else:
+                    print(f"📄 Re-indexing file: {fname}")
+                    stats = index_file_list(
+                        [normalise_path(directory)],
+                        label="1/1",
+                        root_directory=str(Path(directory).parent),
+                    )
+                    chunks = stats.get('chunks_added', 0) if stats else 0
+                    print(f"✅ {fname} — {chunks} chunk(s)")
+            else:
+                command_update(directory, recursive=True, auto_confirm=True)
+
             self.output_queue.put(('status', 'Update complete — index synced & stale chunks purged'))
             self.output_queue.put(('done', 'update'))
         except Exception as e:
@@ -8217,20 +9692,41 @@ Built with Python, ChromaDB, and Claude"""
             sys.stdout = old_stdout
     
     def update_all_worker(self):
-        """Worker thread: update all tracked directories using Python functions directly"""
+        """Worker thread: update all tracked directories AND files."""
         old_stdout = sys.stdout
         try:
             sys.stdout = TextRedirector(self.output_queue, 'update')
             dirs = load_auto_update_list()
             if not dirs:
-                self.output_queue.put(('update', "No tracked directories found.\n"
-                                                 "Index a directory first to start tracking it.\n"))
+                self.output_queue.put(('update', "No tracked directories or files found.\n"
+                                                 "Index a directory or file first to start tracking it.\n"))
             else:
-                for i, directory in enumerate(dirs, 1):
-                    dir_name = Path(directory).name or directory
-                    self.output_queue.put(('update', f"\n[{i}/{len(dirs)}] Updating: {dir_name}\n"))
-                    command_update(directory, recursive=True, auto_confirm=True)
-                self.output_queue.put(('update', "\n✅ All directories updated.\n"))
+                for i, entry in enumerate(dirs, 1):
+                    entry_name = Path(entry).name or entry
+                    is_file = Path(entry).is_file()
+
+                    if is_file:
+                        # Tracked individual file — check mtime before re-indexing
+                        if self._tracked_file_is_unchanged(entry):
+                            self.output_queue.put(('update', f"\n[{i}/{len(dirs)}] ⏭  Unchanged, skipping: {entry_name}\n"))
+                            continue
+                        self.output_queue.put(('update', f"\n[{i}/{len(dirs)}] Re-indexing file: {entry_name}\n"))
+                        try:
+                            stats = index_file_list(
+                                [normalise_path(entry)],
+                                label=f"{i}/{len(dirs)}",
+                                root_directory=str(Path(entry).parent),
+                            )
+                            chunks = stats.get('chunks_added', 0) if stats else 0
+                            self.output_queue.put(('update', f"   ✅ {entry_name} — {chunks} chunk(s)\n"))
+                        except Exception as _fe:
+                            self.output_queue.put(('update', f"   ⚠️  Error: {_fe}\n"))
+                    else:
+                        # Tracked directory — use standard directory update
+                        self.output_queue.put(('update', f"\n[{i}/{len(dirs)}] Updating: {entry_name}\n"))
+                        command_update(entry, recursive=True, auto_confirm=True)
+
+                self.output_queue.put(('update', "\n✅ All tracked items updated.\n"))
             self.output_queue.put(('status', 'Update complete — index synced & stale chunks purged'))
             self.output_queue.put(('done', 'update'))
         except Exception as e:

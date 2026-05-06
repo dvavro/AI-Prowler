@@ -12,6 +12,61 @@ Date: March 2026
 import os
 import sys
 
+# ── Bulletproof stdout/stderr UTF-8 fix ──────────────────────────────────────
+# rag_preprocessor.py has ~150 print() calls that include emoji and em-dashes.
+# On Windows, three different stream conditions break those prints:
+#
+#   1. sys.stdout is None             — pythonw.exe (Tkinter, no console)
+#   2. sys.stdout encoding is cp1252  — default on Windows in some shells
+#   3. sys.stdout is a custom proxy   — some launchers / packagers
+#
+# A naive sys.stdout.reconfigure() handles only case 2 and silently fails
+# on cases 1 and 3 — which is what was happening in the AI-Prowler GUI
+# delete path (UnicodeEncodeError 'charmap' codec at print() time inside
+# get_best_embedding_device()).
+#
+# This function returns a UTF-8-safe replacement for the stream, falling
+# through several strategies to handle every case, and never crashes.
+def _make_safe_text_stream(name):
+    import io
+    cur = getattr(sys, name, None)
+    # Case 1: stream is None (pythonw.exe / windowless Python)
+    if cur is None:
+        return io.TextIOWrapper(io.BytesIO(), encoding="utf-8",
+                                errors="replace", write_through=True)
+    # Case 2: already UTF-8 — leave it alone
+    enc = (getattr(cur, "encoding", "") or "").lower().replace("-", "")
+    if enc in ("utf8", "utf8sig"):
+        return cur
+    # Case 3: stream supports reconfigure (Python 3.7+ on real consoles)
+    if hasattr(cur, "reconfigure"):
+        try:
+            cur.reconfigure(encoding="utf-8", errors="replace")
+            return cur
+        except Exception:
+            pass  # fall through to wrapping
+    # Case 4: wrap the underlying byte buffer with a UTF-8 TextIOWrapper
+    buf = getattr(cur, "buffer", None)
+    if buf is not None:
+        try:
+            return io.TextIOWrapper(buf, encoding="utf-8",
+                                    errors="replace", write_through=True)
+        except Exception:
+            pass
+    # Case 5: opaque proxy — return a safe sink so prints don't crash.
+    # We lose the output but never crash the caller. This is preferable
+    # to a UnicodeEncodeError that bubbles out of a library function.
+    return io.TextIOWrapper(io.BytesIO(), encoding="utf-8",
+                            errors="replace", write_through=True)
+
+# Apply at module import time, BEFORE any code that calls print() runs.
+# Wrapped in try/except so a bug in the fix itself can never break startup.
+try:
+    sys.stdout = _make_safe_text_stream("stdout")
+    sys.stderr = _make_safe_text_stream("stderr")
+except Exception:
+    pass
+
 # Suppress all warnings from libraries
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
@@ -991,7 +1046,7 @@ validate_model_config()
 # Supported file extensions — content-bearing files worth indexing
 SUPPORTED_EXTENSIONS = {
     # Documents
-    '.txt', '.md', '.rst',
+    '.txt', '.md', '.markdown', '.rst',
     '.pdf', '.docx', '.xlsx', '.xls', '.pptx', '.odt', '.rtf',
     # NOTE: .doc (legacy Word binary) and .ppt (legacy PowerPoint binary) are
     # intentionally NOT listed here. Both are OLE compound binary formats that
@@ -2946,6 +3001,13 @@ def index_file_list(file_paths: list, label: str = "",
     processed = skipped = total_chunks = total_words = 0
     stopped_at = 0
 
+    # Track which files were successfully indexed in this run, so we can
+    # write a tracking-DB baseline at the end.  Without this, individually
+    # tracked files (added one-at-a-time, not via index_directory) would
+    # never get an mtime baseline, and every Update would re-index them
+    # even when unchanged.
+    indexed_records = {}   # normalised_path -> {modified, modified_human, size}
+
     # Build flat tracking lookup once — used to skip unchanged files below
     _flat_tracking = _get_flat_file_tracking()
 
@@ -3069,16 +3131,55 @@ def index_file_list(file_paths: list, label: str = "",
             total_chunks += len(chunks)
             total_words  += file_data['word_count']
             print(f"         ✅ {len(chunks)} chunks added")
+
+            # Capture mtime/size for tracking-DB baseline (written at end of run)
+            try:
+                _stat_after = os.stat(filepath)
+                indexed_records[filepath] = {
+                    'modified':       _stat_after.st_mtime,
+                    'modified_human': datetime.fromtimestamp(
+                        _stat_after.st_mtime).strftime('%Y-%m-%d %H:%M:%S'),
+                    'size':           _stat_after.st_size,
+                }
+            except OSError:
+                pass  # File vanished during indexing — skip baseline write
         except Exception as e:
             print(f"         ❌ Error: {e}")
             skipped += 1
 
+    # ── Write tracking-DB baseline for newly indexed files ─────────────────
+    # Group by parent directory to match the convention used by
+    # index_directory and scan_directory_for_changes.  This ensures that
+    # individually tracked files (e.g. a single Markdown user guide) get a
+    # proper mtime baseline so future Update runs correctly skip them.
+    if indexed_records:
+        try:
+            tracking_db = load_tracking_database()
+            now_iso = datetime.now().isoformat()
+            for fp, rec in indexed_records.items():
+                dir_key = normalise_path(str(Path(fp).parent))
+                if dir_key not in tracking_db:
+                    tracking_db[dir_key] = {
+                        'first_scan': now_iso,
+                        'last_scan':  now_iso,
+                        'files':      {},
+                    }
+                tracking_db[dir_key].setdefault('files', {})
+                tracking_db[dir_key]['files'][fp] = rec
+                tracking_db[dir_key]['last_scan'] = now_iso
+            save_tracking_database(tracking_db)
+        except Exception as _te:
+            # Don't let a tracking-DB write failure break indexing — the
+            # chunks are already in ChromaDB.  Just warn the user.
+            print(f"   ⚠️  Tracking-DB baseline not written: {_te}")
+
     return {
-        'processed':  processed,
-        'skipped':    skipped,
-        'chunks':     total_chunks,
-        'words':      total_words,
-        'stopped_at': stopped_at,
+        'processed':     processed,
+        'skipped':       skipped,
+        'chunks':        total_chunks,
+        'chunks_added':  total_chunks,   # alias — GUI reads this name
+        'words':         total_words,
+        'stopped_at':    stopped_at,
     }
 
 
@@ -4184,19 +4285,57 @@ def show_stats():
     print(f"{'='*60}\n")
 
 def clear_database(confirm: bool = False):
-    """Clear all indexed documents"""
+    """Clear all indexed documents AND every piece of state that depends on the
+    ChromaDB collection's existence:
+      • ChromaDB collection (vector store)
+      • TRACKING_DB           (~/.rag_file_tracking.json)
+      • EMAIL_INDEX_DB        (~/.rag_email_index.json)
+      • AUTO_UPDATE_LIST      (~/.rag_auto_update_dirs.json)
+
+    Without this co-ordinated wipe, the four files drift out of sync — e.g.
+    re-indexing an .mbox after Clear Database would silently skip every
+    message because the email-index UIDs are 'known' even though the
+    corresponding chunks are gone (B-04).
+    """
     if not confirm:
         response = input("⚠️  This will delete ALL indexed documents. Continue? (yes/NO): ")
         if response.lower() != 'yes':
             print("Cancelled.")
             return
-    
+
+    # 1. ChromaDB collection
     client, _ = get_chroma_client()
     try:
         client.delete_collection(name=COLLECTION_NAME)
         print("✅ Database cleared successfully.")
     except:
         print("ℹ️  Database was already empty or doesn't exist.")
+
+    # 2. File-tracking DB
+    try:
+        save_tracking_database({})
+    except Exception as e:
+        print(f"⚠️  Could not clear tracking DB: {e}")
+
+    # 3. Per-email incremental index — must be wiped or re-indexed mboxes
+    #    skip every message (UIDs still 'known' but chunks gone).
+    try:
+        save_email_index({})
+    except Exception as e:
+        print(f"⚠️  Could not clear email index: {e}")
+
+    # 4. Auto-update list — leaving stale entries means the Tracked listbox
+    #    keeps showing folders that have zero chunks behind them, and the
+    #    scheduled batch script keeps trying to update them.
+    try:
+        save_auto_update_list([])
+        # Regenerate the script so it no longer references removed paths
+        try:
+            generate_auto_update_script()
+        except Exception:
+            pass   # script regen is a nicety, not required
+    except Exception as e:
+        print(f"⚠️  Could not clear auto-update list: {e}")
 
 # ═══════════════════════════════════════════════════════════
 # CLI INTERFACE
@@ -4301,13 +4440,28 @@ def get_file_modification_info(filepath):
         return None
 
 def scan_directory_for_changes(directory, recursive=True, quiet=False):
-    """Scan directory and detect new/modified files"""
+    """Scan a tracked path (directory OR individual file) and detect
+    new/modified/deleted files.
+
+    Path types supported:
+      • Directory — walks the tree (respecting SKIP_DIRECTORIES) and detects
+        new / modified / deleted files vs. the tracking DB.
+      • Individual file — checks the single file's mtime/size against its
+        tracking DB record. Smart-scan extension/directory restrictions are
+        intentionally ignored because the user explicitly opted to track that
+        one file (only deletions still apply if the file is missing on disk).
+    """
     
     root_path = Path(directory).resolve()
     
     if not root_path.exists():
-        print(f"❌ Error: Directory not found: {directory}")
+        if root_path.suffix:
+            print(f"❌ Error: File not found: {directory}")
+        else:
+            print(f"❌ Error: Directory not found: {directory}")
         return None
+    
+    is_file_target = root_path.is_file()
     
     # Load tracking database
     tracking_db = load_tracking_database()
@@ -4332,14 +4486,59 @@ def scan_directory_for_changes(directory, recursive=True, quiet=False):
     }
     
     if not quiet:
-        print(f"🔍 Scanning: {root_path}")
+        kind_icon = "📄" if is_file_target else "📁"
+        kind_name = "file" if is_file_target else "directory"
+        print(f"🔍 Scanning {kind_name}: {root_path}")
     if not quiet:
         if tracking_db[dir_key]['last_scan']:
             last_scan = datetime.fromisoformat(tracking_db[dir_key]['last_scan'])
             print(f"   Last scanned: {last_scan.strftime('%Y-%m-%d %H:%M:%S')}")
         else:
-            print(f"   First scan of this directory")
+            kind_name = "file" if is_file_target else "directory"
+            print(f"   First scan of this {kind_name}")
         print()
+    
+    # ── Single-file target ────────────────────────────────────────────────────
+    # Smart-scan restrictions (SKIP_EXTENSIONS, SKIP_DIRECTORIES) are bypassed
+    # by design — when a user explicitly tracks one file, they want THAT file
+    # tracked regardless of extension filters configured for bulk scans.
+    if is_file_target:
+        filepath = normalise_path(str(root_path))
+        file_info = get_file_modification_info(filepath)
+        if file_info is None:
+            # Stat failed — treat as deleted if we had a record for it
+            if filepath in tracking_db[dir_key].get('files', {}):
+                old_file = tracking_db[dir_key]['files'][filepath].copy()
+                old_file['path']   = filepath
+                old_file['name']   = root_path.name
+                old_file['status'] = 'DELETED'
+                results['deleted_files'].append(old_file)
+            return results, tracking_db, dir_key
+        
+        file_info['path'] = filepath
+        file_info['name'] = root_path.name
+        results['all_files'].append(file_info)
+        results['total_size'] = file_info['size']
+        
+        existing = tracking_db[dir_key].get('files', {}).get(filepath)
+        if existing is None:
+            results['new_files'].append(file_info)
+            file_info['status'] = 'NEW'
+        else:
+            old_modified = existing.get('modified', 0)
+            old_size     = existing.get('size', -1)
+            # B-02 (companion): symmetric tolerance so a file restored from a
+            # backup with an OLDER mtime is still detected as MODIFIED. Keep
+            # this in lockstep with the directory-branch rule below.
+            if (abs(file_info['modified'] - old_modified) > 1.0
+                    or file_info['size'] != old_size):
+                results['modified_files'].append(file_info)
+                file_info['status'] = 'MODIFIED'
+            else:
+                results['unchanged_files'].append(file_info)
+                file_info['status'] = 'UNCHANGED'
+        
+        return results, tracking_db, dir_key
     
     # Current scan
     current_files = {}
@@ -4383,7 +4582,14 @@ def scan_directory_for_changes(directory, recursive=True, quiet=False):
                         file_info['status'] = 'NEW'
                     else:
                         old_modified = tracking_db[dir_key]['files'][filepath]['modified']
-                        if file_info['modified'] > old_modified:
+                        old_size     = tracking_db[dir_key]['files'][filepath].get('size', -1)
+                        # B-02 fix: match the file-branch comparison rules.
+                        #   • Use abs() (symmetric tolerance) so a file restored
+                        #     from a backup with an OLDER mtime is still detected.
+                        #   • Compare size too, so same-second saves where mtime
+                        #     barely moved but content/length changed are caught.
+                        if (abs(file_info['modified'] - old_modified) > 1.0
+                                or file_info['size'] != old_size):
                             # Modified file
                             results['modified_files'].append(file_info)
                             file_info['status'] = 'MODIFIED'
@@ -4521,9 +4727,129 @@ def command_check(directory, recursive=True):
         print(f"To update index: rag update {directory}")
         print()
 
+def _update_tracked_file(filepath: str, auto_confirm: bool = False) -> None:
+    """Update a single individually-tracked file.
+
+    Bypasses SKIP_EXTENSIONS (per-file tracking is explicit user opt-in).
+    Uses index_file_list which writes its own tracking-DB baseline.
+    Handles the DELETED case by purging from ChromaDB and the tracking DB.
+
+    Called by command_update() when its target is a file rather than a directory.
+    """
+    fp_norm = normalise_path(str(Path(filepath).resolve()))
+    fname   = Path(filepath).name
+
+    print("=" * 70)
+    print(f"🔍 CHECKING FOR CHANGES (file: {fname})")
+    print("=" * 70)
+    print()
+
+    # ── Case A: file deleted on disk — purge from ChromaDB + tracking DB ────
+    if not Path(filepath).exists():
+        print(f"🗑️  File no longer exists on disk: {filepath}")
+        try:
+            client, embedding_func = get_chroma_client()
+            try:
+                collection = client.get_collection(
+                    name=COLLECTION_NAME,
+                    embedding_function=embedding_func
+                )
+                collection.delete(where={"filepath": fp_norm})
+                print(f"   ✅ Chunks purged from ChromaDB")
+            except Exception:
+                print(f"   ℹ️  No collection / nothing to purge")
+        except Exception as exc:
+            print(f"   ⚠️  ChromaDB purge error: {exc}")
+
+        # Strip from tracking DB (covers both per-file key and parent-dir key)
+        try:
+            tracking_db = load_tracking_database()
+            parent_key  = normalise_path(str(Path(filepath).parent))
+            if fp_norm in tracking_db:
+                del tracking_db[fp_norm]
+            if parent_key in tracking_db:
+                files = tracking_db[parent_key].get('files', {})
+                if fp_norm in files:
+                    del files[fp_norm]
+            save_tracking_database(tracking_db)
+            print(f"   ✅ Tracking record removed")
+        except Exception as exc:
+            print(f"   ⚠️  Tracking DB cleanup error: {exc}")
+
+        # Also strip from auto-update list so it stops being scanned
+        try:
+            remove_from_auto_update_list(filepath)
+        except Exception:
+            pass
+
+        print()
+        print("✅ File update complete (deletion handled).")
+        print()
+        return
+
+    # ── Case B: file still on disk — check mtime/size, re-index if changed ─
+    tracking_db   = load_tracking_database()
+    parent_key    = normalise_path(str(Path(filepath).parent))
+
+    # Look up existing record under either the file's own key or its parent
+    stored = None
+    for key in (fp_norm, parent_key):
+        if key in tracking_db:
+            files = tracking_db[key].get('files', {}) or {}
+            if fp_norm in files:
+                stored = files[fp_norm]
+                break
+
+    try:
+        st = Path(filepath).stat()
+        current_mtime = st.st_mtime
+        current_size  = st.st_size
+    except OSError as exc:
+        print(f"❌ Could not stat file: {exc}")
+        return
+
+    unchanged = (
+        stored is not None
+        and abs(current_mtime - float(stored.get('modified', 0))) < 1.0
+        and current_size == int(stored.get('size', -1))
+    )
+
+    if unchanged:
+        print(f"📄 {fname}")
+        print(f"   ✅ Unchanged — index is up to date")
+        print()
+        return
+
+    if not auto_confirm:
+        status = "MODIFIED" if stored else "NEW"
+        print(f"📄 {fname} — {status}")
+        response = input("Proceed with re-index? (y/n): ")
+        if response.lower() != 'y':
+            print("\nUpdate cancelled.")
+            return
+
+    print(f"🚀 Re-indexing file: {fname}")
+    try:
+        stats = index_file_list(
+            [fp_norm],
+            label="1/1",
+            root_directory=str(Path(filepath).parent),
+        )
+        chunks = stats.get('chunks', 0) if stats else 0
+        print(f"   ✅ {fname} — {chunks} chunk(s) indexed")
+    except Exception as exc:
+        print(f"   ❌ Error: {exc}")
+
+    print()
+    print("✅ File update complete.")
+    print()
+
+
 def command_update(directory, recursive=True, auto_confirm=False):
     """Check for changes and update index with new/modified files, and
     automatically purge deleted files from ChromaDB.
+
+    Handles both directories and individually-tracked files.
 
     Handles three classes of change atomically:
       NEW      — file on disk, not in tracking DB  -> index it
@@ -4534,6 +4860,10 @@ def command_update(directory, recursive=True, auto_confirm=False):
     even when there are no new/modified files (previously caused early-return
     before ChromaDB was ever opened, leaving stale chunks in the vector DB).
 
+    For individually-tracked files, smart-scan extension restrictions are
+    bypassed (the user explicitly opted to track that file). The scan/index
+    is delegated to index_file_list which writes its own tracking baseline.
+
     Called by:
       • GUI  -> Update Selected button  (update_directory_worker)
       • GUI  -> Update All button       (update_all_worker)
@@ -4541,6 +4871,13 @@ def command_update(directory, recursive=True, auto_confirm=False):
       • BAT  -> rag_auto_update.bat scheduled task
     Fixing it here covers all four entry-points simultaneously.
     """
+
+    # ── Route individually-tracked files to index_file_list ──────────────────
+    # File targets bypass SKIP_EXTENSIONS (smart-scan restrictions are for
+    # bulk directory scans only — explicit per-file tracking overrides them).
+    target_path = Path(directory)
+    if target_path.exists() and target_path.is_file():
+        return _update_tracked_file(directory, auto_confirm=auto_confirm)
 
     print("=" * 70)
     print("🔍 CHECKING FOR CHANGES")
@@ -4801,14 +5138,17 @@ def remove_from_auto_update_list(directory):
 
 def remove_directory_from_index(directory: str) -> dict:
     """
-    Fully untrack a directory — removes it from:
+    Fully untrack a path (directory OR individually-tracked file) — removes it from:
       1. The auto-update list  (~/.rag_auto_update_dirs.json)
       2. The file-tracking DB  (~/.rag_file_tracking.json)
-      3. ChromaDB — deletes ALL chunks whose filepath starts with this directory
+      3. ChromaDB — deletes ALL chunks for the file (or every file under
+         the directory tree)
 
     Returns a dict with keys: chunks_removed, files_removed, errors
     """
-    directory = normalise_path(str(Path(directory).resolve()))
+    target_path  = Path(directory)
+    is_file      = target_path.exists() and target_path.is_file()
+    directory    = normalise_path(str(target_path.resolve()))
     chunks_removed = 0
     files_removed  = 0
     errors         = []
@@ -4823,21 +5163,41 @@ def remove_directory_from_index(directory: str) -> dict:
         errors.append(f"Auto-update list: {e}")
 
     # 2. Remove from file-tracking DB
+    #    For files: also strip the file's entry from its parent's 'files' map.
+    #    For directories: strip the dir key and any keys nested under it.
     try:
         tracking_db = load_tracking_database()
-        keys_to_remove = [k for k in tracking_db
-                          if normalise_path(k) == directory
-                          or normalise_path(k).startswith(directory + '/')]
-        for k in keys_to_remove:
-            del tracking_db[k]
-        if keys_to_remove:
-            save_tracking_database(tracking_db)
+
+        if is_file:
+            parent_key = normalise_path(str(target_path.parent.resolve()))
+            mutated = False
+            # File may have been registered under its own key
+            if directory in tracking_db:
+                del tracking_db[directory]
+                mutated = True
+            # Or it may live inside its parent's 'files' map
+            if parent_key in tracking_db:
+                files_map = tracking_db[parent_key].get('files', {}) or {}
+                if directory in files_map:
+                    del files_map[directory]
+                    tracking_db[parent_key]['files'] = files_map
+                    mutated = True
+            if mutated:
+                save_tracking_database(tracking_db)
+        else:
+            keys_to_remove = [k for k in tracking_db
+                              if normalise_path(k) == directory
+                              or normalise_path(k).startswith(directory + '/')]
+            for k in keys_to_remove:
+                del tracking_db[k]
+            if keys_to_remove:
+                save_tracking_database(tracking_db)
     except Exception as e:
         errors.append(f"Tracking DB: {e}")
 
-    # 3. Remove all ChromaDB chunks for this directory
-    # ChromaDB where-clause only supports exact match, not startswith.
-    # We must fetch all matching IDs then delete by ID.
+    # 3. Remove ChromaDB chunks
+    #    For files: exact filepath match.
+    #    For directories: every file whose normalised path starts with the dir.
     try:
         client, embedding_func = get_chroma_client()
         try:
@@ -4849,38 +5209,59 @@ def remove_directory_from_index(directory: str) -> dict:
             collection = None   # collection doesn't exist yet — nothing to delete
 
         if collection:
-            # Fetch in pages to handle large collections safely
-            offset   = 0
-            pagesize = 500
-            ids_to_delete = []
+            if is_file:
+                # Fast path: ChromaDB supports exact-match where clauses
+                try:
+                    matched = collection.get(
+                        where={"filepath": directory},
+                        include=['metadatas']
+                    )
+                    ids_to_delete = matched.get('ids', []) or []
+                    if ids_to_delete:
+                        for i in range(0, len(ids_to_delete), 100):
+                            collection.delete(ids=ids_to_delete[i:i+100])
+                        chunks_removed = len(ids_to_delete)
+                        files_removed  = 1
+                except Exception as e:
+                    errors.append(f"ChromaDB file delete: {e}")
+            else:
+                # Directory path: page through metadata, gather matching IDs
+                #
+                # B-08 fix: we ALSO collect the unique filepaths here, because
+                # by the time we finish deleting we no longer have access to
+                # the metadata to count distinct files. The earlier code tried
+                # to do this AFTER deletion via a comprehension over an empty
+                # list (`for meta in []`) and always reported 1 file removed
+                # regardless of how many it actually was.
+                offset    = 0
+                pagesize  = 500
+                ids_to_delete   = []
+                files_seen      = set()
 
-            while True:
-                batch = collection.get(
-                    limit=pagesize,
-                    offset=offset,
-                    include=['metadatas']
-                )
-                if not batch['ids']:
-                    break
-                for doc_id, meta in zip(batch['ids'], batch['metadatas']):
-                    fp = normalise_path(meta.get('filepath', ''))
-                    if fp == directory or fp.startswith(directory + '/'):
-                        ids_to_delete.append(doc_id)
-                offset += pagesize
-                if len(batch['ids']) < pagesize:
-                    break
+                while True:
+                    batch = collection.get(
+                        limit=pagesize,
+                        offset=offset,
+                        include=['metadatas']
+                    )
+                    if not batch['ids']:
+                        break
+                    for doc_id, meta in zip(batch['ids'], batch['metadatas']):
+                        fp = normalise_path(meta.get('filepath', ''))
+                        if fp == directory or fp.startswith(directory + '/'):
+                            ids_to_delete.append(doc_id)
+                            files_seen.add(fp)
+                    offset += pagesize
+                    if len(batch['ids']) < pagesize:
+                        break
 
-            if ids_to_delete:
-                # Delete in batches of 100 (ChromaDB limit per call)
-                for i in range(0, len(ids_to_delete), 100):
-                    collection.delete(ids=ids_to_delete[i:i+100])
-                chunks_removed = len(ids_to_delete)
+                if ids_to_delete:
+                    for i in range(0, len(ids_to_delete), 100):
+                        collection.delete(ids=ids_to_delete[i:i+100])
+                    chunks_removed = len(ids_to_delete)
 
-            # Count distinct files removed
-            files_removed = len({
-                normalise_path(meta.get('filepath', ''))
-                for meta in []   # already deleted — use ids count as proxy
-            }) or (chunks_removed > 0 and 1)   # at least 1 file if chunks removed
+                # Distinct files removed = count of unique filepaths we matched
+                files_removed = len(files_seen)
 
     except Exception as e:
         errors.append(f"ChromaDB: {e}")
@@ -4900,6 +5281,7 @@ def remove_directory_from_index(directory: str) -> dict:
 
     return {
         'chunks_removed': chunks_removed,
+        'files_removed':  files_removed,   # B-03 fix — was missing, now matches the docstring
         'errors':         errors,
     }
 
