@@ -1,6 +1,6 @@
 # AI-Prowler — Complete User Guide
 
-**Version 5.1.0**
+**Version 6.0.0**
 
 \---
 
@@ -15,7 +15,7 @@
 7. [Remote Access — Claude.ai on Mobile and Web](#7-remote-access--claudeai-on-mobile-and-web)
 8. [Mobile Subscription Management](#8-mobile-subscription-management)
 9. [Small Business Service Tools](#9-small-business-service-tools)
-10. [Desktop Ask Questions Tab (Optional Local AI)](#10-desktop-ask-questions-tab-optional-local-ai)
+10. [Quick Links Tab](#10-quick-links-tab)
 11. [Settings \& Configuration](#11-settings--configuration)
 12. [Supported File Types](#12-supported-file-types)
 13. [OCR — Scanned Documents \& Images](#13-ocr--scanned-documents--images)
@@ -49,7 +49,7 @@ This produces dramatically better results — equivalent to having a skilled res
 
 **Hardware requirements are minimal.** Because Claude does the reasoning, AI-Prowler only needs to run the embedding model (\~400 MB RAM) and ChromaDB. No GPU is required. No large local AI model is needed.
 
-**New in v5.1.0 — Self-Learning:** AI-Prowler now includes a RAG-based self-learning system. Claude can record business lessons, fact corrections, project insights, and process improvements into a structured knowledge base — and check that knowledge before answering future questions. Learnings are instant (no GPU training required) and managed through a dedicated 🧠 Learnings tab in the GUI. See Section 20 for full details.
+**New in v6.0.0 — Self-Learning at full strength:** Claude can record business lessons, fact corrections, project insights, and process improvements into a structured knowledge base — and check that knowledge before answering future questions. Learnings are instant (no GPU training required) and managed through a dedicated 🧠 Learnings tab in the GUI. 6.0 hardens the system with a comprehensive automated test suite (147 tests covering indexing, MCP, GUI, and self-learning), plus several engine reliability fixes for change detection, deletion purging, and database wipes. See Section 20 for full self-learning details.
 
 \---
 
@@ -72,7 +72,7 @@ This produces dramatically better results — equivalent to having a skilled res
 
 ### What the Installer Does NOT Do
 
-**Ollama is not installed or downloaded automatically.** The primary AI interface is Claude Desktop via MCP, which requires no local model. If you want to use the standalone Ask Questions tab offline, you can install Ollama and download models manually from **Settings → Browse \& Install Model** after the main install completes.
+**Ollama is not installed or downloaded automatically.** The primary AI interface is Claude Desktop via MCP, which requires no local model. The standalone local-AI Q&A controls are hidden by default in v6.0.0 to keep the GUI clean — most users never need them. If you specifically want offline local-AI Q&A, see the **Advanced / Power-User Features** note in Section 10 for how to re-enable the controls and install Ollama from within AI-Prowler.
 
 This makes installation significantly faster — typically under 10 minutes vs 30+ minutes previously.
 
@@ -297,7 +297,7 @@ This is useful when you want to see what's in the knowledge base before asking C
 
 ## 6\. MCP Tools Reference
 
-AI-Prowler exposes **19 tools** to Claude. They fall into three categories.
+AI-Prowler exposes **28 tools** to Claude. They fall into four categories: Agentic RAG (8), Knowledge Base Management (5), Status (1), Small Business Actions (7), and Self-Learning (6). One additional tool — `how_to_use_ai_prowler` — anchors the lot.
 
 ### Agentic RAG Tools (Primary)
 
@@ -354,6 +354,21 @@ Parameters:
 * `filter\\\_ext` — show only this type, e.g. "pdf", "docx"
 * `filter\\\_path` — show only files whose path contains this string
 * `limit` — max documents shown (default 50)
+
+#### `search\\\_within\\\_directory(query, directory, n\\\_results, min\\\_similarity)`
+
+Directory-scoped semantic search. Restricts results to a single folder tree, filtering by the `parent_directory` and `directory_chain` metadata recorded at index time. Use this when the user asks about a specific case, project, client, or folder and you need to guarantee results don't bleed in from other parts of the corpus.
+
+Parameters:
+
+* `query` — natural language search query
+* `directory` — directory name or path fragment to restrict the search to (e.g. `"Smith\_v\_Jones"`, `"2024"`, `"Contracts"`). Matches against `parent_directory` exactly first; falls back to substring match on `directory_chain` if too few results.
+* `n\\\_results` — chunks to return (default 8, max 20)
+* `min\\\_similarity` — filter threshold 0.0–1.0 (default 0.0)
+
+#### `list\\\_directories()`
+
+Returns the directory tree of all indexed content with document counts per folder. Sorted alphabetically. Use this to orient before calling `search_within_directory` — it tells Claude what scopes are available. Reads from `directory_chain` / `parent_directory` metadata recorded at index time, so documents indexed before the provenance system was added (very old installs) won't appear here until re-indexed.
 
 ### Knowledge Base Management Tools
 
@@ -698,20 +713,57 @@ The default spreadsheet path is written to `\~/.ai-prowler/config.json` during i
 
 \---
 
-## 10\. Desktop Ask Questions Tab (Optional Local AI)
+## 10\. Quick Links Tab
 
-The Ask Questions tab provides a traditional chat interface for querying your knowledge base. It is not Agentic (Agent based) smart Query based Question and answer and it works independently of Claude Desktop and is useful for fully offline operation and requires that the LLM be downloaded locally or you can access the external LLM via API interface but you will need to get API keys and sign up for the service plans offered by the external LLM providers.
+The **Quick Links** tab (formerly "Ask Questions" in v5.x) is a one-click launcher for the recommended Claude Desktop workflow. It is the second tab from the left in the GUI.
 
-### Ollama (Local AI)
+### What you see by default
 
-Ollama is not installed automatically. To use local AI:
+The tab contains:
 
-1. Download and install Ollama from the setting tab -> Install Ollama button [ollama.com](https://ollama.com)
-2. In AI-Prowler, go to **Settings → Start the Ollama server and then Browse \& Install Models**
-3. Select a model appropriate for your hardware
-4. Click Install
+* **AI Agent Smart Guided Questions & Answers** banner — a blue "⭐ RECOMMENDED" panel that briefly explains why Claude Desktop with Agentic RAG produces far better answers than a single-shot local Q&A box. The banner is purely informational.
+* **🚀 Launch Claude Desktop** button — opens Claude Desktop directly using its registered Windows AUMID. If your install is fresh and Claude Desktop isn't reachable, the button falls back to a PowerShell-based dynamic lookup that survives Claude Desktop updates.
+* **⬇ Download Claude Desktop** button — opens `claude.ai/download` in your default browser for users who don't have it yet.
+* **🌐 Open Claude.ai** button — opens `claude.ai` in your browser for mobile/web access via the HTTP MCP server (see Section 7 for tunnel setup).
 
-**Recommended models by RAM:**
+That's it. No Q&A input box, no model picker, no microphone, no spell checker.
+
+### Why the Q&A box is hidden
+
+AI-Prowler v6.0.0 ships with `SUPPORT_LOCAL_HW_LLM = False` as the default. This hides several local-AI features that earlier versions exposed by default:
+
+* Your-Question input box
+* Attach-files button
+* Ask Question / submit button
+* Microphone button with Whisper voice input
+* Inline spell-checker
+* Cloud-API provider selection
+
+The reasoning: the typical AI-Prowler user's workflow is **Claude Desktop or Claude.ai → MCP → AI-Prowler RAG**. Claude does its own LLM hosting, its own UI, its own conversation history. A second Q&A box inside AI-Prowler duplicates that work for no benefit, and adds visual clutter and configuration knobs that aren't needed.
+
+### Advanced / Power-User Features (off by default)
+
+If you specifically need the standalone Q&A interface — e.g. fully offline operation with Ollama, or using a cloud LLM provider directly — you can re-enable it by editing `rag_gui.py`:
+
+```python
+# Near the top of rag_gui.py (around line 120):
+SUPPORT_LOCAL_HW_LLM = True   # was False
+```
+
+Restart AI-Prowler. The Quick Links tab will then show the full Q&A interface as described below. The Settings tab will also gain AI Model selection, External AI APIs, Ollama Server controls, and Microphone settings (see Section 11).
+
+### What appears when `SUPPORT_LOCAL_HW_LLM = True`
+
+The Quick Links tab gains a full local-AI Q&A interface below the Claude Desktop launcher banner:
+
+* **Your Question** — text entry box with inline spell-check (red underline for misspellings, right-click for suggestions)
+* **🎤 microphone** — Whisper-powered voice input (large-v3-turbo model, ~1.6 GB, downloaded on first use, runs entirely locally)
+* **📎 Attachments** — image or text files; vision support requires a cloud provider with vision capability
+* **🤖 Ask Question** — sends the question to the active model
+
+#### Local Ollama models
+
+Install via **Settings → Start the Ollama server → Browse & Install Model**. Recommended models by RAM:
 
 |RAM|Model|Quality|
 |-|-|-|
@@ -720,7 +772,7 @@ Ollama is not installed automatically. To use local AI:
 |16 GB|llama3.1:8b or qwen2.5:14b|Very good|
 |32 GB+|qwen2.5:32b or llama3.1:70b|Excellent|
 
-### Cloud AI Providers
+#### Cloud AI providers
 
 Add API keys in **Settings → External AI APIs**:
 
@@ -733,34 +785,23 @@ Add API keys in **Settings → External AI APIs**:
 |Llama API (Meta)|Free tier available|
 |Mistral Large|Limited free|
 
-### Voice Input
+#### Voice Input
 
-Click the microphone button to speak your question. AI-Prowler uses Whisper (large-v3-turbo model, \~1.6 GB, downloaded on first use) running entirely locally. Voice is never sent to any cloud service.
+Whisper runs entirely locally — voice is never sent to any cloud service. Adjust the **microphone silence timeout** in Settings (default 3.0 s) if speech is being cut off early or if there's lag after you stop speaking.
 
-**Microphone silence timeout** — in Settings, you can adjust the silence detection timeout (default 3.0 seconds). Increase this if your speech is being cut off early; decrease it if there is too much lag after you stop speaking.
+#### File output
 
-### Inline Spell Checker
+When the AI produces code, a 💾 Save button appears automatically. Works with all providers, though some local and external models don't trigger the save flow.
 
-The question text box includes an inline spell checker powered by `pyspellchecker`:
+### Note on Agentic vs. single-pass retrieval
 
-* Misspelled words are underlined in red as you type
-* Right-click a highlighted word for a correction menu showing up to 8 suggestions
-* Click a suggestion to replace the word
-* The word is also added to your personal dictionary so it won't be flagged again
-
-The spell checker activates automatically if `pyspellchecker` is installed. No configuration is needed.
-
-### File Attachments
-
-Attach images or text files to questions using the paperclip button. Vision support (image analysis) requires a cloud provider with vision capability.
-
-### File Output Mode
-
-When the AI produces code, a 💾 Save button appears automatically. Code is saved to a file with an auto-generated name based on the content. Works with all providers but some local and external AI models don't support this.
+Even with `SUPPORT_LOCAL_HW_LLM = True`, the standalone Q&A box does **not** use the Agentic RAG tool loop. It does a single retrieval pass and sends the retrieved chunks to the chosen model. For multi-step research with follow-up queries and full document reading, use Claude Desktop or Claude.ai (which call the full 28-tool MCP surface).
 
 \---
 
 ## 11\. Settings \& Configuration
+
+> **v6.0.0 visibility note:** Several Settings sub-sections from earlier versions are now hidden by default to keep the GUI clean for the typical Claude Desktop / Claude.ai user. The underlying code is still present and the features still work — only the UI surfaces are suppressed. Sub-sections marked **🔒 hidden by default** below appear only when `SUPPORT_LOCAL_HW_LLM = True` or `DEBUG_EN = True` is set near the top of `rag_gui.py` (around line 120). Restart AI-Prowler after flipping a flag.
 
 ### Remote Access Tab
 
@@ -773,7 +814,9 @@ When the AI produces code, a 💾 Save button appears automatically. Code is sav
 
 > \\\*\\\*Note:\\\*\\\* The HTTP server and Cloudflare Tunnel are only needed for Claude.ai web/mobile access. Claude Desktop does \\\*\\\*not\\\*\\\* use these — it connects via the stdio MCP path configured automatically by the installer.
 
-### Claude Desktop MCP Tab
+### Claude Desktop MCP Tab  🔒 hidden by default (requires `DEBUG_EN = True`)
+
+This sub-section was suppressed in v6.0.0 because Claude Desktop registration happens automatically during install and rarely needs manual intervention. Enable `DEBUG_EN` to expose:
 
 * **MCP Status** — shows whether AI-Prowler is correctly registered in Claude Desktop's `claude\\\_desktop\\\_config.json`
 * **Transport mode note** — confirms that Claude Desktop uses the stdio (local process) path, not the HTTP server. If your config shows an HTTP URL here, click **Auto-configure Claude Desktop** to fix it.
@@ -783,18 +826,19 @@ When the AI produces code, a 💾 Save button appears automatically. Code is sav
 * **Copy Config Path** — copies the config file path to the clipboard
 * **🔬 Run MCP Diagnostics** — runs a full health check and shows a scrollable report covering: MCP SDK version, tool count, config validity, subscription cache, and log tail. Use **📋 Copy Output** to share the report with support.
 
-### Models Tab
+### Models Tab  🔒 hidden by default (requires `SUPPORT_LOCAL_HW_LLM = True`)
 
-* **Active model** — switches between installed Ollama models for the Ask Questions tab
+* **Active model** — switches between installed Ollama models for the Quick Links tab Q&A box
 * **Browse \& Install Model** — opens a browser to Ollama's model library; you can then download a model directly from AI-Prowler's Settings
-* **GPU layers** — set how many layers Ollama offloads to GPU (`-1` = auto, `0` = CPU only, `N` = N layers on GPU)
 * **Auto-start Ollama** — when enabled, AI-Prowler launches the Ollama server automatically on startup. Not required if you are using Claude Desktop as your primary interface.
 
-### External AI APIs Tab
+> The **GPU Layers** spinbox that used to appear here is now hidden — but the underlying value still drives Ollama prewarm and subprocess args. To override the default `-1` (auto), edit `gpu_layers` in `~/.ai-prowler/config.json` directly.
+
+### External AI APIs Tab  🔒 hidden by default (requires `SUPPORT_LOCAL_HW_LLM = True`)
 
 * API key fields for each supported cloud provider (ChatGPT, Claude, Gemini, Grok, Llama API, Mistral)
 * **Test Connection** button per provider — verifies your key is valid and the endpoint is reachable
-* Timeout settings — controls how long the Ask Questions tab waits for a cloud response before showing a timeout error
+* Timeout settings — controls how long the Quick Links Q&A box waits for a cloud response before showing a timeout error
 
 ### Smart Scan Config Tab
 
@@ -835,13 +879,15 @@ The Learnings tab provides a desktop GUI for viewing and managing Claude's self-
 * **OCR Debug button** — select any scanned PDF or image file and see the extracted text in a preview window before committing to indexing. Use this to verify OCR quality.
 * **Enable OCR Debug logging** — writes full OCR output to a log file during every index run, useful for diagnosing extraction quality across a large batch.
 
-### GPU Detection
+### GPU Detection  🔒 hidden by default (requires `DEBUG_EN = True`)
 
-* **🔍 Detect GPU** — shows your GPU model, VRAM, CUDA availability, current embedding device (CPU or CUDA), and Ollama GPU layer allocation if Ollama is running. Run this after install to confirm GPU acceleration is active.
+The **GPU Acceleration** panel in Settings is suppressed in v6.0.0 — the auto-detection still runs at startup, picks sensible defaults, and writes to log files. The panel exposed manual GPU-layer overrides and a "🔍 Detect GPU" button which were rarely useful in practice. If you specifically need to see GPU status or override `gpu_layers`, enable `DEBUG_EN` in `rag_gui.py` and the panel returns.
 
-### Voice Input (Mic Settings)
+When visible, the panel shows GPU model and VRAM, CUDA availability, current embedding device (CPU or CUDA), Ollama GPU layer allocation if Ollama is running, and a "Suggested GPU layers" hint based on available VRAM.
 
-* **Silence timeout** — controls how many seconds of silence trigger end-of-speech detection (default 3.0 s). Increase if your speech is being cut off; decrease to reduce lag after you stop speaking. Found in Settings → Ask Questions options.
+### Voice Input (Mic Settings)  🔒 hidden by default (requires `SUPPORT_LOCAL_HW_LLM = True`)
+
+* **Silence timeout** — controls how many seconds of silence trigger end-of-speech detection (default 3.0 s). Increase if your speech is being cut off; decrease to reduce lag after you stop speaking. Visible only when the Quick Links Q&A Q&A box is enabled.
 
 \---
 
@@ -1028,6 +1074,8 @@ In **Settings → Cloudflare Tunnel**, click **Install as Windows Service**.
 
 ## 16\. GPU Support
 
+> **v6.0.0 visibility note:** The **GPU Acceleration** panel that previously appeared in the Settings tab is now suppressed by default. **GPU detection, embedding acceleration, and Ollama GPU offload all still work automatically** — only the manual control panel is hidden. To re-expose the panel (advanced users), see Section 11 → GPU Detection.
+
 ### NVIDIA GPUs
 
 AI-Prowler detects NVIDIA GPUs automatically. The installer installs the correct PyTorch build:
@@ -1039,26 +1087,19 @@ AI-Prowler detects NVIDIA GPUs automatically. The installer installs the correct
 
 The sentence-transformer embedding model (`all-MiniLM-L6-v2`) uses CUDA automatically when available, significantly speeding up indexing.
 
-### GPU Detect Tool
-
-**Settings → 🔍 Detect GPU** shows:
-
-* GPU model and VRAM
-* CUDA availability
-* Current embedding device (CPU or CUDA)
-* Ollama GPU layer allocation (if Ollama is running)
-
 ### Blackwell (RTX 50xx) Note
 
 PyTorch stable does not yet include CUDA 12.8 compute kernels for Blackwell SM 12.0+ architecture. Embeddings run on CPU on RTX 50xx cards even though CUDA is detected. Ollama itself supports Blackwell for inference. This will be resolved in a future PyTorch release.
 
-### Controlling GPU Layers
+### Controlling GPU Layers (advanced)
 
-In **Settings → GPU Layers**, set how many model layers Ollama offloads to GPU:
+The `gpu_layers` value still controls how many model layers Ollama offloads to GPU. The default `-1` (auto) is correct for almost everyone. If you need to override:
 
-* `-1` = auto (let Ollama decide)
+* `-1` = auto (let Ollama decide — recommended)
 * `0` = CPU only
-* `N` = N layers on GPU
+* `N` = N layers on GPU (partial offload)
+
+Edit the `gpu_layers` field directly in `~/.ai-prowler/config.json` and restart AI-Prowler, or enable `DEBUG_EN` to use the in-GUI spinbox.
 
 \---
 
@@ -1190,12 +1231,14 @@ If installation fails, this log shows exactly which step failed and why.
 
 ### Debug View in GUI
 
-In the Ask Questions tab, enable **Debug View** (toggle in toolbar) to see:
+In the Quick Links tab (with `SUPPORT_LOCAL_HW_LLM = True` to expose the Q&A box), enable **Debug View** (toggle in toolbar) to see:
 
 * Which document chunks were retrieved for each query
 * Similarity scores for each chunk
 * The full prompt sent to the LLM
 * Raw LLM response before formatting
+
+For Claude Desktop or Claude.ai workflows (the default v6.0.0 path), look at the MCP server log instead — it captures all tool calls, their arguments, and responses. See the Log File Locations table above.
 
 ### OCR Debug Tool
 
@@ -1351,75 +1394,256 @@ If the uninstaller fails, manually delete:
 
 ### Overview
 
-The Self-Learning System adds RAG-based knowledge accumulation to AI-Prowler. Instead of training LoRA adapters (which would take 30+ minutes and require a GPU), learnings are written to a structured JSON file and semantically indexed in ChromaDB — making new knowledge instantly available to Claude through the existing MCP toolchain.
+The Self-Learning System gives AI-Prowler a persistent, semantically-searchable memory that is **separate from the main document RAG**. When you tell Claude *"learn this"* — or when Claude detects a correction, lesson, or preference during conversation — the fact is written to a structured JSON file and indexed in ChromaDB. The next time a related question comes up, Claude calls `check\_learned()` first, finds the stored fact, and applies it automatically.
 
-This is useful for business operations where you want Claude to remember: what went wrong on a project, client communication preferences, process improvements discovered over time, corrected facts, and best practices.
+No GPU. No training. No 30-minute LoRA cycle. New knowledge is queryable within roughly 1 second of being recorded.
+
+You can manage learnings three ways:
+
+1. **Talking to Claude** — natural language; Claude handles the 6 MCP tools for you
+2. **The 🧠 Learnings tab** in the AI-Prowler desktop GUI — visual browsing, filtering, archive/delete, export
+3. **Editing the JSON file directly** at `~/.ai-prowler/learnings/self\_learning\_data.json`
+
+### Quick Start — Try It in Two Minutes
+
+After install, have this conversation with Claude:
+
+> **You:** "Remember this: Crabby's Daytona prefers we wash the windows on the second Tuesday of the month, not the first."
+>
+> **Claude:** *(calls `record\_learning(...)`)* — shows a confirmation message with the title, category, confidence, and ID.
+>
+> **You:** *(later, in a new chat)* "When should I schedule Crabby's next window cleaning?"
+>
+> **Claude:** *(calls `check\_learned("Crabby's window cleaning schedule")` first)* — finds the learning and answers based on it.
+
+That's the entire feedback loop. The rest of this section explains how to use it productively at scale.
 
 ### How It Works
 
 Learnings are stored in two places simultaneously:
 
-* **JSON file** (`~/.ai-prowler/learnings/self\_learning\_data.json`) — human-readable, easy to backup, read directly by the GUI
+* **JSON file** (`~/.ai-prowler/learnings/self\_learning\_data.json`) — human-readable, easy to back up, read directly by the GUI tab
 * **ChromaDB collection** (`ai\_prowler\_learnings`) — separate from the main document knowledge base, enables semantic search
 
-When Claude records a learning, it is instantly available for retrieval. No training, no GPU, no restart required.
+When Claude records a learning, both stores are updated atomically. No training, no GPU, no restart required.
+
+### The Six Self-Learning MCP Tools at a Glance
+
+| Tool | Purpose | When Claude calls it |
+|------|---------|---------------------|
+| `record\_learning()` | Save a new fact, lesson, or correction | When you say "remember this" / "learn this" — or auto, when Claude detects a correction |
+| `check\_learned()` | Semantic search the knowledge base | **Before answering** any question about clients, projects, procedures, or anywhere a stored correction might exist |
+| `list\_learnings()` | Browse by category / status / tag (no search) | When you ask "what have we learned about X?" |
+| `update\_learning()` | Modify an existing learning | When you correct Claude's confirmation message, or mark an outcome after seeing results |
+| `delete\_learning()` | Permanently remove a learning | When you reject a learning ("that's wrong, remove it") |
+| `get\_learning\_stats()` | Summary stats — totals by category/status/source, top-applied | Health check, audit, or "what do we know?" |
+
+All six tools are loaded automatically when AI-Prowler starts.
 
 ### Three Operational Modes
 
-**Mode 1 — Proactive Checking:** Claude calls `check\_learned()` before answering questions about clients, projects, scheduling, procedures, or any topic where stored corrections might exist. This is instructed via the MCP instructions block in `ai\_prowler\_mcp.py`.
+**Mode 1 — Proactive Checking.** Claude calls `check\_learned()` before answering questions about clients, projects, scheduling, procedures, or any topic where stored corrections might exist. This is instructed via the MCP instructions block in `ai\_prowler\_mcp.py`. Example: when you ask *"Can you plan next week's HVAC schedule?"* Claude calls `check\_learned(query="HVAC scheduling crew management", n\_results=5)`, finds any double-booking lessons, applies them to the proposed schedule, and surfaces *"I'm avoiding double-booking Crew A based on what we learned from the Johnson/Smith jobs"* in its response.
 
-**Mode 2 — Recording:** When the user says "learn this" or "remember that", Claude calls `record\_learning()` with all metadata. Claude also auto-records when it detects fact corrections, project outcomes, client preferences, or process improvements in conversation — always with confirmation.
+**Mode 2 — Recording.** When you say "learn this" or "remember that", Claude calls `record\_learning()` with all metadata. Claude also auto-records when it detects fact corrections, project outcomes, client preferences, or process improvements in conversation — always with confirmation.
 
-**Mode 3 — Post-Operation Analysis:** When asked to review a completed project or job, Claude follows a structured workflow: gathers project docs via `search\_documents()`, checks existing learnings via `check\_learned()`, identifies what went right/wrong, records each insight as a separate learning with `record\_learning()`, and presents all recorded learnings to the user for confirmation.
+**Mode 3 — Post-Operation Analysis.** When you ask Claude to review a completed project or job, it follows a structured workflow: gathers project docs via `search\_documents()` or `search\_within\_directory()`, checks existing learnings via `check\_learned()`, identifies what went right and wrong, records each insight as a separate learning, and presents the whole batch for confirmation. A single post-op review typically yields 3–5 separate learnings, all instantly indexed.
 
-### Confirmation Protocol
+### Talking to Claude — What to Say
 
-Claude never records silently. Every learning gets a confirmation message:
+You don't need to remember tool names. Claude reads the `_INSTRUCTIONS` block at every MCP handshake and recognises natural-language triggers. Patterns that work:
 
-* **Operator-requested** (user said "learn this"): concise confirmation with title, summary, and "Does this look right?"
-* **Auto-detected** (Claude initiated): prominent banner with "🧠 AUTO-LEARNING" header, explains WHAT was recorded and WHY, asks "Is this correct?" explicitly
+**Recording explicitly:**
 
-If the user says the learning is wrong, Claude immediately calls `update\_learning()` or `delete\_learning()` to fix it.
+* "Remember this: …"
+* "Learn this: …"
+* "Save this lesson: …"
+* "Note for next time: …"
+* "Don't forget — …"
 
-### Auto-Detection Triggers
+**Asking Claude to recall:**
 
-Claude automatically records learnings (with `auto\_detected=True`) when it detects:
+* "What did we learn about \[topic\]?"
+* "Do you remember anything about \[client/project\]?"
+* "Have we had issues with \[topic\] before?"
 
-* User corrects a fact ("actually, the number is 555-0200")
-* User shares a project outcome ("the Smith job went over budget by 40%")
-* User mentions a client preference ("they hate phone calls")
-* Post-op review reveals a process gap
-* New information contradicts an existing active learning
-* User describes a better approach ("next time we should submit permits earlier")
+**Reviewing or auditing:**
+
+* "Show me everything you've learned this week"
+* "List all client preferences"
+* "What mistakes have we logged?"
+* "Give me the learning stats"
+
+**Correcting a recent confirmation:**
+
+* "Change the confidence to 95%"
+* "The category should be `best\_practice`"
+* "That's wrong, delete it"
+* "Update that learning — the outcome was actually positive"
+
+### Auto-Detection — Triggers and Confirmation Banner
+
+Claude auto-records (with `auto\_detected=True`) when it detects any of these patterns in conversation. No "learn this" required:
+
+| Trigger | Example | Category Claude usually picks |
+|---------|---------|-------------------------------|
+| User corrects a fact | "Actually, the number is 555-0200" | `fact\_correction` |
+| User shares a project outcome | "The Smith job went over budget by 40%" | `project\_insight` |
+| User mentions a client preference | "They hate phone calls" | `client\_preference` |
+| Post-op review reveals a gap | "We should have photographed the site first" | `mistake\_learned` |
+| New info contradicts an existing learning | "The permit office changed their hours" | `fact\_correction` (with `supersedes\_id`) |
+| User describes a better approach | "Next time we should submit permits earlier" | `process\_improvement` |
+
+When Claude auto-records, it always shows a prominent banner asking you to confirm. You can approve, adjust, or reject in the same turn. Example banner:
+
+```
+🧠 AUTO-LEARNING — I detected something worth remembering and recorded it:
+══════════════════════════════════════════════════════
+
+  📌 "Client X prefers email over phone calls"
+
+  What I recorded:
+    After 3 failed phone attempts, switching to email resulted in
+    same-day response. Always use email as primary contact.
+
+  Why I recorded it:
+    User mentioned that Client X never answers phone calls during
+    discussion about the March HVAC project.
+
+  Category   : client\_preference
+  Confidence : 85%
+  ID         : e5f6g7h8-...
+
+══════════════════════════════════════════════════════
+⚡ Is this correct? If anything is off, tell me what to change
+   and I'll update or remove it immediately.
+```
+
+If you say something is wrong, Claude immediately calls `update\_learning()` or `delete\_learning()` to fix it. You can chain corrections — *"change the category to `best_practice` and bump confidence to 95"* — and Claude will issue a single `update\_learning()` call with both fields.
+
+To **disable auto-detection** entirely, remove the AUTO-RECORDING section from the `_INSTRUCTIONS` block in `ai\_prowler\_mcp.py` and restart the server. Operator-requested learning (you saying "learn this") will still work.
 
 ### Learning Categories
 
-|Category|When to use|
-|-|-|
-|`fact\_correction`|Correcting an outdated or wrong fact|
-|`business\_lesson`|What worked or didn't in business|
-|`project\_insight`|Lessons from a specific project|
-|`process\_improvement`|A better way to do something|
-|`mistake\_learned`|Something went wrong — learn from it|
-|`best\_practice`|Proven approach to adopt|
-|`client\_preference`|Client-specific preferences|
-|`technical\_note`|Technical fact or configuration gotcha|
-|`general`|Catch-all|
+| Category | When to use |
+|---|---|
+| `fact\_correction` | Correcting an outdated or wrong fact |
+| `business\_lesson` | What worked or didn't in business |
+| `project\_insight` | Lessons from a specific project |
+| `process\_improvement` | A better way to do something |
+| `mistake\_learned` | Something went wrong — document so it doesn't happen again |
+| `best\_practice` | Proven approach to adopt going forward |
+| `client\_preference` | Client-specific preferences or requirements |
+| `technical\_note` | Technical fact, configuration, or gotcha |
+| `general` | Catch-all (default if no category fits) |
+
+### Sources
+
+| Source | Meaning |
+|---|---|
+| `operator` | Explicitly told by the user (default for "learn this" calls) |
+| `claude\_detected` | Claude identified a learning trigger during conversation |
+| `project\_review` | Logged during a post-project review |
+| `post\_mortem` | After-incident analysis |
+| `research` | Came from web search or document research |
+| `observation` | Pattern noticed across conversations |
+
+### Outcomes and Status
+
+**Outcomes** (mainly for `business\_lesson` and `project\_insight`): `positive`, `negative`, `neutral`, `unknown` (default).
+
+**Status:** `active` (default — searchable), `deprecated` (replaced by a newer learning), `archived` (manually hidden, kept for history).
 
 ### Supersession Chain
 
-When a learning is replaced by newer information, the old learning is automatically marked as `deprecated` and linked to the new one. Claude sees the chain and knows to prefer the newer fact. The GUI detail panel shows supersession info when you select a learning.
+When a learning replaces an older one, both are linked automatically:
 
-### 🧠 Learnings Tab (Desktop GUI)
+```
+Learning A: "Client X phone number is 555-0100"
+     ↓ superseded by
+Learning B: "Client X phone number is 555-0200"   (supersedes\_id = A.id)
+```
 
-The Learnings tab in AI-Prowler provides a visual interface for managing the knowledge base without needing Claude. It reads directly from the JSON file — click **↻ Refresh** to reload. See Section 11 for the full panel breakdown.
+* Learning A is automatically marked `status: "deprecated"` and `superseded\_by: B.id`
+* Learning B has `supersedes: A.id`
+* `check\_learned()` returns only B by default. Pass `include\_deprecated=True` to also see A — useful for *"what did we used to think?"* auditing
+* The GUI detail panel shows the full supersession chain when you select either learning
 
-### Managing Learnings
+### Applied-Count Tracking
 
-* **Archive** — hides a learning from Claude's search but keeps it for history. Use the GUI's **📦 Archive Selected** button or ask Claude: `"Archive the learning about X"`
-* **Delete** — permanently removes from both JSON and ChromaDB. Use the GUI's **🗑 Delete Selected** button or ask Claude: `"Delete learning [ID]"`
-* **Export** — click **💾 Export to CSV** in the GUI for a spreadsheet-friendly backup of all learnings
-* **Rebuild Index** — click **🔄 Rebuild ChromaDB Index** in the GUI if the search index gets out of sync with the JSON file. Safe — no data is lost.
+Every time `check\_learned()` returns a learning, that learning's `applied\_count` increments and its `last\_applied` timestamp updates. This gives you visibility into which learnings are actually being used. The GUI stats panel shows the total applied count, and `get\_learning\_stats()` lists the most-applied learnings — invaluable for spotting high-value knowledge vs. dead weight.
+
+The GUI's Learnings tab uses `track\_application=False` when refreshing the table so just browsing doesn't inflate the counter. Only real Claude-driven retrievals bump it.
+
+### Conflict Detection
+
+`find\_conflicts()` scans for pairs of active learnings whose semantic similarity exceeds a configurable threshold (default 0.85, range 0.5–0.95). Real contradictions get flagged for review — for example, one learning saying *"use a Phillips screwdriver on Client X panels"* and another saying *"use a flathead on Client X panels"* would surface as a potential conflict.
+
+When you dismiss a flagged pair (the GUI's "this isn't actually a conflict" action), the system records the dismissal bidirectionally so it won't re-flag the same pair. You can later clear a dismissal if you change your mind.
+
+Supersession-linked pairs are automatically excluded from conflict detection — you've already resolved that relationship.
+
+### Confirmation Protocol Summary
+
+Claude **never records silently.** Every successful `record\_learning()` call returns a confirmation summary, and Claude is instructed to always show it to you. Two styles:
+
+* **Operator-requested** (you explicitly asked): concise confirmation with title, summary, category, confidence, ID, and *"Does this look right?"*
+* **Auto-detected** (Claude initiated without being asked): prominent banner with the "🧠 AUTO-LEARNING" header shown above
+
+Correction shortcuts:
+
+| You say | Claude calls |
+|---|---|
+| "Change the confidence to 95%" | `update\_learning(id, {"confidence": 0.95})` |
+| "The category should be `best_practice`" | `update\_learning(id, {"category": "best\_practice"})` |
+| "Update the outcome — that turned out positive" | `update\_learning(id, {"outcome": "positive"})` |
+| "Archive that one" | `update\_learning(id, {"status": "archived"})` |
+| "That's wrong, delete it" | `delete\_learning(id)` |
+
+### 🧠 Learnings Tab — Desktop GUI
+
+The Learnings tab in AI-Prowler provides a visual interface for managing the knowledge base without going through Claude. It reads directly from the JSON file, so it always shows the latest data — just click **↻ Refresh** to reload. See Section 11 for the full layout breakdown.
+
+Key things you can do from the tab:
+
+* **Browse and filter** by category, status, or free-text search across title/content/context/tags
+* **Sort** any column by clicking its header
+* **Inspect** a single learning's full content, "why this was learned" context, supersession chain, and ID
+* **Archive** a learning (hide from Claude's search but keep in history)
+* **Delete** permanently
+* **Export to CSV** for spreadsheet-friendly backup
+* **Rebuild ChromaDB Index** if the search index drifts out of sync with the JSON (safe — no data lost)
+* **Open the raw JSON** or the learnings folder for manual editing or external backup
+
+If `self\_learning.py` is not in the same directory as `rag\_gui.py`, the tab still works but in view-only mode — Archive, Delete, and Reindex show an *"Unavailable"* message prompting you to use Claude instead. Export and file browsing always work.
+
+### Smoke Test — Verifying the System After Install or Update
+
+Takes under 60 seconds:
+
+1. **Tools loaded?** Ask Claude: *"Show me the AI-Prowler self-learning tools."* You should see all 6 listed.
+2. **Stats reachable?** Ask Claude: *"Run get\_learning\_stats."* Expect a clean report (zero learnings on a fresh install is normal).
+3. **Round-trip a learning:**
+   * *"Learn this: my favorite test phrase is 'purple flamingo on a unicycle'."*
+   * In a new chat: *"What's my favorite test phrase?"*
+   * Claude should call `check\_learned()` and answer correctly.
+4. **GUI sanity check:** Open the 🧠 Learnings tab. The test learning should appear (click ↻ Refresh if not).
+5. **Cleanup:** *"Delete the purple flamingo learning."*
+
+If steps 1–4 pass, the system is healthy. AI-Prowler 6.0's automated test suite (`tests\learning\`) covers 75 deterministic regression tests across the same functionality.
+
+### Example Workflow — Post-Op Review Yielding Multiple Learnings
+
+> **You:** "Analyze the Johnson roofing job — it went over budget by 40% and the customer complained about cleanup."
+
+Claude records three learnings in one turn:
+
+| # | Title | Category | Outcome |
+|---|-------|----------|---------|
+| 1 | Get material quotes within 48 hours of estimate | `mistake\_learned` | negative |
+| 2 | Assign dedicated cleanup crew on roofing jobs | `process\_improvement` | negative |
+| 3 | Johnson prefers text message updates over email | `client\_preference` | neutral |
+
+Next time a roofing job is scheduled, Claude calls `check\_learned("roofing job scheduling")` and applies all three lessons automatically.
 
 ### Example Prompts
 
@@ -1429,11 +1653,27 @@ The Learnings tab in AI-Prowler provides a visual interface for managing the kno
 "Analyze the Johnson project — what went right and wrong?"
 "Show me all business lessons we have learned"
 "How many learnings do we have and which are most applied?"
+"Find conflicting learnings — anything contradictory in the knowledge base?"
+"Export everything we know to a learning pack so I can back it up"
+"Archive the old phone number for Bob — we updated it to 555-0200"
 ```
+
+### Common Failure Modes and Fixes
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Tools don't appear in Claude | MCP server didn't restart after install | Fully restart AI-Prowler (server + GUI) |
+| `record\_learning` succeeds but `check\_learned` returns nothing | ChromaDB index out of sync with JSON | GUI → 🔄 Rebuild ChromaDB Index |
+| Claude isn't auto-detecting corrections | `_INSTRUCTIONS` block didn't update | Confirm `ai\_prowler\_mcp.py` is the v6.0 build; restart server |
+| Confirmation message doesn't appear | Claude is recording silently | Confirm `_INSTRUCTIONS` block is present and complete |
+| 🧠 Learnings tab shows "Unavailable" on action buttons | `self\_learning.py` not next to `rag\_gui.py` | Copy `self\_learning.py` into the install directory and restart GUI |
+| GUI shows old data | JSON file was edited externally | Click ↻ Refresh |
+| Same learning recorded twice | Duplicate detection is not automatic (by design — sometimes context warrants two entries) | Manually delete one, or use `update\_learning` to merge |
 
 ### File Locations
 
 * **Learnings data:** `~/.ai-prowler/learnings/self\_learning\_data.json`
+* **Conflict settings:** `~/.ai-prowler/learnings/conflict\_settings.json` (threshold + dismissed pairs)
 * **ChromaDB collection:** `ai\_prowler\_learnings` (inside the main RAG database folder)
 * **Engine module:** `C:\\Program Files\\AI-Prowler\\self\_learning.py`
 
@@ -1465,25 +1705,57 @@ This is a read-only check (no data is sent from your machine). The check can be 
 
 ## 22\. Heartbeats \& Analytics
 
-### MCP Server Heartbeat
+> **v6.0.0 visibility note:** The **Privacy & Analytics** panel in the Settings tab (with the on/off toggle, "📡 Send Heartbeat Now" button, and Last-success indicator) is hidden by default in v6.0.0. The anonymous daily heartbeat still runs in the background per the defaults below. Enable `DEBUG_EN = True` near the top of `rag_gui.py` to re-expose the panel.
 
-The HTTP MCP server includes a heartbeat mechanism to monitor connection health:
+### Anonymous daily heartbeat — what it is
 
-* The server sends periodic heartbeat signals to confirm the Cloudflare Tunnel connection is active
-* If the heartbeat detects a lost connection, it logs the event and can optionally attempt reconnection
-* Heartbeat status is visible in the MCP server log (`mcp\_server.log`)
-* Useful for diagnosing intermittent connection drops when using Claude.ai remotely
+AI-Prowler v6.0.0 sends a small daily anonymous heartbeat to a Cloudflare Worker so the developer can see how many installs are active and which versions are deployed. This is on by default and can be turned off (see below).
 
-### Analytics Dashboard
+**What's sent:**
 
-AI-Prowler tracks basic usage metrics locally (never sent externally):
+* A random `install_id` (UUID, generated once per install, never tied to a name or email)
+* AI-Prowler version
+* OS string (e.g. `"Windows-11"`)
+* Number of chunks currently indexed
+* Number of MCP tool calls in the last 24 hours
 
-* **Tool call counts** — how many times each MCP tool has been called since the server started
+**What is NEVER sent:**
+
+* Your name, email, IP address (the Worker discards client IPs after rate-limiting)
+* Document content, queries, or file paths
+* Document or learning database contents
+* API keys, Bearer tokens, or any credentials
+
+The endpoint is `https://ai-prowler-telemetry.david-vavro1.workers.dev` by default. It can be overridden via `telemetry_endpoint` in `~/.ai-prowler/config.json`.
+
+### Heartbeat schedule
+
+* First heartbeat fires roughly 5 minutes after first launch (`_TELEMETRY_FIRST_DELAY_SEC`)
+* Subsequent heartbeats fire every 24 hours (`_TELEMETRY_HEARTBEAT_INTERVAL_SEC`)
+* On failure: retry once after 1 hour, then back off to the normal 24-hour cycle
+* The receiver applies an additional 12-hour server-side throttle to prevent duplicate uploads from accidentally re-firing
+
+The "last successful heartbeat" timestamp is written to `~/.ai-prowler/telemetry_last_success.txt`.
+
+### How to turn it off
+
+Two options:
+
+1. **Settings → Privacy & Analytics → uncheck "Send anonymous usage heartbeat"** — this is the user-facing toggle, but is hidden in v6.0.0 unless `DEBUG_EN = True`.
+2. **Manually edit `~/.ai-prowler/config.json`** — set `"telemetry_enabled": false`. Restart AI-Prowler. No heartbeats will be sent.
+
+Either method writes to the same config file; AI-Prowler honors it on next launch.
+
+### Local analytics (never sent)
+
+AI-Prowler also tracks several metrics purely for in-app display. These are local-only and have no connection to the heartbeat above:
+
+* **Tool call counts** — how many times each MCP tool has been called since the server started (used to populate the `tools_called_24h` field in the heartbeat, then aggregated and discarded — no per-tool detail is sent)
 * **Self-learning statistics** — total learnings, active vs deprecated, most applied learnings, breakdown by category and source (accessible via `get\_learning\_stats()` or the 🧠 Learnings tab)
 * **Indexing metrics** — total documents, chunks, file types, tracked directories (accessible via `get\_database\_stats()` or `check\_status()`)
 * **Applied count tracking** — every time `check\_learned()` returns a learning, its `applied\_count` increments, providing visibility into which knowledge is actually being used
 
-All analytics data stays on your machine. No telemetry is sent to Anthropic, Cloudflare, or any external service.
+Local analytics live in your ChromaDB, in `~/.ai-prowler/learnings/`, and in the various JSON tracking files. They are never sent to any external service.
 
 \---
 
@@ -1517,7 +1789,8 @@ To upgrade: `pip install --upgrade mcp` in a command prompt.
 **What leaves your machine:**
 
 * When using Claude Desktop MCP: the text of retrieved document chunks (the relevant excerpts Claude found, not your original files) and your questions
-* When using cloud API providers (Ask Questions tab): your question and retrieved document excerpts
+* When using cloud API providers (Quick Links tab Q&A, when enabled via `SUPPORT_LOCAL_HW_LLM = True`): your question and retrieved document excerpts
+* **Anonymous daily heartbeat** (on by default, can be disabled): install_id, version, OS string, indexed chunk count, MCP tool calls in last 24h — sent to the AI-Prowler telemetry endpoint. See Section 22 for full details and how to turn off.
 * Subscription check: a connection to GitHub to read the public `subs.json` file (contains only token hashes, not your data)
 * Update check: a read-only version check against the GitHub repository (no data is sent)
 
@@ -1554,7 +1827,7 @@ Key packages and their roles:
 |pypdfium2|>=4.0.0|PDF page rendering for OCR (no poppler required)|
 |pillow|>=10.0.0|Image I/O for OCR|
 |extract-msg|>=0.45.0|Outlook `.msg` email parsing|
-|pyspellchecker|>=0.7.2|Inline spell checking in Ask Questions tab|
+|pyspellchecker|>=0.7.2|Inline spell checking in Quick Links Q&A box (when enabled via `SUPPORT_LOCAL_HW_LLM = True`)|
 |requests|>=2.31.0|HTTP requests (subscription checks)|
 |uvicorn|>=0.29.0|ASGI server for HTTP MCP transport|
 |faster-whisper|>=1.0.0|Voice-to-text (mic input)|

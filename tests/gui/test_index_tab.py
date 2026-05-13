@@ -178,17 +178,23 @@ def test_G_IDX_03_start_with_empty_queue_warns(gui):
 # ──────────────────────────────────────────────────────────────────────────────
 @pytest.mark.slow
 def test_G_IDX_04_prescan_reports_findings(gui, isolated_env):
-    """Pre-scan a folder containing 2 files → output box ends up with a
+    """Pre-scan a folder containing 2 files → output queue receives a
     scan report mentioning that 2 files would be indexed.
 
-    Implementation note: _run_prescan() spawns a background thread which
-    posts results into self.output_queue, and a separate root.after()
-    callback (process_output_queue) drains the queue into the text widget.
-    Driving that whole machinery from a test fixture is finicky — too
-    many timing dependencies. Instead we call the worker method directly
-    on the main thread (it's synchronous when called this way), then
-    pump the event loop once so process_output_queue flushes the queue
-    into the visible widget.
+    Implementation note: we read from self.output_queue directly rather
+    than waiting for the queue-pump callback to flush results into the
+    text widget. Two reasons:
+
+      1. _prescan_worker uses `sys.stdout = TextRedirector(self.output_queue, …)`
+         to capture print() output. Pytest also redirects sys.stdout for
+         capture purposes. The two compete — running the worker on the
+         main thread, pytest's capture wins and the text never reaches
+         the queue OR the widget.
+
+      2. The queue IS the source of truth — the text widget is just a
+         presentation layer. Verifying the queue contents is closer to
+         what we actually care about, and survives pytest's capture
+         semantics.
     """
     from tests.helpers import sample_files as builders
     folder = isolated_env.sample_root / "prescan_test"
@@ -202,19 +208,41 @@ def test_G_IDX_04_prescan_reports_findings(gui, isolated_env):
 
     # Run the worker synchronously on the main thread. This bypasses the
     # threading wrapper but exercises the worker's logic identically.
-    gui.app._prescan_worker([str(folder)], recursive=True)
+    # We pre-empt pytest's stdout capture for the duration by saving and
+    # restoring sys.stdout around the call — the worker reassigns it
+    # internally to TextRedirector, so we just need to make sure our
+    # saved reference is the real stream, not pytest's wrapper.
+    import sys as _sys
+    saved_stdout = _sys.stdout
+    try:
+        gui.app._prescan_worker([str(folder)], recursive=True)
+    finally:
+        _sys.stdout = saved_stdout
 
-    # Pump events several times so the queue-pumper drains all the messages
-    # the worker posted during its run.
-    gui.pump(times=20, interval_ms=50)
+    # Drain the output queue directly — this is what the queue-pump callback
+    # would also be reading, but we don't depend on its timing.
+    queue_items: list[tuple[str, str]] = []
+    while not gui.app.output_queue.empty():
+        queue_items.append(gui.app.output_queue.get_nowait())
 
-    output = gui.app.index_output.get("1.0", "end")
-    assert "PRE-SCAN" in output or "scan" in output.lower(), (
-        f"Pre-scan should produce a recognisable header. Output: {output[:500]!r}"
+    assert queue_items, (
+        "Pre-scan worker should have posted items to the output queue. "
+        "Queue was empty — worker may have failed silently."
     )
-    # The worker reports counts — verify the 2 files we created show up
-    assert "2" in output, (
-        f"Output should mention the 2 files we created. Got: {output[:500]!r}"
+
+    # Concatenate all the 'index'-tagged text payloads
+    index_text = "".join(payload for tag, payload in queue_items
+                         if tag == "index")
+    assert index_text, (
+        f"No 'index'-tagged messages in queue. Items: {queue_items[:5]}"
+    )
+    assert "PRE-SCAN" in index_text or "scan" in index_text.lower(), (
+        f"Pre-scan output should include a recognisable header. "
+        f"Got: {index_text[:500]!r}"
+    )
+    # The worker reports file counts — verify the 2 files we created show up
+    assert "2" in index_text, (
+        f"Output should mention the 2 files. Got: {index_text[:500]!r}"
     )
 
     # Verify ChromaDB was NOT written to

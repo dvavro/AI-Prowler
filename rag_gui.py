@@ -103,7 +103,7 @@ APP_VERSION = "6.0.0"
 # Flip to True (and restart the GUI) to expose:
 #
 #   SUPPORT_LOCAL_HW_LLM — local-hardware LLM features:
-#     • Ask Questions tab: Your-Question input box, attachments, Ask Question
+#     • Quick Links tab: Your-Question input box, attachments, Ask Question
 #       button, microphone button. (Smart Guided Questions panel always shown.)
 #     • Settings tab:      AI Model section, External AI APIs section,
 #                          Microphone / Speech Input section, Ollama Server
@@ -165,6 +165,7 @@ try:
         check_license, prompt_for_license, LICENSE_REQUIRED,
         command_update, show_stats, clear_database,
         prewarm_ollama, prewarm_embeddings, invalidate_chroma_cache, check_ollama_available,
+        generate_auto_update_script,
         detect_gpu, SUPPORTED_EXTENSIONS, SKIP_EXTENSIONS, SKIP_DIRECTORIES,
         TRACKING_DB, AUTO_UPDATE_LIST, CONFIG_FILE
     )
@@ -764,15 +765,24 @@ class RAGGui:
         # Start output processor
         self.process_output_queue()
         
-        # Bind tab-change event — prewarm Ollama when user switches to Ask Questions
+        # Bind tab-change event — prewarm Ollama when user switches to Quick Links
         self.notebook.bind('<<NotebookTabChanged>>', self._on_tab_changed)
         
-        # Check and auto-start Ollama if enabled (before prewarm)
-        self.root.after(500, self._check_and_start_ollama)
-        
-        # Startup prewarm — load model into memory after a 3-second delay so
-        # the window finishes drawing first. Silent background thread.
-        self.root.after(3000, self._trigger_prewarm)
+        # ── Startup Ollama actions — gated on the local-LLM feature flag ──────
+        # Since v6.0 the local Q&A box is hidden by default (SUPPORT_LOCAL_HW_LLM
+        # = False) and Claude Desktop / Claude.ai are the supported interfaces.
+        # Loading the Ollama model at startup is wasted work in that case, and
+        # the "⚡ Loading AI model into memory..." status message in the footer
+        # confuses users who don't know what Ollama is. We suppress both the
+        # auto-start and the prewarm at launch. The underlying logic is fully
+        # intact and re-activates automatically if SUPPORT_LOCAL_HW_LLM=True.
+        if SUPPORT_LOCAL_HW_LLM:
+            # Check and auto-start Ollama if enabled (before prewarm)
+            self.root.after(500, self._check_and_start_ollama)
+
+            # Startup prewarm — load model into memory after a 3-second delay so
+            # the window finishes drawing first. Silent background thread.
+            self.root.after(3000, self._trigger_prewarm)
 
         # MCP status bar indicator — check once on startup
         self.root.after(2000, self._refresh_mcp_status_bar)
@@ -812,6 +822,8 @@ class RAGGui:
                 if not token:
                     self.status_var.set(
                         "HTTP auto-start skipped — no Bearer token configured")
+                    # Clear hint so footer doesn't hang on it
+                    self.root.after(5000, lambda: self.status_var.set("Ready"))
                     return
             else:
                 return
@@ -827,6 +839,13 @@ class RAGGui:
         try:
             self.status_var.set("Auto-starting HTTP MCP server...")
             fn()
+            # Clear the footer message after a few seconds. The actual server
+            # status is reflected by the ⬤ indicator on the Settings → Remote
+            # Access page; the footer is just a transient hint. Without this
+            # clear-out the footer would hang on "Auto-starting HTTP MCP
+            # server..." indefinitely because _start_http_server() updates a
+            # different StringVar (_http_status_var) rather than self.status_var.
+            self.root.after(4000, lambda: self.status_var.set("Ready"))
         except Exception as exc:
             self.status_var.set(f"HTTP auto-start failed: {exc}")
         
@@ -926,7 +945,7 @@ Version {APP_VERSION}
 Your personal AI assistant that answers questions about YOUR documents.
 
 Core Features:
-• Agentic RAG with Claude Desktop & Claude.ai (13 MCP tools)
+• Agentic RAG with Claude Desktop & Claude.ai (28 MCP tools)
 • 65+ file types: PDF, Word (.docx), Excel (.xlsx/.xls), PowerPoint, HTML, RTF, ODT, CSV, email, images & more
 • Smart chunking — full Column: Value context for spreadsheet and tabular data
 • .docx tables fully extracted (financial tables, schedules, grids)
@@ -1311,7 +1330,9 @@ Built with Python, ChromaDB, and Claude"""
             ]),
 
             ("Step 4 — Create a tunnel", [
-                "1. In Zero Trust, click 'Networks' → 'Tunnels' in the left menu.",
+                "1. In Zero Trust, click 'Networks' → 'Tunnels' in the left",
+                "   menu.  (In the newer Cloudflare UI this may be labeled",
+                "   'Networks' → 'Connectors'.)",
                 "2. Click 'Create a tunnel'.",
                 "3. Choose connector type: 'Cloudflared'.",
                 "4. Name your tunnel (e.g. 'ai-prowler-' + your name).",
@@ -1339,7 +1360,7 @@ Built with Python, ChromaDB, and Claude"""
                 "       Path:       (leave blank)",
                 "3. Under 'Service', set:",
                 "       Type:  HTTP",
-                "       URL:   localhost:8080  (or whatever port AI-Prowler",
+                "       URL:   localhost:8000  (or whatever port AI-Prowler",
                 "                               uses — check Settings tab)",
                 "4. Click 'Save tunnel'.",
                 "5. Your full hostname is now: ai-prowler.yourdomain.com",
@@ -1553,15 +1574,31 @@ Built with Python, ChromaDB, and Claude"""
 Version {APP_VERSION}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ⭐  RECOMMENDED: AGENTIC RAG WITH CLAUDE DESKTOP
+  OVERVIEW
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 AI-Prowler is designed around Agentic RAG — letting Claude
 actively research your documents using its full intelligence.
-Claude Desktop (free) is the easiest way to get started.
+You'll connect Claude to AI-Prowler over MCP (Model Context
+Protocol) and Claude will use 28 tools to search, follow up,
+and synthesize answers from your knowledge base.
 
-STEP 1: Index Your Documents
-─────────────────────────────
+Two equally-supported ways to talk to Claude:
+
+  📱  Claude.ai (web or mobile app)  — PREFERRED
+      Works on phone, tablet, AND desktop browsers. Same
+      capability as Claude Desktop. Requires a quick one-time
+      Cloudflare Tunnel setup so Claude.ai can reach this PC.
+
+  💻  Claude Desktop  — alternative for desktop-only use
+      Connects locally via stdio (no tunnel needed). Free to
+      install. Use this if you don't need mobile/web access.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  STEP 1: INDEX YOUR DOCUMENTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 1. Click the "📚 Index Documents" tab
 2. Click "Add Directory" and select your Documents folder
 3. Check "Include Subfolders" if needed
@@ -1577,15 +1614,55 @@ Tip: Indexing is incremental — only changed files are
 re-processed on subsequent runs. No need to start over.
 
 
-STEP 2: Connect Claude Desktop (Primary Interface)
-───────────────────────────────────────────────────
-Claude Desktop connects to AI-Prowler via MCP (Model Context
-Protocol) and gets 13 tools to actively research your documents.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  STEP 2 — OPTION A: CLAUDE.AI (PREFERRED)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  1. Click "🚀 Launch Claude Desktop" on this screen
-     (or use Settings → Claude Desktop MCP → Auto-configure)
-  2. In Claude Desktop, start a NEW conversation
-  3. Ask any research question about your documents:
+Access your knowledge base from your phone, tablet, or any
+browser using Claude.ai — with the same full agentic RAG
+capability as Claude Desktop.
+
+Requirements:
+  • Active Mobile Access subscription ($10/month Individual)
+  • Claude Pro or Team plan on Claude.ai
+
+One-time Cloudflare Tunnel setup:
+  1. Go to Settings → 📡 Remote Access
+  2. Enter a Bearer token (your password — make it strong)
+  3. Click "▶ Start HTTP Server"
+  4. Click "▶ Start Tunnel" (Cloudflare Tunnel)
+  5. Open Claude.ai → Settings → Connectors → Add connector
+  6. Enter your tunnel URL (e.g. https://your-tunnel.com/mcp)
+  7. Authorize with your Bearer token when prompted
+
+Daily use:
+  • Open the 🔗 Quick Links tab
+  • Click "🌐 Open Claude.ai (Preferred)"
+  • Start a new conversation, ask any research question
+
+  ⚠  Important: The HTTP server and Cloudflare Tunnel must be
+     running on this PC for Claude.ai to reach your knowledge
+     base. Both auto-start each time AI-Prowler launches if
+     you've enabled the "Install as Windows Service" option.
+
+Subscription info:  Help → User Guide → Section 8
+Or email:           david.vavro1@gmail.com
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  STEP 2 — OPTION B: CLAUDE DESKTOP (DESKTOP ONLY)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Claude Desktop is a good alternative when you only need
+research from this PC — no Cloudflare Tunnel needed, no
+subscription needed beyond a free Claude account.
+
+  1. Open the 🔗 Quick Links tab
+  2. Click "🚀 Launch Claude Desktop"
+     • Don't have it yet? Click "⬇ Install Claude Desktop"
+       on the same screen to open the download page
+  3. In Claude Desktop, start a NEW conversation
+  4. Ask any research question about your documents:
 
      "Summarize the key risks in my Q3 contracts"
      "What does my insurance policy say about flooding?"
@@ -1599,64 +1676,56 @@ You don't need to direct it — the agentic loop runs on its own.
   ✅ Works with free Claude account
   ✅ Completely local — no internet required for the connection
 
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  📱  OPTION 2: MOBILE & WEB ACCESS (Claude.ai)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Access your knowledge base from your phone, tablet, or any
-browser using Claude.ai — with the same full agentic RAG
-capability as Claude Desktop.
-
-Requirements:
-  • Active Mobile Access subscription ($10/month Individual)
-  • Claude Pro or Team plan on Claude.ai
-
-Setup Steps:
-  1. Go to Settings → Remote Access
-  2. Enter a Bearer token (your password — make it strong)
-  3. Click "▶ Start HTTP Server"
-  4. Click "▶ Start Tunnel" (Cloudflare Tunnel)
-  5. Open Claude.ai → Settings → Connectors → Add connector
-  6. Enter your tunnel URL (e.g. https://your-tunnel.com/mcp)
-  7. Authorize with your Bearer token when prompted
-
-Then click "🌐 Open Claude.ai" on this screen to open Claude.ai
-in your browser and start chatting from any device.
-
-  ⚠  Important: The HTTP server and Cloudflare Tunnel must be
-     running on your PC for Claude.ai to reach your knowledge base.
-
-Subscription info: Help → User Guide → Section 8
-Or email: david.vavro1@gmail.com
+Note on auto-configuration: The installer automatically
+registers AI-Prowler with Claude Desktop on first install.
+You don't need to edit any config files yourself. If something
+goes wrong, see Help → User Guide → Section 3.
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  💬  OPTION 3: DESKTOP ASK QUESTIONS TAB (Local)
+  🔗  THE QUICK LINKS TAB
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-The Ask Questions tab is a standalone chat mode that works
-with local Ollama models or cloud API keys — no Claude
-subscription required. Best for fully offline use.
+The 🔗 Quick Links tab is the second tab from the left. It's
+a one-screen launcher with three buttons, ordered by preference:
 
-  1. Install Ollama from Settings → Browse & Install Model
-     (or add an API key for ChatGPT, Gemini, etc.)
-  2. Click "🔍 Ask Questions" tab
-  3. Type your question and press Enter
+  1️⃣  🌐 Open Claude.ai (Preferred) — top, biggest button
+  2️⃣  🚀 Launch Claude Desktop      — alternative for PC use
+  3️⃣  ⬇ Install Claude Desktop     — one-time setup, smallest
 
-Note: This mode does NOT use the Agentic RAG tools. It does
-a single retrieval pass and sends chunks to the local model.
-For best results, use Claude Desktop (Option 1 above).
+A short blurb above the buttons explains the desktop/mobile
+choice so you can pick at a glance.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  🧠  TEACH CLAUDE — SELF-LEARNING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+New in v6.0: AI-Prowler remembers what you tell it. Say
+"learn this" in any conversation and Claude saves the fact
+to a structured knowledge base. Next time a related question
+comes up, Claude finds the saved note automatically.
+
+Examples:
+  "Remember: Client Alpha prefers email over phone calls"
+  "Remember: HVAC permits in this county take 10 business days"
+  "What do we know about Client Alpha?"  → finds it instantly
+
+Manage saved learnings from the 🧠 Learnings tab — browse,
+filter, archive, or delete. Full details in Help → User Guide
+→ Section 20.
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   🔄  KEEPING YOUR INDEX CURRENT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-• Click "🔄 Update Index" → "Update All" after adding files
-• Or ask Claude: "Update my knowledge base" — it will call
-  the update_tracked_directories() tool automatically
-• Set up auto-scheduling in Settings → Schedule (runs at 2 AM)
+• Click the "🔄 Update Index" tab → "Update All" after
+  adding or changing files in tracked directories
+• Or just ask Claude: "Update my knowledge base" — it will
+  call update_tracked_directories() automatically
+• Set up auto-scheduling in the ⏰ Schedule tab
+  (default: runs once a day at 2:00 AM)
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1664,7 +1733,9 @@ For best results, use Claude Desktop (Option 1 above).
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Full documentation:  Help → 📖 User Guide
-MCP diagnostics:     Settings → Claude Desktop MCP → 🔬 Run MCP Diagnostics
+Tab overview:        Home / Quick Links / Index Docs /
+                     Update Index / Smart Scan / Schedule /
+                     Settings / Small Business / 🧠 Learnings
 Support email:       david.vavro1@gmail.com
 """
     
@@ -1696,9 +1767,9 @@ This file contains:
 
 Quick Start:
 1. Index Documents tab → Browse → Select folder → Start Indexing
-2. Ask Questions tab → Type question → Press Enter
+2. Quick Links tab → Launch Claude Desktop
 3. Update Index tab → Update All (weekly)
-4. Settings tab → Choose different AI models
+4. Settings tab → adjust scheduling and tracked directories
 
 For detailed help, open COMPLETE_USER_GUIDE.md in your text editor
 or from the Help menu."""
@@ -1715,7 +1786,7 @@ or from the Help menu."""
         
         # Create tabs — ORDER MATTERS: _TAB_INDEX_* constants must match insertion order
         self.create_welcome_tab()          # 0  ← Welcome / Info / Ad Space
-        self.create_query_tab()            # 1  ← Ask Questions (prewarmed on switch)
+        self.create_query_tab()            # 1  ← Quick Links (prewarmed on switch)
         self.create_index_tab()            # 2
         self.create_update_tab()           # 3
         self.create_scan_config_tab()      # 4
@@ -1726,7 +1797,7 @@ or from the Help menu."""
 
         # Named tab index constants — change here if tabs are ever reordered
         self._TAB_INDEX_WELCOME      = 0   # Welcome / Info / Ad Space
-        self._TAB_INDEX_QUERY        = 1   # Ask Questions tab — triggers Ollama prewarm
+        self._TAB_INDEX_QUERY        = 1   # Quick Links tab — triggers Ollama prewarm
         self._TAB_INDEX_INDEX        = 2
         self._TAB_INDEX_UPDATE       = 3
         self._TAB_INDEX_SCAN         = 4
@@ -2101,11 +2172,30 @@ or from the Help menu."""
             return None
 
         # OS string — match the worker's allowed prefixes
+        #
+        # Windows-11 detection note: platform.release() returns "10" on BOTH
+        # Windows 10 AND Windows 11, because Microsoft kept the NT major
+        # version at 10 across both releases. The actual differentiator is
+        # the build number in platform.version() (formatted as "10.0.BUILD"):
+        #   build  < 22000  →  Windows 10
+        #   build >= 22000  →  Windows 11
+        # Without this override, every Win11 install reports as "Windows-10"
+        # in the heartbeat — a known wart of Python's platform module, not
+        # a bug here. The fix below patches the report at the source.
         os_str = "unknown"
         try:
             import platform
             sys_name = platform.system()
             release = platform.release()
+            if sys_name == "Windows" and release == "10":
+                # Try to read the build number to disambiguate Win10 vs Win11
+                try:
+                    ver = platform.version()  # e.g. "10.0.22631"
+                    build = int(ver.split('.')[2])
+                    if build >= 22000:
+                        release = "11"
+                except (ValueError, IndexError):
+                    pass  # fall back to "10" if the version string is odd
             if sys_name and release:
                 os_str = f"{sys_name}-{release}"[:50]
         except Exception:
@@ -2820,7 +2910,7 @@ or from the Help menu."""
         """Create query tab — fully scrollable pane."""
         # ── Outer tab frame holds the canvas + scrollbar ──────────────────────
         outer = ttk.Frame(self.notebook)
-        self.notebook.add(outer, text="🔍 Ask Questions")
+        self.notebook.add(outer, text="🔗 Quick Links")
 
         vscroll = ttk.Scrollbar(outer, orient='vertical')
         vscroll.pack(side='right', fill='y')
@@ -2859,10 +2949,14 @@ or from the Help menu."""
         self._query_scroll_cmd = _on_mousewheel
 
         # Title
-        ttk.Label(query_frame, text="Ask Your AI Questions",
+        ttk.Label(query_frame, text="Quick Links — Connect to Claude",
                   font=('Arial', 16, 'bold')).pack(pady=10)
 
-        # ── Recommended: Claude Desktop Agentic RAG banner ────────────────────
+        # ── Claude connection panel (formerly the "RECOMMENDED" banner) ──────
+        # Redesigned in v6.0: dropped the ⭐ RECOMMENDED badge because Claude is
+        # now the only supported AI. Rewrote the body text to give clear
+        # desktop-vs-mobile guidance, and reordered the action buttons so the
+        # preferred path (Claude.ai mobile/web) is on top.
         _claude_banner = tk.Frame(query_frame, bg='#0f3460',
                                   highlightthickness=1,
                                   highlightbackground='#1a5276')
@@ -2871,29 +2965,40 @@ or from the Help menu."""
         _banner_inner = tk.Frame(_claude_banner, bg='#0f3460')
         _banner_inner.pack(fill='x', padx=14, pady=10)
 
-        # Left side — star badge + text
-        _badge_col = tk.Frame(_banner_inner, bg='#0f3460')
-        _badge_col.pack(side='left', fill='y')
-        tk.Label(_badge_col, text="⭐ RECOMMENDED",
-                 bg='#1a5c9a', fg='#ffffff',
-                 font=('Arial', 7, 'bold'),
-                 padx=6, pady=2).pack(anchor='w')
-
+        # ─ Left side — heading + desktop/mobile guidance text ────────────────
         _text_col = tk.Frame(_banner_inner, bg='#0f3460')
-        _text_col.pack(side='left', fill='both', expand=True, padx=(10, 0))
+        _text_col.pack(side='left', fill='both', expand=True, padx=(0, 12))
+
         tk.Label(_text_col,
                  text="AI Agent Smart Guided Questions & Answers",
                  bg='#0f3460', fg='#ffffff',
                  font=('Arial', 11, 'bold'),
                  anchor='w').pack(anchor='w')
+
         tk.Label(_text_col,
-                 text="Claude Desktop Uses all AI-Prowler tools to actively research your "
-                      "knowledge base — multiple searches, follow-up queries, and full document "
-                      "reading — producing far superior answers compared to the basic Ask tab below.",
+                 text="Claude uses all AI-Prowler tools to actively research your knowledge "
+                      "base — multiple searches, follow-up queries, and full document reading.",
                  bg='#0f3460', fg='#aaccee',
                  font=('Arial', 8),
                  wraplength=520, justify='left',
-                 anchor='w').pack(anchor='w', pady=(2, 0))
+                 anchor='w').pack(anchor='w', pady=(2, 6))
+
+        # Two-line guidance — desktop-only vs mobile/web
+        tk.Label(_text_col,
+                 text="📱  Mobile (or any device):  Claude.ai web or mobile app — preferred, "
+                      "works on phone, tablet, and desktop browsers.",
+                 bg='#0f3460', fg='#d8e8ff',
+                 font=('Arial', 8, 'bold'),
+                 wraplength=520, justify='left',
+                 anchor='w').pack(anchor='w', pady=(0, 2))
+
+        tk.Label(_text_col,
+                 text="💻  Desktop only:  Claude Desktop is fully supported as an alternative "
+                      "when you're at your PC.",
+                 bg='#0f3460', fg='#d8e8ff',
+                 font=('Arial', 8, 'bold'),
+                 wraplength=520, justify='left',
+                 anchor='w').pack(anchor='w')
 
         # Right side — Launch button
         def _launch_claude_desktop():
@@ -2958,37 +3063,41 @@ or from the Help menu."""
             _wb.open('https://claude.ai/download')
             self.status_var.set("Browser opened — claude.ai/download")
 
-
-        # Right side buttons — stacked vertically
-        _btn_col = tk.Frame(_banner_inner, bg='#0f3460')
-        _btn_col.pack(side='right', padx=(12, 0))
-
-        tk.Button(_btn_col,
-                  text="🚀  Launch Claude Desktop",
-                  bg='#2980b9', fg='white',
-                  activebackground='#3498db', activeforeground='white',
-                  font=('Arial', 10, 'bold'),
-                  relief='flat', padx=16, pady=5,
-                  cursor='hand2',
-                  command=_launch_claude_desktop).pack(fill='x', pady=(0, 4))
-
         def _open_claude_ai_web():
             """Open Claude.ai in the default browser (HTTP / mobile access)."""
             import webbrowser as _wb
             _wb.open('https://claude.ai')
             self.status_var.set("Browser opened — claude.ai")
 
+        # ─ Right side buttons — stacked vertically ────────────────────────────
+        # Order matters: preferred path (Claude.ai) on top, alternative path
+        # (Claude Desktop) second, install action (Download) at bottom.
+        _btn_col = tk.Frame(_banner_inner, bg='#0f3460')
+        _btn_col.pack(side='right', padx=(12, 0))
+
+        # 1️⃣  Preferred: Claude.ai (web/mobile) — biggest, brightest button
         tk.Button(_btn_col,
-                  text="🌐  Open Claude.ai (Web / Mobile)",
+                  text="🌐  Open Claude.ai (Preferred)",
                   bg='#1a7a4a', fg='white',
                   activebackground='#239c5e', activeforeground='white',
-                  font=('Arial', 9, 'bold'),
-                  relief='flat', padx=16, pady=4,
+                  font=('Arial', 10, 'bold'),
+                  relief='flat', padx=16, pady=5,
                   cursor='hand2',
                   command=_open_claude_ai_web).pack(fill='x', pady=(0, 4))
 
+        # 2️⃣  Alternative: Claude Desktop (desktop-only use)
         tk.Button(_btn_col,
-                  text="⬇  Download Claude Desktop",
+                  text="🚀  Launch Claude Desktop",
+                  bg='#2980b9', fg='white',
+                  activebackground='#3498db', activeforeground='white',
+                  font=('Arial', 9, 'bold'),
+                  relief='flat', padx=16, pady=4,
+                  cursor='hand2',
+                  command=_launch_claude_desktop).pack(fill='x', pady=(0, 4))
+
+        # 3️⃣  Install action: only needed once, smallest button
+        tk.Button(_btn_col,
+                  text="⬇  Install Claude Desktop",
                   bg='#1a5276', fg='#aaccee',
                   activebackground='#21618c', activeforeground='white',
                   font=('Arial', 8),
@@ -3498,6 +3607,9 @@ or from the Help menu."""
     def set_schedule(self, time_str, days):
         """Create a Windows Task Scheduler entry for the given days."""
         try:
+            # Refresh the batch script content from the current tracked list
+            generate_auto_update_script()
+            
             script_path = Path.home() / "AI-Prowler" / "rag_auto_update.bat"
             all_days    = {'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'}
             days_str    = ",".join(days)
@@ -4302,8 +4414,14 @@ or from the Help menu."""
             self._refresh_silence_label()
 
         # ── GPU Acceleration ──────────────────────────────────────────────────
+        # Panel is constructed but NOT packed into the visible layout. All the
+        # underlying logic still runs:
+        #   • gpu_layers_var still drives prewarm + Ollama subprocess args
+        #   • _run_gpu_detect() / _apply_gpu_settings() still callable from code
+        #   • gpu_status_text receives detection output into an invisible buffer
+        # To re-expose the panel, uncomment the gpu_frame.pack(...) line below.
         gpu_frame = ttk.LabelFrame(scrollable_frame, text="GPU Acceleration", padding=(10, 6))
-        gpu_frame.pack(fill='x', padx=20, pady=(5, 10))
+        # gpu_frame.pack(fill='x', padx=20, pady=(5, 10))   # ← hidden from GUI (v6.0)
 
         # Top row: spinbox + buttons all in one line so buttons are always visible
         ctrl_row = ttk.Frame(gpu_frame)
@@ -5126,48 +5244,142 @@ or from the Help menu."""
             except Exception:
                 pass
             return None
+        # ──────────────────────────────────────────────────────────────────────
+        # v7-hook: Plan / seat-license forward-compatibility helpers
+        # ──────────────────────────────────────────────────────────────────────
+        # These two helpers are dormant in v6.0. They exist so that we can
+        # start writing `plan`, `seats`, and `license_group` fields into
+        # GitHub `subs.json` at any time WITHOUT breaking any v6.0 client.
+        #
+        # v6.0 behaviour:  reads the new fields, normalises them, surfaces
+        #                  them on sub_result, and does NOTHING with the
+        #                  values. The features-resolver returns {} so no
+        #                  conditional behaviour is enabled.
+        # v7.0 plan:       _resolve_plan_features grows a body that returns
+        #                  the feature flags for each plan (admin tab,
+        #                  multi-seat enablement, etc.). Adding that body
+        #                  requires no further changes to _check_subscription_gui.
+        #
+        # Field semantics (when populated in subs.json):
+        #   plan = "individual"      single-user license (default for v6 entries)
+        #   plan = "business"        owner of a multi-seat license (Acme parent)
+        #   plan = "business_seat"   one of the N employee seats under a parent
+        #   seats                    integer; how many employee seats Acme has
+        #                            paid for. Only meaningful when plan=business.
+        #   license_group            string; ties a business owner to their N
+        #                            business_seat entries (e.g. "acme-2026").
+        #                            Same value on parent + all seats.
+        #
+        # Defaults below preserve full v6 backward compatibility: any entry
+        # written before v7 launches reads as plan="individual", seats=1,
+        # license_group=None, which is exactly correct for the existing
+        # single-user customers.
+        # ──────────────────────────────────────────────────────────────────────
+        _VALID_PLANS = ("individual", "business", "business_seat")
+
+        def _normalise_plan(raw) -> str:
+            """Map any value (including missing/garbage) to a valid plan.
+
+            v6 entries with no `plan` field default to 'individual' — the
+            correct semantic for every existing customer.
+            """
+            if isinstance(raw, str):
+                cleaned = raw.strip().lower()
+                if cleaned in _VALID_PLANS:
+                    return cleaned
+            return "individual"
+
+        def _resolve_plan_features(sub_result: dict) -> dict:
+            """v7-hook: Map a plan to its feature flags.
+
+            v6.0:  returns {} — no plan unlocks any features yet.
+            v7.0:  will return something like:
+                   { "show_rbac_tab": True,  "is_business_owner": True }
+                   for plan='business', etc.
+
+            Callers SHOULD use this rather than branching on plan directly,
+            so when v7 ships there's exactly one place to add logic.
+            """
+            return {}
+
         def _check_subscription_gui(tok, subs_data) -> dict:
             """
-            Returns dict with keys: status, name, days_left, message
-            status: 'ok' | 'warning' | 'blocked' | 'unmanaged'
+            Returns dict with keys:
+                status     'ok' | 'warning' | 'blocked' | 'unmanaged'
+                name       subscriber name or None
+                days_left  int or None
+                message    human-readable status
+                plan       v7-hook: 'individual' | 'business' | 'business_seat'
+                seats      v7-hook: int, only meaningful when plan='business'
+                license_group  v7-hook: str|None, ties business owners to seats
+                features   v7-hook: dict of feature flags from _resolve_plan_features
             """
             if not subs_data:
-                return {'status': 'unmanaged', 'name': None, 'days_left': None,
-                        'message': 'No registry — unmanaged/local mode'}
+                # v7-hook: even unmanaged mode carries the plan defaults
+                out = {'status': 'unmanaged', 'name': None, 'days_left': None,
+                       'message': 'No registry — unmanaged/local mode',
+                       'plan': 'individual', 'seats': 1, 'license_group': None}
+                out['features'] = _resolve_plan_features(out)
+                return out
             key  = _token_key(tok)
             subs = subs_data.get('subscribers', {})
             if key not in subs:
-                return {'status': 'unmanaged', 'name': None, 'days_left': None,
-                        'message': 'Token not in managed registry — local mode'}
+                out = {'status': 'unmanaged', 'name': None, 'days_left': None,
+                       'message': 'Token not in managed registry — local mode',
+                       'plan': 'individual', 'seats': 1, 'license_group': None}
+                out['features'] = _resolve_plan_features(out)
+                return out
             entry    = subs[key]
             name     = entry.get('name', 'Subscriber')
             exp_str  = entry.get('expires', '')
+
+            # v7-hook: read forward-compatible plan fields with safe defaults.
+            # Any v6 entry missing these fields reads as a regular individual
+            # subscription, which is correct for every existing customer.
+            plan          = _normalise_plan(entry.get('plan'))
+            seats         = entry.get('seats', 1)
+            if not isinstance(seats, int) or seats < 1:
+                seats = 1
+            license_group = entry.get('license_group') or None
+
             try:
                 import datetime as _dt
                 expiry    = _dt.date.fromisoformat(exp_str)
                 today     = _dt.date.today()
                 days_left = (expiry - today).days
             except ValueError:
-                return {'status': 'unmanaged', 'name': name, 'days_left': None,
-                        'message': f'Invalid expiry in registry for {name}'}
+                out = {'status': 'unmanaged', 'name': name, 'days_left': None,
+                       'message': f'Invalid expiry in registry for {name}',
+                       'plan': plan, 'seats': seats,
+                       'license_group': license_group}
+                out['features'] = _resolve_plan_features(out)
+                return out
 
             _WARN_DAYS  = 30
             _GRACE_DAYS = 30
+            # Helper to build the result dict with the v7-hook fields baked in.
+            # All result paths flow through this so we never forget a field.
+            def _result(status, msg):
+                out = {'status': status, 'name': name, 'days_left': days_left,
+                       'message': msg,
+                       'plan': plan, 'seats': seats,
+                       'license_group': license_group}
+                out['features'] = _resolve_plan_features(out)
+                return out
+
             if days_left >= 0:
                 if days_left <= _WARN_DAYS:
-                    return {'status': 'warning', 'name': name,
-                            'days_left': days_left,
-                            'message': f"Subscription expires in {days_left} day(s) — renewal recommended"}
-                return {'status': 'ok', 'name': name, 'days_left': days_left,
-                        'message': f'Active — {days_left} day(s) remaining'}
+                    return _result('warning',
+                        f"Subscription expires in {days_left} day(s) — renewal recommended")
+                return _result('ok', f'Active — {days_left} day(s) remaining')
             days_over = -days_left
             if days_over <= _GRACE_DAYS:
-                return {'status': 'warning', 'name': name, 'days_left': days_left,
-                        'message': (f"Subscription EXPIRED {days_over} day(s) ago — "
-                                    f"{_GRACE_DAYS - days_over} day(s) grace period remaining")}
-            return {'status': 'blocked', 'name': name, 'days_left': days_left,
-                    'message': (f"Remote access BLOCKED — subscription expired "
-                                f"{days_over} day(s) ago and grace period has elapsed")}
+                return _result('warning',
+                    f"Subscription EXPIRED {days_over} day(s) ago — "
+                    f"{_GRACE_DAYS - days_over} day(s) grace period remaining")
+            return _result('blocked',
+                f"Remote access BLOCKED — subscription expired "
+                f"{days_over} day(s) ago and grace period has elapsed")
 
         def _show_subscription_popup(sub_result):
             """Show a subscription info popup, reading instructions from file."""
@@ -6263,7 +6475,7 @@ or from the Help menu."""
 Version {APP_VERSION}
 
 Core:
-• Agentic RAG — 13 MCP tools for Claude Desktop & Claude.ai
+• Agentic RAG — 28 MCP tools for Claude Desktop & Claude.ai
 • 65+ file types: PDF, Word (.docx), Excel (.xlsx/.xls), PPTX, HTML, RTF, ODT, CSV, email, images
 • Smart chunking — Column: Value context for all tabular data
 • .docx tables fully extracted (was silently dropped in v4)
@@ -6273,8 +6485,13 @@ Core:
 • Auto-start after Windows reboot (Task Scheduler)
 
 Small Business (🏢 tab):
-• 6 action tools: weather, routing, maps, spreadsheet updater
+• 7 action tools: weather, geocode, route optimization, maps URL builder,
+  spreadsheet read/update, action-tools status check
 • Job Tracker spreadsheet pre-installed in Documents\AI-Prowler\
+
+Self-Learning (🧠 Learnings tab):
+• 6 MCP tools for record/check/list/update/delete/stats
+• Conflict detection, supersession chains, learning packs export/import
 
 ⚠  .doc / legacy .xls not supported — convert to .docx / .xlsx
 
@@ -8277,6 +8494,14 @@ Built with Python, ChromaDB, and Claude"""
                      model is ready at exactly the right size before querying.
                      None = calculate for Auto mode (3 chunks = 8192 context).
         """
+        # ── Feature-flag gate ─────────────────────────────────────────────────
+        # When SUPPORT_LOCAL_HW_LLM is False (the v6.0+ default) the local
+        # Ollama Q&A surface is hidden, so prewarming is wasted work and the
+        # footer status message would confuse the user. Skip silently — every
+        # caller of _trigger_prewarm sits behind a UI that's also hidden, so
+        # the early return is safe.
+        if not SUPPORT_LOCAL_HW_LLM:
+            return
         if self._prewarm_in_progress:
             return
         if self._prewarm_done and num_ctx is None:

@@ -193,21 +193,47 @@ def dialogs(monkeypatch):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# The GUI fixture — instantiates a real RAGGui in an isolated environment.
-# Closes the window on teardown so the next test gets a clean slate.
+# Shared Tk root — session-scoped
+#
+# Why session-scoped: creating a fresh Tk() per test exhausts the Tcl
+# interpreter's resources around the 25th call on some Windows Python
+# installs (manifests as "Can't find a usable tk.tcl"). Even when it
+# works, each Tk() takes 100-300ms — across 25 tests that's most of the
+# GUI suite's runtime.
+#
+# We create ONE root for the whole session, and instead destroy the
+# RAGGui's child widgets between tests. Isolation isn't lost — each
+# test still gets a freshly-constructed RAGGui with all its variables
+# at default values. The Tk interpreter itself is reused.
+# ─────────────────────────────────────────────────────────────────────────────
+@pytest.fixture(scope="session")
+def _tk_root():
+    """Session-scoped Tk root. Created once, reused across every GUI test."""
+    import tkinter as tk
+    root = tk.Tk()
+    root.withdraw()        # invisible — comment out to watch tests run
+    yield root
+    try:
+        root.destroy()
+    except Exception:
+        pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The GUI fixture — instantiates a fresh RAGGui in the shared root.
+# Tears down all children on exit so the next test gets a clean slate.
 # ─────────────────────────────────────────────────────────────────────────────
 @pytest.fixture
-def gui(isolated_env, dialogs, monkeypatch):
+def gui(isolated_env, dialogs, monkeypatch, _tk_root):
     """Build a real RAGGui instance with patched globals so it sees the
     isolated test environment (temp ChromaDB, temp tracking JSON, etc.)
     instead of the user's real install.
 
     Returns an object exposing:
       .app    — the RAGGui instance
-      .root   — the Tk root (for direct widget access if needed)
-      .pump() — call root.update() to process pending events. Tests that
-                trigger threaded background work should call pump() in a
-                short loop until the work completes.
+      .root   — the Tk root (shared session-wide)
+      .pump() — call root.update() to process pending events
+      .wait_until(predicate) — pump events until predicate is truthy
     """
     import tkinter as tk
     import rag_gui as gui_mod
@@ -218,19 +244,20 @@ def gui(isolated_env, dialogs, monkeypatch):
     monkeypatch.setattr(gui_mod, "TRACKING_DB",      rag.TRACKING_DB)
     monkeypatch.setattr(gui_mod, "AUTO_UPDATE_LIST", rag.AUTO_UPDATE_LIST)
 
-    # Build the root and instantiate the GUI exactly like main() does
-    root = tk.Tk()
-    # Don't display the window in CI — withdraw makes it invisible but the
-    # widgets still respond to programmatic events. The user can comment
-    # this out if they want to *see* what the test is doing.
-    root.withdraw()
+    root = _tk_root
+
+    # Wipe any leftover children from the previous test before instantiating
+    # the new RAGGui (it builds many widgets as children of root).
+    for child in list(root.winfo_children()):
+        try:
+            child.destroy()
+        except Exception:
+            pass
 
     app = gui_mod.RAGGui(root)
 
-    # Cancel any outstanding after() callbacks so they don't fire during the
-    # test and confuse our state. We can't enumerate them via the public API,
-    # so we use Tk's internal info command. This is best-effort cleanup; the
-    # subprocess silencer above is the actual safety net.
+    # Cancel any outstanding after() callbacks so they don't fire during
+    # the test and confuse our state.
     try:
         for callback_id in root.tk.call("after", "info"):
             try:
@@ -248,9 +275,7 @@ def gui(isolated_env, dialogs, monkeypatch):
     h.dialogs = dialogs
 
     def _pump(times: int = 5, interval_ms: int = 10):
-        """Process pending Tk events. `times` controls how many update_idletasks
-        + update cycles we run; bump it for tests that involve threaded workers
-        (which post results back through self.output_queue)."""
+        """Process pending Tk events."""
         import time
         for _ in range(times):
             try:
@@ -263,10 +288,7 @@ def gui(isolated_env, dialogs, monkeypatch):
     h.pump = _pump
 
     def _wait_until(predicate, timeout_s: float = 30.0):
-        """Pump events until predicate() returns truthy or timeout. Returns
-        the predicate's value (so you can `result = wait_until(...)` and use
-        it). Raises AssertionError on timeout. Use this for tests that wait
-        on a worker thread to finish."""
+        """Pump events until predicate() returns truthy or timeout."""
         import time
         deadline = time.time() + timeout_s
         while time.time() < deadline:
@@ -287,8 +309,24 @@ def gui(isolated_env, dialogs, monkeypatch):
 
     yield h
 
-    # Teardown
+    # Per-test teardown: cancel any leftover after() callbacks. The shared
+    # root is NOT destroyed here — that happens in the session fixture.
     try:
-        root.destroy()
+        for callback_id in root.tk.call("after", "info"):
+            try:
+                root.after_cancel(callback_id)
+            except Exception:
+                pass
     except Exception:
         pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Self-learning fixtures — imported from the shared module so GUI learning
+# tests can use sl_env / seeded_learnings.
+# ─────────────────────────────────────────────────────────────────────────────
+from tests.learning_fixtures import (  # noqa: F401, E402
+    sl_module,
+    sl_env,
+    seeded_learnings,
+)

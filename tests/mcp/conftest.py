@@ -96,3 +96,15 @@ def mcp_env(isolated_env, mcp_module):
     e.email_index = isolated_env.email_index
     e.db_dir = isolated_env.db_dir
     return e
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Self-learning fixtures — imported from the shared module so the learning
+# tests in tests/mcp/ can use sl_env / seeded_learnings.
+# Pytest treats imported fixtures the same as locally-defined ones.
+# ─────────────────────────────────────────────────────────────────────────────
+from tests.learning_fixtures import (  # noqa: F401, E402
+    sl_module,
+    sl_env,
+    seeded_learnings,
+)

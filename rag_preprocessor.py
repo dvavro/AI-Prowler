@@ -5134,6 +5134,9 @@ def remove_from_auto_update_list(directory):
     if directory in dirs:
         dirs.remove(directory)
         save_auto_update_list(dirs)
+        
+        # Auto-regenerate script with updated list
+        generate_auto_update_script()
 
 
 def remove_directory_from_index(directory: str) -> dict:
@@ -5336,7 +5339,7 @@ echo.
     for i, directory in enumerate(directories, 1):
         dir_name = Path(directory).name or Path(directory).as_posix()
         script += f"""echo [{i}/{len(directories)}] Updating: {dir_name}
-python "C:\\Program Files\\AI-Prowler\\rag_preprocessor.py" update "{directory}" --yes
+"{sys.executable}" "{Path(__file__).resolve()}" update "{directory}" --yes
 if errorlevel 1 (
     echo   [FAIL] Update failed
 ) else (
