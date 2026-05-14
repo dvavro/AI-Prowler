@@ -92,7 +92,7 @@ if sys.stderr is None:
 # Single source of truth for the app version. Bump this one line when releasing
 # a new version; all UI labels, About dialogs, help text, and update checks
 # read from here.
-APP_VERSION = "6.0.0"
+APP_VERSION = "6.0.1"
 
 # ── UI feature flags ─────────────────────────────────────────────────────────
 # Toggle visibility of advanced/legacy GUI sections without removing any
@@ -2615,12 +2615,24 @@ or from the Help menu."""
             try:
                 self.status_var.set(f"Downloading AI-Prowler v{version}...")
 
-                # For GitHub releases, the URL points to the release page.
-                # We need to fetch the release API to get asset download URLs.
-                # For simplicity, download the source files directly from the
-                # repo's main branch (same files that are in the release).
-                _base = ("https://raw.githubusercontent.com/"
-                         "dvavro/AI-Prowler/main/")
+                # Tag-based fetching — pin to the released git tag so that
+                # ongoing development on `main` never bleeds into an
+                # in-flight user update.
+                #
+                # Release workflow:
+                #   1. Finish v{N} on main, bump APP_VERSION, commit, push.
+                #   2. git tag v{N} && git push origin v{N}
+                #   3. Push the notification via the Subscription Manager.
+                #
+                # The notification's `latest_version` field MUST match an
+                # existing git tag (with a leading 'v'). If the tag is
+                # missing for any reason, we fall back to `main` so a typo
+                # or forgotten tag-push doesn't brick the update path for
+                # users.
+                _tag_base = (f"https://raw.githubusercontent.com/"
+                             f"dvavro/AI-Prowler/v{version}/")
+                _main_base = ("https://raw.githubusercontent.com/"
+                              "dvavro/AI-Prowler/main/")
                 _files = [
                     'rag_gui.py',
                     'rag_preprocessor.py',
@@ -2632,13 +2644,44 @@ or from the Help menu."""
                 staging_dir.mkdir(parents=True, exist_ok=True)
 
                 import urllib.request
+                import urllib.error
+
+                # Probe the tag once before committing to it. If the tag
+                # doesn't exist on GitHub, fall back to main.
+                _base = _tag_base
+                try:
+                    _probe_url = f"{_tag_base}{_files[0]}"
+                    _probe_req = urllib.request.Request(
+                        _probe_url,
+                        headers={"User-Agent": f"AI-Prowler/{APP_VERSION}"})
+                    with urllib.request.urlopen(_probe_req,
+                                                  timeout=15) as _probe:
+                        if _probe.status == 200:
+                            print(f"[UPDATE] Using tag v{version}")
+                except urllib.error.HTTPError as _http_exc:
+                    if _http_exc.code == 404:
+                        print(f"[UPDATE] Tag v{version} not found on "
+                              f"GitHub — falling back to main branch.")
+                        _base = _main_base
+                    else:
+                        # Other HTTP errors (rate limit, 5xx) — still try
+                        # the tag; the per-file loop will surface real
+                        # download failures.
+                        print(f"[UPDATE] Tag probe returned HTTP "
+                              f"{_http_exc.code} — proceeding with tag.")
+                except Exception as _probe_exc:
+                    # Network glitch on the probe — proceed with tag and
+                    # let the per-file loop handle real failures.
+                    print(f"[UPDATE] Tag probe failed ({_probe_exc}) — "
+                          f"proceeding with tag.")
+
                 downloaded = 0
                 for fname in _files:
                     try:
                         _url = f"{_base}{fname}"
                         req = urllib.request.Request(
                             _url,
-                            headers={"User-Agent": "AI-Prowler/6.0"})
+                            headers={"User-Agent": f"AI-Prowler/{APP_VERSION}"})
                         with urllib.request.urlopen(req, timeout=30) as resp:
                             content = resp.read()
                         out_path = staging_dir / fname
