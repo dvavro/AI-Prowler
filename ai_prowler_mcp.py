@@ -283,22 +283,43 @@ _INSTRUCTIONS = (
     "═══════════════════════════════════════════════════════════════\n"
     " MANDATORY SEARCH ORDER FOR EVERY USER QUESTION\n"
     "═══════════════════════════════════════════════════════════════\n"
-    "For ANY question that could touch the user's work, clients, projects, "
-    "procedures, technical setup, or business — which is most questions — "
-    "you MUST run BOTH searches before answering. Do them in this order:\n\n"
+    "You MUST run check_learned(query=...) BEFORE answering ANY user\n"
+    "question. No exceptions. The user uses AI-Prowler as a personal\n"
+    "knowledge store for everything — not just business. Recipes,\n"
+    "preferences, opinions, hobbies, how they like things done — any\n"
+    "of these may live in the learnings store and override what your\n"
+    "training data would say.\n\n"
 
-    "  STEP 1 (FIRST, ALWAYS):  check_learned(query=...)\n"
-    "    Self-learning is the AUTHORITATIVE override layer. It contains the\n"
-    "    user's deliberate corrections, preferences, and lessons. These are\n"
-    "    newer and more curated than anything in the document index.\n"
-    "    Run check_learned BEFORE any document search.\n\n"
+    "  STEP 1 (ALWAYS, NO EXCEPTIONS):  check_learned(query=...)\n"
+    "    Self-learning is the AUTHORITATIVE override layer. It contains\n"
+    "    the user's deliberate corrections, preferences, and lessons.\n"
+    "    These are newer and more curated than anything in your training\n"
+    "    data or the document index.\n"
+    "    Run check_learned BEFORE generating any answer, EVEN FOR:\n"
+    "      • General world-knowledge questions ('what's a good recipe\n"
+    "        for ribs', 'best way to clean windows', 'what wine pairs\n"
+    "        with salmon') — the user may have recorded a personal\n"
+    "        version that overrides the generic answer\n"
+    "      • Definitional questions ('what is X') — the user may have\n"
+    "        recorded their own working definition\n"
+    "      • How-to questions — the user may have recorded their\n"
+    "            preferred technique\n"
+    "      • Recommendations of any kind\n"
+    "      • Business / client / project questions\n"
+    "    The ONLY questions you may skip check_learned on are pure\n"
+    "    arithmetic ('what is 7 * 13') and language translation, where\n"
+    "    there's no plausible way a personal learning could apply.\n"
+    "    When in doubt, SEARCH. The cost of an unnecessary search is\n"
+    "    one tool call; the cost of missing a stored preference is the\n"
+    "    user getting a wrong or generic answer.\n\n"
 
-    "  STEP 2 (SECOND, ALSO ALWAYS):  search_documents(query=...)\n"
-    "    Document RAG provides the broader factual context — install notes,\n"
-    "    case files, manuals, spreadsheets, contracts. It supplements but\n"
-    "    does NOT override learnings.\n"
-    "    Run this even if check_learned returned a hit, because docs may\n"
-    "    add useful surrounding context.\n\n"
+    "  STEP 2 (CONDITIONAL):  search_documents(query=...)\n"
+    "    Run document RAG when the question is plausibly about\n"
+    "    something in the indexed knowledge base — work documents,\n"
+    "    contracts, manuals, case files, spreadsheets, the user's own\n"
+    "    writing. Skip it for purely personal-preference questions\n"
+    "    where no document is likely to be relevant (e.g. 'what's my\n"
+    "    rib recipe' — that's a learning, not a document).\n\n"
 
     "  BLEND BOTH SOURCES IN YOUR ANSWER (when they don't conflict):\n"
     "    If a learning and a document chunk are about the same topic but\n"
@@ -320,6 +341,13 @@ _INSTRUCTIONS = (
     "    only processes invoices on Mondays' — recommend Monday and mention\n"
     "    the doc as outdated background.\n\n"
 
+    "  LEARNING vs. TRAINING-DATA CONFLICT (the recipe case):\n"
+    "    If check_learned returns a personal version of something general\n"
+    "    (e.g. the user's rib recipe vs. recipes you know from training),\n"
+    "    THE STORED LEARNING WINS. Lead with the user's version. Do not\n"
+    "    fall back on web search or generic recipes unless the user\n"
+    "    explicitly asks for alternatives.\n\n"
+
     "  RELEVANCE INTERPRETATION:\n"
     "    Relevance labels on check_learned results are now calibrated:\n"
     "      🟢 HIGH (≥ 0.70)     — near-identical phrasing match; trust fully\n"
@@ -330,10 +358,6 @@ _INSTRUCTIONS = (
     "    trustworthy. Do NOT skip a MODERATE result just because it isn't\n"
     "    HIGH. Only treat LOW as a signal to ignore, and even then check\n"
     "    the title before discarding.\n\n"
-
-    "  ONLY skip the dual-search when the question is purely about Claude's\n"
-    "  general world knowledge with no link to the user's work (e.g. 'what\n"
-    "  is a regex', 'translate this Latin phrase'). When in doubt, search.\n\n"
 
     "═══════════════════════════════════════════════════════════════\n"
     " DOCUMENT RAG — Detailed Tool Reference\n"
@@ -602,13 +626,20 @@ def how_to_use_ai_prowler() -> str:
         "and represent the operator's verified ground truth. Use them.\n\n"
 
         "  STEP A  check_learned(query)\n"
-        "    Call BEFORE answering questions about clients, projects,\n"
-        "    procedures, or any business-specific facts. If a learning\n"
-        "    contradicts your built-in knowledge, prefer the learning.\n"
-        "    Triggers:\n"
+        "    Call BEFORE answering ANY user question. No exceptions for\n"
+        "    questions that look like general knowledge — the user may\n"
+        "    have recorded a personal version of a recipe, technique,\n"
+        "    preference, or recommendation that overrides what your\n"
+        "    training data would suggest. If a learning contradicts your\n"
+        "    built-in knowledge or any web search result, prefer the\n"
+        "    learning.\n"
+        "    The ONLY questions you may skip on are pure arithmetic and\n"
+        "    language translation. When in doubt, search.\n"
+        "    Triggers that GUARANTEE a check_learned call:\n"
+        "      - User asks 'what's a good X' / 'how do I X' / 'recommend X'\n"
         "      - User says 'what did we learn about...', 'do you remember...'\n"
-        "      - User mentions a client, project, or case by name\n"
-        "      - You're about to make a business recommendation\n"
+        "      - User mentions a client, project, recipe, or case by name\n"
+        "      - You're about to make a recommendation of any kind\n"
         "      - You're about to state a fact that may have been corrected\n\n"
 
         "  STEP B  record_learning(category, content, ...)\n"
@@ -658,7 +689,8 @@ def how_to_use_ai_prowler() -> str:
         "  - Claude receives RAW CHUNKS and synthesizes answers directly.\n"
         "  - For complex questions, always search multiple times before answering.\n"
         "  - Stored learnings outrank built-in knowledge — always check_learned\n"
-        "    before answering business-specific questions.\n"
+        "    before answering ANY user question (the only exceptions are pure\n"
+        "    arithmetic and language translation).\n"
         "  - Use check_status() to verify the knowledge base is healthy.\n"
         "  - Use get_action_tools_status() to verify field-service tools.\n"
         "  - Re-call this tool any time you need a reminder of the workflow.\n\n"
@@ -3066,22 +3098,36 @@ def check_learned(
     Check the self-learning knowledge base for relevant learnings before
     answering a question or making a decision.
 
-    WHEN TO USE THIS TOOL — call PROACTIVELY, without being asked:
-    - BEFORE answering questions about clients, projects, or procedures
-    - BEFORE making scheduling or business recommendations
-    - When the user asks about a topic that may have stored corrections
-    - When the user says "what did we learn about..." or "do you remember..."
-    - When you're about to state a fact that might have been updated
+    WHEN TO USE THIS TOOL — call PROACTIVELY, without being asked, BEFORE
+    answering ANY user question. The user uses AI-Prowler as a personal
+    knowledge store for everything (recipes, preferences, techniques,
+    opinions — not just business), so a personal learning may override
+    what your training data would say.
+
+    Specifically, call check_learned() before:
+    - ANY recommendation or "what's a good X" / "how do I X" question
+      (recipes, techniques, products, places, services, etc.)
+    - ANY question about clients, projects, procedures, or business
+    - ANY definitional or how-to question
+    - Scheduling, planning, or workflow recommendations
+    - When the user says "what did we learn about...", "do you remember..."
+    - When you're about to state a fact that may have been corrected
     - At the START of post-operation analysis workflows
+
+    The ONLY questions you may skip on are pure arithmetic and language
+    translation, where no personal learning could plausibly apply.
 
     The tool searches semantically — you don't need exact keyword matches.
     For example, searching "client communication preferences" will find
-    a learning titled "Client X prefers email over phone calls".
+    a learning titled "Client X prefers email over phone calls", and
+    searching "ribs recipe" will find a learning titled "My BBQ rib rub".
 
     IMPORTANT: If check_learned() returns relevant results, you MUST
     apply them to your response. If a learning contradicts your built-in
-    knowledge, prefer the learning (it was recorded more recently and
-    with specific context from the operator).
+    knowledge OR a web search result, prefer the learning — it was
+    recorded by the user and represents their explicit preference or
+    ground truth. Do NOT fall back to generic answers or web searches
+    when a stored learning covers the question.
 
     Args:
         query:              Natural language search query describing what

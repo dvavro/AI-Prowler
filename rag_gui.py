@@ -641,7 +641,65 @@ class RAGGui:
     def __init__(self, root):
         self.root = root
         self.root.title(f"AI-Prowler — Agentic RAG Knowledge Base v{APP_VERSION}")
-        self.root.geometry("1200x980")
+
+        # ── Match Tk scaling to Windows DPI ──────────────────────────────────
+        # Now that we declared DPI awareness in main(), Windows stops bitmap-
+        # upscaling our window. Without telling Tk about the scale factor,
+        # all fonts and ttk widgets would render at their literal point size
+        # on a 150% display — i.e. uncomfortably small. Tk's scaling property
+        # is in pixels-per-point; default is 1.333 (= 96 DPI / 72). We bump
+        # it proportionally to whatever scale the user has configured.
+        try:
+            if sys.platform == 'win32':
+                _dpi = ctypes.windll.user32.GetDpiForSystem()
+                _scale = _dpi / 96.0
+                self.root.tk.call('tk', 'scaling', 1.333 * _scale)
+        except Exception:
+            pass   # Stick with Tk default scaling if anything goes wrong
+
+        # ── Adaptive window sizing ────────────────────────────────────────────
+        # Hardcoding 1200x980 caused the window to hang off the bottom of the
+        # screen on common 1366x768 / 1920x1080 Win 11 laptops, hiding the
+        # status bar with the MCP Ready indicator. Now we measure the screen
+        # and cap the window to fit, leaving room for the Windows taskbar.
+        # We also scale the desired dimensions by the OS DPI so the window
+        # stays the same physical-on-screen size regardless of display scaling.
+        try:
+            _screen_w = self.root.winfo_screenwidth()
+            _screen_h = self.root.winfo_screenheight()
+            # Determine DPI scale (1.0 at 100%, 1.5 at 150%, etc.)
+            try:
+                if sys.platform == 'win32':
+                    _dpi_scale = ctypes.windll.user32.GetDpiForSystem() / 96.0
+                else:
+                    _dpi_scale = 1.0
+            except Exception:
+                _dpi_scale = 1.0
+            _desired_w = int(1200 * _dpi_scale)
+            _desired_h = int(980 * _dpi_scale)
+            # Leave ~80px (scaled) for the Windows taskbar and window decorations
+            _avail_h   = max(int(600 * _dpi_scale), _screen_h - int(80 * _dpi_scale))
+            _avail_w   = max(int(800 * _dpi_scale), _screen_w - int(40 * _dpi_scale))
+            _win_w     = min(_desired_w, _avail_w)
+            _win_h     = min(_desired_h, _avail_h)
+            # Center the window on screen
+            _pos_x     = max(0, (_screen_w - _win_w) // 2)
+            _pos_y     = max(0, (_screen_h - _win_h) // 2 - 20)
+            self.root.geometry(f"{_win_w}x{_win_h}+{_pos_x}+{_pos_y}")
+        except Exception:
+            # Fall back to a safe size that fits on a 1366x768 laptop
+            self.root.geometry("1200x680")
+
+        # Enforce a minimum size so the user can't shrink the window so far
+        # that critical controls become unreachable. 800x600 is the smallest
+        # the Notebook can render all tabs without horizontal clipping.
+        # Scale the minimum too so it remains usable at high DPI.
+        try:
+            _min_scale = (ctypes.windll.user32.GetDpiForSystem() / 96.0
+                          if sys.platform == 'win32' else 1.0)
+        except Exception:
+            _min_scale = 1.0
+        self.root.minsize(int(800 * _min_scale), int(600 * _min_scale))
         
         # Set icon (if available)
         try:
@@ -1779,8 +1837,15 @@ or from the Help menu."""
         
         # Create menu bar
         self.create_menu_bar()
-        
-        # Create notebook (tabs)
+
+        # Status bar — pack BEFORE the notebook so the bottom-anchored bar
+        # always reserves its space first. If the notebook packs first with
+        # expand=True it can steal all available height on small screens and
+        # push the status bar (with the MCP Ready indicator) off the bottom.
+        self.create_status_bar()
+
+        # Create notebook (tabs) — packs into the remaining space above the
+        # status bar.
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill='both', expand=True, padx=5, pady=5)
         
@@ -1805,9 +1870,6 @@ or from the Help menu."""
         self._TAB_INDEX_SETTINGS     = 6
         self._TAB_INDEX_SMALL_BIZ    = 7   # Small Business Service Tools
         self._TAB_INDEX_LEARNINGS    = 8   # Self-Learning Knowledge Base
-        
-        # Status bar
-        self.create_status_bar()
     
     def _make_scrollable_tab(self, outer_frame):
         """Wrap outer_frame in a canvas + scrollbar and return the inner content frame.
@@ -1918,7 +1980,11 @@ or from the Help menu."""
                 pass
 
         # ── Build the Welcome tab layout ──────────────────────────────────────
-        container = ttk.Frame(welcome_frame, padding=(30, 15))
+        # Wrap in a scrollable region so the full Home page is reachable on
+        # smaller display windows (the welcome icon, ad space, and footer can
+        # all end up below the fold otherwise).
+        _welcome_scroll = self._make_scrollable_tab(welcome_frame)
+        container = ttk.Frame(_welcome_scroll, padding=(30, 15))
         container.pack(fill='both', expand=True)
 
         # ── Large Icon — centered at top ──────────────────────────────────────
@@ -3104,6 +3170,82 @@ or from the Help menu."""
                   relief='flat', padx=16, pady=3,
                   cursor='hand2',
                   command=_download_claude_desktop).pack(fill='x')
+
+        # ── Initial connection test panel ────────────────────────────────────
+        # A copy-to-clipboard helper for the recommended first prompt of every
+        # new Claude chat. Paste this in once per chat to (a) verify the MCP
+        # link is live and (b) prime Claude to check learnings before answering.
+        _conntest_banner = tk.Frame(query_frame, bg='#2c3e50',
+                                    highlightthickness=1,
+                                    highlightbackground='#3a5066')
+        _conntest_banner.pack(fill='x', padx=20, pady=(8, 8))
+
+        _conntest_inner = tk.Frame(_conntest_banner, bg='#2c3e50')
+        _conntest_inner.pack(fill='x', padx=14, pady=10)
+
+        # Left side — heading + explanation
+        _ct_text_col = tk.Frame(_conntest_inner, bg='#2c3e50')
+        _ct_text_col.pack(side='left', fill='both', expand=True, padx=(0, 12))
+
+        tk.Label(_ct_text_col,
+                 text="✅  Initial Connection Test (recommended at start of every chat)",
+                 bg='#2c3e50', fg='#ffffff',
+                 font=('Arial', 11, 'bold'),
+                 anchor='w').pack(anchor='w')
+
+        tk.Label(_ct_text_col,
+                 text="For best results and initial connection test, copy this command "
+                      "into every new Claude chat once — it verifies the MCP link is "
+                      "live and primes Claude to list all available AI-Prowler tools.",
+                 bg='#2c3e50', fg='#aaccee',
+                 font=('Arial', 8),
+                 wraplength=520, justify='left',
+                 anchor='w').pack(anchor='w', pady=(2, 6))
+
+        # The exact command text shown in a read-only entry for transparency
+        _CONN_TEST_CMD = ("Check the status of AI-Prowler and "
+                          "list all the tools.")
+
+        _cmd_entry = tk.Entry(_ct_text_col,
+                              font=('Consolas', 9),
+                              bg='#1a2530', fg='#d8e8ff',
+                              insertbackground='#d8e8ff',
+                              readonlybackground='#1a2530',
+                              relief='flat', bd=2)
+        _cmd_entry.insert(0, _CONN_TEST_CMD)
+        _cmd_entry.configure(state='readonly')
+        _cmd_entry.pack(fill='x', pady=(0, 2))
+
+        # Right side — Copy button
+        _ct_btn_col = tk.Frame(_conntest_inner, bg='#2c3e50')
+        _ct_btn_col.pack(side='right', padx=(12, 0))
+
+        def _copy_conn_test_cmd():
+            """Copy the initial connection test command to the system clipboard."""
+            try:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(_CONN_TEST_CMD)
+                # Force clipboard to persist after window close
+                self.root.update()
+                self.status_var.set(
+                    "Copied connection test command to clipboard")
+                # Brief visual feedback on the button itself
+                _copy_btn.configure(text="✓  Copied!", bg='#1a7a4a')
+                self.root.after(1500, lambda: _copy_btn.configure(
+                    text="📋  Copy Command", bg='#2980b9'))
+            except Exception as _e:
+                self.status_var.set(f"Clipboard copy failed: {_e}")
+
+        _copy_btn = tk.Button(_ct_btn_col,
+                              text="📋  Copy Command",
+                              bg='#2980b9', fg='white',
+                              activebackground='#3498db',
+                              activeforeground='white',
+                              font=('Arial', 10, 'bold'),
+                              relief='flat', padx=16, pady=8,
+                              cursor='hand2',
+                              command=_copy_conn_test_cmd)
+        _copy_btn.pack(fill='x')
 
         # Divider under the banner
         ttk.Separator(query_frame, orient='horizontal').pack(
@@ -6649,7 +6791,34 @@ Built with Python, ChromaDB, and Claude"""
         ttk.Label(xl_path_row, text="Default spreadsheet path:",
                   font=('Arial', 9), width=26, anchor='w').pack(side='left')
         _xl_path_var = tk.StringVar()
-        _xl_path_var.set(_load_cfg().get('default_spreadsheet_path', ''))
+
+        # Auto-detect default path with fallbacks. Some installs may not have
+        # written default_spreadsheet_path to config.json (e.g. the bundled
+        # template went missing at compile time, or installer-side config init
+        # failed silently). In that case we look for the template in the
+        # standard install location and use it if present.
+        def _detect_default_xl_path():
+            cfg_val = _load_cfg().get('default_spreadsheet_path', '')
+            if cfg_val:
+                return cfg_val
+            # Standard install location written by the Inno [Files] section:
+            #     %USERPROFILE%\Documents\AI-Prowler\AI-Prowler_Job_Tracker.xlsx
+            import os as _os
+            for candidate in (
+                Path.home() / 'Documents' / 'AI-Prowler' / 'AI-Prowler_Job_Tracker.xlsx',
+                # Older installs may have used OneDrive's redirected Documents
+                Path.home() / 'OneDrive' / 'Documents' / 'AI-Prowler' / 'AI-Prowler_Job_Tracker.xlsx',
+                # Fall back to the file shipped next to rag_gui.py (dev runs)
+                Path(__file__).parent / 'AI-Prowler_Job_Tracker.xlsx',
+            ):
+                try:
+                    if candidate.exists():
+                        return str(candidate).replace('/', _os.sep)
+                except Exception:
+                    pass
+            return ''
+
+        _xl_path_var.set(_detect_default_xl_path())
         ttk.Entry(xl_path_row, textvariable=_xl_path_var, width=44
                   ).pack(side='left', padx=4)
 
@@ -11937,6 +12106,36 @@ def main():
                     ctypes.windll.user32.ShowWindow(_hwnd, 0)  # SW_HIDE
         except Exception:
             pass   # Never crash startup over window-hiding
+
+    # ── Per-monitor DPI awareness (Windows) ──────────────────────────────────
+    # Tell Windows that AI-Prowler will render at the native screen DPI rather
+    # than letting the OS bitmap-upscale a 96 DPI render. Without this, on a
+    # 125% or 150% scaled laptop (very common on Win 11) the entire window
+    # gets blown up by the OS, which both blurs text AND makes the window
+    # consume more physical screen than the 1200x980 we requested — pushing
+    # the status bar (MCP Ready) off the bottom of the screen on smaller
+    # laptops.
+    #
+    # We use a fallback chain because the modern API didn't exist before
+    # Windows 10 1703 (April 2017). Order is: best → fallback → fallback.
+    # All are wrapped in try/except so non-Windows or older Windows just
+    # silently skips this step.
+    if sys.platform == 'win32':
+        try:
+            # Best: per-monitor v2 (Win 10 1703+) — handles multi-monitor
+            # setups with different scale factors per display.
+            ctypes.windll.user32.SetProcessDpiAwarenessContext(
+                ctypes.c_void_p(-4))  # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+        except Exception:
+            try:
+                # Fallback: per-monitor v1 (Win 8.1+)
+                ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            except Exception:
+                try:
+                    # Last resort: system-wide DPI awareness (Vista+)
+                    ctypes.windll.user32.SetProcessDPIAware()
+                except Exception:
+                    pass  # Never crash startup over DPI
 
     if not RAG_AVAILABLE:
         root = tk.Tk()

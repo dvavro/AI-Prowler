@@ -1,6 +1,6 @@
-AI-Prowler Software License
-============================
-Version 5.0 — Effective March 2026
+AI-Prowler Software License & Terms of Service
+================================================
+Version 6.0 — Effective May 2026
 
 Copyright (C) 2026 David Kevin Vavro. All rights reserved.
 Contact: david.vavro1@gmail.com
@@ -8,120 +8,557 @@ Contact: david.vavro1@gmail.com
 
 PLAIN-LANGUAGE SUMMARY
 -----------------------
-  - Desktop use:  AI-Prowler is FREE to use but for advance Agentic (agent) operation AI-Prowler requires an 
-    MCP compatible port LLM such as Claude desktop app installed and may or may not require paid subscriptions 
-    with Anthropic currently the free tier supports MCP. AI-Prowler is not responsible for other subscriptions.
-  - Mobile / remote access via the internet for an individual: Requires a paid
-    Managed Service subscription from AI-Prowler $50 initial setup fee and $10/month to manage internet 
-    domains and support.
-  - Developers: You may modify and redistribute the desktop
-    software freely under the conditions below.
+  - Desktop use:  AI-Prowler desktop software is FREE and open source
+    under the Apache License 2.0. You can use it, modify it, and even
+    redistribute it. To use AI-Prowler's agentic features you will also
+    need an MCP-compatible LLM client such as Claude Desktop, which is
+    not provided by AI-Prowler and may carry its own subscription or
+    terms from its vendor (e.g., Anthropic).
+
+  - Mobile / remote access:  Connecting your AI-Prowler instance to the
+    public internet through AI-Prowler's managed infrastructure
+    (subdomain, Cloudflare Tunnel, license key) is an OPTIONAL paid
+    service — currently $10 USD per month per subscriber. Part 2 below
+    governs that service.
+
+  - Developers:  You may modify and redistribute the desktop software
+    freely under the Apache 2.0 terms in Part 1 below. You may NOT
+    resell or replicate AI-Prowler's managed remote-access
+    infrastructure (Part 2).
+
+  - Your data:  AI-Prowler stores nothing on its servers. Indexed
+    documents, queries, and LLM responses stay on your machine and
+    flow directly to the LLM provider you choose. The managed service
+    is a network transport only.
 
 This summary is for convenience only. The full terms below govern.
 
 
-PART 1 — AI-Prowler DESKTOP SOFTWARE LICENSE (Free)
-=========================================
+==============================================================================
+PART 1 — AI-PROWLER DESKTOP SOFTWARE LICENSE (Apache 2.0)
+==============================================================================
 
-Permission is granted, free of charge, to any person obtaining a
-copy of this software, to use, copy, modify, and redistribute it
-FOR LOCAL / DESKTOP USE ONLY, subject to the following conditions:
+The AI-Prowler desktop software, including but not limited to rag_gui.py,
+ai_prowler_mcp.py, the bundled MCP tools, and the AI-Prowler_Job_Tracker
+spreadsheet template, is licensed under the Apache License, Version 2.0
+(the "License"). You may obtain a full copy of the License at:
 
-1. All redistributions of source code must retain all copyright
-   notices, this license, and the conditions below without
-   modification.
+    http://www.apache.org/licenses/LICENSE-2.0
 
-2. All redistributions in binary form must retain all occurrences
-   of the copyright notice and any website addresses present in
-   the original distribution.
+The complete Apache 2.0 text is reproduced below for reference. Where any
+plain-language summary in this document differs from the Apache 2.0 text,
+the Apache 2.0 text governs.
 
-3. The origin of this software must not be misrepresented. You
-   must not claim that you wrote the original software. If you
-   use this software in a product, an acknowledgment in the
-   product documentation is appreciated but not required.
+   -----------------------------------------------------------------
+                         Apache License
+                   Version 2.0, January 2004
+                http://www.apache.org/licenses/
 
-4. Modified versions, in source or binary form, must be plainly
-   marked as such and must not be misrepresented as the original
-   unmodified software.
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
 
-5. This free license applies ONLY to local (stdio / Claude
-   Desktop) use where the MCP server is not exposed to the
-   public internet. Claude Desktop free version does currently support MCP.
-   See Part 2 below for internet-facing deployments.
+   1. Definitions.
 
-DISCLAIMER: This software is provided "as-is," without any
-express or implied warranty. In no event shall the author be
-liable for any damages arising from the use of this software including
-deleting of files or data and AI-Prowler is not liable for any damages arising from the 
-use of a LLM (Large Language Model) controlling AI-Prowler from the MCP port.
+      "License" shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      "Licensor" shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      "Legal Entity" shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      "control" means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      "You" (or "Your") shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      "Source" form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      "Object" form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      "Work" shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      "Derivative Works" shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      "Contribution" shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, "submitted"
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as "Not a Contribution."
+
+      "Contributor" shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a "NOTICE" text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for describing the origin of the Work and
+      reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF APACHE 2.0 TERMS AND CONDITIONS
+   -----------------------------------------------------------------
 
 
-PART 2 — MANAGED REMOTE ACCESS SERVICE (Paid)
-===============================================
+ADDITIONAL DISCLAIMERS APPLICABLE TO ALL USE OF AI-PROWLER (Desktop or Remote)
+-----------------------------------------------------------------------------
 
-Any deployment in which the AI-Prowler HTTP MCP server
-(ai_prowler_mcp.py) is exposed to the public internet —
-including but not limited to use with Claude.ai custom
-connectors, mobile devices, or any remote client — constitutes
-use of the "Managed Remote Access Service" and is subject to the
-following additional terms:
+The following disclaimers apply IN ADDITION to the Apache 2.0 warranty
+and liability sections above, to the maximum extent permitted by
+applicable law:
 
-1. SUBSCRIPTION REQUIRED
-   Remote / internet-facing use requires an active paid
-   subscription issued by AI-Prowler ADMIN ("the Provider").
-   Subscriptions are available at:  david.vavro1@gmail.com
+  a) NO LLM CONTROL. AI-Prowler does not provide a Large Language Model
+     (LLM). It exposes tools to an external LLM (such as Anthropic's
+     Claude) over the MCP protocol. The Licensor does not control, and
+     is not responsible for, ANY action that an LLM takes through the
+     AI-Prowler interface — including but not limited to reading,
+     modifying, deleting, moving, or transmitting files; running
+     commands; sending emails; geocoding, scheduling, or invoicing
+     operations; or any data the LLM may include in its outputs. You
+     are solely responsible for reviewing and approving which tools
+     and directories you expose to any LLM.
 
-2. WHAT THE SUBSCRIPTION COVERS
-   The Provider supplies:
-     a) A dedicated public subdomain (e.g., yourname.ai-prowler.com)
-     b) SSL/TLS certificate management via Cloudflare
-     c) A Bearer token granting remote access
-     d) Technical support for connection and configuration issues
-     e) Token renewal and management upon each billing cycle
+  b) NO RESPONSIBILITY FOR DATA LOSS. The Licensor is not liable for
+     deletion, corruption, alteration, or loss of any file, document,
+     spreadsheet, database, indexed content, or other data, regardless
+     of cause. You are responsible for maintaining backups of your
+     data independently of AI-Prowler.
 
-3. ACCESS TOKENS
-   Remote access tokens are issued per subscriber and are:
-     - Non-transferable
-     - Valid only for the subscription seat stated on the token
-     - Automatically invalidated upon 30 day subscription lapse
-   Sharing tokens with non-subscribers is a violation of this
-   agreement and will result in immediate service termination
-   without refund.
+  c) NO RESPONSIBILITY FOR SECURITY. The Licensor is not liable for
+     unauthorized access to, interception of, or exposure of your data,
+     network, machine, or any third-party service, regardless of cause.
+     You are solely responsible for the security of your local machine,
+     your network, your Bearer token, and any third-party services
+     (including but not limited to LLM providers, cloud storage, and
+     email accounts) that you connect through AI-Prowler.
 
-4. SERVICE TERMINATION
-   The Provider may terminate remote access immediately and
-   without notice if:
-     a) A subscription payment is overdue by more than 30 days
-     b) A token is shared or misused
-     c) The subscriber violates any term of this agreement
-   Termination is effected by revoking the subscriber's
-   subdomain DNS record and/or invalidating their token.
+  d) NO RESPONSIBILITY FOR THIRD-PARTY SERVICES. AI-Prowler interacts
+     with third-party services that operate under their own terms and
+     SLAs, including but not limited to Anthropic (Claude), Cloudflare,
+     Microsoft (Windows, OneDrive), Google (Maps, geocoding), weather
+     data providers, and any LLM, payment, or email provider you choose
+     to use. The Licensor is not responsible for the actions, policies,
+     outages, data practices, or terms of any third-party service.
 
-5. NO SELF-HOSTING OF THE MANAGED INFRASTRUCTURE
-   Subscribers may not replicate, resell, or sublicense the
-   managed infrastructure components (subdomain, tunnel
-   configuration, OAuth server) provided by the Provider.
-   The desktop software itself may be freely modified and
-   redistributed under Part 1 above.
-
-6. REFUNDS
-   Subscriptions are non-refundable once a token has been issued
-   and the service has been activated for the billing period.
-
-7. LIMITATION OF LIABILITY
-   The Provider makes no guarantee of uptime, availability, or
-   fitness for a particular purpose for the remote access
-   service. The subscriber assumes all risk associated with
-   remote connectivity and data transmitted over the service.
+PART 1 covers LOCAL desktop use of AI-Prowler. Use of AI-Prowler over
+the public internet through Provider-managed infrastructure is
+additionally governed by PART 2 below.
 
 
+==============================================================================
+PART 2 — MANAGED REMOTE ACCESS SERVICE (Paid, Optional)
+==============================================================================
+
+Any deployment in which the AI-Prowler HTTP MCP server is exposed to
+the public internet through Provider-managed infrastructure (subdomain,
+Cloudflare Tunnel, license key) — including use with Claude.ai custom
+connectors, mobile devices, or any remote client — constitutes use of
+the "Managed Remote Access Service" ("the Service") and is governed by
+the following additional Terms of Service:
+
+IMPORTANT: SECTIONS 2.7 THROUGH 2.11 CONTAIN LIMITATIONS OF LIABILITY,
+WARRANTY DISCLAIMERS, AND AN INDEMNIFICATION CLAUSE THAT AFFECT YOUR
+LEGAL RIGHTS. PLEASE READ THEM CAREFULLY.
+
+
+2.1  WHAT THE SERVICE IS
+-------------------------
+The Service provides remote internet access to your locally-installed
+AI-Prowler instance through Provider-managed infrastructure:
+
+  a) A dedicated public subdomain (e.g., yourname.dvavro-ai-prowler.com)
+  b) Managed Cloudflare Tunnel configuration and SSL/TLS certificates
+  c) A license key that activates remote access in your AI-Prowler
+     installation
+  d) Email-based technical support for connection and configuration
+     issues directly related to the Service
+  e) Renewal and rotation of license keys upon each billing cycle
+
+The Service does NOT include:
+
+  - Any software license (the desktop software is separately licensed
+    under Apache 2.0; see Part 1)
+  - Any LLM access; you must obtain that separately (e.g., Claude Pro)
+  - Hosting, backup, or recovery of your indexed documents — all of
+    your data remains on your own machine
+  - Security assessments, penetration testing, or compliance
+    certifications for your local environment
+
+
+2.2  PRICING AND BILLING
+-------------------------
+  Plan:       AI-Prowler Remote Access
+  Price:      $10 USD per month per subscriber
+  Billing:    Monthly, in advance
+  Payment:    PayPal, Venmo, or bank transfer
+
+Subscriptions are NOT pro-rated. Monthly billing covers the full
+calendar month regardless of when within the month service is
+activated or canceled.
+
+
+2.3  ACTIVATION AND TOKENS
+---------------------------
+After payment is received, Provider will issue a license key by email
+within one business day. You activate the Service by entering the
+license key into your local AI-Prowler installation.
+
+Your Bearer token is generated locally on your machine and is NEVER
+sent to Provider.
+
+License keys are issued per subscriber and are:
+
+  - Non-transferable
+  - Valid only for the subscriber seat stated on the key
+  - Automatically invalidated upon subscription lapse beyond the grace
+    period (see Section 2.5)
+
+Sharing license keys with non-subscribers is a violation of these
+Terms and will result in immediate service termination without
+refund.
+
+
+2.4  ACCEPTABLE USE
+--------------------
+You agree NOT to:
+
+  a) Share, resell, or transfer your license key to any other person
+     or entity
+  b) Use the Service in violation of any applicable law, including
+     U.S. export control laws
+  c) Use the Service to store, transmit, or process data that
+     violates third-party rights (including copyrighted material you
+     do not own or have license to use)
+  d) Attempt to circumvent, disable, or interfere with the
+     authentication, licensing, or rate-limiting mechanisms of the
+     Service
+  e) Use the Service to scan, probe, attack, or harm Provider's
+     infrastructure or any third party's systems
+  f) Use the Service to process personally identifiable information
+     of third parties in violation of applicable privacy law (HIPAA,
+     GDPR, CCPA, FIPA, etc.) without your own independent legal basis
+     to do so
+  g) Replicate, resell, or sublicense the managed infrastructure
+     components (subdomain, tunnel configuration, OAuth server)
+     provided by Provider. The desktop software itself may be freely
+     modified and redistributed under Part 1 above.
+
+Violation of this section may result in immediate suspension or
+termination of Service without refund.
+
+
+2.5  GRACE PERIOD AND TERMINATION
+----------------------------------
+If a payment is not received by the renewal date:
+
+  a) The Service continues to function for 30 days with a renewal
+     reminder shown in your AI-Prowler dashboard
+  b) On day 31, the license key is invalidated and remote access
+     stops working; the desktop software continues to function fully
+  c) The corresponding subdomain may be revoked at Provider's
+     discretion after day 60
+
+Provider may terminate or suspend the Service IMMEDIATELY and without
+refund if you violate Section 2.4. Provider may also terminate the
+Service for any reason on 30 days' written notice to your email of
+record, with a pro-rated refund of any unused prepaid period.
+
+You may cancel at any time by emailing david.vavro1@gmail.com.
+Cancellation takes effect at the end of the current billing period.
+Subscriptions are non-refundable once a license key has been issued
+for the billing period.
+
+
+2.6  YOUR DATA AND PRIVACY
+---------------------------
+The Service is a NETWORK TRANSPORT service. Provider does not access,
+copy, store, or process the contents of your indexed documents, your
+queries to the LLM, or the responses from the LLM. All of that data
+flows directly between your machine and the LLM provider (e.g.,
+Anthropic) through your machine's Cloudflare Tunnel connection.
+
+Provider's infrastructure may log the following minimal operational
+metadata for billing and abuse prevention:
+
+  - Your subdomain and license key identifier
+  - Aggregate connection counts and bandwidth totals
+  - Source IP addresses of incoming connections (Cloudflare default)
+  - Timestamps of connection events
+
+Provider does NOT log:
+
+  - The content of any request or response
+  - The names or contents of your indexed files
+  - Your queries, prompts, or LLM outputs
+
+Provider will not sell, rent, or share operational metadata with
+third parties except: (a) as required by court order or law, or
+(b) with Cloudflare and payment processors strictly as needed to
+operate the Service.
+
+
+2.7  DISCLAIMER OF WARRANTIES (Service)
+----------------------------------------
+THE SERVICE IS PROVIDED "AS IS" AND "AS AVAILABLE," WITHOUT WARRANTIES
+OF ANY KIND, WHETHER EXPRESS, IMPLIED, STATUTORY, OR OTHERWISE.
+PROVIDER SPECIFICALLY DISCLAIMS ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND
+NON-INFRINGEMENT.
+
+WITHOUT LIMITING THE FOREGOING, PROVIDER MAKES NO WARRANTY THAT:
+
+  a) The Service will be uninterrupted, timely, secure, or error-free
+  b) The Service will meet your specific requirements
+  c) Any data transmitted through the Service will be free from
+     interception, corruption, or loss
+  d) Any LLM connected through the Service will produce accurate,
+     reliable, safe, lawful, or useful results
+  e) The Service will be compatible with any specific operating
+     system, hardware, network, or third-party software
+
+PROVIDER IS NOT AN LLM PROVIDER. PROVIDER DOES NOT CONTROL THE
+BEHAVIOR, OUTPUTS, OR SAFETY OF ANY LLM USED WITH AI-PROWLER. ANY
+ACTION TAKEN BY AN LLM THROUGH THE MCP INTERFACE — INCLUDING BUT NOT
+LIMITED TO READING, MODIFYING, OR DELETING FILES, EXECUTING TOOLS,
+SENDING EMAILS, OR PROCESSING SENSITIVE DATA — IS UNDERTAKEN AT YOUR
+OWN RISK. YOU ARE RESPONSIBLE FOR REVIEWING AND APPROVING THE TOOLS
+YOU EXPOSE TO ANY LLM.
+
+
+2.8  LIMITATION OF LIABILITY (Service)
+---------------------------------------
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL
+PROVIDER BE LIABLE FOR ANY:
+
+  a) LOSS OF DATA, FILES, KNOWLEDGE BASES, OR INDEXED CONTENT
+  b) LOSS OF BUSINESS, PROFITS, REVENUE, OR GOODWILL
+  c) UNAUTHORIZED ACCESS TO, ALTERATION OF, OR DESTRUCTION OF DATA
+     ON YOUR MACHINE, NETWORK, OR ANY THIRD-PARTY SERVICE
+  d) ACTIONS TAKEN BY ANY LLM CONNECTED THROUGH AI-PROWLER,
+     INCLUDING DELETION, MODIFICATION, OR EXFILTRATION OF FILES
+  e) SECURITY BREACHES, INTRUSIONS, OR DATA EXPOSURE ARISING FROM
+     YOUR LOCAL MACHINE, NETWORK, OR USE OF THE SERVICE
+  f) DOWNTIME, INTERRUPTION, OR UNAVAILABILITY OF THE SERVICE OR
+     ANY THIRD-PARTY SERVICE (CLOUDFLARE, LLM PROVIDERS, ETC.)
+  g) ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY,
+     OR PUNITIVE DAMAGES OF ANY KIND
+
+EVEN IF PROVIDER HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+PROVIDER'S TOTAL CUMULATIVE LIABILITY TO YOU FOR ALL CLAIMS ARISING
+FROM OR RELATED TO THE SERVICE, REGARDLESS OF THE FORM OF ACTION
+(WHETHER IN CONTRACT, TORT, STRICT LIABILITY, OR OTHERWISE), SHALL
+NOT EXCEED THE TOTAL FEES YOU PAID TO PROVIDER FOR THE SERVICE
+DURING THE THREE (3) MONTHS IMMEDIATELY PRECEDING THE EVENT GIVING
+RISE TO THE CLAIM.
+
+Some jurisdictions do not allow the exclusion or limitation of
+incidental or consequential damages, so the above limitations may
+not apply to you in those jurisdictions. In such case, Provider's
+liability shall be limited to the maximum extent permitted by law.
+
+NOTHING IN THESE TERMS LIMITS OR EXCLUDES LIABILITY FOR (a) FRAUD,
+(b) DEATH OR PERSONAL INJURY CAUSED BY PROVIDER'S NEGLIGENCE, OR
+(c) ANY OTHER LIABILITY THAT CANNOT BE LIMITED OR EXCLUDED BY LAW.
+
+
+2.9  INDEMNIFICATION
+---------------------
+You agree to defend, indemnify, and hold harmless Provider from and
+against any claims, damages, losses, liabilities, costs, and expenses
+(including reasonable attorneys' fees) arising out of or related to:
+
+  a) Your use of the Service in violation of these Terms
+  b) Your violation of any applicable law or third-party right
+  c) Any action taken by an LLM through your AI-Prowler installation
+  d) Any data you index, process, transmit, or store using
+     AI-Prowler, including any third-party rights it may infringe
+  e) Any security incident on your local machine or network
+
+
+2.10 THIRD-PARTY SERVICES
+--------------------------
+The Service depends on third-party services that operate under their
+own terms, including but not limited to:
+
+  - Cloudflare (Cloudflare Tunnel, DNS, SSL/TLS)
+  - Anthropic (Claude API and Claude.ai), or other LLM provider
+  - Your domain registrar and ISP
+
+Provider is not responsible for the actions, policies, outages, data
+practices, or terms of any third-party service. You are responsible
+for complying with all third-party terms.
+
+
+2.11 GOVERNING LAW AND DISPUTES
+--------------------------------
+These Terms are governed by the laws of the State of Florida, United
+States, without regard to its conflict-of-laws rules. Any dispute
+arising from or related to these Terms or the Service shall be
+resolved exclusively in the state or federal courts located in
+Volusia County, Florida. You consent to personal jurisdiction and
+venue in those courts.
+
+You and Provider each waive any right to a trial by jury in any
+proceeding arising out of or related to these Terms.
+
+If any provision of these Terms is held unenforceable, the remaining
+provisions shall continue in full force and effect.
+
+
+2.12 CHANGES TO THESE TERMS
+----------------------------
+Provider may revise these Terms from time to time. Material changes
+will be communicated by email to your address of record at least 30
+days before they take effect. Your continued use of the Service after
+the effective date constitutes acceptance of the revised Terms. If
+you do not agree to the revised Terms, you may cancel under Section
+2.5 and any unused prepaid amount will be refunded on a pro-rated
+basis.
+
+
+==============================================================================
 PART 3 — ENTERPRISE / BUSINESS DEPLOYMENTS
-============================================
+==============================================================================
 
-Businesses deploying AI-Prowler for internal use by employees
-require a separate Enterprise License Agreement. Enterprise
-licensing covers:
-  - Multi-user / multi-seat deployments
+The desktop software (Part 1) is free for any use, including
+commercial use within a business, under the Apache 2.0 license.
+
+Businesses deploying AI-Prowler's MANAGED REMOTE ACCESS SERVICE for
+multiple internal users (multi-seat) should contact Provider for
+volume pricing and a tailored agreement. Optional enterprise add-ons
+may include:
+
+  - Multi-user / multi-seat managed deployments
   - On-premise or cloud-hosted server installations
   - Custom subdomain and branding options
   - Priority support SLA
@@ -129,5 +566,33 @@ licensing covers:
 Contact david.vavro1@gmail.com to discuss enterprise pricing.
 
 
-David Kevin Vavro
-david.vavro1@gmail.com
+==============================================================================
+PART 4 — THIRD-PARTY COMPONENTS (NOTICE)
+==============================================================================
+
+This product includes or depends on the following third-party software,
+each governed by its own license. The full text of each license is
+available from the respective project.
+
+  * Python                  PSF License Agreement
+  * ChromaDB                Apache License 2.0
+  * FastMCP                 Apache License 2.0
+  * openpyxl                MIT License
+  * tkinter                 PSF License Agreement (Python stdlib)
+  * cloudflared             Apache License 2.0
+  * sentence-transformers   Apache License 2.0
+  * onnxruntime             MIT License
+
+If you redistribute AI-Prowler, you must preserve this notice along
+with the rest of this license file. See Apache 2.0 Section 4(d) for
+the redistribution attribution requirement.
+
+
+==============================================================================
+CONTACT
+==============================================================================
+
+  David Kevin Vavro
+  Email:     david.vavro1@gmail.com
+  Location:  Volusia County, Florida, USA
+  Project:   https://github.com/dvavro/AI-Prowler
