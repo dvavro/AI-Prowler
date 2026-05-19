@@ -1,6 +1,6 @@
 # AI-Prowler — Complete User Guide
 
-**Version 6.0.0**
+**Version 6.0.2**
 
 \---
 

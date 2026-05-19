@@ -110,7 +110,7 @@
 
 [Setup]
 AppName=AI-Prowler
-AppVersion=6.0.1
+AppVersion=6.0.2
 DefaultDirName={autopf}\AI-Prowler
 DefaultGroupName=AI-Prowler
 OutputBaseFilename=AI-Prowler_INSTALL
