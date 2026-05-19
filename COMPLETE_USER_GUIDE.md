@@ -51,6 +51,8 @@ This produces dramatically better results — equivalent to having a skilled res
 
 **New in v6.0.0 — Self-Learning at full strength:** Claude can record business lessons, fact corrections, project insights, and process improvements into a structured knowledge base — and check that knowledge before answering future questions. Learnings are instant (no GPU training required) and managed through a dedicated 🧠 Learnings tab in the GUI. 6.0 hardens the system with a comprehensive automated test suite (147 tests covering indexing, MCP, GUI, and self-learning), plus several engine reliability fixes for change detection, deletion purging, and database wipes. See Section 20 for full self-learning details.
 
+**New in v6.0.2 — Mobile Write Zones & Code Tools:** Claude can now create, edit, list, back up, and restore files in directories you've explicitly pre-authorized. Nine new MCP code tools (`create_file`, `write_file`, `str_replace_in_file`, `create_directory`, `list_directory`, `copy_to_backup`, `list_backups`, `restore_backup`, `reset_write_counter`) are gated by a double-lock security model — a read allowlist plus a separate writable allowlist — with a per-session 20-write circuit breaker and a hard blocklist that always wins. The new **Update Index** tab UI lets you grant or revoke write access by double-clicking a row, with `[W]` / `[W*]` / `[R]` indicators showing each path's current state. Edits to existing CRLF files now preserve their Windows line endings cleanly. See Section 4 for the Mobile Write Zones UI and Section 6 for the new code tools.
+
 \---
 
 ## 2\. Installation
@@ -232,6 +234,41 @@ The indexing progress display shows:
 * Per-file status messages in the output panel
 * File counts (e.g., `\\\[File 47/312] report.pdf`)
 
+### Mobile Write Zones — Granting Claude Write Access
+
+Indexing a directory makes its contents **searchable**. It does *not* let Claude **modify** files there. Write access is a separate, opt-in permission you grant per directory through the **Update Index** tab.
+
+The tracked-paths listbox at the top of the Update Index tab now shows a write-permission prefix on every row:
+
+```
+[W]   C:\Users\david\AI-Prowler-ADMIN
+[W*]  C:\Users\david\AI-Prowler_V601_to_V602_work
+[R]   C:\Users\david\AI_Evolution\UserManualDOC
+[R]   C:\Users\david\OneDrive\Documents\AI-Prowler
+```
+
+* `[W]` — **writable.** This path is in your writable allowlist (or an ancestor is). Claude can create, edit, and delete files anywhere inside, from desktop *and* mobile, with no further prompt.
+* `[W*]` — **partially writable.** A narrower sub-directory of this path is granted, but the path itself isn't. Files inside that sub-directory are writable; everything else here is not.
+* `[R]` — **read-only.** Claude can search content here but cannot modify any file.
+
+**Double-click a row to toggle:**
+
+* `[R]` → `[W]` — opens a confirmation dialog warning that the grant applies to all sessions including mobile. On YES, the path is added to `~/.rag_writable_dirs.json`.
+* `[W*]` → `[W]` — opens a "widen?" dialog listing the narrower sub-grants that will be absorbed. On YES, those narrower entries are removed and replaced with a single grant at this path's level.
+* `[W]` → `[R]` — instant revoke, no confirmation. If write access is inherited from an ancestor in the allowlist, an info dialog tells you which ancestor grants it so you can revoke from there.
+
+The legend below the listbox documents these indicators for at-a-glance reference.
+
+**The writable allowlist is a separate file from the tracked-paths list:**
+
+```
+%USERPROFILE%\.rag_writable_dirs.json
+```
+
+You can edit it by hand if you prefer — it's a sorted JSON array of full directory paths. The GUI re-reads it every time the list refreshes, so changes show up immediately.
+
+**Why this is separate from indexing:** searching documents is permissive (you want Claude to know about as much as possible). Writing to disk is restrictive (a runaway edit loop is a real risk). The two-allowlist design lets you index broadly while writing narrowly. See Section 6 — Code Tools (Write-Side) for the full security model.
+
 \---
 
 ## 5\. Agentic RAG — How Claude Uses Your Knowledge Base
@@ -297,7 +334,7 @@ This is useful when you want to see what's in the knowledge base before asking C
 
 ## 6\. MCP Tools Reference
 
-AI-Prowler exposes **28 tools** to Claude. They fall into four categories: Agentic RAG (8), Knowledge Base Management (5), Status (1), Small Business Actions (7), and Self-Learning (6). One additional tool — `how_to_use_ai_prowler` — anchors the lot.
+AI-Prowler exposes **39 tools** to Claude. They fall into six categories: Agentic RAG (8), Knowledge Base Management (5), Status (1), Small Business Actions (7), Self-Learning (6), and Code Tools (9). Three additional anchor tools — `how_to_use_ai_prowler`, `get_database_stats`, and `check_status` — sit alongside.
 
 ### Agentic RAG Tools (Primary)
 
@@ -472,6 +509,62 @@ Permanently removes a learning from both the JSON file and ChromaDB index. Destr
 #### `get\\\_learning\\\_stats()`
 
 Returns summary statistics: total count, breakdown by category/source/outcome/status, most frequently applied learnings, and file path.
+
+### Code Tools (Write-Side)
+
+Nine tools for file creation, editing, listing, backup, and restore. Together they let Claude work as a coding agent on directories you've explicitly authorized — from desktop or mobile. All write operations are subject to the security model described at the end of this sub-section.
+
+#### `create\\\_file(filepath, content)`
+
+Creates a new file with the given content. Fails if the file already exists (use `write_file` to overwrite). Content is encoded as UTF-8. On Windows, pure-LF content (`\n`-only) is automatically translated to CRLF (`\r\n`) so new files match the platform convention; content with explicit `\r` bytes is written verbatim. Newly-created files in tracked directories are immediately indexed in ChromaDB.
+
+#### `write\\\_file(filepath, content, verify\\\_after\\\_write)`
+
+Overwrites an existing file with new content. Fails if the file doesn't exist (use `create_file` to create new). Detects the existing file's line-ending convention (CRLF or LF) and preserves it on write — so editing a Windows file from a tool that produces LF input still leaves a clean CRLF file on disk. An automatic backup is created as `<filepath>.bak<N>` before any change. If `verify_after_write=True`, the tool reads the file back and includes the first/last few lines in the response for visual confirmation.
+
+#### `str\\\_replace\\\_in\\\_file(filepath, old\\\_str, new\\\_str, dry\\\_run)`
+
+Surgical in-place edit: replaces one unique occurrence of `old_str` with `new_str`. The `old_str` must appear exactly once in the file — if it appears zero times or more than once, the tool refuses and reports the count. Useful for narrow code edits where you don't want to send the whole file across the wire. Set `dry_run=True` to see the unified diff and byte-count impact without writing. An automatic backup is created as `<filepath>.bak<N>` before any change. Line endings of the original file are preserved on write.
+
+#### `create\\\_directory(dirpath)`
+
+Creates a directory (and any missing parents). Idempotent — succeeds if the directory already exists. Subject to the writable allowlist just like file writes.
+
+#### `list\\\_directory(dirpath)`
+
+Lists the immediate contents of a directory: files (with byte sizes), subdirectories, and any `.bak<N>` backups, with backups segregated from active files so you can see at a glance what's been edited. Read-only; works on any tracked path regardless of write permissions.
+
+#### `copy\\\_to\\\_backup(filepath)`
+
+Creates a manual snapshot of a file as `<filepath>.bak<N>`, where `N` is the next unused backup number. The active file is not changed. Use before destructive operations you want extra protection on, or to bookmark a known-good state before a series of edits.
+
+#### `list\\\_backups(filepath)`
+
+Lists all `<filepath>.bak<N>` backups for a given file, with timestamps and sizes, newest backup last. Read-only.
+
+#### `restore\\\_backup(filepath, backup\\\_number)`
+
+Overwrites the active file with the contents of `<filepath>.bak<N>`. The backup itself is preserved on disk (restore is non-destructive to backups). Note: this does *not* automatically snapshot the current state before restoring — if you want to roll back the rollback, call `copy_to_backup` first.
+
+#### `reset\\\_write\\\_counter()`
+
+Resets the per-session write circuit breaker (see Security Model below). Reports the previous count and confirms reset to `0 / 20`. Useful during long sessions involving many writes — Claude calls this only on operator request.
+
+### Code Tools — Security Model
+
+Write-side tools are protected by four independent layers. All four must permit an operation for it to succeed.
+
+**Layer 1 — Read allowlist (`~/.rag_auto_update_dirs.json`).** A file's parent directory must be tracked for indexing before any write tool can address it. If you haven't indexed a folder, Claude cannot write to it.
+
+**Layer 2 — Writable allowlist (`~/.rag_writable_dirs.json`).** A *separate* file from the read allowlist. The file's parent (or an ancestor) must be in this list. Indexing alone is not enough — write access is a distinct opt-in granted through the Mobile Write Zones UI (see Section 4) or by hand-editing the JSON.
+
+**Layer 3 — Hard blocklist (always wins).** Even if a path passes layers 1 and 2, writes are *unconditionally refused* if the path is under any of: `C:\Windows`, `C:\Program Files` (except AI-Prowler's own writable state), `%AppData%` (except AI-Prowler's own state), `%LocalAppData%` (same exception), `.git`, `.ssh`, `.aws`, the active job tracker `.xlsx`, and any of AI-Prowler's own JSON state files. Adding these paths to the writable allowlist does *not* override the blocklist.
+
+**Layer 4 — Per-session circuit breaker.** A maximum of 20 writes per server lifetime. After the 20th write, all write tools return a "circuit breaker tripped" error until you call `reset_write_counter` explicitly. This caps the blast radius of a runaway edit loop and forces a human in the loop on long sessions.
+
+**Backup-as-audit-trail.** There is no separate audit log. Instead, *every* modification leaves a `.bak<N>` next to the file, and the `<N>` is monotonic for the file's lifetime. Backups are never auto-deleted — only you can remove them. This means the full history of any edited file is reconstructible from the filesystem alone, with no external dependency.
+
+**Mobile implications.** Because all four layers are enforced at the MCP server (not at the client), they apply identically to desktop, mobile, and any future Claude client. Granting a Mobile Write Zone via the GUI is a *deliberate desktop action* — the chat channel cannot create or widen a zone, only the GUI can. This is by design: the trust root for "may Claude write here" stays at the keyboard, not in the conversation.
 
 \---
 

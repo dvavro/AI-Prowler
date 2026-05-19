@@ -852,6 +852,108 @@ class RAGGui:
         # the subscription status check to complete first.
         self.root.after(6000, self._auto_start_http_server)
 
+        # ----- Code Tools write-side: approval-queue poll -----
+        # The Code Tools write-side tools (create_file, write_file,
+        # str_replace_in_file, etc.) queue write-approval requests to
+        # ~/.rag_writable_pending.json when Claude tries to write to a
+        # directory that's not yet in the writable allowlist. This
+        # background poll picks them up and shows a modal dialog so the
+        # user can grant or deny access. Poll runs every 5 seconds.
+        self.root.after(5000, self._schedule_write_approval_poll)
+
+    # ====== Code Tools write-side: approval-queue dialog ======
+    # These two methods support the write-side filesystem tools added in
+    # ai_prowler_mcp.py (create_file, write_file, str_replace_in_file, etc).
+    # The tools queue approval requests; this dialog grants the access.
+
+    def _check_write_approval_queue(self):
+        """Poll the write-approval queue and show a dialog for any pending
+        requests. See ai_prowler_mcp.py _resolve_writable_path for the
+        producer side. Approved paths are persisted to
+        ~/.rag_writable_dirs.json so future writes succeed without prompting.
+        """
+        from pathlib import Path as _Path
+        pending_path = _Path.home() / ".rag_writable_pending.json"
+        writable_path = _Path.home() / ".rag_writable_dirs.json"
+        try:
+            if not pending_path.exists():
+                return
+            with open(pending_path, "r", encoding="utf-8") as f:
+                pending = json.load(f)
+            if not isinstance(pending, list) or not pending:
+                return
+        except Exception:
+            return
+
+        # Load current writable allowlist
+        try:
+            with open(writable_path, "r", encoding="utf-8") as f:
+                writable = json.load(f)
+            if not isinstance(writable, list):
+                writable = []
+        except Exception:
+            writable = []
+
+        for req in pending:
+            try:
+                path = req.get("path", "") if isinstance(req, dict) else ""
+                if not path:
+                    continue
+                # Grant target is the parent directory (covers this file
+                # AND siblings, which is what the user usually wants).
+                parent = str(_Path(path).parent)
+                msg = (
+                    f"AI-Prowler is requesting permission to WRITE to:\n\n"
+                    f"  {path}\n\n"
+                    f"Grant write access to the parent directory?\n"
+                    f"  {parent}\n\n"
+                    f"This is a one-time approval. Future writes anywhere\n"
+                    f"under this directory will succeed without prompting.\n\n"
+                    f"Click YES to approve, NO to deny."
+                )
+                approved = messagebox.askyesno(
+                    "AI-Prowler \u2014 Approve Write Access?",
+                    msg,
+                    parent=self.root,
+                )
+                if approved and parent not in writable:
+                    writable.append(parent)
+            except Exception:
+                continue
+
+        # Save updated writable allowlist
+        try:
+            writable_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(writable_path, "w", encoding="utf-8") as f:
+                json.dump(sorted(set(writable)), f, indent=2)
+        except Exception as exc:
+            try:
+                messagebox.showerror(
+                    "AI-Prowler",
+                    f"Could not save writable allowlist: {exc}",
+                    parent=self.root,
+                )
+            except Exception:
+                pass
+
+        # Clear the pending queue (user has now responded to each request)
+        try:
+            with open(pending_path, "w", encoding="utf-8") as f:
+                json.dump([], f)
+        except Exception:
+            pass
+
+    def _schedule_write_approval_poll(self):
+        """Run the approval-queue check and reschedule for 5s from now."""
+        try:
+            self._check_write_approval_queue()
+        except Exception:
+            pass
+        try:
+            self.root.after(5000, self._schedule_write_approval_poll)
+        except Exception:
+            pass
+
     def _auto_start_http_server(self):
         """
         Silently start the HTTP MCP server on launch if a Bearer token
@@ -3633,7 +3735,9 @@ or from the Help menu."""
 
         # Tracked directories
         tracked_frame = ttk.LabelFrame(f,
-                                       text="Tracked Directories & Files", padding=10)
+                                       text="Tracked Directories & Files — "
+                                            "Mobile Write Zones",
+                                       padding=10)
         tracked_frame.pack(fill='x', padx=20, pady=(0, 6))
 
         # Listbox with scrollbar
@@ -3650,6 +3754,33 @@ or from the Help menu."""
                                           activestyle='dotbox')
         self.tracked_listbox.pack(side='left', fill='both', expand=True)
         scrollbar.config(command=self.tracked_listbox.yview)
+
+        # Parallel list of raw paths indexed by listbox row. Populated by
+        # refresh_tracked_dirs. Used by callers (remove, update, toggle)
+        # to retrieve the underlying path without parsing the prefixed
+        # display string. Placeholder/error rows store None.
+        self._tracked_raw_paths: list = []
+
+        # Double-click toggles a path's write permission (Mobile Write Zones).
+        self.tracked_listbox.bind(
+            "<Double-Button-1>",
+            lambda _e: self._toggle_writable_for_selected()
+        )
+
+        # Legend explaining the row prefixes
+        legend = ttk.Label(
+            tracked_frame,
+            text="[W]  writable — Claude can modify files in this path "
+                 "(from desktop AND mobile).      "
+                 "[W*] writable in a subdirectory only — double-click to widen.      "
+                 "[R]  read-only — Claude can search but not edit.      "
+                 "Double-click a row to toggle.",
+            font=('Arial', 8),
+            foreground='gray',
+            wraplength=900,
+            justify='left'
+        )
+        legend.pack(fill='x', pady=(4, 0))
 
         # Buttons row: refresh + remove
         tracked_btn_row = ttk.Frame(tracked_frame)
@@ -5811,6 +5942,21 @@ or from the Help menu."""
                     _launch_args,
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, bufsize=1, env=_env,
+                    # Force UTF-8 decoding of the subprocess's stdout. Without
+                    # this, Python uses the platform default (cp1252 on
+                    # Windows), which crashes _watch_http with a
+                    # UnicodeDecodeError as soon as the MCP server emits any
+                    # non-ASCII byte (emoji status markers, em-dashes in log
+                    # text, accented characters in paths, etc.). The MCP
+                    # server already configures its own stdout via
+                    # _make_safe_text_stream to write UTF-8, so this matches
+                    # what's actually on the pipe. errors="replace" is
+                    # belt-and-suspenders: if a third-party library somewhere
+                    # in the dependency chain writes raw non-UTF-8 bytes, we
+                    # get a "?" in the captured log line instead of a dead
+                    # watcher thread (which would leave the GUI stuck on
+                    # "Starting…" forever).
+                    encoding="utf-8", errors="replace",
                     creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
                 )
                 _http_status_var.set("⬤ Starting…")
@@ -9921,25 +10067,295 @@ Built with Python, ChromaDB, and Claude"""
         threading.Thread(target=_worker, daemon=True).start()
 
     def refresh_tracked_dirs(self):
-        """Refresh tracked directories list from the auto-update tracking file."""
+        """Refresh tracked directories list from the auto-update tracking file.
+
+        Each row is rendered with a write-permission prefix indicating whether
+        Claude can modify files in that path (Mobile Write Zones). The raw
+        path is stored in self._tracked_raw_paths at the same index so
+        callers can look it up without parsing the display string.
+        """
         self.tracked_listbox.delete(0, tk.END)
+        self._tracked_raw_paths = []
 
         if not RAG_AVAILABLE:
             self.tracked_listbox.insert(tk.END, "(AI Prowler engine not available)")
+            self._tracked_raw_paths.append(None)
             return
 
         try:
             dirs = load_auto_update_list()
+            writable_paths = self._load_writable_paths()
             if dirs:
                 for directory in dirs:
-                    self.tracked_listbox.insert(tk.END, directory)
+                    state, _exact, _narrower = self._writable_state(
+                        directory, writable_paths
+                    )
+                    # Text-based indicators (instead of emoji) — Courier renders
+                    # these crisply on every Windows install; emoji glyphs vary
+                    # by font and are easy to misread. Pad to 4 chars so paths
+                    # align in a column.
+                    if state == "full":
+                        prefix = "[W] "
+                    elif state == "partial":
+                        prefix = "[W*]"
+                    else:
+                        prefix = "[R] "
+                    self.tracked_listbox.insert(tk.END, f"{prefix} {directory}")
+                    self._tracked_raw_paths.append(directory)
             else:
                 self.tracked_listbox.insert(
                     tk.END,
                     "(No tracked items yet — index a directory or file first)"
                 )
+                self._tracked_raw_paths.append(None)
         except Exception as e:
             self.tracked_listbox.insert(tk.END, f"(Error loading list: {e})")
+            self._tracked_raw_paths.append(None)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Mobile Write Zones — write-permission management for the tracked-path
+    # list. The writable allowlist (~/.rag_writable_dirs.json) is read by
+    # ai_prowler_mcp.py's _resolve_writable_path() to decide whether Claude
+    # can modify a given file. This GUI lets the user pre-authorize zones
+    # from the desktop, so mobile sessions don't stall waiting on dialogs.
+    # ══════════════════════════════════════════════════════════════════════
+
+    # File location mirrors ai_prowler_mcp.py:_WRITABLE_DIRS_FILE.
+    # Defined as a property so a single source of truth is easy to refactor.
+    @property
+    def _writable_dirs_file(self):
+        return Path.home() / ".rag_writable_dirs.json"
+
+    def _load_writable_paths(self) -> list:
+        """Read ~/.rag_writable_dirs.json. Returns [] on any error or missing file."""
+        try:
+            f = self._writable_dirs_file
+            if not f.exists():
+                return []
+            import json as _json
+            with open(f, "r", encoding="utf-8") as fh:
+                data = _json.load(fh)
+            if isinstance(data, list):
+                return [str(p) for p in data if isinstance(p, str)]
+            return []
+        except Exception:
+            return []
+
+    def _save_writable_paths(self, paths: list) -> bool:
+        """Write ~/.rag_writable_dirs.json. Returns True on success."""
+        try:
+            f = self._writable_dirs_file
+            f.parent.mkdir(parents=True, exist_ok=True)
+            import json as _json
+            with open(f, "w", encoding="utf-8") as fh:
+                _json.dump(sorted(set(paths)), fh, indent=2)
+            return True
+        except Exception as e:
+            messagebox.showerror(
+                "Cannot save Mobile Write Zones",
+                f"Failed to write {self._writable_dirs_file}:\n\n{e}"
+            )
+            return False
+
+    def _is_path_writable(self, path: str, writable_paths: list) -> bool:
+        """True if `path` is exactly in or is a descendant of any entry in writable_paths.
+
+        Comparison is case-insensitive on Windows; case-sensitive elsewhere.
+        Empty writable_paths => always False.
+
+        Kept for backward compatibility. New code should prefer
+        _writable_state(), which distinguishes 'full' / 'partial' / 'none'.
+        """
+        state, _, _ = self._writable_state(path, writable_paths)
+        return state == "full"
+
+    def _writable_state(self, path: str, writable_paths: list):
+        """Classify a tracked path's write-permission state.
+
+        Returns a 3-tuple (state, exact_match, narrower_grants) where:
+            state           — one of 'full', 'partial', 'none':
+                              'full'    — path itself OR an ancestor is granted
+                              'partial' — some descendant is granted, but path/ancestors aren't
+                              'none'    — no overlap with any grant
+            exact_match     — True iff `path` itself is literally in writable_paths
+                              (only meaningful when state == 'full').
+            narrower_grants — list[str] of grant entries strictly *under* path,
+                              non-empty only when state == 'partial'.
+
+        Comparison uses pathlib.Path normalization (case handling matches the
+        filesystem). All three return values can be computed in one pass.
+        """
+        if not writable_paths:
+            return ("none", False, [])
+        try:
+            target = Path(path).resolve()
+        except Exception:
+            target = Path(path)
+
+        # Normalize the input list once
+        normalized: list = []
+        for w in writable_paths:
+            try:
+                normalized.append((w, Path(w).resolve()))
+            except Exception:
+                normalized.append((w, Path(w)))
+
+        def _is_under(child: Path, parent: Path) -> bool:
+            """child == parent OR child is strictly inside parent."""
+            if child == parent:
+                return True
+            try:
+                return child.is_relative_to(parent)
+            except AttributeError:
+                c = str(child).rstrip("/\\")
+                p = str(parent).rstrip("/\\")
+                return c == p or c.startswith(p + "\\") or c.startswith(p + "/")
+
+        exact_match = False
+        ancestor_grant = False
+        narrower: list = []
+
+        for raw, granted in normalized:
+            if target == granted:
+                exact_match = True
+                ancestor_grant = True   # exact is a degenerate ancestor
+            elif _is_under(target, granted):
+                ancestor_grant = True
+            elif _is_under(granted, target):
+                # `granted` is strictly inside `target`
+                narrower.append(raw)
+
+        if ancestor_grant:
+            return ("full", exact_match, narrower)
+        if narrower:
+            return ("partial", False, narrower)
+        return ("none", False, [])
+
+    def _toggle_writable_for_selected(self):
+        """Toggle write permission for the path under the current selection.
+
+        Three transitions are possible depending on the row's current state:
+          [R]  → [W]   grant write access (confirmation dialog)
+          [W*] → [W]   widen narrower sub-grants up to this row (confirmation
+                       dialog listing the entries that will be absorbed)
+          [W]  → [R]   revoke (immediate, no confirmation) — only if this row
+                       has an exact-match grant; if write access is inherited
+                       from an ancestor, show an info dialog explaining where
+                       the grant actually lives.
+        """
+        sel = self.tracked_listbox.curselection()
+        if not sel:
+            return  # silent — double-click in empty space is harmless
+        row_idx = sel[0]
+        if row_idx >= len(self._tracked_raw_paths):
+            return
+        raw_path = self._tracked_raw_paths[row_idx]
+        if raw_path is None:
+            return  # placeholder / error row, no path to toggle
+
+        writable_paths = self._load_writable_paths()
+        state, exact_match, narrower = self._writable_state(
+            raw_path, writable_paths
+        )
+
+        # IMPORTANT: the read allowlist stores paths with forward slashes
+        # ("C:/Users/...") while the writable allowlist stores them with
+        # backslashes ("C:\\Users\\..."). Plain string compares fail across
+        # the two conventions, so we normalize via pathlib before any
+        # list mutation. _writable_state already does this internally for
+        # comparisons; this helper is used for storage and exact-match
+        # filtering below.
+        def _norm(p: str) -> str:
+            try:
+                return str(Path(p).resolve())
+            except Exception:
+                return str(Path(p))
+
+        norm_raw = _norm(raw_path)
+
+        if state == "full":
+            # ── REVOKE ── only meaningful when there's an exact-match grant.
+            # If access is inherited from an ancestor, tell the user where to
+            # go to revoke it (since revoking from here would silently leave
+            # a hole if other paths also depend on that ancestor grant).
+            if exact_match:
+                # Filter using normalized comparison — handles slash-direction
+                # mismatch between the read and writable allowlists.
+                new_list = [p for p in writable_paths
+                            if _norm(p) != norm_raw]
+                if self._save_writable_paths(new_list):
+                    self.status_var.set(f"Revoked write access: {raw_path}")
+                    self.refresh_tracked_dirs()
+            else:
+                # Find the ancestor grant that's giving us write access
+                granting_ancestor = next(
+                    (w for w in writable_paths
+                     if self._writable_state(raw_path, [w])[0] == "full"),
+                    None
+                )
+                messagebox.showinfo(
+                    "Cannot revoke from here",
+                    f"This path inherits write access from a parent zone:\n\n"
+                    f"   {granting_ancestor}\n\n"
+                    f"To revoke, find that parent in the list and "
+                    f"double-click it instead. (Or edit "
+                    f"{self._writable_dirs_file} by hand.)"
+                )
+            return
+
+        if state == "partial":
+            # ── WIDEN ── show the user which narrower entries will be removed
+            # and replaced with a single grant at this row's level.
+            entries_block = "\n".join(f"   • {p}" for p in narrower)
+            if not messagebox.askyesno(
+                    "Widen Mobile Write Zone?",
+                    f"This path is partially writable — Claude can already "
+                    f"modify files inside the following narrower zone"
+                    f"{'s' if len(narrower) > 1 else ''}:\n\n"
+                    f"{entries_block}\n\n"
+                    f"Widening will REPLACE those entries with a single grant "
+                    f"covering this entire path:\n\n"
+                    f"   {raw_path}\n\n"
+                    f"After widening, every file and subdirectory here "
+                    f"becomes writable to Claude from all sessions (including "
+                    f"mobile). The hard blocklist (Windows, Program Files, "
+                    f".git, .ssh, .aws, the job tracker, and AppData except "
+                    f"AI-Prowler's own state) still applies.\n\n"
+                    f"Proceed with widening?"):
+                return
+            # Remove the narrower entries (normalized compare) and add the
+            # wider one in normalized form.
+            narrower_norm_set = {_norm(p) for p in narrower}
+            new_list = [p for p in writable_paths
+                        if _norm(p) not in narrower_norm_set]
+            new_list.append(norm_raw)
+            if self._save_writable_paths(new_list):
+                self.status_var.set(
+                    f"Widened {len(narrower)} → 1 grant: {raw_path}"
+                )
+                self.refresh_tracked_dirs()
+            return
+
+        # state == "none"  → ── GRANT ── significant action, require confirmation
+        if not messagebox.askyesno(
+                "Grant write access — Mobile Write Zone?",
+                f"Allow Claude to modify files in:\n\n"
+                f"   {raw_path}\n\n"
+                f"This grants write access from ALL sessions, including "
+                f"mobile, with no further prompt. The hard blocklist "
+                f"(Windows, Program Files, .git, .ssh, .aws, the job tracker, "
+                f"and AppData except AI-Prowler's own state) still applies.\n\n"
+                f"Revoke later by double-clicking this row again, or by "
+                f"editing ~/.rag_writable_dirs.json.\n\n"
+                f"Grant write access to this path?"):
+            return
+
+        # Store the normalized form so future revoke / widen comparisons
+        # match cleanly regardless of slash direction.
+        new_list = writable_paths + [norm_raw]
+        if self._save_writable_paths(new_list):
+            self.status_var.set(f"Granted write access: {raw_path}")
+            self.refresh_tracked_dirs()
 
     def _remove_tracked_directory(self):
         """Remove selected directory from tracking and delete all its vectors."""
@@ -9949,8 +10365,14 @@ Built with Python, ChromaDB, and Claude"""
                                    "Select a directory in the list first.")
             return
 
-        directory = self.tracked_listbox.get(sel[0])
-        if directory.startswith("("):
+        # Look up the raw path from the parallel list (the displayed text now
+        # includes a write-permission prefix and isn't a path itself).
+        row_idx = sel[0]
+        if row_idx >= len(self._tracked_raw_paths):
+            return
+        directory = self._tracked_raw_paths[row_idx]
+        if directory is None:
+            # Placeholder / error row — nothing to remove
             return
 
         if not messagebox.askyesno(
@@ -10021,8 +10443,15 @@ Built with Python, ChromaDB, and Claude"""
             messagebox.showwarning("No Selection",
                                    "Please select a directory or file")
             return
-        
-        directory = self.tracked_listbox.get(selection[0])
+
+        # Look up the raw path from the parallel list (display rows are
+        # prefixed with write-permission icons and aren't paths themselves).
+        row_idx = selection[0]
+        if row_idx >= len(self._tracked_raw_paths):
+            return
+        directory = self._tracked_raw_paths[row_idx]
+        if directory is None:
+            return  # placeholder row
         
         self.update_output.delete('1.0', tk.END)
         self.update_progress.start()

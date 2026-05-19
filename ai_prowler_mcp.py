@@ -553,16 +553,19 @@ def how_to_use_ai_prowler() -> str:
         "AI-Prowler — Agentic RAG Knowledge Base\n"
         + "=" * 50 + "\n\n"
 
-        "TOOL CATEGORIES (28 tools total)\n"
+        "TOOL CATEGORIES (30 tools total)\n"
         + "-" * 30 + "\n"
-        "AI-Prowler exposes four tool families. Most question-answering\n"
-        "tasks use the first two; the others are for actions and admin.\n\n"
+        "AI-Prowler exposes five tool families. Most question-answering\n"
+        "tasks use the first two; the others are for code, actions and admin.\n\n"
 
         "  • Knowledge retrieval (RAG over indexed documents):\n"
         "      get_knowledge_base_overview, list_indexed_documents,\n"
         "      list_directories, search_documents, search_within_directory,\n"
         "      search_by_multiple_queries, get_chunk_context,\n"
         "      get_document_chunks\n\n"
+
+        "  • Code-aware retrieval (exact match + line-accurate reads):\n"
+        "      grep_documents, read_file_lines\n\n"
 
         "  • Self-learning memory (corrections, post-mortems, preferences):\n"
         "      check_learned, record_learning, list_learnings,\n"
@@ -618,6 +621,30 @@ def how_to_use_ai_prowler() -> str:
         "  STEP 8  get_document_chunks(filename, start_chunk)\n"
         "    Read a whole document sequentially for full summaries or\n"
         "    when the user asks about a specific document's contents.\n\n"
+
+        "CODE-AWARE RETRIEVAL — FOR PROGRAM FILES\n"
+        + "-" * 30 + "\n"
+        "Semantic search degrades on source code. When the user asks about\n"
+        "code (symbols, definitions, call sites, TODOs), use this pair\n"
+        "INSTEAD OF search_documents — same workflow Claude Code uses.\n\n"
+
+        "  STEP C1  grep_documents(pattern, filter_ext, filter_path)\n"
+        "    Locate exact matches with real line numbers. Use for any\n"
+        "    'where is X defined / called / used' question.\n"
+        "    Examples:\n"
+        "      grep_documents('def clear_database', filter_ext='.py')\n"
+        "      grep_documents('TODO', filter_path='rag_')\n"
+        "      grep_documents(r'class \\w+Error', regex=True)\n\n"
+
+        "  STEP C2  read_file_lines(filepath, start_line, end_line)\n"
+        "    After grep, extract the surrounding function or block at\n"
+        "    original fidelity. Returns numbered lines so you can keep\n"
+        "    paging through with start_line=last_seen+1.\n\n"
+
+        "  Both tools read only files under the tracked-paths allowlist.\n"
+        "  Useful especially for mobile users who cannot attach files —\n"
+        "  ask them to add_and_index_directory() the project once, then\n"
+        "  use grep + read_file_lines for all subsequent code questions.\n\n"
 
         "SELF-LEARNING WORKFLOW — PERSISTENT MEMORY\n"
         + "-" * 30 + "\n"
@@ -3544,6 +3571,1866 @@ def get_learning_stats() -> str:
         "record_learning() to add new"
     )
     return "\n".join(lines)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CODE-AWARE RETRIEVAL  (v6.0.2)
+# ══════════════════════════════════════════════════════════════════════════════
+# Two MCP tools for navigating source code in the knowledge base:
+#
+#   grep_documents(pattern, ...)         — literal/regex search across tracked
+#                                           files; returns real line numbers
+#   read_file_lines(filepath, ...)       — direct on-disk read by line range
+#
+# WHY: the all-MiniLM-L6-v2 embedding model degrades on source code, so
+# semantic search returns near-irrelevant chunks for queries like
+# "def clear_database". These two tools give agents the same locate-then-read
+# workflow Claude Code uses, making AI-Prowler effective for code Q&A even
+# when the user is mobile and cannot attach files.
+#
+# SECURITY: both tools restrict I/O to paths under the existing tracked-paths
+# allowlist (~/.rag_auto_update_dirs.json). Tracked entries may be directories
+# (entire tree allowed) OR single files (only that exact file allowed). This
+# mirrors the trust model already used by indexing and the existing untrack
+# tool — we do NOT add a second permission surface.
+# ══════════════════════════════════════════════════════════════════════════════
+
+import re as _re
+
+# Hard caps to keep responses bounded and prevent abuse
+_GREP_MAX_RESULTS_HARD_CAP   = 500
+_GREP_DEFAULT_MAX_RESULTS    = 50
+_GREP_CONTEXT_HARD_CAP       = 10
+_READ_LINES_HARD_CAP         = 1000
+_READ_LINES_DEFAULT          = 200
+_READ_FILE_MAX_BYTES         = 50 * 1024 * 1024   # 50 MB
+_BINARY_SNIFF_BYTES          = 4096               # first 4 KB scanned for NUL
+_GREP_PER_FILE_TIMEOUT_HINT  = 200_000            # max lines scanned per file
+
+
+def _is_path_under_tracked_roots(target_path: str) -> tuple[bool, str]:
+    """
+    Authorize a filesystem path against the tracked-paths allowlist.
+
+    A path is allowed if and only if it equals OR is a descendant of an entry
+    in ~/.rag_auto_update_dirs.json. Tracked entries may be directories or
+    single files. Returns (allowed, resolved_path_or_reason).
+
+    On allow: returns (True, resolved_absolute_path_as_string).
+    On deny: returns (False, short_human_reason).
+    """
+    try:
+        from rag_preprocessor import load_auto_update_list, normalise_path
+    except Exception as _exc:
+        return (False, f"allowlist unavailable: {_exc}")
+
+    try:
+        resolved = Path(target_path).resolve(strict=False)
+    except Exception as _exc:
+        return (False, f"could not resolve path: {_exc}")
+
+    # Defense in depth — if resolve() somehow left a traversal token, refuse.
+    if any(part == ".." for part in resolved.parts):
+        return (False, "path contains '..' after resolution")
+
+    entries = load_auto_update_list() or []
+    if not entries:
+        return (False, "tracked-paths allowlist is empty")
+
+    resolved_str = normalise_path(str(resolved))
+
+    for entry in entries:
+        try:
+            e = Path(entry).resolve(strict=False)
+        except Exception:
+            continue
+        entry_str = normalise_path(str(e))
+
+        # Exact match (covers both single-file tracking and the directory itself)
+        if resolved_str == entry_str:
+            return (True, resolved_str)
+
+        # Descendant check — only meaningful if entry is (or was) a directory
+        # We can't always tell on disk (entry may have been deleted), so we
+        # rely on the path-prefix relationship using parts to avoid the
+        # classic "/foo" matching "/foobar" bug.
+        try:
+            resolved.relative_to(e)
+            return (True, resolved_str)
+        except ValueError:
+            continue
+
+    return (False, "not under any tracked root")
+
+
+def _resolve_allowlisted_path(filepath: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    Wrap _is_path_under_tracked_roots for tool use.
+    Returns (resolved_path, None) on allow, or (None, error_message) on deny.
+    Error message is fully formatted and ready to return to the agent.
+    """
+    allowed, info = _is_path_under_tracked_roots(filepath)
+    if allowed:
+        return (info, None)
+
+    # Build a helpful denial that tells the agent what IS allowed
+    try:
+        from rag_preprocessor import load_auto_update_list
+        entries = load_auto_update_list() or []
+    except Exception:
+        entries = []
+
+    lines = [
+        f"🚫 Access denied — '{filepath}'",
+        f"Reason: {info}",
+        "",
+        "Only paths under the tracked allowlist may be read.",
+    ]
+    if entries:
+        lines.append("Currently tracked:")
+        for e in entries[:10]:
+            lines.append(f"  - {e}")
+        if len(entries) > 10:
+            lines.append(f"  ... and {len(entries) - 10} more")
+        lines.append("")
+        lines.append(
+            "If the file you want is outside these, ask the user to run "
+            "add_and_index_directory() on its parent folder first."
+        )
+    else:
+        lines.append("No directories are tracked yet. "
+                     "Use add_and_index_directory() to track one.")
+    _log.warning("Access denied for path: %s (%s)", filepath, info)
+    return (None, "\n".join(lines))
+
+
+def _iter_allowlisted_files(filter_ext: Optional[str] = None,
+                            filter_path: Optional[str] = None):
+    """
+    Yield (resolved_path_str, extension) for every file under the tracked
+    allowlist, respecting SKIP_EXTENSIONS / SKIP_DIRECTORIES from the
+    preprocessor. Used by grep_documents.
+
+    Walks each directory entry; for single-file entries, yields that file
+    directly. Honors the preprocessor's skip lists so we never try to grep
+    a .exe or .zip even if a user accidentally indexed one.
+    """
+    try:
+        from rag_preprocessor import (
+            load_auto_update_list, normalise_path,
+            SKIP_EXTENSIONS, SKIP_DIRECTORIES,
+        )
+    except Exception as _exc:
+        _log.error("iter_allowlisted_files: import failure: %s", _exc)
+        return
+
+    entries = load_auto_update_list() or []
+    if not entries:
+        return
+
+    norm_ext_filter = None
+    if filter_ext:
+        norm_ext_filter = filter_ext.lower()
+        if not norm_ext_filter.startswith('.'):
+            norm_ext_filter = '.' + norm_ext_filter
+
+    filter_path_lower = filter_path.lower() if filter_path else None
+    seen = set()
+
+    for entry in entries:
+        try:
+            ep = Path(entry).resolve(strict=False)
+        except Exception:
+            continue
+        if not ep.exists():
+            continue
+
+        if ep.is_file():
+            candidates = [ep]
+        else:
+            # Recursive walk — skip blacklisted dirs cheaply by pruning os.walk
+            candidates = []
+            for root, dirs, files in os.walk(str(ep)):
+                # Prune skip-directories in place so os.walk does NOT descend into them
+                dirs[:] = [d for d in dirs if d not in SKIP_DIRECTORIES]
+                for fname in files:
+                    candidates.append(Path(root) / fname)
+
+        for fp in candidates:
+            try:
+                ext = fp.suffix.lower()
+            except Exception:
+                continue
+            if ext in SKIP_EXTENSIONS:
+                continue
+            if norm_ext_filter and ext != norm_ext_filter:
+                continue
+            resolved_str = normalise_path(str(fp))
+            if filter_path_lower and filter_path_lower not in resolved_str.lower():
+                continue
+            if resolved_str in seen:
+                continue
+            seen.add(resolved_str)
+            yield (resolved_str, ext)
+
+
+def _looks_binary(sample: bytes) -> bool:
+    """Heuristic: a NUL byte in the first few KB strongly implies binary."""
+    return b'\x00' in sample
+
+
+@mcp.tool()
+def grep_documents(
+    pattern: str,
+    filter_ext: Optional[str] = None,
+    filter_path: Optional[str] = None,
+    max_results: int = _GREP_DEFAULT_MAX_RESULTS,
+    context_lines: int = 2,
+    case_sensitive: bool = False,
+    regex: bool = False,
+) -> str:
+    """
+    CODE-AWARE RETRIEVAL — Locate exact text or regex matches across tracked
+    files, with real line numbers.
+
+    Use this when semantic search (search_documents) returns irrelevant chunks
+    for code or other structured text. It is the right tool for questions like:
+      • "Where is def clear_database defined?"
+      • "Which file calls collection.delete?"
+      • "Find every TODO in the project"
+      • "Show me all occurrences of API_KEY"
+
+    Pair with read_file_lines() — grep locates, read_file_lines extracts. This
+    mirrors how Claude Code navigates source.
+
+    Security: only files under the tracked-paths allowlist
+    (~/.rag_auto_update_dirs.json) are scanned. Use add_and_index_directory()
+    to track a folder first if your target file isn't already covered.
+
+    Args:
+        pattern:        Text to search for (literal substring by default).
+                        Pass regex=True to treat as a Python regular expression.
+        filter_ext:     Restrict to one extension, e.g. ".py" or "py". Optional.
+        filter_path:    Case-insensitive substring that must appear in the file
+                        path (e.g. "rag_" matches rag_preprocessor.py). Optional.
+        max_results:    Total matches across all files (default 50, max 500).
+        context_lines:  Lines of context above and below each match
+                        (default 2, max 10). Use 0 for one-line hits only.
+        case_sensitive: Default False.
+        regex:          Treat `pattern` as a Python regex (default False).
+
+    Returns:
+        Grouped-by-file list of matches with real line numbers. Each match
+        includes its surrounding context_lines lines. Ends with a suggested
+        read_file_lines() call so the agent can extract more context.
+    """
+    if not _prewarm_event.wait(timeout=60):
+        return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
+
+    if not pattern or not pattern.strip():
+        return ("⚠️  grep_documents: empty pattern.\n"
+                "Pass a text snippet or regex to search for.")
+
+    max_results   = max(1, min(int(max_results), _GREP_MAX_RESULTS_HARD_CAP))
+    context_lines = max(0, min(int(context_lines), _GREP_CONTEXT_HARD_CAP))
+
+    # Compile matcher
+    if regex:
+        try:
+            flags = 0 if case_sensitive else _re.IGNORECASE
+            matcher = _re.compile(pattern, flags)
+        except _re.error as exc:
+            return (f"⚠️  grep_documents: invalid regex — {exc}\n"
+                    f"If you meant a literal match, set regex=False.")
+        def _match_fn(line: str) -> bool:
+            return matcher.search(line) is not None
+    else:
+        if case_sensitive:
+            needle = pattern
+            def _match_fn(line: str) -> bool:
+                return needle in line
+        else:
+            needle = pattern.lower()
+            def _match_fn(line: str) -> bool:
+                return needle in line.lower()
+
+    files_scanned   = 0
+    files_skipped   = 0
+    matches_by_file = {}   # path -> list of (line_no, line_text, context_before, context_after)
+    total_matches   = 0
+    truncated       = False
+
+    _log.info(
+        "grep_documents: pattern=%r regex=%s ext=%s path=%s max=%d ctx=%d",
+        pattern, regex, filter_ext, filter_path, max_results, context_lines,
+    )
+
+    for fp_str, _ext in _iter_allowlisted_files(filter_ext, filter_path):
+        if total_matches >= max_results:
+            truncated = True
+            break
+
+        files_scanned += 1
+        try:
+            # Quick binary sniff before committing to reading the whole file
+            with open(fp_str, 'rb') as bf:
+                head = bf.read(_BINARY_SNIFF_BYTES)
+            if _looks_binary(head):
+                files_skipped += 1
+                _log.debug("grep_documents: skip binary %s", fp_str)
+                continue
+
+            # Read line-by-line, retain a rolling buffer for context
+            file_lines = []
+            with open(fp_str, 'r', encoding='utf-8', errors='replace') as tf:
+                for i, line in enumerate(tf, start=1):
+                    if i > _GREP_PER_FILE_TIMEOUT_HINT:
+                        break
+                    file_lines.append(line.rstrip('\n'))
+
+            for idx, line_text in enumerate(file_lines):
+                if total_matches >= max_results:
+                    truncated = True
+                    break
+                if _match_fn(line_text):
+                    line_no = idx + 1
+                    ctx_before = file_lines[max(0, idx - context_lines):idx] if context_lines else []
+                    ctx_after  = file_lines[idx + 1: idx + 1 + context_lines] if context_lines else []
+                    matches_by_file.setdefault(fp_str, []).append(
+                        (line_no, line_text, ctx_before, ctx_after)
+                    )
+                    total_matches += 1
+        except (PermissionError, OSError) as exc:
+            files_skipped += 1
+            _log.debug("grep_documents: skip unreadable %s (%s)", fp_str, exc)
+            continue
+        except Exception as exc:
+            files_skipped += 1
+            _log.debug("grep_documents: unexpected error on %s: %s", fp_str, exc)
+            continue
+
+    # ── Format the response ──
+    pattern_kind = "regex" if regex else "literal"
+    case_note    = "case-sensitive" if case_sensitive else "case-insensitive"
+    header = [
+        f"🔍 Grep results for: {pattern!r}",
+        f"Pattern type : {pattern_kind}  ({case_note})",
+        f"Files scanned: {files_scanned}"
+        + (f"  ({files_skipped} skipped: binary/unreadable)" if files_skipped else ""),
+        f"Matches      : {total_matches} in {len(matches_by_file)} file(s)"
+        + ("  [truncated — raise max_results for more]" if truncated else ""),
+    ]
+    if filter_ext or filter_path:
+        flt_parts = []
+        if filter_ext:  flt_parts.append(f"ext={filter_ext}")
+        if filter_path: flt_parts.append(f"path~={filter_path}")
+        header.append(f"Filters      : {', '.join(flt_parts)}")
+    header.append("─" * 55)
+
+    if not matches_by_file:
+        header.append("No matches.")
+        if files_scanned == 0:
+            header.append("")
+            header.append(
+                "Tip: the tracked-paths allowlist may be empty or your "
+                "filter_ext / filter_path eliminated every candidate. "
+                "Use list_tracked_directories() to inspect what's tracked."
+            )
+        return "\n".join(header)
+
+    body = []
+    suggested_next = None
+    for fp_str, hits in matches_by_file.items():
+        body.append(f"📄 {fp_str}")
+        for line_no, line_text, ctx_b, ctx_a in hits:
+            for offset, c in enumerate(ctx_b, start=line_no - len(ctx_b)):
+                body.append(f"  {offset:>6}  {c}")
+            body.append(f"▶ {line_no:>6}  {line_text}")
+            for offset, c in enumerate(ctx_a, start=line_no + 1):
+                body.append(f"  {offset:>6}  {c}")
+            body.append("")
+        if suggested_next is None and hits:
+            first_line = hits[0][0]
+            suggested_next = (
+                f'read_file_lines("{fp_str}", start_line={first_line}, '
+                f'end_line={first_line + 40})'
+            )
+        body.append("─" * 55)
+
+    if suggested_next:
+        body.append(f"Next: {suggested_next}")
+    return "\n".join(header + body)
+
+
+@mcp.tool()
+def read_file_lines(
+    filepath: str,
+    start_line: int,
+    end_line: Optional[int] = None,
+    max_lines: int = _READ_LINES_DEFAULT,
+) -> str:
+    """
+    CODE-AWARE RETRIEVAL — Read an exact line range from a file on disk.
+
+    Use after grep_documents() pinpoints a symbol's line, when you need the
+    full surrounding function/block at original fidelity (no chunk boundaries).
+    Lines are returned with their real line numbers prefixed for easy reference.
+
+    Security: only files under the tracked-paths allowlist
+    (~/.rag_auto_update_dirs.json) can be read. If denied, the response lists
+    the currently tracked entries so you know what to ask the user about.
+
+    Args:
+        filepath:   Absolute path to the file. Must be inside a tracked
+                    directory OR be an individually-tracked file.
+        start_line: First line to return (1-based).
+        end_line:   Last line to return (inclusive). Optional — defaults to
+                    start_line + max_lines - 1.
+        max_lines:  Hard ceiling on lines returned regardless of end_line
+                    (default 200, max 1000). Protects mobile contexts.
+
+    Returns:
+        Numbered line block with a header showing the range / total lines,
+        and a continuation hint if more lines exist beyond what was returned.
+    """
+    if not _prewarm_event.wait(timeout=60):
+        return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
+
+    # ── Authorize ──
+    resolved, deny_msg = _resolve_allowlisted_path(filepath)
+    if not resolved:
+        return deny_msg
+
+    # ── Argument hygiene ──
+    notes = []
+    try:
+        start_line = int(start_line)
+    except (TypeError, ValueError):
+        return f"⚠️  read_file_lines: start_line must be an integer, got {start_line!r}"
+    if start_line < 1:
+        notes.append(f"(start_line adjusted from {start_line} to 1)")
+        start_line = 1
+
+    max_lines = max(1, min(int(max_lines), _READ_LINES_HARD_CAP))
+
+    if end_line is not None:
+        try:
+            end_line = int(end_line)
+        except (TypeError, ValueError):
+            return f"⚠️  read_file_lines: end_line must be an integer or None"
+        if end_line < start_line:
+            return (f"⚠️  read_file_lines: end_line ({end_line}) must be "
+                    f">= start_line ({start_line}).")
+        requested_count = end_line - start_line + 1
+        effective_count = min(requested_count, max_lines)
+    else:
+        effective_count = max_lines
+        end_line = start_line + effective_count - 1
+
+    _log.info("read_file_lines: %s  [%d..%d]  cap=%d",
+              resolved, start_line, end_line, max_lines)
+
+    # ── Existence and size checks ──
+    try:
+        fp = Path(resolved)
+        if not fp.exists():
+            return (f"⚠️  File no longer exists on disk: {resolved}\n"
+                    "It may have been moved or deleted. "
+                    "Run update_tracked_directories() to refresh the index.")
+        if not fp.is_file():
+            return f"⚠️  Path is not a regular file: {resolved}"
+        size = fp.stat().st_size
+        if size > _READ_FILE_MAX_BYTES:
+            return (f"⚠️  File too large to read inline "
+                    f"({size:,} bytes, cap {_READ_FILE_MAX_BYTES:,}).\n"
+                    f"Use grep_documents to locate specific content instead.")
+    except (PermissionError, OSError) as exc:
+        return f"⚠️  Cannot access file: {exc}"
+
+    # ── Binary sniff ──
+    try:
+        with open(resolved, 'rb') as bf:
+            head = bf.read(_BINARY_SNIFF_BYTES)
+        if _looks_binary(head):
+            return (f"⚠️  File appears to be binary: {resolved}\n"
+                    f"read_file_lines only reads text files. If this is a "
+                    f"document (PDF, DOCX, etc.), use get_document_chunks().")
+    except (PermissionError, OSError) as exc:
+        return f"⚠️  Cannot open file: {exc}"
+
+    # ── Stream and slice ──
+    lines_out = []
+    last_line_seen = 0
+    try:
+        with open(resolved, 'r', encoding='utf-8', errors='replace') as tf:
+            for i, line in enumerate(tf, start=1):
+                last_line_seen = i
+                if i < start_line:
+                    continue
+                if i > end_line:
+                    # Keep iterating just enough to learn total line count?
+                    # No — that would read the whole file every call. We stop
+                    # here and report the upper bound conservatively.
+                    break
+                lines_out.append((i, line.rstrip('\n')))
+                if len(lines_out) >= effective_count:
+                    break
+    except UnicodeDecodeError as exc:
+        return f"⚠️  Encoding error reading {resolved}: {exc}"
+    except (PermissionError, OSError) as exc:
+        return f"⚠️  Read error: {exc}"
+
+    if not lines_out:
+        # Either start_line is past EOF, or we read the entire file but
+        # found fewer lines than start_line.
+        return (f"⚠️  No content returned. File has {last_line_seen} line(s); "
+                f"start_line was {start_line}.")
+
+    actual_first = lines_out[0][0]
+    actual_last  = lines_out[-1][0]
+    n_returned   = len(lines_out)
+
+    # Was the file longer than what we returned? Cheap check via tail seek:
+    has_more = False
+    total_lines_hint = None
+    try:
+        # Quick total-line probe — only opens the file again if we hit our cap
+        # to keep the common case cheap.
+        if n_returned == effective_count:
+            with open(resolved, 'r', encoding='utf-8', errors='replace') as tf2:
+                total_lines_hint = sum(1 for _ in tf2)
+            if total_lines_hint > actual_last:
+                has_more = True
+    except Exception:
+        total_lines_hint = None
+
+    header = [
+        f"📄 {resolved}",
+    ]
+    if total_lines_hint is not None:
+        header.append(
+            f"   Lines {actual_first}-{actual_last} of {total_lines_hint} "
+            f"(showing {n_returned} line{'s' if n_returned != 1 else ''})"
+        )
+    else:
+        header.append(
+            f"   Lines {actual_first}-{actual_last} "
+            f"(showing {n_returned} line{'s' if n_returned != 1 else ''})"
+        )
+    if notes:
+        header.append("   " + " ".join(notes))
+    header.append("─" * 55)
+
+    body = [f"{ln:>6}  {tx}" for ln, tx in lines_out]
+
+    footer = []
+    if has_more and total_lines_hint:
+        remaining = total_lines_hint - actual_last
+        footer.append("─" * 55)
+        footer.append(
+            f"File continues — {remaining} more line(s). "
+            f"Call: read_file_lines(\"{resolved}\", "
+            f"start_line={actual_last + 1})"
+        )
+
+    return "\n".join(header + body + footer)
+#!/usr/bin/env python3
+"""
+AI-Prowler Code Tools — WRITE-SIDE PATCH (8 tools)
+====================================================
+
+This file contains the 8 new write-side code tools, plus all supporting
+infrastructure (writable-path allowlist, hard blocklist, GUI approval queue,
+re-index helper, write-counter circuit breaker).
+
+INSTALL INSTRUCTIONS:
+   1. Open C:/Users/david/AI-Prowler_V601_to_V602_work/AI-Prowler/ai_prowler_mcp.py
+   2. Find the end of read_file_lines() — line 4135 in the May 18 2026 snapshot,
+      ends with `return "\n".join(header + body + footer)`
+   3. Paste this entire file's contents IMMEDIATELY AFTER that line, BEFORE the
+      `# HTTP transport with Bearer-token auth ...` banner at line 4138.
+   4. Save. The 8 new tools are registered automatically by the @mcp.tool()
+      decorator pattern already in use.
+
+DEPENDENCIES ALREADY IN AI_PROWLER_MCP.PY (no new imports required at top of file):
+   import os, sys, json, re, threading
+   from pathlib import Path
+   from typing import Optional
+   _log               (the logger)
+   _prewarm_event     (initialization sync)
+   _BINARY_SNIFF_BYTES, _READ_FILE_MAX_BYTES
+   _resolve_allowlisted_path   (from code-tools section)
+   _looks_binary               (from code-tools section)
+   mcp                         (the FastMCP instance — @mcp.tool() decorator)
+
+The patch only uses these existing names plus standard-library imports.
+
+DESIGN REFERENCE: Self-learning entries
+   6412cfe3-26e6-4029-a408-a9ea3b43b88a  — design spec
+   56a6b144-990b-4822-b6d6-0c039b70d3a7  — implementation tracker
+"""
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CODE TOOLS — WRITE-SIDE
+#
+# 8 tools that complement grep_documents and read_file_lines to give Claude
+# in-place editing capability over the tracked-paths allowlist. All writes
+# require BOTH read-allowlist membership AND writable-allowlist approval.
+# Backups land alongside the file as <name>.bak<N>. Auto re-index on every
+# successful write keeps ChromaDB in sync. See design spec for full rationale.
+# ══════════════════════════════════════════════════════════════════════════════
+
+import shutil as _shutil
+import time as _time
+
+# ── Writable-path allowlist persistence ──────────────────────────────────────
+# Mirrors the structure of ~/.rag_auto_update_dirs.json. Stored as a JSON list.
+# Empty by default. Grows only via explicit user approval through the GUI.
+_WRITABLE_DIRS_FILE = Path.home() / ".rag_writable_dirs.json"
+
+# Pending-approval queue. When a write is attempted to a path not in the
+# writable allowlist, the path is added here. The GUI checks this file on
+# focus and shows a confirmation dialog. Format: list of dicts with path +
+# requested_at.
+_WRITE_APPROVAL_QUEUE_FILE = Path.home() / ".rag_writable_pending.json"
+
+# Hard caps
+_WRITE_MAX_BYTES                  = 50 * 1024 * 1024   # 50 MB per write
+_WRITES_PER_SESSION_LIMIT         = 20                 # circuit breaker
+_BACKUP_MAX_FILES_PER_PARENT      = 10_000             # sanity cap on .bak<N> scanning
+_STR_REPLACE_MAX_OLD_STR_LEN      = 500_000            # 500K char hard cap on old_str
+
+# Session-scoped write counter (resettable via reset_write_counter()).
+# Lives only in process memory — restarting AI-Prowler resets it.
+_write_counter_lock = threading.Lock()
+_write_counter = {"count": 0, "session_started": _time.time()}
+
+
+def _writable_allowlist_load() -> list:
+    """Read the writable-path allowlist from disk. Returns [] if missing/invalid."""
+    try:
+        if not _WRITABLE_DIRS_FILE.exists():
+            return []
+        with open(_WRITABLE_DIRS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return [str(p) for p in data if isinstance(p, str)]
+        return []
+    except Exception as exc:
+        _log.warning("writable allowlist read failed: %s", exc)
+        return []
+
+
+def _writable_allowlist_save(entries: list) -> bool:
+    """Write the writable-path allowlist to disk. Returns True on success."""
+    try:
+        _WRITABLE_DIRS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(_WRITABLE_DIRS_FILE, "w", encoding="utf-8") as f:
+            json.dump(sorted(set(entries)), f, indent=2)
+        return True
+    except Exception as exc:
+        _log.error("writable allowlist write failed: %s", exc)
+        return False
+
+
+def _queue_write_approval(path: str) -> None:
+    """Append a path to the pending-approval queue. Idempotent — duplicates ignored."""
+    try:
+        pending = []
+        if _WRITE_APPROVAL_QUEUE_FILE.exists():
+            with open(_WRITE_APPROVAL_QUEUE_FILE, "r", encoding="utf-8") as f:
+                pending = json.load(f)
+            if not isinstance(pending, list):
+                pending = []
+        seen_paths = {p.get("path") for p in pending if isinstance(p, dict)}
+        if path not in seen_paths:
+            pending.append({
+                "path": path,
+                "requested_at": _time.strftime("%Y-%m-%dT%H:%M:%S"),
+            })
+            with open(_WRITE_APPROVAL_QUEUE_FILE, "w", encoding="utf-8") as f:
+                json.dump(pending, f, indent=2)
+    except Exception as exc:
+        _log.warning("queue_write_approval failed: %s", exc)
+
+
+# ── Hard blocklist (cannot be approved, ever) ────────────────────────────────
+# Each entry is matched case-insensitively against the resolved absolute path.
+# Patterns ending with os.sep mean "this directory and anything under it".
+# Bare segments like ".git" match if they appear as a path component.
+def _is_blocked_path(resolved_path: str) -> tuple[bool, str]:
+    """
+    Check if a resolved path is in the hard-coded write blocklist.
+    Returns (blocked, reason). Reason is empty when not blocked.
+
+    These cannot be overridden by the user — system directories, credentials,
+    git internals, and the schema-aware xlsx are protected at code level.
+    """
+    p = resolved_path.replace("/", "\\").lower()
+    parts = Path(resolved_path).parts
+    parts_lower = [pt.lower() for pt in parts]
+
+    # System / install directories
+    if p.startswith("c:\\windows\\") or p == "c:\\windows":
+        return (True, "C:\\Windows is a system directory")
+    if p.startswith("c:\\program files\\") or p == "c:\\program files":
+        return (True, "C:\\Program Files is a system directory "
+                       "(includes the installed AI-Prowler — never overwrite)")
+    if p.startswith("c:\\program files (x86)\\") or p == "c:\\program files (x86)":
+        return (True, "C:\\Program Files (x86) is a system directory")
+    if p.startswith("c:\\programdata\\") or p == "c:\\programdata":
+        return (True, "C:\\ProgramData is a system directory")
+
+    # AppData — block specific sensitive subdirectories instead of all of AppData.
+    # AppData\Local\Temp is user scratch space (pytest tmpdir lives here, and
+    # legitimate transient work happens here). AppData\Local\AI-Prowler is
+    # AI-Prowler's own state. Everything else in AppData is generally other
+    # apps' configs and credentials — we block the well-known sensitive ones
+    # rather than ALL of AppData, since AppData is too broad to deny wholesale.
+    if "\\appdata\\" in p:
+        # Sensitive AppData subdirectories (anywhere under AppData\Local or AppData\Roaming)
+        sensitive_appdata_segments = (
+            "\\appdata\\roaming\\microsoft\\",
+            "\\appdata\\local\\microsoft\\",
+            "\\appdata\\roaming\\mozilla\\",
+            "\\appdata\\local\\mozilla\\",
+            "\\appdata\\roaming\\google\\",
+            "\\appdata\\local\\google\\",
+            "\\appdata\\roaming\\apple\\",
+            "\\appdata\\local\\apple computer\\",
+            "\\appdata\\local\\packages\\",   # Windows Store apps
+            "\\appdata\\roaming\\discord\\",
+            "\\appdata\\roaming\\slack\\",
+            "\\appdata\\roaming\\anthropic\\",   # Claude Desktop config
+        )
+        for sensitive in sensitive_appdata_segments:
+            if sensitive in p:
+                # Friendly app name from the segment for the error message
+                app_name = sensitive.split("\\")[-2]
+                return (True, f"AppData\\{app_name} contains app state/credentials "
+                               f"and is not writable by AI-Prowler")
+        # Not in the sensitive list — allowed (covers Temp, AI-Prowler, and any
+
+    # Git internals — protect from any write
+    # Use both parts-based (semantic) and string-based (defense-in-depth) checks
+    # to be robust across any path-tokenization quirks.
+    if ".git" in parts_lower:
+        for seg in parts_lower:
+            if seg == ".git":
+                return (True, "git internals — git operations stay in user's terminal")
+    if "\\.git\\" in p or p.endswith("\\.git"):
+        return (True, "git internals — git operations stay in user's terminal")
+
+    # Credentials — same defense-in-depth pattern
+    if ".ssh" in parts_lower or "\\.ssh\\" in p or p.endswith("\\.ssh"):
+        return (True, ".ssh contains credentials — never written by AI-Prowler")
+    if ".aws" in parts_lower or "\\.aws\\" in p or p.endswith("\\.aws"):
+        return (True, ".aws contains credentials — never written by AI-Prowler")
+
+    # The job tracker spreadsheet — schema-aware tool only
+    job_tracker_marker = "ai-prowler_job_tracker.xlsx"
+    if p.endswith(job_tracker_marker):
+        return (True, "AI-Prowler_Job_Tracker.xlsx must be modified via the "
+                       "dedicated update_job_spreadsheet tool (schema-aware), "
+                       "not via generic write tools")
+
+    return (False, "")
+
+
+def _resolve_writable_path(filepath: str, *, queue_approval: bool = True
+                           ) -> tuple[Optional[str], Optional[str]]:
+    """
+    Authorize a path for WRITES. Returns (resolved_path, None) on allow,
+    or (None, formatted_error_message) on deny.
+
+    Double-lock constraint:
+      (1) Path must be in the read allowlist (~/.rag_auto_update_dirs.json)
+      (2) Path must be in the writable allowlist (~/.rag_writable_dirs.json)
+      Plus the hard blocklist always wins, regardless of either allowlist.
+
+    If the path passes (1) and the blocklist but fails (2), this function
+    enqueues a GUI approval request (unless queue_approval=False).
+    """
+    # Step 1: read allowlist (also resolves the path)
+    resolved, deny_msg = _resolve_allowlisted_path(filepath)
+    if not resolved:
+        # Already a formatted denial from the read allowlist
+        return (None, deny_msg)
+
+    # Step 2: hard blocklist — never bypassable
+    blocked, reason = _is_blocked_path(resolved)
+    if blocked:
+        lines = [
+            f"🚫 Write blocked — '{resolved}'",
+            f"Reason: {reason}",
+            "",
+            "This path is on AI-Prowler's hard write-blocklist and cannot be "
+            "approved even by the user. Hard-blocked locations include "
+            "C:\\Windows, C:\\Program Files, C:\\ProgramData, AppData, "
+            ".git, .ssh, .aws, and the job tracker xlsx.",
+        ]
+        _log.warning("Write blocked (hard): %s (%s)", resolved, reason)
+        return (None, "\n".join(lines))
+
+    # Step 3: writable allowlist
+    writable = _writable_allowlist_load()
+    if any(_path_is_under(resolved, w) for w in writable):
+        return (resolved, None)
+
+    # Not yet approved — queue for GUI approval if requested
+    if queue_approval:
+        _queue_write_approval(resolved)
+
+    lines = [
+        f"🔐 Write needs approval — '{resolved}'",
+        "",
+        "This path is in the READ allowlist but not yet in the WRITABLE "
+        "allowlist. AI-Prowler has queued an approval request — the next time "
+        "you focus the AI-Prowler GUI window, it will ask you to approve "
+        "writes to:",
+        f"    {Path(resolved).parent}",
+        "",
+        "Once approved, this and all paths under that directory will be "
+        "writable in future sessions. No need to re-run this tool — the "
+        "approval persists in ~/.rag_writable_dirs.json.",
+    ]
+    if writable:
+        lines.append("")
+        lines.append("Currently writable:")
+        for w in writable[:10]:
+            lines.append(f"  - {w}")
+    return (None, "\n".join(lines))
+
+
+def _path_is_under(target: str, ancestor: str) -> bool:
+    """True if target equals or is a descendant of ancestor (both resolved)."""
+    try:
+        t = Path(target).resolve(strict=False)
+        a = Path(ancestor).resolve(strict=False)
+        if t == a:
+            return True
+        try:
+            t.relative_to(a)
+            return True
+        except ValueError:
+            return False
+    except Exception:
+        return False
+
+
+# ── Backup naming (.bak<N> alongside the file) ───────────────────────────────
+_BAK_RE = _re.compile(r"\.bak(\d+)$", _re.IGNORECASE)
+
+
+def _next_backup_path(filepath: str) -> Path:
+    """
+    Find the next available <filepath>.bak<N> in the file's parent directory.
+    N = (max existing bak number for this base filename) + 1.
+    Returns the Path object for where the new backup should be written.
+    Does NOT create the file — caller must copy contents into it.
+    """
+    fp = Path(filepath)
+    parent = fp.parent
+    base = fp.name
+    highest = 0
+    try:
+        prefix = base + ".bak"
+        prefix_lower = prefix.lower()
+        # List parent dir; cap scan to avoid pathological cases
+        scanned = 0
+        for sibling in parent.iterdir():
+            scanned += 1
+            if scanned > _BACKUP_MAX_FILES_PER_PARENT:
+                break
+            name = sibling.name
+            if name.lower().startswith(prefix_lower):
+                tail = name[len(prefix):]   # the digit portion after ".bak"
+                if tail.isdigit():
+                    n = int(tail)
+                    if n > highest:
+                        highest = n
+    except Exception as exc:
+        _log.warning("_next_backup_path: directory scan failed in %s: %s", parent, exc)
+    return parent / f"{base}.bak{highest + 1}"
+
+
+def _make_backup(filepath: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    Copy filepath to <filepath>.bak<N> alongside it. Returns (backup_path, None)
+    on success or (None, error_message) on failure.
+
+    Caller has already verified the file exists.
+    """
+    try:
+        target = _next_backup_path(filepath)
+        _shutil.copy2(filepath, str(target))   # copy2 preserves mtime
+        _log.info("Backup created: %s -> %s", filepath, target)
+        return (str(target), None)
+    except Exception as exc:
+        msg = f"backup failed: {exc}"
+        _log.error("_make_backup: %s", msg)
+        return (None, msg)
+
+
+# ── Line-ending preservation helper ──────────────────────────────────────────
+# Background: Python's text-mode file I/O on Windows silently converts
+# CRLF → LF on read and LF → platform-native on write. The write-side
+# tools previously round-tripped through text mode and binary write,
+# which silently stripped CRLF endings from Windows files on every edit.
+# These helpers let us detect the existing convention and preserve it.
+
+def _detect_line_ending(file_bytes: bytes) -> str:
+    """Detect the dominant line ending in raw file bytes.
+
+    Returns one of:
+        '\\r\\n'  — Windows / CRLF  (any CRLF presence wins)
+        '\\r'     — Classic Mac     (only \\r, no \\n)
+        '\\n'     — Unix / LF       (the default; also empty files)
+
+    Strategy: any CRLF in the file = treat the whole file as CRLF. This
+    correctly handles slightly-mixed files (rare in practice, but they
+    do occur from tools that append LF-only lines to a CRLF file).
+    """
+    if b"\r\n" in file_bytes:
+        return "\r\n"
+    if b"\r" in file_bytes and b"\n" not in file_bytes:
+        return "\r"
+    return "\n"
+
+
+def _read_text_preserving_endings(filepath: str) -> tuple[str, str]:
+    """Read filepath, return (lf_normalized_text, original_line_ending).
+
+    The returned text always uses LF newlines so that in-memory string
+    operations (str_replace, etc.) behave uniformly regardless of the
+    file's on-disk convention. The caller is responsible for re-applying
+    the returned line ending before writing back.
+
+    Caller has already verified the file exists and is small enough.
+    Decoding errors are replaced (matches the previous read behavior).
+    """
+    with open(filepath, "rb") as f:
+        raw = f.read()
+    line_ending = _detect_line_ending(raw)
+    decoded = raw.decode("utf-8", errors="replace")
+    # Normalize all endings to LF for consistent in-memory editing.
+    # Order matters: handle \r\n before bare \r.
+    normalized = decoded.replace("\r\n", "\n").replace("\r", "\n")
+    return (normalized, line_ending)
+
+
+def _apply_line_ending(text: str, line_ending: str) -> str:
+    """Re-apply the given line ending to LF-normalized text.
+
+    If line_ending is '\\n', returns text unchanged (zero allocations).
+    Otherwise replaces every '\\n' with the target ending.
+    """
+    if line_ending == "\n":
+        return text
+    return text.replace("\n", line_ending)
+
+
+# ── Write-counter circuit breaker ────────────────────────────────────────────
+def _check_and_increment_write_counter() -> tuple[bool, str]:
+    """
+    Returns (allowed, message). Increments the counter on each call.
+    The counter is process-scoped — restarting AI-Prowler resets it.
+    """
+    with _write_counter_lock:
+        if _write_counter["count"] >= _WRITES_PER_SESSION_LIMIT:
+            return (False,
+                    f"🛑 Write circuit-breaker tripped: "
+                    f"{_WRITES_PER_SESSION_LIMIT} writes already this session. "
+                    f"This protects against runaway loops. Restart AI-Prowler "
+                    f"or call reset_write_counter from the GUI to continue.")
+        _write_counter["count"] += 1
+        return (True, "")
+
+
+def _reset_write_counter_internal() -> int:
+    """Reset session write counter. Returns the count that was reset from."""
+    with _write_counter_lock:
+        old = _write_counter["count"]
+        _write_counter["count"] = 0
+        _write_counter["session_started"] = _time.time()
+        return old
+
+
+# ── Auto re-index helper ─────────────────────────────────────────────────────
+def _reindex_file_after_write(filepath: str, *, was_new: bool = False) -> None:
+    """
+    Update ChromaDB to reflect on-disk content of filepath.
+
+    Semantics: delete-then-add (replace). For new files (was_new=True), the
+    delete is a no-op but harmless. Best-effort — failures are logged but do
+    not propagate to the tool caller (the file is on disk; next scheduled
+    re-scan will catch up).
+
+    The .bak<N> files are NEVER indexed — the indexer's SKIP_EXTENSIONS /
+    skip patterns must include .bak* (LAYER 2 of the 'backups never indexed'
+    rule; LAYER 1 is this function only ever being called with the active
+    filepath, never a backup path).
+    """
+    try:
+        from rag_preprocessor import (
+            normalise_path, index_file_list, _get_or_create_collection,
+        )
+    except Exception as exc:
+        # If the indexer surface differs, fall back to the safer pattern:
+        # log and let the next scheduled re-scan catch up.
+        _log.warning("re-index post-write: import failure (%s) — "
+                     "next scheduled scan will catch up.", exc)
+        return
+
+    fp_norm = normalise_path(filepath)
+
+    # Step 1: purge existing chunks for this filepath (delete-then-add)
+    try:
+        coll = _get_or_create_collection()
+        coll.delete(where={"filepath": fp_norm})
+    except Exception as exc:
+        _log.warning("re-index post-write: purge failed for %s: %s", fp_norm, exc)
+        # Continue anyway — index_file_list will add new chunks regardless
+
+    # Step 2: re-index the file
+    try:
+        index_file_list([fp_norm], label="post-write")
+    except Exception as exc:
+        _log.warning("re-index post-write: index_file_list failed for %s: %s",
+                     fp_norm, exc)
+
+
+# ── Parent directory must exist (helper for create_file / write_file) ────────
+def _parent_dir_check(filepath: str) -> Optional[str]:
+    """Return an error message if the parent directory doesn't exist, else None."""
+    try:
+        parent = Path(filepath).parent
+        if not parent.exists():
+            return (f"⚠️  Parent directory does not exist: {parent}\n"
+                    f"Call create_directory({parent}) first, then retry.")
+        if not parent.is_dir():
+            return f"⚠️  Parent path is not a directory: {parent}"
+    except Exception as exc:
+        return f"⚠️  Could not check parent directory: {exc}"
+    return None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOL 1 — create_file
+# ══════════════════════════════════════════════════════════════════════════════
+@mcp.tool()
+def create_file(filepath: str, content: str) -> str:
+    """
+    CODE TOOLS — Create a NEW file. FAILS if the file already exists.
+
+    Use this for files that should not yet exist. To modify an existing file,
+    use write_file (whole-file overwrite) or str_replace_in_file (surgical edit).
+
+    Security: the path must be in BOTH the read allowlist
+    (~/.rag_auto_update_dirs.json) AND the writable allowlist
+    (~/.rag_writable_dirs.json). The first time you attempt a write to a new
+    directory, AI-Prowler queues a GUI approval request that you must accept
+    at the desktop. Subsequent writes to that directory succeed silently.
+
+    Hard-blocked locations (cannot be approved):
+      C:\\Windows, C:\\Program Files, C:\\ProgramData, AppData (except
+      AI-Prowler's own state), .git, .ssh, .aws, the job tracker xlsx.
+
+    Args:
+        filepath:  Absolute path of the file to create.
+        content:   Full file contents as a string. Empty string is allowed.
+
+    Returns:
+        Success: confirmation with byte count and a note that the file is now
+                 indexed in ChromaDB. Failure: a clear error explaining what
+                 went wrong (path not allowlisted, file already exists,
+                 parent missing, write circuit-breaker tripped, etc.).
+    """
+    if not _prewarm_event.wait(timeout=60):
+        return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
+
+    # Authorize
+    resolved, deny = _resolve_writable_path(filepath)
+    if not resolved:
+        return deny
+
+    # Existence check — create_file fails if file exists (negative space: use write_file)
+    if Path(resolved).exists():
+        return (f"⚠️  File already exists: {resolved}\n"
+                f"create_file is for NEW files only. To modify an existing "
+                f"file, use write_file (full overwrite) or "
+                f"str_replace_in_file (surgical edit).")
+
+    # Parent directory must already exist (force explicit create_directory call)
+    parent_err = _parent_dir_check(resolved)
+    if parent_err:
+        return parent_err
+
+    # Size cap
+    # Line-ending handling for NEW files: if the caller passed pure-LF content
+    # and we're on Windows, translate to CRLF so the new file matches the
+    # rest of the codebase. If the caller passed content with explicit \r
+    # bytes, respect their choice exactly. Empty content is untouched.
+    if "\r" in content:
+        # Caller chose their endings explicitly — write as-is.
+        final_content = content
+    elif "\n" in content and os.linesep != "\n":
+        # Pure-LF content on a non-LF platform: convert to native.
+        # On Windows os.linesep == "\r\n"; on Linux/macOS it's "\n" already.
+        final_content = content.replace("\n", os.linesep)
+    else:
+        final_content = content
+    try:
+        content_bytes = final_content.encode("utf-8")
+    except Exception as exc:
+        return f"⚠️  Content could not be encoded as UTF-8: {exc}"
+    if len(content_bytes) > _WRITE_MAX_BYTES:
+        return (f"⚠️  Content too large ({len(content_bytes):,} bytes, "
+                f"cap {_WRITE_MAX_BYTES:,}).")
+
+    # Circuit breaker
+    ok, msg = _check_and_increment_write_counter()
+    if not ok:
+        return msg
+
+    # Write
+    try:
+        with open(resolved, "wb") as f:
+            f.write(content_bytes)
+    except Exception as exc:
+        return f"⚠️  Write failed: {exc}"
+
+    _log.info("create_file: %s (%d bytes)", resolved, len(content_bytes))
+
+    # Re-index
+    _reindex_file_after_write(resolved, was_new=True)
+
+    return (f"✅ Created {resolved}\n"
+            f"   {len(content_bytes):,} bytes written\n"
+            f"   File indexed in ChromaDB.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOL 2 — write_file
+# ══════════════════════════════════════════════════════════════════════════════
+@mcp.tool()
+def write_file(filepath: str, content: str, verify_after_write: bool = False) -> str:
+    """
+    CODE TOOLS — Overwrite an EXISTING file with new content. FAILS if the
+    file does not exist.
+
+    Use this for whole-file rewrites. To create a new file, use create_file.
+    For surgical single-string edits, use str_replace_in_file (much cheaper
+    in tokens for large files).
+
+    Auto-backup: before writing, the current file is copied to
+    <filepath>.bak<N> alongside it, where N is the next available number.
+    Backups are kept forever — manual cleanup only. The .bak<N> file is
+    never indexed in ChromaDB.
+
+    Auto re-index: after the write succeeds, all existing ChromaDB chunks
+    for this filepath are purged and the new content is re-chunked and added.
+
+    Args:
+        filepath:           Absolute path to overwrite.
+        content:            Full new file contents.
+        verify_after_write: If True (default False for write_file), re-read the
+                            file after writing and include the first/last 5
+                            lines of the new content in the response so you
+                            can confirm the write landed.
+
+    Returns:
+        Success: confirmation including backup path and byte counts.
+        Failure: a clear error message.
+    """
+    if not _prewarm_event.wait(timeout=60):
+        return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
+
+    # Authorize
+    resolved, deny = _resolve_writable_path(filepath)
+    if not resolved:
+        return deny
+
+    # Existence check — write_file requires the file to exist
+    if not Path(resolved).exists():
+        return (f"⚠️  File does not exist: {resolved}\n"
+                f"write_file is for EXISTING files only. To create a new "
+                f"file, use create_file.")
+    if not Path(resolved).is_file():
+        return f"⚠️  Path is not a regular file: {resolved}"
+
+    # Detect the existing file's line-ending convention so we can preserve
+    # it when writing the new content. The user passes `content` with \n
+    # newlines (the normal Python convention); we translate to whatever
+    # the file currently uses. Without this, every Windows file we touch
+    # silently loses its CRLF endings on write.
+    # Read up to 64 KB — plenty to find the first CRLF in any real file.
+    try:
+        with open(resolved, "rb") as f:
+            existing_head = f.read(65536)
+        line_ending = _detect_line_ending(existing_head)
+    except Exception as exc:
+        return f"⚠️  Cannot probe existing file for line endings: {exc}"
+
+    # Normalize incoming content to LF, then re-apply the detected ending.
+    # Normalization makes the behavior predictable: whether the caller
+    # passes \n or \r\n, the output uses the file's existing convention.
+    normalized_content = content.replace("\r\n", "\n").replace("\r", "\n")
+    final_content = _apply_line_ending(normalized_content, line_ending)
+
+    # Size cap on new content
+    try:
+        content_bytes = final_content.encode("utf-8")
+    except Exception as exc:
+        return f"⚠️  Content could not be encoded as UTF-8: {exc}"
+    if len(content_bytes) > _WRITE_MAX_BYTES:
+        return (f"⚠️  Content too large ({len(content_bytes):,} bytes, "
+                f"cap {_WRITE_MAX_BYTES:,}).")
+
+    # Circuit breaker
+    ok, msg = _check_and_increment_write_counter()
+    if not ok:
+        return msg
+
+    # Auto-backup before overwriting
+    old_size = Path(resolved).stat().st_size
+    backup_path, backup_err = _make_backup(resolved)
+    if backup_err:
+        return f"⚠️  Aborting write — could not create backup: {backup_err}"
+
+    # Write
+    try:
+        with open(resolved, "wb") as f:
+            f.write(content_bytes)
+    except Exception as exc:
+        return (f"⚠️  Write failed (backup preserved at {backup_path}): {exc}\n"
+                f"Use restore_backup to recover if needed.")
+
+    _log.info("write_file: %s (%d -> %d bytes, backup %s)",
+              resolved, old_size, len(content_bytes), backup_path)
+
+    # Re-index
+    _reindex_file_after_write(resolved, was_new=False)
+
+    # Build response
+    out = [
+        f"✅ Wrote {resolved}",
+        f"   {old_size:,} bytes  →  {len(content_bytes):,} bytes",
+        f"   Backup: {backup_path}",
+        f"   ChromaDB chunks purged and re-indexed.",
+    ]
+    if verify_after_write:
+        out.append("")
+        out.append("─── Verify (first 5 / last 5 lines of new content) ───")
+        try:
+            with open(resolved, "r", encoding="utf-8", errors="replace") as f:
+                new_lines = f.read().splitlines()
+            total = len(new_lines)
+            head = new_lines[:5]
+            tail = new_lines[-5:] if total > 10 else []
+            for i, ln in enumerate(head, start=1):
+                out.append(f"  {i:>4}  {ln}")
+            if tail:
+                out.append(f"  ... ({total - 10} line(s) omitted)")
+                for i, ln in enumerate(tail, start=total - 4):
+                    out.append(f"  {i:>4}  {ln}")
+        except Exception as exc:
+            out.append(f"  (verify read failed: {exc})")
+    return "\n".join(out)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOL 3 — str_replace_in_file  (THE MOST IMPORTANT WRITE TOOL)
+# ══════════════════════════════════════════════════════════════════════════════
+@mcp.tool()
+def str_replace_in_file(filepath: str,
+                        old_str: str,
+                        new_str: str,
+                        dry_run: bool = False,
+                        verify_after_write: bool = True) -> str:
+    """
+    CODE TOOLS — Surgical in-place edit: replace one unique occurrence of
+    old_str with new_str. This is THE primary write tool — prefer it over
+    write_file for any change to a specific section of a file.
+
+    Why this is so much better than read-modify-write for large files:
+        A round-trip of rag_gui.py (12,209 lines, ~120K tokens) costs
+        ~240K tokens vs ~250 tokens for a str_replace edit. 1000x savings.
+
+    UNIQUENESS CONSTRAINT: old_str must appear in the file EXACTLY ONCE.
+    If it appears zero times, the tool fails (typo or already-edited).
+    If it appears more than once, the tool fails and reports each match's
+    line number so you can pick a more distinctive old_str.
+
+    Auto-backup: before any write, the file is copied to <filepath>.bak<N>.
+    Auto re-index: ChromaDB chunks for this file are purged and rebuilt.
+
+    Args:
+        filepath:           Absolute path to edit. Must be writable-allowlisted.
+        old_str:            Exact substring to find. Must appear exactly once.
+                            Whitespace is significant.
+        new_str:            Replacement text. May be empty to delete a span.
+                            May include multiple lines.
+        dry_run:            If True, returns a unified diff WITHOUT modifying
+                            the file. No backup is created. Useful for mobile
+                            confirmation — review the diff, then call again
+                            with dry_run=False.
+        verify_after_write: If True (default True for str_replace_in_file),
+                            include 5 lines before and after the changed
+                            region in the response. Catches silent failures
+                            (file locked by AV, OneDrive sync conflict).
+
+    Returns:
+        Success: confirmation with line where the change landed, backup path,
+                 and (if verify_after_write) the surrounding context.
+        Failure: detailed error explaining why (not found, ambiguous, etc.).
+    """
+    if not _prewarm_event.wait(timeout=60):
+        return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
+
+    # Sanity checks on the strings
+    if old_str is None:
+        return "⚠️  old_str cannot be None."
+    if new_str is None:
+        return "⚠️  new_str cannot be None (use empty string to delete a span)."
+    if len(old_str) == 0:
+        return "⚠️  old_str cannot be empty (would match infinitely)."
+    if len(old_str) > _STR_REPLACE_MAX_OLD_STR_LEN:
+        return (f"⚠️  old_str too long ({len(old_str):,} chars, cap "
+                f"{_STR_REPLACE_MAX_OLD_STR_LEN:,}). Use a smaller distinctive "
+                f"snippet or write_file for whole-file rewrites.")
+
+    # Authorize (suppress queueing if it's a dry-run — no actual write attempted)
+    resolved, deny = _resolve_writable_path(filepath, queue_approval=not dry_run)
+    if not resolved:
+        return deny
+
+    if not Path(resolved).exists():
+        return f"⚠️  File does not exist: {resolved}"
+    if not Path(resolved).is_file():
+        return f"⚠️  Path is not a regular file: {resolved}"
+
+    # Size cap on the file
+    try:
+        size = Path(resolved).stat().st_size
+    except Exception as exc:
+        return f"⚠️  Cannot stat file: {exc}"
+    if size > _READ_FILE_MAX_BYTES:
+        return (f"⚠️  File too large for in-memory edit "
+                f"({size:,} bytes, cap {_READ_FILE_MAX_BYTES:,}).")
+
+    # Binary sniff
+    try:
+        with open(resolved, "rb") as bf:
+            head = bf.read(_BINARY_SNIFF_BYTES)
+        if _looks_binary(head):
+            return (f"⚠️  File appears to be binary: {resolved}\n"
+                    f"str_replace_in_file only edits text files.")
+    except Exception as exc:
+        return f"⚠️  Cannot open file: {exc}"
+
+    # Read whole file — in BINARY first so we can detect the line-ending
+    # convention, then decode to an LF-normalized in-memory string. This
+    # preserves CRLF files on the round-trip; without it Python's text-mode
+    # write silently strips \r bytes from every Windows file we edit.
+    try:
+        text, line_ending = _read_text_preserving_endings(resolved)
+    except Exception as exc:
+        return f"⚠️  Read failed: {exc}"
+
+    # Count occurrences
+    count = text.count(old_str)
+    if count == 0:
+        return (f"⚠️  old_str not found in {resolved}.\n"
+                f"Possible causes: typo in old_str, file already edited, "
+                f"whitespace difference (tabs vs spaces, trailing newline). "
+                f"Tip: use grep_documents to verify the exact text first.")
+    if count > 1:
+        # Find each occurrence and report its line number for disambiguation
+        lines_of_match = []
+        start_at = 0
+        while True:
+            idx = text.find(old_str, start_at)
+            if idx == -1:
+                break
+            line_no = text.count("\n", 0, idx) + 1
+            lines_of_match.append(line_no)
+            start_at = idx + 1
+            if len(lines_of_match) > 20:
+                break
+        return (f"⚠️  old_str found {count} times in {resolved}.\n"
+                f"Match line numbers: {lines_of_match[:20]}"
+                + ("  (more not listed)" if count > 20 else "") + "\n"
+                f"old_str must match EXACTLY ONCE. Add surrounding context "
+                f"(a few lines before/after) until it's unique, then retry.")
+
+    # Compute the change
+    new_text = text.replace(old_str, new_str, 1)
+
+    # Find where the change happened (for verify and reporting)
+    change_idx = text.find(old_str)
+    line_of_change = text.count("\n", 0, change_idx) + 1
+    # Report the size as it will be on disk — i.e. AFTER re-applying the
+    # original line ending. Otherwise size previews are wrong for CRLF files.
+    new_bytes_on_disk = _apply_line_ending(new_text, line_ending).encode("utf-8")
+    new_byte_count = len(new_bytes_on_disk)
+
+    # ── DRY RUN ──
+    if dry_run:
+        out = [
+            f"🔎 DRY RUN — no changes written to {resolved}",
+            f"   Match found at line {line_of_change}",
+            f"   File size would change: {size:,} → {new_byte_count:,} bytes",
+            "",
+            "─── Unified diff (a=before, b=after) ───",
+        ]
+        try:
+            import difflib as _difflib
+            diff = list(_difflib.unified_diff(
+                text.splitlines(keepends=False),
+                new_text.splitlines(keepends=False),
+                fromfile=f"a/{Path(resolved).name}",
+                tofile=f"b/{Path(resolved).name}",
+                lineterm="",
+                n=3,
+            ))
+            if diff:
+                out.extend(diff[:200])
+                if len(diff) > 200:
+                    out.append(f"... ({len(diff) - 200} more diff lines suppressed)")
+            else:
+                out.append("(no textual diff — old_str and new_str are identical)")
+        except Exception as exc:
+            out.append(f"(diff generation failed: {exc})")
+        out.append("")
+        out.append("To apply: call again with dry_run=False.")
+        return "\n".join(out)
+
+    # ── REAL WRITE ──
+    # Circuit breaker
+    ok, msg = _check_and_increment_write_counter()
+    if not ok:
+        return msg
+
+    # Size cap on new content
+    if new_byte_count > _WRITE_MAX_BYTES:
+        return (f"⚠️  Resulting content too large ({new_byte_count:,} bytes, "
+                f"cap {_WRITE_MAX_BYTES:,}).")
+
+    # Auto-backup
+    backup_path, backup_err = _make_backup(resolved)
+    if backup_err:
+        return f"⚠️  Aborting edit — could not create backup: {backup_err}"
+
+    # Write — re-apply the original line ending convention. new_bytes_on_disk
+    # was already computed above for the size report; reuse it here.
+    try:
+        with open(resolved, "wb") as f:
+            f.write(new_bytes_on_disk)
+    except Exception as exc:
+        return (f"⚠️  Write failed (backup preserved at {backup_path}): {exc}\n"
+                f"Use restore_backup to recover.")
+
+    _log.info("str_replace_in_file: %s line=%d (%d -> %d bytes, backup %s)",
+              resolved, line_of_change, size, new_byte_count, backup_path)
+
+    # Re-index
+    _reindex_file_after_write(resolved, was_new=False)
+
+    out = [
+        f"✅ Edited {resolved}",
+        f"   Change at line {line_of_change}",
+        f"   {size:,} bytes  →  {new_byte_count:,} bytes",
+        f"   Backup: {backup_path}",
+        f"   ChromaDB chunks purged and re-indexed.",
+    ]
+    if verify_after_write:
+        out.append("")
+        out.append("─── Verify (5 lines before, change region, 5 lines after) ───")
+        try:
+            new_lines_list = new_text.splitlines()
+            new_total = len(new_lines_list)
+            new_str_line_count = new_str.count("\n") + 1
+            change_start = max(1, line_of_change - 5)
+            change_end = min(new_total, line_of_change + new_str_line_count + 4)
+            for i in range(change_start, change_end + 1):
+                marker = "▶" if change_start + 5 <= i < change_start + 5 + new_str_line_count else " "
+                if i <= new_total:
+                    out.append(f"  {marker}{i:>5}  {new_lines_list[i - 1]}")
+        except Exception as exc:
+            out.append(f"  (verify read failed: {exc})")
+    return "\n".join(out)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOL 4 — create_directory
+# ══════════════════════════════════════════════════════════════════════════════
+@mcp.tool()
+def create_directory(dirpath: str, parents: bool = True) -> str:
+    """
+    CODE TOOLS — Create a directory inside an indexed AND writable area.
+    Idempotent: succeeds if the directory already exists.
+
+    Args:
+        dirpath:  Absolute path to create.
+        parents:  If True (default), create missing parent directories
+                  (mkdir -p semantics). If False, parent must already exist.
+
+    Returns:
+        Confirmation with whether the directory was newly created or already
+        existed, or an error explaining why creation failed.
+    """
+    if not _prewarm_event.wait(timeout=60):
+        return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
+
+    resolved, deny = _resolve_writable_path(dirpath)
+    if not resolved:
+        return deny
+
+    dp = Path(resolved)
+    if dp.exists():
+        if dp.is_dir():
+            return f"✅ Directory already exists: {resolved}\n   (idempotent — no action taken)"
+        return f"⚠️  Path exists but is not a directory: {resolved}"
+
+    # Circuit breaker (directory creation counts toward the limit)
+    ok, msg = _check_and_increment_write_counter()
+    if not ok:
+        return msg
+
+    try:
+        dp.mkdir(parents=parents, exist_ok=False)
+    except FileNotFoundError as exc:
+        return (f"⚠️  Parent directory does not exist: {exc}\n"
+                f"Retry with parents=True, or call create_directory on the "
+                f"parent first.")
+    except Exception as exc:
+        return f"⚠️  Could not create directory: {exc}"
+
+    _log.info("create_directory: %s (parents=%s)", resolved, parents)
+    return f"✅ Created directory: {resolved}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOL 5 — list_directory
+# ══════════════════════════════════════════════════════════════════════════════
+@mcp.tool()
+def list_directory(dirpath: str, show_hidden: bool = False) -> str:
+    """
+    CODE TOOLS — List the contents of a directory (files and subdirectories).
+    Read-only — no writable-allowlist requirement; only the read allowlist
+    applies.
+
+    Args:
+        dirpath:      Absolute path to list.
+        show_hidden:  If True, include entries beginning with '.'
+                      (default False).
+
+    Returns:
+        A formatted listing with file/dir indicators, sizes for files, and
+        a summary line. Output is sorted: directories first, then files,
+        each group alphabetically.
+    """
+    if not _prewarm_event.wait(timeout=60):
+        return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
+
+    # read-only — only the read allowlist applies
+    resolved, deny = _resolve_allowlisted_path(dirpath)
+    if not resolved:
+        return deny
+
+    dp = Path(resolved)
+    if not dp.exists():
+        return f"⚠️  Path does not exist: {resolved}"
+    if not dp.is_dir():
+        return f"⚠️  Path is not a directory: {resolved}"
+
+    try:
+        entries = list(dp.iterdir())
+    except Exception as exc:
+        return f"⚠️  Cannot list directory: {exc}"
+
+    dirs = []
+    files = []
+    backups = []
+    for e in entries:
+        name = e.name
+        if not show_hidden and name.startswith("."):
+            continue
+        try:
+            if e.is_dir():
+                dirs.append(name)
+            elif _BAK_RE.search(name):
+                # .bak<N> files grouped separately so the listing emphasizes
+                # active code over historical backups
+                try:
+                    size = e.stat().st_size
+                except Exception:
+                    size = 0
+                backups.append((name, size))
+            else:
+                try:
+                    size = e.stat().st_size
+                except Exception:
+                    size = 0
+                files.append((name, size))
+        except Exception:
+            continue
+
+    dirs.sort(key=str.lower)
+    files.sort(key=lambda x: x[0].lower())
+    backups.sort(key=lambda x: x[0].lower())
+
+    out = [
+        f"📁 {resolved}",
+        f"   {len(dirs)} dir(s), {len(files)} file(s)"
+        + (f", {len(backups)} backup(s)" if backups else ""),
+        "─" * 55,
+    ]
+    for name in dirs:
+        out.append(f"   📁  {name}/")
+    for name, size in files:
+        out.append(f"   📄  {name}   ({size:,} bytes)")
+    if backups:
+        out.append("")
+        out.append("   Backups (not indexed in ChromaDB):")
+        for name, size in backups:
+            out.append(f"   💾  {name}   ({size:,} bytes)")
+    if not dirs and not files and not backups:
+        out.append("   (empty)")
+    return "\n".join(out)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOL 6 — copy_to_backup
+# ══════════════════════════════════════════════════════════════════════════════
+@mcp.tool()
+def copy_to_backup(filepath: str) -> str:
+    """
+    CODE TOOLS — Take a manual snapshot of a file. Creates <filepath>.bak<N>
+    alongside the file WITHOUT modifying the active file.
+
+    This is the 'soft delete' primitive in AI-Prowler — there is no delete
+    tool. To remove content from active use, copy_to_backup first, then
+    write_file an empty string (or simply stop touching the file).
+
+    Differs from the auto-backup inside write_file / str_replace_in_file:
+    that one fires automatically before a modification. This one is for
+    when you want a checkpoint of the current state without changing it.
+
+    The .bak<N> file is NOT indexed in ChromaDB. The active file's existing
+    chunks are untouched (no re-index needed).
+
+    Args:
+        filepath:  Absolute path of the file to snapshot.
+
+    Returns:
+        Confirmation including the backup path, or an error.
+    """
+    if not _prewarm_event.wait(timeout=60):
+        return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
+
+    resolved, deny = _resolve_writable_path(filepath)
+    if not resolved:
+        return deny
+
+    if not Path(resolved).exists():
+        return f"⚠️  File does not exist: {resolved}"
+    if not Path(resolved).is_file():
+        return f"⚠️  Path is not a regular file: {resolved}"
+
+    # Counts toward the circuit breaker (it does create a file)
+    ok, msg = _check_and_increment_write_counter()
+    if not ok:
+        return msg
+
+    backup_path, backup_err = _make_backup(resolved)
+    if backup_err:
+        return f"⚠️  Snapshot failed: {backup_err}"
+
+    try:
+        size = Path(backup_path).stat().st_size
+    except Exception:
+        size = 0
+
+    return (f"💾 Snapshot created\n"
+            f"   Source: {resolved}\n"
+            f"   Backup: {backup_path}\n"
+            f"   {size:,} bytes\n"
+            f"   Active file unchanged. Backup NOT indexed in ChromaDB.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOL 7 — list_backups
+# ══════════════════════════════════════════════════════════════════════════════
+@mcp.tool()
+def list_backups(filepath: str) -> str:
+    """
+    CODE TOOLS — Show all <filepath>.bak<N> files next to the given file,
+    with their sizes and modification times.
+
+    Args:
+        filepath:  Absolute path of the active file whose backups to enumerate.
+
+    Returns:
+        Sorted list (newest = highest N first) of backups, or a message if
+        none exist.
+    """
+    if not _prewarm_event.wait(timeout=60):
+        return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
+
+    # Read-only — only the read allowlist applies. Backups don't need write
+    # approval to be listed.
+    resolved, deny = _resolve_allowlisted_path(filepath)
+    if not resolved:
+        return deny
+
+    fp = Path(resolved)
+    parent = fp.parent
+    base = fp.name
+    prefix = base + ".bak"
+    prefix_lower = prefix.lower()
+
+    found = []
+    try:
+        for sibling in parent.iterdir():
+            name = sibling.name
+            if name.lower().startswith(prefix_lower):
+                tail = name[len(prefix):]
+                if tail.isdigit():
+                    try:
+                        stat = sibling.stat()
+                        found.append((int(tail), str(sibling), stat.st_size, stat.st_mtime))
+                    except Exception:
+                        continue
+    except Exception as exc:
+        return f"⚠️  Could not scan {parent}: {exc}"
+
+    if not found:
+        return (f"📂 No backups for {resolved}\n"
+                f"   No <{base}>.bak<N> files found in {parent}")
+
+    # Sort newest first (highest N first)
+    found.sort(key=lambda x: x[0], reverse=True)
+
+    out = [
+        f"📂 Backups for {resolved}",
+        f"   {len(found)} backup(s) found in {parent}",
+        f"   (newest = highest .bak number)",
+        "─" * 55,
+    ]
+    for n, path, size, mtime in found:
+        when = _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime(mtime))
+        out.append(f"   .bak{n:<4}  {size:>12,} bytes  {when}")
+        out.append(f"             {path}")
+    out.append("")
+    out.append(f"Restore: restore_backup({resolved!r}, backup_number=<N>)")
+    return "\n".join(out)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOL 8 — restore_backup
+# ══════════════════════════════════════════════════════════════════════════════
+@mcp.tool()
+def restore_backup(filepath: str, backup_number: int) -> str:
+    """
+    CODE TOOLS — Restore <filepath>.bak<N> over the active file at filepath.
+
+    Does NOT auto-backup the current state before restoring — this is
+    deliberate to keep the tool simple. If you want to preserve the broken
+    state for later study, call copy_to_backup(filepath) FIRST, then call
+    restore_backup.
+
+    Triggers a full ChromaDB re-index of the active file (functionally a
+    write — the file's contents change on disk).
+
+    Args:
+        filepath:       Absolute path of the active file to restore over.
+        backup_number:  The N in <filepath>.bak<N>. Use list_backups to see
+                        what's available.
+
+    Returns:
+        Confirmation with byte counts before and after, or an error.
+    """
+    if not _prewarm_event.wait(timeout=60):
+        return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
+
+    resolved, deny = _resolve_writable_path(filepath)
+    if not resolved:
+        return deny
+
+    try:
+        n = int(backup_number)
+        if n < 1:
+            return f"⚠️  backup_number must be >= 1, got {backup_number}"
+    except (TypeError, ValueError):
+        return f"⚠️  backup_number must be an integer, got {backup_number!r}"
+
+    fp = Path(resolved)
+    backup_path = fp.parent / f"{fp.name}.bak{n}"
+
+    if not backup_path.exists():
+        return (f"⚠️  Backup not found: {backup_path}\n"
+                f"Call list_backups({resolved!r}) to see what's available.")
+
+    # Active file may or may not exist (e.g. after a failed write that left
+    # only the backup). Allow restore-over-missing for recovery.
+    old_size = fp.stat().st_size if fp.exists() else 0
+    try:
+        backup_size = backup_path.stat().st_size
+    except Exception as exc:
+        return f"⚠️  Could not read backup: {exc}"
+
+    # Circuit breaker
+    ok, msg = _check_and_increment_write_counter()
+    if not ok:
+        return msg
+
+    # Restore: copy backup over active path
+    try:
+        _shutil.copy2(str(backup_path), str(fp))
+    except Exception as exc:
+        return f"⚠️  Restore failed: {exc}"
+
+    _log.info("restore_backup: %s <- %s (%d -> %d bytes)",
+              resolved, backup_path, old_size, backup_size)
+
+    # Re-index
+    _reindex_file_after_write(resolved, was_new=False)
+
+    return (f"✅ Restored {resolved}\n"
+            f"   Source: {backup_path}\n"
+            f"   {old_size:,} bytes  →  {backup_size:,} bytes\n"
+            f"   ChromaDB chunks purged and re-indexed.\n"
+            f"   .bak{n} preserved (restore is non-destructive to backups).")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BONUS — reset_write_counter (admin tool, not part of the 8)
+# ══════════════════════════════════════════════════════════════════════════════
+@mcp.tool()
+def reset_write_counter() -> str:
+    """
+    CODE TOOLS — Reset the per-session write circuit-breaker counter.
+
+    The circuit breaker limits AI-Prowler to 20 write operations per process
+    lifetime to protect against runaway loops. This tool resets the count so
+    legitimate large editing sessions can continue without restarting the
+    server.
+
+    Returns:
+        Confirmation with the count that was reset.
+    """
+    old = _reset_write_counter_internal()
+    _log.info("Write counter reset (was %d)", old)
+    return (f"✅ Write counter reset\n"
+            f"   Was: {old} / {_WRITES_PER_SESSION_LIMIT}\n"
+            f"   Now: 0 / {_WRITES_PER_SESSION_LIMIT}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# END OF CODE TOOLS WRITE-SIDE PATCH
+# ══════════════════════════════════════════════════════════════════════════════
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # HTTP transport with Bearer-token auth (launched by GUI or manually)

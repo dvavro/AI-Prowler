@@ -119,9 +119,20 @@ $RECYCLE.BIN/
 *.log
 *.tmp
 *.temp
+# Match both ".bak" and AI-Prowler's monotonic ".bak1", ".bak2", ... format
 *.bak
+*.bak*
 *.orig
 *.pid
+
+
+# ── Release tooling (scripts/release.py outputs) ─────────────
+# Generated drafts — review then copy into the admin repo
+release-drafts/
+# Inno Setup compiler output — install exe is uploaded to GitHub Releases
+Output/
+# Local release config (admin repo paths, ISCC overrides, etc.)
+.release-config.json
 
 
 # ── Sensitive files — never commit these ─────────────────────

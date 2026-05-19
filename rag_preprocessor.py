@@ -1107,6 +1107,30 @@ SKIP_EXTENSIONS = {
     '.DS_Store', '.Thumbs.db',
 }
 
+# ----- Code Tools write-side: backup-filename pattern check -----
+# The plain '.bak' in SKIP_EXTENSIONS catches files named 'foo.bak' but NOT
+# 'rag_gui.py.bak1' because Path('rag_gui.py.bak1').suffix == '.bak1'. The
+# helper below catches BOTH and is used at every SKIP_EXTENSIONS site so
+# .bak<N> backup files produced by the new write tools never get indexed.
+# This is Layer 2 of the 'backups are never indexed' guarantee. Layer 1
+# lives in ai_prowler_mcp.py (the write tools themselves never push backups
+# to ChromaDB).
+import re as _bak_re_for_backup_check
+_BACKUP_FILENAME_RE = _bak_re_for_backup_check.compile(
+    r'\.bak\d+$', _bak_re_for_backup_check.IGNORECASE
+)
+
+def is_backup_filename(filename: str) -> bool:
+    """True if filename ends with .bak<N> where N is one or more digits.
+
+    Used alongside `ext in SKIP_EXTENSIONS` checks throughout this module so
+    Code Tools backup files (rag_gui.py.bak1, etc.) are excluded from the
+    indexer in the same places suffixes like .exe or .zip are excluded.
+    """
+    if not filename:
+        return False
+    return _BACKUP_FILENAME_RE.search(filename) is not None
+
 # Directory names to always skip when walking trees
 SKIP_DIRECTORIES = {
     # Version control
@@ -2903,7 +2927,7 @@ def scan_directory(directory: str, recursive: bool = True) -> dict:
         fp   = normalise_path(directory)
         ext  = os.path.splitext(fp)[1].lower()
         result['total_seen'] = 1
-        if ext in SKIP_EXTENSIONS:
+        if ext in SKIP_EXTENSIONS or is_backup_filename(os.path.basename(fp)):
             result['skipped_bin'].append((fp, ext))
         elif ext in SUPPORTED_EXTENSIONS:
             result['to_index'].append((fp, ext))
@@ -2928,7 +2952,7 @@ def scan_directory(directory: str, recursive: bool = True) -> dict:
                 fp  = os.path.join(root, fname)
                 ext = os.path.splitext(fname)[1].lower()
 
-                if ext in SKIP_EXTENSIONS:
+                if ext in SKIP_EXTENSIONS or is_backup_filename(fname):
                     result['skipped_bin'].append((fp, ext))
                 elif ext in SUPPORTED_EXTENSIONS:
                     result['to_index'].append((fp, ext))
@@ -2941,7 +2965,7 @@ def scan_directory(directory: str, recursive: bool = True) -> dict:
                 continue
             result['total_seen'] += 1
             ext = os.path.splitext(fname)[1].lower()
-            if ext in SKIP_EXTENSIONS:
+            if ext in SKIP_EXTENSIONS or is_backup_filename(fname):
                 result['skipped_bin'].append((fp, ext))
             elif ext in SUPPORTED_EXTENSIONS:
                 result['to_index'].append((fp, ext))
@@ -3413,13 +3437,13 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False)
             for file in files:
                 if not file.startswith('.'):
                     ext = os.path.splitext(file)[1].lower()
-                    if ext not in SKIP_EXTENSIONS:
+                    if ext not in SKIP_EXTENSIONS and not is_backup_filename(file):
                         all_files.append(normalise_path(os.path.join(root, file)))
     else:
         for f in os.listdir(directory):
             if not f.startswith('.'):
                 ext = os.path.splitext(f)[1].lower()
-                if ext not in SKIP_EXTENSIONS:
+                if ext not in SKIP_EXTENSIONS and not is_backup_filename(f):
                     fp = normalise_path(os.path.join(directory, f))
                     if os.path.isfile(fp):
                         all_files.append(fp)
