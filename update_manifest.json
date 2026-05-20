@@ -1,0 +1,46 @@
+{
+  "version": "6.0.2",
+  "generated": "2026-05-20T06:48:46",
+  "files": [
+    {
+      "path": "rag_gui.py",
+      "sha256": "38f5cb6169b52bb40038d5bb19fb9331b7b92462d518ad446df4619583ade5c9",
+      "bytes": 627614
+    },
+    {
+      "path": "rag_preprocessor.py",
+      "sha256": "0b7bf61379d0ef14d0d77fdd753957869bc072ac94ac1abac1987aa71c787065",
+      "bytes": 246463
+    },
+    {
+      "path": "ai_prowler_mcp.py",
+      "sha256": "580beb026401134c260890610e7a2b49ad39a80650216fca4c150c8fa541b06a",
+      "bytes": 291547
+    },
+    {
+      "path": "mcp_diagnostics.py",
+      "sha256": "d3b9f63f0222ff774fc7398b5f5f1c6fa739aa8099e80482ef58640219716920",
+      "bytes": 21895
+    },
+    {
+      "path": "self_learning.py",
+      "sha256": "c5688984e70ceb4b13ab7aa35fb1b8e43a5dc4ac151cb7774fdeb5e13efc9bca",
+      "bytes": 40794
+    },
+    {
+      "path": "RAG_RUN.bat",
+      "sha256": "5dc094bd14102748f83b67c611e5982187e421ec6a43e6749a8563c53680bf95",
+      "bytes": 5289
+    },
+    {
+      "path": "COMPLETE_USER_GUIDE.md",
+      "sha256": "296d3df4e791860d07484aaa9d0ac73347b79ef3d6afa6e9100e2a79e804c6b8",
+      "bytes": 113647
+    },
+    {
+      "path": "VERSION",
+      "sha256": "75c7759a637c4979c1b269d312f78df2f40f0d4a92084a7769c486c8f8aa9fb5",
+      "bytes": 7
+    }
+  ]
+}

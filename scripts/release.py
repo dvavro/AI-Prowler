@@ -48,6 +48,7 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -445,6 +446,65 @@ def compile_installer(new_version: str) -> Optional[Path]:
     return installer
 
 
+# ── Update manifest (update_manifest.json) ──────────────────────────────────
+# The auto-updater in rag_gui.py fetches this file from the release tag and
+# downloads every file it lists. This is the single source of truth for "what
+# files make up an install" — add a file here and the next auto-update ships
+# it, with no code change to the updater. Each entry carries a SHA256 so the
+# updater can (now or later) verify integrity after download.
+#
+# IMPORTANT: keep this list complete. A file that a running install needs but
+# that is missing from the manifest will go stale on auto-updated clients
+# (this is exactly the bug that motivated the manifest — the old hardcoded
+# 5-file list never shipped the user guide).
+MANIFEST_FILES = [
+    "rag_gui.py",
+    "rag_preprocessor.py",
+    "ai_prowler_mcp.py",
+    "mcp_diagnostics.py",
+    "self_learning.py",
+    "RAG_RUN.bat",
+    "COMPLETE_USER_GUIDE.md",
+    "VERSION",
+]
+
+
+def write_update_manifest(new_version: str) -> None:
+    step("Writing update manifest")
+    import hashlib
+
+    entries = []
+    missing = []
+    for rel in MANIFEST_FILES:
+        fp = REPO_ROOT / rel
+        if not fp.exists():
+            missing.append(rel)
+            continue
+        digest = hashlib.sha256(fp.read_bytes()).hexdigest()
+        entries.append({
+            "path": rel,
+            "sha256": digest,
+            "bytes": fp.stat().st_size,
+        })
+
+    if missing:
+        for m in missing:
+            warn(f"Manifest: listed file not found, skipping: {m}")
+        warn("Auto-updated clients will NOT receive the skipped files. "
+             "Fix MANIFEST_FILES or add the missing file before releasing.")
+
+    manifest = {
+        "version": new_version,
+        "generated": datetime.now().isoformat(timespec="seconds"),
+        "files": entries,
+    }
+    out = REPO_ROOT / "update_manifest.json"
+    out.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    ok(f"Wrote {out.relative_to(REPO_ROOT)} — {len(entries)} file(s).")
+    info("This file MUST be committed and pushed with the release so the "
+         "updater can fetch it at the tag URL.")
+
+
 # ── Release drafts (welcome_ad.json / notifications.json) ───────────────────
 def write_release_drafts(new_version: str) -> None:
     step("Writing release drafts")
@@ -525,6 +585,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--refactor-only", action="store_true",
                    help="One-shot: introduce VERSION file and make rag_gui.py + .iss "
                         "read from it. Does not change the version number.")
+    p.add_argument("--remanifest", action="store_true",
+                   help="Re-cut path: regenerate update_manifest.json (and the "
+                        "release drafts) for the CURRENT version without bumping. "
+                        "Use when correcting an already-tagged release whose code "
+                        "changed but whose version number stays the same.")
     p.add_argument("--skip-tests", action="store_true",
                    help="Skip pytest run (use only for hotfix iteration).")
     p.add_argument("--skip-compile", action="store_true",
@@ -549,6 +614,34 @@ def main() -> None:
 
     if args.check:
         ok("Repo OK. Exiting (--check).")
+        return
+
+    if args.remanifest:
+        # Re-cut path: the version is NOT changing. Regenerate the manifest
+        # and drafts against whatever files are currently in the working tree,
+        # so a corrected (but same-numbered) release ships accurate hashes.
+        # Optionally run tests/compile via the usual flags.
+        step(f"Re-manifest for current version {current} (no bump)")
+        if not args.skip_tests:
+            run_tests()
+        else:
+            warn("Skipping tests (--skip-tests).")
+        write_update_manifest(current)
+        write_release_drafts(current)
+        if not args.skip_compile:
+            compile_installer(current)
+        else:
+            warn("Skipping Inno Setup compile (--skip-compile).")
+        ok(f"Re-manifest for {current} complete.")
+        info("Next: commit the corrected files + update_manifest.json, then "
+             "FORCE-MOVE the tag to the new commit:")
+        info(f"    git add -A && git commit -m \"Correct v{current} — "
+             f"auto-update fixes\"")
+        info(f"    git tag -f v{current}")
+        info(f"    git push origin main")
+        info(f"    git push -f origin v{current}")
+        info("Then edit the GitHub release and re-upload the corrected "
+             "installer asset.")
         return
 
     if args.refactor_only:
@@ -591,6 +684,12 @@ def main() -> None:
     ):
         sys.exit(1)
     apply_changes(changes)
+
+    # Generate the update manifest AFTER version files are bumped, so its
+    # SHA256 hashes match exactly what will be committed and fetched at the
+    # tag. Must run before tests/compile so it's part of the same working
+    # tree the operator commits.
+    write_update_manifest(new_version)
 
     if not args.skip_tests:
         run_tests()

@@ -2114,6 +2114,17 @@ or from the Help menu."""
         self._notif_frame = ttk.Frame(container)
         self._notif_frame.pack(fill='x', pady=(0, 6))
         self._notif_widgets = []  # track notification widgets for clearing
+        # The update banner ("Download Update" button) is tracked separately
+        # from _notif_widgets so that _display_notifications — which clears
+        # and rebuilds _notif_widgets on every refresh — does not destroy it.
+        # Without this, the update banner created by _check_for_update is
+        # wiped milliseconds later by the notification render (an after(0,...)
+        # ordering race). See _show_update_banner.
+        self._update_banner_widget = None
+        # Tracks whether an in-app update is available (set by _check_for_update).
+        # Used by _display_notifications to suppress full-installer notification
+        # cards while the in-place updater can do the upgrade.
+        self._update_available = False
 
         # Debug label — hidden by default, only shown if notification
         # fetch fails. Helper methods _show_notif_debug / _hide_notif_debug
@@ -2661,14 +2672,61 @@ or from the Help menu."""
                 pass
 
         if is_newer:
+            # Record that an in-app update is available so _display_notifications
+            # can suppress any notification that points at the FULL INSTALLER
+            # exe. Showing both the green "Download Update" (in-place) banner
+            # AND a yellow "Install vX" (full-installer) card to an existing
+            # user invites a double-install: the installer path may require an
+            # uninstall first, after which the in-app updater is gone. For a
+            # running install, the in-place updater is always the correct path.
+            #
+            # Note: in the normal fetch sequence, _check_for_update runs just
+            # BEFORE _display_notifications, so setting this flag here is enough
+            # — the notification render that follows will see it. No re-render
+            # is triggered from here (that would double-render).
+            self._update_available = True
             self.root.after(0, self._show_update_banner,
                             latest, update_url, update_notes)
+        else:
+            self._update_available = False
+            # Not newer (client is current or ahead) — remove any stale
+            # update banner left over from a previous refresh, so the banner
+            # disappears once the user has actually upgraded.
+            self.root.after(0, self._clear_update_banner)
+
+    def _clear_update_banner(self):
+        """Destroy the update banner if present. Safe to call when absent."""
+        if getattr(self, '_update_banner_widget', None) is not None:
+            try:
+                self._update_banner_widget.destroy()
+            except Exception:
+                pass
+            self._update_banner_widget = None
 
     def _show_update_banner(self, version, url, notes):
-        """Display an update available banner at the top of notifications."""
+        """Display an update available banner at the top of notifications.
+
+        The banner is tracked in self._update_banner_widget (NOT in
+        _notif_widgets) so that _display_notifications cannot destroy it
+        when it clears and rebuilds the notification cards. Any previously
+        shown update banner is destroyed first, so repeated refreshes don't
+        stack duplicate banners.
+        """
+        # Remove a prior update banner if one exists (idempotent refresh)
+        if getattr(self, '_update_banner_widget', None) is not None:
+            try:
+                self._update_banner_widget.destroy()
+            except Exception:
+                pass
+            self._update_banner_widget = None
+
         update_frame = tk.Frame(self._notif_frame, bg='#d4edda',
                                 relief='ridge', bd=1)
-        update_frame.pack(fill='x', pady=(0, 4))
+        # Pack at the TOP of the notification frame so the update banner sits
+        # above the regular notification cards. side='top' is the pack default,
+        # but we state it explicitly for clarity since other widgets share
+        # this frame.
+        update_frame.pack(side='top', fill='x', pady=(0, 4))
 
         tk.Label(update_frame,
                  text=f"🆕 AI-Prowler™ v{version} is available!",
@@ -2686,7 +2744,7 @@ or from the Help menu."""
                    command=lambda u=url: webbrowser.open(u)
                    ).pack(side='right', padx=(0, 4), pady=4)
 
-        self._notif_widgets.append(update_frame)
+        self._update_banner_widget = update_frame
 
     def _download_update(self, url, version):
         """Download update files from GitHub release and stage them for install.
@@ -2735,13 +2793,23 @@ or from the Help menu."""
                              f"dvavro/AI-Prowler/v{version}/")
                 _main_base = ("https://raw.githubusercontent.com/"
                               "dvavro/AI-Prowler/main/")
-                _files = [
+                # The list of files to update is no longer hardcoded. Each
+                # release ships an update_manifest.json listing every file
+                # that belongs in an install (code, launcher, user guide,
+                # icons, etc.). We fetch the manifest first and use its
+                # "files" array. If the manifest is missing (older releases,
+                # or a forgotten manifest in the release build), we fall back
+                # to this minimal hardcoded list so the update path never
+                # bricks — but the fallback is intentionally minimal and the
+                # manifest is the supported mechanism.
+                _fallback_files = [
                     'rag_gui.py',
                     'rag_preprocessor.py',
                     'ai_prowler_mcp.py',
                     'RAG_RUN.bat',
                     'mcp_diagnostics.py',
                 ]
+                _files = _fallback_files
 
                 staging_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2777,6 +2845,37 @@ or from the Help menu."""
                     print(f"[UPDATE] Tag probe failed ({_probe_exc}) — "
                           f"proceeding with tag.")
 
+                # ── Fetch the update manifest from the resolved base ──────
+                # update_manifest.json lists every file that belongs in an
+                # install. If present, it REPLACES the fallback list. This
+                # is what lets a release ship the user guide, icons, and any
+                # new modules without editing this code each time.
+                try:
+                    _manifest_url = f"{_base}update_manifest.json"
+                    _man_req = urllib.request.Request(
+                        _manifest_url,
+                        headers={"User-Agent": f"AI-Prowler/{APP_VERSION}"})
+                    with urllib.request.urlopen(_man_req, timeout=15) as _mr:
+                        _manifest = _json.loads(_mr.read().decode("utf-8"))
+                    _man_files = _manifest.get("files", [])
+                    if isinstance(_man_files, list) and _man_files:
+                        # Manifest entries may be plain strings or objects
+                        # with a "path" key (for future SHA support). Accept
+                        # both.
+                        _resolved = []
+                        for _entry in _man_files:
+                            if isinstance(_entry, str):
+                                _resolved.append(_entry)
+                            elif isinstance(_entry, dict) and _entry.get("path"):
+                                _resolved.append(_entry["path"])
+                        if _resolved:
+                            _files = _resolved
+                            print(f"[UPDATE] Manifest loaded — "
+                                  f"{len(_files)} file(s) to update.")
+                except Exception as _man_exc:
+                    print(f"[UPDATE] No manifest ({_man_exc}) — using "
+                          f"fallback list of {len(_fallback_files)} files.")
+
                 downloaded = 0
                 for fname in _files:
                     try:
@@ -2787,6 +2886,10 @@ or from the Help menu."""
                         with urllib.request.urlopen(req, timeout=30) as resp:
                             content = resp.read()
                         out_path = staging_dir / fname
+                        # Manifest entries may include subdirectories
+                        # (e.g. "skills/foo.md"). Ensure the parent exists
+                        # before writing.
+                        out_path.parent.mkdir(parents=True, exist_ok=True)
                         out_path.write_bytes(content)
                         downloaded += 1
                         print(f"[UPDATE] Downloaded: {fname}")
@@ -2861,6 +2964,19 @@ or from the Help menu."""
             # Skip dismissed show_once notifications
             if notif.get('show_once') and nid in dismissed:
                 skipped_reasons.append(f"{nid}:dismissed")
+                continue
+
+            # Suppress full-installer notifications when an in-app update is
+            # available. A notification flagged "suppress_when_update_available"
+            # points at the full installer exe — showing it alongside the green
+            # in-place "Download Update" banner invites a double-install. When
+            # the in-place updater can handle the upgrade, it is the only path
+            # the running client should offer. (New users who lack AI-Prowler
+            # entirely reach the installer from the GitHub release page, not
+            # from inside a running copy.)
+            if (notif.get('suppress_when_update_available')
+                    and getattr(self, '_update_available', False)):
+                skipped_reasons.append(f"{nid}:suppressed-update-available")
                 continue
 
             # Check date range

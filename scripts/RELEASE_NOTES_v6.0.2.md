@@ -140,8 +140,20 @@ all gated by a double-lock security model: a read allowlist for indexing PLUS
 a separate writable allowlist for modifications, with a hard blocklist that
 always wins and a 20-write circuit breaker per session.
 
-To upgrade, download AI-Prowler_INSTALL.exe from:
-https://github.com/dvavro/AI-Prowler/releases/tag/v6.0.2
+HOW TO UPGRADE (important): For this release, please upgrade by downloading and
+running the full installer:
+
+   https://github.com/dvavro/AI-Prowler/releases/tag/v6.0.2
+
+Download AI-Prowler_INSTALL.exe from that page and run it. If your AI-Prowler is
+running, close it first (File → Exit), then run the installer.
+
+A note on the in-app updater: starting with this version, AI-Prowler has a new
+one-click "Download Update" button that applies updates in place — no installer,
+no uninstall. That smooth path becomes available for the NEXT update (6.0.2 →
+whatever comes next). For getting ONTO 6.0.2 from an older build, the installer
+above is the reliable route, so please use it this one time. After you're on
+6.0.2, future updates will just be a button click.
 
 After install, open the Update Index tab. You'll see new [W] / [W*] / [R]
 indicators on every tracked directory. Double-click any row to toggle write
