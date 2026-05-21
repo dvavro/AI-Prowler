@@ -4899,6 +4899,20 @@ def str_replace_in_file(filepath: str,
                 f"{_STR_REPLACE_MAX_OLD_STR_LEN:,}). Use a smaller distinctive "
                 f"snippet or write_file for whole-file rewrites.")
 
+    # ── CRLF FIX (v7.0.0) ──────────────────────────────────────────────────────
+    # The file is read and LF-normalized by _read_text_preserving_endings(), but
+    # old_str / new_str arrive straight from the MCP client. When a multi-line
+    # snippet is copied from a CRLF (Windows) source — which is every file in this
+    # codebase — old_str carries '\r\n' while the in-memory file text carries only
+    # '\n'. text.count(old_str) then compares a CRLF needle against LF-normalized
+    # text and returns 0, so the edit fails with "old_str not found". Single-line
+    # old_str has no newline and so was never affected — which is exactly why this
+    # bug only manifested on multi-line matches. Normalize both args to LF here so
+    # all matching logic below is line-ending-agnostic; the file's original ending
+    # is re-applied at write time by _apply_line_ending().
+    old_str = old_str.replace("\r\n", "\n").replace("\r", "\n")
+    new_str = new_str.replace("\r\n", "\n").replace("\r", "\n")
+
     # Authorize (suppress queueing if it's a dry-run — no actual write attempted)
     resolved, deny = _resolve_writable_path(filepath, queue_approval=not dry_run)
     if not resolved:
@@ -5433,6 +5447,167 @@ def reset_write_counter() -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# EDITION / MODE + ACTIVATION — MODULE-LEVEL PURE HELPERS  (v7.0.0 Phase A')
+# ══════════════════════════════════════════════════════════════════════════════
+# These four functions are PURE (no I/O beyond reading config.json in
+# _load_runtime_config) and were hoisted out of _run_http() to module level so
+# the test suite (tests/mcp/test_edition_activation.py) can import and call them
+# directly without launching the HTTP server. _run_http() calls them by bare
+# name, which now resolves here. See PHASE_A_PRIME_TEST_PLAN.md §4.0.
+#
+# EDITION : "home" | "mobile" | "business"     MODE : "personal" | "server"
+# Valid combos: (home,personal) (mobile,personal) (business,personal)
+#               (business,server).  (home,server) and (mobile,server) invalid.
+# Backwards-compat: plan "individual" reads as the "mobile" edition; no live
+# subs.json record is ever rewritten.
+# ══════════════════════════════════════════════════════════════════════════════
+_CONFIG_PATH = Path.home() / ".ai-prowler" / "config.json"
+
+_VALID_EDITIONS = ("home", "mobile", "business")
+_VALID_MODES    = ("personal", "server")
+_MOBILE_PLAN_SYNONYMS   = ("mobile", "individual")
+_BUSINESS_PLAN_SYNONYMS = ("business", "small_business", "enterprise")
+
+# 2-active-install rule (architecture spec §4)
+_ACTIVE_WINDOW_DAYS  = 14   # last_seen within N days == "active"
+_MAX_ACTIVE_INSTALLS = 2    # at most this many active install_ids per license
+
+
+def _plan_to_edition(plan: str) -> str:
+    """Map a subs.json plan string onto an edition. Unknown/empty → 'mobile'
+    (any managed subscriber gets at least remote access; a fail-open default
+    that never strips entitlement from a paying user)."""
+    p = (plan or "").strip().lower()
+    if p in _BUSINESS_PLAN_SYNONYMS:
+        return "business"
+    if p in _MOBILE_PLAN_SYNONYMS:
+        return "mobile"
+    return "mobile"
+
+
+def _load_runtime_config() -> dict:
+    """Read ~/.ai-prowler/config.json and return a normalized dict with at
+    least edition/mode keys. Missing file or unreadable JSON yields the safe
+    default (home, personal). Never raises."""
+    cfg = {}
+    try:
+        if _CONFIG_PATH.exists():
+            cfg = json.loads(_CONFIG_PATH.read_text(encoding="utf-8")) or {}
+    except Exception as _e:
+        _log.warning("config.json unreadable (%s) — defaulting to home/personal", _e)
+        cfg = {}
+    edition = str(cfg.get("edition", "home")).strip().lower()
+    mode    = str(cfg.get("mode", "personal")).strip().lower()
+    if edition not in _VALID_EDITIONS:
+        _log.warning("Unknown edition %r in config — defaulting to 'home'", edition)
+        edition = "home"
+    if mode not in _VALID_MODES:
+        _log.warning("Unknown mode %r in config — defaulting to 'personal'", mode)
+        mode = "personal"
+    cfg["edition"] = edition
+    cfg["mode"]    = mode
+    return cfg
+
+
+def _enforce_edition_mode(edition: str, mode: str, sub_status: str) -> tuple[str, str]:
+    """Belt-and-suspenders startup enforcement (architecture spec §2),
+    hardened against manual config.json tampering. Returns the (possibly
+    downgraded) effective (edition, mode).
+
+    Rules:
+      1. server mode requires business edition → else fall back to personal.
+      2. mobile/business editions require a VALID managed subscription
+         (sub_status 'ok' or 'warning'); otherwise fall back to home.
+    """
+    eff_edition, eff_mode = edition, mode
+
+    if eff_mode == "server" and eff_edition != "business":
+        _log.warning(
+            "Server mode requires Business edition; got edition=%s. "
+            "Falling back to personal mode.", eff_edition)
+        eff_mode = "personal"
+
+    if eff_edition in ("mobile", "business") and sub_status not in ("ok", "warning"):
+        _log.warning(
+            "Edition=%s requires a valid subscription but status is %r. "
+            "Falling back to Home edition (remote access disabled).",
+            eff_edition, sub_status)
+        eff_edition = "home"
+        eff_mode = "personal"   # home can never be server
+
+    return eff_edition, eff_mode
+
+
+def _evaluate_activation(entry: dict, install_id: str, now=None) -> dict:
+    """Decide this install_id's activation standing for a subscriber entry.
+    PURE — no I/O, no mutation. Returns a dict with keys: decision
+    ('active'|'admissible'|'rejected'|'unbound'), active_install_ids,
+    active_count, this_active, message. See architecture spec §4 and
+    PHASE_A_PRIME_TEST_PLAN.md §4.1 for the full decision table.
+
+    'now' is an injectable clock (datetime) for deterministic tests; defaults
+    to UTC now. Records older than _ACTIVE_WINDOW_DAYS are not counted (they
+    auto-release); pruning is a write-side concern, not done here."""
+    import datetime as _dt
+
+    if not install_id:
+        return {"decision": "unbound", "active_install_ids": [],
+                "active_count": 0, "this_active": False,
+                "message": "install_id unavailable — activation binding skipped (fail-open)"}
+
+    if now is None:
+        now = _dt.datetime.now(_dt.timezone.utc)
+
+    def _parse(ts: str):
+        if not ts:
+            return None
+        try:
+            s = ts.strip().replace("Z", "+00:00")
+            d = _dt.datetime.fromisoformat(s)
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=_dt.timezone.utc)
+            return d
+        except Exception:
+            return None
+
+    cutoff = now - _dt.timedelta(days=_ACTIVE_WINDOW_DAYS)
+    activations = entry.get("activations", []) or []
+
+    active_ids = []
+    for a in activations:
+        if not isinstance(a, dict):
+            continue
+        iid = a.get("install_id")
+        if not iid:
+            continue
+        seen = _parse(a.get("last_seen", "")) or _parse(a.get("first_seen", ""))
+        if seen is not None and seen >= cutoff:
+            if iid not in active_ids:
+                active_ids.append(iid)
+
+    this_active = install_id in active_ids
+    count = len(active_ids)
+
+    if this_active:
+        return {"decision": "active", "active_install_ids": active_ids,
+                "active_count": count, "this_active": True,
+                "message": f"This machine is an active install ({count} of {_MAX_ACTIVE_INSTALLS})."}
+
+    if count < _MAX_ACTIVE_INSTALLS:
+        return {"decision": "admissible", "active_install_ids": active_ids,
+                "active_count": count, "this_active": False,
+                "message": (f"New install with capacity "
+                            f"({count} of {_MAX_ACTIVE_INSTALLS} used) — will activate.")}
+
+    return {"decision": "rejected", "active_install_ids": active_ids,
+            "active_count": count, "this_active": False,
+            "message": (
+                f"This license is already active on {_MAX_ACTIVE_INSTALLS} machines. "
+                f"Release one in your AI-Prowler License panel, or purchase an "
+                f"additional license, to use it here.")}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # HTTP transport with Bearer-token auth (launched by GUI or manually)
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -5515,9 +5690,49 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
         "https://raw.githubusercontent.com/dvavro/ai-prowler-subs/main/subs.json"
     )
 
+    # ── EDITION / MODE helpers (v7.0.0) ───────────────────────────────────────
+    # _plan_to_edition, _load_runtime_config, _enforce_edition_mode and the
+    # edition/mode constants were HOISTED to module level (just before
+    # _run_http) so the test suite can call them directly. The bare-name calls
+    # below resolve to those module-level definitions. See the module-level
+    # block and PHASE_A_PRIME_TEST_PLAN.md §4.0.
+
     def _token_key(tok: str) -> str:
         """Short hash of token used as lookup key in subs.json."""
         return _hashlib.sha256(tok.encode()).hexdigest()[:16]
+
+    # ── install_id (v7.0.0 — Phase A' install-id binding) ─────────────────────
+    # The GUI generates ~/.ai-prowler/install_id on first launch (a 16-char
+    # sha256 hash). The MCP server reads it here so the subscription check and
+    # the 2-active-install rule can bind a license to specific machines. If the
+    # file is missing (e.g. server started before the GUI ever ran), we generate
+    # it here too so the server is self-sufficient — same format the GUI uses.
+    _INSTALL_ID_PATH = Path.home() / ".ai-prowler" / "install_id"
+
+    def _read_or_create_install_id() -> str:
+        """Return this machine's install_id, creating it if absent. Never raises;
+        returns '' only if the home directory itself is unwritable."""
+        try:
+            if _INSTALL_ID_PATH.exists():
+                val = _INSTALL_ID_PATH.read_text(encoding="utf-8").strip()
+                if val:
+                    return val
+        except Exception as _e:
+            _log.warning("Could not read install_id (%s)", _e)
+        # Generate — mirror the GUI's algorithm (uuid4 → sha256 → first 16 hex)
+        try:
+            import uuid as _uuid
+            new_id = _hashlib.sha256(str(_uuid.uuid4()).encode()).hexdigest()[:16]
+            _INSTALL_ID_PATH.parent.mkdir(parents=True, exist_ok=True)
+            _INSTALL_ID_PATH.write_text(new_id, encoding="utf-8")
+            _log.info("Generated new install_id for this machine")
+            return new_id
+        except Exception as _e:
+            _log.warning("Could not create install_id (%s) — install-id binding disabled", _e)
+            return ""
+
+    _INSTALL_ID = _read_or_create_install_id()
+
 
     def _fetch_subs_registry() -> dict | None:
         """
@@ -5572,11 +5787,14 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
           days_left: days until expiry (negative = days past expiry)
           message:   human-readable explanation
           banner:    HTML snippet for the login page (empty string if none needed)
+          edition:   "home" | "mobile" | "business" — entitlement derived from
+                     the subscriber's plan via _plan_to_edition(). Unmanaged /
+                     not-found tokens get "home" (no remote-access entitlement).
         """
         if subs_data is None:
             return {"status": "unmanaged", "name": None, "days_left": None,
                     "message": "No registry — unmanaged/local mode",
-                    "banner": ""}
+                    "banner": "", "edition": "home"}
 
         key         = _token_key(tok)
         subscribers = subs_data.get("subscribers", {})
@@ -5585,17 +5803,18 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
             # Token not in registry — treat as local/unmanaged, not an error
             return {"status": "unmanaged", "name": None, "days_left": None,
                     "message": "Token not in managed registry — local mode",
-                    "banner": ""}
+                    "banner": "", "edition": "home"}
 
         entry    = subscribers[key]
         name     = entry.get("name", "Subscriber")
+        _edition = _plan_to_edition(entry.get("plan", ""))
         exp_str  = entry.get("expires", "")
         try:
             expiry = _dt.date.fromisoformat(exp_str)
         except ValueError:
             return {"status": "unmanaged", "name": name, "days_left": None,
                     "message": f"Invalid expiry date for {name}",
-                    "banner": ""}
+                    "banner": "", "edition": "home"}
 
         today     = _dt.date.today()
         days_left = (expiry - today).days   # negative = past expiry
@@ -5613,10 +5832,10 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                 )
                 return {"status": "warning", "name": name, "days_left": days_left,
                         "message": f"Subscription for '{name}' expires in {days_left} day(s) ({expiry}) — renewal recommended",
-                        "banner": banner}
+                        "banner": banner, "edition": _edition}
             return {"status": "ok", "name": name, "days_left": days_left,
                     "message": f"Subscription OK — '{name}', {days_left} day(s) remaining",
-                    "banner": ""}
+                    "banner": "", "edition": _edition}
 
         # Past expiry
         days_over = -days_left
@@ -5638,7 +5857,7 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                         f"Grace period: {_GRACE_DAYS - days_over} day(s) remaining.  "
                         f"Renew at david.vavro1@gmail.com"
                     ),
-                    "banner": banner}
+                    "banner": banner, "edition": _edition}
 
         # Past grace period — BLOCKED
         return {"status": "blocked", "name": name, "days_left": days_left,
@@ -5647,7 +5866,72 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                     f"{days_over} day(s) ago ({expiry}) and the {_GRACE_DAYS}-day grace period has elapsed.  "
                     f"Renew at david.vavro1@gmail.com"
                 ),
-                "banner": ""}
+                "banner": "", "edition": _edition}
+
+    # ── 2-active-install rule (v7.0.0) ────────────────────────────────────────
+    # _evaluate_activation and the constants _ACTIVE_WINDOW_DAYS /
+    # _MAX_ACTIVE_INSTALLS were HOISTED to module level (just before _run_http)
+    # so the test suite can call the pure evaluator directly. The bare-name
+    # references below resolve to those module-level definitions. See the
+    # module-level block and PHASE_A_PRIME_TEST_PLAN.md §4.
+
+    # ── D1-backed activation (v7.0.0 — Phase A' Option X, D1 variant) ─────────
+    # Activations are authoritatively stored in the telemetry Worker's D1
+    # database (table license_activations), NOT in subs.json. The client POSTs
+    # its install_id + token HASH (never the raw token) to /license/activate and
+    # the Worker returns the binding decision. If the Worker is unreachable we
+    # FAIL OPEN — fall back to the local _evaluate_activation() over whatever
+    # activations subs.json may carry, and ultimately allow access. This mirrors
+    # the 14-day cached-validation grace philosophy: a network blip must never
+    # lock out a paying customer.
+    _TELEMETRY_DEFAULT_ENDPOINT = "https://ai-prowler-telemetry.david-vavro1.workers.dev"
+
+    def _activation_endpoint() -> str:
+        """Resolve the Worker base URL (config override or default), no trailing slash."""
+        base = _TELEMETRY_DEFAULT_ENDPOINT
+        try:
+            ep = (_runtime_cfg_for_endpoint or {}).get("telemetry_endpoint", "")
+            if ep:
+                base = str(ep)
+        except Exception:
+            pass
+        return base.rstrip("/")
+
+    def _post_activation(license_hash: str, install_id: str,
+                         os_str: str, version: str) -> dict | None:
+        """POST to the Worker's /license/activate. Returns the parsed decision
+        dict on success, or None on any failure (caller falls back to local)."""
+        if not install_id or not license_hash:
+            return None
+        url = f"{_activation_endpoint()}/license/activate"
+        payload = {
+            "license_key_hash": license_hash,
+            "install_id":       install_id,
+            "os":               os_str,
+            "version":          version,
+        }
+        try:
+            import requests as _req
+            resp = _req.post(
+                url, json=payload,
+                headers={"User-Agent": "AI-Prowler-MCP/1.0",
+                         "Content-Type": "application/json"},
+                timeout=10,
+                proxies={"http": None, "https": None})
+            if resp.status_code == 200:
+                data = resp.json()
+                _log.info("D1 activation decision=%s (%s of %s active)",
+                          data.get("decision"), data.get("active_count"),
+                          data.get("max_active"))
+                return data
+            _log.warning("Activation endpoint returned HTTP %s", resp.status_code)
+        except Exception as _e:
+            _log.warning("Activation endpoint unreachable (%s) — failing open", _e)
+        return None
+
+    # Pulled out so _activation_endpoint can see the loaded config without a
+    # forward reference; populated just before the activation call below.
+    _runtime_cfg_for_endpoint = None
 
     # ── Perform initial subscription check on startup ─────────────────────────
     _subs_data = _fetch_subs_registry()
@@ -5676,6 +5960,105 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
         sys.exit(1)
     elif _sub_result["status"] == "warning":
         _log.warning("SUBSCRIPTION NOTICE: %s", _sub_result["message"])
+
+    # ── Resolve effective edition / mode (v7.0.0 — Phase A') ──────────────────
+    # config.json declares the *requested* edition/mode; the subscription check
+    # decides whether the token is actually entitled to it. _enforce_edition_mode
+    # reconciles the two, downgrading to home/personal where the request can't be
+    # honored. The subscriber's plan (via _sub_result["edition"]) is the upper
+    # bound on entitlement; config.json can request equal-or-lower, never higher.
+    _runtime_cfg       = _load_runtime_config()
+    _requested_edition = _runtime_cfg["edition"]
+    _requested_mode    = _runtime_cfg["mode"]
+    _entitled_edition  = _sub_result.get("edition", "home")
+
+    # The requested edition may not exceed what the subscription entitles.
+    # Ranking: home(0) < mobile(1) < business(2). Clamp request to entitlement.
+    _EDITION_RANK = {"home": 0, "mobile": 1, "business": 2}
+    if _EDITION_RANK.get(_requested_edition, 0) > _EDITION_RANK.get(_entitled_edition, 0):
+        _log.warning(
+            "config.json requests edition=%s but subscription only entitles %s. "
+            "Clamping to %s.", _requested_edition, _entitled_edition, _entitled_edition)
+        _requested_edition = _entitled_edition
+
+    _EFFECTIVE_EDITION, _EFFECTIVE_MODE = _enforce_edition_mode(
+        _requested_edition, _requested_mode, _sub_result["status"])
+
+    _log.info(
+        "Effective runtime: edition=%s mode=%s install_id=%s (requested edition=%s mode=%s; "
+        "subscription status=%s, entitles=%s)",
+        _EFFECTIVE_EDITION, _EFFECTIVE_MODE, _INSTALL_ID or "<none>",
+        _runtime_cfg["edition"], _runtime_cfg["mode"],
+        _sub_result["status"], _entitled_edition)
+
+    # ── Apply the 2-active-install rule (v7.0.0 — Phase A') ───────────────────
+    # Only relevant once we've cleared edition entitlement: a Home install has
+    # no remote-access seat to bind, so there's nothing to enforce. For a
+    # mobile/business effective edition, determine THIS machine's activation
+    # standing. Authoritative source is the D1-backed Worker (/license/activate);
+    # if it's unreachable we FAIL OPEN by falling back to the local evaluator
+    # over subs.json activations (which may be empty), and ultimately allowing
+    # access — a network blip must never lock out a paying customer.
+    # A "rejected" decision → soft-revert to Home (spec §4.4 Mobile flow),
+    # leaving everything else functional, and annotate _sub_result so the
+    # License panel and /authorize page can surface the "release a machine" CTA.
+    _runtime_cfg_for_endpoint = _runtime_cfg   # let _activation_endpoint() see config
+
+    _activation = {"decision": "unbound", "active_install_ids": [],
+                   "active_count": 0, "this_active": False, "message": ""}
+    if _EFFECTIVE_EDITION in ("mobile", "business"):
+        # Build an OS string for the activation record.
+        try:
+            import platform as _platform
+            _os_str = f"{_platform.system()}-{_platform.release()}"[:50]
+        except Exception:
+            _os_str = "unknown"
+        _license_hash = _token_key(token)
+
+        # Resolve the app version for the activation record. APP_VERSION lives
+        # in rag_gui.py, not here, so read the bundled VERSION file directly
+        # (same value the installer ships) with a safe fallback.
+        _app_version = ""
+        try:
+            _ver_file = Path(__file__).resolve().parent / "VERSION"
+            if _ver_file.exists():
+                _app_version = _ver_file.read_text(encoding="utf-8").strip()
+        except Exception:
+            _app_version = ""
+
+        # Try the authoritative D1 endpoint first.
+        _d1 = _post_activation(_license_hash, _INSTALL_ID, _os_str, _app_version)
+        if _d1 is not None and _d1.get("decision"):
+            _activation = {
+                "decision":           _d1.get("decision"),
+                "active_install_ids": _d1.get("active_install_ids", []),
+                "active_count":       _d1.get("active_count", 0),
+                "this_active":        _d1.get("decision") == "active",
+                "message":            _d1.get("message", ""),
+            }
+            _log.info("Activation (D1): decision=%s (%d of %d active)",
+                      _activation["decision"], _activation["active_count"],
+                      _MAX_ACTIVE_INSTALLS)
+        else:
+            # FAIL OPEN — local evaluation over subs.json activations.
+            _sub_key   = _token_key(token)
+            _sub_entry = (_subs_data or {}).get("subscribers", {}).get(_sub_key, {}) \
+                         if _subs_data else {}
+            _activation = _evaluate_activation(_sub_entry, _INSTALL_ID)
+            _log.warning("Activation (local fallback): decision=%s (%d of %d active) — %s",
+                         _activation["decision"], _activation["active_count"],
+                         _MAX_ACTIVE_INSTALLS, _activation["message"])
+
+        if _activation["decision"] == "rejected":
+            _log.warning(
+                "Install-id rejected (2-active-install cap reached). Soft-reverting "
+                "to Home edition; remote access disabled on this machine.")
+            _EFFECTIVE_EDITION = "home"
+            _EFFECTIVE_MODE    = "personal"
+            _sub_result = dict(_sub_result)
+            _sub_result["activation_rejected"] = True
+            _sub_result["activation_message"]  = _activation["message"]
+            _sub_result["active_install_ids"]  = _activation["active_install_ids"]
 
     # Mutable container so background thread can update it
     _current_sub_result = [_sub_result]

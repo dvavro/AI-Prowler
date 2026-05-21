@@ -5591,6 +5591,177 @@ or from the Help menu."""
 
         ttk.Separator(remote_frame, orient='horizontal').pack(fill='x', pady=(4, 8))
 
+        # ── Machine Activations (v7.0.0 — Phase A' Mobile License panel) ──────
+        # Architecture spec §6.7. Mobile licenses may be active on at most 2
+        # machines at once. This panel shows this machine's install_id, the
+        # current active-install count from the activation endpoint, and lets a
+        # solo user release another machine to free a slot.
+        ttk.Label(remote_frame, text="Machine Activations  (Mobile licenses: max 2 machines):",
+                  font=('Arial', 9, 'bold')).pack(anchor='w')
+        ttk.Label(remote_frame, font=('Arial', 8), foreground='gray',
+                  text="Your Mobile license can be active on up to 2 machines. To use it on a "
+                       "new machine when both slots are full, release one here.").pack(
+                           anchor='w', pady=(0, 4))
+
+        _activations_frame = ttk.Frame(remote_frame)
+        _activations_frame.pack(fill='x', pady=(0, 8))
+
+        # This machine's install_id (generated at GUI launch; see __init__).
+        _this_install_id = ""
+        try:
+            _this_install_id = self._install_id_path.read_text(
+                encoding='utf-8').strip()
+        except Exception:
+            _this_install_id = ""
+
+        _activations_status_var = tk.StringVar(
+            value="Click “Check Activations” to see active machines.")
+        ttk.Label(_activations_frame, textvariable=_activations_status_var,
+                  font=('Arial', 8), foreground='gray', justify='left',
+                  wraplength=620).pack(anchor='w', pady=(0, 4))
+
+        ttk.Label(_activations_frame, font=('Arial', 8), foreground='gray',
+                  text=(f"This machine: {_this_install_id or '(install_id unavailable)'}")
+                  ).pack(anchor='w', pady=(0, 4))
+
+        # Holds active install_ids fetched from the endpoint, for the release flow.
+        _active_ids_box = {"ids": []}
+
+        def _activation_base_url():
+            """Telemetry/activation Worker base URL (config override or default)."""
+            base = _TELEMETRY_DEFAULT_ENDPOINT
+            try:
+                _cfg_p = Path.home() / '.ai-prowler' / 'config.json'
+                if _cfg_p.exists():
+                    import json as _jm
+                    _d = _jm.loads(_cfg_p.read_text(encoding='utf-8'))
+                    if _d.get('telemetry_endpoint'):
+                        base = str(_d['telemetry_endpoint'])
+            except Exception:
+                pass
+            return base.rstrip('/')
+
+        def _token_hash_for_activation():
+            """SHA-256[:16] of the saved bearer token — the activation key.
+            Matches _token_key() in ai_prowler_mcp.py and the subs.json key."""
+            tok = _remote_token_var.get().strip()
+            if not tok:
+                return ""
+            import hashlib as _hl
+            return _hl.sha256(tok.encode()).hexdigest()[:16]
+
+        def _check_activations():
+            """Background-fetch the current active set from the Worker by POSTing
+            an activation probe for THIS machine, then update the UI. We use the
+            activate endpoint (idempotent for an already-active install) so the
+            response carries the authoritative active_install_ids list."""
+            lh = _token_hash_for_activation()
+            if not lh:
+                _activations_status_var.set(
+                    "Save a Bearer Token first — it identifies your license.")
+                return
+            _activations_status_var.set("Checking activations…")
+
+            def _worker():
+                result_text = ""
+                ids = []
+                try:
+                    import requests as _rq
+                    url = f"{_activation_base_url()}/license/activate"
+                    payload = {"license_key_hash": lh,
+                               "install_id": _this_install_id or "0" * 16,
+                               "os": "Windows-11", "version": APP_VERSION}
+                    resp = _rq.post(url, json=payload, timeout=10,
+                                    headers={"Content-Type": "application/json",
+                                             "User-Agent": "AI-Prowler-GUI/1.0"},
+                                    proxies={"http": None, "https": None})
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        ids = data.get("active_install_ids", []) or []
+                        cnt = data.get("active_count", len(ids))
+                        mx  = data.get("max_active", 2)
+                        decision = data.get("decision", "?")
+                        result_text = (f"Active on {cnt} of {mx} machines "
+                                       f"(this machine: {decision}).")
+                    else:
+                        result_text = f"Activation server returned HTTP {resp.status_code}."
+                except Exception as _e:
+                    result_text = f"Could not reach activation server: {_e}"
+
+                def _apply():
+                    _active_ids_box["ids"] = ids
+                    _activations_status_var.set(result_text)
+                self.root.after(0, _apply)
+
+            import threading as _th
+            _th.Thread(target=_worker, daemon=True).start()
+
+        def _release_other_machine():
+            """Release the active install_id that is NOT this machine. For a solo
+            Mobile user with 2 active machines, this frees the other slot."""
+            lh = _token_hash_for_activation()
+            if not lh:
+                messagebox.showwarning("No Token",
+                                       "Save a Bearer Token first.")
+                return
+            others = [i for i in _active_ids_box.get("ids", [])
+                      if i and i != _this_install_id]
+            if not others:
+                messagebox.showinfo(
+                    "Nothing to Release",
+                    "No other active machine was found. Click “Check Activations” "
+                    "first, or there may be no second machine to release.")
+                return
+            target = others[0]
+            if not messagebox.askyesno(
+                    "Release Machine",
+                    f"Release the other active machine?\n\n  {target}\n\n"
+                    "That machine's remote access will be disabled until it "
+                    "re-activates. This frees a slot for this machine."):
+                return
+            _activations_status_var.set(f"Releasing {target}…")
+
+            def _worker():
+                msg = ""
+                ok = False
+                try:
+                    import requests as _rq
+                    url = f"{_activation_base_url()}/license/release_install"
+                    resp = _rq.post(url,
+                                    json={"license_key_hash": lh, "install_id": target},
+                                    timeout=10,
+                                    headers={"Content-Type": "application/json",
+                                             "User-Agent": "AI-Prowler-GUI/1.0"},
+                                    proxies={"http": None, "https": None})
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        ok = bool(data.get("released"))
+                        msg = data.get("message", "")
+                    else:
+                        msg = f"Server returned HTTP {resp.status_code}."
+                except Exception as _e:
+                    msg = f"Could not reach activation server: {_e}"
+
+                def _apply():
+                    if ok:
+                        _activations_status_var.set(
+                            "Released. Re-run the HTTP server to claim the freed slot.")
+                    else:
+                        _activations_status_var.set(msg or "Release failed.")
+                self.root.after(0, _apply)
+
+            import threading as _th
+            _th.Thread(target=_worker, daemon=True).start()
+
+        _act_btn_row = ttk.Frame(_activations_frame)
+        _act_btn_row.pack(fill='x', pady=(2, 0))
+        ttk.Button(_act_btn_row, text="🔄 Check Activations",
+                   command=_check_activations).pack(side='left', padx=(0, 8))
+        ttk.Button(_act_btn_row, text="🔓 Release Other Machine",
+                   command=_release_other_machine).pack(side='left')
+
+        ttk.Separator(remote_frame, orient='horizontal').pack(fill='x', pady=(4, 8))
+
         # ── HTTP MCP Server ────────────────────────────────────────────────────
         # Header row with internet + subscription indicators
         http_hdr_row = ttk.Frame(remote_frame)
@@ -5889,6 +6060,17 @@ or from the Help menu."""
         def _update_sub_light(sub_result: dict):
             status    = sub_result.get('status', 'unmanaged')
             days_left = sub_result.get('days_left')
+
+            # v7.0.0: the 2-active-install rule can disable remote access on
+            # THIS machine even when the subscription itself is valid (the
+            # license is in use on 2 other machines). Surface that distinctly,
+            # taking precedence over the normal status, since the user's action
+            # (release a machine) differs from a renewal.
+            if sub_result.get('activation_rejected'):
+                _sub_canvas.itemconfig(_sub_dot, fill='#d4ac0d')
+                _sub_lbl.config(text='Mobile disabled — in use elsewhere',
+                                foreground='#d4ac0d')
+                return
 
             if status == 'ok':
                 # Paid and active — green

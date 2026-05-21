@@ -38,6 +38,7 @@ convention used by C-MCP-NN (the read-side tools) and L-MCP-NN (learning).
     circuit breaker      C-MCP-WRITE-69 … C-MCP-WRITE-71
     integration          C-MCP-WRITE-72 … C-MCP-WRITE-75
     line endings         C-MCP-WRITE-76 … C-MCP-WRITE-82   (v6.02 CRLF fix)
+    crlf old_str match   C-MCP-WRITE-83 … C-MCP-WRITE-88   (v7.0.0 multi-line CRLF fix)
 
 Isolation
 ---------
@@ -1095,3 +1096,144 @@ def test_C_MCP_WRITE_82_create_file_uses_platform_native(mcp_mod, writable_env):
     assert target2.read_bytes() == b"a\r\nb\r\n", (
         "Explicit \\r\\n in content should be respected exactly"
     )
+
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║  CRLF old_str MATCHING  (v7.0.0 multi-line CRLF fix)                        ║
+# ║  C-MCP-WRITE-83 … C-MCP-WRITE-88                                            ║
+# ║                                                                            ║
+# ║  Regression cluster for the bug recorded in self-learning                  ║
+# ║  6d0bd78f-d219-4d0b-be95-973dffaf275a: str_replace_in_file failed to       ║
+# ║  match a MULTI-LINE old_str when the on-disk file used CRLF endings.       ║
+# ║                                                                            ║
+# ║  Root cause: the file content was LF-normalized on read, but the incoming  ║
+# ║  old_str/new_str arguments were not. A multi-line old_str copied from a     ║
+# ║  CRLF source carries '\r\n'; text.count(old_str) then compared a CRLF      ║
+# ║  needle against LF-normalized text → 0 matches → "old_str not found".      ║
+# ║  Single-line old_str (no newline) was never affected, which is why the     ║
+# ║  pre-existing tests 76–82 (all single-line old_str) passed and missed it.  ║
+# ║                                                                            ║
+# ║  Fix: normalize old_str/new_str to LF immediately after the sanity         ║
+# ║  checks, mirroring the file-content normalization.                         ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+def test_C_MCP_WRITE_83_str_replace_multiline_crlf_oldstr_matches(mcp_mod, writable_env):
+    """THE bug: multi-line old_str carrying \\r\\n must match a CRLF file.
+
+    This is the exact failure from learning 6d0bd78f. Before the fix this
+    returned "old_str not found"; after the fix it edits successfully and
+    preserves CRLF on disk.
+    """
+    target = writable_env.project / "crlf_multiline.py"
+    target.write_bytes(b"def handler():\r\n    return 1\r\n    # tail\r\n")
+
+    # old_str arrives with CRLF — exactly what happens when the snippet is
+    # copied out of a Windows file via grep_documents / read_file_lines.
+    old = "def handler():\r\n    return 1\r\n"
+    new = "def handler():\r\n    # patched\r\n    return 2\r\n"
+
+    r = mcp_mod.str_replace_in_file(str(target), old_str=old, new_str=new)
+    assert "✅ Edited" in r, f"Multi-line CRLF old_str should match. Got: {r}"
+
+    raw = target.read_bytes()
+    # Edit applied
+    assert b"# patched" in raw, f"Edit not applied: {raw!r}"
+    assert b"return 2" in raw
+    # CRLF preserved everywhere, no bare LF and no doubled \r
+    assert b"\n" not in raw.replace(b"\r\n", b""), f"Bare LF leaked in: {raw!r}"
+    assert b"\r\r" not in raw, f"Doubled \\r introduced: {raw!r}"
+    assert raw == (
+        b"def handler():\r\n    # patched\r\n    return 2\r\n    # tail\r\n"
+    ), f"Unexpected final bytes: {raw!r}"
+
+
+def test_C_MCP_WRITE_84_str_replace_multiline_crlf_oldstr_lf_file(mcp_mod, writable_env):
+    """A CRLF-carrying old_str must also match an LF file (normalization is
+    symmetric — the needle is normalized regardless of file convention)."""
+    target = writable_env.project / "lf_file_crlf_needle.py"
+    target.write_bytes(b"def handler():\n    return 1\n")
+
+    old = "def handler():\r\n    return 1\r\n"   # CRLF needle, LF file
+    new = "def handler():\r\n    return 99\r\n"
+
+    r = mcp_mod.str_replace_in_file(str(target), old_str=old, new_str=new)
+    assert "✅ Edited" in r, f"CRLF needle should match LF file. Got: {r}"
+
+    raw = target.read_bytes()
+    # File was LF — must STAY LF (file convention wins on write)
+    assert b"\r" not in raw, f"File was LF; \\r should not appear: {raw!r}"
+    assert raw == b"def handler():\n    return 99\n"
+
+
+def test_C_MCP_WRITE_85_str_replace_lf_oldstr_crlf_file(mcp_mod, writable_env):
+    """The mirror case: an LF-carrying old_str must match a CRLF file. This is
+    the common path when Claude hand-writes a multi-line old_str with plain
+    \\n while the target file on disk is CRLF."""
+    target = writable_env.project / "crlf_file_lf_needle.py"
+    target.write_bytes(b"alpha = 1\r\nbeta = 2\r\ngamma = 3\r\n")
+
+    old = "alpha = 1\nbeta = 2\n"      # LF needle, CRLF file
+    new = "alpha = 10\nbeta = 20\n"
+
+    r = mcp_mod.str_replace_in_file(str(target), old_str=old, new_str=new)
+    assert "✅ Edited" in r, f"LF needle should match CRLF file. Got: {r}"
+
+    raw = target.read_bytes()
+    assert b"\n" not in raw.replace(b"\r\n", b""), f"Bare LF leaked in: {raw!r}"
+    assert raw == b"alpha = 10\r\nbeta = 20\r\ngamma = 3\r\n"
+
+
+def test_C_MCP_WRITE_86_str_replace_crlf_dry_run_matches(mcp_mod, writable_env):
+    """dry_run with a multi-line CRLF old_str must produce a diff (not a
+    'not found' error) and must NOT modify the file."""
+    target = writable_env.project / "crlf_dry.py"
+    original = b"x = 1\r\ny = 2\r\nz = 3\r\n"
+    target.write_bytes(original)
+
+    old = "x = 1\r\ny = 2\r\n"
+    new = "x = 100\r\ny = 200\r\n"
+
+    r = mcp_mod.str_replace_in_file(
+        str(target), old_str=old, new_str=new, dry_run=True
+    )
+    assert "DRY RUN" in r, f"Should reach dry-run, not 'not found'. Got: {r}"
+    assert "not found" not in r.lower()
+    # File untouched
+    assert target.read_bytes() == original, "dry_run must not modify the file"
+    # No backup created on dry run
+    assert not (target.parent / "crlf_dry.py.bak1").exists()
+
+
+def test_C_MCP_WRITE_87_str_replace_crlf_uniqueness_still_enforced(mcp_mod, writable_env):
+    """Normalization must not break uniqueness detection. A multi-line CRLF
+    old_str that occurs twice (after normalization) still errors as ambiguous,
+    not silently edits the first hit."""
+    target = writable_env.project / "crlf_dup.py"
+    # The two-line block "ping()\r\npong()\r\n" appears twice.
+    target.write_bytes(
+        b"ping()\r\npong()\r\nMIDDLE\r\nping()\r\npong()\r\n"
+    )
+
+    old = "ping()\r\npong()\r\n"   # CRLF, occurs twice
+    r = mcp_mod.str_replace_in_file(str(target), old_str=old, new_str="noop()\r\n")
+
+    assert "found 2 times" in r.lower(), f"Should detect 2 matches. Got: {r}"
+    # File unchanged
+    assert target.read_bytes() == (
+        b"ping()\r\npong()\r\nMIDDLE\r\nping()\r\npong()\r\n"
+    )
+
+
+def test_C_MCP_WRITE_88_str_replace_crlf_delete_span(mcp_mod, writable_env):
+    """Deleting a multi-line span (new_str='') from a CRLF file via a CRLF
+    old_str works and leaves the surrounding CRLF intact."""
+    target = writable_env.project / "crlf_delete.py"
+    target.write_bytes(b"keep_a\r\nDROP_1\r\nDROP_2\r\nkeep_b\r\n")
+
+    old = "DROP_1\r\nDROP_2\r\n"
+    r = mcp_mod.str_replace_in_file(str(target), old_str=old, new_str="")
+    assert "✅ Edited" in r, r
+
+    raw = target.read_bytes()
+    assert b"DROP_1" not in raw and b"DROP_2" not in raw, f"Span not deleted: {raw!r}"
+    assert raw == b"keep_a\r\nkeep_b\r\n", f"Unexpected bytes: {raw!r}"
+    assert b"\n" not in raw.replace(b"\r\n", b""), f"Bare LF leaked: {raw!r}"
