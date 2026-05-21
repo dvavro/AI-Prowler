@@ -5641,7 +5641,8 @@ def _load_runtime_config() -> dict:
     cfg = {}
     try:
         if _CONFIG_PATH.exists():
-            cfg = json.loads(_CONFIG_PATH.read_text(encoding="utf-8")) or {}
+            # utf-8-sig tolerates a BOM from PowerShell/Notepad-edited configs.
+            cfg = json.loads(_CONFIG_PATH.read_text(encoding="utf-8-sig")) or {}
     except Exception as _e:
         _log.warning("config.json unreadable (%s) — defaulting to home/personal", _e)
         cfg = {}
@@ -5894,7 +5895,7 @@ def _validate_business_license(license_key: str, install_id: str,
     cache = {}
     try:
         if _LICENSE_CACHE_PATH.exists():
-            cache = json.loads(_LICENSE_CACHE_PATH.read_text(encoding="utf-8")) or {}
+            cache = json.loads(_LICENSE_CACHE_PATH.read_text(encoding="utf-8-sig")) or {}
     except Exception as _e:
         _log.warning("license_cache.json unreadable (%s)", _e)
         cache = {}
@@ -6214,7 +6215,9 @@ def _load_users() -> "dict | None":
     (caller treats None as 'server mode not provisioned')."""
     try:
         if _USERS_JSON_PATH.exists():
-            data = json.loads(_USERS_JSON_PATH.read_text(encoding="utf-8"))
+            # utf-8-sig: tolerate a BOM (PowerShell Out-File / some editors add
+            # one). Reads correctly whether or not a BOM is present.
+            data = json.loads(_USERS_JSON_PATH.read_text(encoding="utf-8-sig"))
             if isinstance(data, dict) and isinstance(data.get("users"), dict):
                 return data
             _log.error("users.json present but malformed (no 'users' map).")
