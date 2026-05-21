@@ -6194,6 +6194,141 @@ def _filter_audit_entries(entries: "list | None", limit: int = 20,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# SERVER MODE — multi-user HTTP transport  (v7.0.0 Phase B Block 3, spec §5.1/§6.4)
+# ══════════════════════════════════════════════════════════════════════════════
+# Business "company server" transport. Differs from _run_http (single shared
+# token) by authenticating EACH request against users.json: bearer token →
+# _resolve_user() → request.state.user, 401 on unknown/suspended. This is
+# STEP 1 — the AUTHENTICATION layer only. Per-user ChromaDB COLLECTION SCOPING
+# (using _allowed_collections / _can_index) is STEP 2, wired into the tools
+# next; until then a logged warning makes clear data is not yet user-scoped.
+#
+# SAFETY: only reached when config.json mode=server. If prerequisites are
+# missing (no users.json, deps unavailable) it FALLS BACK to _run_http so a
+# server install is never left with no transport. _run_http itself is untouched.
+_USERS_JSON_PATH = Path.home() / ".ai-prowler" / "users.json"
+
+
+def _load_users() -> "dict | None":
+    """Load users.json. Returns the parsed dict, or None if missing/unreadable
+    (caller treats None as 'server mode not provisioned')."""
+    try:
+        if _USERS_JSON_PATH.exists():
+            data = json.loads(_USERS_JSON_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and isinstance(data.get("users"), dict):
+                return data
+            _log.error("users.json present but malformed (no 'users' map).")
+            return None
+    except Exception as _e:
+        _log.error("users.json unreadable: %s", _e)
+    return None
+
+
+def _run_server_mode(port: int, token: str,
+                     public_base: str = "https://mobile.dvavro-ai-prowler.com") -> None:
+    """Multi-user server transport. STEP 1: authentication layer.
+
+    Falls back to _run_http() if server mode can't be established, so a
+    misconfigured Business server still serves (single-user) rather than dying.
+    """
+    users_data = _load_users()
+    if users_data is None:
+        _log.error(
+            "Server mode requested but ~/.ai-prowler/users.json is missing or "
+            "malformed. Falling back to single-user HTTP transport. Create the "
+            "first owner user via the Admin tab to enable multi-user mode.")
+        return _run_http(port=port, token=token, public_base=public_base)
+
+    try:
+        import uvicorn
+        from starlette.applications import Starlette
+        from starlette.middleware.base import BaseHTTPMiddleware
+        from starlette.responses import JSONResponse, PlainTextResponse
+        from starlette.routing import Route, Mount
+        from starlette.requests import Request
+    except ImportError as _ie:
+        _log.error("Server mode needs uvicorn/starlette (%s). Falling back.", _ie)
+        return _run_http(port=port, token=token, public_base=public_base)
+
+    n_users = len(users_data.get("users", {}))
+    company = users_data.get("company_id", "<unknown>")
+    _log.info("Server mode: company=%s, %d user(s) loaded from users.json",
+              company, n_users)
+
+    # ── Multi-user auth middleware (spec §6.4 steps 1-4) ──────────────────────
+    # Extract bearer token → resolve to a user → attach to request.state. A
+    # request with no/invalid/suspended token gets 401. Health and OAuth
+    # discovery routes are exempt (no auth needed to advertise capability).
+    _EXEMPT_PATHS = ("/health", "/.well-known/")
+
+    class MultiUserAuthMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: "Request", call_next):
+            path = request.url.path
+            if path == "/health" or path.startswith("/.well-known/"):
+                return await call_next(request)
+
+            auth = request.headers.get("Authorization", "")
+            tok = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+            if not tok:
+                return JSONResponse({"error": "missing bearer token"}, status_code=401)
+
+            # Re-read users each request? No — read once at startup for now;
+            # the Admin tab will trigger a reload. Resolve against the in-memory map.
+            user = _resolve_user(users_data, tok)
+            if user is None:
+                _log.info("Auth rejected for token …%s on %s", tok[-4:] if tok else "", path)
+                return JSONResponse(
+                    {"error": "invalid or revoked token"}, status_code=401)
+
+            request.state.user = user
+            # STEP 2 NOT YET WIRED: collection scoping. Log once per request so
+            # it's unmistakable in testing that responses are not yet scoped.
+            request.state.allowed_collections = _allowed_collections(user)
+            _log.debug("Authenticated user=%s role=%s scopes=%s",
+                       user.get("id"), user.get("role"),
+                       request.state.allowed_collections)
+            return await call_next(request)
+
+    async def _health(request):
+        return PlainTextResponse("OK")
+
+    async def _whoami(request):
+        """Diagnostic: confirms auth resolved the right user (Step-1 test aid)."""
+        u = getattr(request.state, "user", None)
+        if not u:
+            return JSONResponse({"error": "no user"}, status_code=401)
+        return JSONResponse({
+            "user_id": u.get("id"), "name": u.get("name"),
+            "role": u.get("role"),
+            "allowed_collections": getattr(request.state, "allowed_collections", []),
+            "scoping_active": False,   # STEP 2 not yet wired — honest flag
+        })
+
+    # ── Mount FastMCP under the auth middleware ───────────────────────────────
+    # FastMCP exposes a streamable-http ASGI app; we mount it and wrap the whole
+    # Starlette app in the auth middleware so every MCP request is authenticated.
+    try:
+        mcp_app = mcp.streamable_http_app()
+    except Exception as _e:
+        _log.error("Could not get FastMCP ASGI app (%s). Falling back.", _e)
+        return _run_http(port=port, token=token, public_base=public_base)
+
+    app = Starlette(routes=[
+        Route("/health", _health),
+        Route("/whoami", _whoami),
+        Mount("/", app=mcp_app),
+    ])
+    app.add_middleware(MultiUserAuthMiddleware)
+
+    _log.warning(
+        "SERVER MODE STEP 1 (auth only): requests are authenticated per-user, "
+        "but ChromaDB results are NOT yet collection-scoped. Do NOT expose to "
+        "real multi-tenant use until Step 2 (collection scoping) is wired.")
+    _log.info("Server mode listening on port %d", port)
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # HTTP transport with Bearer-token auth (launched by GUI or manually)
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -6570,6 +6705,37 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
     _EFFECTIVE_EDITION, _EFFECTIVE_MODE = _enforce_edition_mode(
         _requested_edition, _requested_mode, _sub_result["status"])
 
+    # ── Business license validation + grace ladder (v7.0.0 Phase B Block 2) ───
+    # If we've landed on the Business edition, validate the company license key
+    # against the D1 Worker (/license/validate) through the cache + grace ladder.
+    # The ladder can soft-revert Business → Home on a hard fail (revoked) or
+    # after the 14-day grace window of failed validations. This runs BEFORE the
+    # activation rule so the activation check sees the edition that actually
+    # survived license validation. The license key comes from config.json
+    # ('license_key'); if absent, Business can't be validated → revert to home.
+    _runtime_cfg_for_endpoint = _runtime_cfg   # let _activation_endpoint() see config (used here + by the activation rule below)
+    _license_grace = {"effective_edition": _EFFECTIVE_EDITION, "action": "n/a",
+                      "banner": "", "license_key_present": False}
+    if _EFFECTIVE_EDITION == "business":
+        _lic_key = str(_runtime_cfg.get("license_key", "")).strip()
+        _license_grace = _validate_business_license(
+            _lic_key, _INSTALL_ID, _activation_endpoint())
+        if _license_grace["effective_edition"] != "business":
+            _log.warning(
+                "Business license check → %s (action=%s). Reverting to Home.",
+                _license_grace["effective_edition"], _license_grace["action"])
+            _EFFECTIVE_EDITION = "home"
+            _EFFECTIVE_MODE    = "personal"
+            _sub_result = dict(_sub_result)
+            _sub_result["license_reverted"] = True
+            _sub_result["license_message"]  = _license_grace.get("banner", "")
+        elif _license_grace.get("banner"):
+            # Still Business, but a grace-period warning to surface in the GUI.
+            _log.warning("Business license grace warning: %s",
+                         _license_grace["banner"])
+            _sub_result = dict(_sub_result)
+            _sub_result["license_warning"] = _license_grace["banner"]
+
     _log.info(
         "Effective runtime: edition=%s mode=%s install_id=%s (requested edition=%s mode=%s; "
         "subscription status=%s, entitles=%s)",
@@ -6588,7 +6754,6 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
     # A "rejected" decision → soft-revert to Home (spec §4.4 Mobile flow),
     # leaving everything else functional, and annotate _sub_result so the
     # License panel and /authorize page can surface the "release a machine" CTA.
-    _runtime_cfg_for_endpoint = _runtime_cfg   # let _activation_endpoint() see config
 
     _activation = {"decision": "unbound", "active_install_ids": [],
                    "active_count": 0, "this_active": False, "message": ""}
@@ -7254,8 +7419,24 @@ if __name__ == "__main__":
               args.transport, args.port, resolved_public_base)
 
     if args.transport == 'http':
-        _log.info("Starting HTTP transport on port %d", args.port)
-        _run_http(port=args.port, token=args.token, public_base=resolved_public_base)
+        # ── Server mode dispatch (v7.0.0 Phase B) ─────────────────────────────
+        # When config.json sets mode=server (Business company server), use the
+        # multi-user server transport instead of the single-token _run_http.
+        # Personal/Mobile/Home installs are UNAFFECTED — _run_http is unchanged
+        # and remains the default path. _run_server_mode falls back to _run_http
+        # if its prerequisites aren't met (no users.json, missing deps), so a
+        # misconfigured server can never end up with NO transport.
+        try:
+            _rt = _load_runtime_config()
+        except Exception:
+            _rt = {"mode": "personal", "edition": "home"}
+        if _rt.get("mode") == "server":
+            _log.info("Starting SERVER-MODE HTTP transport on port %d (multi-user)", args.port)
+            _run_server_mode(port=args.port, token=args.token,
+                             public_base=resolved_public_base)
+        else:
+            _log.info("Starting HTTP transport on port %d", args.port)
+            _run_http(port=args.port, token=args.token, public_base=resolved_public_base)
     else:
         _log.info("Starting stdio transport (Claude Desktop mode)")
 
