@@ -5442,6 +5442,155 @@ def reset_write_counter() -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# DEV CHECK TOOLS — compile_check / import_check  (v7.0.0, Home-edition only)
+# ══════════════════════════════════════════════════════════════════════════════
+# Let the agent verify its own edits on THIS machine (real interpreter, real
+# installed stack) instead of asking the user to run py_compile / import by hand.
+#
+# SAFETY MODEL — these are developer conveniences, NOT customer-facing tools:
+#   • Edition-gated: only available when this install is the Home edition OR
+#     config.json explicitly sets {"dev_tools": true}. On any deployed Business
+#     server (edition != home, no dev_tools flag) they are HARD-DISABLED and
+#     return a refusal — so a tunnel-exposed customer box is never an RCE host.
+#   • NO free-form shell: each tool builds a FIXED argument list
+#     ([sys.executable, "-m", "py_compile", path] etc.) and runs it with
+#     subprocess.run(shell=False). The agent cannot inject a command string.
+#   • Path-scoped: compile_check validates filepath against the SAME tracked-root
+#     allowlist the edit tools use (_resolve_allowlisted_path). No arbitrary file.
+#   • Bounded: a hard timeout prevents a hung interpreter from wedging the server.
+# ══════════════════════════════════════════════════════════════════════════════
+_DEV_CHECK_TIMEOUT_SEC = 120   # generous enough for an import that loads heavy deps
+
+
+def _dev_tools_enabled() -> tuple[bool, str]:
+    """Return (enabled, reason). Enabled only on Home edition or explicit opt-in.
+    Reads the RAW config (no subscription needed) so it works in stdio mode too."""
+    try:
+        cfg = _load_runtime_config()   # module-level; safe, never raises
+    except Exception:
+        cfg = {}
+    if cfg.get("dev_tools") is True:
+        return (True, "dev_tools flag set in config.json")
+    if cfg.get("edition", "home") == "home":
+        return (True, "Home edition")
+    return (False,
+            f"disabled on edition={cfg.get('edition', 'home')!r} "
+            f"(set \"dev_tools\": true in config.json to override on a dev box)")
+
+
+@mcp.tool()
+def compile_check(filepath: str, timeout_sec: int = _DEV_CHECK_TIMEOUT_SEC) -> str:
+    """
+    DEV TOOLS — Byte-compile a Python file with this machine's interpreter to
+    check for SYNTAX errors. Equivalent to `python -m py_compile <file>`.
+
+    Use this after editing a .py file to confirm it parses before relying on it.
+    Catches syntax errors only (not import-time or runtime errors — use
+    import_check for those). Home-edition / dev boxes only.
+
+    Args:
+        filepath:    Path to a .py file under a tracked root.
+        timeout_sec: Max seconds to wait (default 120).
+
+    Returns:
+        "✅ compile OK" or the compiler's error output.
+    """
+    enabled, why = _dev_tools_enabled()
+    if not enabled:
+        return f"🚫 compile_check is disabled here ({why})."
+
+    resolved, err = _resolve_allowlisted_path(filepath)
+    if err:
+        return err
+    if not resolved.lower().endswith(".py"):
+        return f"⚠️  compile_check only handles .py files (got {resolved})."
+
+    import subprocess as _sp
+    try:
+        proc = _sp.run(
+            [sys.executable, "-m", "py_compile", resolved],
+            capture_output=True, text=True, timeout=max(5, int(timeout_sec)),
+            shell=False)
+    except _sp.TimeoutExpired:
+        return f"⏱️  compile_check timed out after {timeout_sec}s on {resolved}."
+    except Exception as exc:
+        return f"⚠️  compile_check could not run: {exc}"
+
+    if proc.returncode == 0:
+        _log.info("compile_check OK: %s", resolved)
+        return f"✅ compile OK — {resolved}\n   (python -m py_compile, rc=0)"
+    out = (proc.stderr or proc.stdout or "").strip()
+    _log.warning("compile_check FAILED: %s\n%s", resolved, out)
+    return (f"❌ compile FAILED — {resolved}  (rc={proc.returncode})\n"
+            f"───\n{out}")
+
+
+@mcp.tool()
+def import_check(module_or_path: str, timeout_sec: int = _DEV_CHECK_TIMEOUT_SEC) -> str:
+    """
+    DEV TOOLS — Import a Python module with this machine's interpreter to catch
+    LOAD-TIME errors (NameError, ImportError, bad module-level references) that
+    syntax-only compile_check misses. Equivalent to `python -c "import <module>"`.
+
+    Accepts either a bare module name (e.g. "ai_prowler_mcp") or a path to a .py
+    file under a tracked root (the module name is derived from the filename).
+    The import runs in a SEPARATE interpreter process, so it cannot disturb the
+    running server. Home-edition / dev boxes only.
+
+    Args:
+        module_or_path: Module name, or path to a .py file under a tracked root.
+        timeout_sec:    Max seconds to wait (default 120; imports of heavy deps
+                        like torch/chromadb can take a while).
+
+    Returns:
+        "✅ import OK" or the traceback the import produced.
+    """
+    enabled, why = _dev_tools_enabled()
+    if not enabled:
+        return f"🚫 import_check is disabled here ({why})."
+
+    # Resolve to a module name + a working directory to run from.
+    cwd = None
+    if module_or_path.replace("_", "").isalnum() and "/" not in module_or_path \
+            and "\\" not in module_or_path and not module_or_path.endswith(".py"):
+        module = module_or_path           # bare module name
+    else:
+        resolved, err = _resolve_allowlisted_path(module_or_path)
+        if err:
+            return err
+        if not resolved.lower().endswith(".py"):
+            return f"⚠️  import_check path must be a .py file (got {resolved})."
+        import os as _os
+        cwd = _os.path.dirname(resolved)
+        module = _os.path.splitext(_os.path.basename(resolved))[0]
+
+    # Validate the derived module name is a safe identifier — no injection via -c.
+    if not module.isidentifier():
+        return f"⚠️  '{module}' is not a valid module name."
+
+    import subprocess as _sp
+    try:
+        proc = _sp.run(
+            [sys.executable, "-c", f"import {module}"],
+            capture_output=True, text=True, timeout=max(5, int(timeout_sec)),
+            shell=False, cwd=cwd)
+    except _sp.TimeoutExpired:
+        return f"⏱️  import_check timed out after {timeout_sec}s importing {module}."
+    except Exception as exc:
+        return f"⚠️  import_check could not run: {exc}"
+
+    if proc.returncode == 0:
+        _log.info("import_check OK: %s", module)
+        note = (proc.stderr or "").strip()
+        extra = f"\n   (stderr, non-fatal):\n{note}" if note else ""
+        return f"✅ import OK — {module}\n   (python -c 'import {module}', rc=0){extra}"
+    out = (proc.stderr or proc.stdout or "").strip()
+    _log.warning("import_check FAILED: %s\n%s", module, out)
+    return (f"❌ import FAILED — {module}  (rc={proc.returncode})\n"
+            f"───\n{out}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # END OF CODE TOOLS WRITE-SIDE PATCH
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -5605,6 +5754,443 @@ def _evaluate_activation(entry: dict, install_id: str, now=None) -> dict:
                 f"This license is already active on {_MAX_ACTIVE_INSTALLS} machines. "
                 f"Release one in your AI-Prowler License panel, or purchase an "
                 f"additional license, to use it here.")}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BUSINESS LICENSE VALIDATION + GRACE LADDER  (v7.0.0 Phase B — base spec §3.3/§3.4)
+# ══════════════════════════════════════════════════════════════════════════════
+# A Business install validates its license key against the Worker's
+# /license/validate endpoint on launch, caching the result in
+# ~/.ai-prowler/license_cache.json. The cache + grace ladder protect a paying
+# customer from network blips: a brief outage must NOT instantly downgrade them
+# to Home. The ladder (§3.4), measured from last SUCCESSFUL validation:
+#   • within 24h of success            → use cache, no network call needed
+#   • network fail, < 7 days since ok  → run business, log silently
+#   • network fail, 7–14 days          → run business, show a warning banner
+#   • network fail, ≥ 14 days          → revert to home (data kept, features gated)
+#   • explicit 'revoked'/'suspended'   → revert to home IMMEDIATELY (no grace)
+#
+# _evaluate_license_grace() is PURE (no I/O) so it is unit-testable; the I/O
+# wrapper _validate_business_license() does the cache read/write + HTTP POST.
+_LICENSE_CACHE_PATH   = Path.home() / ".ai-prowler" / "license_cache.json"
+_LICENSE_FRESH_HOURS  = 24   # within this since last success → trust cache, skip network
+_LICENSE_WARN_DAYS    = 7    # network-fail past this since success → warning banner
+_LICENSE_GRACE_DAYS   = 14   # network-fail past this since success → revert to home
+
+# Reasons the Worker returns that mean "stop being business right now" (no grace).
+_LICENSE_HARD_FAIL_REASONS = ("revoked", "suspended", "parent_revoked",
+                              "parent_suspended", "not_found", "bad_format")
+
+
+def _evaluate_license_grace(cache: dict, validate_result: "dict | None",
+                            now=None) -> dict:
+    """Decide the effective Business-license standing. PURE.
+
+    Args:
+        cache:           parsed license_cache.json (may be {} if none yet).
+                         Recognized keys: last_validated_at (ISO), status,
+                         cached_expires_at (ISO).
+        validate_result: the Worker's /license/validate JSON this launch, or
+                         None if the network call wasn't made/failed. Shape:
+                         {valid: bool, reason?, edition?, expires_at?, status?}.
+        now:             injectable clock (datetime); defaults to UTC now.
+
+    Returns dict:
+        effective_edition : 'business' | 'home'
+        action            : 'validated' | 'cached_fresh' | 'grace_silent'
+                            | 'grace_warning' | 'reverted_expired'
+                            | 'reverted_revoked'
+        banner            : str  (warning/notice text, '' if none)
+        used_network      : bool (did we trust a fresh validate_result)
+    """
+    import datetime as _dt
+
+    if now is None:
+        now = _dt.datetime.now(_dt.timezone.utc)
+
+    def _parse(ts):
+        if not ts:
+            return None
+        try:
+            s = str(ts).strip().replace("Z", "+00:00")
+            d = _dt.datetime.fromisoformat(s)
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=_dt.timezone.utc)
+            return d
+        except Exception:
+            return None
+
+    # 1) Fresh successful validation this launch → trust it.
+    if validate_result is not None:
+        if validate_result.get("valid") is True:
+            return {"effective_edition": "business", "action": "validated",
+                    "banner": "", "used_network": True}
+        # Explicit negative from the Worker — hard fail, no grace.
+        reason = validate_result.get("reason", "invalid")
+        if reason in _LICENSE_HARD_FAIL_REASONS:
+            return {"effective_edition": "home", "action": "reverted_revoked",
+                    "banner": (f"Business license is no longer valid ({reason}). "
+                               f"Reverted to Home features. Contact "
+                               f"david.vavro1@gmail.com to restore service."),
+                    "used_network": True}
+        # Unknown negative reason — treat as a soft/network-ish failure, fall
+        # through to the cache-based grace ladder below.
+
+    # 2) No fresh success (network failure, or unknown negative). Lean on cache.
+    last_ok = _parse(cache.get("last_validated_at"))
+    if last_ok is None:
+        # Never successfully validated and can't now → can't grant business.
+        return {"effective_edition": "home", "action": "reverted_expired",
+                "banner": ("Could not validate your Business license and no "
+                           "prior validation is cached. Running Home features. "
+                           "Check your connection and license key."),
+                "used_network": False}
+
+    age = now - last_ok
+    age_days = age.total_seconds() / 86400.0
+
+    # 2a) Within 24h of a prior success and we didn't need the network → cached.
+    if validate_result is None and age.total_seconds() <= _LICENSE_FRESH_HOURS * 3600:
+        return {"effective_edition": "business", "action": "cached_fresh",
+                "banner": "", "used_network": False}
+
+    # 2b) Grace ladder by days since last success.
+    if age_days < _LICENSE_WARN_DAYS:
+        return {"effective_edition": "business", "action": "grace_silent",
+                "banner": "", "used_network": False}
+
+    if age_days < _LICENSE_GRACE_DAYS:
+        revert_on = (last_ok + _dt.timedelta(days=_LICENSE_GRACE_DAYS)).date().isoformat()
+        return {"effective_edition": "business", "action": "grace_warning",
+                "banner": (f"License validation has failed for several days. "
+                           f"Renew/reconnect before {revert_on} or Business "
+                           f"features will be disabled."),
+                "used_network": False}
+
+    return {"effective_edition": "home", "action": "reverted_expired",
+            "banner": ("Business license could not be validated for "
+                       f"{_LICENSE_GRACE_DAYS}+ days. Reverted to Home features. "
+                       "Your data is intact; reconnect to restore Business."),
+            "used_network": False}
+
+
+def _validate_business_license(license_key: str, install_id: str,
+                               endpoint: str, now=None) -> dict:
+    """I/O wrapper around _evaluate_license_grace: read cache, decide whether
+    to call the Worker, POST /license/validate, persist a fresh success, and
+    return the grace evaluation. Never raises.
+
+    Returns the _evaluate_license_grace dict, plus 'license_key_present': bool.
+    """
+    import datetime as _dt
+    if now is None:
+        now = _dt.datetime.now(_dt.timezone.utc)
+
+    if not license_key:
+        return {"effective_edition": "home", "action": "no_license",
+                "banner": "", "used_network": False, "license_key_present": False}
+
+    # Load cache (tolerant of missing/corrupt file).
+    cache = {}
+    try:
+        if _LICENSE_CACHE_PATH.exists():
+            cache = json.loads(_LICENSE_CACHE_PATH.read_text(encoding="utf-8")) or {}
+    except Exception as _e:
+        _log.warning("license_cache.json unreadable (%s)", _e)
+        cache = {}
+
+    # If cache is fresh (<24h since success), skip the network entirely (§3.3 step 2).
+    last_ok = None
+    try:
+        s = str(cache.get("last_validated_at", "")).strip().replace("Z", "+00:00")
+        if s:
+            last_ok = _dt.datetime.fromisoformat(s)
+            if last_ok.tzinfo is None:
+                last_ok = last_ok.replace(tzinfo=_dt.timezone.utc)
+    except Exception:
+        last_ok = None
+
+    if last_ok is not None and (now - last_ok).total_seconds() <= _LICENSE_FRESH_HOURS * 3600:
+        result = _evaluate_license_grace(cache, None, now=now)
+        result["license_key_present"] = True
+        return result
+
+    # Otherwise POST to the Worker.
+    validate_result = None
+    try:
+        import requests as _req
+        resp = _req.post(
+            f"{endpoint.rstrip('/')}/license/validate",
+            json={"license_key": license_key, "install_id": install_id or ""},
+            headers={"Content-Type": "application/json",
+                     "User-Agent": "AI-Prowler-MCP/1.0"},
+            timeout=10, proxies={"http": None, "https": None})
+        if resp.status_code == 200:
+            validate_result = resp.json()
+        else:
+            _log.warning("license/validate returned HTTP %s", resp.status_code)
+    except Exception as _e:
+        _log.warning("license/validate unreachable (%s) — using grace ladder", _e)
+
+    result = _evaluate_license_grace(cache, validate_result, now=now)
+
+    # Persist a fresh SUCCESS to the cache (so the 24h fast-path + grace anchor work).
+    if validate_result is not None and validate_result.get("valid") is True:
+        try:
+            _LICENSE_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            new_cache = {
+                "last_validated_at": now.isoformat(),
+                "status": validate_result.get("status", "active"),
+                "cached_expires_at": validate_result.get("expires_at", ""),
+                "edition": validate_result.get("edition", "business"),
+            }
+            _LICENSE_CACHE_PATH.write_text(json.dumps(new_cache, indent=2),
+                                           encoding="utf-8")
+        except Exception as _e:
+            _log.warning("Could not write license_cache.json (%s)", _e)
+
+    result["license_key_present"] = True
+    return result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MULTI-USER MODEL — pure auth/scoping helpers  (v7.0.0 Phase B Block 3, spec §6)
+# ══════════════════════════════════════════════════════════════════════════════
+# Server-mode only. These PURE functions are the security spine (§6.4): they
+# resolve a bearer token to a user, compute the exact set of ChromaDB collections
+# that user may touch, and decide indexing permission. They have NO I/O — the
+# uvicorn middleware (built at the keyboard) reads users.json, calls
+# _resolve_user(), attaches request.state.user, then uses _allowed_collections()
+# to constrain every ChromaDB call. Enforcement is at the collection-selection
+# level, never a post-filter, so a request can never receive results from a
+# collection outside its scope.
+#
+# Roles (§6.1) are a FIXED set. The matrix below encodes the cross-cutting
+# capabilities; collection READ scope is computed per-user from role + scopes.
+_USER_ROLES = ("owner", "manager", "staff", "field_crew")
+
+# Per-role capabilities that are NOT per-collection (those come from scopes):
+#   read_all_role_scopes : owner sees every role:* collection regardless of scopes
+#   read_others_private  : owner may read any user:* collection
+#   can_write            : may write/index (subject to per-collection rules in _can_index)
+#   is_admin             : may use Admin-tab/user-management tools
+_ROLE_CAPS = {
+    "owner":      {"read_all_role_scopes": True,  "read_others_private": True,
+                   "can_write": True,  "is_admin": True},
+    "manager":    {"read_all_role_scopes": False, "read_others_private": False,
+                   "can_write": True,  "is_admin": False},
+    "staff":      {"read_all_role_scopes": False, "read_others_private": False,
+                   "can_write": False, "is_admin": False},
+    "field_crew": {"read_all_role_scopes": False, "read_others_private": False,
+                   "can_write": False, "is_admin": False},
+}
+
+_SHARED_COLLECTION = "shared"
+
+
+def _role_caps(role: str) -> dict:
+    """Capabilities for a role; unknown roles get the most-restricted set."""
+    return _ROLE_CAPS.get((role or "").strip().lower(), _ROLE_CAPS["field_crew"])
+
+
+def _resolve_user(users_data: "dict | None", token: str) -> "dict | None":
+    """Look up a bearer token in users.json data. Returns the user dict
+    (augmented with 'id') if found AND active, else None. PURE.
+
+    A non-active status ('suspended'/'revoked') resolves to None — a soft-revoke
+    that denies access without losing the audit record. Matches §6.4 steps 1-2.
+    """
+    if not token or not users_data:
+        return None
+    users = users_data.get("users", {})
+    entry = users.get(token)
+    if not isinstance(entry, dict):
+        return None
+    if entry.get("status", "active") != "active":
+        return None
+    # Return a shallow copy with the id folded in, so callers have everything.
+    user = dict(entry)
+    user["id"] = token
+    # Normalize role to the known set (defense against a hand-edited users.json).
+    if user.get("role") not in _USER_ROLES:
+        user["role"] = "field_crew"
+    return user
+
+
+def _allowed_collections(user: "dict | None",
+                         all_role_collections: "list | tuple | None" = None) -> list:
+    """Compute the ordered list of ChromaDB collections this user may READ.
+    PURE. Implements §6.4 step 5 / §6.2.
+
+    Args:
+        user: a resolved user dict (from _resolve_user), or None.
+        all_role_collections: the full set of existing 'role:<name>' collection
+            names on this server. Only consulted for owners (who read ALL
+            role-scoped collections regardless of their own scopes). For
+            non-owners, scopes alone decide.
+
+    Returns a de-duplicated list:
+        - always 'shared'
+        - each 'role:<scope>' the user is entitled to
+        - 'user:<id>' iff private_collection_enabled
+    None user → [] (no token resolved → no access; the middleware 401s earlier).
+    """
+    if not user:
+        return []
+
+    cols = [_SHARED_COLLECTION]
+    caps = _role_caps(user.get("role"))
+
+    if caps["read_all_role_scopes"] and all_role_collections:
+        # Owner: every role collection on the server.
+        for c in all_role_collections:
+            if c and c not in cols:
+                cols.append(c)
+    else:
+        # Everyone else: only their assigned scopes (which are already
+        # 'role:<name>' strings per the users.json schema).
+        for scope in (user.get("scopes") or []):
+            s = str(scope).strip()
+            if not s:
+                continue
+            # Tolerate either 'role:sales' or bare 'sales' in the data.
+            col = s if s.startswith("role:") else f"role:{s}"
+            if col not in cols:
+                cols.append(col)
+
+    # Per-user private collection.
+    if user.get("private_collection_enabled"):
+        priv = f"user:{user.get('id')}"
+        if priv not in cols:
+            cols.append(priv)
+
+    return cols
+
+
+def _can_index(user: "dict | None", target_collection: str,
+               all_role_collections: "list | tuple | None" = None) -> tuple:
+    """Decide whether `user` may INDEX (write) into `target_collection`. PURE.
+    Implements §6.5. Returns (allowed: bool, reason: str).
+
+    Rules:
+      - owner: may index into ANY collection (shared, any role:*, any user:*).
+      - manager: may index into role:* collections that are in their scopes,
+                 and into their own private collection. NOT shared, NOT others'.
+      - staff / field_crew: cannot index server-side at all.
+    """
+    if not user:
+        return (False, "no user context")
+    caps = _role_caps(user.get("role"))
+    role = user.get("role")
+    target = (target_collection or "").strip()
+    if not target:
+        return (False, "no target collection")
+
+    if role == "owner":
+        return (True, "owner may index any collection")
+
+    if not caps["can_write"]:
+        return (False, f"role '{role}' cannot index server-side")
+
+    # manager from here on.
+    if target == _SHARED_COLLECTION:
+        return (False, "only the owner may write the shared collection")
+
+    if target.startswith("user:"):
+        if target == f"user:{user.get('id')}":
+            return (True, "own private collection")
+        return (False, "cannot index another user's private collection")
+
+    if target.startswith("role:"):
+        scopes = set()
+        for s in (user.get("scopes") or []):
+            s = str(s).strip()
+            scopes.add(s if s.startswith("role:") else f"role:{s}")
+        if target in scopes:
+            return (True, "assigned role scope")
+        return (False, "role scope not assigned to this manager")
+
+    return (False, "unrecognized collection type")
+
+
+# ── Admin role gate (§9.1 / spec item 9) ──────────────────────────────────────
+# Admin MCP tools (add_user, revoke_user, view_audit_log, ...) are owner-only.
+# This is the PURE decision the @requires_role gate / middleware will call.
+def _user_has_role(user: "dict | None", required_role: str) -> bool:
+    """True iff the resolved user holds exactly `required_role`. PURE.
+    A None user (unauthenticated) never satisfies a role requirement."""
+    if not user:
+        return False
+    return (user.get("role") or "").strip().lower() == required_role.strip().lower()
+
+
+def _is_admin(user: "dict | None") -> bool:
+    """True iff the user may use admin/user-management tools. PURE.
+    Currently only 'owner' is admin (§6.1 matrix)."""
+    if not user:
+        return False
+    return bool(_role_caps(user.get("role")).get("is_admin"))
+
+
+# ── Audit log (§6.6 / spec item 11) — pure format + filter helpers ────────────
+# The audit log records {timestamp, user, tool, collection} per request, plus
+# named events like 'remote_support_enabled'. These two helpers are the pure
+# surface; the actual append (one JSONL line per entry) and the Admin-tab table
+# rendering are thin I/O built at the keyboard. Kept deliberately small.
+def _format_audit_entry(user: "dict | None", tool: str,
+                        collection: str = "", event: str = "",
+                        now=None) -> dict:
+    """Build one audit record. PURE (except reading the clock when now is None).
+    Records only tool name + collection — no query content or results (§6.6:
+    'read-only, no detail beyond tool name and collection')."""
+    import datetime as _dt
+    if now is None:
+        now = _dt.datetime.now(_dt.timezone.utc)
+    return {
+        "ts":         now.isoformat(),
+        "user_id":    (user or {}).get("id", ""),
+        "user_name":  (user or {}).get("name", ""),
+        "role":       (user or {}).get("role", ""),
+        "tool":       tool or "",
+        "collection": collection or "",
+        "event":      event or "",
+    }
+
+
+def _filter_audit_entries(entries: "list | None", limit: int = 20,
+                          since=None) -> list:
+    """Return the most recent `limit` entries, optionally only those at/after
+    `since` (a datetime or ISO string). PURE. Newest-last input is assumed
+    (append order); returns newest-last, trimmed to `limit`."""
+    import datetime as _dt
+    rows = list(entries or [])
+
+    if since is not None:
+        if isinstance(since, str):
+            try:
+                s = since.strip().replace("Z", "+00:00")
+                since = _dt.datetime.fromisoformat(s)
+                if since.tzinfo is None:
+                    since = since.replace(tzinfo=_dt.timezone.utc)
+            except Exception:
+                since = None
+
+    def _ts(row):
+        try:
+            s = str(row.get("ts", "")).strip().replace("Z", "+00:00")
+            d = _dt.datetime.fromisoformat(s)
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=_dt.timezone.utc)
+            return d
+        except Exception:
+            return None
+
+    if since is not None:
+        rows = [r for r in rows if (_ts(r) is not None and _ts(r) >= since)]
+
+    if limit and limit > 0:
+        rows = rows[-limit:]
+    return rows
 
 
 # ══════════════════════════════════════════════════════════════════════════════
