@@ -6114,6 +6114,81 @@ def _can_index(user: "dict | None", target_collection: str,
     return (False, "unrecognized collection type")
 
 
+# ── Multi-collection result merge (v7.0.0 Phase B Step 2 read path) ───────────
+# After a server-mode read tool queries the user's N _allowed_collections, it
+# gets N separate ChromaDB result sets. This merges them into ONE ranked list,
+# the final step of the read-enforcement flow. PURE — no ChromaDB, no I/O — so
+# it's unit-testable in isolation.
+#
+# ChromaDB query() returns parallel lists per collection: ids, documents,
+# metadatas, distances (LOWER distance = more similar). We flatten all hits,
+# tag each with its source collection, dedup by id (defensive — collections are
+# disjoint so dupes shouldn't occur, but a chunk indexed into two scopes would),
+# sort by distance ascending, and truncate to n_results.
+def _merge_collection_results(per_collection: "dict", n_results: int = 10) -> list:
+    """Merge per-collection ChromaDB query results into one ranked list. PURE.
+
+    Args:
+        per_collection: {collection_name: chroma_result_dict}, where each
+            chroma_result_dict has the shape ChromaDB query() returns:
+            {"ids": [[...]], "documents": [[...]], "metadatas": [[...]],
+             "distances": [[...]]}  (each value is a list-of-lists; we use [0]).
+            A value may also be the already-unwrapped single-query form
+            {"ids": [...], ...} — both are tolerated.
+        n_results: max hits to return after merge.
+
+    Returns a list of dicts sorted by distance ascending (best first):
+        {"id", "document", "metadata", "distance", "collection"}
+    Hits missing a distance sort last (treated as +inf). Malformed entries are
+    skipped, never raised on.
+    """
+    merged = []
+    seen_ids = set()
+
+    for cname, res in (per_collection or {}).items():
+        if not isinstance(res, dict):
+            continue
+
+        def _col(key):
+            """Pull a column, unwrapping Chroma's list-of-lists if present."""
+            v = res.get(key)
+            if v is None:
+                return []
+            # list-of-lists (multi-query shape) → take first query's row
+            if isinstance(v, list) and len(v) == 1 and isinstance(v[0], list):
+                return v[0]
+            return v if isinstance(v, list) else []
+
+        ids       = _col("ids")
+        docs      = _col("documents")
+        metas     = _col("metadatas")
+        distances = _col("distances")
+
+        for i, _id in enumerate(ids):
+            if _id is None:
+                continue
+            if _id in seen_ids:
+                continue           # dedup across collections
+            seen_ids.add(_id)
+            dist = distances[i] if i < len(distances) and distances[i] is not None else float("inf")
+            try:
+                dist = float(dist)
+            except (TypeError, ValueError):
+                dist = float("inf")
+            merged.append({
+                "id":         _id,
+                "document":   docs[i]  if i < len(docs)  else "",
+                "metadata":   metas[i] if i < len(metas) else {},
+                "distance":   dist,
+                "collection": cname,
+            })
+
+    merged.sort(key=lambda h: h["distance"])
+    if n_results and n_results > 0:
+        merged = merged[:n_results]
+    return merged
+
+
 # ── Admin role gate (§9.1 / spec item 9) ──────────────────────────────────────
 # Admin MCP tools (add_user, revoke_user, view_audit_log, ...) are owner-only.
 # This is the PURE decision the @requires_role gate / middleware will call.

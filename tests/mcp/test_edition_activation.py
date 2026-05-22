@@ -609,3 +609,129 @@ class TestAuditHelpers:
         out = admin_api.filt(rows, limit=100,
                              since=(self.NOW + dt.timedelta(days=2)).isoformat())
         assert len(out) == 2  # days 2,3
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# MULTI-COLLECTION RESULT MERGE — _merge_collection_results
+# (v7.0.0 Phase B Step 2 read path). Combines per-collection ChromaDB results
+# into one distance-ranked list. PURE. The final step of read enforcement:
+# after querying the user's allowed collections, merge into one answer.
+# ═════════════════════════════════════════════════════════════════════════════
+@pytest.fixture
+def merge_api(mcp_module):
+    fn = getattr(mcp_module, "_merge_collection_results", None)
+    if fn is None:
+        pytest.skip("_merge_collection_results not present (Phase B Step 2 read path).")
+    return fn
+
+
+def _chroma(ids, docs, dists, metas=None):
+    """Build a ChromaDB-query-shaped result (list-of-lists)."""
+    metas = metas or [{} for _ in ids]
+    return {"ids": [ids], "documents": [docs], "distances": [dists],
+            "metadatas": [metas]}
+
+
+class TestMergeCollectionResults:
+    def test_C_MCP_MERGE_01_single_collection_passthrough(self, merge_api):
+        per = {"shared": _chroma(["a", "b"], ["doc a", "doc b"], [0.1, 0.2])}
+        out = merge_api(per, n_results=10)
+        assert [h["id"] for h in out] == ["a", "b"]
+        assert all(h["collection"] == "shared" for h in out)
+
+    def test_C_MCP_MERGE_02_cross_collection_ranked_by_distance(self, merge_api):
+        per = {
+            "shared":     _chroma(["s1"], ["shared hit"], [0.5]),
+            "role:sales": _chroma(["r1"], ["sales hit"],  [0.1]),
+            "user:bob":   _chroma(["u1"], ["bob hit"],    [0.3]),
+        }
+        out = merge_api(per, n_results=10)
+        # Best (lowest distance) first, regardless of source collection.
+        assert [h["id"] for h in out] == ["r1", "u1", "s1"]
+        assert out[0]["collection"] == "role:sales"
+
+    def test_C_MCP_MERGE_03_truncates_to_n_results(self, merge_api):
+        per = {"shared": _chroma(["a", "b", "c", "d"], ["", "", "", ""],
+                                 [0.1, 0.2, 0.3, 0.4])}
+        out = merge_api(per, n_results=2)
+        assert len(out) == 2
+        assert [h["id"] for h in out] == ["a", "b"]   # best two
+
+    def test_C_MCP_MERGE_04_provenance_tagged(self, merge_api):
+        per = {
+            "role:sales": _chroma(["r1"], ["x"], [0.2]),
+            "user:bob":   _chroma(["u1"], ["y"], [0.1]),
+        }
+        out = merge_api(per, n_results=10)
+        prov = {h["id"]: h["collection"] for h in out}
+        assert prov == {"u1": "user:bob", "r1": "role:sales"}
+
+    def test_C_MCP_MERGE_05_dedup_by_id(self, merge_api):
+        # Same id in two collections → counted once (first seen wins).
+        per = {
+            "shared":     _chroma(["dup"], ["from shared"], [0.4]),
+            "role:sales": _chroma(["dup"], ["from sales"],  [0.1]),
+        }
+        out = merge_api(per, n_results=10)
+        assert len(out) == 1
+
+    def test_C_MCP_MERGE_06_empty_dict(self, merge_api):
+        assert merge_api({}, n_results=10) == []
+
+    def test_C_MCP_MERGE_07_none_input(self, merge_api):
+        assert merge_api(None, n_results=10) == []
+
+    def test_C_MCP_MERGE_08_empty_collection_skipped(self, merge_api):
+        per = {
+            "shared":     _chroma([], [], []),
+            "role:sales": _chroma(["r1"], ["x"], [0.2]),
+        }
+        out = merge_api(per, n_results=10)
+        assert [h["id"] for h in out] == ["r1"]
+
+    def test_C_MCP_MERGE_09_malformed_result_skipped(self, merge_api):
+        per = {
+            "bad1": "not a dict",
+            "bad2": None,
+            "good": _chroma(["g1"], ["x"], [0.1]),
+        }
+        out = merge_api(per, n_results=10)
+        assert [h["id"] for h in out] == ["g1"]
+
+    def test_C_MCP_MERGE_10_already_unwrapped_shape_tolerated(self, merge_api):
+        # Some callers may pass the single-query (already-unwrapped) form.
+        per = {"shared": {"ids": ["a"], "documents": ["x"],
+                          "distances": [0.1], "metadatas": [{}]}}
+        out = merge_api(per, n_results=10)
+        assert [h["id"] for h in out] == ["a"]
+
+    def test_C_MCP_MERGE_11_missing_distance_sorts_last(self, merge_api):
+        per = {
+            "c1": {"ids": [["a"]], "documents": [["x"]], "metadatas": [[{}]]},  # no distances
+            "c2": _chroma(["b"], ["y"], [0.5]),
+        }
+        out = merge_api(per, n_results=10)
+        # 'b' has a real distance; 'a' (inf) sorts after it.
+        assert [h["id"] for h in out] == ["b", "a"]
+
+    def test_C_MCP_MERGE_12_metadata_preserved(self, merge_api):
+        per = {"shared": _chroma(["a"], ["doc"], [0.1],
+                                 metas=[{"source": "file.pdf", "page": 3}])}
+        out = merge_api(per, n_results=10)
+        assert out[0]["metadata"]["source"] == "file.pdf"
+        assert out[0]["metadata"]["page"] == 3
+
+    def test_C_MCP_MERGE_13_non_numeric_distance_treated_as_inf(self, merge_api):
+        per = {
+            "c1": _chroma(["a"], ["x"], ["not-a-number"]),
+            "c2": _chroma(["b"], ["y"], [0.5]),
+        }
+        out = merge_api(per, n_results=10)
+        assert [h["id"] for h in out] == ["b", "a"]   # 'a' → inf, sorts last
+
+    def test_C_MCP_MERGE_14_document_aligned_with_id(self, merge_api):
+        per = {"shared": _chroma(["a", "b"], ["doc A", "doc B"], [0.2, 0.1])}
+        out = merge_api(per, n_results=10)
+        # After ranking, b (0.1) first — its document must still be "doc B".
+        assert out[0]["id"] == "b" and out[0]["document"] == "doc B"
+        assert out[1]["id"] == "a" and out[1]["document"] == "doc A"
