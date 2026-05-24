@@ -6189,6 +6189,79 @@ def _merge_collection_results(per_collection: "dict", n_results: int = 10) -> li
     return merged
 
 
+# ── Model B: path → collection resolver (v7.0.0 Phase B Step 2 write path) ─────
+# Decides which ChromaDB collection an indexed file belongs to, from a
+# CONFIGURED path→collection map (the owner declares it once; assignment is an
+# auditable config artifact, not per-index human judgment). PURE — no I/O — so
+# it is unit-testable. The pipeline surgery that CALLS this (inside
+# index_directory / index_file_list) is a separate, keyboard-tested step.
+#
+# mapping shape (from config, e.g. users.json or a company collection_map):
+#   {"rules": [{"prefix": "C:/CompanyDocs/Sales", "collection": "role:sales"},
+#              {"prefix": "C:/CompanyDocs/Public", "collection": "shared"}],
+#    "default_collection": "shared"}   # optional; see fallback below
+#
+# Matching: longest matching prefix wins (most specific rule), case-insensitive,
+# slash-agnostic. No rule + no default → the indexer's OWN private collection
+# (user:<id>) — the safe fallback: an unclassified doc goes to the indexer's
+# own space, NEVER accidentally to shared.
+def _normalize_path_for_match(p: str) -> str:
+    """Lowercased, forward-slashed, trailing-slash-free path for prefix match."""
+    s = (p or "").replace("\\", "/").strip()
+    s = s.rstrip("/")
+    return s.lower()
+
+
+def _resolve_collection_for_path(filepath: str, mapping: "dict | None",
+                                 indexer_user: "dict | None" = None) -> str:
+    """Return the target collection name for `filepath`. PURE.
+
+    Args:
+        filepath:     the file being indexed.
+        mapping:      {"rules": [{"prefix","collection"}...],
+                       "default_collection": "..."}  (may be {} / None).
+        indexer_user: resolved user dict (for the user:<id> fallback). May be
+                      None in personal mode — then the ultimate fallback is the
+                      single default 'documents' collection (personal behavior).
+
+    Resolution order:
+      1. Longest matching prefix rule wins.
+      2. Else mapping['default_collection'] if set.
+      3. Else indexer's own 'user:<id>' (if a user is known).
+      4. Else 'documents' (personal/Home single-collection default).
+    """
+    fp = _normalize_path_for_match(filepath)
+
+    best_collection = None
+    best_len = -1
+    for rule in ((mapping or {}).get("rules") or []):
+        if not isinstance(rule, dict):
+            continue
+        prefix = _normalize_path_for_match(rule.get("prefix", ""))
+        coll   = str(rule.get("collection", "")).strip()
+        if not prefix or not coll:
+            continue
+        # Prefix match on a path-segment boundary: either exact, or followed
+        # by '/', so '.../Sales' doesn't spuriously match '.../SalesArchive'.
+        if fp == prefix or fp.startswith(prefix + "/"):
+            if len(prefix) > best_len:
+                best_len = len(prefix)
+                best_collection = coll
+
+    if best_collection:
+        return best_collection
+
+    default_coll = str((mapping or {}).get("default_collection", "")).strip()
+    if default_coll:
+        return default_coll
+
+    if indexer_user and indexer_user.get("id"):
+        return f"user:{indexer_user['id']}"
+
+    # Personal/Home single-collection default.
+    return "documents"
+
+
 # ── Admin role gate (§9.1 / spec item 9) ──────────────────────────────────────
 # Admin MCP tools (add_user, revoke_user, view_audit_log, ...) are owner-only.
 # This is the PURE decision the @requires_role gate / middleware will call.

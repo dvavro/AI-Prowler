@@ -735,3 +735,104 @@ class TestMergeCollectionResults:
         # After ranking, b (0.1) first — its document must still be "doc B".
         assert out[0]["id"] == "b" and out[0]["document"] == "doc B"
         assert out[1]["id"] == "a" and out[1]["document"] == "doc A"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# MODEL B PATH→COLLECTION RESOLVER — _resolve_collection_for_path
+# (v7.0.0 Phase B Step 2 write path). Decides which collection an indexed file
+# belongs to from a configured path→collection map. PURE. This is the WRITE-side
+# data-isolation decision, so coverage is adversarial: boundary matching,
+# longest-prefix precedence, and the fallback ladder.
+# ═════════════════════════════════════════════════════════════════════════════
+@pytest.fixture
+def resolver_api(mcp_module):
+    fn = getattr(mcp_module, "_resolve_collection_for_path", None)
+    if fn is None:
+        pytest.skip("_resolve_collection_for_path not present (Phase B Step 2 write path).")
+    return fn
+
+
+def _mapping(rules, default=None):
+    m = {"rules": rules}
+    if default is not None:
+        m["default_collection"] = default
+    return m
+
+
+class TestResolveCollectionForPath:
+    SALES = {"prefix": "C:/CompanyDocs/Sales", "collection": "role:sales"}
+    PUBLIC = {"prefix": "C:/CompanyDocs/Public", "collection": "shared"}
+
+    def test_C_MCP_RESOLVE_01_simple_prefix_match(self, resolver_api):
+        m = _mapping([self.SALES, self.PUBLIC])
+        assert resolver_api("C:/CompanyDocs/Sales/q3.pdf", m) == "role:sales"
+        assert resolver_api("C:/CompanyDocs/Public/flyer.pdf", m) == "shared"
+
+    def test_C_MCP_RESOLVE_02_longest_prefix_wins(self, resolver_api):
+        # A nested rule must beat the broader one.
+        m = _mapping([
+            {"prefix": "C:/CompanyDocs/Sales", "collection": "role:sales"},
+            {"prefix": "C:/CompanyDocs/Sales/Confidential", "collection": "role:exec"},
+        ])
+        assert resolver_api("C:/CompanyDocs/Sales/Confidential/m.pdf", m) == "role:exec"
+        assert resolver_api("C:/CompanyDocs/Sales/normal.pdf", m) == "role:sales"
+
+    def test_C_MCP_RESOLVE_03_segment_boundary_no_false_match(self, resolver_api):
+        # 'Sales' must NOT match 'SalesArchive' (the critical leak-prevention case).
+        m = _mapping([self.SALES], default="shared")
+        assert resolver_api("C:/CompanyDocs/SalesArchive/old.pdf", m) == "shared"
+        # but the real Sales dir still matches
+        assert resolver_api("C:/CompanyDocs/Sales/new.pdf", m) == "role:sales"
+
+    def test_C_MCP_RESOLVE_04_exact_dir_match(self, resolver_api):
+        m = _mapping([self.SALES])
+        # The directory path itself (no trailing file) matches its rule.
+        assert resolver_api("C:/CompanyDocs/Sales", m) == "role:sales"
+
+    def test_C_MCP_RESOLVE_05_case_insensitive(self, resolver_api):
+        m = _mapping([self.SALES])
+        assert resolver_api("c:/companydocs/SALES/x.pdf", m) == "role:sales"
+
+    def test_C_MCP_RESOLVE_06_backslash_agnostic(self, resolver_api):
+        m = _mapping([self.SALES])
+        assert resolver_api("C:\\CompanyDocs\\Sales\\x.pdf", m) == "role:sales"
+
+    def test_C_MCP_RESOLVE_07_no_match_uses_default(self, resolver_api):
+        m = _mapping([self.SALES], default="shared")
+        assert resolver_api("D:/Random/thing.pdf", m) == "shared"
+
+    def test_C_MCP_RESOLVE_08_no_match_no_default_uses_user_private(self, resolver_api):
+        m = _mapping([self.SALES])   # no default
+        user = {"id": "alice000000000001", "role": "manager"}
+        assert resolver_api("D:/Random/thing.pdf", m, user) == "user:alice000000000001"
+
+    def test_C_MCP_RESOLVE_09_no_match_no_default_no_user_falls_to_documents(self, resolver_api):
+        # Personal mode: no map, no user → the legacy single collection.
+        assert resolver_api("D:/Random/thing.pdf", {}, None) == "documents"
+        assert resolver_api("D:/Random/thing.pdf", None, None) == "documents"
+
+    def test_C_MCP_RESOLVE_10_empty_mapping_personal_default(self, resolver_api):
+        assert resolver_api("C:/anything.pdf", {"rules": []}) == "documents"
+
+    def test_C_MCP_RESOLVE_11_malformed_rules_skipped(self, resolver_api):
+        m = {"rules": ["not-a-dict", {"prefix": "", "collection": "x"},
+                       {"prefix": "C:/A", "collection": ""}, self.SALES],
+             "default_collection": "shared"}
+        # Only the valid SALES rule applies; the junk is skipped, not crashed on.
+        assert resolver_api("C:/CompanyDocs/Sales/x.pdf", m) == "role:sales"
+        assert resolver_api("C:/A/y.pdf", m) == "shared"   # the ''-collection rule was skipped
+
+    def test_C_MCP_RESOLVE_12_user_private_target_for_home_folder(self, resolver_api):
+        # A rule can map a user's home folder to their private collection.
+        m = _mapping([{"prefix": "C:/Users/bob/Private", "collection": "user:bob00000000000"}])
+        assert resolver_api("C:/Users/bob/Private/notes.txt", m) == "user:bob00000000000"
+
+    def test_C_MCP_RESOLVE_13_default_beats_user_private(self, resolver_api):
+        # When a default is configured, it takes precedence over the user fallback.
+        m = _mapping([self.SALES], default="shared")
+        user = {"id": "alice000000000001"}
+        assert resolver_api("D:/unmatched/x.pdf", m, user) == "shared"
+
+    def test_C_MCP_RESOLVE_14_trailing_slash_normalized(self, resolver_api):
+        m = _mapping([{"prefix": "C:/CompanyDocs/Sales/", "collection": "role:sales"}])
+        assert resolver_api("C:/CompanyDocs/Sales/x.pdf", m) == "role:sales"
