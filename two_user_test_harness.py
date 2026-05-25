@@ -51,6 +51,15 @@ USER_B = {"id": "userB00000000002", "name": "Bob Field", "role": "manager",
           "scopes": ["role:field"], "private_collection_enabled": True,
           "status": "active"}
 
+# An owner — should see EVERYTHING role-scoped (via owner enumeration) + shared
+# + own private. Current code does NOT grant read of OTHER users' private
+# collections (read_others_private cap is declared but intentionally not
+# implemented — "private stays private, even from the owner"). The owner test
+# asserts that actual behavior.
+USER_OWNER = {"id": "owner00000000003", "name": "Olive Owner", "role": "owner",
+              "scopes": [], "private_collection_enabled": True,
+              "status": "active"}
+
 # Sentinel content: each doc says which scope it belongs to, so the read test
 # can assert "A must NOT see FIELD_SECRET / BOB_PRIVATE".
 TEST_DOCS = {
@@ -267,6 +276,58 @@ def cmd_direct_test():
     return True
 
 
+def cmd_owner_test():
+    """Owner enumeration test: an owner should see SHARED + ALL role:*
+    collections (via _enumerate_role_collections) + their OWN private, but NOT
+    other users' private collections (read_others_private intentionally not
+    implemented). Run after --seed (which creates role:sales, role:field,
+    user:A, user:B, shared)."""
+    print("👑 OWNER ENUMERATION TEST\n" + "─" * 50)
+    passed = failed = 0
+
+    def check(label, condition):
+        nonlocal passed, failed
+        if condition:
+            passed += 1
+            print(f"   ✅ {label}")
+        else:
+            failed += 1
+            print(f"   ❌ {label}")
+
+    class _Stub:
+        def __init__(self, **kw):
+            for k, v in kw.items():
+                setattr(self, k, v)
+
+    ctx = _Stub(request_context=_Stub(request=_Stub(state=_Stub(user=USER_OWNER))))
+    cols = ap._scoped_collections_for_ctx(ctx)
+    texts = []
+    for col in cols:
+        try:
+            total = col.count()
+            sample = col.get(limit=min(5000, total), include=["documents"])
+            texts.extend(sample.get("documents", []) or [])
+        except Exception as e:
+            print(f"      (collection read error: {e})")
+    owner_text = " ".join(texts)
+
+    # Owner SEES: shared + both role scopes (enumeration) + own private.
+    check("Owner sees SHARED",        "COMPANY_SHARED" in owner_text)
+    check("Owner sees SALES_SECRET (role enum)",  "SALES_SECRET" in owner_text)
+    check("Owner sees FIELD_SECRET (role enum)",  "FIELD_SECRET" in owner_text)
+    # Owner does NOT see other users' private collections (private stays private).
+    check("Owner does NOT see ALICE_PRIVATE", "ALICE_PRIVATE" not in owner_text)
+    check("Owner does NOT see BOB_PRIVATE",   "BOB_PRIVATE"   not in owner_text)
+
+    print("\n" + "─" * 50)
+    print(f"   RESULT: {passed} passed, {failed} failed")
+    if failed:
+        print("   ⛔ OWNER ENUMERATION TEST FAILED.")
+        return False
+    print("   ✅ OWNER ENUMERATION CORRECT.")
+    return True
+
+
 def cmd_cleanup():
     """Delete ONLY the scoped test collections (never 'documents')."""
     client, _ = rp.get_chroma_client()
@@ -294,6 +355,9 @@ if __name__ == "__main__":
         sys.exit(0 if ok else 1)
     elif arg in ("--direct-test", "direct-test", "--direct"):
         ok = cmd_direct_test()
+        sys.exit(0 if ok else 1)
+    elif arg in ("--owner-test", "owner-test", "--owner"):
+        ok = cmd_owner_test()
         sys.exit(0 if ok else 1)
     elif arg in ("--cleanup", "cleanup"):
         cmd_cleanup()

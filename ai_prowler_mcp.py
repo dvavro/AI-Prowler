@@ -870,7 +870,7 @@ def update_tracked_directories(directory: Optional[str] = None) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
-def get_database_stats() -> str:
+def get_database_stats(ctx: Context = None) -> str:
     """
     Return statistics about the indexed knowledge base: total chunk count,
     number of unique documents, breakdown by file type, and database location.
@@ -882,22 +882,22 @@ def get_database_stats() -> str:
     # print output.  This is safe in BOTH stdio mode (where sys.stdout is the
     # MCP pipe and must never be redirected) and HTTP mode.
     try:
-        from rag_preprocessor import get_chroma_client, COLLECTION_NAME, CHROMA_DB_PATH
-        client, embedding_func = get_chroma_client()
+        from rag_preprocessor import CHROMA_DB_PATH
         try:
-            collection = client.get_collection(
-                name=COLLECTION_NAME,
-                embedding_function=embedding_func
-            )
-        except Exception:
+            _collections = _scoped_collections_for_ctx(ctx)
+        except RuntimeError:
             return "📭 Database is empty or not yet created."
 
-        total_chunks = collection.count()
+        total_chunks = 0
+        metadatas = []
+        for _col in _collections:
+            c = _col.count()
+            total_chunks += c
+            if c:
+                sample = _col.get(limit=min(5000, c), include=["metadatas"])
+                metadatas.extend(sample.get('metadatas', []))
         if total_chunks == 0:
             return "📭 Database is empty."
-
-        sample    = collection.get(limit=min(5000, total_chunks), include=["metadatas"])
-        metadatas = sample.get('metadatas', [])
 
         unique_files: dict = {}
         ext_counts:   dict = {}
@@ -1139,9 +1139,18 @@ def _scoped_collections_for_ctx(ctx):
                 "No indexed documents found. "
                 "Use add_and_index_directory to index some documents first.")
 
-    # Server mode — each allowed collection that exists.
+    # Owner-sees-all: enumerate every existing role:* collection so the owner's
+    # allowed set includes all of them (not just their own scopes). Role
+    # collections live physically as 'scope-role-<name>'; map them back to the
+    # logical 'role:<name>' form _allowed_collections expects. Non-owners pass
+    # None here, so this enumeration only affects owners (per _ROLE_CAPS).
+    all_role_collections = None
+    if _is_admin(user) or _role_caps(user.get("role")).get("read_all_role_scopes"):
+        all_role_collections = _enumerate_role_collections(client)
+
+    # Each allowed collection that exists.
     cols = []
-    for logical in _allowed_collections(user):
+    for logical in _allowed_collections(user, all_role_collections):
         phys = chroma_collection_name(logical)
         try:
             cols.append(client.get_collection(name=phys,
@@ -1151,8 +1160,36 @@ def _scoped_collections_for_ctx(ctx):
     return cols
 
 
+def _enumerate_role_collections(client) -> list:
+    """List all existing role:* collections (LOGICAL names) by inspecting
+    ChromaDB for physical 'scope-role-<name>' collections. Used to give owners
+    read access to every role scope. Returns [] on any error (fail-closed:
+    an owner simply sees fewer collections, never MORE than exist).
+
+    Note: the physical->logical remap reverses chroma_collection_name's
+    'role:<name>' -> 'scope-role-<name>'. Sub-names that contained characters
+    the sanitizer rewrote to '-' cannot be perfectly reversed, but role scope
+    names are expected to be simple ([a-z0-9-]), so 'scope-role-sales' ->
+    'role:sales' is exact for normal usage.
+    """
+    try:
+        raw = client.list_collections()
+        names = []
+        for c in raw:
+            names.append(c if isinstance(c, str) else getattr(c, "name", str(c)))
+    except Exception:
+        return []
+    role_logicals = []
+    for phys in names:
+        if phys.startswith("scope-role-"):
+            sub = phys[len("scope-role-"):]
+            if sub:
+                role_logicals.append(f"role:{sub}")
+    return role_logicals
+
+
 @mcp.tool()
-def get_knowledge_base_overview() -> str:
+def get_knowledge_base_overview(ctx: Context = None) -> str:
     """
     AGENTIC RAG - Start here.
     Returns a high-level summary of the AI-Prowler knowledge base: total
@@ -1168,28 +1205,25 @@ def get_knowledge_base_overview() -> str:
         _log.warning("get_knowledge_base_overview: prewarm timeout — returning early")
         return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
 
-    from rag_preprocessor import (
-        get_chroma_client, COLLECTION_NAME, CHROMA_DB_PATH,
-        load_auto_update_list
-    )
+    from rag_preprocessor import CHROMA_DB_PATH, load_auto_update_list
     try:
-        client, embedding_func = get_chroma_client()
-        collection = client.get_collection(
-            name=COLLECTION_NAME,
-            embedding_function=embedding_func
-        )
+        _collections = _scoped_collections_for_ctx(ctx)
     except Exception:
         return (
             "Knowledge base is empty — no documents indexed yet.\n"
             "Use add_and_index_directory to index a folder of documents."
         )
 
-    total_chunks = collection.count()
+    total_chunks = 0
+    metadatas = []
+    for _col in _collections:
+        c = _col.count()
+        total_chunks += c
+        if c:
+            sample = _col.get(limit=min(2000, c))
+            metadatas.extend(sample.get('metadatas', []))
     if total_chunks == 0:
         return "Knowledge base is empty."
-
-    sample    = collection.get(limit=min(2000, total_chunks))
-    metadatas = sample.get('metadatas', [])
 
     unique_files = {}
     ext_counts   = {}
