@@ -1372,6 +1372,7 @@ def get_chunk_context(
     filename: str,
     chunk_index: int,
     window: int = 2,
+    ctx: Context = None,
 ) -> str:
     """
     AGENTIC RAG - Expand context around a search result.
@@ -1391,18 +1392,19 @@ def get_chunk_context(
     window = max(1, min(5, window))
 
     try:
-        collection = _get_collection()
+        _collections = _scoped_collections_for_ctx(ctx)
     except RuntimeError as e:
         return str(e)
 
     try:
-        sample    = collection.get(limit=5000, include=["metadatas", "documents"])
         fn_lower  = filename.lower()
         chunk_map = {}
-        for doc, meta in zip(sample['documents'], sample['metadatas']):
-            if fn_lower in meta.get('filename', '').lower() or \
-               fn_lower in meta.get('filepath', '').lower():
-                chunk_map[meta.get('chunk_index', 0)] = (doc, meta)
+        for _col in _collections:
+            sample = _col.get(limit=5000, include=["metadatas", "documents"])
+            for doc, meta in zip(sample['documents'], sample['metadatas']):
+                if fn_lower in meta.get('filename', '').lower() or \
+                   fn_lower in meta.get('filepath', '').lower():
+                    chunk_map[meta.get('chunk_index', 0)] = (doc, meta)
     except Exception as exc:
         return f"Could not retrieve chunks: {exc}"
 
@@ -1447,6 +1449,7 @@ def get_document_chunks(
     filename: str,
     start_chunk: int = 0,
     max_chunks: int = 10,
+    ctx: Context = None,
 ) -> str:
     """
     AGENTIC RAG - Read a whole document in sequence.
@@ -1469,18 +1472,19 @@ def get_document_chunks(
     max_chunks = min(max(1, max_chunks), 30)
 
     try:
-        collection = _get_collection()
+        _collections = _scoped_collections_for_ctx(ctx)
     except RuntimeError as e:
         return str(e)
 
     try:
-        sample   = collection.get(limit=5000, include=["metadatas", "documents"])
         fn_lower = filename.lower()
         matches  = []
-        for doc, meta in zip(sample['documents'], sample['metadatas']):
-            if fn_lower in meta.get('filename', '').lower() or \
-               fn_lower in meta.get('filepath', '').lower():
-                matches.append((meta.get('chunk_index', 0), doc, meta))
+        for _col in _collections:
+            sample = _col.get(limit=5000, include=["metadatas", "documents"])
+            for doc, meta in zip(sample['documents'], sample['metadatas']):
+                if fn_lower in meta.get('filename', '').lower() or \
+                   fn_lower in meta.get('filepath', '').lower():
+                    matches.append((meta.get('chunk_index', 0), doc, meta))
     except Exception as exc:
         return f"Could not access knowledge base: {exc}"
 
@@ -1749,6 +1753,7 @@ def search_within_directory(
     directory: str,
     n_results: int = 8,
     min_similarity: float = 0.0,
+    ctx: Context = None,
 ) -> str:
     """
     AGENTIC RAG - Directory-scoped search to prevent cross-contamination.
@@ -1782,7 +1787,7 @@ def search_within_directory(
     dir_lower = directory.strip().lower()
 
     try:
-        collection = _get_collection()
+        _collections = _scoped_collections_for_ctx(ctx)
     except RuntimeError as e:
         return str(e)
 
@@ -1790,48 +1795,54 @@ def search_within_directory(
     # ChromaDB's `where` filter supports exact match on metadata fields.
     # We try parent_directory exact match first (fastest).  If that yields
     # too few results, fall back to a broader search + client-side filter
-    # on directory_chain (substring match).
-    try:
-        # Attempt 1: exact match on parent_directory
-        results = collection.query(
-            query_texts=[query],
-            n_results=min(n_results * 3, 60),
-            where={"parent_directory": directory.strip()}
-        )
-        chunks_raw = []
-        for i in range(len(results['documents'][0])):
-            chunks_raw.append({
-                'content':    results['documents'][0][i],
-                'metadata':   results['metadatas'][0][i],
-                'distance':   results['distances'][0][i],
-                'similarity': 1 - results['distances'][0][i],
-            })
-    except Exception:
-        chunks_raw = []
-
-    # Attempt 2: if exact match found nothing, do a broad search and
-    # filter client-side on directory_chain (case-insensitive substring)
-    if not chunks_raw:
+    # on directory_chain (substring match). Both attempts run across EACH of the
+    # user's allowed collections (one in personal mode) and accumulate.
+    chunks_raw = []
+    # Attempt 1: exact match on parent_directory, per collection.
+    for collection in _collections:
         try:
             results = collection.query(
                 query_texts=[query],
-                n_results=min(n_results * 5, 100),
+                n_results=min(n_results * 3, 60),
+                where={"parent_directory": directory.strip()}
             )
             for i in range(len(results['documents'][0])):
-                meta = results['metadatas'][0][i]
-                chain = meta.get('directory_chain', '').lower()
-                parent = meta.get('parent_directory', '').lower()
-                fp = meta.get('filepath', '').lower()
-                if (dir_lower in chain or dir_lower in parent
-                        or dir_lower in fp):
-                    chunks_raw.append({
-                        'content':    results['documents'][0][i],
-                        'metadata':   meta,
-                        'distance':   results['distances'][0][i],
-                        'similarity': 1 - results['distances'][0][i],
-                    })
-        except Exception as exc:
-            return f"Search failed: {exc}"
+                chunks_raw.append({
+                    'content':    results['documents'][0][i],
+                    'metadata':   results['metadatas'][0][i],
+                    'distance':   results['distances'][0][i],
+                    'similarity': 1 - results['distances'][0][i],
+                })
+        except Exception:
+            continue
+
+    # Attempt 2: if exact match found nothing, do a broad search and
+    # filter client-side on directory_chain (case-insensitive substring).
+    if not chunks_raw:
+        for collection in _collections:
+            try:
+                results = collection.query(
+                    query_texts=[query],
+                    n_results=min(n_results * 5, 100),
+                )
+                for i in range(len(results['documents'][0])):
+                    meta = results['metadatas'][0][i]
+                    chain = meta.get('directory_chain', '').lower()
+                    parent = meta.get('parent_directory', '').lower()
+                    fp = meta.get('filepath', '').lower()
+                    if (dir_lower in chain or dir_lower in parent
+                            or dir_lower in fp):
+                        chunks_raw.append({
+                            'content':    results['documents'][0][i],
+                            'metadata':   meta,
+                            'distance':   results['distances'][0][i],
+                            'similarity': 1 - results['distances'][0][i],
+                        })
+            except Exception:
+                continue
+
+    # Merge across collections by best similarity before filtering/truncating.
+    chunks_raw.sort(key=lambda c: c['distance'])
 
     if min_similarity > 0.0:
         chunks_raw = [c for c in chunks_raw if c['similarity'] >= min_similarity]
@@ -1897,7 +1908,7 @@ def search_within_directory(
 # ══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
-def list_directories() -> str:
+def list_directories(ctx: Context = None) -> str:
     """
     AGENTIC RAG - Directory tree discovery.
     Lists all indexed directory trees with document counts per directory.
@@ -1912,22 +1923,23 @@ def list_directories() -> str:
         return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
 
     try:
-        collection = _get_collection()
+        _collections = _scoped_collections_for_ctx(ctx)
     except RuntimeError as e:
         return str(e)
 
-    total_chunks = collection.count()
-    if total_chunks == 0:
-        return "Knowledge base is empty — no documents indexed yet."
-
     try:
-        sample = collection.get(
-            limit=min(5000, total_chunks),
-            include=["metadatas"]
-        )
-        metadatas = sample.get('metadatas', [])
+        metadatas = []
+        for _col in _collections:
+            total = _col.count()
+            if total == 0:
+                continue
+            sample = _col.get(limit=min(5000, total), include=["metadatas"])
+            metadatas.extend(sample.get('metadatas', []))
     except Exception as exc:
         return f"Could not read knowledge base: {exc}"
+
+    if not metadatas:
+        return "Knowledge base is empty — no documents indexed yet."
 
     # Build directory tree: directory_chain → set of unique filepaths
     dir_tree = {}       # chain → set(filepath)

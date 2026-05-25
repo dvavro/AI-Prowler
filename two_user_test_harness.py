@@ -198,6 +198,75 @@ def cmd_read_test():
     return True
 
 
+def cmd_direct_test():
+    """Isolation test for the DIRECT-collection tools (those using
+    _scoped_collections_for_ctx via .get()/.query() rather than the
+    search_documents delegation). Builds a stub ctx per user, asks
+    ai_prowler_mcp._scoped_collections_for_ctx for the collections it would
+    expose, aggregates their docs (as the migrated .get() tools do), and
+    asserts each user sees only their scoped content."""
+    print("🔒 DIRECT-COLLECTION ISOLATION TEST (_scoped_collections_for_ctx)\n"
+          + "─" * 50)
+    passed = failed = 0
+
+    def check(label, condition):
+        nonlocal passed, failed
+        if condition:
+            passed += 1
+            print(f"   ✅ {label}")
+        else:
+            failed += 1
+            print(f"   ❌ {label}")
+
+    # Stub ctx chain mirroring FastMCP: ctx.request_context.request.state.user
+    class _Stub:
+        def __init__(self, **kw):
+            for k, v in kw.items():
+                setattr(self, k, v)
+
+    def _ctx_for(user):
+        return _Stub(request_context=_Stub(request=_Stub(state=_Stub(user=user))))
+
+    def _aggregate_text(user):
+        """Mimic the migrated .get() tools: pull all docs from the user's
+        scoped collections and concatenate (this is exactly what
+        list_indexed_documents / get_document_chunks iterate over)."""
+        cols = ap._scoped_collections_for_ctx(_ctx_for(user))
+        texts = []
+        for col in cols:
+            try:
+                total = col.count()
+                sample = col.get(limit=min(5000, total),
+                                 include=["documents"])
+                texts.extend(sample.get("documents", []) or [])
+            except Exception as e:
+                print(f"      (collection read error: {e})")
+        return " ".join(texts)
+
+    a_text = _aggregate_text(USER_A)
+    b_text = _aggregate_text(USER_B)
+
+    # Same sentinel assertions as the search test, but via the .get() path.
+    check("A sees SHARED",               "COMPANY_SHARED" in a_text)
+    check("A sees SALES_SECRET",         "SALES_SECRET"   in a_text)
+    check("A sees own ALICE_PRIVATE",    "ALICE_PRIVATE"  in a_text)
+    check("A does NOT see FIELD_SECRET", "FIELD_SECRET"   not in a_text)
+    check("A does NOT see BOB_PRIVATE",  "BOB_PRIVATE"    not in a_text)
+    check("B sees SHARED",               "COMPANY_SHARED" in b_text)
+    check("B sees FIELD_SECRET",         "FIELD_SECRET"   in b_text)
+    check("B sees own BOB_PRIVATE",      "BOB_PRIVATE"    in b_text)
+    check("B does NOT see SALES_SECRET", "SALES_SECRET"   not in b_text)
+    check("B does NOT see ALICE_PRIVATE","ALICE_PRIVATE"  not in b_text)
+
+    print("\n" + "─" * 50)
+    print(f"   RESULT: {passed} passed, {failed} failed")
+    if failed:
+        print("   ⛔ DIRECT-TOOL ISOLATION FAILED.")
+        return False
+    print("   ✅ DIRECT-TOOL ISOLATION HOLDS.")
+    return True
+
+
 def cmd_cleanup():
     """Delete ONLY the scoped test collections (never 'documents')."""
     client, _ = rp.get_chroma_client()
@@ -222,6 +291,9 @@ if __name__ == "__main__":
         cmd_verify()
     elif arg in ("--read-test", "read-test", "--read", "test"):
         ok = cmd_read_test()
+        sys.exit(0 if ok else 1)
+    elif arg in ("--direct-test", "direct-test", "--direct"):
+        ok = cmd_direct_test()
         sys.exit(0 if ok else 1)
     elif arg in ("--cleanup", "cleanup"):
         cmd_cleanup()
