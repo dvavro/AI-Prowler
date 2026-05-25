@@ -1107,6 +1107,50 @@ def _get_collection():
         )
 
 
+def _scoped_collections_for_ctx(ctx):
+    """Return the list of ChromaDB collection OBJECTS the current request may
+    read. v7.0.0 Phase B Step 2 — the shared foundation for the read tools that
+    access collections directly (via .get()/.query()) rather than delegating to
+    rag_preprocessor.search_documents.
+
+    Personal mode (no user on the request, i.e. ctx None or no .user): returns
+    [the single default 'documents' collection] — byte-for-byte the old
+    single-collection behavior, so these tools are unchanged for personal use.
+
+    Server mode (a user is present): returns one collection object per entry in
+    _allowed_collections(user), skipping any that don't exist yet. Logical scope
+    names are sanitized to physical names via chroma_collection_name().
+
+    Raises RuntimeError only in personal mode when nothing is indexed (preserves
+    the existing _get_collection error contract for the tools' try/except).
+    """
+    from rag_preprocessor import (get_chroma_client, COLLECTION_NAME,
+                                  chroma_collection_name)
+    client, embedding_func = get_chroma_client()
+
+    user = _current_user(ctx)
+    if user is None:
+        # Personal mode — single collection, original contract (raises if absent).
+        try:
+            return [client.get_collection(name=COLLECTION_NAME,
+                                          embedding_function=embedding_func)]
+        except Exception:
+            raise RuntimeError(
+                "No indexed documents found. "
+                "Use add_and_index_directory to index some documents first.")
+
+    # Server mode — each allowed collection that exists.
+    cols = []
+    for logical in _allowed_collections(user):
+        phys = chroma_collection_name(logical)
+        try:
+            cols.append(client.get_collection(name=phys,
+                                              embedding_function=embedding_func))
+        except Exception:
+            continue  # scope collection not created yet — skip, not an error
+    return cols
+
+
 @mcp.tool()
 def get_knowledge_base_overview() -> str:
     """
@@ -1491,6 +1535,7 @@ def list_indexed_documents(
     filter_ext: Optional[str] = None,
     filter_path: Optional[str] = None,
     limit: int = 50,
+    ctx: Context = None,
 ) -> str:
     """
     AGENTIC RAG - Browse the knowledge base.
@@ -1508,14 +1553,17 @@ def list_indexed_documents(
         Sorted list of indexed documents grouped by file type.
     """
     try:
-        collection = _get_collection()
+        _collections = _scoped_collections_for_ctx(ctx)
     except RuntimeError as e:
         return str(e)
 
+    # Aggregate metadata across all allowed collections (one in personal mode).
     try:
-        total   = collection.count()
-        sample  = collection.get(limit=min(5000, total), include=["metadatas"])
-        metas   = sample.get('metadatas', [])
+        metas = []
+        for _col in _collections:
+            total   = _col.count()
+            sample  = _col.get(limit=min(5000, total), include=["metadatas"])
+            metas.extend(sample.get('metadatas', []))
     except Exception as exc:
         return f"Could not list documents: {exc}"
 
