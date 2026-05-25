@@ -836,3 +836,51 @@ class TestResolveCollectionForPath:
     def test_C_MCP_RESOLVE_14_trailing_slash_normalized(self, resolver_api):
         m = _mapping([{"prefix": "C:/CompanyDocs/Sales/", "collection": "role:sales"}])
         assert resolver_api("C:/CompanyDocs/Sales/x.pdf", m) == "role:sales"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# _current_user(ctx) — extract the authed user from a FastMCP Context.
+# (v7.0.0 Phase B Step 2 read path.) Returns None in personal mode / on any
+# missing link in the ctx chain; never raises. Tested with stubbed ctx objects.
+# ═════════════════════════════════════════════════════════════════════════════
+@pytest.fixture
+def current_user_api(mcp_module):
+    fn = getattr(mcp_module, "_current_user", None)
+    if fn is None:
+        pytest.skip("_current_user not present (Phase B Step 2 read path).")
+    return fn
+
+
+class _Stub:
+    """Minimal attribute holder for building fake ctx chains."""
+    def __init__(self, **kw):
+        for k, v in kw.items():
+            setattr(self, k, v)
+
+
+class TestCurrentUser:
+    def test_C_MCP_CURUSER_01_none_ctx_is_none(self, current_user_api):
+        assert current_user_api(None) is None
+
+    def test_C_MCP_CURUSER_02_happy_path_returns_user(self, current_user_api):
+        user = {"id": "tok123", "role": "owner"}
+        ctx = _Stub(request_context=_Stub(request=_Stub(state=_Stub(user=user))))
+        assert current_user_api(ctx) == user
+
+    def test_C_MCP_CURUSER_03_no_user_on_state_is_none(self, current_user_api):
+        # State exists but middleware never set .user (e.g. exempt route) → None.
+        ctx = _Stub(request_context=_Stub(request=_Stub(state=_Stub())))
+        assert current_user_api(ctx) is None
+
+    def test_C_MCP_CURUSER_04_missing_request_context_is_none(self, current_user_api):
+        ctx = _Stub()   # no request_context attribute at all
+        assert current_user_api(ctx) is None
+
+    def test_C_MCP_CURUSER_05_missing_request_is_none(self, current_user_api):
+        ctx = _Stub(request_context=_Stub())   # no .request
+        assert current_user_api(ctx) is None
+
+    def test_C_MCP_CURUSER_06_user_explicitly_none(self, current_user_api):
+        # Middleware set state.user = None (shouldn't happen, but be safe).
+        ctx = _Stub(request_context=_Stub(request=_Stub(state=_Stub(user=None))))
+        assert current_user_api(ctx) is None

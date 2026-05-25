@@ -133,6 +133,15 @@ _log.info("Importing MCP SDK (FastMCP)…")
 try:
     from mcp.server.fastmcp import FastMCP
     _log.info("MCP SDK imported OK")
+    # Context enables per-request user threading in server mode (Phase B).
+    # Optional: if a build lacks it, fall back to None so `ctx: Context = None`
+    # tool params remain harmless (personal mode never reads ctx anyway).
+    try:
+        from mcp.server.fastmcp import Context
+    except Exception:
+        Context = None
+        _log.warning("FastMCP Context not importable — server-mode user "
+                     "threading will be unavailable (personal mode unaffected).")
 except ImportError:
     _log.critical("FATAL: 'mcp' package not found. Run: pip install mcp")
     print(
@@ -1201,6 +1210,7 @@ def search_documents(
     query: str,
     n_results: int = 8,
     min_similarity: float = 0.0,
+    ctx: Context = None,
 ) -> str:
     """
     AGENTIC RAG - Primary search tool.
@@ -1229,9 +1239,22 @@ def search_documents(
 
     n_results = min(max(1, n_results), 20)
 
+    # ── Server-mode collection scoping (v7.0.0 Phase B; personal mode = None) ──
+    # In server mode the auth middleware attached a user to the request; restrict
+    # the search to that user's allowed collections. In personal mode there is
+    # no user (ctx None or no .user), so collection_names stays None and the
+    # search hits the single 'documents' collection exactly as before.
+    _scoped_collections = None
+    _user = _current_user(ctx)
+    if _user is not None:
+        _scoped_collections = _allowed_collections(_user)
+        _log.debug("search_documents scoped for user=%s to %s",
+                   _user.get("id"), _scoped_collections)
+
     try:
         from rag_preprocessor import search_documents as _search
-        chunks = _search(query, n_results=n_results)
+        chunks = _search(query, n_results=n_results,
+                         collection_names=_scoped_collections)
     except Exception as exc:
         return f"Search failed: {exc}"
 
@@ -6016,6 +6039,26 @@ def _resolve_user(users_data: "dict | None", token: str) -> "dict | None":
     if user.get("role") not in _USER_ROLES:
         user["role"] = "field_crew"
     return user
+
+
+def _current_user(ctx) -> "dict | None":
+    """Extract the authenticated user that server-mode auth middleware attached
+    to this request, via the FastMCP Context. Returns None in personal mode
+    (no server-mode middleware, so no user on request.state) or if anything in
+    the chain is absent. PURE-ish (only reads ctx; no other I/O). Never raises.
+
+    The access path (ctx.request_context.request.state.user) was confirmed
+    against the live FastMCP version by the Step-2 context probe: the auth
+    middleware sets request.state.user, and FastMCP exposes the genuine
+    per-call Starlette Request here — so this is the safe per-request identity,
+    not ambient/thread-local state.
+    """
+    if ctx is None:
+        return None
+    try:
+        return getattr(ctx.request_context.request.state, "user", None)
+    except Exception:
+        return None
 
 
 def _allowed_collections(user: "dict | None",

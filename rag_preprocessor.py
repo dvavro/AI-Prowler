@@ -2869,25 +2869,35 @@ def get_chroma_client():
 
     return client, embedding_func
 
-def create_or_get_collection(client, embedding_func):
-    """Create or retrieve the document collection"""
+def create_or_get_collection(client, embedding_func, collection_name: str = None):
+    """Create or retrieve a document collection.
+
+    Args:
+        client, embedding_func: from get_chroma_client().
+        collection_name: target collection. Defaults to COLLECTION_NAME
+            ('documents') — so ALL existing callers (which pass no name) behave
+            exactly as before (single-collection personal mode). v7.0.0 Phase B
+            server-mode indexing passes a specific name (shared / role:x /
+            user:y) to route documents into per-scope collections.
+    """
+    name = collection_name or COLLECTION_NAME
     try:
         collection = client.get_collection(
-            name=COLLECTION_NAME,
+            name=name,
             embedding_function=embedding_func
         )
         count = collection.count()
-        print(f"📂 Using existing collection: {COLLECTION_NAME} ({count} chunks)")
+        print(f"📂 Using existing collection: {name} ({count} chunks)")
     except:
         collection = client.create_collection(
-            name=COLLECTION_NAME,
+            name=name,
             embedding_function=embedding_func,
             metadata={
                 "description": "AI Prowler document store",
                 "created": datetime.now().isoformat()
             }
         )
-        print(f"✨ Created new collection: {COLLECTION_NAME}")
+        print(f"✨ Created new collection: {name}")
     
     return collection
 
@@ -2995,7 +3005,8 @@ def _get_flat_file_tracking() -> dict:
 def index_file_list(file_paths: list, label: str = "",
                     stop_event=None, pause_event=None,
                     start_from: int = 0,
-                    root_directory: str = "") -> dict:
+                    root_directory: str = "",
+                    collection_resolver=None) -> dict:
     """
     Index a specific pre-built list of file paths.
 
@@ -3013,12 +3024,35 @@ def index_file_list(file_paths: list, label: str = "",
         root_directory: Top-level directory being indexed (used for provenance
                        metadata — directory_chain breadcrumbs).  If empty, the
                        parent directory of each file is used as a fallback.
+        collection_resolver: OPTIONAL callable filepath -> collection_name
+                       (v7.0.0 Phase B server mode). None (default) => every file
+                       goes to the single default collection (original behavior).
 
     Returns dict with keys: processed, skipped, chunks, words, stopped_at
       stopped_at = 1-based index of next unprocessed file (0 if completed)
     """
     import time as _time
     client, embedding_func = get_chroma_client()
+
+    # Per-file collection routing (cached). No resolver => default collection,
+    # identical to the original single-collection behavior.
+    _collection_cache = {}
+    def _collection_for(fp):
+        name = None
+        if collection_resolver is not None:
+            try:
+                name = collection_resolver(fp)
+            except Exception as _re:
+                print(f"         ⚠️  collection_resolver failed for {fp}: {_re} "
+                      f"— using default collection")
+                name = None
+        name = name or COLLECTION_NAME
+        if name not in _collection_cache:
+            _collection_cache[name] = create_or_get_collection(
+                client, embedding_func, collection_name=name)
+        return _collection_cache[name]
+
+    # Default handle retained for any code/logging expecting `collection`.
     collection = create_or_get_collection(client, embedding_func)
 
     total     = len(file_paths)
@@ -3088,6 +3122,7 @@ def index_file_list(file_paths: list, label: str = "",
                 stop_event=stop_event,
                 pause_event=pause_event,
                 root_directory=root_directory,
+                collection_resolver=collection_resolver,
             )
             processed    += arc_stats["processed"]
             skipped      += arc_stats["skipped"]
@@ -3144,13 +3179,14 @@ def index_file_list(file_paths: list, label: str = "",
             file_size_bytes=prov['file_size_bytes'],
         ) for j in range(len(chunks))]
 
+        _file_collection = _collection_for(filepath)
         try:
-            collection.delete(where={"filepath": filepath})
+            _file_collection.delete(where={"filepath": filepath})
         except Exception:
             pass
 
         try:
-            collection.add(ids=ids, documents=chunks, metadatas=metadatas)
+            _file_collection.add(ids=ids, documents=chunks, metadatas=metadatas)
             processed    += 1
             total_chunks += len(chunks)
             total_words  += file_data['word_count']
@@ -3210,7 +3246,8 @@ def index_file_list(file_paths: list, label: str = "",
 def index_email_archive(filepath: str,
                         stop_event=None,
                         pause_event=None,
-                        root_directory: str = "") -> dict:
+                        root_directory: str = "",
+                        collection_resolver=None) -> dict:
     """
     Incrementally index a multi-message email archive file.
 
@@ -3256,7 +3293,18 @@ def index_email_archive(filepath: str,
     fname         = Path(filepath).name
 
     client, embedding_func = get_chroma_client()
-    collection             = create_or_get_collection(client, embedding_func)
+    # The whole archive routes to ONE collection (resolved from the archive's
+    # path). No resolver => default collection (original behavior).
+    _archive_collection_name = None
+    if collection_resolver is not None:
+        try:
+            _archive_collection_name = collection_resolver(filepath_norm)
+        except Exception as _re:
+            print(f"⚠️  collection_resolver failed for {filepath_norm}: {_re} "
+                  f"— using default collection")
+            _archive_collection_name = None
+    collection = create_or_get_collection(
+        client, embedding_func, collection_name=_archive_collection_name)
 
     # ── Load existing email index for this file ────────────────────────────────
     email_db     = load_email_index()
@@ -3402,7 +3450,8 @@ def index_email_archive(filepath: str,
     }
 
 
-def index_directory(directory: str, recursive: bool = True, quiet: bool = False):
+def index_directory(directory: str, recursive: bool = True, quiet: bool = False,
+                    collection_resolver=None):
     """
     Index all files in a directory
     
@@ -3410,6 +3459,13 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False)
         directory: Path to directory to index
         recursive: Whether to search subdirectories
         quiet: Whether to suppress verbose output
+        collection_resolver: OPTIONAL callable filepath -> collection_name
+            (v7.0.0 Phase B server mode). If None (default / personal mode),
+            every file goes to the single default collection — byte-for-byte the
+            original behavior. If provided, each file is routed to the collection
+            the resolver returns, and collections are opened/cached on demand.
+            Kept as a callable (not a direct import of the resolver) so
+            rag_preprocessor stays free of any dependency on ai_prowler_mcp.
     """
     if not quiet:
         print(f"\n{'='*60}")
@@ -3425,7 +3481,30 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False)
     
     # Initialize database
     client, embedding_func = get_chroma_client()
-    collection = create_or_get_collection(client, embedding_func)
+
+    # Collection access: cache opened collections by name. _collection_for(fp)
+    # returns the right collection for a file. With no resolver, every file maps
+    # to the default collection (original single-collection behavior, unchanged).
+    _collection_cache = {}
+    def _collection_for(fp):
+        name = None
+        if collection_resolver is not None:
+            try:
+                name = collection_resolver(fp)
+            except Exception as _re:
+                print(f"         ⚠️  collection_resolver failed for {fp}: {_re} "
+                      f"— using default collection")
+                name = None
+        name = name or COLLECTION_NAME
+        if name not in _collection_cache:
+            _collection_cache[name] = create_or_get_collection(
+                client, embedding_func, collection_name=name)
+        return _collection_cache[name]
+
+    # Backwards-compatible single default collection handle (used by callers/
+    # logging that expect `collection` to exist; per-file writes use _collection_for).
+    collection = _collection_for(directory) if collection_resolver is None \
+        else create_or_get_collection(client, embedding_func)
     
     # Find all files — skip binaries, executables and known-useless dirs
     all_files = []
@@ -3498,17 +3577,21 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False)
             file_size_bytes=prov['file_size_bytes'],
         ) for j in range(len(chunks))]
         
+        # Route this file to its target collection (default collection in
+        # personal mode; per-scope collection when a resolver is supplied).
+        _file_collection = _collection_for(filepath)
+
         # Remove any existing chunks for this file before re-adding
         # This prevents ghost chunks from shorter re-processed files and
         # duplicate accumulation from repeated indexing of the same directory
         try:
-            collection.delete(where={"filepath": filepath})
+            _file_collection.delete(where={"filepath": filepath})
         except Exception:
             pass  # Collection may not have this file yet — that's fine
         
         # Add to database
         try:
-            collection.add(
+            _file_collection.add(
                 ids=ids,
                 documents=chunks,
                 metadatas=metadatas
@@ -3588,45 +3671,67 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False)
 # RETRIEVAL
 # ═══════════════════════════════════════════════════════════
 
-def search_documents(query: str, n_results: int = 3) -> List[Dict]:
+def search_documents(query: str, n_results: int = 3,
+                     collection_names: list = None) -> List[Dict]:
     """
     Search for relevant document chunks
     
     Args:
         query: Search query
         n_results: Number of results to return
+        collection_names: OPTIONAL list of collection names to search
+            (v7.0.0 Phase B server mode). If None (default / personal mode),
+            searches the single COLLECTION_NAME — byte-for-byte the original
+            behavior. If a list, searches EACH collection and merges results by
+            distance (best first), so a user's allowed collections are queried
+            and combined. Missing/empty collections are skipped, not fatal.
     
     Returns:
-        List of matching chunks with metadata
+        List of matching chunks with metadata (each: content, metadata,
+        distance, similarity, and 'collection' when multi-collection).
     """
     client, embedding_func = get_chroma_client()
-    
-    try:
-        collection = client.get_collection(
-            name=COLLECTION_NAME,
-            embedding_function=embedding_func
+
+    # Personal mode (no list) → single default collection, original path.
+    names = collection_names if collection_names else [COLLECTION_NAME]
+
+    all_chunks = []
+    for cname in names:
+        try:
+            collection = client.get_collection(
+                name=cname,
+                embedding_function=embedding_func
+            )
+        except:
+            # In personal mode this means "nothing indexed yet"; in server
+            # mode a not-yet-created scope collection is simply skipped.
+            if collection_names is None:
+                print("❌ No indexed documents found. Run 'index' command first.")
+                return []
+            continue
+
+        results = collection.query(
+            query_texts=[query],
+            n_results=n_results
         )
-    except:
-        print("❌ No indexed documents found. Run 'index' command first.")
-        return []
-    
-    # Search
-    results = collection.query(
-        query_texts=[query],
-        n_results=n_results
-    )
-    
-    # Format results
-    chunks = []
-    for i in range(len(results['documents'][0])):
-        chunks.append({
-            'content': results['documents'][0][i],
-            'metadata': results['metadatas'][0][i],
-            'distance': results['distances'][0][i],
-            'similarity': 1 - results['distances'][0][i]  # Convert distance to similarity
-        })
-    
-    return chunks
+        docs = results.get('documents') or [[]]
+        metas = results.get('metadatas') or [[]]
+        dists = results.get('distances') or [[]]
+        if not docs or not docs[0]:
+            continue
+        for i in range(len(docs[0])):
+            dist = dists[0][i]
+            all_chunks.append({
+                'content': docs[0][i],
+                'metadata': metas[0][i],
+                'distance': dist,
+                'similarity': 1 - dist,
+                'collection': cname,
+            })
+
+    # Merge across collections: best (lowest distance) first, then truncate.
+    all_chunks.sort(key=lambda c: c.get('distance', float('inf')))
+    return all_chunks[:n_results]
 
 # ═══════════════════════════════════════════════════════════
 # LLM QUERY
