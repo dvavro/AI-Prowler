@@ -1572,6 +1572,7 @@ def search_by_multiple_queries(
     queries: list[str],
     n_results_each: int = 5,
     min_similarity: float = 0.0,
+    ctx: Context = None,
 ) -> str:
     """
     AGENTIC RAG - Parallel multi-angle search.
@@ -1601,10 +1602,17 @@ def search_by_multiple_queries(
     except Exception as exc:
         return f"Could not access knowledge base: {exc}"
 
+    # Server-mode scoping (personal mode → None → single 'documents' collection).
+    _scoped_collections = None
+    _user = _current_user(ctx)
+    if _user is not None:
+        _scoped_collections = _allowed_collections(_user)
+
     all_chunks: dict = {}
     for q in queries:
         try:
-            results = _search(q, n_results=n_results_each)
+            results = _search(q, n_results=n_results_each,
+                             collection_names=_scoped_collections)
         except Exception:
             continue
         for chunk in results:
