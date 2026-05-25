@@ -2869,35 +2869,72 @@ def get_chroma_client():
 
     return client, embedding_func
 
+def chroma_collection_name(logical_name: str) -> str:
+    """Map a LOGICAL scope name (e.g. 'role:sales', 'user:UserA01', 'shared')
+    to a ChromaDB-LEGAL physical collection name.
+
+    ChromaDB rules: 3-512 chars, start/end lowercase-alnum, middle may contain
+    only dots/dashes/underscores, no '::' (and practically no colons at all),
+    no consecutive dots, not an IPv4. Our logical names use colons and mixed
+    case, which ChromaDB REJECTS — so we deterministically rewrite them:
+      ':' and any other illegal char -> '-', lowercase everything, collapse
+      repeats, and prefix 'scope-' so the result always starts with a letter
+      and is visually distinct from the personal 'documents' collection.
+    Deterministic + collision-safe for our namespaced inputs (role:/user:/shared).
+
+    Examples:
+      'documents'             -> 'documents'        (left as-is; already legal)
+      'shared'                -> 'scope-shared'
+      'role:sales'            -> 'scope-role-sales'
+      'user:UserA00000000001' -> 'scope-user-usera00000000001'
+    """
+    import re as _re
+    name = (logical_name or "").strip()
+    if not name or name == COLLECTION_NAME:
+        return COLLECTION_NAME  # personal collection: unchanged
+    s = name.lower()
+    s = _re.sub(r"[^a-z0-9]+", "-", s)   # any run of illegal chars -> single '-'
+    s = s.strip("-")
+    s = f"scope-{s}"                     # guarantee legal start + namespacing
+    # Guarantee legal end (strip trailing '-') and length bounds.
+    s = s.rstrip("-")
+    if len(s) < 3:
+        s = (s + "-x").ljust(3, "x")
+    return s[:512]
+
+
 def create_or_get_collection(client, embedding_func, collection_name: str = None):
     """Create or retrieve a document collection.
 
     Args:
         client, embedding_func: from get_chroma_client().
-        collection_name: target collection. Defaults to COLLECTION_NAME
+        collection_name: LOGICAL target collection. Defaults to COLLECTION_NAME
             ('documents') — so ALL existing callers (which pass no name) behave
             exactly as before (single-collection personal mode). v7.0.0 Phase B
-            server-mode indexing passes a specific name (shared / role:x /
-            user:y) to route documents into per-scope collections.
+            server-mode indexing passes a logical name (shared / role:x /
+            user:y); it is sanitized to a ChromaDB-legal physical name here, so
+            the rest of the codebase keeps using clean logical names.
     """
-    name = collection_name or COLLECTION_NAME
+    logical = collection_name or COLLECTION_NAME
+    name = chroma_collection_name(logical)
     try:
         collection = client.get_collection(
             name=name,
             embedding_function=embedding_func
         )
         count = collection.count()
-        print(f"📂 Using existing collection: {name} ({count} chunks)")
+        print(f"📂 Using existing collection: {logical} -> {name} ({count} chunks)")
     except:
         collection = client.create_collection(
             name=name,
             embedding_function=embedding_func,
             metadata={
                 "description": "AI Prowler document store",
+                "logical_name": logical,
                 "created": datetime.now().isoformat()
             }
         )
-        print(f"✨ Created new collection: {name}")
+        print(f"✨ Created new collection: {logical} -> {name}")
     
     return collection
 
@@ -3699,7 +3736,7 @@ def search_documents(query: str, n_results: int = 3,
     for cname in names:
         try:
             collection = client.get_collection(
-                name=cname,
+                name=chroma_collection_name(cname),
                 embedding_function=embedding_func
             )
         except:
