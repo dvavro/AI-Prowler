@@ -407,6 +407,109 @@ def cmd_admin_test():
     return True
 
 
+def cmd_ownership_test():
+    """END-TO-END chunk-ownership test through the REAL index pipeline.
+    Proves the 'delete only your own' protection actually TAKES EFFECT:
+      1. Alice indexes a file → its chunks carry indexed_by == Alice.
+      2. Bob tries to re-index the SAME path → the purge is REFUSED, so Alice's
+         chunks survive (Bob cannot wipe Alice's data).
+      3. Alice re-indexes her own file → succeeds.
+
+    EXPECTED TO FAIL until the wiring (step 3) is done — nothing stamps
+    indexed_by or gates the purge yet. This is the red→green target.
+    Indexes into a dedicated 'scope-ownership-test' collection; cleaned at end."""
+    print("📁 CHUNK-OWNERSHIP END-TO-END TEST (delete only your own)\n" + "─" * 50)
+    passed = failed = 0
+
+    def check(label, condition):
+        nonlocal passed, failed
+        if condition:
+            passed += 1
+            print(f"   ✅ {label}")
+        else:
+            failed += 1
+            print(f"   ❌ {label}")
+
+    OWN_COLL = "ownership-test"   # logical; physical scope-ownership-test
+    FNAME = "contested.txt"
+    tmp = Path(tempfile.mkdtemp(prefix="aiprowler_own_"))
+    fpath = tmp / FNAME
+    fpath.write_text("CONTESTED document content owned by Alice. Shared work area.",
+                     encoding="utf-8")
+
+    def _resolver(_fp):
+        return OWN_COLL
+
+    def _index_as(user):
+        """Index the file through the real pipeline AS `user`. Uses the future
+        indexer_user param (step-3 wiring). Returns (ok, note)."""
+        try:
+            rp.index_directory(str(tmp), recursive=False, quiet=True,
+                               collection_resolver=_resolver,
+                               indexer_user=user)
+            return (True, "")
+        except TypeError as e:
+            # indexer_user not supported yet → wiring not done.
+            return (False, f"pipeline has no indexer_user param yet: {e}")
+
+    def _chunks():
+        client, ef = rp.get_chroma_client()
+        phys = rp.chroma_collection_name(OWN_COLL)
+        try:
+            col = client.get_collection(name=phys, embedding_function=ef)
+            got = col.get(include=["metadatas", "documents"])
+            return got.get("metadatas", []) or [], got.get("documents", []) or []
+        except Exception:
+            return [], []
+
+    try:
+        # 1. Alice indexes.
+        ok_a, note_a = _index_as(USER_A)
+        if not ok_a:
+            print(f"   ⚠️  {note_a}")
+        metas, _ = _chunks()
+        alice_owns = bool(metas) and all(
+            m.get("indexed_by") == USER_A["id"] for m in metas)
+        check("Alice's chunks stamped indexed_by == Alice", alice_owns)
+
+        # 2. Bob attempts to re-index the SAME path → must be refused; Alice's
+        #    content must survive.
+        ok_b, note_b = _index_as(USER_B)
+        if not ok_b:
+            print(f"   ⚠️  {note_b}")
+        metas2, docs2 = _chunks()
+        alice_survived = any("CONTESTED" in d for d in docs2) and any(
+            m.get("indexed_by") == USER_A["id"] for m in metas2)
+        bob_did_not_take_over = not any(
+            m.get("indexed_by") == USER_B["id"] for m in metas2)
+        check("Alice's chunks SURVIVE Bob's re-index attempt", alice_survived)
+        check("Bob did NOT take ownership of the path", bob_did_not_take_over)
+
+        # 3. Alice re-indexes her own file → still hers.
+        _index_as(USER_A)
+        metas3, _ = _chunks()
+        still_alice = bool(metas3) and all(
+            m.get("indexed_by") == USER_A["id"] for m in metas3)
+        check("Alice may re-index her own file", still_alice)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        # Drop the test collection.
+        try:
+            client, _ = rp.get_chroma_client()
+            client.delete_collection(name=rp.chroma_collection_name(OWN_COLL))
+        except Exception:
+            pass
+
+    print("\n" + "─" * 50)
+    print(f"   RESULT: {passed} passed, {failed} failed")
+    if failed:
+        print("   ⛔ OWNERSHIP PROTECTION NOT YET IN EFFECT "
+              "(expected until step-3 wiring).")
+        return False
+    print("   ✅ OWNERSHIP PROTECTION HOLDS end-to-end.")
+    return True
+
+
 def cmd_cleanup():
     """Delete ONLY the scoped test collections (never 'documents')."""
     client, _ = rp.get_chroma_client()
@@ -440,6 +543,9 @@ if __name__ == "__main__":
         sys.exit(0 if ok else 1)
     elif arg in ("--admin-test", "admin-test", "--admin"):
         ok = cmd_admin_test()
+        sys.exit(0 if ok else 1)
+    elif arg in ("--ownership-test", "ownership-test", "--ownership"):
+        ok = cmd_ownership_test()
         sys.exit(0 if ok else 1)
     elif arg in ("--cleanup", "cleanup"):
         cmd_cleanup()
