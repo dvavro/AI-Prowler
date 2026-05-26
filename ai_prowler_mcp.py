@@ -6864,77 +6864,144 @@ def _run_server_mode(port: int, token: str,
     _log.info("Server mode: company=%s, %d user(s) loaded from users.json",
               company, n_users)
 
-    # ── Multi-user auth middleware (spec §6.4 steps 1-4) ──────────────────────
-    # Extract bearer token → resolve to a user → attach to request.state. A
-    # request with no/invalid/suspended token gets 401. Health and OAuth
-    # discovery routes are exempt (no auth needed to advertise capability).
-    _EXEMPT_PATHS = ("/health", "/.well-known/")
-
-    class MultiUserAuthMiddleware(BaseHTTPMiddleware):
-        async def dispatch(self, request: "Request", call_next):
-            path = request.url.path
-            if path == "/health" or path.startswith("/.well-known/"):
-                return await call_next(request)
-
-            auth = request.headers.get("Authorization", "")
-            tok = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-            if not tok:
-                return JSONResponse({"error": "missing bearer token"}, status_code=401)
-
-            # Re-read users each request? No — read once at startup for now;
-            # the Admin tab will trigger a reload. Resolve against the in-memory map.
-            user = _resolve_user(users_data, tok)
-            if user is None:
-                _log.info("Auth rejected for token …%s on %s", tok[-4:] if tok else "", path)
-                return JSONResponse(
-                    {"error": "invalid or revoked token"}, status_code=401)
-
-            request.state.user = user
-            # STEP 2 NOT YET WIRED: collection scoping. Log once per request so
-            # it's unmistakable in testing that responses are not yet scoped.
-            request.state.allowed_collections = _allowed_collections(user)
-            _log.debug("Authenticated user=%s role=%s scopes=%s",
-                       user.get("id"), user.get("role"),
-                       request.state.allowed_collections)
-            return await call_next(request)
-
-    async def _health(request):
-        return PlainTextResponse("OK")
-
-    async def _whoami(request):
-        """Diagnostic: confirms auth resolved the right user (Step-1 test aid)."""
-        u = getattr(request.state, "user", None)
-        if not u:
-            return JSONResponse({"error": "no user"}, status_code=401)
-        return JSONResponse({
-            "user_id": u.get("id"), "name": u.get("name"),
-            "role": u.get("role"),
-            "allowed_collections": getattr(request.state, "allowed_collections", []),
-            "scoping_active": False,   # STEP 2 not yet wired — honest flag
-        })
-
-    # ── Mount FastMCP under the auth middleware ───────────────────────────────
-    # FastMCP exposes a streamable-http ASGI app; we mount it and wrap the whole
-    # Starlette app in the auth middleware so every MCP request is authenticated.
+    # ── FastMCP ASGI app ──────────────────────────────────────────────────────
+    # FastMCP exposes a streamable-http ASGI app mounted at /mcp.
     try:
-        mcp_app = mcp.streamable_http_app()
+        mcp_asgi = mcp.streamable_http_app()
     except Exception as _e:
         _log.error("Could not get FastMCP ASGI app (%s). Falling back.", _e)
         return _run_http(port=port, token=token, public_base=public_base)
 
-    app = Starlette(routes=[
-        Route("/health", _health),
-        Route("/whoami", _whoami),
-        Mount("/", app=mcp_app),
-    ])
-    app.add_middleware(MultiUserAuthMiddleware)
+    # ── Pure-ASGI multi-user router (spec §6.4 steps 1-4) ─────────────────────
+    # CRITICAL: this is a raw ASGI app, NOT BaseHTTPMiddleware. BaseHTTPMiddleware
+    # buffers responses and breaks the MCP streamable-HTTP SSE transport (that was
+    # the POST /mcp 500). This mirrors _run_http's proven _RouterASGI pattern:
+    #   1. /health, /whoami, /.well-known/* handled inline (plain JSON, no auth
+    #      except /whoami which needs the user).
+    #   2. every other path: bearer → _resolve_user → stash the user in
+    #      scope["state"] so FastMCP's Request(scope).state.user resolves it
+    #      (this is what _current_user(ctx) reads inside the tools — the keystone),
+    #      then inject the MCP headers (Accept/Content-Type/Host/MCP-Protocol-
+    #      Version) exactly like _run_http, then stream to mcp_asgi WITHOUT
+    #      buffering so SSE works.
+    _local_host = f"127.0.0.1:{port}".encode()
 
-    _log.warning(
-        "SERVER MODE STEP 1 (auth only): requests are authenticated per-user, "
-        "but ChromaDB results are NOT yet collection-scoped. Do NOT expose to "
-        "real multi-tenant use until Step 2 (collection scoping) is wired.")
-    _log.info("Server mode listening on port %d", port)
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+    async def _send_json(send, status, payload):
+        import json as _json
+        body = _json.dumps(payload).encode()
+        await send({"type": "http.response.start", "status": status,
+                    "headers": [(b"content-type", b"application/json"),
+                                (b"content-length", str(len(body)).encode())]})
+        await send({"type": "http.response.body", "body": body})
+
+    async def _send_text(send, status, text):
+        body = text.encode()
+        await send({"type": "http.response.start", "status": status,
+                    "headers": [(b"content-type", b"text/plain; charset=utf-8"),
+                                (b"content-length", str(len(body)).encode())]})
+        await send({"type": "http.response.body", "body": body})
+
+    def _bearer_from_scope(scope):
+        for hk, hv in scope.get("headers", []):
+            if hk.lower() == b"authorization":
+                v = hv.decode("utf-8", "replace")
+                if v.lower().startswith("bearer "):
+                    return v[7:].strip()
+        return ""
+
+    class _ServerRouterASGI:
+        async def __call__(self, scope, receive, send):
+            if scope["type"] != "http":
+                # lifespan/websocket — pass straight through to FastMCP.
+                await mcp_asgi(scope, receive, send)
+                return
+
+            path = scope.get("path", "")
+            method = scope.get("method", "GET")
+
+            # Exempt: health + OAuth discovery (no auth).
+            if path == "/health":
+                await _send_text(send, 200, "OK")
+                return
+            if path.startswith("/.well-known/"):
+                await mcp_asgi(scope, receive, send)
+                return
+
+            # Authenticate every other path.
+            tok = _bearer_from_scope(scope)
+            if not tok:
+                await _send_json(send, 401, {"error": "missing bearer token"})
+                return
+            user = _resolve_user(users_data, tok)
+            if user is None:
+                _log.info("Auth rejected for token …%s on %s",
+                          tok[-4:] if tok else "", path)
+                await _send_json(send, 401, {"error": "invalid or revoked token"})
+                return
+
+            # Stash the user where FastMCP's Request(scope).state will expose it.
+            # Starlette's Request.state is backed by scope["state"]; setting it
+            # here is what makes _current_user(ctx) resolve the right user inside
+            # the tools over HTTP (the keystone).
+            scope = dict(scope)
+            state = dict(scope.get("state") or {})
+            state["user"] = user
+            state["allowed_collections"] = _allowed_collections(user)
+            scope["state"] = state
+            _log.debug("Authenticated user=%s role=%s", user.get("id"),
+                       user.get("role"))
+
+            # /whoami diagnostic (now reports scoping_active=True — tools scope).
+            if path == "/whoami":
+                await _send_json(send, 200, {
+                    "user_id": user.get("id"), "name": user.get("name"),
+                    "role": user.get("role"),
+                    "allowed_collections": state["allowed_collections"],
+                    "scoping_active": True,
+                })
+                return
+
+            # ── MCP header injection (mirrors _run_http; required by FastMCP's
+            #    streamable_http_app validators) ────────────────────────────────
+            if path == "/mcp" or path.startswith("/mcp"):
+                headers = list(scope.get("headers", []))
+
+                def _has(name, frag):
+                    return any(hk.lower() == name and frag in hv.lower()
+                               for hk, hv in headers)
+
+                def _set(name, value):
+                    for i, (hk, hv) in enumerate(headers):
+                        if hk.lower() == name:
+                            headers[i] = (name, value); return
+                    headers.append((name, value))
+
+                if method == "POST":
+                    if not _has(b"content-type", b"application/json"):
+                        _set(b"content-type", b"application/json")
+                    if not _has(b"accept", b"text/event-stream"):
+                        _set(b"accept", b"application/json, text/event-stream")
+                elif method == "GET":
+                    if not _has(b"accept", b"text/event-stream"):
+                        _set(b"accept", b"text/event-stream")
+
+                # Host rewrite + MCP-Protocol-Version (FastMCP validators).
+                _set(b"host", _local_host)
+                if not any(hk.lower() == b"mcp-protocol-version"
+                           for hk, hv in headers):
+                    _set(b"mcp-protocol-version", b"2025-03-26")
+
+                scope["headers"] = headers
+
+            # Stream to FastMCP WITHOUT buffering (SSE-safe).
+            await mcp_asgi(scope, receive, send)
+
+    app = _ServerRouterASGI()
+
+    _log.info("Server mode (multi-user, scoped) listening on port %d", port)
+    _log.info("Pure-ASGI router active — SSE-safe, per-user ctx scoping live.")
+    uvicorn.run(app, host="0.0.0.0", port=port,
+                proxy_headers=True, forwarded_allow_ips="*", log_config=None)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

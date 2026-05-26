@@ -92,8 +92,141 @@ def _wait_for_server(base, timeout_s=45):
     return False
 
 
+def _launch_server(state_dir, port, python_exe):
+    """Write sandboxed config/users, launch the server subprocess. Returns proc."""
+    (state_dir / "config.json").write_text(json.dumps(CONFIG_DOC, indent=2),
+                                           encoding="utf-8")
+    (state_dir / "users.json").write_text(json.dumps(USERS_DOC, indent=2),
+                                          encoding="utf-8")
+    env = dict(os.environ)
+    env["AIPROWLER_TEST_STATE_DIR"] = str(state_dir)
+    proc = subprocess.Popen(
+        [python_exe, str(MCP_MAIN), "--transport", "http",
+         "--port", str(port), "--token", TOK_OWNER,
+         "--public-base", f"http://127.0.0.1:{port}"],
+        env=env, cwd=str(HERE),
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+    )
+    return proc
+
+
+def _stage2_async(base):
+    """Async MCP-client assertions answering the KEYSTONE: does ctx reach the
+    tools over HTTP so scoping actually works? Uses the SDK's streamable-http
+    client. Returns (passed, failed, log_lines)."""
+    import asyncio
+    from mcp.client.streamable_http import streamablehttp_client
+    from mcp import ClientSession
+
+    MARKER = "STAGE2_SALES_SECRET_MARKER_42"
+    log = []
+    pf = {"passed": 0, "failed": 0}
+
+    def chk(label, cond, detail=""):
+        if cond:
+            pf["passed"] += 1; log.append(f"   [PASS] {label}")
+        else:
+            pf["failed"] += 1; log.append(f"   [FAIL] {label}  {detail}")
+
+    def _text(result):
+        """Flatten a call_tool result to a lowercase string for matching."""
+        try:
+            parts = []
+            for c in getattr(result, "content", []) or []:
+                t = getattr(c, "text", None)
+                if t:
+                    parts.append(t)
+            return " ".join(parts).lower()
+        except Exception:
+            return str(result).lower()
+
+    async def _session(token):
+        url = f"{base}/mcp"
+        headers = {"Authorization": f"Bearer {token}"}
+        return streamablehttp_client(url, headers=headers)
+
+    async def run():
+        import tempfile as _tf
+        # A temp file the sales manager will index. Lands in role:sales.
+        tmpdir = Path(_tf.mkdtemp(prefix="aiprowler_s2doc_"))
+        doc = tmpdir / "sales_secret.txt"
+        doc.write_text(f"{MARKER} confidential sales pricing for Q3.",
+                       encoding="utf-8")
+        try:
+            # 1) SALES indexes the file.
+            async with await _session(TOK_SALES) as (r, w, _):
+                async with ClientSession(r, w) as s:
+                    await s.initialize()
+                    res = await s.call_tool("add_and_index_directory",
+                                            {"directory": str(doc),
+                                             "track": False})
+                    chk("sales-mgr indexed the file (tool call succeeded)",
+                        "error" not in _text(res) or "indexed" in _text(res),
+                        f"({_text(res)[:160]})")
+
+            # 2) FIELD searches — must NOT get a real hit. NOTE: a "no results"
+            #    response echoes the query (which contains MARKER), so we can't
+            #    just look for MARKER. A genuine hit includes the source filename
+            #    and/or a "no results" sentinel is absent. Assert on those.
+            async with await _session(TOK_FIELD) as (r, w, _):
+                async with ClientSession(r, w) as s:
+                    await s.initialize()
+                    res = await s.call_tool("search_documents",
+                                            {"query": MARKER, "n_results": 10})
+                    field_txt = _text(res)
+                    field_no_hit = ("no results" in field_txt
+                                    or "sales_secret.txt" not in field_txt)
+                    chk("field-mgr CANNOT see sales-mgr's content (isolation)",
+                        field_no_hit,
+                        f"(LEAK! field got a real hit: {field_txt[:200]})")
+
+            # 3) SALES searches — SHOULD get a real hit (its own filename present).
+            async with await _session(TOK_SALES) as (r, w, _):
+                async with ClientSession(r, w) as s:
+                    await s.initialize()
+                    res = await s.call_tool("search_documents",
+                                            {"query": MARKER, "n_results": 10})
+                    sales_txt = _text(res)
+                    sales_hit = ("sales_secret.txt" in sales_txt
+                                 or "confidential sales pricing" in sales_txt)
+                    chk("sales-mgr CAN see its own content (ctx→tool works)",
+                        sales_hit,
+                        f"(not found in: {sales_txt[:200]})")
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    try:
+        asyncio.run(run())
+    except Exception as e:
+        pf["failed"] += 1
+        log.append(f"   [FAIL] Stage 2 client error: {e!r}")
+    return pf["passed"], pf["failed"], log
+
+
+def _cleanup_test_collections(python_exe):
+    """Drop the scope-role-sales/field collections this test may have created in
+    the REAL ChromaDB (server indexes there). Best-effort."""
+    code = (
+        "import rag_preprocessor as rp\n"
+        "c,_=rp.get_chroma_client()\n"
+        "for n in ('role:sales','role:field'):\n"
+        "    try:\n"
+        "        c.delete_collection(name=rp.chroma_collection_name(n))\n"
+        "        print('dropped',n)\n"
+        "    except Exception as e:\n"
+        "        print('skip',n,e)\n"
+    )
+    try:
+        subprocess.run([python_exe, "-c", code], cwd=str(HERE),
+                       capture_output=True, timeout=60)
+    except Exception:
+        pass
+
+
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--stage2", action="store_true",
+                    help="Run Stage 2 (MCP tool-call isolation over HTTP).")
     ap.add_argument("--port", type=int, default=8123)
     ap.add_argument("--python", default=sys.executable,
                     help="Interpreter to launch the server with.")
@@ -152,6 +285,23 @@ def main():
             _dump_tail()
             return 1
 
+        if args.stage2:
+            print("STAGE 2 - MCP TOOL-CALL ISOLATION over real HTTP "
+                  "(the keystone)\n" + "-" * 50)
+            s2_pass, s2_fail, s2_log = _stage2_async(base)
+            for line in s2_log:
+                print(line)
+            print("\n" + "-" * 50)
+            print(f"   RESULT: {s2_pass} passed, {s2_fail} failed")
+            if s2_fail:
+                print("   STAGE 2 FAILED - scoping/ownership did NOT hold "
+                      "over HTTP (or client error). See server output:")
+                _dump_tail()
+                return 1
+            print("   STAGE 2 PASSED - ctx reaches the tools; scoping + "
+                  "ownership hold live over HTTP. KEYSTONE ANSWERED.")
+            return 0
+
         print("STAGE 1 - AUTH / IDENTITY over real HTTP\n" + "-" * 50)
 
         s, _ = _http_get(f"{base}/health")
@@ -197,6 +347,12 @@ def main():
                     proc.kill()
                 except Exception:
                     pass
+            # Stage 2 indexes into the REAL ChromaDB (server's DB). Drop the
+            # role:sales/role:field test collections now that the server (which
+            # held the DB open) is stopped.
+            if args.stage2:
+                _cleanup_test_collections(args.python)
+                print("Dropped Stage 2 test collections (role:sales/role:field).")
             shutil.rmtree(state_dir, ignore_errors=True)
             print(f"Cleaned up {state_dir}")
         else:
