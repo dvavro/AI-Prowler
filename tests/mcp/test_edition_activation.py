@@ -1036,10 +1036,39 @@ class TestResolverFactory:
             resolver_factory_api.cmap(None), dict)
 
     def test_C_MCP_FACTORY_09_company_default_used_when_no_user_default(self, resolver_factory_api):
+        # Option A: 'shared' is the company commons — a MANAGER may write it, so
+        # the company default 'shared' is honored (no degrade). Per-file ownership
+        # still protects what each user adds.
         users = {"users": {}, "collection_map": {"rules": [],
                  "default_collection": "shared"}}
         r = resolver_factory_api.build(self.USERA, users)
-        assert r("D:/x.pdf") == "shared"   # company default applies
+        assert r("D:/x.pdf") == "shared"
+
+    def test_C_MCP_FACTORY_10_staff_cannot_write_shared_degrades(self, resolver_factory_api):
+        # Option-A BOUNDARY: 'shared' is open to WRITERS, not literally everyone.
+        # A staff user (can_write=False) cannot write shared, so the company
+        # default 'shared' degrades to their own private collection. This guards
+        # against accidentally opening shared to read-only roles.
+        staff = {"id": "staff9", "role": "staff"}
+        users = {"users": {}, "collection_map": {"rules": [],
+                 "default_collection": "shared"}}
+        r = resolver_factory_api.build(staff, users)
+        assert r("D:/x.pdf") == "user:staff9"
+
+    def test_C_MCP_FACTORY_11_can_index_degrades_forbidden_role_rule(self, resolver_factory_api):
+        # A path rule routes to role:field, but USERA (sales manager) isn't in
+        # that scope → _can_index denies → degrade to own private.
+        users = {"users": {}, "collection_map": {"rules": [
+            {"prefix": "C:/Co/Field", "collection": "role:field"}]}}
+        r = resolver_factory_api.build(self.USERA, users)
+        assert r("C:/Co/Field/route.pdf") == "user:usera01"
+
+    def test_C_MCP_FACTORY_12_can_index_allows_own_role_rule(self, resolver_factory_api):
+        # Same shape but routing to the manager's OWN assigned scope → allowed.
+        users = {"users": {}, "collection_map": {"rules": [
+            {"prefix": "C:/Co/Sales", "collection": "role:sales"}]}}
+        r = resolver_factory_api.build(self.USERA, users)
+        assert r("C:/Co/Sales/quote.pdf") == "role:sales"
 
 
 # ═════════════════════════════════════════════════════════════════════════════

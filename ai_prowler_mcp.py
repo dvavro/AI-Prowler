@@ -746,6 +746,7 @@ def add_and_index_directory(
     directory: str,
     recursive: bool = True,
     track: bool = True,
+    ctx: Context = None,
 ) -> str:
     """
     Index all supported documents inside a local folder OR a single file
@@ -782,6 +783,20 @@ def add_and_index_directory(
 
     load_config()
 
+    # v7.0.0 Phase B: in server mode build the per-user write controls. Personal
+    # mode (no authenticated user) leaves all three None → pipeline unchanged.
+    #   • resolver   — routes each file to its scoped collection (WHERE), with
+    #                  _can_index enforced inside the resolver (WHETHER).
+    #   • indexer_user— stamps indexed_by for the ownership model.
+    #   • purge_gate  — blocks overwriting/destroying chunks the user doesn't own.
+    _user = _current_user(ctx)
+    _resolver = _build_collection_resolver(_user) if _user else None
+    _indexer_user = _user
+    _purge_gate = None
+    if _user:
+        _oid = _owner_user_id()
+        _purge_gate = lambda metas: _can_purge_chunks(_user, metas, _oid)
+
     is_file = target.is_file()
 
     with _capture_stdout() as buf:
@@ -794,11 +809,17 @@ def add_and_index_directory(
                     [fp],
                     label="1/1",
                     root_directory=str(target.parent),
+                    collection_resolver=_resolver,
+                    indexer_user=_indexer_user,
+                    purge_gate=_purge_gate,
                 )
                 chunks = stats.get('chunks', 0) if stats else 0
                 print(f"✅ Indexed file: {target.name} — {chunks} chunk(s)")
             else:
-                index_directory(str(target), recursive=recursive)
+                index_directory(str(target), recursive=recursive,
+                                collection_resolver=_resolver,
+                                indexer_user=_indexer_user,
+                                purge_gate=_purge_gate)
         except Exception as exc:
             return f"❌ Indexing failed: {exc}"
 
@@ -828,7 +849,8 @@ def add_and_index_directory(
 # ══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
-def update_tracked_directories(directory: Optional[str] = None) -> str:
+def update_tracked_directories(directory: Optional[str] = None,
+                               ctx: Context = None) -> str:
     """
     Re-scan all tracked paths (directories AND individually-tracked files) for
     new, modified, or deleted files and update the index incrementally — only
@@ -842,6 +864,16 @@ def update_tracked_directories(directory: Optional[str] = None) -> str:
         A summary of changes detected and files re-indexed.
     """
     load_config()
+
+    # v7.0.0 Phase B: server-mode write controls (None in personal mode →
+    # pipeline unchanged). Same trio as add_and_index_directory. The purge gate
+    # matters especially here: command_update PURGES deleted files (destructive).
+    _user = _current_user(ctx)
+    _resolver = _build_collection_resolver(_user) if _user else None
+    _purge_gate = None
+    if _user:
+        _oid = _owner_user_id()
+        _purge_gate = lambda metas: _can_purge_chunks(_user, metas, _oid)
 
     dirs_to_update: list[str] = []
     if directory:
@@ -858,7 +890,10 @@ def update_tracked_directories(directory: Optional[str] = None) -> str:
     with _capture_stdout() as buf:
         for d in dirs_to_update:
             try:
-                command_update(d, recursive=True, auto_confirm=True)
+                command_update(d, recursive=True, auto_confirm=True,
+                                collection_resolver=_resolver,
+                                indexer_user=_user,
+                                purge_gate=_purge_gate)
             except Exception as exc:
                 print(f"⚠️  Error updating {d}: {exc}")
 
@@ -6296,7 +6331,13 @@ def _can_index(user: "dict | None", target_collection: str,
 
     # manager from here on.
     if target == _SHARED_COLLECTION:
-        return (False, "only the owner may write the shared collection")
+        # Option A: 'shared' is the company commons — any can_write role may
+        # ADD files here (read+write for everyone who can write server-side).
+        # The chunk-ownership gate (_can_purge_chunks) still protects each file:
+        # you own what you add, only you (+ owner/admin custody) may modify or
+        # delete it, and the owner's posted files (e.g. safety manual) can't be
+        # clobbered by anyone else.
+        return (True, "shared is the company commons — any writer may add")
 
     if target.startswith("user:"):
         if target == f"user:{user.get('id')}":
@@ -6506,7 +6547,20 @@ def _build_collection_resolver(user: "dict | None", users_data: "dict | None" = 
         mapping["default_collection"] = company_map["default_collection"]
 
     def _resolver(filepath):
-        return _resolve_collection_for_path(filepath, mapping, indexer_user=user)
+        target = _resolve_collection_for_path(filepath, mapping, indexer_user=user)
+        # WHETHER-gate: the factory PROPOSES a target (WHERE); enforce _can_index
+        # (WHETHER) here so a path rule can never land a write in a collection the
+        # user isn't permitted to write to. On denial, degrade to the user's own
+        # private collection — the always-safe target (you may always write your
+        # own). This keeps indexing from silently leaking into a forbidden scope.
+        try:
+            allowed, _why = _can_index(user, target)
+        except Exception:
+            allowed = False
+        if allowed:
+            return target
+        own_private = f"user:{user.get('id')}" if user.get("id") else "documents"
+        return own_private
     return _resolver
 
 
