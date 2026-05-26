@@ -3488,7 +3488,7 @@ def index_email_archive(filepath: str,
 
 
 def index_directory(directory: str, recursive: bool = True, quiet: bool = False,
-                    collection_resolver=None):
+                    collection_resolver=None, indexer_user=None, purge_gate=None):
     """
     Index all files in a directory
     
@@ -3613,10 +3613,51 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False,
             file_modified=prov['file_modified'],
             file_size_bytes=prov['file_size_bytes'],
         ) for j in range(len(chunks))]
-        
+
         # Route this file to its target collection (default collection in
         # personal mode; per-scope collection when a resolver is supplied).
         _file_collection = _collection_for(filepath)
+
+        # Fetch any existing chunks for this path ONCE — used both for the
+        # ownership gate and to PRESERVE the original owner on re-index.
+        _existing_metas = []
+        if indexer_user or purge_gate is not None:
+            try:
+                _ex = _file_collection.get(where={"filepath": filepath},
+                                           include=["metadatas"])
+                _existing_metas = _ex.get("metadatas", []) or []
+            except Exception:
+                _existing_metas = []
+
+        # v7.0.0 Phase B ownership gate: before purging existing chunks for this
+        # path, check the indexer is allowed to remove whoever owns them. The
+        # gate is a callable supplied by the MCP layer (keeps rag_preprocessor
+        # free of ai_prowler_mcp). No gate (personal mode) → always allowed.
+        if purge_gate is not None:
+            try:
+                allowed, reason = purge_gate(_existing_metas)
+            except Exception as _ge:
+                allowed, reason = (False, f"purge gate error: {_ge}")
+            if not allowed:
+                print(f"         🛡️  Skipped (ownership): {reason}")
+                skipped_files += 1
+                continue
+
+        # v7.0.0 Phase B: stamp ownership so the purge gate can enforce
+        # "delete only your own". PRESERVE the original owner on re-index — if
+        # existing chunks already record an indexed_by, keep it (an owner/admin
+        # refreshing someone's file must NOT silently steal ownership). Only a
+        # FIRST index (no prior owner) records the current indexer. Personal
+        # mode (no indexer_user) leaves it off entirely.
+        if indexer_user and indexer_user.get("id"):
+            _prior_owner = None
+            for _m in _existing_metas:
+                if isinstance(_m, dict) and _m.get("indexed_by"):
+                    _prior_owner = _m["indexed_by"]
+                    break
+            _owner_stamp = _prior_owner or indexer_user["id"]
+            for m in metadatas:
+                m["indexed_by"] = _owner_stamp
 
         # Remove any existing chunks for this file before re-adding
         # This prevents ghost chunks from shorter re-processed files and
@@ -4893,7 +4934,8 @@ def command_check(directory, recursive=True):
         print(f"To update index: rag update {directory}")
         print()
 
-def _update_tracked_file(filepath: str, auto_confirm: bool = False) -> None:
+def _update_tracked_file(filepath: str, auto_confirm: bool = False,
+                         collection_resolver=None) -> None:
     """Update a single individually-tracked file.
 
     Bypasses SKIP_EXTENSIONS (per-file tracking is explicit user opt-in).
@@ -5000,6 +5042,7 @@ def _update_tracked_file(filepath: str, auto_confirm: bool = False) -> None:
             [fp_norm],
             label="1/1",
             root_directory=str(Path(filepath).parent),
+            collection_resolver=collection_resolver,
         )
         chunks = stats.get('chunks', 0) if stats else 0
         print(f"   ✅ {fname} — {chunks} chunk(s) indexed")
@@ -5011,7 +5054,8 @@ def _update_tracked_file(filepath: str, auto_confirm: bool = False) -> None:
     print()
 
 
-def command_update(directory, recursive=True, auto_confirm=False):
+def command_update(directory, recursive=True, auto_confirm=False,
+                   collection_resolver=None):
     """Check for changes and update index with new/modified files, and
     automatically purge deleted files from ChromaDB.
 
@@ -5043,7 +5087,8 @@ def command_update(directory, recursive=True, auto_confirm=False):
     # bulk directory scans only — explicit per-file tracking overrides them).
     target_path = Path(directory)
     if target_path.exists() and target_path.is_file():
-        return _update_tracked_file(directory, auto_confirm=auto_confirm)
+        return _update_tracked_file(directory, auto_confirm=auto_confirm,
+                                    collection_resolver=collection_resolver)
 
     print("=" * 70)
     print("🔍 CHECKING FOR CHANGES")
@@ -5089,6 +5134,25 @@ def command_update(directory, recursive=True, auto_confirm=False):
     client, embedding_func = get_chroma_client()
     collection = create_or_get_collection(client, embedding_func)
 
+    # v7.0.0 Phase B: per-file collection routing for server mode. No resolver
+    # (personal/desktop) => every file uses the default 'collection' above,
+    # unchanged. With a resolver, each file routes to its scoped collection
+    # (cached). Both the purge (delete) and re-index (add) use the per-file one.
+    _cu_cache = {}
+    def _cu_collection_for(fp):
+        if collection_resolver is None:
+            return collection
+        name = None
+        try:
+            name = collection_resolver(fp)
+        except Exception:
+            name = None
+        name = name or COLLECTION_NAME
+        if name not in _cu_cache:
+            _cu_cache[name] = create_or_get_collection(
+                client, embedding_func, collection_name=name)
+        return _cu_cache[name]
+
     # ═══════════════════════════════════════════════════════════════════════════
     # PASS 1 — PURGE DELETED FILES
     # Runs first so stale chunks are gone before we (optionally) re-index.
@@ -5111,7 +5175,7 @@ def command_update(directory, recursive=True, auto_confirm=False):
             print(f"[{i}/{deleted}] [DELETED] {filename}")
 
             try:
-                collection.delete(where={"filepath": filepath})
+                _cu_collection_for(filepath).delete(where={"filepath": filepath})
                 print(f"  ✅ Chunks purged from ChromaDB")
                 purged += 1
             except Exception as exc:
@@ -5198,8 +5262,9 @@ def command_update(directory, recursive=True, auto_confirm=False):
 
             try:
                 # Remove stale chunks before re-adding (handles re-index of modified)
-                collection.delete(where={"filepath": filepath})
-                collection.add(ids=ids, documents=chunks, metadatas=metadatas)
+                _cu_col = _cu_collection_for(filepath)
+                _cu_col.delete(where={"filepath": filepath})
+                _cu_col.add(ids=ids, documents=chunks, metadatas=metadatas)
                 print(f"  ✅ Indexed {len(chunks)} chunk(s)")
                 updated += 1
             except Exception as exc:

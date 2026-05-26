@@ -441,16 +441,26 @@ def cmd_ownership_test():
         return OWN_COLL
 
     def _index_as(user):
-        """Index the file through the real pipeline AS `user`. Uses the future
-        indexer_user param (step-3 wiring). Returns (ok, note)."""
+        """Index the file through the real pipeline AS `user`, with the SAME
+        ownership gate the MCP layer will use (step-3 wiring). Returns (ok, note)."""
+        # Build the purge gate exactly as the MCP index tool will: it asks
+        # _can_purge_chunks(this user, existing chunk metas, owner_id). Owner id
+        # is patched to our seeded owner (test users aren't in the real users.json).
+        _orig = ap._owner_user_id
+        ap._owner_user_id = lambda *a, **k: USER_OWNER["id"]
         try:
+            owner_id = ap._owner_user_id()
+            def _gate(existing_metas):
+                return ap._can_purge_chunks(user, existing_metas, owner_id)
             rp.index_directory(str(tmp), recursive=False, quiet=True,
                                collection_resolver=_resolver,
-                               indexer_user=user)
+                               indexer_user=user,
+                               purge_gate=_gate)
             return (True, "")
         except TypeError as e:
-            # indexer_user not supported yet → wiring not done.
-            return (False, f"pipeline has no indexer_user param yet: {e}")
+            return (False, f"pipeline has no indexer_user/purge_gate param yet: {e}")
+        finally:
+            ap._owner_user_id = _orig
 
     def _chunks():
         client, ef = rp.get_chroma_client()
@@ -491,6 +501,18 @@ def cmd_ownership_test():
         still_alice = bool(metas3) and all(
             m.get("indexed_by") == USER_A["id"] for m in metas3)
         check("Alice may re-index her own file", still_alice)
+
+        # 4. Admin (custody) re-indexes Alice's file → ALLOWED, but Alice STAYS
+        #    the owner (admin refresh must not steal ownership).
+        ok_adm, note_adm = _index_as(USER_ADMIN)
+        if not ok_adm:
+            print(f"   ⚠️  {note_adm}")
+        metas4, docs4 = _chunks()
+        admin_refreshed = any("CONTESTED" in d for d in docs4)
+        owner_preserved = bool(metas4) and all(
+            m.get("indexed_by") == USER_A["id"] for m in metas4)
+        check("Admin MAY re-index an employee's file (custody)", admin_refreshed)
+        check("Original owner PRESERVED after admin re-index", owner_preserved)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         # Drop the test collection.
