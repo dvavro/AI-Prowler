@@ -884,3 +884,84 @@ class TestCurrentUser:
         # Middleware set state.user = None (shouldn't happen, but be safe).
         ctx = _Stub(request_context=_Stub(request=_Stub(state=_Stub(user=None))))
         assert current_user_api(ctx) is None
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# DATA-MANAGEMENT / OWNER PROTECTION — _can_manage_user_data, _owner_user_id
+# (v7.0.0 Phase B). Owner manages anyone; admin (can_manage_users, not owner)
+# manages employees but NEVER the owner's data. PURE.
+# ═════════════════════════════════════════════════════════════════════════════
+@pytest.fixture
+def manage_api(mcp_module):
+    fn = getattr(mcp_module, "_can_manage_user_data", None)
+    oid = getattr(mcp_module, "_owner_user_id", None)
+    if fn is None or oid is None:
+        pytest.skip("_can_manage_user_data/_owner_user_id not present.")
+
+    class Api:
+        can_manage = staticmethod(fn)
+        owner_id = staticmethod(oid)
+    return Api
+
+
+class TestDataManagement:
+    OWNER = {"id": "owner001", "role": "owner", "can_manage_users": True}
+    ADMIN = {"id": "admin001", "role": "manager", "can_manage_users": True}
+    STAFF = {"id": "staff001", "role": "staff"}
+    OWNER_ID = "owner001"
+
+    def test_C_MCP_MANAGE_01_owner_manages_employee(self, manage_api):
+        ok, _ = manage_api.can_manage(self.OWNER, "staff001", self.OWNER_ID)
+        assert ok is True
+
+    def test_C_MCP_MANAGE_02_owner_manages_own(self, manage_api):
+        ok, _ = manage_api.can_manage(self.OWNER, self.OWNER_ID, self.OWNER_ID)
+        assert ok is True
+
+    def test_C_MCP_MANAGE_03_admin_manages_employee(self, manage_api):
+        ok, _ = manage_api.can_manage(self.ADMIN, "staff001", self.OWNER_ID)
+        assert ok is True
+
+    def test_C_MCP_MANAGE_04_admin_CANNOT_manage_owner(self, manage_api):
+        # The core protection: admin blocked from the owner's data.
+        ok, reason = manage_api.can_manage(self.ADMIN, self.OWNER_ID, self.OWNER_ID)
+        assert ok is False
+        assert "owner" in reason.lower()
+
+    def test_C_MCP_MANAGE_05_staff_cannot_manage(self, manage_api):
+        ok, _ = manage_api.can_manage(self.STAFF, "other001", self.OWNER_ID)
+        assert ok is False
+
+    def test_C_MCP_MANAGE_06_none_actor(self, manage_api):
+        ok, _ = manage_api.can_manage(None, "x", self.OWNER_ID)
+        assert ok is False
+
+    def test_C_MCP_MANAGE_07_manager_without_flag_cannot(self, manage_api):
+        plain_mgr = {"id": "m9", "role": "manager"}  # no can_manage_users
+        ok, _ = manage_api.can_manage(plain_mgr, "staff001", self.OWNER_ID)
+        assert ok is False
+
+    def test_C_MCP_MANAGE_08_owner_id_lookup(self, manage_api):
+        users = {"users": {
+            "tokOwner": {"role": "owner"},
+            "tokMgr":   {"role": "manager"},
+        }}
+        assert manage_api.owner_id(users) == "tokOwner"
+
+    def test_C_MCP_MANAGE_09_owner_id_none_when_no_owner(self, manage_api):
+        users = {"users": {"tokMgr": {"role": "manager"}}}
+        assert manage_api.owner_id(users) is None
+
+    def test_C_MCP_MANAGE_10_unknown_owner_id_fails_closed(self, manage_api):
+        # FAIL CLOSED: if the owner's id can't be determined, an admin is DENIED
+        # management of ANY target — we never risk destroying owner data we
+        # cannot rule out. (Owner-protection must be robust to users.json glitches.)
+        ok, reason = manage_api.can_manage(self.ADMIN, "staff001", None)
+        assert ok is False
+        assert "fail closed" in reason.lower() or "unknown" in reason.lower()
+
+    def test_C_MCP_MANAGE_11_owner_unaffected_by_unknown_id(self, manage_api):
+        # The owner themself is still allowed even if owner_id lookup is None
+        # (they're identified by role, not by id-matching).
+        ok, _ = manage_api.can_manage(self.OWNER, "anyone", None)
+        assert ok is True

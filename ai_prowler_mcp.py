@@ -1139,18 +1139,72 @@ def _scoped_collections_for_ctx(ctx):
                 "No indexed documents found. "
                 "Use add_and_index_directory to index some documents first.")
 
-    # Owner-sees-all: enumerate every existing role:* collection so the owner's
-    # allowed set includes all of them (not just their own scopes). Role
-    # collections live physically as 'scope-role-<name>'; map them back to the
-    # logical 'role:<name>' form _allowed_collections expects. Non-owners pass
-    # None here, so this enumeration only affects owners (per _ROLE_CAPS).
-    all_role_collections = None
-    if _is_admin(user) or _role_caps(user.get("role")).get("read_all_role_scopes"):
-        all_role_collections = _enumerate_role_collections(client)
+    # Two SEPARATE elevated capabilities (decoupled by design):
+    #   • read_all_role_scopes (role cap; owner has it) → read every role:*
+    #     collection ("see all team knowledge bases").
+    #   • can_manage_users (per-user flag in users.json, independent of role) →
+    #     read every user:* PRIVATE collection ("data custodian": cleanup when an
+    #     employee leaves, administer the database). This is deliberately a flag,
+    #     not a role, so an owner can DELEGATE custody to e.g. an office manager
+    #     without making them a full owner. NOTE: company-server user: collections
+    #     are administrative workspace, NOT true privacy — real privacy is a
+    #     separate AI-Prowler install on the employee's own PC. Communicate this
+    #     to employees in onboarding.
+    caps = _role_caps(user.get("role"))
+    can_read_all_roles    = bool(caps.get("read_all_role_scopes")) or _is_admin(user)
+    # Owner ALWAYS has custody (implicit can_manage_users); a non-owner needs the
+    # flag explicitly set. The owner reads all privates incl. their own; admins
+    # read all employees' privates but are blocked from the owner's (below).
+    can_read_all_privates = _user_has_role(user, "owner") or bool(user.get("can_manage_users"))
 
-    # Each allowed collection that exists.
+    if can_read_all_roles or can_read_all_privates:
+        # Build the elevated set from physical collections directly (avoids any
+        # logical<->physical round-trip fragility). Always include the user's own
+        # base set first (shared + own scopes + own private), then add the
+        # elevated categories they're entitled to.
+        cols = []
+        seen = set()
+
+        def _add_phys(phys):
+            if phys in seen:
+                return
+            seen.add(phys)
+            try:
+                cols.append(client.get_collection(
+                    name=phys, embedding_function=embedding_func))
+            except Exception:
+                pass  # not created yet — skip
+
+        # The user's own base allowed set (shared + their scopes + own private).
+        for logical in _allowed_collections(user, None):
+            _add_phys(chroma_collection_name(logical))
+
+        # Elevated role visibility.
+        if can_read_all_roles:
+            _add_phys(chroma_collection_name(_SHARED_COLLECTION))
+            for phys in _enumerate_scope_collections(client, "scope-role-"):
+                _add_phys(phys)
+
+        # Elevated private/custody visibility (can_manage_users). The OWNER's
+        # private collection is PROTECTED: an admin (can_manage_users but not the
+        # owner) can read every employee's private collection EXCEPT the owner's.
+        # The owner's private space is private even from their own admins. The
+        # owner themself reads everything (they're not excluded from their own).
+        if can_read_all_privates:
+            requester_is_owner = _user_has_role(user, "owner")
+            owner_id = None if requester_is_owner else _owner_user_id()
+            owner_priv_phys = (chroma_collection_name(f"user:{owner_id}")
+                               if owner_id else None)
+            for phys in _enumerate_scope_collections(client, "scope-user-"):
+                if owner_priv_phys and phys == owner_priv_phys:
+                    continue  # protect the owner's private data from admins
+                _add_phys(phys)
+
+        return cols
+
+    # Standard user: own scopes + shared + own private only.
     cols = []
-    for logical in _allowed_collections(user, all_role_collections):
+    for logical in _allowed_collections(user, None):
         phys = chroma_collection_name(logical)
         try:
             cols.append(client.get_collection(name=phys,
@@ -1160,17 +1214,11 @@ def _scoped_collections_for_ctx(ctx):
     return cols
 
 
-def _enumerate_role_collections(client) -> list:
-    """List all existing role:* collections (LOGICAL names) by inspecting
-    ChromaDB for physical 'scope-role-<name>' collections. Used to give owners
-    read access to every role scope. Returns [] on any error (fail-closed:
-    an owner simply sees fewer collections, never MORE than exist).
-
-    Note: the physical->logical remap reverses chroma_collection_name's
-    'role:<name>' -> 'scope-role-<name>'. Sub-names that contained characters
-    the sanitizer rewrote to '-' cannot be perfectly reversed, but role scope
-    names are expected to be simple ([a-z0-9-]), so 'scope-role-sales' ->
-    'role:sales' is exact for normal usage.
+def _enumerate_scope_collections(client, prefix: str = "scope-") -> list:
+    """List existing PHYSICAL collection names beginning with `prefix`
+    (default all 'scope-*' — i.e. every shared/role/user scope collection).
+    Used to give owners/admins read access to everything on the company server.
+    Returns [] on any error (fail-closed: owner sees fewer, never more).
     """
     try:
         raw = client.list_collections()
@@ -1179,12 +1227,20 @@ def _enumerate_role_collections(client) -> list:
             names.append(c if isinstance(c, str) else getattr(c, "name", str(c)))
     except Exception:
         return []
+    return [n for n in names if n.startswith(prefix)]
+
+
+def _enumerate_role_collections(client) -> list:
+    """List all existing role:* collections (LOGICAL names) by inspecting
+    ChromaDB for physical 'scope-role-<name>' collections. Retained for
+    _allowed_collections' owner role-enumeration arg and unit tests. Returns []
+    on any error (fail-closed).
+    """
     role_logicals = []
-    for phys in names:
-        if phys.startswith("scope-role-"):
-            sub = phys[len("scope-role-"):]
-            if sub:
-                role_logicals.append(f"role:{sub}")
+    for phys in _enumerate_scope_collections(client, "scope-role-"):
+        sub = phys[len("scope-role-"):]
+        if sub:
+            role_logicals.append(f"role:{sub}")
     return role_logicals
 
 
@@ -6518,6 +6574,53 @@ def _load_users() -> "dict | None":
     except Exception as _e:
         _log.error("users.json unreadable: %s", _e)
     return None
+
+
+def _owner_user_id(users_data: "dict | None" = None) -> "str | None":
+    """Return the user id (token) of the OWNER from users.json, or None if no
+    owner is defined / users.json absent. Used to PROTECT the owner's private
+    collection from admins (can_manage_users grants read of all OTHER users'
+    privates, but never the owner's). If multiple owners exist (unusual), the
+    first found is returned. PURE given users_data; loads it if not supplied."""
+    if users_data is None:
+        users_data = _load_users()
+    if not users_data:
+        return None
+    for uid, entry in (users_data.get("users") or {}).items():
+        if isinstance(entry, dict) and (entry.get("role") or "").strip().lower() == "owner":
+            return uid
+    return None
+
+
+def _can_manage_user_data(actor: "dict | None", target_user_id: str,
+                          owner_id: "str | None") -> tuple:
+    """Decide whether `actor` may DELETE / clean up the data of target_user_id.
+    PURE. Guards the (future) Admin-tab data-management / departed-employee
+    cleanup operation — NOT yet wired to any delete op, encoded now + tested.
+
+    Rules (FAIL CLOSED on the owner-protection — never destroy owner data on a
+    guess):
+      • The owner may manage anyone's data (including their own).
+      • An admin (can_manage_users, not owner) may manage any EMPLOYEE's data
+        but NEVER the owner's. If the owner's id cannot be determined
+        (owner_id is None/empty), an admin is DENIED — we will not risk
+        deleting owner data we cannot rule out.
+      • Anyone else: no management rights.
+    Returns (allowed: bool, reason: str).
+    """
+    if not actor:
+        return (False, "no actor")
+    if _user_has_role(actor, "owner"):
+        return (True, "owner may manage any data")
+    if not actor.get("can_manage_users"):
+        return (False, "actor lacks can_manage_users")
+    # Admin from here. Owner data is protected — and we FAIL CLOSED: if we can't
+    # identify the owner, we cannot prove the target isn't the owner, so deny.
+    if not owner_id:
+        return (False, "owner id unknown — refusing to risk owner data (fail closed)")
+    if target_user_id == owner_id:
+        return (False, "owner data is protected from admins")
+    return (True, "admin may manage employee data")
 
 
 def _run_server_mode(port: int, token: str,

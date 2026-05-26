@@ -51,14 +51,21 @@ USER_B = {"id": "userB00000000002", "name": "Bob Field", "role": "manager",
           "scopes": ["role:field"], "private_collection_enabled": True,
           "status": "active"}
 
-# An owner — should see EVERYTHING role-scoped (via owner enumeration) + shared
-# + own private. Current code does NOT grant read of OTHER users' private
-# collections (read_others_private cap is declared but intentionally not
-# implemented — "private stays private, even from the owner"). The owner test
-# asserts that actual behavior.
+# An owner who is ALSO the data custodian (can_manage_users=True). Sees
+# EVERYTHING: shared + all role:* (read_all_role_scopes) + own private + every
+# employee's user:* private (can_manage_users custody). In production the owner
+# would typically have this flag; custody can also be delegated to a non-owner
+# by setting can_manage_users=True on their users.json entry without the owner role.
 USER_OWNER = {"id": "owner00000000003", "name": "Olive Owner", "role": "owner",
               "scopes": [], "private_collection_enabled": True,
-              "status": "active"}
+              "can_manage_users": True, "status": "active"}
+
+# A delegated ADMIN: can_manage_users=True but NOT the owner. Reads all
+# employees' privates (Alice, Bob) for custody, but is BARRED from the owner's
+# private collection (neither read nor delete). Tests the owner-protection.
+USER_ADMIN = {"id": "admin00000000004", "name": "Adam Admin", "role": "manager",
+              "scopes": [], "private_collection_enabled": True,
+              "can_manage_users": True, "status": "active"}
 
 # Sentinel content: each doc says which scope it belongs to, so the read test
 # can assert "A must NOT see FIELD_SECRET / BOB_PRIVATE".
@@ -78,6 +85,9 @@ TEST_DOCS = {
     "bob_notes.txt":
         "BOB_PRIVATE Bob's personal notes. Only Bob (userB) may read this. "
         "user private collection content.",
+    "owner_notes.txt":
+        "OWNER_PRIVATE Olive the owner's confidential personal notes. An admin "
+        "must NEVER read this — owner private data is protected. user content.",
 }
 
 # Which file maps to which collection (this is the Model-B mapping, expressed as
@@ -88,6 +98,7 @@ FILE_TO_COLLECTION = {
     "field_routes.txt":    "role:field",
     "alice_notes.txt":     f"user:{USER_A['id']}",
     "bob_notes.txt":       f"user:{USER_B['id']}",
+    "owner_notes.txt":     f"user:{USER_OWNER['id']}",
 }
 
 TEST_COLLECTIONS = sorted(set(FILE_TO_COLLECTION.values()))
@@ -311,13 +322,13 @@ def cmd_owner_test():
             print(f"      (collection read error: {e})")
     owner_text = " ".join(texts)
 
-    # Owner SEES: shared + both role scopes (enumeration) + own private.
+    # Owner SEES EVERYTHING on the company server: shared + both role scopes
+    # (enumeration) + own private + every employee's private (data-custody model).
     check("Owner sees SHARED",        "COMPANY_SHARED" in owner_text)
     check("Owner sees SALES_SECRET (role enum)",  "SALES_SECRET" in owner_text)
     check("Owner sees FIELD_SECRET (role enum)",  "FIELD_SECRET" in owner_text)
-    # Owner does NOT see other users' private collections (private stays private).
-    check("Owner does NOT see ALICE_PRIVATE", "ALICE_PRIVATE" not in owner_text)
-    check("Owner does NOT see BOB_PRIVATE",   "BOB_PRIVATE"   not in owner_text)
+    check("Owner sees ALICE_PRIVATE (custody)", "ALICE_PRIVATE" in owner_text)
+    check("Owner sees BOB_PRIVATE (custody)",   "BOB_PRIVATE"   in owner_text)
 
     print("\n" + "─" * 50)
     print(f"   RESULT: {passed} passed, {failed} failed")
@@ -325,6 +336,74 @@ def cmd_owner_test():
         print("   ⛔ OWNER ENUMERATION TEST FAILED.")
         return False
     print("   ✅ OWNER ENUMERATION CORRECT.")
+    return True
+
+
+def cmd_admin_test():
+    """Owner-protection test for a delegated ADMIN (can_manage_users, not owner).
+    Asserts the admin READS all employees' privates (custody) but NOT the
+    owner's, AND that the delete-permission logic blocks the admin from the
+    owner's data while allowing employees'. Run after --seed (which now also
+    seeds the owner's private OWNER_PRIVATE doc)."""
+    print("🛡️  ADMIN OWNER-PROTECTION TEST\n" + "─" * 50)
+    passed = failed = 0
+
+    def check(label, condition):
+        nonlocal passed, failed
+        if condition:
+            passed += 1
+            print(f"   ✅ {label}")
+        else:
+            failed += 1
+            print(f"   ❌ {label}")
+
+    class _Stub:
+        def __init__(self, **kw):
+            for k, v in kw.items():
+                setattr(self, k, v)
+
+    ctx = _Stub(request_context=_Stub(request=_Stub(state=_Stub(user=USER_ADMIN))))
+    # _scoped_collections_for_ctx calls ap._owner_user_id(), which reads the REAL
+    # users.json — but our test users are in-memory, not in that file. Patch it to
+    # return our seeded owner's id so the owner-exclusion targets the right
+    # collection. (Restored in finally.)
+    _orig_owner_fn = ap._owner_user_id
+    ap._owner_user_id = lambda *a, **k: USER_OWNER["id"]
+    try:
+        cols = ap._scoped_collections_for_ctx(ctx)
+        texts = []
+        for col in cols:
+            try:
+                total = col.count()
+                sample = col.get(limit=min(5000, total), include=["documents"])
+                texts.extend(sample.get("documents", []) or [])
+            except Exception as e:
+                print(f"      (collection read error: {e})")
+        admin_text = " ".join(texts)
+    finally:
+        ap._owner_user_id = _orig_owner_fn
+
+    # READ side: admin sees employees' privates + shared, but NOT owner's private.
+    check("Admin sees SHARED",              "COMPANY_SHARED" in admin_text)
+    check("Admin sees ALICE_PRIVATE (custody)", "ALICE_PRIVATE" in admin_text)
+    check("Admin sees BOB_PRIVATE (custody)",   "BOB_PRIVATE"   in admin_text)
+    check("Admin does NOT see OWNER_PRIVATE",   "OWNER_PRIVATE" not in admin_text)
+
+    # DELETE side: _can_manage_user_data — admin may manage employees, not owner.
+    owner_id = USER_OWNER["id"]
+    ok_emp, _ = ap._can_manage_user_data(USER_ADMIN, USER_A["id"], owner_id)
+    ok_own, _ = ap._can_manage_user_data(USER_ADMIN, owner_id, owner_id)
+    ok_failclosed, _ = ap._can_manage_user_data(USER_ADMIN, USER_A["id"], None)
+    check("Admin MAY manage employee data",     ok_emp is True)
+    check("Admin may NOT manage owner data",    ok_own is False)
+    check("Admin BLOCKED when owner id unknown (fail closed)", ok_failclosed is False)
+
+    print("\n" + "─" * 50)
+    print(f"   RESULT: {passed} passed, {failed} failed")
+    if failed:
+        print("   ⛔ ADMIN OWNER-PROTECTION FAILED.")
+        return False
+    print("   ✅ ADMIN OWNER-PROTECTION HOLDS.")
     return True
 
 
@@ -358,6 +437,9 @@ if __name__ == "__main__":
         sys.exit(0 if ok else 1)
     elif arg in ("--owner-test", "owner-test", "--owner"):
         ok = cmd_owner_test()
+        sys.exit(0 if ok else 1)
+    elif arg in ("--admin-test", "admin-test", "--admin"):
+        ok = cmd_admin_test()
         sys.exit(0 if ok else 1)
     elif arg in ("--cleanup", "cleanup"):
         cmd_cleanup()
