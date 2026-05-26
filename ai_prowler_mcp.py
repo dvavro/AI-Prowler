@@ -6463,6 +6463,53 @@ def _resolve_collection_for_path(filepath: str, mapping: "dict | None",
     return "documents"
 
 
+def _company_collection_map(users_data: "dict | None" = None) -> dict:
+    """Return the company path→scope mapping from users.json's top-level
+    'collection_map' key, or {} if absent/malformed. Shape:
+      {"rules": [{"prefix","collection"}...], "default_collection": "..."}
+    PURE given users_data; loads users.json if not supplied."""
+    if users_data is None:
+        users_data = _load_users()
+    if not isinstance(users_data, dict):
+        return {}
+    cm = users_data.get("collection_map")
+    return cm if isinstance(cm, dict) else {}
+
+
+def _build_collection_resolver(user: "dict | None", users_data: "dict | None" = None):
+    """Build a collection_resolver(filepath)->logical_collection_name for the
+    given indexing user (v7.0.0 Phase B write-side activation). Returns None in
+    personal mode (no user) so the index pipeline keeps its single-'documents'
+    behavior untouched.
+
+    Resolution (via the tested _resolve_collection_for_path):
+      1. company path→scope rules (collection_map.rules) — longest-prefix match
+      2. else the user's own 'index_target' default scope (if set in users.json)
+      3. else the user's own private 'user:<id>' (safe fallback — never shared)
+
+    IMPORTANT: this only PROPOSES a target. The index tool MUST still gate the
+    proposed target with _can_index(user, target) before writing, so a path rule
+    can never let a user write somewhere they're not permitted. Routing decides
+    WHERE; _can_index decides WHETHER.
+    """
+    if user is None:
+        return None  # personal mode — no resolver, single 'documents' collection
+
+    company_map = _company_collection_map(users_data)
+    # Compose the mapping the resolver expects: company rules + this user's
+    # default scope as the mapping default (per-user override of the global one).
+    mapping = {"rules": list((company_map or {}).get("rules") or [])}
+    user_default = str(user.get("index_target", "")).strip()
+    if user_default:
+        mapping["default_collection"] = user_default
+    elif company_map.get("default_collection"):
+        mapping["default_collection"] = company_map["default_collection"]
+
+    def _resolver(filepath):
+        return _resolve_collection_for_path(filepath, mapping, indexer_user=user)
+    return _resolver
+
+
 # ── Admin role gate (§9.1 / spec item 9) ──────────────────────────────────────
 # Admin MCP tools (add_user, revoke_user, view_audit_log, ...) are owner-only.
 # This is the PURE decision the @requires_role gate / middleware will call.

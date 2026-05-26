@@ -965,3 +965,78 @@ class TestDataManagement:
         # (they're identified by role, not by id-matching).
         ok, _ = manage_api.can_manage(self.OWNER, "anyone", None)
         assert ok is True
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# WRITE-SIDE RESOLVER FACTORY — _build_collection_resolver, _company_collection_map
+# (v7.0.0 Phase B write-side activation). Composes company path rules + per-user
+# default into a collection_resolver. PURE (users_data injected). Note: the
+# factory only PROPOSES a target; _can_index gates it at the index tool.
+# ═════════════════════════════════════════════════════════════════════════════
+@pytest.fixture
+def resolver_factory_api(mcp_module):
+    fn = getattr(mcp_module, "_build_collection_resolver", None)
+    cm = getattr(mcp_module, "_company_collection_map", None)
+    if fn is None or cm is None:
+        pytest.skip("_build_collection_resolver/_company_collection_map not present.")
+
+    class Api:
+        build = staticmethod(fn)
+        cmap = staticmethod(cm)
+    return Api
+
+
+class TestResolverFactory:
+    USERA = {"id": "usera01", "role": "manager", "scopes": ["role:sales"]}
+    USERS = {
+        "users": {"usera01": {"role": "manager", "scopes": ["role:sales"]}},
+        "collection_map": {
+            "rules": [{"prefix": "C:/CompanyDocs/Sales", "collection": "role:sales"},
+                      {"prefix": "C:/CompanyDocs/Public", "collection": "shared"}],
+        },
+    }
+
+    def test_C_MCP_FACTORY_01_personal_mode_none_resolver(self, resolver_factory_api):
+        # No user → None resolver → pipeline keeps single 'documents' behavior.
+        assert resolver_factory_api.build(None, self.USERS) is None
+
+    def test_C_MCP_FACTORY_02_company_path_rule_routes(self, resolver_factory_api):
+        r = resolver_factory_api.build(self.USERA, self.USERS)
+        assert r("C:/CompanyDocs/Sales/q3.pdf") == "role:sales"
+        assert r("C:/CompanyDocs/Public/flyer.pdf") == "shared"
+
+    def test_C_MCP_FACTORY_03_unmatched_falls_to_user_private(self, resolver_factory_api):
+        r = resolver_factory_api.build(self.USERA, self.USERS)
+        # No rule matches, no per-user default → indexer's own private collection.
+        assert r("D:/Random/thing.pdf") == "user:usera01"
+
+    def test_C_MCP_FACTORY_04_per_user_default_overrides_fallback(self, resolver_factory_api):
+        user = {"id": "usera01", "role": "manager", "index_target": "role:sales"}
+        r = resolver_factory_api.build(user, self.USERS)
+        # Unmatched path now uses the user's index_target default, not private.
+        assert r("D:/Random/thing.pdf") == "role:sales"
+
+    def test_C_MCP_FACTORY_05_path_rule_beats_user_default(self, resolver_factory_api):
+        user = {"id": "usera01", "role": "manager", "index_target": "shared"}
+        r = resolver_factory_api.build(user, self.USERS)
+        # A matching path rule wins over the per-user default.
+        assert r("C:/CompanyDocs/Sales/x.pdf") == "role:sales"
+
+    def test_C_MCP_FACTORY_06_no_map_no_default_uses_private(self, resolver_factory_api):
+        r = resolver_factory_api.build(self.USERA, {"users": {}})
+        assert r("C:/anything.pdf") == "user:usera01"
+
+    def test_C_MCP_FACTORY_07_company_map_extracted(self, resolver_factory_api):
+        cm = resolver_factory_api.cmap(self.USERS)
+        assert isinstance(cm.get("rules"), list) and len(cm["rules"]) == 2
+
+    def test_C_MCP_FACTORY_08_company_map_absent_is_empty(self, resolver_factory_api):
+        assert resolver_factory_api.cmap({"users": {}}) == {}
+        assert resolver_factory_api.cmap(None) == {} or isinstance(
+            resolver_factory_api.cmap(None), dict)
+
+    def test_C_MCP_FACTORY_09_company_default_used_when_no_user_default(self, resolver_factory_api):
+        users = {"users": {}, "collection_map": {"rules": [],
+                 "default_collection": "shared"}}
+        r = resolver_factory_api.build(self.USERA, users)
+        assert r("D:/x.pdf") == "shared"   # company default applies
