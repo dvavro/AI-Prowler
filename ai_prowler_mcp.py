@@ -8029,7 +8029,7 @@ if __name__ == "__main__":
 
     if not resolved_public_base:
         try:
-            _cfg_path = Path.home() / '.ai-prowler' / 'config.json'
+            _cfg_path = _CONFIG_PATH   # honors AIPROWLER_TEST_STATE_DIR sandbox
             if _cfg_path.exists():
                 import json as _jcfg
                 _cfg = _jcfg.loads(_cfg_path.read_text(encoding='utf-8'))
