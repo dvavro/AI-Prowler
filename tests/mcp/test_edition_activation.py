@@ -473,10 +473,12 @@ class TestCanIndex:
             ok, _ = mu_api.can_index(u, tgt)
             assert ok, tgt
 
-    def test_C_MCP_MU_21_manager_cannot_write_shared(self, mu_api):
+    def test_C_MCP_MU_21_manager_can_write_shared(self, mu_api):
+        # Option A: 'shared' is the company commons — any can_write role (manager
+        # included) may ADD to it. Per-file ownership still protects each doc.
         u = mu_api.resolve(_users_doc(), "mgr0000000000000")
         ok, _ = mu_api.can_index(u, "shared")
-        assert ok is False
+        assert ok is True
 
     def test_C_MCP_MU_22_manager_can_index_assigned_scope(self, mu_api):
         u = mu_api.resolve(_users_doc(), "mgr0000000000000")
@@ -1011,15 +1013,20 @@ class TestResolverFactory:
         assert r("D:/Random/thing.pdf") == "user:usera01"
 
     def test_C_MCP_FACTORY_04_per_user_default_overrides_fallback(self, resolver_factory_api):
-        user = {"id": "usera01", "role": "manager", "index_target": "role:sales"}
+        # index_target routes unmatched files — but only to a scope the user may
+        # actually write (scopes assignment). index_target alone does NOT grant
+        # access; _can_index still gates. Here usera01 IS in role:sales.
+        user = {"id": "usera01", "role": "manager", "scopes": ["role:sales"],
+                "index_target": "role:sales"}
         r = resolver_factory_api.build(user, self.USERS)
-        # Unmatched path now uses the user's index_target default, not private.
         assert r("D:/Random/thing.pdf") == "role:sales"
 
     def test_C_MCP_FACTORY_05_path_rule_beats_user_default(self, resolver_factory_api):
-        user = {"id": "usera01", "role": "manager", "index_target": "shared"}
+        # A matching path rule (→ role:sales) wins over the per-user default
+        # (shared). usera01 is in role:sales so the rule target is permitted.
+        user = {"id": "usera01", "role": "manager", "scopes": ["role:sales"],
+                "index_target": "shared"}
         r = resolver_factory_api.build(user, self.USERS)
-        # A matching path rule wins over the per-user default.
         assert r("C:/CompanyDocs/Sales/x.pdf") == "role:sales"
 
     def test_C_MCP_FACTORY_06_no_map_no_default_uses_private(self, resolver_factory_api):

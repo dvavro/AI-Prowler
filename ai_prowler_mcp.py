@@ -5826,7 +5826,57 @@ def import_check(module_or_path: str, timeout_sec: int = _DEV_CHECK_TIMEOUT_SEC)
 # Backwards-compat: plan "individual" reads as the "mobile" edition; no live
 # subs.json record is ever rewritten.
 # ══════════════════════════════════════════════════════════════════════════════
-_CONFIG_PATH = Path.home() / ".ai-prowler" / "config.json"
+# ── Test-state sandbox hook (v7.0.0 — pre-release server-mode validation) ─────
+# When AIPROWLER_TEST_STATE_DIR is set, AI-Prowler reads its state files
+# (config.json, users.json, and the subs cache) from that directory instead of
+# ~/.ai-prowler. This lets an automated test suite stand up a fully sandboxed
+# server-mode instance without touching the operator's real state and without a
+# live license. SAFETY: this only redirects WHERE state is read from; it does
+# NOT disable any enforcement (auth, scoping, ownership all still run for real).
+# The companion entitlement short-circuit (_test_entitlement_active / used in
+# main()) is what skips the NETWORK license/subscription calls under test, and
+# it is HARD-GATED to dev/Home boxes — see _test_entitlement_active(). The env
+# var must be set at process launch, so it can never be flipped on a deployed,
+# tunnel-exposed customer install by editing a file or calling a tool.
+def _state_dir() -> Path:
+    """Directory holding AI-Prowler's state files. Honors the test sandbox env
+    var AIPROWLER_TEST_STATE_DIR when set; otherwise the real ~/.ai-prowler."""
+    import os as _os
+    td = _os.environ.get("AIPROWLER_TEST_STATE_DIR", "").strip()
+    if td:
+        return Path(td)
+    return Path.home() / ".ai-prowler"
+
+
+def _test_state_active() -> bool:
+    """True iff the test-state sandbox env var is set (paths are redirected)."""
+    import os as _os
+    return bool(_os.environ.get("AIPROWLER_TEST_STATE_DIR", "").strip())
+
+
+def _test_entitlement_active(cfg: "dict | None" = None) -> bool:
+    """True iff the test ENTITLEMENT short-circuit may engage — i.e. the startup
+    flow should substitute a sandboxed (edition/mode/status) verdict and SKIP the
+    network license/subscription/activation calls.
+
+    HARD-GATED by TWO independent affirmations, both only settable by whoever
+    launches the process (never by a deployed customer box at runtime):
+      1. AIPROWLER_TEST_STATE_DIR env var is set (state is sandboxed), AND
+      2. the sandboxed config.json explicitly carries "test_mode": true.
+    Either alone is insufficient. This short-circuit substitutes only the
+    ENTITLEMENT verdict; it never disables auth, scoping, or ownership — those
+    run for real against the sandboxed users.json. PURE (reads cfg only)."""
+    if not _test_state_active():
+        return False
+    if cfg is None:
+        try:
+            cfg = _load_runtime_config()
+        except Exception:
+            return False
+    return cfg.get("test_mode") is True
+
+
+_CONFIG_PATH = _state_dir() / "config.json"
 
 _VALID_EDITIONS = ("home", "mobile", "business")
 _VALID_MODES    = ("personal", "server")
@@ -6657,7 +6707,7 @@ def _filter_audit_entries(entries: "list | None", limit: int = 20,
 # SAFETY: only reached when config.json mode=server. If prerequisites are
 # missing (no users.json, deps unavailable) it FALLS BACK to _run_http so a
 # server install is never left with no transport. _run_http itself is untouched.
-_USERS_JSON_PATH = Path.home() / ".ai-prowler" / "users.json"
+_USERS_JSON_PATH = _state_dir() / "users.json"
 
 
 def _load_users() -> "dict | None":
@@ -7214,24 +7264,41 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
     _runtime_cfg_for_endpoint = None
 
     # ── Perform initial subscription check on startup ─────────────────────────
-    _subs_data = _fetch_subs_registry()
-    if _subs_data is not None:
-        _save_subs_cache(_subs_data)
-        _log.info("Subscription registry fetched from GitHub OK")
+    if _test_entitlement_active():
+        # TEST ENTITLEMENT SHORT-CIRCUIT (pre-release validation only). Both the
+        # env var AND config.json "test_mode": true are set (dev/test launch).
+        # Skip the network subscription/license/activation calls and substitute
+        # a known-good verdict so the suite can exercise the REAL auth + scoping
+        # + ownership code against the sandboxed users.json. Enforcement is NOT
+        # disabled — only the entitlement verdict and state-file paths are
+        # sandboxed. Loud on purpose.
+        _log.warning(
+            "⚠️  TEST ENTITLEMENT ACTIVE — network license/subscription checks "
+            "SKIPPED, entitlement sandboxed (edition=business,status=ok). "
+            "State dir=%s. NOT FOR PRODUCTION.", _state_dir())
+        _subs_data = None
+        _sub_result = {"status": "ok", "name": "TEST", "days_left": None,
+                       "edition": "business",
+                       "message": "test entitlement (sandboxed; network skipped)"}
     else:
-        _subs_data, _cache_age = _load_cached_subs()
+        _subs_data = _fetch_subs_registry()
         if _subs_data is not None:
-            _log.warning(
-                "Using cached subscription registry (%d days old, max cache age: %d days)",
-                _cache_age, _CHECK_INTERVAL_DAYS + _GRACE_DAYS
-            )
+            _save_subs_cache(_subs_data)
+            _log.info("Subscription registry fetched from GitHub OK")
         else:
-            _log.warning(
-                "No subscription registry available (no internet + no cache).  "
-                "Starting in unmanaged mode — all tokens accepted."
-            )
+            _subs_data, _cache_age = _load_cached_subs()
+            if _subs_data is not None:
+                _log.warning(
+                    "Using cached subscription registry (%d days old, max cache age: %d days)",
+                    _cache_age, _CHECK_INTERVAL_DAYS + _GRACE_DAYS
+                )
+            else:
+                _log.warning(
+                    "No subscription registry available (no internet + no cache).  "
+                    "Starting in unmanaged mode — all tokens accepted."
+                )
 
-    _sub_result = _check_subscription(token, _subs_data)
+        _sub_result = _check_subscription(token, _subs_data)
     _log.info("Startup subscription check: %s", _sub_result["message"])
 
     if _sub_result["status"] == "blocked":
@@ -7275,7 +7342,10 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
     _runtime_cfg_for_endpoint = _runtime_cfg   # let _activation_endpoint() see config (used here + by the activation rule below)
     _license_grace = {"effective_edition": _EFFECTIVE_EDITION, "action": "n/a",
                       "banner": "", "license_key_present": False}
-    if _EFFECTIVE_EDITION == "business":
+    if _EFFECTIVE_EDITION == "business" and _test_entitlement_active():
+        _log.warning("⚠️  TEST ENTITLEMENT — skipping D1 Business license "
+                     "validation (network); keeping Business edition.")
+    elif _EFFECTIVE_EDITION == "business":
         _lic_key = str(_runtime_cfg.get("license_key", "")).strip()
         _license_grace = _validate_business_license(
             _lic_key, _INSTALL_ID, _activation_endpoint())
@@ -7316,7 +7386,11 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
 
     _activation = {"decision": "unbound", "active_install_ids": [],
                    "active_count": 0, "this_active": False, "message": ""}
-    if _EFFECTIVE_EDITION in ("mobile", "business"):
+    if _test_entitlement_active():
+        _log.warning("⚠️  TEST ENTITLEMENT — skipping D1 activation (2-install) "
+                     "check (network); treating this install as active.")
+        _activation["this_active"] = True
+    elif _EFFECTIVE_EDITION in ("mobile", "business"):
         # Build an OS string for the activation record.
         try:
             import platform as _platform
@@ -7400,7 +7474,11 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                     _current_sub_result[0]["status"]
                 )
 
-    _threading.Thread(target=_periodic_sub_refresh, daemon=True).start()
+    if _test_entitlement_active():
+        _log.warning("⚠️  TEST ENTITLEMENT — not starting the 30-day "
+                     "subscription refresh thread (would hit the network).")
+    else:
+        _threading.Thread(target=_periodic_sub_refresh, daemon=True).start()
 
     # In-memory stores for OAuth codes and issued access tokens
     # code -> {redirect_uri, code_challenge, code_challenge_method}
