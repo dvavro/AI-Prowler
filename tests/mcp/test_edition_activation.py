@@ -1040,3 +1040,101 @@ class TestResolverFactory:
                  "default_collection": "shared"}}
         r = resolver_factory_api.build(self.USERA, users)
         assert r("D:/x.pdf") == "shared"   # company default applies
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# CHUNK-OWNERSHIP PURGE GATE — _can_purge_chunks, _chunk_owners
+# (v7.0.0 Phase B "delete only your own"). Before the index pipeline purges
+# existing chunks for a path, the actor must be allowed to remove every owner
+# present. PURE. This is the protection against a bad employee wiping data.
+# ═════════════════════════════════════════════════════════════════════════════
+@pytest.fixture
+def purge_api(mcp_module):
+    fn = getattr(mcp_module, "_can_purge_chunks", None)
+    co = getattr(mcp_module, "_chunk_owners", None)
+    if fn is None or co is None:
+        pytest.skip("_can_purge_chunks/_chunk_owners not present.")
+
+    class Api:
+        can_purge = staticmethod(fn)
+        owners = staticmethod(co)
+    return Api
+
+
+def _meta(owner):
+    return {"filepath": "C:/x.pdf", "indexed_by": owner}
+
+
+class TestPurgeGate:
+    ALICE = {"id": "alice01", "role": "manager"}
+    BOB   = {"id": "bob01", "role": "manager"}
+    ADMIN = {"id": "admin01", "role": "manager", "can_manage_users": True}
+    OWNER = {"id": "owner01", "role": "owner"}
+    OWNER_ID = "owner01"
+
+    def test_C_MCP_PURGE_01_own_chunks_allowed(self, purge_api):
+        ok, _ = purge_api.can_purge(self.ALICE, [_meta("alice01"), _meta("alice01")],
+                                    self.OWNER_ID)
+        assert ok is True
+
+    def test_C_MCP_PURGE_02_others_chunks_blocked(self, purge_api):
+        ok, reason = purge_api.can_purge(self.ALICE, [_meta("bob01")], self.OWNER_ID)
+        assert ok is False
+        assert "another user" in reason.lower()
+
+    def test_C_MCP_PURGE_03_no_existing_chunks_allowed(self, purge_api):
+        # Pure add — nothing destroyed.
+        assert purge_api.can_purge(self.ALICE, [], self.OWNER_ID)[0] is True
+        assert purge_api.can_purge(self.ALICE, None, self.OWNER_ID)[0] is True
+
+    def test_C_MCP_PURGE_04_admin_purges_employee(self, purge_api):
+        ok, _ = purge_api.can_purge(self.ADMIN, [_meta("alice01")], self.OWNER_ID)
+        assert ok is True
+
+    def test_C_MCP_PURGE_05_admin_CANNOT_purge_owner_chunks(self, purge_api):
+        ok, _ = purge_api.can_purge(self.ADMIN, [_meta("owner01")], self.OWNER_ID)
+        assert ok is False
+
+    def test_C_MCP_PURGE_06_owner_purges_anything(self, purge_api):
+        ok, _ = purge_api.can_purge(self.OWNER, [_meta("alice01"), _meta("bob01")],
+                                    self.OWNER_ID)
+        assert ok is True
+
+    def test_C_MCP_PURGE_07_mixed_owners_one_forbidden_blocks_all(self, purge_api):
+        # Alice owns some, Bob owns one → Alice can't purge the batch.
+        ok, _ = purge_api.can_purge(self.ALICE,
+                                    [_meta("alice01"), _meta("bob01")], self.OWNER_ID)
+        assert ok is False
+
+    def test_C_MCP_PURGE_08_legacy_ownerless_blocks_plain_user(self, purge_api):
+        # Chunk with no indexed_by → only owner/admin may purge.
+        ok, reason = purge_api.can_purge(self.ALICE, [{"filepath": "C:/x.pdf"}],
+                                         self.OWNER_ID)
+        assert ok is False
+        assert "legacy" in reason.lower() or "no owner" in reason.lower()
+
+    def test_C_MCP_PURGE_09_legacy_ownerless_allows_admin(self, purge_api):
+        ok, _ = purge_api.can_purge(self.ADMIN, [{"filepath": "C:/x.pdf"}], self.OWNER_ID)
+        assert ok is True
+
+    def test_C_MCP_PURGE_10_legacy_ownerless_allows_owner(self, purge_api):
+        ok, _ = purge_api.can_purge(self.OWNER, [{"filepath": "C:/x.pdf"}], self.OWNER_ID)
+        assert ok is True
+
+    def test_C_MCP_PURGE_11_no_actor_blocked(self, purge_api):
+        ok, _ = purge_api.can_purge(None, [_meta("alice01")], self.OWNER_ID)
+        assert ok is False
+
+    def test_C_MCP_PURGE_12_chunk_owners_distinct(self, purge_api):
+        owners = purge_api.owners([_meta("a"), _meta("a"), _meta("b")])
+        assert owners == {"a", "b"}
+
+    def test_C_MCP_PURGE_13_chunk_owners_ownerless_sentinel(self, purge_api):
+        owners = purge_api.owners([{"filepath": "x"}, _meta("a")])
+        # one real owner + the ownerless sentinel
+        assert "a" in owners and len(owners) == 2
+
+    def test_C_MCP_PURGE_14_admin_purges_own_and_employee_mix(self, purge_api):
+        ok, _ = purge_api.can_purge(self.ADMIN,
+                                    [_meta("admin01"), _meta("alice01")], self.OWNER_ID)
+        assert ok is True

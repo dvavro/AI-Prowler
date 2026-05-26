@@ -6670,6 +6670,65 @@ def _can_manage_user_data(actor: "dict | None", target_user_id: str,
     return (True, "admin may manage employee data")
 
 
+# ── Chunk-ownership purge gate (v7.0.0 Phase B — "delete only your own") ───────
+# Filesystem-style protection against a bad actor wiping others' data: every
+# indexed chunk carries indexed_by=<user_id>. Before the index pipeline PURGES
+# existing chunks for a path (the delete(where=filepath) that precedes every
+# re-add), this gate checks the actor may remove every owner present. PURE.
+_OWNERLESS = "__ownerless__"  # sentinel for legacy chunks lacking indexed_by
+
+
+def _chunk_owners(existing_metadatas: "list | None") -> set:
+    """Distinct indexed_by owners across the given chunk metadatas. Chunks with
+    no indexed_by map to the _OWNERLESS sentinel. PURE."""
+    owners = set()
+    for meta in (existing_metadatas or []):
+        if not isinstance(meta, dict):
+            continue
+        owners.add(str(meta.get("indexed_by") or _OWNERLESS))
+    return owners
+
+
+def _can_purge_chunks(actor: "dict | None", existing_metadatas: "list | None",
+                      owner_id: "str | None") -> tuple:
+    """May `actor` purge/overwrite the given existing chunks? PURE.
+
+    Rule (filesystem-like): you may purge chunks you OWN; an owner/admin may
+    purge employees' chunks (subject to owner-data protection in
+    _can_manage_user_data); legacy chunks with no indexed_by are treated as
+    manageable only by owner/admin (a normal user can't wipe un-owned data).
+
+    • No existing chunks (empty/None) → allowed (pure add, nothing destroyed).
+    • Else: allowed iff the actor can manage EVERY distinct owner present.
+      For each owner X present, require _can_manage_user_data(actor, X, owner_id);
+      ownerless legacy chunks require actor to be owner/admin.
+    Returns (allowed: bool, reason: str).
+    """
+    if not actor:
+        return (False, "no actor")
+    owners = _chunk_owners(existing_metadatas)
+    if not owners:
+        return (True, "no existing chunks to purge")
+
+    actor_id = actor.get("id")
+    for owner in owners:
+        if owner == _OWNERLESS:
+            # Legacy/un-owned: only owner/admin (manage rights over *anyone*) may
+            # purge. Reuse _can_manage_user_data against a non-owner placeholder
+            # so a plain user is denied but owner/admin allowed.
+            allowed, _ = _can_manage_user_data(actor, "__legacy__", owner_id)
+            if not allowed:
+                return (False, "contains chunks with no owner (legacy) — only "
+                               "owner/admin may purge")
+            continue
+        if owner == actor_id:
+            continue  # you always may purge your own
+        allowed, reason = _can_manage_user_data(actor, owner, owner_id)
+        if not allowed:
+            return (False, f"contains chunks owned by another user ({reason})")
+    return (True, "actor may purge all present owners")
+
+
 def _run_server_mode(port: int, token: str,
                      public_base: str = "https://mobile.dvavro-ai-prowler.com") -> None:
     """Multi-user server transport. STEP 1: authentication layer.
