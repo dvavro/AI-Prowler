@@ -3043,7 +3043,8 @@ def index_file_list(file_paths: list, label: str = "",
                     stop_event=None, pause_event=None,
                     start_from: int = 0,
                     root_directory: str = "",
-                    collection_resolver=None) -> dict:
+                    collection_resolver=None,
+                    indexer_user=None, purge_gate=None) -> dict:
     """
     Index a specific pre-built list of file paths.
 
@@ -3160,6 +3161,8 @@ def index_file_list(file_paths: list, label: str = "",
                 pause_event=pause_event,
                 root_directory=root_directory,
                 collection_resolver=collection_resolver,
+                indexer_user=indexer_user,
+                purge_gate=purge_gate,
             )
             processed    += arc_stats["processed"]
             skipped      += arc_stats["skipped"]
@@ -3217,6 +3220,37 @@ def index_file_list(file_paths: list, label: str = "",
         ) for j in range(len(chunks))]
 
         _file_collection = _collection_for(filepath)
+
+        # v7.0.0 Phase B ownership: fetch existing chunks once (for gate +
+        # owner-preservation), gate the purge, stamp indexed_by preserving the
+        # original owner on re-index. Personal mode (both None) = unchanged.
+        _existing_metas = []
+        if indexer_user or purge_gate is not None:
+            try:
+                _ex = _file_collection.get(where={"filepath": filepath},
+                                           include=["metadatas"])
+                _existing_metas = _ex.get("metadatas", []) or []
+            except Exception:
+                _existing_metas = []
+        if purge_gate is not None:
+            try:
+                _allowed, _reason = purge_gate(_existing_metas)
+            except Exception as _ge:
+                _allowed, _reason = (False, f"purge gate error: {_ge}")
+            if not _allowed:
+                print(f"         🛡️  Skipped (ownership): {_reason}")
+                skipped += 1
+                continue
+        if indexer_user and indexer_user.get("id"):
+            _prior = None
+            for _m in _existing_metas:
+                if isinstance(_m, dict) and _m.get("indexed_by"):
+                    _prior = _m["indexed_by"]
+                    break
+            _stamp = _prior or indexer_user["id"]
+            for m in metadatas:
+                m["indexed_by"] = _stamp
+
         try:
             _file_collection.delete(where={"filepath": filepath})
         except Exception:
@@ -3284,7 +3318,8 @@ def index_email_archive(filepath: str,
                         stop_event=None,
                         pause_event=None,
                         root_directory: str = "",
-                        collection_resolver=None) -> dict:
+                        collection_resolver=None,
+                        indexer_user=None, purge_gate=None) -> dict:
     """
     Incrementally index a multi-message email archive file.
 
@@ -3340,6 +3375,18 @@ def index_email_archive(filepath: str,
             print(f"⚠️  collection_resolver failed for {filepath_norm}: {_re} "
                   f"— using default collection")
             _archive_collection_name = None
+    # ── v7.0.0 Phase B: email indexing is NOT SUPPORTED in server mode ──────────
+    # Server mode exists to SHARE company data for AI. Email is inherently
+    # private and must never be shared into company-visible collections. The
+    # presence of an indexer_user or purge_gate is the server-mode signal — when
+    # set, refuse email archives outright. Personal mode (neither set) is
+    # unchanged: email indexing works exactly as before for a single local user.
+    if indexer_user is not None or purge_gate is not None:
+        print("🚫 Email archive indexing is not supported in server mode "
+              "(email is private and never shared). Skipped.")
+        return {"processed": 0, "skipped": 0, "removed": 0,
+                "chunks": 0, "words": 0, "stopped_at": 0}
+
     collection = create_or_get_collection(
         client, embedding_func, collection_name=_archive_collection_name)
 
@@ -4935,7 +4982,8 @@ def command_check(directory, recursive=True):
         print()
 
 def _update_tracked_file(filepath: str, auto_confirm: bool = False,
-                         collection_resolver=None) -> None:
+                         collection_resolver=None,
+                         indexer_user=None, purge_gate=None) -> None:
     """Update a single individually-tracked file.
 
     Bypasses SKIP_EXTENSIONS (per-file tracking is explicit user opt-in).
@@ -5043,6 +5091,8 @@ def _update_tracked_file(filepath: str, auto_confirm: bool = False,
             label="1/1",
             root_directory=str(Path(filepath).parent),
             collection_resolver=collection_resolver,
+            indexer_user=indexer_user,
+            purge_gate=purge_gate,
         )
         chunks = stats.get('chunks', 0) if stats else 0
         print(f"   ✅ {fname} — {chunks} chunk(s) indexed")
@@ -5055,7 +5105,7 @@ def _update_tracked_file(filepath: str, auto_confirm: bool = False,
 
 
 def command_update(directory, recursive=True, auto_confirm=False,
-                   collection_resolver=None):
+                   collection_resolver=None, indexer_user=None, purge_gate=None):
     """Check for changes and update index with new/modified files, and
     automatically purge deleted files from ChromaDB.
 
@@ -5088,7 +5138,9 @@ def command_update(directory, recursive=True, auto_confirm=False,
     target_path = Path(directory)
     if target_path.exists() and target_path.is_file():
         return _update_tracked_file(directory, auto_confirm=auto_confirm,
-                                    collection_resolver=collection_resolver)
+                                    collection_resolver=collection_resolver,
+                                    indexer_user=indexer_user,
+                                    purge_gate=purge_gate)
 
     print("=" * 70)
     print("🔍 CHECKING FOR CHANGES")
@@ -5175,7 +5227,25 @@ def command_update(directory, recursive=True, auto_confirm=False,
             print(f"[{i}/{deleted}] [DELETED] {filename}")
 
             try:
-                _cu_collection_for(filepath).delete(where={"filepath": filepath})
+                _del_col = _cu_collection_for(filepath)
+                # v7.0.0 Phase B: purging a DELETED file removes chunks outright
+                # (no re-add) — the genuinely destructive op. Gate it on the
+                # existing chunks' ownership. No gate (personal) → always purge.
+                if purge_gate is not None:
+                    try:
+                        _ex = _del_col.get(where={"filepath": filepath},
+                                           include=["metadatas"])
+                        _ex_metas = _ex.get("metadatas", []) or []
+                    except Exception:
+                        _ex_metas = []
+                    try:
+                        _ok, _why = purge_gate(_ex_metas)
+                    except Exception as _ge:
+                        _ok, _why = (False, f"purge gate error: {_ge}")
+                    if not _ok:
+                        print(f"  🛡️  Skipped purge (ownership): {_why}")
+                        continue
+                _del_col.delete(where={"filepath": filepath})
                 print(f"  ✅ Chunks purged from ChromaDB")
                 purged += 1
             except Exception as exc:
@@ -5216,7 +5286,9 @@ def command_update(directory, recursive=True, auto_confirm=False,
             # ── Email archive — incremental per-message update ─────────────
             if ext in EMAIL_ARCHIVE_EXTENSIONS:
                 arc_stats = index_email_archive(filepath,
-                                                root_directory=directory)
+                                                root_directory=directory,
+                                                indexer_user=indexer_user,
+                                                purge_gate=purge_gate)
                 if arc_stats["processed"] > 0 or arc_stats.get("removed", 0) > 0:
                     print(f"  ✅ {arc_stats['processed']} new message(s) indexed, "
                           f"{arc_stats.get('removed', 0)} removed, "
@@ -5261,8 +5333,37 @@ def command_update(directory, recursive=True, auto_confirm=False,
             ) for j in range(len(chunks))]
 
             try:
-                # Remove stale chunks before re-adding (handles re-index of modified)
                 _cu_col = _cu_collection_for(filepath)
+                # v7.0.0 Phase B ownership: fetch existing once, gate the purge,
+                # stamp indexed_by preserving the original owner on re-index.
+                _existing = []
+                if indexer_user or purge_gate is not None:
+                    try:
+                        _ex = _cu_col.get(where={"filepath": filepath},
+                                          include=["metadatas"])
+                        _existing = _ex.get("metadatas", []) or []
+                    except Exception:
+                        _existing = []
+                if purge_gate is not None:
+                    try:
+                        _ok, _why = purge_gate(_existing)
+                    except Exception as _ge:
+                        _ok, _why = (False, f"purge gate error: {_ge}")
+                    if not _ok:
+                        print(f"  🛡️  Skipped (ownership): {_why}")
+                        failed += 1
+                        print()
+                        continue
+                if indexer_user and indexer_user.get("id"):
+                    _prior = None
+                    for _m in _existing:
+                        if isinstance(_m, dict) and _m.get("indexed_by"):
+                            _prior = _m["indexed_by"]
+                            break
+                    _stamp = _prior or indexer_user["id"]
+                    for m in metadatas:
+                        m["indexed_by"] = _stamp
+                # Remove stale chunks before re-adding (handles re-index of modified)
                 _cu_col.delete(where={"filepath": filepath})
                 _cu_col.add(ids=ids, documents=chunks, metadatas=metadatas)
                 print(f"  ✅ Indexed {len(chunks)} chunk(s)")
