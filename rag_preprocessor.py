@@ -5005,11 +5005,40 @@ def _update_tracked_file(filepath: str, auto_confirm: bool = False,
         print(f"🗑️  File no longer exists on disk: {filepath}")
         try:
             client, embedding_func = get_chroma_client()
+            # Resolve the file's actual collection. In server mode the chunks
+            # live in a scope collection (resolved by path — still works even
+            # though the file is gone); in personal mode it's COLLECTION_NAME.
+            target_name = COLLECTION_NAME
+            if collection_resolver is not None:
+                try:
+                    target_name = collection_resolver(filepath) or COLLECTION_NAME
+                except Exception:
+                    target_name = COLLECTION_NAME
             try:
                 collection = client.get_collection(
-                    name=COLLECTION_NAME,
+                    name=target_name,
                     embedding_function=embedding_func
                 )
+                # Deleting a file's chunks is DESTRUCTIVE (no re-add). In server
+                # mode, gate it on ownership: only the owner of the chunks (or an
+                # owner/admin custodian) may purge. Personal mode (no gate) always
+                # purges. Skip the delete on denial.
+                if purge_gate is not None:
+                    try:
+                        _ex = collection.get(where={"filepath": fp_norm},
+                                             include=["metadatas"])
+                        _ex_metas = _ex.get("metadatas", []) or []
+                    except Exception:
+                        _ex_metas = []
+                    try:
+                        _ok, _why = purge_gate(_ex_metas)
+                    except Exception as _ge:
+                        _ok, _why = (False, f"purge gate error: {_ge}")
+                    if not _ok:
+                        print(f"   🛡️  Skipped purge (ownership): {_why}")
+                        # Do NOT strip from tracking DB either — the chunks
+                        # remain, so the tracking entry should remain too.
+                        return
                 collection.delete(where={"filepath": fp_norm})
                 print(f"   ✅ Chunks purged from ChromaDB")
             except Exception:
