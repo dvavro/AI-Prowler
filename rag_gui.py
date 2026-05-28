@@ -92,7 +92,7 @@ if sys.stderr is None:
 # Single source of truth for the app version. Bump this one line when releasing
 # a new version; all UI labels, About dialogs, help text, and update checks
 # read from here.
-APP_VERSION = "6.0.2"
+APP_VERSION = "7.0.0"
 
 # ── UI feature flags ─────────────────────────────────────────────────────────
 # Toggle visibility of advanced/legacy GUI sections without removing any
@@ -1961,6 +1961,43 @@ or from the Help menu."""
         self.create_settings_tab()         # 6
         self.create_small_business_tab()   # 7  ← Small Business Service Tools
         self.create_learnings_tab()        # 8  ← Self-Learning Knowledge Base
+
+        # 9 (conditional) ← Admin tab: ONLY in Business server mode. Appended
+        # LAST so it never shifts the fixed _TAB_INDEX_* constants above.
+        # NOTE: read the RUNTIME config (~/.ai-prowler/config.json) — that's
+        # where 'edition' and 'mode' live. The engine's load_config() reads a
+        # DIFFERENT file (~/.rag_config.json, legacy GUI settings) and would
+        # always miss these keys.
+        self._TAB_INDEX_ADMIN = None
+        try:
+            import json as _json
+            from pathlib import Path as _Path
+            _rt_path = _Path.home() / ".ai-prowler" / "config.json"
+            _cfg = {}
+            if _rt_path.exists():
+                try:
+                    _cfg = _json.loads(_rt_path.read_text(encoding="utf-8-sig")) or {}
+                except Exception as _je:
+                    print(f"[admin tab] could not parse {_rt_path}: {_je}")
+                    _cfg = {}
+            if (str(_cfg.get("edition", "")).lower() == "business"
+                    and str(_cfg.get("mode", "")).lower() == "server"):
+                self.create_admin_tab()
+                self._TAB_INDEX_ADMIN = self.notebook.index('end') - 1
+                print(f"[admin tab] enabled (edition=business, mode=server)")
+            else:
+                # Helpful diagnostic in dev — silent in normal Home use because
+                # the file simply isn't present.
+                if _rt_path.exists():
+                    print(f"[admin tab] not enabled — runtime config has "
+                          f"edition={_cfg.get('edition')!r} mode={_cfg.get('mode')!r}; "
+                          f"need edition='business' and mode='server'")
+        except Exception as _admin_e:
+            # Never let an Admin-tab problem block the rest of the GUI.
+            try:
+                print(f"[admin tab] skipped: {_admin_e}")
+            except Exception:
+                pass
 
         # Named tab index constants — change here if tabs are ever reordered
         self._TAB_INDEX_WELCOME      = 0   # Welcome / Info / Ad Space
@@ -9048,6 +9085,686 @@ Built with Python, ChromaDB, and Claude"""
         self._prewarm_done = False
         self._prewarm_in_progress = False
         self._trigger_prewarm(num_ctx=needed_ctx)
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  ADMIN TAB — Business server-mode user/seat management (Slice 1)
+    #  Only created when config edition=business AND mode=server (see the
+    #  conditional call in the tab-setup block). Reads/writes the SAME
+    #  ~/.ai-prowler/users.json the server backend authenticates against.
+    #  Slice 1 = Active Users table + Add/Edit/Remove/Regenerate-token.
+    #  (Slice 2 adds the License/Seats panel + child-key dropdown;
+    #   Slice 3 the Active Installs panel; Slice 4 the audit log.)
+    # ══════════════════════════════════════════════════════════════════════
+    def _admin_users_path(self):
+        """Path to the server's users.json (the file the backend reads)."""
+        from pathlib import Path as _Path
+        return _Path.home() / ".ai-prowler" / "users.json"
+
+    def _admin_load_users(self):
+        """Load users.json → full dict (with 'users' map). Returns a safe
+        default skeleton if the file is missing/unreadable so the UI still works."""
+        import json as _json
+        p = self._admin_users_path()
+        try:
+            if p.exists():
+                data = _json.loads(p.read_text(encoding="utf-8-sig")) or {}
+                if not isinstance(data.get("users"), dict):
+                    data["users"] = {}
+                return data
+        except Exception as e:
+            try:
+                from tkinter import messagebox
+                messagebox.showwarning(
+                    "users.json",
+                    f"Could not read users.json:\n{e}\n\n"
+                    "Starting from an empty user list. Saving will OVERWRITE the "
+                    "existing file — back it up first if it contains data.")
+            except Exception:
+                pass
+        return {"users": {}}
+
+    def _admin_save_users(self, data):
+        """Write users.json atomically (temp + replace) so a crash mid-write
+        can't corrupt the live auth file. Returns True on success."""
+        import json as _json, os as _os
+        from pathlib import Path as _Path
+        p = self._admin_users_path()
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_suffix(".json.tmp")
+            tmp.write_text(_json.dumps(data, indent=2), encoding="utf-8")
+            _os.replace(str(tmp), str(p))
+            return True
+        except Exception as e:
+            from tkinter import messagebox
+            messagebox.showerror("Save failed", f"Could not write users.json:\n{e}")
+            return False
+
+    def _admin_gen_token(self):
+        """Generate a 16-hex bearer token (secrets.token_hex(8)) — spec §5.2."""
+        import secrets
+        return secrets.token_hex(8)
+
+    # ── Slice 2: seat pool (child license keys) ────────────────────────────
+    #  Provisioning Model A: David mints parent + N child keys, delivers them as
+    #  ~/.ai-prowler/seats.json {parent_license_key, seats_total, child_keys:[...]}.
+    #  The customer tab NEVER mints or calls Worker admin endpoints. It reads the
+    #  delivered pool, assigns a child key to each user (stored as child_license_key
+    #  on the users.json record), and validates a key on Save against the PUBLIC
+    #  /license/validate (same public endpoint the mobile sub uses — no token).
+    #  A seat is 'used' iff some active user record carries that child key, so
+    #  users.json is the single source of truth for allocation (no dual-write).
+    def _admin_seats_path(self):
+        from pathlib import Path as _Path
+        return _Path.home() / ".ai-prowler" / "seats.json"
+
+    def _admin_load_seats(self):
+        """Load the delivered child-key pool. Returns {parent_license_key,
+        seats_total, child_keys:[...]} or a safe empty default if absent."""
+        import json as _json
+        p = self._admin_seats_path()
+        try:
+            if p.exists():
+                data = _json.loads(p.read_text(encoding="utf-8-sig")) or {}
+                if not isinstance(data.get("child_keys"), list):
+                    data["child_keys"] = []
+                return data
+        except Exception as e:
+            try:
+                from tkinter import messagebox
+                messagebox.showwarning(
+                    "seats.json",
+                    f"Could not read seats.json:\n{e}\n\nNo seat pool available; "
+                    "license-key assignment will be disabled until it's fixed.")
+            except Exception:
+                pass
+        return {"parent_license_key": "", "seats_total": 0, "child_keys": []}
+
+    def _admin_assigned_keys(self, users_data=None):
+        """Set of child keys currently assigned to ANY user record (used seats)."""
+        if users_data is None:
+            users_data = self._admin_load_users()
+        assigned = set()
+        for u in (users_data.get("users") or {}).values():
+            if isinstance(u, dict):
+                k = u.get("child_license_key")
+                if k:
+                    assigned.add(k)
+        return assigned
+
+    def _admin_unassigned_keys(self, seats=None, users_data=None):
+        """Child keys from the delivered pool not yet assigned to any user."""
+        if seats is None:
+            seats = self._admin_load_seats()
+        assigned = self._admin_assigned_keys(users_data)
+        return [k for k in (seats.get("child_keys") or []) if k not in assigned]
+
+    def _admin_mask_key(self, key):
+        """Mask a license key for display: keep first 4 + last 4."""
+        if not key:
+            return ""
+        if len(key) <= 9:
+            return key
+        return f"{key[:4]}…{key[-4:]}"
+
+    def _admin_validate_child_key(self, child_key):
+        """Validate a child key against the PUBLIC /license/validate endpoint
+        (no auth token — same public check the mobile sub uses). Returns
+        (ok: bool, message: str). Network failure is reported but NON-fatal —
+        the caller decides whether to allow assignment anyway."""
+        import json as _json, urllib.request, urllib.error
+        endpoint = "https://ai-prowler-telemetry.david-vavro1.workers.dev"
+        # Honor a config override if present (mirrors _activation_endpoint).
+        try:
+            cfg = load_config() if RAG_AVAILABLE else {}
+            ov = str(cfg.get("license_endpoint", "")).strip()
+            if ov:
+                endpoint = ov.rstrip("/")
+        except Exception:
+            pass
+        try:
+            install_id = ""
+            try:
+                from pathlib import Path as _Path
+                iid = _Path.home() / ".ai-prowler" / "install_id"
+                if iid.exists():
+                    install_id = iid.read_text(encoding="utf-8").strip()
+            except Exception:
+                pass
+            body = _json.dumps({"license_key": child_key,
+                                "install_id": install_id}).encode()
+            req = urllib.request.Request(
+                f"{endpoint}/license/validate", data=body,
+                headers={"Content-Type": "application/json",
+                         "User-Agent": "AI-Prowler-AdminTab/1.0"}, method="POST")
+            with urllib.request.urlopen(req, timeout=8) as r:
+                resp = _json.loads(r.read().decode("utf-8", "replace"))
+            if resp.get("valid") is True:
+                exp = resp.get("expires_at", "")
+                return (True, f"Valid child seat{(' — expires ' + exp) if exp else ''}.")
+            reason = resp.get("reason", "invalid")
+            return (False, f"License key rejected: {reason}. {resp.get('message','')}".strip())
+        except urllib.error.HTTPError as e:
+            return (False, f"Validation HTTP error {e.code} (key not accepted).")
+        except Exception as e:
+            # Network/offline — non-fatal; let the caller offer to proceed.
+            return (None, f"Could not reach the license server ({e}). "
+                          "You can assign the seat now and it will be "
+                          "re-validated automatically later.")
+
+    def create_admin_tab(self):
+        """Admin tab — Active Users management for Business server mode.
+        Reads/writes ~/.ai-prowler/users.json (the backend's auth source)."""
+        import tkinter as tk
+        from tkinter import ttk, messagebox, simpledialog
+
+        outer = ttk.Frame(self.notebook)
+        self.notebook.add(outer, text="👥 Admin")
+        f = self._make_scrollable_tab(outer)
+
+        ttk.Label(f, text="👥 User & Seat Management",
+                  font=('Segoe UI', 14, 'bold')).pack(anchor='w', pady=(4, 2))
+        ttk.Label(f, wraplength=720, justify='left',
+                  text="Manage the employees who can connect to this company "
+                       "server. Changes are written to ~/.ai-prowler/users.json, "
+                       "which the server reads to authenticate each bearer token. "
+                       "A user's bearer token is their password — generate it here, "
+                       "then send it to them securely. "
+                       "Each employee also gets a license seat from your delivered pool."
+                  ).pack(anchor='w', pady=(0, 8))
+
+        # ── Seat summary strip (read-only; pool from ~/.ai-prowler/seats.json) ─
+        seat_bar = ttk.Frame(f)
+        seat_bar.pack(fill='x', pady=(0, 6))
+        self._admin_seat_label = ttk.Label(
+            seat_bar, text="", font=('Segoe UI', 9, 'bold'))
+        self._admin_seat_label.pack(side='left')
+
+        # ── Active Users table ────────────────────────────────────────────
+        table_frame = ttk.Frame(f)
+        table_frame.pack(fill='both', expand=True, pady=(0, 6))
+
+        columns = ('name', 'email', 'role', 'scopes', 'admin', 'private', 'seat', 'status', 'token')
+        tree_scroll = ttk.Scrollbar(table_frame, orient='vertical')
+        self._admin_tree = ttk.Treeview(table_frame, columns=columns,
+                                        show='headings', height=12,
+                                        yscrollcommand=tree_scroll.set,
+                                        selectmode='browse')
+        tree_scroll.config(command=self._admin_tree.yview)
+
+        col_cfg = [
+            ('name',    'Name',          140, 'w'),
+            ('email',   'Email',         180, 'w'),
+            ('role',    'Role',          90,  'center'),
+            ('scopes',  'Scopes',        150, 'w'),
+            ('admin',   'Manages Users', 95,  'center'),
+            ('private', 'Private Coll.', 85,  'center'),
+            ('seat',    'Seat (key)',    110, 'w'),
+            ('status',  'Status',        80,  'center'),
+            ('token',   'Token (id)',    120, 'w'),
+        ]
+        for col_id, heading, width, anchor in col_cfg:
+            self._admin_tree.heading(col_id, text=heading)
+            self._admin_tree.column(col_id, width=width, anchor=anchor, minwidth=40)
+        self._admin_tree.pack(side='left', fill='both', expand=True)
+        tree_scroll.pack(side='right', fill='y')
+
+        # ── Action buttons ────────────────────────────────────────────────
+        btn_row = ttk.Frame(f)
+        btn_row.pack(fill='x', pady=(2, 6))
+        ttk.Button(btn_row, text="➕ Add User",
+                   command=self._admin_add_user).pack(side='left', padx=(0, 4))
+        ttk.Button(btn_row, text="✏️ Edit",
+                   command=self._admin_edit_user).pack(side='left', padx=4)
+        ttk.Button(btn_row, text="🔑 Regenerate Token",
+                   command=self._admin_regen_token).pack(side='left', padx=4)
+        ttk.Button(btn_row, text="🚫 Suspend/Activate",
+                   command=self._admin_toggle_status).pack(side='left', padx=4)
+        ttk.Button(btn_row, text="🗑 Remove",
+                   command=self._admin_remove_user).pack(side='left', padx=4)
+        ttk.Button(btn_row, text="↻ Refresh",
+                   command=self._admin_refresh_table).pack(side='right')
+
+        self._admin_refresh_table()
+
+    def _admin_refresh_table(self):
+        """Reload users.json and repopulate the table; refresh seat summary."""
+        if not hasattr(self, "_admin_tree"):
+            return
+        for row in self._admin_tree.get_children():
+            self._admin_tree.delete(row)
+        data = self._admin_load_users()
+        seats = self._admin_load_seats()
+        for token, u in (data.get("users") or {}).items():
+            if not isinstance(u, dict):
+                continue
+            role = u.get("role", "field_crew")
+            scopes = ", ".join(u.get("scopes") or [])
+            is_owner = (role == "owner")
+            admin_flag = "✓ (owner)" if is_owner else ("✓" if u.get("can_manage_users") else "")
+            private = "✓" if u.get("private_collection_enabled") else ""
+            seat = self._admin_mask_key(u.get("child_license_key", ""))
+            status = u.get("status", "active")
+            tok_short = (token[:8] + "…") if len(token) > 9 else token
+            self._admin_tree.insert(
+                '', 'end', iid=token,
+                values=(u.get("name", "(unnamed)"), u.get("email", ""), role, scopes,
+                        admin_flag, private, seat, status, tok_short))
+        # Seat summary strip
+        if hasattr(self, "_admin_seat_label"):
+            total = seats.get("seats_total") or len(seats.get("child_keys") or [])
+            used = len(self._admin_assigned_keys(data))
+            free = max(0, total - used)
+            parent = self._admin_mask_key(seats.get("parent_license_key", ""))
+            if total == 0 and not seats.get("child_keys"):
+                txt = ("⚠ No seat pool found (~/.ai-prowler/seats.json). "
+                       "License-key assignment is unavailable.")
+            else:
+                txt = (f"Seats: {used}/{total} used · {free} available"
+                       + (f"   ·   Company key: {parent}" if parent else ""))
+            self._admin_seat_label.config(text=txt)
+
+    def _admin_selected_token(self):
+        """Return the token (iid) of the selected row, or None."""
+        sel = self._admin_tree.selection()
+        return sel[0] if sel else None
+
+    def _admin_user_dialog(self, title, existing=None):
+        """Modal dialog to add/edit a user. Returns a dict of fields or None.
+        `existing` is the current user dict when editing (role/scopes/flags
+        prefilled). Does NOT include the token — that's managed separately."""
+        import tkinter as tk
+        from tkinter import ttk, messagebox
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title(title)
+        dlg.transient(self.root)
+        dlg.grab_set()
+        dlg.resizable(False, False)
+        pad = {'padx': 8, 'pady': 4}
+
+        ex = existing or {}
+        frm = ttk.Frame(dlg, padding=12)
+        frm.pack(fill='both', expand=True)
+
+        ttk.Label(frm, text="Name:").grid(row=0, column=0, sticky='e', **pad)
+        name_var = tk.StringVar(value=ex.get("name", ""))
+        ttk.Entry(frm, textvariable=name_var, width=34).grid(row=0, column=1, **pad)
+
+        ttk.Label(frm, text="Email:").grid(row=1, column=0, sticky='e', **pad)
+        email_var = tk.StringVar(value=ex.get("email", ""))
+        ttk.Entry(frm, textvariable=email_var, width=34).grid(row=1, column=1, **pad)
+
+        ttk.Label(frm, text="Role:").grid(row=2, column=0, sticky='e', **pad)
+        role_var = tk.StringVar(value=ex.get("role", "field_crew"))
+        role_cb = ttk.Combobox(frm, textvariable=role_var, state='readonly',
+                               width=31, values=("owner", "manager",
+                                                 "staff", "field_crew"))
+        role_cb.grid(row=2, column=1, **pad)
+
+        ttk.Label(frm, text="Scopes:").grid(row=3, column=0, sticky='ne', **pad)
+        scopes_var = tk.StringVar(value=", ".join(ex.get("scopes") or []))
+        scopes_entry = ttk.Entry(frm, textvariable=scopes_var, width=34)
+        scopes_entry.grid(row=3, column=1, **pad)
+        ttk.Label(frm, text="(the data groups this user may access — you define "
+                            "these, e.g. role:sales, role:office, role:field)",
+                  font=('Segoe UI', 8)).grid(row=4, column=1, sticky='w', padx=8)
+
+        manage_var = tk.BooleanVar(value=bool(ex.get("can_manage_users")))
+        manage_cb = ttk.Checkbutton(
+            frm, text="Can manage users (delegated admin)", variable=manage_var)
+        manage_cb.grid(row=5, column=1, sticky='w', **pad)
+
+        private_var = tk.BooleanVar(
+            value=bool(ex.get("private_collection_enabled", True)))
+        ttk.Checkbutton(frm, text="Private collection enabled",
+                        variable=private_var).grid(row=6, column=1, sticky='w', **pad)
+
+        # ── License seat (child key) dropdown ──────────────────────────────
+        # Options = unassigned keys from the delivered pool, plus the user's
+        # CURRENT key when editing (so it stays selectable), plus a blank
+        # '(none)' option. Display masked; map the label back to the full key.
+        ttk.Label(frm, text="License seat:").grid(row=7, column=0, sticky='e', **pad)
+        cur_key = ex.get("child_license_key", "")
+        avail = list(self._admin_unassigned_keys())
+        if cur_key and cur_key not in avail:
+            avail = [cur_key] + avail
+        # label->key map; blank label means no seat
+        key_labels = {"(no seat assigned)": ""}
+        for k in avail:
+            key_labels[self._admin_mask_key(k) + f"   [{k[:8]}…]"] = k
+        # Choose initial label
+        init_label = "(no seat assigned)"
+        for lbl, k in key_labels.items():
+            if k == cur_key and cur_key:
+                init_label = lbl
+                break
+        seat_var = tk.StringVar(value=init_label)
+        seat_cb = ttk.Combobox(frm, textvariable=seat_var, state='readonly',
+                               width=31, values=list(key_labels.keys()))
+        seat_cb.grid(row=7, column=1, **pad)
+        if len(key_labels) == 1:  # only the '(no seat)' entry → pool empty
+            ttk.Label(frm, text="(no unassigned seats in the pool)",
+                      font=('Segoe UI', 8)).grid(row=8, column=1, sticky='w', padx=8)
+
+        # ── Optional custom bearer token (Add only) ────────────────────────
+        # A bearer token is a SECRET (the employee's password). Leave blank to
+        # auto-generate a strong random one (recommended). Only type your own if
+        # you have a specific reason (e.g. matching a pre-distributed value) —
+        # weak/guessable tokens compromise access. Ignored when editing (use the
+        # Regenerate Token button to change an existing user's token).
+        is_edit = bool(existing)
+        token_var = tk.StringVar(value="")
+        if not is_edit:
+            ttk.Label(frm, text="Bearer token:").grid(row=9, column=0, sticky='e', **pad)
+            ttk.Entry(frm, textvariable=token_var, width=34,
+                      font=('Consolas', 10)).grid(row=9, column=1, **pad)
+            ttk.Label(frm, text="(optional — leave blank to auto-generate a "
+                                "strong token; typing a weak one is insecure)",
+                      font=('Segoe UI', 8)).grid(row=10, column=1, sticky='w', padx=8)
+
+        # can_manage_users only valid for managers (spec §6.3): staff/field never;
+        # owner is implicitly an admin so the flag is moot. Enforce in the UI.
+        def _sync_manage_state(*_a):
+            r = role_var.get()
+            if r == "manager":
+                manage_cb.state(['!disabled'])
+            else:
+                manage_var.set(False)
+                manage_cb.state(['disabled'])
+        role_var.trace_add('write', _sync_manage_state)
+        _sync_manage_state()
+
+        result = {}
+
+        def _ok():
+            name = name_var.get().strip()
+            if not name:
+                messagebox.showwarning("Missing", "Name is required.", parent=dlg)
+                return
+            scopes = [s.strip() for s in scopes_var.get().split(",") if s.strip()]
+            chosen_key = key_labels.get(seat_var.get(), "")
+            result.update({
+                "name": name,
+                "email": email_var.get().strip(),
+                "role": role_var.get(),
+                "scopes": scopes,
+                "can_manage_users": bool(manage_var.get()),
+                "private_collection_enabled": bool(private_var.get()),
+                "child_license_key": chosen_key,
+                "custom_token": token_var.get().strip(),  # '' = auto-generate
+            })
+            dlg.destroy()
+
+        def _cancel():
+            result.clear()
+            dlg.destroy()
+
+        btns = ttk.Frame(frm)
+        btns.grid(row=11, column=0, columnspan=2, pady=(10, 0))
+        ttk.Button(btns, text="Save", command=_ok).pack(side='left', padx=4)
+        ttk.Button(btns, text="Cancel", command=_cancel).pack(side='left', padx=4)
+
+        dlg.wait_window()
+        return result or None
+
+    def _admin_confirm_child_key(self, child_key):
+        """Validate an assigned child key on Save. Returns True to proceed,
+        False to abort. A hard rejection (valid:false) blocks; a network error
+        is non-fatal and offers to proceed (re-validated automatically later).
+        An empty key (no seat) always proceeds."""
+        from tkinter import messagebox
+        if not child_key:
+            return True
+        ok, msg = self._admin_validate_child_key(child_key)
+        if ok is True:
+            return True
+        if ok is None:
+            # Network/offline — offer to proceed.
+            return messagebox.askyesno(
+                "License server unreachable",
+                f"{msg}\n\nAssign this seat anyway? It will be validated "
+                "automatically the next time the server can reach the license "
+                "service.")
+        # ok is False — hard rejection.
+        messagebox.showerror("License key rejected",
+                             f"{msg}\n\nThis seat was not assigned.")
+        return False
+
+    def _admin_add_user(self):
+        """Add a new user: collect fields, generate a bearer token, write
+        users.json, then show the token so the admin can send it securely."""
+        from tkinter import messagebox
+        fields = self._admin_user_dialog("Add User")
+        if not fields:
+            return
+        data = self._admin_load_users()
+        users = data.setdefault("users", {})
+
+        # Guard: only one owner. If adding an owner and one exists, refuse.
+        if fields["role"] == "owner":
+            for u in users.values():
+                if isinstance(u, dict) and u.get("role") == "owner":
+                    messagebox.showerror(
+                        "Owner exists",
+                        "There is already an owner. Only one owner is allowed; "
+                        "change the existing owner's role first if you need to "
+                        "transfer ownership.")
+                    return
+
+        # Guard: the chosen seat must not already be taken (race vs. another edit).
+        child_key = fields.get("child_license_key", "")
+        if child_key and child_key in self._admin_assigned_keys(data):
+            messagebox.showerror(
+                "Seat already assigned",
+                "That license seat is already assigned to another user. "
+                "Refresh and pick a different seat.")
+            return
+        # Validate the seat on Save (public /license/validate).
+        if not self._admin_confirm_child_key(child_key):
+            return
+
+        # Bearer token: use the admin's custom value if provided, else generate
+        # a strong random one. A custom token must be unique and not trivially
+        # short (a token is a password).
+        custom = (fields.get("custom_token") or "").strip()
+        if custom:
+            if len(custom) < 8:
+                messagebox.showerror(
+                    "Token too short",
+                    "A custom bearer token must be at least 8 characters "
+                    "(it's the employee's password). Use a longer value or "
+                    "leave it blank to auto-generate a strong one.")
+                return
+            if custom in users:
+                messagebox.showerror(
+                    "Token already in use",
+                    "That bearer token is already assigned to another user. "
+                    "Choose a different value or leave it blank to auto-generate.")
+                return
+            token = custom
+        else:
+            token = self._admin_gen_token()
+            while token in users:  # extremely unlikely collision guard
+                token = self._admin_gen_token()
+
+        import datetime as _dt
+        users[token] = {
+            "name": fields["name"],
+            "email": fields["email"],
+            "role": fields["role"],
+            "scopes": fields["scopes"],
+            "can_manage_users": fields["can_manage_users"],
+            "private_collection_enabled": fields["private_collection_enabled"],
+            "child_license_key": child_key,
+            "status": "active",
+            "added": _dt.date.today().isoformat(),
+        }
+        if not self._admin_save_users(data):
+            return
+        self._admin_refresh_table()
+        self._admin_show_token(fields["name"], token)
+
+    def _admin_show_token(self, name, token):
+        """Show the freshly generated bearer token with a Copy button. This is
+        the ONLY time it's displayed in full — it's stored as the users.json key."""
+        import tkinter as tk
+        from tkinter import ttk
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Bearer Token")
+        dlg.transient(self.root)
+        dlg.grab_set()
+        frm = ttk.Frame(dlg, padding=14)
+        frm.pack(fill='both', expand=True)
+        ttk.Label(frm, text=f"Bearer token for {name}:",
+                  font=('Segoe UI', 10, 'bold')).pack(anchor='w')
+        ttk.Label(frm, wraplength=440, justify='left',
+                  text="Send this to the employee securely. They paste it into "
+                       "their Claude MCP connector to authenticate to this server. "
+                       "Treat it like a password — this is the only time it's "
+                       "shown in full.").pack(anchor='w', pady=(2, 8))
+        # Reliable readonly display: create NORMAL, insert, THEN lock. Setting a
+        # textvariable then flipping to readonly can render blank on some Tk
+        # builds, which was the bug. insert()-then-readonly always shows.
+        ent = ttk.Entry(frm, width=46, font=('Consolas', 11))
+        ent.pack(fill='x')
+        ent.insert(0, token)
+        ent.selection_range(0, 'end')
+        ent.configure(state='readonly')
+
+        def _copy():
+            self.root.clipboard_clear()
+            self.root.clipboard_append(token)
+            copy_btn.configure(text="✓ Copied")
+        copy_btn = ttk.Button(frm, text="📋 Copy to Clipboard", command=_copy)
+        copy_btn.pack(pady=(8, 0))
+        ttk.Button(frm, text="Close", command=dlg.destroy).pack(pady=(6, 0))
+        ent.focus_set()
+
+    def _admin_edit_user(self):
+        """Edit the selected user's fields (not the token)."""
+        from tkinter import messagebox
+        token = self._admin_selected_token()
+        if not token:
+            messagebox.showinfo("Edit", "Select a user first.")
+            return
+        data = self._admin_load_users()
+        u = (data.get("users") or {}).get(token)
+        if not isinstance(u, dict):
+            messagebox.showerror("Edit", "User not found (refresh the table).")
+            return
+        was_owner = (u.get("role") == "owner")
+        fields = self._admin_user_dialog(f"Edit User — {u.get('name','')}", existing=u)
+        if not fields:
+            return
+        # If demoting the only owner, warn (a server with no owner loses custody).
+        if was_owner and fields["role"] != "owner":
+            owners = sum(1 for x in (data.get("users") or {}).values()
+                         if isinstance(x, dict) and x.get("role") == "owner")
+            if owners <= 1 and not messagebox.askyesno(
+                    "Demote owner?",
+                    "This is the only owner. Demoting them leaves the company "
+                    "server with no owner (no full data custody). Continue?"):
+                return
+        # Seat (child key) handling: guard against taking a seat another user
+        # already holds (excluding this user's own current key), and validate on
+        # Save if the key changed.
+        new_key = fields.get("child_license_key", "")
+        old_key = u.get("child_license_key", "")
+        if new_key and new_key != old_key:
+            others = self._admin_assigned_keys(data) - ({old_key} if old_key else set())
+            if new_key in others:
+                messagebox.showerror(
+                    "Seat already assigned",
+                    "That license seat is already assigned to another user. "
+                    "Refresh and pick a different seat.")
+                return
+            if not self._admin_confirm_child_key(new_key):
+                return
+        u.update({
+            "name": fields["name"], "email": fields["email"],
+            "role": fields["role"], "scopes": fields["scopes"],
+            "can_manage_users": fields["can_manage_users"],
+            "private_collection_enabled": fields["private_collection_enabled"],
+            "child_license_key": new_key,
+        })
+        if self._admin_save_users(data):
+            self._admin_refresh_table()
+
+    def _admin_regen_token(self):
+        """Regenerate the selected user's bearer token (revocation in 5s, spec
+        §5.3). The old token immediately stops authenticating once saved."""
+        from tkinter import messagebox
+        token = self._admin_selected_token()
+        if not token:
+            messagebox.showinfo("Regenerate", "Select a user first.")
+            return
+        data = self._admin_load_users()
+        users = data.get("users") or {}
+        u = users.get(token)
+        if not isinstance(u, dict):
+            messagebox.showerror("Regenerate", "User not found (refresh the table).")
+            return
+        if not messagebox.askyesno(
+                "Regenerate token",
+                f"Regenerate the bearer token for {u.get('name','')}?\n\n"
+                "Their OLD token will stop working immediately. You'll need to "
+                "send them the new one."):
+            return
+        new_token = self._admin_gen_token()
+        while new_token in users:
+            new_token = self._admin_gen_token()
+        # Move the record to the new key (the token IS the key).
+        users[new_token] = u
+        del users[token]
+        if self._admin_save_users(data):
+            self._admin_refresh_table()
+            self._admin_show_token(u.get("name", ""), new_token)
+
+    def _admin_toggle_status(self):
+        """Toggle a user between active and suspended (soft revoke — keeps the
+        record but _resolve_user denies access)."""
+        from tkinter import messagebox
+        token = self._admin_selected_token()
+        if not token:
+            messagebox.showinfo("Suspend", "Select a user first.")
+            return
+        data = self._admin_load_users()
+        u = (data.get("users") or {}).get(token)
+        if not isinstance(u, dict):
+            messagebox.showerror("Suspend", "User not found (refresh the table).")
+            return
+        cur = u.get("status", "active")
+        u["status"] = "suspended" if cur == "active" else "active"
+        if self._admin_save_users(data):
+            self._admin_refresh_table()
+
+    def _admin_remove_user(self):
+        """Permanently remove a user from users.json."""
+        from tkinter import messagebox
+        token = self._admin_selected_token()
+        if not token:
+            messagebox.showinfo("Remove", "Select a user first.")
+            return
+        data = self._admin_load_users()
+        u = (data.get("users") or {}).get(token)
+        if not isinstance(u, dict):
+            messagebox.showerror("Remove", "User not found (refresh the table).")
+            return
+        if u.get("role") == "owner":
+            messagebox.showerror(
+                "Cannot remove owner",
+                "The owner cannot be removed. Transfer ownership first by editing "
+                "another user to the owner role, then change this one's role.")
+            return
+        if not messagebox.askyesno(
+                "Remove user",
+                f"Permanently remove {u.get('name','')}?\n\nTheir token will stop "
+                "working. This cannot be undone."):
+            return
+        del data["users"][token]
+        if self._admin_save_users(data):
+            self._admin_refresh_table()
 
     def _on_tab_changed(self, event=None):
         """Handle tab switches."""
