@@ -1443,3 +1443,89 @@ class TestCadenceConstant:
             f"_LICENSE_FRESH_HOURS must be 720 (30d) per the v7.0.0 #4 design; got {v}. "
             f"If you intentionally changed the cadence, update this test AND learning 3dce04e8."
         )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# LICENSE-WARNINGS PERSISTENCE — _save_license_warnings (v7.0.0 GUI surface).
+# The engine writes child-license warnings to ~/.ai-prowler/license_warnings.json
+# so the GUI's Admin tab can read them on each refresh. The file is ALWAYS
+# written (even when warnings=[]) so the GUI distinguishes "all clear as of
+# last_check_at" from "the sweep has never run" (file absent).
+# ═════════════════════════════════════════════════════════════════════════════
+@pytest.fixture
+def warnings_io_api(mcp_module):
+    fn = getattr(mcp_module, "_save_license_warnings", None)
+    if fn is None:
+        pytest.skip("_save_license_warnings not present (pre-v7.0.0 GUI slice).")
+
+    class Api:
+        save = staticmethod(fn)
+        mod = mcp_module
+    return Api
+
+
+@pytest.fixture
+def tmp_warnings_path(warnings_io_api, tmp_path, monkeypatch):
+    """Redirect _LICENSE_WARNINGS_PATH to a per-test temp file."""
+    p = tmp_path / "license_warnings.json"
+    monkeypatch.setattr(warnings_io_api.mod, "_LICENSE_WARNINGS_PATH", p)
+    return p
+
+
+class TestLicenseWarningsPersistence:
+    def test_C_MCP_WARN_01_save_empty_writes_file_with_empty_list(
+            self, warnings_io_api, tmp_warnings_path):
+        # Empty list MUST still write a file — the absence of the file means
+        # "sweep never ran", which is a different signal than "all clear".
+        warnings_io_api.save([])
+        assert tmp_warnings_path.exists()
+        data = json.loads(tmp_warnings_path.read_text(encoding="utf-8"))
+        assert data["warnings"] == []
+        assert "last_check_at" in data
+
+    def test_C_MCP_WARN_02_save_persists_warning_entries(
+            self, warnings_io_api, tmp_warnings_path):
+        ws = [
+            {"name": "Alice", "child_key_masked": "AP-C…AAAA-0001",
+             "reason": "reverted_revoked", "banner": "Revoked."},
+            {"name": "Bob",   "child_key_masked": "AP-C…BBBB-0002",
+             "reason": "grace_warning",    "banner": "Expires soon."},
+        ]
+        warnings_io_api.save(ws)
+        data = json.loads(tmp_warnings_path.read_text(encoding="utf-8"))
+        assert data["warnings"] == ws
+
+    def test_C_MCP_WARN_03_save_uses_iso_utc_timestamp(
+            self, warnings_io_api, tmp_warnings_path):
+        warnings_io_api.save([])
+        data = json.loads(tmp_warnings_path.read_text(encoding="utf-8"))
+        ts = data["last_check_at"]
+        # Must parse as a tz-aware ISO datetime (UTC).
+        parsed = dt.datetime.fromisoformat(ts)
+        assert parsed.tzinfo is not None, f"last_check_at must be tz-aware: {ts!r}"
+
+    def test_C_MCP_WARN_04_save_overwrites_previous(
+            self, warnings_io_api, tmp_warnings_path):
+        # A later sweep with fewer issues replaces an earlier sweep's warnings.
+        warnings_io_api.save([
+            {"name": "Alice", "child_key_masked": "AP-C…AAAA-0001",
+             "reason": "reverted_revoked", "banner": "x"}])
+        warnings_io_api.save([])
+        data = json.loads(tmp_warnings_path.read_text(encoding="utf-8"))
+        assert data["warnings"] == []
+
+    def test_C_MCP_WARN_05_save_never_raises_on_io_error(
+            self, warnings_io_api, monkeypatch, tmp_path):
+        # The save is advisory — if the disk is full or the path is locked, the
+        # engine startup must NOT fail because of it. Point the path at an
+        # impossible location (a path inside a file, which can never be a dir)
+        # and confirm no exception escapes.
+        impossible = tmp_path / "real_file"
+        impossible.write_text("x", encoding="utf-8")
+        bad = impossible / "child" / "license_warnings.json"
+        monkeypatch.setattr(warnings_io_api.mod, "_LICENSE_WARNINGS_PATH", bad)
+        # Should NOT raise.
+        warnings_io_api.save([{"name": "X", "child_key_masked": "x",
+                                "reason": "x", "banner": "x"}])
+        # And of course the file isn't there.
+        assert not bad.exists()

@@ -6376,6 +6376,33 @@ def _sweep_child_licenses(users_doc, validate_fn):
     return warnings
 
 
+# Path the engine writes child-license warnings to; the GUI Admin tab reads it
+# on each refresh. Always written (even when warnings=[]) so the GUI can tell
+# "no issues as of <last_check_at>" from "the sweep has never run" (file absent).
+_LICENSE_WARNINGS_PATH = Path.home() / ".ai-prowler" / "license_warnings.json"
+
+
+def _save_license_warnings(warnings):
+    """Persist the child-license warnings list for the GUI to read. Atomic
+    write (tmp + os.replace). Never raises — a failed write should never
+    block startup, since the warnings are advisory (the bearer-token auth
+    path still works regardless)."""
+    import datetime as _dt
+    try:
+        _LICENSE_WARNINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "last_check_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+            "warnings":      list(warnings or []),
+        }
+        tmp = _LICENSE_WARNINGS_PATH.with_suffix(
+            _LICENSE_WARNINGS_PATH.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        import os as _os
+        _os.replace(str(tmp), str(_LICENSE_WARNINGS_PATH))
+    except Exception as _e:
+        _log.warning("Could not write %s (%s)", _LICENSE_WARNINGS_PATH, _e)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # MULTI-USER MODEL — pure auth/scoping helpers  (v7.0.0 Phase B Block 3, spec §6)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -7614,6 +7641,10 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
         except Exception as _cwerr:
             # Never let a child-key sweep block startup. Log and continue.
             _log.warning("Child-license sweep failed (%s); continuing.", _cwerr)
+        # Persist the warnings (or the empty list) so the Admin tab can display
+        # them. ALWAYS write — an absent file means 'sweep never ran', a present
+        # file with warnings=[] means 'all clear as of last_check_at'.
+        _save_license_warnings(_child_warnings)
     if _child_warnings:
         _sub_result = dict(_sub_result)
         _sub_result["child_license_warnings"] = _child_warnings

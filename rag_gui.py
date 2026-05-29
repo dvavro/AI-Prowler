@@ -9180,6 +9180,34 @@ Built with Python, ChromaDB, and Claude"""
                 pass
         return {"parent_license_key": "", "seats_total": 0, "child_keys": []}
 
+    def _admin_warnings_path(self):
+        from pathlib import Path as _Path
+        return _Path.home() / ".ai-prowler" / "license_warnings.json"
+
+    def _admin_load_warnings(self):
+        """Load child-license warnings written by the engine's startup sweep.
+        Returns {'last_check_at': str|None, 'warnings': [...]}. Tolerant of
+        missing/corrupt — silent empty default (the warnings are advisory; a
+        broken file should NOT pop a modal at the owner)."""
+        import json as _json
+        p = self._admin_warnings_path()
+        try:
+            if p.exists():
+                data = _json.loads(p.read_text(encoding="utf-8-sig")) or {}
+                if not isinstance(data.get("warnings"), list):
+                    data["warnings"] = []
+                if "last_check_at" not in data:
+                    data["last_check_at"] = None
+                return data
+        except Exception as _e:
+            # Advisory data; don't pop a modal. The seat strip will simply not
+            # show warnings until the next sweep writes a clean file.
+            try:
+                print(f"[admin tab] could not read license_warnings.json: {_e}")
+            except Exception:
+                pass
+        return {"last_check_at": None, "warnings": []}
+
     def _admin_assigned_keys(self, users_data=None):
         """Set of child keys currently assigned to ANY user record (used seats)."""
         if users_data is None:
@@ -9280,6 +9308,16 @@ Built with Python, ChromaDB, and Claude"""
             seat_bar, text="", font=('Segoe UI', 9, 'bold'))
         self._admin_seat_label.pack(side='left')
 
+        # ── Child-license warning strip (v7.0.0 #4 sweep → GUI surface) ───────
+        # Populated by the engine's startup sweep into
+        # ~/.ai-prowler/license_warnings.json. Empty when nothing is wrong; lists
+        # affected users + masked keys when something is. Soft policy: no
+        # action gating, this is purely advisory for the owner.
+        self._admin_warning_label = ttk.Label(
+            f, text="", font=('Segoe UI', 9),
+            foreground='#a05a00', wraplength=720, justify='left')
+        self._admin_warning_label.pack(fill='x', pady=(0, 6))
+
         # ── Active Users table ────────────────────────────────────────────
         table_frame = ttk.Frame(f)
         table_frame.pack(fill='both', expand=True, pady=(0, 6))
@@ -9363,6 +9401,29 @@ Built with Python, ChromaDB, and Claude"""
                 txt = (f"Seats: {used}/{total} used · {free} available"
                        + (f"   ·   Company key: {parent}" if parent else ""))
             self._admin_seat_label.config(text=txt)
+
+        # Child-license warning strip — read engine-written file. Only the most
+        # recent sweep wins; the engine writes an empty warnings list when
+        # everything checked out, so an empty list != stale data.
+        if hasattr(self, "_admin_warning_label"):
+            wdata = self._admin_load_warnings()
+            warnings = wdata.get("warnings") or []
+            if not warnings:
+                self._admin_warning_label.config(text="")
+            else:
+                # Compact summary: up to 5 names with their reason; rest counted.
+                parts = []
+                for w in warnings[:5]:
+                    name = w.get("name", "?")
+                    masked = w.get("child_key_masked", "")
+                    reason = w.get("reason", "issue")
+                    parts.append(f"{name} ({reason}, {masked})")
+                more = len(warnings) - 5
+                trailer = f" — and {more} more" if more > 0 else ""
+                summary = ", ".join(parts) + trailer
+                self._admin_warning_label.config(
+                    text=f"⚠ License issue(s) on {len(warnings)} child seat(s): "
+                         f"{summary}.  Contact your provider.")
 
     def _admin_selected_token(self):
         """Return the token (iid) of the selected row, or None."""
