@@ -6031,18 +6031,23 @@ def _evaluate_activation(entry: dict, install_id: str, now=None) -> dict:
 # ~/.ai-prowler/license_cache.json. The cache + grace ladder protect a paying
 # customer from network blips: a brief outage must NOT instantly downgrade them
 # to Home. The ladder (§3.4), measured from last SUCCESSFUL validation:
-#   • within 24h of success            → use cache, no network call needed
-#   • network fail, < 7 days since ok  → run business, log silently
-#   • network fail, 7–14 days          → run business, show a warning banner
-#   • network fail, ≥ 14 days          → revert to home (data kept, features gated)
-#   • explicit 'revoked'/'suspended'   → revert to home IMMEDIATELY (no grace)
+#   • within 30 days of success                → use cache, no network call needed
+#   • network fail, within 30 days of last ok  → cached_fresh (still trust)
+#   • network fail, 30-37 days since last ok    → run business, log silently
+#   • network fail, 37-44 days since last ok    → run business, show warning banner
+#   • network fail, ≥ 44 days since last ok     → revert to home (data kept, features gated)
+#   • explicit 'revoked'/'suspended'            → revert to home IMMEDIATELY (no grace)
+#
+# Constants are ordered FRESH ≤ WARN ≤ GRACE; the grace ladder only fires for
+# caches OLDER than FRESH, so each tier gets a meaningful 7-day window beyond
+# the 30-day trust period.
 #
 # _evaluate_license_grace() is PURE (no I/O) so it is unit-testable; the I/O
 # wrapper _validate_business_license() does the cache read/write + HTTP POST.
 _LICENSE_CACHE_PATH   = Path.home() / ".ai-prowler" / "license_cache.json"
-_LICENSE_FRESH_HOURS  = 24   # within this since last success → trust cache, skip network
-_LICENSE_WARN_DAYS    = 7    # network-fail past this since success → warning banner
-_LICENSE_GRACE_DAYS   = 14   # network-fail past this since success → revert to home
+_LICENSE_FRESH_HOURS  = 720  # within this since last success → trust cache, skip network (30 days, v7.0.0)
+_LICENSE_WARN_DAYS    = 37   # network-fail past this since success → warning banner (30d trust + 7d silent)
+_LICENSE_GRACE_DAYS   = 44   # network-fail past this since success → revert to home (30d trust + 14d grace)
 
 # Reasons the Worker returns that mean "stop being business right now" (no grace).
 _LICENSE_HARD_FAIL_REASONS = ("revoked", "suspended", "parent_revoked",
@@ -6141,13 +6146,81 @@ def _evaluate_license_grace(cache: dict, validate_result: "dict | None",
             "used_network": False}
 
 
+def _load_license_cache_for(license_key: str) -> dict:
+    """Return the cached validation entry for ONE license key, or {} if absent.
+
+    Cache shape (v7.0.0): a per-key map keyed by full license_key:
+        {"licenses": {"AP-XXXX-...": {"last_validated_at": "...", ...}}}
+
+    Backward compat: a legacy file with top-level last_validated_at is treated
+    as the entry for the FIRST key we're asked about (the parent at startup),
+    and migrated to the new shape on the next successful save.
+    """
+    try:
+        if not _LICENSE_CACHE_PATH.exists():
+            return {}
+        raw = json.loads(_LICENSE_CACHE_PATH.read_text(encoding="utf-8-sig")) or {}
+    except Exception as _e:
+        _log.warning("license_cache.json unreadable (%s)", _e)
+        return {}
+
+    # New shape: {"licenses": {key: entry}}
+    if isinstance(raw.get("licenses"), dict):
+        entry = raw["licenses"].get(license_key)
+        return entry if isinstance(entry, dict) else {}
+
+    # Legacy shape: top-level fields belong to whichever key asks first.
+    # We can't distinguish, so we return it unconditionally — the writer below
+    # will migrate it to the new shape under THIS key on next success.
+    if "last_validated_at" in raw:
+        return raw
+    return {}
+
+
+def _save_license_cache_for(license_key: str, entry: dict) -> None:
+    """Persist a per-key cache entry under the new shape, migrating legacy
+    top-level fields into the new map if needed. Never raises."""
+    try:
+        _LICENSE_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        existing = {}
+        if _LICENSE_CACHE_PATH.exists():
+            try:
+                existing = json.loads(
+                    _LICENSE_CACHE_PATH.read_text(encoding="utf-8-sig")) or {}
+            except Exception:
+                existing = {}
+
+        # Ensure we end up with the new shape: {"licenses": {key: entry, ...}}
+        licenses_map = {}
+        if isinstance(existing.get("licenses"), dict):
+            licenses_map = dict(existing["licenses"])
+        elif "last_validated_at" in existing:
+            # Legacy single-license file — we don't know which key it belonged
+            # to. Drop it: the new save below puts the current key in correctly,
+            # and the legacy entry is only useful if it matches the active key,
+            # in which case the new entry replaces it anyway.
+            pass
+
+        licenses_map[license_key] = entry
+        _LICENSE_CACHE_PATH.write_text(
+            json.dumps({"licenses": licenses_map}, indent=2), encoding="utf-8")
+    except Exception as _e:
+        _log.warning("Could not write license_cache.json (%s)", _e)
+
+
 def _validate_business_license(license_key: str, install_id: str,
                                endpoint: str, now=None) -> dict:
-    """I/O wrapper around _evaluate_license_grace: read cache, decide whether
-    to call the Worker, POST /license/validate, persist a fresh success, and
-    return the grace evaluation. Never raises.
+    """I/O wrapper around _evaluate_license_grace: read PER-KEY cache, decide
+    whether to call the Worker, POST /license/validate, persist a fresh success,
+    and return the grace evaluation. Never raises.
 
     Returns the _evaluate_license_grace dict, plus 'license_key_present': bool.
+
+    v7.0.0 changes: per-key cache (so the server can validate parent + N child
+    keys without overwriting each other), and a 30-day fresh-cache window
+    (_LICENSE_FRESH_HOURS = 720) so a long-running server hits the network on
+    a ~30d cadence and a daily-launched personal install skips the network on
+    each launch within those 30 days.
     """
     import datetime as _dt
     if now is None:
@@ -6157,16 +6230,10 @@ def _validate_business_license(license_key: str, install_id: str,
         return {"effective_edition": "home", "action": "no_license",
                 "banner": "", "used_network": False, "license_key_present": False}
 
-    # Load cache (tolerant of missing/corrupt file).
-    cache = {}
-    try:
-        if _LICENSE_CACHE_PATH.exists():
-            cache = json.loads(_LICENSE_CACHE_PATH.read_text(encoding="utf-8-sig")) or {}
-    except Exception as _e:
-        _log.warning("license_cache.json unreadable (%s)", _e)
-        cache = {}
+    # Load this key's cache entry (tolerant of missing/corrupt file).
+    cache = _load_license_cache_for(license_key)
 
-    # If cache is fresh (<24h since success), skip the network entirely (§3.3 step 2).
+    # If cache is fresh (<30d since success), skip the network entirely.
     last_ok = None
     try:
         s = str(cache.get("last_validated_at", "")).strip().replace("Z", "+00:00")
@@ -6201,23 +6268,112 @@ def _validate_business_license(license_key: str, install_id: str,
 
     result = _evaluate_license_grace(cache, validate_result, now=now)
 
-    # Persist a fresh SUCCESS to the cache (so the 24h fast-path + grace anchor work).
+    # Persist a fresh SUCCESS to the cache (so the 30d fast-path + grace anchor work).
     if validate_result is not None and validate_result.get("valid") is True:
-        try:
-            _LICENSE_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-            new_cache = {
-                "last_validated_at": now.isoformat(),
-                "status": validate_result.get("status", "active"),
-                "cached_expires_at": validate_result.get("expires_at", ""),
-                "edition": validate_result.get("edition", "business"),
-            }
-            _LICENSE_CACHE_PATH.write_text(json.dumps(new_cache, indent=2),
-                                           encoding="utf-8")
-        except Exception as _e:
-            _log.warning("Could not write license_cache.json (%s)", _e)
+        _save_license_cache_for(license_key, {
+            "last_validated_at": now.isoformat(),
+            "status": validate_result.get("status", "active"),
+            "cached_expires_at": validate_result.get("expires_at", ""),
+            "edition": validate_result.get("edition", "business"),
+        })
 
     result["license_key_present"] = True
     return result
+
+
+def _sweep_child_licenses(users_doc, validate_fn):
+    """Walk active users and validate each one's child_license_key.
+
+    PURE-AT-THE-EDGE — takes the users dict + the validate function as injectables
+    so tests can stub the network. Returns a list of warning entries; the caller
+    decides what to do with them (log, surface in GUI, etc.). Soft policy per
+    David 2026-05-28: rejections produce warnings but do NOT mutate users_doc.
+
+    Args:
+        users_doc:    The parsed users.json dict, or anything with a 'users' key
+                      mapping bearer-token → user record. Falsy/missing 'users'
+                      yields an empty result.
+        validate_fn:  Callable(license_key: str) -> dict matching the shape of
+                      _validate_business_license's return:
+                        {'effective_edition': 'business'|'home',
+                         'action': str,
+                         'banner': str, ...}
+
+    Returns:
+        list of dicts: [{name, child_key_masked, reason, banner}, ...]
+        Empty list when nothing is wrong.
+
+    Skip rules (each entry is silently skipped if):
+      - record is not a dict (malformed users.json entry)
+      - status is not 'active' (suspended/removed users don't consume checks)
+      - child_license_key is empty (not yet assigned)
+
+    A user whose validate_fn returns effective_edition=='business' AND no banner
+    is healthy and contributes nothing to the result.
+    """
+    warnings = []
+    if not isinstance(users_doc, dict):
+        return warnings
+    users_map = users_doc.get("users") or {}
+    if not isinstance(users_map, dict):
+        return warnings
+
+    for _utok, urec in users_map.items():
+        if not isinstance(urec, dict):
+            continue
+        if urec.get("status", "active") != "active":
+            continue
+        # Read the child key. Treat JSON null / missing / empty / non-string all
+        # as 'no key assigned'. (A bare str() on None becomes the literal string
+        # "None" which is truthy, so the falsy-check has to come FIRST.)
+        ckey_raw = urec.get("child_license_key")
+        if not ckey_raw or not isinstance(ckey_raw, str):
+            continue   # phone-only-without-key OR not yet assigned OR malformed
+        ckey = ckey_raw.strip()
+        if not ckey:
+            continue   # whitespace-only is treated as no key
+
+        try:
+            cres = validate_fn(ckey) or {}
+        except Exception as _ve:
+            # A failed validate call shouldn't kill the sweep — record it and
+            # move on (the caller's outer try/except still catches catastrophic
+            # failures, but per-user errors should be local).
+            _log.warning("validate_fn raised for child key (%s); skipping user", _ve)
+            continue
+
+        eff = cres.get("effective_edition")
+        banner = cres.get("banner", "")
+        # Mask: first 4 + last 8. The dashed AP-key format puts the distinguishing
+        # bits in the last two segments, so a short tail like 4 would still leave
+        # sibling keys looking identical (e.g. AP-CHLD-AAAA-0001 vs ...-BBBB-0002
+        # both shrink to AP-C…0001 / AP-C…0002 — same prefix, indistinguishable).
+        # 8 trailing chars preserves the AAAA/BBBB segment.
+        masked = (ckey[:4] + "…" + ckey[-8:]) if len(ckey) > 13 else ckey
+
+        if eff != "business":
+            warnings.append({
+                "name": urec.get("name", "(unnamed)"),
+                "child_key_masked": masked,
+                "reason": cres.get("action", "rejected"),
+                "banner": banner,
+            })
+            _log.warning(
+                "Child license check FAILED for user=%s key=%s → %s",
+                urec.get("name", "?"), masked, cres.get("action", "rejected"))
+        elif banner:
+            # Grace-warning on a child key — surface as a softer warning.
+            warnings.append({
+                "name": urec.get("name", "(unnamed)"),
+                "child_key_masked": masked,
+                "reason": cres.get("action", "grace_warning"),
+                "banner": banner,
+            })
+            _log.warning(
+                "Child license grace-warning for user=%s key=%s: %s",
+                urec.get("name", "?"), masked, banner)
+
+    return warnings
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -7431,6 +7587,36 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                          _license_grace["banner"])
             _sub_result = dict(_sub_result)
             _sub_result["license_warning"] = _license_grace["banner"]
+
+    # ── Per-user child-license validation (server mode only, v7.0.0) ──────────
+    # When running as a company server, each active employee in users.json may
+    # carry a child_license_key (their paid seat). On startup AND on the
+    # natural 30-day fresh-cache rhythm of _validate_business_license, validate
+    # every active user's child key against the Worker. Soft policy per David
+    # 2026-05-28: REJECTIONS LOG + SHOW A BANNER, they DO NOT mutate users.json
+    # and do NOT block the bearer-token auth at request time. The owner sees
+    # the banner and acts via the Admin tab. The hard enforcement that matters
+    # is the future-dated expires_at on the child key in D1; when it eventually
+    # comes back expired, validate just keeps reporting that — the seat is
+    # logically dead but service continues (white-glove model).
+    #
+    # The actual sweep logic lives in _sweep_child_licenses(users_doc, validate_fn)
+    # so it's testable in isolation (tests pass synthetic users_doc + stubbed
+    # validate_fn, no network).
+    _child_warnings = []
+    if (_EFFECTIVE_EDITION == "business" and _EFFECTIVE_MODE == "server"
+            and not _test_entitlement_active()):
+        try:
+            _users_doc = _load_users() or {}
+            _endpoint  = _activation_endpoint()
+            _validate  = lambda k: _validate_business_license(k, _INSTALL_ID, _endpoint)
+            _child_warnings = _sweep_child_licenses(_users_doc, _validate)
+        except Exception as _cwerr:
+            # Never let a child-key sweep block startup. Log and continue.
+            _log.warning("Child-license sweep failed (%s); continuing.", _cwerr)
+    if _child_warnings:
+        _sub_result = dict(_sub_result)
+        _sub_result["child_license_warnings"] = _child_warnings
 
     _log.info(
         "Effective runtime: edition=%s mode=%s install_id=%s (requested edition=%s mode=%s; "

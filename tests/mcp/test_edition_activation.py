@@ -28,6 +28,7 @@ Design notes
 from __future__ import annotations
 
 import datetime as dt
+import json
 
 import pytest
 
@@ -286,20 +287,26 @@ class TestLicenseGrace:
         assert r["used_network"] is False
 
     # ── Grace ladder on network failure (validate_result None, old cache) ───
-    def test_C_MCP_LICENSE_06_grace_silent_under_7_days(self, grace_api):
-        r = grace_api(self._cache(3), None, now=self.NOW)
+    # NOTE v7.0.0: with FRESH=30d, WARN=37d, GRACE=44d, the grace ladder only
+    # fires for caches OLDER than FRESH. Each tier gets a 7-day window beyond
+    # the 30-day trust period. Tests below pick ages that fall cleanly in each.
+    def test_C_MCP_LICENSE_06_grace_silent_under_37_days(self, grace_api):
+        # 33d old → past FRESH (30d), under WARN (37d) → silent grace.
+        r = grace_api(self._cache(33), None, now=self.NOW)
         assert r["effective_edition"] == "business"
         assert r["action"] == "grace_silent"
         assert r["banner"] == ""
 
-    def test_C_MCP_LICENSE_07_grace_warning_between_7_and_14(self, grace_api):
-        r = grace_api(self._cache(10), None, now=self.NOW)
+    def test_C_MCP_LICENSE_07_grace_warning_between_37_and_44(self, grace_api):
+        # 40d old → past WARN (37d), under GRACE (44d) → warning banner.
+        r = grace_api(self._cache(40), None, now=self.NOW)
         assert r["effective_edition"] == "business"
         assert r["action"] == "grace_warning"
         assert r["banner"]   # non-empty warning
 
-    def test_C_MCP_LICENSE_08_revert_after_14_days(self, grace_api):
-        r = grace_api(self._cache(20), None, now=self.NOW)
+    def test_C_MCP_LICENSE_08_revert_after_44_days(self, grace_api):
+        # 50d old → past GRACE (44d) → revert to home.
+        r = grace_api(self._cache(50), None, now=self.NOW)
         assert r["effective_edition"] == "home"
         assert r["action"] == "reverted_expired"
         assert r["banner"]
@@ -310,14 +317,15 @@ class TestLicenseGrace:
         assert r["effective_edition"] == "home"
         assert r["action"] == "reverted_expired"
 
-    def test_C_MCP_LICENSE_10_boundary_just_under_7_days(self, grace_api):
-        # 6.9 days → still silent (warning starts AT 7).
-        cache = {"last_validated_at": _iso(self.NOW - dt.timedelta(days=6, hours=20))}
+    def test_C_MCP_LICENSE_10_boundary_just_under_37_days(self, grace_api):
+        # 36d 20h → still silent (warning starts AT 37).
+        cache = {"last_validated_at": _iso(self.NOW - dt.timedelta(days=36, hours=20))}
         r = grace_api(cache, None, now=self.NOW)
         assert r["action"] == "grace_silent"
 
-    def test_C_MCP_LICENSE_11_boundary_just_under_14_days(self, grace_api):
-        cache = {"last_validated_at": _iso(self.NOW - dt.timedelta(days=13, hours=20))}
+    def test_C_MCP_LICENSE_11_boundary_just_under_44_days(self, grace_api):
+        # 43d 20h → still warning (revert starts AT 44).
+        cache = {"last_validated_at": _iso(self.NOW - dt.timedelta(days=43, hours=20))}
         r = grace_api(cache, None, now=self.NOW)
         assert r["action"] == "grace_warning"
         assert r["effective_edition"] == "business"
@@ -1174,3 +1182,264 @@ class TestPurgeGate:
         ok, _ = purge_api.can_purge(self.ADMIN,
                                     [_meta("admin01"), _meta("alice01")], self.OWNER_ID)
         assert ok is True
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PER-KEY LICENSE CACHE — _load_license_cache_for / _save_license_cache_for
+# (v7.0.0 #4: the server validates parent + N child keys, each needing
+# independent cache state. Previously a single-license cache file would have
+# been overwritten on every call. Tests cover the new shape, legacy migration,
+# multi-key independence, and tolerance of missing/corrupt files.)
+# ═════════════════════════════════════════════════════════════════════════════
+@pytest.fixture
+def cache_io_api(mcp_module):
+    load_fn = getattr(mcp_module, "_load_license_cache_for", None)
+    save_fn = getattr(mcp_module, "_save_license_cache_for", None)
+    if load_fn is None or save_fn is None:
+        pytest.skip("_load/save_license_cache_for not present (pre-v7.0.0 #4).")
+
+    class Api:
+        load = staticmethod(load_fn)
+        save = staticmethod(save_fn)
+        mod  = mcp_module
+    return Api
+
+
+@pytest.fixture
+def tmp_license_cache(cache_io_api, tmp_path, monkeypatch):
+    """Redirect _LICENSE_CACHE_PATH to a per-test temp file. Returns the path."""
+    p = tmp_path / "license_cache.json"
+    monkeypatch.setattr(cache_io_api.mod, "_LICENSE_CACHE_PATH", p)
+    return p
+
+
+class TestPerKeyLicenseCache:
+    PARENT = "AP-PRNT-0000-0001"
+    CHILD1 = "AP-CHLD-0000-0002"
+    CHILD2 = "AP-CHLD-0000-0003"
+
+    def test_C_MCP_CACHE_01_missing_file_returns_empty(self, cache_io_api, tmp_license_cache):
+        # No file on disk yet → empty dict, no exception.
+        assert tmp_license_cache.exists() is False
+        assert cache_io_api.load(self.PARENT) == {}
+
+    def test_C_MCP_CACHE_02_save_then_load_roundtrip(self, cache_io_api, tmp_license_cache):
+        entry = {"last_validated_at": "2026-05-28T00:00:00+00:00",
+                 "status": "active", "cached_expires_at": "2027-01-01",
+                 "edition": "business"}
+        cache_io_api.save(self.PARENT, entry)
+        got = cache_io_api.load(self.PARENT)
+        assert got == entry
+
+    def test_C_MCP_CACHE_03_two_keys_are_independent(self, cache_io_api, tmp_license_cache):
+        # The whole point of #4: parent and child caches don't clobber each other.
+        e1 = {"last_validated_at": "2026-05-01T00:00:00+00:00", "status": "active"}
+        e2 = {"last_validated_at": "2026-05-20T00:00:00+00:00", "status": "active"}
+        cache_io_api.save(self.PARENT, e1)
+        cache_io_api.save(self.CHILD1, e2)
+        assert cache_io_api.load(self.PARENT) == e1
+        assert cache_io_api.load(self.CHILD1) == e2
+
+    def test_C_MCP_CACHE_04_unknown_key_returns_empty(self, cache_io_api, tmp_license_cache):
+        cache_io_api.save(self.PARENT, {"last_validated_at": "2026-05-28T00:00:00+00:00"})
+        assert cache_io_api.load(self.CHILD2) == {}
+
+    def test_C_MCP_CACHE_05_legacy_shape_load_returns_as_first_key(self, cache_io_api,
+                                                                    tmp_license_cache):
+        # v6.x cache layout (top-level fields, single license) — load returns
+        # them unconditionally so the first key asked about gets the old data.
+        legacy = {"last_validated_at": "2026-05-01T00:00:00+00:00",
+                  "status": "active", "cached_expires_at": "2027-01-01",
+                  "edition": "business"}
+        tmp_license_cache.write_text(json.dumps(legacy), encoding="utf-8")
+        got = cache_io_api.load(self.PARENT)
+        assert got == legacy
+
+    def test_C_MCP_CACHE_06_save_migrates_legacy_to_new_shape(self, cache_io_api,
+                                                              tmp_license_cache):
+        # After a save, the file is in the new {"licenses": {...}} shape and the
+        # legacy top-level fields are gone.
+        legacy = {"last_validated_at": "2026-05-01T00:00:00+00:00", "status": "active"}
+        tmp_license_cache.write_text(json.dumps(legacy), encoding="utf-8")
+        new_entry = {"last_validated_at": "2026-05-28T00:00:00+00:00", "status": "active"}
+        cache_io_api.save(self.PARENT, new_entry)
+        raw = json.loads(tmp_license_cache.read_text(encoding="utf-8"))
+        assert "licenses" in raw and self.PARENT in raw["licenses"]
+        # legacy top-level fields are dropped by the migration:
+        assert "last_validated_at" not in raw
+
+    def test_C_MCP_CACHE_07_corrupt_file_returns_empty_not_raises(self, cache_io_api,
+                                                                   tmp_license_cache):
+        tmp_license_cache.write_text("not valid json {{{", encoding="utf-8")
+        # Must never raise — the caller treats {} as 'no cache, recheck'.
+        assert cache_io_api.load(self.PARENT) == {}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# CHILD-LICENSE STARTUP SWEEP — _sweep_child_licenses(users_doc, validate_fn)
+# (v7.0.0 #4: in server mode the company server walks active users in users.json
+# and validates each one's child_license_key. Soft policy: rejections produce
+# warning entries but do NOT mutate users_doc and do NOT block bearer-token
+# auth at request time. Tests inject the validate function so no network is
+# needed — pure unit tests.)
+# ═════════════════════════════════════════════════════════════════════════════
+@pytest.fixture
+def sweep_api(mcp_module):
+    fn = getattr(mcp_module, "_sweep_child_licenses", None)
+    if fn is None:
+        pytest.skip("_sweep_child_licenses not present (pre-v7.0.0 #4).")
+    return fn
+
+
+def _user(name="Alice", child_key="AP-CHLD-AAAA-0001",
+          status="active", role="manager"):
+    """Build a synthetic users.json user record."""
+    return {
+        "name": name, "role": role, "scopes": [],
+        "status": status, "child_license_key": child_key,
+        "private_collection_enabled": True,
+    }
+
+
+def _validate_ok(_key):
+    return {"effective_edition": "business", "action": "validated",
+            "banner": "", "used_network": True}
+
+
+def _validate_revoked(_key):
+    return {"effective_edition": "home", "action": "reverted_revoked",
+            "banner": "Business license is no longer valid (revoked).",
+            "used_network": True}
+
+
+def _validate_grace_warning(_key):
+    return {"effective_edition": "business", "action": "grace_warning",
+            "banner": "License validation has failed for several days.",
+            "used_network": False}
+
+
+class TestChildLicenseSweep:
+    def test_C_MCP_SWEEP_01_empty_users_yields_no_warnings(self, sweep_api):
+        assert sweep_api({"users": {}}, _validate_ok) == []
+        assert sweep_api({}, _validate_ok) == []
+        assert sweep_api(None, _validate_ok) == []
+
+    def test_C_MCP_SWEEP_02_all_valid_yields_no_warnings(self, sweep_api):
+        users = {"users": {
+            "tok_alice": _user("Alice", "AP-CHLD-AAAA-0001"),
+            "tok_bob":   _user("Bob",   "AP-CHLD-BBBB-0002"),
+        }}
+        assert sweep_api(users, _validate_ok) == []
+
+    def test_C_MCP_SWEEP_03_one_rejected_appears_in_warnings(self, sweep_api):
+        users = {"users": {
+            "tok_alice": _user("Alice", "AP-CHLD-AAAA-0001"),
+            "tok_bob":   _user("Bob",   "AP-CHLD-BBBB-0002"),
+        }}
+        # Reject only Bob's key.
+        def vfn(key):
+            return _validate_revoked(key) if key.startswith("AP-CHLD-BBBB") else _validate_ok(key)
+        warnings = sweep_api(users, vfn)
+        assert len(warnings) == 1
+        w = warnings[0]
+        assert w["name"] == "Bob"
+        # The mask must DISTINGUISH Bob's key from Alice's (the real contract —
+        # not a brittle 'specific N chars visible' check). Confirm the masks
+        # would differ, by re-running with Alice rejected and comparing.
+        def vfn_a(key):
+            return _validate_revoked(key) if key.startswith("AP-CHLD-AAAA") else _validate_ok(key)
+        warnings_a = sweep_api(users, vfn_a)
+        assert warnings_a[0]["child_key_masked"] != w["child_key_masked"], (
+            f"mask too aggressive — sibling keys produce identical masks: "
+            f"{w['child_key_masked']!r} vs {warnings_a[0]['child_key_masked']!r}")
+        # And the mask should not be the empty/'None' string or the raw key.
+        assert w["child_key_masked"] and w["child_key_masked"] != "AP-CHLD-BBBB-0002"
+        assert w["reason"] == "reverted_revoked"
+        assert w["banner"]                       # non-empty
+
+    def test_C_MCP_SWEEP_04_grace_warning_is_recorded(self, sweep_api):
+        # A user whose key is still valid but in grace — still a warning entry,
+        # softer "reason".
+        users = {"users": {"tok_alice": _user("Alice", "AP-CHLD-AAAA-0001")}}
+        warnings = sweep_api(users, _validate_grace_warning)
+        assert len(warnings) == 1
+        assert warnings[0]["reason"] == "grace_warning"
+        assert warnings[0]["name"] == "Alice"
+
+    def test_C_MCP_SWEEP_05_suspended_user_is_skipped(self, sweep_api):
+        # Soft policy: a suspended user already can't authenticate; don't burn
+        # a network check on them, and don't warn about a key that's parked.
+        users = {"users": {
+            "tok_alice": _user("Alice", "AP-CHLD-AAAA-0001", status="suspended"),
+        }}
+        # Use validate_revoked — if the function were called, we'd see a warning.
+        assert sweep_api(users, _validate_revoked) == []
+
+    def test_C_MCP_SWEEP_06_user_without_child_key_is_skipped(self, sweep_api):
+        # Phone-only-without-key OR not yet assigned — silently skipped.
+        users = {"users": {
+            "tok_alice": _user("Alice", ""),
+            "tok_bob":   _user("Bob",   None),
+        }}
+        # Even with revoked validate (which would warn), no warnings because
+        # the loop never reaches validate when child_key is empty.
+        assert sweep_api(users, _validate_revoked) == []
+
+    def test_C_MCP_SWEEP_07_malformed_entries_are_skipped(self, sweep_api):
+        # users.json corrupted in places — sweep should be resilient.
+        users = {"users": {
+            "tok_alice": _user("Alice", "AP-CHLD-AAAA-0001"),
+            "tok_bad":   "not a dict",
+            "tok_none":  None,
+        }}
+        warnings = sweep_api(users, _validate_ok)
+        assert warnings == []   # only Alice was checked, and she's valid
+
+    def test_C_MCP_SWEEP_08_validate_exception_is_isolated(self, sweep_api):
+        # If validate_fn raises for one user, the sweep continues with the next.
+        users = {"users": {
+            "tok_alice": _user("Alice", "AP-CHLD-AAAA-0001"),
+            "tok_bob":   _user("Bob",   "AP-CHLD-BBBB-0002"),
+        }}
+        def vfn(key):
+            if key.startswith("AP-CHLD-AAAA"):
+                raise RuntimeError("simulated network blow-up")
+            return _validate_revoked(key)
+        # Bob's revocation should still surface even though Alice's call raised.
+        warnings = sweep_api(users, vfn)
+        assert len(warnings) == 1
+        assert warnings[0]["name"] == "Bob"
+
+    def test_C_MCP_SWEEP_09_warning_entry_has_expected_keys(self, sweep_api):
+        # Shape check — callers (and the future GUI banner) depend on these.
+        users = {"users": {"tok_alice": _user("Alice", "AP-CHLD-AAAA-0001")}}
+        warnings = sweep_api(users, _validate_revoked)
+        assert len(warnings) == 1
+        w = warnings[0]
+        for k in ("name", "child_key_masked", "reason", "banner"):
+            assert k in w, f"warning entry missing key {k!r}"
+
+    def test_C_MCP_SWEEP_10_does_not_mutate_input(self, sweep_api):
+        # SOFT-POLICY contract: the sweep MUST NOT mutate users.json contents.
+        # The Admin tab + the owner are the only writers; the sweep just reports.
+        users = {"users": {
+            "tok_alice": _user("Alice", "AP-CHLD-AAAA-0001"),
+        }}
+        import copy
+        before = copy.deepcopy(users)
+        sweep_api(users, _validate_revoked)
+        assert users == before, "sweep mutated users_doc — soft-policy contract violated"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# CADENCE CONSTANT — _LICENSE_FRESH_HOURS pinned to 30 days (v7.0.0 #4).
+# A regression bug here (someone reverts to 24) would silently make every server
+# hit the Worker daily instead of monthly. Pin it.
+# ═════════════════════════════════════════════════════════════════════════════
+class TestCadenceConstant:
+    def test_C_MCP_CADENCE_01_fresh_hours_is_30_days(self, mcp_module):
+        v = getattr(mcp_module, "_LICENSE_FRESH_HOURS", None)
+        assert v == 720, (
+            f"_LICENSE_FRESH_HOURS must be 720 (30d) per the v7.0.0 #4 design; got {v}. "
+            f"If you intentionally changed the cadence, update this test AND learning 3dce04e8."
+        )
