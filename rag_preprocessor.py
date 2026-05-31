@@ -1102,9 +1102,15 @@ SKIP_EXTENSIONS = {
     '.db', '.sqlite', '.sqlite3', '.mdb', '.accdb',
     # Virtual machines / disk images
     '.vmdk', '.vhd', '.vhdx', '.ova', '.ovf',
-    # Temp / cache / lock
-    '.tmp', '.temp', '.cache', '.lock', '.bak', '.swp', '.swo',
-    '.DS_Store', '.Thumbs.db',
+    # Temp / cache / lock / log
+    '.tmp', '.temp', '.cache', '.lock', '.bak', '.swp', '.swo', '.log',
+    # Windows shortcuts (small binary, indexed as junk)
+    '.lnk',
+    # NOTE: '.DS_Store' and '.Thumbs.db' previously lived here, but
+    # os.path.splitext doesn't actually produce those as suffixes (a leading
+    # dot is not treated as an extension separator, and Thumbs.db's suffix
+    # is '.db' which already matches). The proper match is by FILENAME, not
+    # extension — see is_system_junk_filename() below.
 }
 
 # ----- Code Tools write-side: backup-filename pattern check -----
@@ -1130,6 +1136,56 @@ def is_backup_filename(filename: str) -> bool:
     if not filename:
         return False
     return _BACKUP_FILENAME_RE.search(filename) is not None
+
+
+# ----- OS / system junk filename patterns -----
+# Files whose BASENAME matches one of these patterns are excluded from
+# indexing. Same role as is_backup_filename() — extends the extension-based
+# SKIP_EXTENSIONS to filenames that don't have a meaningful suffix (or whose
+# suffix is too generic to skip by extension alone).
+#
+# Reported in learning 0ead289c (v6.0.2): OS / system junk like .DS_Store
+# (macOS Finder metadata), Thumbs.db / desktop.ini (Windows shell metadata),
+# and default OS Screenshot files were leaking into the knowledge base when
+# users indexed broad directories like ~/Desktop or ~/Documents.
+_SYSTEM_JUNK_NAMES = frozenset({
+    '.ds_store',         # macOS Finder folder-view metadata
+    'thumbs.db',         # Windows thumbnail cache
+    'ehthumbs.db',       # Windows thumbnail cache (older)
+    'desktop.ini',       # Windows folder customisation
+    'icon\r',            # macOS custom folder icon (literal CR in name)
+    '.localized',        # macOS localised-folder marker
+    '.spotlight-v100',   # macOS Spotlight index marker
+    '.trashes',          # macOS Trash marker
+})
+
+_SYSTEM_JUNK_RE = _bak_re_for_backup_check.compile(
+    # Default screenshot filenames on macOS ("Screen Shot 2024-01-15 at...")
+    # and Windows ("Screenshot 2024-01-15 ..."). Case-insensitive; matches
+    # the whole basename. Extensions like .png/.jpg are intentionally in
+    # SUPPORTED_EXTENSIONS for OCR, so the broad ".png skip" approach isn't
+    # appropriate — only the screenshot pattern should be filtered.
+    r'^(?:screen\s*shot|screenshot)\b.*\.(?:png|jpg|jpeg|gif|heic)$',
+    _bak_re_for_backup_check.IGNORECASE,
+)
+
+def is_system_junk_filename(filename: str) -> bool:
+    """True if `filename` is OS-level cruft that should never be indexed.
+
+    Catches: .DS_Store, Thumbs.db, desktop.ini, the macOS Spotlight/Trash
+    sentinels, and default-named screenshots from macOS/Windows. Match is on
+    the BASENAME (not full path) and case-insensitive.
+
+    Used alongside `ext in SKIP_EXTENSIONS` and is_backup_filename() at every
+    indexer/scan call site so this junk never reaches the embedder.
+    """
+    if not filename:
+        return False
+    base = filename.strip().lower()
+    if base in _SYSTEM_JUNK_NAMES:
+        return True
+    return _SYSTEM_JUNK_RE.match(base) is not None
+
 
 # Directory names to always skip when walking trees
 SKIP_DIRECTORIES = {
@@ -2974,7 +3030,9 @@ def scan_directory(directory: str, recursive: bool = True) -> dict:
         fp   = normalise_path(directory)
         ext  = os.path.splitext(fp)[1].lower()
         result['total_seen'] = 1
-        if ext in SKIP_EXTENSIONS or is_backup_filename(os.path.basename(fp)):
+        if (ext in SKIP_EXTENSIONS
+                or is_backup_filename(os.path.basename(fp))
+                or is_system_junk_filename(os.path.basename(fp))):
             result['skipped_bin'].append((fp, ext))
         elif ext in SUPPORTED_EXTENSIONS:
             result['to_index'].append((fp, ext))
@@ -2999,7 +3057,9 @@ def scan_directory(directory: str, recursive: bool = True) -> dict:
                 fp  = os.path.join(root, fname)
                 ext = os.path.splitext(fname)[1].lower()
 
-                if ext in SKIP_EXTENSIONS or is_backup_filename(fname):
+                if (ext in SKIP_EXTENSIONS
+                        or is_backup_filename(fname)
+                        or is_system_junk_filename(fname)):
                     result['skipped_bin'].append((fp, ext))
                 elif ext in SUPPORTED_EXTENSIONS:
                     result['to_index'].append((fp, ext))
@@ -3012,7 +3072,9 @@ def scan_directory(directory: str, recursive: bool = True) -> dict:
                 continue
             result['total_seen'] += 1
             ext = os.path.splitext(fname)[1].lower()
-            if ext in SKIP_EXTENSIONS or is_backup_filename(fname):
+            if (ext in SKIP_EXTENSIONS
+                    or is_backup_filename(fname)
+                    or is_system_junk_filename(fname)):
                 result['skipped_bin'].append((fp, ext))
             elif ext in SUPPORTED_EXTENSIONS:
                 result['to_index'].append((fp, ext))
@@ -3600,13 +3662,17 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False,
             for file in files:
                 if not file.startswith('.'):
                     ext = os.path.splitext(file)[1].lower()
-                    if ext not in SKIP_EXTENSIONS and not is_backup_filename(file):
+                    if (ext not in SKIP_EXTENSIONS
+                            and not is_backup_filename(file)
+                            and not is_system_junk_filename(file)):
                         all_files.append(normalise_path(os.path.join(root, file)))
     else:
         for f in os.listdir(directory):
             if not f.startswith('.'):
                 ext = os.path.splitext(f)[1].lower()
-                if ext not in SKIP_EXTENSIONS and not is_backup_filename(f):
+                if (ext not in SKIP_EXTENSIONS
+                        and not is_backup_filename(f)
+                        and not is_system_junk_filename(f)):
                     fp = normalise_path(os.path.join(directory, f))
                     if os.path.isfile(fp):
                         all_files.append(fp)

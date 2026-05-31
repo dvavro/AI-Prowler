@@ -1085,13 +1085,41 @@ def check_status() -> str:
         lines.append("   Try re-indexing with add_and_index_directory.")
 
     # ── Embedding model info (parsed from init output) ────────────────────────
+    # Bug fix v7.0.0: filter the captured stdout to ONLY surface the clean
+    # "✅ Embedding model loaded on <device>" line emitted by rag_preprocessor.
+    # The old filter accepted any line containing "Loading" or "embedding",
+    # which on fresh installs caught HuggingFace's first-time download /
+    # cache-resolution chatter and made the status check look like an error.
+    # Reported by Rick, Jamie, and Sam during v6.0.2 installs (learning fe420ae5).
     lines.append("")
+    emitted_embedding_line = False
     if init_output:
         for line in init_output.splitlines():
-            if any(k in line for k in ("Embedding", "embedding", "Loading", "device", "GPU", "CPU", "Blackwell")):
-                lines.append(f"   {line.strip()}")
-    else:
-        lines.append("   Embedding model: loaded (no detail available)")
+            s = line.strip()
+            # Allowlist: only the clean rag_preprocessor confirmation line.
+            # Look for the ✅ + "Embedding model loaded" signature, OR an
+            # explicit device announcement we control.
+            if ("Embedding model loaded" in s
+                    or "Embedding model is loaded" in s):
+                lines.append(f"   {s}")
+                emitted_embedding_line = True
+                break  # one line is enough — don't dump the rest
+    if not emitted_embedding_line:
+        lines.append("   Embedding model: loaded")
+
+    # ── Empty-knowledge-base hint ─────────────────────────────────────────────
+    # Bug fix v7.0.0: on a fresh install ChromaDB connects fine but has zero
+    # chunks. The previous status output buried this fact under technical
+    # diagnostics, leading users (Rick/Jamie/Sam) to think AI-Prowler was
+    # broken. Lead with a clear "this is what's expected and here's how to
+    # fix it" message so the first impression is friendly and actionable.
+    if db_ok and chunk_count == 0:
+        lines.append("")
+        lines.append("ℹ️  Knowledge base is empty — this is normal on a fresh install.")
+        lines.append("   To index your documents, either:")
+        lines.append("     • Call add_and_index_directory(\"<path>\") from this tool, OR")
+        lines.append("     • Open the AI-Prowler GUI → Reindex tab → pick a folder.")
+        lines.append("   Once indexed, search_documents and friends will return real results.")
 
     # ── Tracked paths (directories + individually-tracked files) ─────────────
     try:
@@ -3978,6 +4006,19 @@ def _iter_allowlisted_files(filter_ext: Optional[str] = None,
                 continue
             if ext in SKIP_EXTENSIONS:
                 continue
+            # Also skip backup files (rag_gui.py.bak1, etc.) and OS junk
+            # (.DS_Store, Thumbs.db, screenshots). Uses the same helpers the
+            # indexer uses so grep_documents sees the same filtered file set.
+            try:
+                from rag_preprocessor import (
+                    is_backup_filename as _is_bak,
+                    is_system_junk_filename as _is_junk,
+                )
+                _fname = fp.name
+                if _is_bak(_fname) or _is_junk(_fname):
+                    continue
+            except Exception:
+                pass  # Helper not present (older rag_preprocessor) → fall through.
             if norm_ext_filter and ext != norm_ext_filter:
                 continue
             resolved_str = normalise_path(str(fp))
@@ -4788,7 +4829,8 @@ def _reindex_file_after_write(filepath: str, *, was_new: bool = False) -> None:
     """
     try:
         from rag_preprocessor import (
-            normalise_path, index_file_list, _get_or_create_collection,
+            normalise_path, index_file_list,
+            get_chroma_client, COLLECTION_NAME,
         )
     except Exception as exc:
         # If the indexer surface differs, fall back to the safer pattern:
@@ -4799,9 +4841,22 @@ def _reindex_file_after_write(filepath: str, *, was_new: bool = False) -> None:
 
     fp_norm = normalise_path(filepath)
 
-    # Step 1: purge existing chunks for this filepath (delete-then-add)
+    # Step 1: purge existing chunks for this filepath (delete-then-add).
+    # Uses get_or_create_collection so this is a no-op on a fresh install
+    # where no collection exists yet. NOTE 2026-05-30 v7.0.0 bug fix: the
+    # previous import line referenced a `_get_or_create_collection` helper
+    # that doesn't exist in rag_preprocessor. The import raised silently and
+    # _reindex_file_after_write returned early WITHOUT reindexing, meaning
+    # every write tool was reporting "✅ indexed" while leaving ChromaDB
+    # stale. Replaced with the same two-step (get_chroma_client →
+    # client.get_or_create_collection) pattern that `_get_collection` at
+    # ~line 1157 uses for the read tools.
     try:
-        coll = _get_or_create_collection()
+        client, embedding_func = get_chroma_client()
+        coll = client.get_or_create_collection(
+            name=COLLECTION_NAME,
+            embedding_function=embedding_func,
+        )
         coll.delete(where={"filepath": fp_norm})
     except Exception as exc:
         _log.warning("re-index post-write: purge failed for %s: %s", fp_norm, exc)

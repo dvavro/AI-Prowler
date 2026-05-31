@@ -5513,6 +5513,37 @@ or from the Help menu."""
                         "The HTTP server runs locally on this laptop; Cloudflare provides the secure public URL."),
                   foreground='gray').pack(anchor='w', pady=(0, 8))
 
+        # ── Keep It Running (sleep / reboot guidance) ─────────────────────────
+        # Documents Bug v6.0.2 #2 (learning ec3f6feb): the MCP server goes
+        # offline when the laptop sleeps. The fix is operator-side: set the
+        # Windows power plan so the machine doesn't sleep when plugged in.
+        # The good news (also from that learning): Windows Update auto-reboots
+        # are SAFE — AI-Prowler restarts itself and reconnects the tunnel
+        # automatically, so the only thing the operator has to worry about
+        # is sleep, not reboots.
+        keep_running = ttk.Frame(remote_frame)
+        keep_running.pack(fill='x', pady=(0, 8))
+        ttk.Label(keep_running, text="💡 Keep It Running",
+                  font=('Arial', 9, 'bold'),
+                  foreground='#1f5fa1').pack(anchor='w')
+        ttk.Label(keep_running, justify='left', font=('Arial', 9),
+                  foreground='gray',
+                  wraplength=520,
+                  text=(
+                      "Sleep mode disconnects the MCP server — mobile Claude will "
+                      "stop responding until you wake the laptop AND restart the "
+                      "server via Claude Desktop → Settings → Developer → MCP Servers.\n"
+                      "\n"
+                      "Recommended: set Windows Power Plan to ‘Never sleep’ while "
+                      "plugged in. Then you can close the lid and walk away — "
+                      "AI-Prowler stays online for mobile use.\n"
+                      "\n"
+                      "Good news: Windows Update auto-reboots are SAFE. If "
+                      "AI-Prowler was running before the reboot, Windows re-launches "
+                      "it automatically and the tunnel reconnects on its own — no "
+                      "operator action needed."
+                  )).pack(anchor='w', pady=(2, 4))
+
         ttk.Separator(remote_frame, orient='horizontal').pack(fill='x', pady=(0, 8))
 
         # ── Token ─────────────────────────────────────────────────────────────
