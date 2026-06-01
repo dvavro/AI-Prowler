@@ -3,10 +3,10 @@ REM ─────────────────────────�
 REM  release.bat — thin wrapper around scripts\release.py
 REM
 REM  Usage from the AI-Prowler repo root:
-REM      release 6.0.2
+REM      release 7.0.0
 REM      release --check
-REM      release --refactor-only
-REM      release 6.0.2 --skip-tests
+REM      release --remanifest
+REM      release 7.0.0 --skip-tests
 REM
 REM  Lives in the repo root so it's discoverable. All real logic is in
 REM  scripts\release.py.

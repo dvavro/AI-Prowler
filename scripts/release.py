@@ -458,14 +458,24 @@ def compile_installer(new_version: str) -> Optional[Path]:
 # (this is exactly the bug that motivated the manifest — the old hardcoded
 # 5-file list never shipped the user guide).
 MANIFEST_FILES = [
+    # Core application files — must match [Files] section in AI-Prowler-Setup.iss
     "rag_gui.py",
     "rag_preprocessor.py",
     "ai_prowler_mcp.py",
     "mcp_diagnostics.py",
     "self_learning.py",
     "RAG_RUN.bat",
+    "create_shortcut.py",
+    "requirements.txt",
+    "claude_desktop_config_example.json",
+    "subscription_instructions.txt",
+    "README.md",
     "COMPLETE_USER_GUIDE.md",
     "VERSION",
+    # NOTE: rag_icon.ico and python-3.11.8-amd64.exe are intentionally excluded.
+    # rag_icon.ico rarely changes and is large binary noise in the update.
+    # python-3.11.8-amd64.exe is the bundled Python installer — it is never
+    # auto-updated (users already have Python installed after first install).
 ]
 
 
