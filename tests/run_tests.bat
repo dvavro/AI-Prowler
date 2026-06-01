@@ -43,7 +43,7 @@ if "%1"=="fast" (
 )
 
 if "%1"=="bugs" (
-    py -m pytest tests -k "B_01 or B_02 or B_03 or B_04 or B_05 or B_07 or B_08 or F_TRK_04 or F_TRK_05 or F_TRK_15 or F_UPD_07"
+    py -m pytest tests -k "B_01 or B_02 or B_03 or B_04 or B_05 or B_07 or B_08 or F_TRK_04 or F_TRK_05 or F_TRK_15 or F_UPD_07 or C_REINDEX"
     goto :end
 )
 

@@ -70,13 +70,13 @@ def _path_in_text(path: str, text: str) -> bool:
 # G-MCP-01 — directory mode: add, index, track in one call
 # ──────────────────────────────────────────────────────────────────────────────
 @pytest.mark.slow
-def test_G_MCP_01_add_and_index_directory(mcp_env, sample_files):
-    """add_and_index_directory on a folder: indexes every supported file,
+def test_G_MCP_01_index_path_directory(mcp_env, sample_files):
+    """index_path on a folder: indexes every supported file,
     adds the folder to the auto-update list, and returns a non-empty
     human-readable summary."""
     folder = mcp_env.sample_root
 
-    output = mcp_env.mcp.add_and_index_directory(
+    output = mcp_env.mcp.index_path(
         directory=str(folder), recursive=True, track=True)
 
     assert isinstance(output, str)
@@ -106,11 +106,11 @@ def test_G_MCP_01_add_and_index_directory(mcp_env, sample_files):
 # G-MCP-02 — single-file path mode (different code path than directory)
 # ──────────────────────────────────────────────────────────────────────────────
 @pytest.mark.slow
-def test_G_MCP_02_add_and_index_single_file(mcp_env, small_text_file):
+def test_G_MCP_02_index_path_single_file(mcp_env, small_text_file):
     """When given a file path instead of a directory, the tool should route
     to index_file_list (not index_directory) and add the file (not its
     parent) to the auto-update list."""
-    output = mcp_env.mcp.add_and_index_directory(
+    output = mcp_env.mcp.index_path(
         directory=str(small_text_file), recursive=True, track=True)
 
     assert isinstance(output, str) and output.strip()
@@ -141,8 +141,8 @@ def test_G_MCP_03a_update_all_tracked(mcp_env, sample_files):
     builders.make_txt(folder_a / "a.txt", "alpha " * 30)
     builders.make_txt(folder_b / "b.txt", "bravo " * 30)
 
-    mcp_env.mcp.add_and_index_directory(str(folder_a), recursive=True, track=True)
-    mcp_env.mcp.add_and_index_directory(str(folder_b), recursive=True, track=True)
+    mcp_env.mcp.index_path(str(folder_a), recursive=True, track=True)
+    mcp_env.mcp.index_path(str(folder_b), recursive=True, track=True)
 
     output = mcp_env.mcp.update_tracked_directories()
 
@@ -165,8 +165,8 @@ def test_G_MCP_03b_update_specific_directory(mcp_env, sample_files):
     builders.make_txt(folder_a / "a.txt", "alpha " * 30)
     builders.make_txt(folder_b / "b.txt", "bravo " * 30)
 
-    mcp_env.mcp.add_and_index_directory(str(folder_a), recursive=True, track=True)
-    mcp_env.mcp.add_and_index_directory(str(folder_b), recursive=True, track=True)
+    mcp_env.mcp.index_path(str(folder_a), recursive=True, track=True)
+    mcp_env.mcp.index_path(str(folder_b), recursive=True, track=True)
 
     output = mcp_env.mcp.update_tracked_directories(directory=str(folder_a))
 
@@ -189,7 +189,7 @@ def test_G_MCP_04_get_database_stats(mcp_env, sample_files):
     the right unique-document count, and the database path the test fixture
     redirected to."""
     folder = mcp_env.sample_root
-    mcp_env.mcp.add_and_index_directory(str(folder), recursive=True, track=False)
+    mcp_env.mcp.index_path(str(folder), recursive=True, track=False)
 
     stats = mcp_env.mcp.get_database_stats()
 
@@ -244,9 +244,9 @@ def test_G_MCP_05_list_tracked_with_icons(mcp_env, small_text_file):
     builders.make_txt(missing_path / "ghost.txt", "ghost " * 30)
 
     # Track all three
-    mcp_env.mcp.add_and_index_directory(str(folder), recursive=True, track=True)
-    mcp_env.mcp.add_and_index_directory(str(file_path), recursive=True, track=True)
-    mcp_env.mcp.add_and_index_directory(str(missing_path), recursive=True, track=True)
+    mcp_env.mcp.index_path(str(folder), recursive=True, track=True)
+    mcp_env.mcp.index_path(str(file_path), recursive=True, track=True)
+    mcp_env.mcp.index_path(str(missing_path), recursive=True, track=True)
 
     # Now delete the third one from disk to test the missing-path icon
     import shutil
@@ -271,14 +271,14 @@ def test_G_MCP_05b_list_when_nothing_tracked(mcp_env):
     assert "no paths" in output.lower() or "no directories" in output.lower(), (
         f"Empty-list output should be informative. Got: {output!r}"
     )
-    # The message should mention add_and_index_directory as the next step
-    assert "add_and_index_directory" in output, (
+    # The message should mention index_path as the next step
+    assert "index_path" in output, (
         f"Empty-list message should reference the indexing tool. Got: {output!r}"
     )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# G-MCP-06 — remove_directory output reports correct counts
+# G-MCP-06 — untrack_directory output reports correct counts
 #
 # This was the test that was blocked by Bug B-03 in the original review. With
 # B-03 fixed, the underlying remove_directory_from_index() now returns a
@@ -286,8 +286,8 @@ def test_G_MCP_05b_list_when_nothing_tracked(mcp_env):
 # wrapper is reading the right key.
 # ──────────────────────────────────────────────────────────────────────────────
 @pytest.mark.slow
-def test_G_MCP_06_remove_directory_reports_real_counts(mcp_env):
-    """After indexing 3 files in a directory then calling remove_directory,
+def test_G_MCP_06_untrack_directory_reports_real_counts(mcp_env):
+    """After indexing 3 files in a directory then calling untrack_directory,
     the human-readable output should mention 3 files (not 'unknown' or '1')."""
     from tests.helpers import sample_files as builders
 
@@ -296,13 +296,13 @@ def test_G_MCP_06_remove_directory_reports_real_counts(mcp_env):
     for i in range(n_files):
         builders.make_txt(folder / f"f{i}.txt", f"content {i} " * 30)
 
-    mcp_env.mcp.add_and_index_directory(str(folder), recursive=True, track=True)
+    mcp_env.mcp.index_path(str(folder), recursive=True, track=True)
 
-    output = mcp_env.mcp.remove_directory(directory=str(folder))
+    output = mcp_env.mcp.untrack_directory(directory=str(folder))
 
     assert isinstance(output, str) and output.strip()
     assert "unknown" not in output.lower(), (
-        "remove_directory output still says 'unknown' — B-03 regression. "
+        "untrack_directory output still says 'unknown' — B-03 regression. "
         f"Got: {output!r}"
     )
     # The file count should appear as a real number, and it should match n_files
@@ -320,10 +320,10 @@ def test_G_MCP_06_remove_directory_reports_real_counts(mcp_env):
 # G-MCP-07 — error handling for non-existent paths
 # ──────────────────────────────────────────────────────────────────────────────
 def test_G_MCP_07a_index_nonexistent_path(mcp_env):
-    """add_and_index_directory on a path that doesn't exist returns a
+    """index_path on a path that doesn't exist returns a
     well-formed error string — never crashes, never mutates state."""
     fake = mcp_env.sample_root / "this_definitely_does_not_exist"
-    output = mcp_env.mcp.add_and_index_directory(directory=str(fake))
+    output = mcp_env.mcp.index_path(directory=str(fake))
 
     assert isinstance(output, str)
     assert "not found" in output.lower() or "❌" in output, (
@@ -337,10 +337,10 @@ def test_G_MCP_07a_index_nonexistent_path(mcp_env):
     )
 
 
-def test_G_MCP_07b_remove_nonexistent_path(mcp_env):
-    """remove_directory on a path that was never indexed returns gracefully."""
+def test_G_MCP_07b_untrack_nonexistent_path(mcp_env):
+    """untrack_directory on a path that was never indexed returns gracefully."""
     fake = mcp_env.sample_root / "never_indexed"
-    output = mcp_env.mcp.remove_directory(directory=str(fake))
+    output = mcp_env.mcp.untrack_directory(directory=str(fake))
     assert isinstance(output, str)
     # Should produce SOME output, no exception leak
     assert output.strip()

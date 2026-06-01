@@ -57,21 +57,21 @@
 
   "_tools_exposed": [
     "how_to_use_ai_prowler        - call first: recommended tool sequence and key facts",
-    "check_status                 - ChromaDB health, chunk count, tracked directories, DB path",
+    "check_ai_prowler_status      - ChromaDB health, chunk count, tracked directories, DB path",
     "get_knowledge_base_overview  - high-level summary of all indexed documents and topics",
     "search_documents             - PRIMARY retrieval: semantic search returning raw document chunks",
-    "search_by_multiple_queries   - parallel search across multiple phrasings, auto-deduplicated",
-    "get_chunk_context            - expand context around a specific chunk (neighboring paragraphs)",
-    "get_document_chunks          - read a whole document sequentially by chunk index",
+    "multi_query_search           - parallel search across multiple phrasings, auto-deduplicated",
+    "expand_search_result         - expand context around a specific chunk (neighboring paragraphs)",
+    "read_document                - read a whole document sequentially by chunk index",
     "list_indexed_documents       - browse indexed files, filterable by extension or path",
     "get_database_stats           - total chunks, unique documents, breakdown by file type",
-    "add_and_index_directory      - index all files in a folder, optionally add to auto-update tracking",
+    "index_path                   - index all files in a folder or single file, add to auto-update tracking",
     "update_tracked_directories   - re-scan tracked folders, re-index only changed files",
     "list_tracked_directories     - list all folders registered for auto-update",
-    "remove_directory             - remove a folder from tracking and delete its chunks from the index"
+    "untrack_directory            - remove a folder from tracking and delete its chunks from the index"
   ],
 
-  "_total_tools": 13,
+  "_total_tools": 57,
 
   "_note_no_ollama": [
     "AI-Prowler v4.0+ is pure Agentic RAG — no Ollama or local LLM required.",

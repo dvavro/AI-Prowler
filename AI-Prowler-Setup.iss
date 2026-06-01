@@ -30,7 +30,7 @@
 ;     a structured JSON file + ChromaDB index, instantly available
 ;     without GPU training
 ;   - Data stored at: %USERPROFILE%\.ai-prowler\learnings\
-;   - MCP tools (record_learning, check_learned, etc.) are built into
+;   - MCP tools (record_learning, search_learnings, etc.) are built into
 ;     ai_prowler_mcp.py; desktop GUI tab (🧠 Learnings) is built into rag_gui.py
 ;   - Learnings folder is included in the uninstall data-deletion prompt
 ;
@@ -177,6 +177,14 @@ Source: "python-3.11.8-amd64.exe"; DestDir: "{app}"; Flags: ignoreversion
 ;   copy named AI-Prowler_Job_Tracker.xlsx alongside this .iss file.
 Source: "AI-Prowler_Job_Tracker.xlsx"; DestDir: "{userdocs}\AI-Prowler"; \
   Flags: onlyifdoesntexist uninsneveruninstall
+
+; --- User Guide — copied to Documents\AI-Prowler so it can be indexed ---
+; ignoreversion: always update the guide on reinstall (it's our content, not user data).
+; uninsneveruninstall: keep it after uninstall — the user may have bookmarked it.
+; The installer also seeds ~/.rag_auto_update_dirs.json to track this file
+; automatically, so Claude can answer questions about AI-Prowler out of the box.
+Source: "COMPLETE_USER_GUIDE.md"; DestDir: "{userdocs}\AI-Prowler"; \
+  Flags: ignoreversion uninsneveruninstall
 
 [Icons]
 Name: "{commonprograms}\AI-Prowler"; Filename: "{app}\RAG_RUN.bat"; IconFilename: "{app}\rag_icon.ico"
@@ -809,6 +817,76 @@ begin
     AppendInstallLog('[Spreadsheet] WARNING: Could not write config file: ' + CfgFile);
 
   AppendInstallLog('[Spreadsheet] === Job Tracker setup complete ===');
+end;
+
+procedure SeedUserGuideTracking;
+// ============================================================
+// SEED USER GUIDE TRACKING
+//
+// Adds the COMPLETE_USER_GUIDE.md (copied to Documents\AI-Prowler\
+// by the [Files] section) to ~/.rag_auto_update_dirs.json so
+// AI-Prowler tracks and indexes it automatically on first launch.
+//
+// Design decisions:
+//   - Idempotent: safe to run on reinstall — skips if path already present.
+//   - Single-file tracking: the guide is listed as a file path, not a
+//     directory, so the smart-scan SKIP_DIRECTORIES filter does not apply.
+//   - Forward slashes: AI-Prowler normalises all paths to forward slashes
+//     internally; we store the guide path the same way.
+//   - Fresh install (file absent): creates the JSON from scratch.
+//   - Existing install (file present): reads, merges, writes back.
+// ============================================================
+var
+  PsFile, PsContents, GuideDest, TrackFile: String;
+begin
+  AppendInstallLog('[UserGuide] === Seeding user guide tracking ===');
+
+  GuideDest := ExpandConstant('{userdocs}\AI-Prowler\COMPLETE_USER_GUIDE.md');
+  TrackFile  := ExpandConstant('{%USERPROFILE}\.rag_auto_update_dirs.json');
+
+  AppendInstallLog('[UserGuide] Guide path : ' + GuideDest);
+  AppendInstallLog('[UserGuide] Track file : ' + TrackFile);
+
+  PsFile := MakeTempFile('seed_guide');
+  PsFile := Copy(PsFile, 1, Length(PsFile) - 4) + '.ps1';
+
+  // Build the PowerShell that safely merges the guide path into the JSON.
+  // Uses a Generic List<string> so single-element arrays stay arrays after
+  // ConvertFrom-Json (PowerShell collapses a one-element array to a scalar
+  // unless you use an explicit typed list).
+  PsContents :=
+    '$ErrorActionPreference = "Stop"' + #13#10 +
+    '$trackFile  = "' + TrackFile  + '"' + #13#10 +
+    '$guidePath  = "' + GuideDest  + '".Replace("\", "/")' + #13#10 +
+    '' + #13#10 +
+    'try {' + #13#10 +
+    '  if (Test-Path $trackFile) {' + #13#10 +
+    '    $obj  = Get-Content $trackFile -Raw -Encoding UTF8 | ConvertFrom-Json' + #13#10 +
+    '    $dirs = [System.Collections.Generic.List[string]]::new()' + #13#10 +
+    '    if ($obj.directories) { foreach ($d in $obj.directories) { $dirs.Add($d) } }' + #13#10 +
+    '    if ($dirs.Contains($guidePath)) {' + #13#10 +
+    '      Write-Host "User guide already tracked — no change needed."' + #13#10 +
+    '    } else {' + #13#10 +
+    '      $dirs.Add($guidePath)' + #13#10 +
+    '      [pscustomobject]@{ directories = $dirs.ToArray() } |' + #13#10 +
+    '        ConvertTo-Json -Compress | Set-Content $trackFile -Encoding UTF8' + #13#10 +
+    '      Write-Host "User guide added to tracking list."' + #13#10 +
+    '    }' + #13#10 +
+    '  } else {' + #13#10 +
+    '    @{ directories = @($guidePath) } |' + #13#10 +
+    '      ConvertTo-Json -Compress | Set-Content $trackFile -Encoding UTF8' + #13#10 +
+    '    Write-Host "Tracking file created with user guide as first entry."' + #13#10 +
+    '  }' + #13#10 +
+    '} catch {' + #13#10 +
+    '  Write-Host "WARNING: Could not seed user guide tracking: $_"' + #13#10 +
+    '}' + #13#10;
+
+  SaveStringToFile(PsFile, PsContents, False);
+  AppendInstallLog('[UserGuide] Temp script: ' + PsFile);
+  ExecWithLogging(True, '[UserGuide]', 'powershell.exe',
+    '-NoProfile -ExecutionPolicy Bypass -File "' + PsFile + '"');
+  DeleteFileIfExists(PsFile);
+  AppendInstallLog('[UserGuide] === User guide tracking seed complete ===');
 end;
 
 procedure RegisterStartupTask(const AppDir: String);
@@ -1621,6 +1699,16 @@ begin
     // ----------------------------------------------------------
     SetProgress(97, 'Setting up Job Tracker spreadsheet...');
     InstallJobTrackerSpreadsheet;
+
+    // ----------------------------------------------------------
+    // USER GUIDE TRACKING  (progress 97 -> 98)
+    // Seed ~/.rag_auto_update_dirs.json with the user guide path
+    // so AI-Prowler indexes it automatically on first launch.
+    // The guide was already copied to Documents\AI-Prowler\ by
+    // the [Files] section above — we just register it for tracking.
+    // ----------------------------------------------------------
+    SetProgress(97, 'Registering user guide for automatic indexing...');
+    SeedUserGuideTracking;
 
     // ----------------------------------------------------------
     // STARTUP TASK  (progress 98)

@@ -55,26 +55,22 @@ pillow>=10.0.0
 # ── Email parsing ──────────────────────────────────────────────────────────────
 extract-msg>=0.45.0
 
-# ── Spell checking (Ask Questions tab) ──────────────────────────────────────
-# pyspellchecker: pure-Python spell checker with no external binary deps.
-# Used by the question text box for red-underline misspelling hints and
-# right-click correction suggestions.
-pyspellchecker>=0.7.2
-
 # ── HTTP / API ──────────────────────────────────────────────────────────────────────────────
 requests>=2.31.0
 
 # ── HTTP MCP server (Remote Access / Cloudflare Tunnel) ──────────────────────
-# uvicorn: ASGI server used by ai_prowler_mcp.py --transport http
+# mcp: official Anthropic MCP Python SDK — provides FastMCP, the tool decorator,
+# and both stdio and streamable-http transports used by ai_prowler_mcp.py.
+# CRITICAL: without this package the MCP server will not start.
+mcp>=1.0.0
+# uvicorn: ASGI server used by ai_prowler_mcp.py --transport http.
 # Required to serve the streamable-http MCP endpoint that Cloudflare Tunnel exposes.
 uvicorn>=0.29.0
 
-# ── Speech-to-text (microphone input in GUI) ──────────────────────────────────
-# Required for the mic voice input button in the Ask Questions tab.
-# Whisper large-v3-turbo model (~1.6 GB) is downloaded on first use.
+# ── Numeric / array support ────────────────────────────────────────────────────
+# numpy: required by chromadb and sentence-transformers. Listed explicitly to
+# ensure a compatible version is installed before those packages pull it in.
 numpy>=1.24.0
-faster-whisper>=1.0.0
-sounddevice>=0.4.6
 
 # ── GPU acceleration (auto-installed by INSTALL.bat) ──────────────────────────
 # torch is intentionally NOT listed here. The installer detects whether an

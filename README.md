@@ -31,7 +31,7 @@ Claude thinks:     I should look at what contract documents are indexed...
 Claude calls:      get_knowledge_base_overview()
 Claude calls:      search_documents("Q3 contract risks")
 Claude calls:      search_documents("liability indemnification clauses")
-Claude calls:      get_chunk_context("contract_q3.pdf", 14)
+Claude calls:      expand_search_result("contract_q3.pdf", 14)
 Claude answers:    A detailed synthesis across all relevant documents.
 ```
 
@@ -108,9 +108,9 @@ All tools are automatically available when Claude connects — no configuration 
 |---|---|
 | `get_knowledge_base_overview` | Orients itself — what's indexed, what types |
 | `search_documents` | Semantic search, called multiple times |
-| `search_by_multiple_queries` | Parallel search with synonym queries |
-| `get_chunk_context` | Expands around promising results |
-| `get_document_chunks` | Reads a full document sequentially |
+| `multi_query_search` | Parallel search with synonym queries |
+| `expand_search_result` | Expands around promising results |
+| `read_document` | Reads a full document sequentially |
 | `list_indexed_documents` | Browses available files by type or path |
 | `how_to_use_ai_prowler` | Self-orienting guidance tool |
 
@@ -123,13 +123,13 @@ Nine field service automation tools — configure once in the Small Business tab
 |---|---|
 | `get_weather` | Forecast for any location — flags rain risk for outdoor jobs |
 | `geocode_address` | Street address → GPS coordinates (Nominatim, free) |
-| `get_route_optimization` | Traveling Salesman solver — real street routing via OSRM (free) |
+| `optimize_route` | Traveling Salesman solver — real street routing via OSRM (free) |
 | `build_maps_url` | Tap-to-navigate Google/Apple Maps link for your phone |
 | `create_quickbooks_online_invoice` | Creates & emails invoices via QBO OAuth |
 | `create_quickbooks_desktop_invoice` | Creates invoices via QB Desktop COM automation |
 | `read_job_spreadsheet` | Reads any sheet in your .xlsx job tracker with optional date filter |
 | `update_job_spreadsheet` | Updates rows in your .xlsx job tracker post-job with auto-backup |
-| `get_action_tools_status` | Health check for all 9 action tools |
+| `check_tools_status` | Health check for all action tools |
 
 A pre-built **Job Tracker spreadsheet** (`AI-Prowler_Job_Tracker.xlsx`) is deployed to your `Documents\AI-Prowler\` folder during installation. It has 8 tabs — Customers, Jobs_Schedule, Route_Planner, Quotes, Invoices, QB_Daily_Export, Services_Pricing, and AI-Prowler_Commands — designed to work with the action tools out of the box.
 

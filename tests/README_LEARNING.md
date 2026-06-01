@@ -72,7 +72,7 @@ ID-prefix inventory:
 | `L-CRUD-*` | Create / read / update / delete | 14 | `test_crud_and_persistence.py` |
 | `L-PERS-*` | Persistence — JSON survive, reindex, atomic save | 4 | `test_crud_and_persistence.py` |
 | `L-STATS-*` | `get_learning_stats` correctness | 2 | `test_crud_and_persistence.py` |
-| `L-SEARCH-*` | `check_learned` semantic search | 8 | `test_search_and_counters.py` |
+| `L-SEARCH-*` | `search_learnings` semantic search | 8 | `test_search_and_counters.py` |
 | `L-COUNT-*` | `applied_count` tracking | 4 | `test_search_and_counters.py` |
 | `L-SUPER-*` | Supersession chains | 3 | `test_supersession_and_conflicts.py` |
 | `L-CONF-*` | Conflict detection, dismissal, threshold | 8 | `test_supersession_and_conflicts.py` |
@@ -209,7 +209,7 @@ The `.aiplearn` export format for sharing or backup, with five import policies c
 Wraps every learning tool that's exposed to Claude:
 
 - **`record_learning`** — validates non-empty title/content at the MCP layer (engine is more permissive); converts the comma-separated `tags` string into the engine's list format
-- **`check_learned`** — validates non-empty query; returns formatted multi-line output; "no matches" produces a friendly message rather than a blank string
+- **`search_learnings`** — validates non-empty query; returns formatted multi-line output; "no matches" produces a friendly message rather than a blank string
 - **`list_learnings`** — category/status/tag filters work; empty result shows "No learnings found"
 - **`update_learning`** — empty `learning_id` rejected; empty `updates` dict rejected; non-existent ID returns `❌` error
 - **`delete_learning`** — three distinct outcomes are documented in tests:
@@ -244,7 +244,7 @@ If you have notes from the original manual learning validation, here's the rough
 | Delete a learning and confirm it's gone from both stores | L-CRUD-13 |
 | Supersede an old fact with a new one | L-SUPER-01, L-SUPER-02 |
 | Browse all learnings without inflating the counter | L-COUNT-02 |
-| Confirm `check_learned` is application-tracking by default | L-COUNT-01, L-COUNT-03 |
+| Confirm `search_learnings` is application-tracking by default | L-COUNT-01, L-COUNT-03 |
 | Detect conflicting learnings | L-CONF-01, L-CONF-02 |
 | Dismiss a non-conflict so it stops being flagged | L-CONF-04, L-CONF-05 |
 | Reindex after corruption rebuilds the search index | L-PERS-04 |

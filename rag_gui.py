@@ -642,6 +642,20 @@ class RAGGui:
         self.root = root
         self.root.title(f"AI-Prowler — Agentic RAG Knowledge Base v{APP_VERSION}")
 
+        # ── Hide window during construction to prevent the small-then-resize flicker ──
+        # Tk creates the window at a default small size before geometry() is called.
+        # Withdrawing it immediately keeps it invisible until we have calculated the
+        # correct size, built all widgets, and are ready to show it fully formed.
+        # deiconify() is called after create_widgets() completes below.
+        #
+        # _we_withdrew tracks whether THIS __init__ call is the one that hid the
+        # window. If an external caller (e.g. the test suite's _tk_root fixture)
+        # already withdrew the root before constructing RAGGui, we must NOT call
+        # deiconify() — that would pop the window visible during automated tests.
+        _was_already_withdrawn = (self.root.state() == 'withdrawn')
+        self.root.withdraw()
+        _we_withdrew = not _was_already_withdrawn
+
         # ── Match Tk scaling to Windows DPI ──────────────────────────────────
         # Now that we declared DPI awareness in main(), Windows stops bitmap-
         # upscaling our window. Without telling Tk about the scale factor,
@@ -819,6 +833,14 @@ class RAGGui:
         
         # Create GUI
         self.create_widgets()
+
+        # ── Reveal the window now that it is fully built and correctly sized ──
+        # Only deiconify if WE are the caller who withdrew it. If the window was
+        # already withdrawn before __init__ ran (e.g. test suite's _tk_root
+        # fixture calls root.withdraw() to keep tests headless), leave it hidden.
+        self.root.update_idletasks()
+        if _we_withdrew:
+            self.root.deiconify()
         
         # Start output processor
         self.process_output_queue()
@@ -841,6 +863,12 @@ class RAGGui:
             # Startup prewarm — load model into memory after a 3-second delay so
             # the window finishes drawing first. Silent background thread.
             self.root.after(3000, self._trigger_prewarm)
+        else:
+            # Local-LLM mode is OFF — Claude MCP is the only AI interface.
+            # Ensure the Ollama Windows Service cannot auto-start on reboot:
+            # a previous session with SUPPORT_LOCAL_HW_LLM=True may have set
+            # the service to 'auto'. Silently correct that in the background.
+            self.root.after(2000, self._ensure_ollama_disabled)
 
         # MCP status bar indicator — check once on startup
         self.root.after(2000, self._refresh_mcp_status_bar)
@@ -1102,32 +1130,59 @@ class RAGGui:
         about_text = f"""AI-Prowler — Agentic RAG Knowledge Base
 Version {APP_VERSION}
 
-Your personal AI assistant that answers questions about YOUR documents.
+Your AI-powered knowledge assistant. Index your documents once,
+then ask Claude questions from your desktop or phone.
 
-Core Features:
-• Agentic RAG with Claude Desktop & Claude.ai (28 MCP tools)
-• 65+ file types: PDF, Word (.docx), Excel (.xlsx/.xls), PowerPoint, HTML, RTF, ODT, CSV, email, images & more
-• Smart chunking — full Column: Value context for spreadsheet and tabular data
-• .docx tables fully extracted (financial tables, schedules, grids)
-• Automatic OCR for scanned PDFs and image files
+─────────────────────────────────────────────────
+ KNOWLEDGE BASE (RAG)
+─────────────────────────────────────────────────
+• 57 MCP tools for Claude Desktop & Claude.ai mobile
+• 65+ file types: PDF, Word, Excel, PowerPoint, HTML,
+  CSV, email (.eml/.msg/.mbox), images & more
+• Automatic OCR for scanned PDFs and images
 • Incremental indexing — only changed files reprocessed
-• Auto-purge deleted files from ChromaDB on every update run
-• Email support (.eml, .msg, .mbox) with deduplication
-• Voice input via local Whisper model
-• Remote access via Cloudflare Tunnel + OAuth 2.0
-• Auto-start after Windows reboot via Task Scheduler
+• Auto-purge deleted files from ChromaDB on every update
 
-Small Business Service Tools (🏢 tab):
-• Route optimization & tap-to-navigate links (free)
-• Weather forecasts for job scheduling (free)
-• Job spreadsheet updater (.xlsx)
+─────────────────────────────────────────────────
+ REMOTE ACCESS
+─────────────────────────────────────────────────
+• Named Tunnel via Cloudflare (permanent URL, $10/yr domain)
+• Bearer-token authentication
+• Auto-start after reboot via Windows Task Scheduler
+• Server uptime displayed in Settings → Remote Access
 
-⚠  .doc and .xls (legacy OLE binary) are NOT supported — convert to .docx / .xlsx first.
+─────────────────────────────────────────────────
+ CODE TOOLS
+─────────────────────────────────────────────────
+• Create, edit, and manage files in tracked directories
+• str_replace, backup/restore, directory management
+• Lint, syntax check, and pytest runner
 
-100% Local • 100% Private • 100% Yours
+─────────────────────────────────────────────────
+ SELF-LEARNING (🧠 tab)
+─────────────────────────────────────────────────
+• Claude remembers facts across sessions
+• Record, retrieve, update, delete, and export learnings
+• Conflict detection and supersession chains
 
-Built with Python, ChromaDB, and Claude"""
-        
+─────────────────────────────────────────────────
+ SMALL BUSINESS (🏢 tab)
+─────────────────────────────────────────────────
+• Route optimization, weather, geocoding (free, no API key)
+• Job tracker spreadsheet — read and update from Claude
+
+─────────────────────────────────────────────────
+ EMAIL ALERTS
+─────────────────────────────────────────────────
+• Send emails, alerts, file attachments, learnings reports
+• Gmail, iCloud, Outlook, or any SMTP provider
+
+⚠  .doc and legacy .xls not supported — convert to .docx / .xlsx
+
+100% Local  •  100% Private  •  100% Yours
+
+Built with Python, ChromaDB, FastMCP, and Claude"""
+
         messagebox.showinfo("About AI Prowler", about_text)
 
     def show_notifications_status(self):
@@ -1452,12 +1507,13 @@ Built with Python, ChromaDB, and Claude"""
             ("Why Named Tunnels?", [
                 "A Named Tunnel gives you a permanent URL like",
                 "    https://ai-prowler.yourdomain.com/mcp",
-                "that survives restarts. Quick Tunnel URLs change every time.",
+                "that survives restarts and never needs to be re-copied.",
                 "",
                 "NOTE: Free Cloudflare accounts and free tier tunnels are sufficient.",
                 "NOTE: You will need a domain name. Cloudflare Registrar sells",
                 "      domains at cost (~$10/year for .com), or you can transfer",
-                "      an existing domain.",
+                "      an existing domain. A Named Tunnel requires this one-time",
+                "      setup step.",
             ]),
 
             ("Step 1 — Create a Cloudflare account (free)", [
@@ -1598,7 +1654,7 @@ Built with Python, ChromaDB, and Claude"""
             ("Step 0 — Prerequisites", [
                 "Before connecting Claude, make sure:",
                 "1. AI-Prowler HTTP server is running (Settings → Start HTTP Server).",
-                "2. A tunnel is active — either Quick Tunnel or Named Tunnel.",
+                "2. Your Named Tunnel is active (Settings → Remote Access).",
                 "3. Your Bearer Token is saved (Settings → Bearer Token field).",
                 "",
                 "NOTE: If you haven't set up a tunnel yet, click",
@@ -1640,7 +1696,7 @@ Built with Python, ChromaDB, and Claude"""
                 "2. Claude will attempt to connect to your tunnel.",
                 "3. If successful, you'll see 'Connected' or a green indicator.",
                 "4. The 22 AI-Prowler tools will be listed (search_documents,",
-                "   add_and_index_directory, get_route_optimization, etc.).",
+                "   add_and_index_directory, optimize_route, etc.).",
             ]),
 
             ("Step 5 — Test it", [
@@ -1663,8 +1719,7 @@ Built with Python, ChromaDB, and Claude"""
                 "",
                 "Connection fails / DNS error:",
                 "  → Named Tunnel hostname not yet propagated (wait 5 min)",
-                "    or typo in hostname. For Quick Tunnel, the URL changes",
-                "    every restart — re-copy it.",
+                "    or typo in hostname. Check Settings → Remote Access.",
                 "",
                 "Claude doesn't see the connector:",
                 "  → MCP connectors require Claude Pro. Free accounts don't",
@@ -1709,24 +1764,221 @@ Built with Python, ChromaDB, and Claude"""
             width=860, height=680)
 
     def show_help_window(self, title, content):
-        """Show help content in new window"""
-        help_window = tk.Toplevel(self.root)
-        help_window.title(title)
-        help_window.geometry("800x600")
-        
-        # Add scrolled text widget
-        text_widget = scrolledtext.ScrolledText(help_window, wrap=tk.WORD,
-                                                 font=('Arial', 10))
-        text_widget.pack(fill='both', expand=True, padx=10, pady=10)
-        
-        # Insert content
-        text_widget.insert('1.0', content)
-        text_widget.config(state='disabled')  # Make read-only
-        
-        # Add close button
-        close_btn = ttk.Button(help_window, text="Close", 
-                              command=help_window.destroy)
-        close_btn.pack(pady=5)
+        """Show help content in a navigable window with a clickable Table of
+        Contents sidebar and section-jump capability.
+
+        The TOC is built by scanning for lines that start with '## ' (top-level
+        sections).  Clicking a TOC entry scrolls the main text pane to that
+        heading.  Markdown headings are rendered bold/larger; code blocks get a
+        monospace font. The raw markdown escape sequences used in the .md file
+        (\\--- , \\*, \\[, etc.) are stripped for readability.
+        """
+        import re as _re
+
+        win = tk.Toplevel(self.root)
+        win.title(title)
+        win.geometry("1060x720")
+        win.minsize(700, 480)
+
+        # ── Top-level layout: sidebar (TOC) + main text pane ─────────────────
+        paned = tk.PanedWindow(win, orient='horizontal', sashrelief='raised',
+                               sashwidth=5, bg='#cccccc')
+        paned.pack(fill='both', expand=True, padx=6, pady=(6, 0))
+
+        # ── Left: TOC listbox ─────────────────────────────────────────────────
+        toc_frame = tk.Frame(paned, width=220, bg='#f5f5f5')
+        toc_frame.pack_propagate(False)
+        paned.add(toc_frame, minsize=160)
+
+        tk.Label(toc_frame, text="Contents", font=('Segoe UI', 10, 'bold'),
+                 bg='#f5f5f5', anchor='w').pack(fill='x', padx=6, pady=(6, 2))
+
+        toc_scroll = tk.Scrollbar(toc_frame, orient='vertical')
+        toc_list = tk.Listbox(toc_frame, font=('Segoe UI', 9),
+                              yscrollcommand=toc_scroll.set,
+                              selectbackground='#0078d4', selectforeground='white',
+                              activestyle='none', bd=0, highlightthickness=0,
+                              bg='#f5f5f5')
+        toc_scroll.config(command=toc_list.yview)
+        toc_list.pack(side='left', fill='both', expand=True, padx=(4, 0), pady=(0, 4))
+        toc_scroll.pack(side='right', fill='y', pady=(0, 4))
+
+        # ── Right: main text pane ─────────────────────────────────────────────
+        text_frame = tk.Frame(paned)
+        paned.add(text_frame, minsize=400)
+
+        txt_scroll = tk.Scrollbar(text_frame, orient='vertical')
+        txt = tk.Text(text_frame, wrap=tk.WORD, font=('Segoe UI', 10),
+                      yscrollcommand=txt_scroll.set,
+                      padx=14, pady=10, bd=0, highlightthickness=0,
+                      state='normal', cursor='arrow')
+        txt_scroll.config(command=txt.yview)
+        txt.pack(side='left', fill='both', expand=True)
+        txt_scroll.pack(side='right', fill='y')
+
+        # ── Text tags ─────────────────────────────────────────────────────────
+        txt.tag_configure('h1',   font=('Segoe UI', 15, 'bold'), spacing3=4,
+                          foreground='#003580')
+        txt.tag_configure('h2',   font=('Segoe UI', 13, 'bold'), spacing3=3,
+                          foreground='#005a9e')
+        txt.tag_configure('h3',   font=('Segoe UI', 11, 'bold'), spacing3=2,
+                          foreground='#1a6096')
+        txt.tag_configure('h4',   font=('Segoe UI', 10, 'bold'), spacing3=1,
+                          foreground='#2a7ab5')
+        txt.tag_configure('code', font=('Consolas', 9),
+                          background='#f0f0f0', foreground='#333333')
+        txt.tag_configure('hr',   font=('Segoe UI', 1),
+                          foreground='#cccccc', spacing1=4, spacing3=4)
+        txt.tag_configure('body', font=('Segoe UI', 10))
+
+        # ── Parse and render markdown ─────────────────────────────────────────
+        # Maps TOC entry index → text index string so clicking jumps correctly.
+        toc_entries   = []   # list of (display_label, mark_name)
+        section_marks = {}   # mark_name → inserted mark in txt widget
+        in_code_block = False
+        code_buf      = []
+
+        def _clean(line):
+            """Strip common markdown escapes used in the .md file."""
+            # Remove backslash escapes: \--- \* \[ etc.
+            line = _re.sub(r'\\([*\[\]_`#\-|])', r'\1', line)
+            # Remove stray leading backslashes before --- separators
+            line = _re.sub(r'^\\+(-{3,})\s*$', r'\1', line)
+            return line
+
+        def _flush_code(buf):
+            if buf:
+                txt.insert(tk.END, '\n'.join(buf) + '\n', 'code')
+                txt.insert(tk.END, '\n')
+            buf.clear()
+
+        lines = content.splitlines()
+        for raw_line in lines:
+            line = raw_line
+
+            # Code fence toggle
+            if line.strip().startswith('```'):
+                if in_code_block:
+                    _flush_code(code_buf)
+                    in_code_block = False
+                else:
+                    in_code_block = True
+                continue
+
+            if in_code_block:
+                code_buf.append(line)
+                continue
+
+            line = _clean(line)
+
+            # Horizontal rules
+            if _re.match(r'^-{3,}\s*$', line):
+                txt.insert(tk.END, '─' * 80 + '\n', 'hr')
+                continue
+
+            # ATX headings
+            h_match = _re.match(r'^(#{1,4})\s+(.*)', line)
+            if h_match:
+                level  = len(h_match.group(1))
+                text_  = h_match.group(2).strip()
+                # Strip trailing \  escapes / markdown link syntax
+                text_  = _re.sub(r'\\$', '', text_).strip()
+                # Strip inline markdown like **bold** or `code`
+                text_  = _re.sub(r'[`*]', '', text_)
+                tag    = f'h{level}'
+
+                # Insert the heading text first, THEN place the mark at the
+                # start of the heading line so txt.see(mark) lands correctly.
+                txt.insert(tk.END, text_ + '\n', tag)
+                txt.insert(tk.END, '\n')
+                mark = f'mark_{len(toc_entries)}'
+                txt.mark_set(mark, f'end - 2 lines linestart')
+                txt.mark_gravity(mark, tk.LEFT)
+
+                # Only h2 sections go into the TOC (top-level numbered sections)
+                if level == 2:
+                    # Build a short label — strip trailing markdown link text
+                    label = _re.sub(r'\[.*?\]', '', text_).strip()
+                    toc_entries.append((label, mark))
+                    toc_list.insert(tk.END, '  ' + label)
+                elif level == 3:
+                    toc_entries.append((text_, mark))
+                    toc_list.insert(tk.END, '    › ' + text_)
+                continue
+
+            # Strip inline markdown (bold, italic, inline code for display)
+            # Keep the text, drop the syntax characters
+            display = _re.sub(r'\*\*(.+?)\*\*', r'\1', line)
+            display = _re.sub(r'\*(.+?)\*',     r'\1', display)
+            display = _re.sub(r'`(.+?)`',       r'\1', display)
+            # Strip markdown link syntax [text](url) → text
+            display = _re.sub(r'\[([^\]]+)\]\([^\)]*\)', r'\1', display)
+
+            txt.insert(tk.END, display + '\n', 'body')
+
+        if in_code_block:
+            _flush_code(code_buf)
+
+        txt.config(state='disabled')
+
+        # ── TOC click → jump to section ───────────────────────────────────────
+        def _on_toc_select(event):
+            sel = toc_list.curselection()
+            if not sel:
+                return
+            idx = sel[0]
+            if idx < len(toc_entries):
+                _, mark = toc_entries[idx]
+                try:
+                    # Get the line number the mark sits on and scroll it
+                    # to the top of the visible area using yview_scroll.
+                    mark_index = txt.index(mark)          # e.g. "142.0"
+                    txt.see(mark_index)                   # ensure it's visible
+                    txt.update_idletasks()
+                    # Now nudge so the heading sits near the top, not the middle
+                    txt.yview_scroll(-10, 'units')        # scroll back up a bit
+                    txt.see(mark_index)                   # re-anchor to heading
+                except Exception:
+                    pass
+
+        toc_list.bind('<<ListboxSelect>>', _on_toc_select)
+        toc_list.bind('<Double-Button-1>', _on_toc_select)
+
+        # ── Bottom buttons ────────────────────────────────────────────────────
+        btn_row = tk.Frame(win)
+        btn_row.pack(fill='x', padx=6, pady=6)
+
+        # Search bar
+        tk.Label(btn_row, text="Find:", font=('Segoe UI', 9)).pack(side='left')
+        search_var = tk.StringVar()
+        search_entry = ttk.Entry(btn_row, textvariable=search_var, width=22)
+        search_entry.pack(side='left', padx=(2, 4))
+        _search_pos = [None]   # mutable cell for last match position
+
+        def _do_search(*_):
+            query = search_var.get().strip()
+            if not query:
+                return
+            txt.tag_remove('sel', '1.0', tk.END)
+            start = _search_pos[0] or '1.0'
+            pos = txt.search(query, start, nocase=True, stopindex=tk.END)
+            if not pos:
+                # Wrap around
+                pos = txt.search(query, '1.0', nocase=True, stopindex=tk.END)
+            if pos:
+                end_pos = f'{pos}+{len(query)}c'
+                txt.tag_add('sel', pos, end_pos)
+                txt.see(pos)
+                _search_pos[0] = end_pos
+            else:
+                _search_pos[0] = None
+
+        search_entry.bind('<Return>', _do_search)
+        ttk.Button(btn_row, text="Find", command=_do_search,
+                   width=6).pack(side='left', padx=(0, 12))
+
+        ttk.Button(btn_row, text="Close", command=win.destroy,
+                   width=8).pack(side='right')
     
     def get_quick_start_content(self):
         """Get quick start guide content"""
@@ -1737,22 +1989,21 @@ Version {APP_VERSION}
   OVERVIEW
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-AI-Prowler is designed around Agentic RAG — letting Claude
-actively research your documents using its full intelligence.
-You'll connect Claude to AI-Prowler over MCP (Model Context
-Protocol) and Claude will use 28 tools to search, follow up,
-and synthesize answers from your knowledge base.
+AI-Prowler is an Agentic RAG platform — it gives Claude
+57 MCP tools to search, cross-reference, and synthesize
+answers from your own documents. You ask a question;
+Claude researches your knowledge base and answers it.
 
-Two equally-supported ways to talk to Claude:
+Two ways to talk to Claude:
 
   📱  Claude.ai (web or mobile app)  — PREFERRED
-      Works on phone, tablet, AND desktop browsers. Same
-      capability as Claude Desktop. Requires a quick one-time
-      Cloudflare Tunnel setup so Claude.ai can reach this PC.
+      Works on phone, tablet, and desktop browsers.
+      Requires a one-time Cloudflare Named Tunnel setup
+      and an active AI-Prowler Mobile Access subscription.
 
-  💻  Claude Desktop  — alternative for desktop-only use
-      Connects locally via stdio (no tunnel needed). Free to
-      install. Use this if you don't need mobile/web access.
+  💻  Claude Desktop  — desktop-only alternative
+      Connects locally via stdio. No tunnel needed.
+      Free to install alongside Claude.ai.
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1778,114 +2029,102 @@ re-processed on subsequent runs. No need to start over.
   STEP 2 — OPTION A: CLAUDE.AI (PREFERRED)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Access your knowledge base from your phone, tablet, or any
-browser using Claude.ai — with the same full agentic RAG
-capability as Claude Desktop.
+Access your knowledge base from your phone, tablet, or
+any browser — with full agentic RAG capability.
 
 Requirements:
-  • Active Mobile Access subscription ($10/month Individual)
-  • Claude Pro or Team plan on Claude.ai
+  • Active AI-Prowler Mobile Access subscription
+  • Claude Pro plan on Claude.ai
+  • A domain name (~$10/yr via Cloudflare Registrar)
 
-One-time Cloudflare Tunnel setup:
+One-time Cloudflare Named Tunnel setup:
   1. Go to Settings → 📡 Remote Access
-  2. Enter a Bearer token (your password — make it strong)
+  2. Enter a Bearer token (make it strong — it's your password)
   3. Click "▶ Start HTTP Server"
-  4. Click "▶ Start Tunnel" (Cloudflare Tunnel)
+  4. Enter your tunnel domain and token, click "Activate"
   5. Open Claude.ai → Settings → Connectors → Add connector
-  6. Enter your tunnel URL (e.g. https://your-tunnel.com/mcp)
+  6. Enter your tunnel URL (https://your-domain.com/mcp)
   7. Authorize with your Bearer token when prompted
 
-Daily use:
-  • Open the 🔗 Quick Links tab
-  • Click "🌐 Open Claude.ai (Preferred)"
-  • Start a new conversation, ask any research question
+Daily use — the server auto-starts on login. If Claude
+can't reach your knowledge base, check Settings →
+Remote Access — the ⬤ Running indicator and uptime
+display confirm whether the server is up.
 
-  ⚠  Important: The HTTP server and Cloudflare Tunnel must be
-     running on this PC for Claude.ai to reach your knowledge
-     base. Both auto-start each time AI-Prowler launches if
-     you've enabled the "Install as Windows Service" option.
+  ⚠  If the connector goes stale after a reboot, go to
+     Claude.ai Settings → Connectors, disconnect and
+     reconnect AI-Prowler — the server is likely already
+     back up and just needs a handshake refresh.
 
 Subscription info:  Help → User Guide → Section 8
-Or email:           david.vavro1@gmail.com
+Support:            david.vavro1@gmail.com
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   STEP 2 — OPTION B: CLAUDE DESKTOP (DESKTOP ONLY)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Claude Desktop is a good alternative when you only need
-research from this PC — no Cloudflare Tunnel needed, no
-subscription needed beyond a free Claude account.
+Good alternative when you only need access from this PC.
+No Cloudflare Tunnel needed, no subscription beyond
+a free Claude account.
 
   1. Open the 🔗 Quick Links tab
   2. Click "🚀 Launch Claude Desktop"
-     • Don't have it yet? Click "⬇ Install Claude Desktop"
-       on the same screen to open the download page
-  3. In Claude Desktop, start a NEW conversation
-  4. Ask any research question about your documents:
+     • First time? Click "⬇ Install Claude Desktop" first
+  3. Start a NEW conversation and ask a research question:
 
      "Summarize the key risks in my Q3 contracts"
      "What does my insurance policy say about flooding?"
      "Find everything related to Project Alpha"
 
-Claude will automatically call multiple search tools, follow
-leads, expand context, and synthesize a comprehensive answer.
-You don't need to direct it — the agentic loop runs on its own.
+Claude calls multiple search tools, follows leads, and
+synthesizes a comprehensive answer automatically.
 
   ✅ No HTTP server needed for Claude Desktop
-  ✅ Works with free Claude account
-  ✅ Completely local — no internet required for the connection
+  ✅ Works with a free Claude account
+  ✅ Completely local — no internet required for the RAG connection
 
-Note on auto-configuration: The installer automatically
-registers AI-Prowler with Claude Desktop on first install.
-You don't need to edit any config files yourself. If something
-goes wrong, see Help → User Guide → Section 3.
+Note: The installer registers AI-Prowler with Claude
+Desktop automatically. No config files to edit.
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  🔗  THE QUICK LINKS TAB
+  🧠  SELF-LEARNING
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-The 🔗 Quick Links tab is the second tab from the left. It's
-a one-screen launcher with three buttons, ordered by preference:
+AI-Prowler remembers what you tell it across sessions.
 
-  1️⃣  🌐 Open Claude.ai (Preferred) — top, biggest button
-  2️⃣  🚀 Launch Claude Desktop      — alternative for PC use
-  3️⃣  ⬇ Install Claude Desktop     — one-time setup, smallest
-
-A short blurb above the buttons explains the desktop/mobile
-choice so you can pick at a glance.
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  🧠  TEACH CLAUDE — SELF-LEARNING
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-New in v6.0: AI-Prowler remembers what you tell it. Say
-"learn this" in any conversation and Claude saves the fact
-to a structured knowledge base. Next time a related question
-comes up, Claude finds the saved note automatically.
-
-Examples:
   "Remember: Client Alpha prefers email over phone calls"
   "Remember: HVAC permits in this county take 10 business days"
   "What do we know about Client Alpha?"  → finds it instantly
 
 Manage saved learnings from the 🧠 Learnings tab — browse,
-filter, archive, or delete. Full details in Help → User Guide
-→ Section 20.
+filter, archive, or delete. See Help → User Guide → Section 20.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  📧  EMAIL ALERTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Configure once in Settings → Email (Gmail, iCloud, or
+any SMTP provider), then ask Claude to send you alerts,
+file attachments, or a full learnings report by email.
+
+  "Send me an alert — the Johnson job is running late"
+  "Email the job tracker spreadsheet to myself"
+  "Send my learnings report to david@example.com"
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   🔄  KEEPING YOUR INDEX CURRENT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-• Click the "🔄 Update Index" tab → "Update All" after
+• Click "🔄 Update Index" tab → "Update All" after
   adding or changing files in tracked directories
-• Or just ask Claude: "Update my knowledge base" — it will
-  call update_tracked_directories() automatically
+• Or ask Claude: "Update my knowledge base" — it calls
+  update_tracked_directories() automatically
 • Set up auto-scheduling in the ⏰ Schedule tab
-  (default: runs once a day at 2:00 AM)
+  (default: once a day at 2:00 AM)
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1893,9 +2132,6 @@ filter, archive, or delete. Full details in Help → User Guide
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Full documentation:  Help → 📖 User Guide
-Tab overview:        Home / Quick Links / Index Docs /
-                     Update Index / Smart Scan / Schedule /
-                     Settings / Small Business / 🧠 Learnings
 Support email:       david.vavro1@gmail.com
 """
     
@@ -6215,6 +6451,59 @@ or from the Help menu."""
                                      foreground='#cc0000', font=('Arial', 9, 'bold'))
         _http_status_lbl.pack(side='left', padx=(0, 12))
 
+        # ── Server uptime display ──────────────────────────────────────────────
+        # Shows how long the HTTP server has been running, e.g. "· up 2h 15m".
+        # Blank when stopped. Updates every 30 s via a self-rescheduling after().
+        _http_uptime_var = tk.StringVar(value="")
+        ttk.Label(http_ctrl_row, textvariable=_http_uptime_var,
+                  foreground='#666666', font=('Arial', 9)).pack(side='left', padx=(0, 12))
+
+        _http_start_time  = [None]   # [datetime | None] — set when server goes Running
+        _uptime_after_id  = [None]   # [str | None]      — cancellable after() token
+
+        def _fmt_uptime():
+            """Return a compact 'up Xh Ym' string from _http_start_time[0]."""
+            if _http_start_time[0] is None:
+                return ""
+            from datetime import datetime as _dt
+            elapsed = int((_dt.now() - _http_start_time[0]).total_seconds())
+            h, rem  = divmod(elapsed, 3600)
+            m       = rem // 60
+            if h > 0:
+                return f"· up {h}h {m}m"
+            elif m > 0:
+                return f"· up {m}m"
+            else:
+                return "· up <1m"
+
+        def _start_uptime_ticker():
+            """Refresh the uptime label and reschedule itself every 30 s."""
+            _http_uptime_var.set(_fmt_uptime())
+            _uptime_after_id[0] = self.root.after(30_000, _start_uptime_ticker)
+
+        def _stop_uptime_ticker():
+            """Cancel the ticker and blank the uptime label."""
+            if _uptime_after_id[0] is not None:
+                self.root.after_cancel(_uptime_after_id[0])
+                _uptime_after_id[0] = None
+            _http_start_time[0] = None
+            _http_uptime_var.set("")
+
+        def _mark_server_running():
+            """Record the start time and kick off the uptime ticker (once only)."""
+            if _http_start_time[0] is None:   # guard: don't double-start
+                _http_start_time[0] = __import__('datetime').datetime.now()
+                _start_uptime_ticker()
+
+        # ── Expose uptime internals as instance attributes for unit testing ───
+        # Tests in tests/gui/test_http_uptime.py call these directly rather
+        # than driving the full subprocess lifecycle.
+        self._http_uptime_var      = _http_uptime_var
+        self._http_start_time      = _http_start_time    # mutable [datetime|None]
+        self._fmt_uptime           = _fmt_uptime
+        self._mark_server_running  = _mark_server_running
+        self._stop_uptime_ticker   = _stop_uptime_ticker
+
         def _start_http_server():
             tok = _remote_token_var.get().strip()
             if not tok:
@@ -6337,6 +6626,7 @@ or from the Help menu."""
                     if _proc_ref.poll() is None:   # still running = success
                         _http_status_var.set("⬤ Running")
                         _http_status_lbl.configure(foreground='#27ae60')
+                        _mark_server_running()          # start uptime ticker
                         # Prevent Windows sleep while the MCP server is live
                         self._set_sleep_prevention(True)
                     # else — process died quickly; _watch_http will set Stopped/error
@@ -6355,7 +6645,8 @@ or from the Help menu."""
                                 'Application startup', 'Uvicorn running')):
                             self.root.after(0, lambda: (
                                 _http_status_var.set("⬤ Running"),
-                                _http_status_lbl.configure(foreground='#27ae60')
+                                _http_status_lbl.configure(foreground='#27ae60'),
+                                _mark_server_running(),         # start uptime ticker
                             ))
                         # Detect port already in use
                         if ('address already in use' in line.lower() or
@@ -6376,7 +6667,8 @@ or from the Help menu."""
                     else:
                         self.root.after(0, lambda: (
                             _http_status_var.set("⬤ Stopped"),
-                            _http_status_lbl.configure(foreground='#cc0000')
+                            _http_status_lbl.configure(foreground='#cc0000'),
+                            _stop_uptime_ticker(),          # clear uptime on stop
                         ))
                 threading.Thread(target=_watch_http, daemon=True).start()
             except Exception as _e:
@@ -6389,6 +6681,7 @@ or from the Help menu."""
             if self._http_server_proc is None or self._http_server_proc.poll() is not None:
                 _http_status_var.set("⬤ Stopped")
                 _http_status_lbl.configure(foreground='#cc0000')
+                _stop_uptime_ticker()               # ensure ticker is cancelled
                 self._set_sleep_prevention(False)   # ensure sleep is re-enabled
                 return
             try:
@@ -6402,6 +6695,7 @@ or from the Help menu."""
             self._http_server_proc = None
             _http_status_var.set("⬤ Stopped")
             _http_status_lbl.configure(foreground='#cc0000')
+            _stop_uptime_ticker()                   # clear uptime on manual stop
             # Restore normal Windows sleep/power management
             self._set_sleep_prevention(False)
 
@@ -6418,196 +6712,12 @@ or from the Help menu."""
         def _cf_exe():
             return str(Path(__file__).parent / 'cloudflared.exe')
 
-        # ══════════════════════════════════════════════════════════════════════
-        # Quick Tunnel  (Free, No Account Needed)
-        # ══════════════════════════════════════════════════════════════════════
-        qt_frame = ttk.LabelFrame(remote_frame,
-                                   text="🚀 Quick Tunnel  (free, no Cloudflare account needed)",
-                                   padding=(10, 8))
-        qt_frame.pack(fill='x', pady=(0, 8))
-
-        ttk.Label(qt_frame, font=('Arial', 8), foreground='gray', justify='left',
-                  text=("One-click remote access — generates a temporary public URL.\n"
-                        "URL changes each time you restart, but setup takes seconds. Great for testing or casual use.")
-                  ).pack(anchor='w', pady=(0, 6))
-
-        # Quick Tunnel controls row
-        qt_ctrl_row = ttk.Frame(qt_frame)
-        qt_ctrl_row.pack(fill='x', pady=(0, 4))
-
-        _qt_status_var = tk.StringVar(value="⬤ Stopped")
-        _qt_status_lbl = ttk.Label(qt_ctrl_row, textvariable=_qt_status_var,
-                                    foreground='#cc0000', font=('Arial', 9, 'bold'))
-        _qt_status_lbl.pack(side='left', padx=(0, 12))
-
-        def _start_quick_tunnel():
-            """Start a cloudflared Quick Tunnel pointing at the HTTP server.
-
-            When the Quick Tunnel URL is captured, the HTTP server is
-            automatically restarted with the tunnel URL as --public-base
-            so the OAuth authorization endpoint matches what Claude sees.
-            """
-            # Check HTTP server is running
-            if self._http_server_proc is None or self._http_server_proc.poll() is not None:
-                messagebox.showwarning("HTTP Server Not Running",
-                    "Start the HTTP server first (above), then click Quick Tunnel.")
-                return
-            # Check cloudflared exists
-            cf_path = _cf_exe()
-            if not Path(cf_path).exists():
-                messagebox.showerror("cloudflared not found",
-                    f"cloudflared.exe not found at:\n{cf_path}\n\n"
-                    "Re-run the AI-Prowler installer or download cloudflared.exe\n"
-                    "from https://developers.cloudflare.com/cloudflare-one/"
-                    "connections/connect-apps/install-and-setup/installation/")
-                return
-            # Kill any existing quick tunnel
-            if self._cloudflared_proc is not None and self._cloudflared_proc.poll() is None:
-                try:
-                    self._cloudflared_proc.terminate()
-                    self._cloudflared_proc.wait(timeout=5)
-                except Exception:
-                    pass
-
-            port = _http_port_var.get().strip() or '8000'
-            _qt_status_var.set("⬤ Starting…")
-            _qt_status_lbl.configure(foreground='#e67e00')
-            _qt_url_var.set("Waiting for Cloudflare to assign URL…")
-
-            def _run_quick_tunnel():
-                try:
-                    import os as _os
-                    _env = _os.environ.copy()
-                    self._cloudflared_proc = subprocess.Popen(
-                        [cf_path, 'tunnel', '--url', f'http://localhost:{port}',
-                         '--no-autoupdate', '--config', ''],
-                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                        text=True, bufsize=1, env=_env,
-                        creationflags=(subprocess.CREATE_NO_WINDOW
-                                       if sys.platform == 'win32' else 0)
-                    )
-                    # Scan output for the generated URL
-                    url_found = False
-                    for line in self._cloudflared_proc.stdout:
-                        line = line.strip()
-                        # cloudflared prints the URL like:
-                        #   | https://random-words.trycloudflare.com |
-                        if ('trycloudflare.com' in line
-                                or '.cfargotunnel.com' in line):
-                            import re
-                            url_match = re.search(
-                                r'(https://[a-zA-Z0-9\-]+\.trycloudflare\.com)',
-                                line)
-                            if not url_match:
-                                url_match = re.search(
-                                    r'(https://[a-zA-Z0-9\-]+\.cfargotunnel\.com)',
-                                    line)
-                            if url_match:
-                                tunnel_url = url_match.group(1)
-                                mcp_url = f"{tunnel_url}/mcp"
-                                url_found = True
-                                self.root.after(0, lambda u=mcp_url: (
-                                    _qt_url_var.set(u),
-                                    _qt_status_var.set("⬤ Running"),
-                                    _qt_status_lbl.configure(
-                                        foreground='#27ae60'),
-                                ))
-                        if self._cloudflared_proc.poll() is not None:
-                            break
-
-                    if not url_found:
-                        self.root.after(0, lambda: (
-                            _qt_status_var.set("⬤ Failed"),
-                            _qt_status_lbl.configure(foreground='#cc0000'),
-                            _qt_url_var.set(
-                                "Quick Tunnel failed to start. "
-                                "Check internet connection."),
-                        ))
-                    else:
-                        self._cloudflared_proc.wait()
-                        self.root.after(0, lambda: (
-                            _qt_status_var.set("⬤ Stopped"),
-                            _qt_status_lbl.configure(foreground='#cc0000'),
-                            _qt_url_var.set("Quick Tunnel stopped."),
-                        ))
-                except Exception as exc:
-                    self.root.after(0, lambda e=str(exc): (
-                        _qt_status_var.set("⬤ Error"),
-                        _qt_status_lbl.configure(foreground='#cc0000'),
-                        _qt_url_var.set(f"Error: {e}"),
-                    ))
-
-            threading.Thread(target=_run_quick_tunnel, daemon=True).start()
-
-        def _stop_quick_tunnel():
-            """Stop the Quick Tunnel and restore the HTTP server's public-base
-            to the Named Tunnel domain so switching back works seamlessly."""
-            if (self._cloudflared_proc is None
-                    or self._cloudflared_proc.poll() is not None):
-                _qt_status_var.set("⬤ Stopped")
-                _qt_status_lbl.configure(foreground='#cc0000')
-                return
-            try:
-                self._cloudflared_proc.terminate()
-                self._cloudflared_proc.wait(timeout=5)
-            except Exception:
-                try:
-                    self._cloudflared_proc.kill()
-                except Exception:
-                    pass
-            _qt_status_var.set("⬤ Stopped")
-            _qt_status_lbl.configure(foreground='#cc0000')
-            _qt_url_var.set("Quick Tunnel stopped.")
-
-        ttk.Button(qt_ctrl_row, text="▶ Start Quick Tunnel",
-                   command=_start_quick_tunnel).pack(side='left', padx=(0, 6))
-        ttk.Button(qt_ctrl_row, text="⏹ Stop",
-                   command=_stop_quick_tunnel).pack(side='left', padx=(0, 6))
-
-        # URL display + copy button
-        qt_url_frame = ttk.Frame(qt_frame)
-        qt_url_frame.pack(fill='x', pady=(4, 2))
-
-        ttk.Label(qt_url_frame, text="Your MCP URL:",
-                  font=('Arial', 9, 'bold')).pack(side='left', padx=(0, 6))
-
-        _qt_url_var = tk.StringVar(value="Not started")
-        _qt_url_entry = ttk.Entry(qt_url_frame, textvariable=_qt_url_var,
-                                   width=55, state='readonly')
-        _qt_url_entry.pack(side='left', padx=(0, 6))
-
-        def _copy_qt_url():
-            url = _qt_url_var.get()
-            if url and url.startswith('https://'):
-                self.root.clipboard_clear()
-                self.root.clipboard_append(url)
-                self.status_var.set("✅ MCP URL copied to clipboard")
-                self.root.after(3000, lambda: self.status_var.set("Ready"))
-            else:
-                messagebox.showinfo("Not Ready",
-                                    "Start the Quick Tunnel first.")
-
-        ttk.Button(qt_url_frame, text="📋 Copy URL",
-                   command=_copy_qt_url).pack(side='left', padx=(0, 6))
-
-        # Instructions + visual guide button
-        instructions_row = ttk.Frame(qt_frame)
-        instructions_row.pack(fill='x', pady=(4, 0))
-        ttk.Label(instructions_row, font=('Arial', 8), foreground='gray',
-                  justify='left',
-                  text=("Steps: 1) Save Bearer Token above  "
-                        "2) Start HTTP Server  3) Start Quick Tunnel\n"
-                        "4) Copy URL  5) Paste into Claude.ai → Settings → "
-                        "Connectors → Add MCP")
-                  ).pack(side='left')
-        ttk.Button(instructions_row,
-                   text="📖 Connect Claude.ai →",
-                   command=self.show_claude_connector_guide
-                   ).pack(side='right', padx=(8, 0))
-
-        ttk.Separator(remote_frame, orient='horizontal').pack(fill='x',
-                                                               pady=(4, 8))
-
+        # ── Named Tunnel separator (Quick Tunnel removed in v7.0.0) ──────────
+        # Quick Tunnel is not supported — the URL changes on every restart,
+        # which causes the Claude.ai connector to go stale and requires
+        # manual re-configuration each time. Users are directed to set up
+        # a Named Tunnel with a permanent subdomain ($10/yr via Cloudflare
+        # Registrar) instead.
         # ══════════════════════════════════════════════════════════════════════
         # Named Tunnel  (Persistent URL, Requires Cloudflare Account)
         # ══════════════════════════════════════════════════════════════════════
@@ -7164,38 +7274,7 @@ or from the Help menu."""
                   font=('Arial', 8), foreground='#006600'
                   ).pack(anchor='w', pady=(2, 0))
 
-        # About
-        about_frame = ttk.LabelFrame(scrollable_frame, text="About", padding=10)
-        about_frame.pack(fill='both', expand=True, padx=20, pady=10)
-        
-        about_text = f"""AI-Prowler — Agentic RAG Knowledge Base
-Version {APP_VERSION}
-
-Core:
-• Agentic RAG — 28 MCP tools for Claude Desktop & Claude.ai
-• 65+ file types: PDF, Word (.docx), Excel (.xlsx/.xls), PPTX, HTML, RTF, ODT, CSV, email, images
-• Smart chunking — Column: Value context for all tabular data
-• .docx tables fully extracted (was silently dropped in v4)
-• Auto-purge deleted files from ChromaDB on every update run
-• Automatic OCR for scanned PDFs and images
-• Email indexing with deduplication
-• Auto-start after Windows reboot (Task Scheduler)
-
-Small Business (🏢 tab):
-• 7 action tools: weather, geocode, route optimization, maps URL builder,
-  spreadsheet read/update, action-tools status check
-• Job Tracker spreadsheet pre-installed in Documents\AI-Prowler\
-
-Self-Learning (🧠 Learnings tab):
-• 6 MCP tools for record/check/list/update/delete/stats
-• Conflict detection, supersession chains, learning packs export/import
-
-⚠  .doc / legacy .xls not supported — convert to .docx / .xlsx
-
-Built with Python, ChromaDB, and Claude"""
-        
-        about_label = ttk.Label(about_frame, text=about_text, justify='left')
-        about_label.pack(pady=10)
+        # About section removed in v7.0.0 — use Help → About AI Prowler instead.
 
     # ══════════════════════════════════════════════════════════════════════════
     # TAB 6 — SMALL BUSINESS SERVICE TOOLS
@@ -7260,7 +7339,7 @@ Built with Python, ChromaDB, and Claude"""
             ("🌤  Weather",      '"What is the weather forecast for New Smyrna Beach for the next 3 days?"'),
             ("🗺  Route",        '"Optimize my route for these 6 jobs today and give me a Google Maps link."'),
             ("📊  Spreadsheet",  '"Mark the Miller Windows job complete in my jobs.xlsx and record invoice #1048."'),
-            ("🔍  Status check", '"Call get_action_tools_status() and tell me what is ready to use."'),
+            ("🔍  Status check", '"Call check_tools_status() and tell me what is ready to use."'),
         ]
         for icon_label, prompt in examples:
             row = ttk.Frame(ex_frame)
@@ -7289,8 +7368,8 @@ Built with Python, ChromaDB, and Claude"""
              "Useful for verifying job addresses before route planning.",
              "Nominatim / OpenStreetMap — free, no key"),
 
-            ("get_route_optimization(stops, origin, …)",
-             "Traveling Salesman solver — reorders your stops into the fastest\n"
+                ("optimize_route(stops, origin, …)",
+               "Traveling Salesman solver — reorders your stops into the fastest\n"
              "driving sequence with estimated arrival times per stop.\n"
              "Geocodes ~20 addresses in ~6 s (0.35 s/address courtesy delay).",
              "OSRM public server + Nominatim — free, no key"),
@@ -7424,7 +7503,7 @@ Built with Python, ChromaDB, and Claude"""
         route_outer.pack(fill='x', padx=16, pady=(0, 10))
 
         route_info = (
-            "get_route_optimization(stops, origin, optimize_for, departure_hour, return_to_origin)\n"
+            "optimize_route(stops, origin, optimize_for, departure_hour, return_to_origin)\n"
             "  • Geocoding:   Nominatim / OpenStreetMap  (0.35 s/address courtesy delay)\n"
             "  • TSP solver:  OSRM public /trip endpoint — real street routing, free, no key\n"
             "  • Returns:     optimised stop order with estimated arrival time per stop\n"
@@ -7436,7 +7515,7 @@ Built with Python, ChromaDB, and Claude"""
             "  • Pass app='apple' for Apple Maps — iPhone/iPad only\n\n"
             "Typical workflow:\n"
             "  1. Tell Claude: \"Optimize my route for today's jobs\"\n"
-            "  2. Claude calls get_route_optimization() → get optimised order\n"
+            "  2. Claude calls optimize_route() → get optimised order\n"
             "  3. Claude calls build_maps_url() → tap-to-navigate link\n"
             "  4. Tap the link on your phone — Google Maps opens in navigation mode"
         )
@@ -7511,7 +7590,7 @@ Built with Python, ChromaDB, and Claude"""
         ex_frame.pack(fill='x', pady=(8, 0))
 
         examples = [
-            ("🔍  Check",      '"What do we know about Client X?"  →  Claude calls check_learned()'),
+            ("🔍  Check",      '"What do we know about Client X?"  →  Claude calls search_learnings()'),
             ("📝  Record",     '"Remember: always submit permits 2 weeks before job start"'),
             ("📊  Post-Op",    '"Analyze the Johnson project — what went right and wrong?"'),
             ("🔄  Correct",    '"Actually, the correct phone number is 555-0200"'),
@@ -9867,6 +9946,120 @@ Built with Python, ChromaDB, and Claude"""
             # Settings tab: no synchronous refresh — background poller keeps list current
         except Exception:
             pass
+
+    def _ensure_ollama_disabled(self):
+        """
+        Called at startup when SUPPORT_LOCAL_HW_LLM is False (Claude-MCP-only mode).
+
+        Ollama is not needed when Claude MCP is the only AI interface.
+        This method silently:
+          1. Kills the 'ollama app' tray watchdog (it relaunches ollama.exe if left alive)
+          2. Removes 'ollama app' from the Windows startup registry so it never
+             auto-launches on boot again
+          3. Sets the Ollama Windows Service to manual start
+          4. Stops the Ollama service and kills any remaining ollama.exe processes
+
+        Runs entirely in a background thread — never blocks the GUI.
+        """
+        def _do_disable():
+            try:
+                if sys.platform != 'win32':
+                    return
+
+                import winreg
+
+                # ── Step 1: Kill the tray watchdog first ─────────────────────
+                # 'ollama app' is the system-tray process that relaunches
+                # ollama.exe every time it is killed. Must die before we stop
+                # the service, otherwise it immediately restarts it.
+                for tray_exe in ('ollama app.exe', 'ollama_app.exe'):
+                    subprocess.run(
+                        f'taskkill /F /T /IM "{tray_exe}"',
+                        shell=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL)
+                print("[Ollama] Tray watchdog terminated.")
+
+                # ── Step 2: Remove tray app from Windows startup registry ────
+                # Ollama installer adds itself to:
+                #   HKCU\Software\Microsoft\Windows\CurrentVersion\Run
+                # under the key name 'Ollama'.  Remove it so it never comes
+                # back after the next reboot.
+                startup_keys = [
+                    (winreg.HKEY_CURRENT_USER,
+                     r'Software\Microsoft\Windows\CurrentVersion\Run'),
+                    (winreg.HKEY_LOCAL_MACHINE,
+                     r'Software\Microsoft\Windows\CurrentVersion\Run'),
+                    (winreg.HKEY_LOCAL_MACHINE,
+                     r'Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run'),
+                ]
+                for hive, subkey in startup_keys:
+                    try:
+                        with winreg.OpenKey(hive, subkey,
+                                            0, winreg.KEY_READ | winreg.KEY_WRITE) as k:
+                            # Enumerate all values and remove any whose data
+                            # path contains 'ollama' (case-insensitive)
+                            to_delete = []
+                            try:
+                                i = 0
+                                while True:
+                                    name, data, _ = winreg.EnumValue(k, i)
+                                    if 'ollama' in str(data).lower() or \
+                                       'ollama' in str(name).lower():
+                                        to_delete.append(name)
+                                    i += 1
+                            except OSError:
+                                pass   # end of values
+                            for name in to_delete:
+                                try:
+                                    winreg.DeleteValue(k, name)
+                                    print(f"[Ollama] Removed startup entry: '{name}'")
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass   # key doesn't exist or no write access — skip
+
+                # ── Step 3: Disable the Windows Service ──────────────────────
+                svc_check = subprocess.run(
+                    'sc query ollama',
+                    shell=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True)
+                if svc_check.returncode != 0:
+                    print("[Ollama] Windows Service not found — skipping service steps.")
+                else:
+                    # Set to manual so it never auto-starts on reboot
+                    subprocess.run(
+                        'sc config ollama start= demand',
+                        shell=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL)
+
+                    # Stop the service if running
+                    if 'RUNNING' in (svc_check.stdout or ''):
+                        subprocess.run(
+                            'sc stop ollama',
+                            shell=True,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
+                        print("[Ollama] Service stopped.")
+                    else:
+                        print("[Ollama] Service was not running.")
+
+                # ── Step 4: Kill any remaining ollama.exe processes ──────────
+                subprocess.run(
+                    'taskkill /F /T /IM ollama.exe',
+                    shell=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL)
+
+                print("[Ollama] Fully disabled — will not auto-start on next boot.")
+
+            except Exception as e:
+                print(f"[Ollama] _ensure_ollama_disabled error (non-fatal): {e}")
+
+        threading.Thread(target=_do_disable, daemon=True).start()
 
     def _check_and_start_ollama(self):
         """Check if Ollama is running, and start it if auto-start is enabled."""
@@ -13548,39 +13741,60 @@ Built with Python, ChromaDB, and Claude"""
             ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
 
     def _on_window_close(self):
-        """Handle window close event - stop Ollama if we started it."""
-        # Stop Ollama if we started it
+        """Handle window close event - cleanly stop all child processes."""
+
+        def _kill_proc(proc, name="process"):
+            """Terminate a subprocess gracefully, then force-kill if needed."""
+            if proc is None:
+                return
+            try:
+                if proc.poll() is not None:
+                    return          # already dead
+                proc.terminate()    # polite SIGTERM / TerminateProcess
+                try:
+                    proc.wait(timeout=3)
+                except Exception:
+                    pass
+                if proc.poll() is None:
+                    # Still alive — force kill the entire process tree so no
+                    # grandchild Python workers are left behind.
+                    try:
+                        if sys.platform == 'win32':
+                            subprocess.run(
+                                ['taskkill', '/F', '/T', '/PID', str(proc.pid)],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+                        else:
+                            import signal as _sig
+                            import os as _os2
+                            _os2.killpg(_os2.getpgid(proc.pid), _sig.SIGKILL)
+                    except Exception:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+            except Exception as e:
+                print(f"Warning: could not stop {name}: {e}")
+
+        # ── Ollama (only if AI-Prowler started it) ───────────────────────────
         if self._ollama_process is not None:
             print("Stopping Ollama server (started by AI Prowler)...")
-            try:
-                self._ollama_process.terminate()
-                # Wait a moment for graceful shutdown
-                import time
-                time.sleep(1)
-                # Force kill if still running
-                if self._ollama_process.poll() is None:
-                    self._ollama_process.kill()
-                print("Ollama server stopped")
-            except Exception as e:
-                print(f"Error stopping Ollama: {e}")
-        
-        # Stop HTTP MCP server if running — also restore sleep prevention
-        if self._http_server_proc is not None:
-            try:
-                self._http_server_proc.terminate()
-                self._http_server_proc.wait(timeout=3)
-            except Exception:
-                pass
-            self._set_sleep_prevention(False)   # always restore on exit
-        # Stop cloudflared tunnel if running
-        if self._cloudflared_proc is not None:
-            try:
-                self._cloudflared_proc.terminate()
-                self._cloudflared_proc.wait(timeout=3)
-            except Exception:
-                pass
-        # Close the window and terminate the process (including the CMD window)
-        self.root.destroy()
+            _kill_proc(self._ollama_process, "Ollama")
+            print("Ollama server stopped")
+
+        # ── HTTP MCP server subprocess (python ai_prowler_mcp.py --http) ────
+        _kill_proc(self._http_server_proc, "HTTP MCP server")
+        self._set_sleep_prevention(False)   # always restore sleep on exit
+
+        # ── cloudflared tunnel ───────────────────────────────────────────────
+        _kill_proc(self._cloudflared_proc, "cloudflared tunnel")
+
+        # ── Close window and exit cleanly ────────────────────────────────────
+        # Destroy the Tk root first so all after() callbacks are cancelled.
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
         # os._exit() terminates the Python process immediately, which also
         # kills the parent CMD/batch window that launched AI-Prowler.
         # Without this, the DOS prompt stays open after the GUI closes.
@@ -13725,8 +13939,35 @@ def main():
                            f"Script dir: {str(Path(__file__).parent)}")
         return
     
+    # ── Windows taskbar / tray icon fix ──────────────────────────────────────
+    # Without an explicit AppUserModelID, Windows groups the window under the
+    # Python interpreter icon instead of the AI-Prowler icon.  Setting a unique
+    # AppUserModelID before the Tk window is created tells the shell to treat
+    # this process as its own distinct application.
+    if sys.platform == 'win32':
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                u'DV.AIProwler.RAG.1'
+            )
+        except Exception:
+            pass
+
     root = tk.Tk()
-    
+
+    # Apply the AI-Prowler icon to the window AND the taskbar button
+    _icon_path = Path(__file__).parent / 'rag_icon.ico'
+    if _icon_path.exists() and sys.platform == 'win32':
+        try:
+            # iconbitmap covers the title-bar icon
+            root.iconbitmap(str(_icon_path))
+        except Exception:
+            pass
+        try:
+            # wm_iconbitmap with the default= kwarg sets the taskbar icon too
+            root.wm_iconbitmap(default=str(_icon_path))
+        except Exception:
+            pass
+
     # Try to set theme
     try:
         style = ttk.Style()

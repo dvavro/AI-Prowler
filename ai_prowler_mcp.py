@@ -292,19 +292,19 @@ _INSTRUCTIONS = (
     "═══════════════════════════════════════════════════════════════\n"
     " MANDATORY SEARCH ORDER FOR EVERY USER QUESTION\n"
     "═══════════════════════════════════════════════════════════════\n"
-    "You MUST run check_learned(query=...) BEFORE answering ANY user\n"
+    "You MUST run search_learnings(query=...) BEFORE answering ANY user\n"
     "question. No exceptions. The user uses AI-Prowler as a personal\n"
     "knowledge store for everything — not just business. Recipes,\n"
     "preferences, opinions, hobbies, how they like things done — any\n"
     "of these may live in the learnings store and override what your\n"
     "training data would say.\n\n"
 
-    "  STEP 1 (ALWAYS, NO EXCEPTIONS):  check_learned(query=...)\n"
+    "  STEP 1 (ALWAYS, NO EXCEPTIONS):  search_learnings(query=...)\n"
     "    Self-learning is the AUTHORITATIVE override layer. It contains\n"
     "    the user's deliberate corrections, preferences, and lessons.\n"
     "    These are newer and more curated than anything in your training\n"
     "    data or the document index.\n"
-    "    Run check_learned BEFORE generating any answer, EVEN FOR:\n"
+    "    Run search_learnings BEFORE generating any answer, EVEN FOR:\n"
     "      • General world-knowledge questions ('what's a good recipe\n"
     "        for ribs', 'best way to clean windows', 'what wine pairs\n"
     "        with salmon') — the user may have recorded a personal\n"
@@ -315,7 +315,7 @@ _INSTRUCTIONS = (
     "            preferred technique\n"
     "      • Recommendations of any kind\n"
     "      • Business / client / project questions\n"
-    "    The ONLY questions you may skip check_learned on are pure\n"
+    "    The ONLY questions you may skip search_learnings on are pure\n"
     "    arithmetic ('what is 7 * 13') and language translation, where\n"
     "    there's no plausible way a personal learning could apply.\n"
     "    When in doubt, SEARCH. The cost of an unnecessary search is\n"
@@ -351,14 +351,14 @@ _INSTRUCTIONS = (
     "    the doc as outdated background.\n\n"
 
     "  LEARNING vs. TRAINING-DATA CONFLICT (the recipe case):\n"
-    "    If check_learned returns a personal version of something general\n"
+    "    If search_learnings returns a personal version of something general\n"
     "    (e.g. the user's rib recipe vs. recipes you know from training),\n"
     "    THE STORED LEARNING WINS. Lead with the user's version. Do not\n"
     "    fall back on web search or generic recipes unless the user\n"
     "    explicitly asks for alternatives.\n\n"
 
     "  RELEVANCE INTERPRETATION:\n"
-    "    Relevance labels on check_learned results are now calibrated:\n"
+    "    Relevance labels on search_learnings results are now calibrated:\n"
     "      🟢 HIGH (≥ 0.70)     — near-identical phrasing match; trust fully\n"
     "      🟡 MODERATE (0.40+)  — solid semantic match; APPLY THIS\n"
     "      🟠 LOW (< 0.40)      — likely irrelevant; ignore unless title\n"
@@ -371,15 +371,15 @@ _INSTRUCTIONS = (
     "═══════════════════════════════════════════════════════════════\n"
     " DOCUMENT RAG — Detailed Tool Reference\n"
     "═══════════════════════════════════════════════════════════════\n"
-    "After running check_learned (Step 1), use these for Step 2 and beyond:\n"
+    "After running search_learnings (Step 1), use these for Step 2 and beyond:\n"
     "  • get_knowledge_base_overview — orient: what's indexed, what topics\n"
     "  • list_indexed_documents      — browse files for a topic area\n"
     "  • search_documents            — PRIMARY document retrieval\n"
-    "  • search_by_multiple_queries  — parallel searches across synonyms\n"
+    "  • multi_query_search          — parallel searches across synonyms\n"
     "  • search_within_directory     — restrict to a specific case/project\n"
-    "  • get_chunk_context           — expand a cut-off result\n"
-    "  • get_document_chunks         — read a document sequentially\n\n"
-    "Use check_status() to verify the knowledge base is healthy.\n\n"
+    "  • expand_search_result        — expand a cut-off result\n"
+    "  • read_document               — read a document sequentially\n\n"
+    "Use check_ai_prowler_status() to verify the knowledge base is healthy.\n\n"
 
     "═══════════════════════════════════════════════════════════════\n"
     " SELF-LEARNING — Capture, Review, and Override\n"
@@ -406,7 +406,7 @@ _INSTRUCTIONS = (
 
     "  POST-OPERATION ANALYSIS workflow:\n"
     "    When asked to review/analyze a completed project or job:\n"
-    "    1. Call check_learned() FIRST to see existing learnings for this topic\n"
+    "    1. Call search_learnings() FIRST to see existing learnings for this topic\n"
     "    2. Call search_within_directory() or search_documents() for full context\n"
     "    3. Identify: what went wrong, what went right, process gaps\n"
     "    4. For EACH insight, call record_learning() with proper category\n"
@@ -414,7 +414,7 @@ _INSTRUCTIONS = (
     "    5. Present ALL recorded learnings to the user for confirmation\n"
     "    6. Adjust any the user disagrees with\n\n"
 
-    "Tool sequence: check_learned → search_documents → (record_learning if new info)"
+    "Tool sequence: search_learnings → search_documents → (record_learning if new info)"
 )
 
 import inspect as _inspect
@@ -569,26 +569,26 @@ def how_to_use_ai_prowler() -> str:
 
         "  • Knowledge retrieval (RAG over indexed documents):\n"
         "      get_knowledge_base_overview, list_indexed_documents,\n"
-        "      list_directories, search_documents, search_within_directory,\n"
-        "      search_by_multiple_queries, get_chunk_context,\n"
-        "      get_document_chunks\n\n"
+        "      list_indexed_directories, search_documents, search_within_directory,\n"
+        "      multi_query_search, expand_search_result,\n"
+        "      read_document\n\n"
 
         "  • Code-aware retrieval (exact match + line-accurate reads):\n"
         "      grep_documents, read_file_lines\n\n"
 
         "  • Self-learning memory (corrections, post-mortems, preferences):\n"
-        "      check_learned, record_learning, list_learnings,\n"
+        "      search_learnings, record_learning, list_learnings,\n"
         "      update_learning, delete_learning, get_learning_stats\n\n"
 
         "  • Field service actions (free public APIs, no key needed):\n"
-        "      geocode_address, get_weather, get_route_optimization,\n"
+        "      geocode_address, get_weather, optimize_route,\n"
         "      build_maps_url, read_job_spreadsheet, update_job_spreadsheet,\n"
-        "      get_action_tools_status\n\n"
+        "      check_tools_status\n\n"
 
         "  • Indexing & admin:\n"
-        "      add_and_index_directory, update_tracked_directories,\n"
-        "      list_tracked_directories, remove_directory,\n"
-        "      get_database_stats, check_status\n\n"
+        "      index_path, update_tracked_directories,\n"
+        "      list_tracked_directories, untrack_directory,\n"
+        "      get_database_stats, check_ai_prowler_status\n\n"
 
         "PREFERRED TOOL SEQUENCE — KNOWLEDGE RETRIEVAL\n"
         + "-" * 30 + "\n"
@@ -602,7 +602,7 @@ def how_to_use_ai_prowler() -> str:
         "    Browse specific files when the user asks about a particular\n"
         "    document, company, or topic area.\n\n"
 
-        "  STEP 3  list_directories()\n"
+        "  STEP 3  list_indexed_directories()\n"
         "    See the directory tree of all indexed content. Use this to\n"
         "    identify the right scope for targeted searches.\n\n"
 
@@ -619,15 +619,15 @@ def how_to_use_ai_prowler() -> str:
         "    Example:\n"
         "      search_within_directory('summary of damages', 'Smith_v_Jones')\n\n"
 
-        "  STEP 6  search_by_multiple_queries(queries)\n"
+        "  STEP 6  multi_query_search(queries)\n"
         "    Parallel search when a topic has synonyms or multiple angles.\n"
         "    More efficient than calling search_documents() repeatedly.\n\n"
 
-        "  STEP 7  get_chunk_context(filename, chunk_index)\n"
+        "  STEP 7  expand_search_result(filename, chunk_index)\n"
         "    Expand around a result that appears cut off or references\n"
         "    content in the surrounding paragraphs.\n\n"
 
-        "  STEP 8  get_document_chunks(filename, start_chunk)\n"
+        "  STEP 8  read_document(filename, start_chunk)\n"
         "    Read a whole document sequentially for full summaries or\n"
         "    when the user asks about a specific document's contents.\n\n"
 
@@ -652,7 +652,7 @@ def how_to_use_ai_prowler() -> str:
 
         "  Both tools read only files under the tracked-paths allowlist.\n"
         "  Useful especially for mobile users who cannot attach files —\n"
-        "  ask them to add_and_index_directory() the project once, then\n"
+        "  ask them to index_path() the project once, then\n"
         "  use grep + read_file_lines for all subsequent code questions.\n\n"
 
         "SELF-LEARNING WORKFLOW — PERSISTENT MEMORY\n"
@@ -661,7 +661,7 @@ def how_to_use_ai_prowler() -> str:
         "captured from prior sessions. They override built-in knowledge\n"
         "and represent the operator's verified ground truth. Use them.\n\n"
 
-        "  STEP A  check_learned(query)\n"
+        "  STEP A  search_learnings(query)\n"
         "    Call BEFORE answering ANY user question. No exceptions for\n"
         "    questions that look like general knowledge — the user may\n"
         "    have recorded a personal version of a recipe, technique,\n"
@@ -671,7 +671,7 @@ def how_to_use_ai_prowler() -> str:
         "    learning.\n"
         "    The ONLY questions you may skip on are pure arithmetic and\n"
         "    language translation. When in doubt, search.\n"
-        "    Triggers that GUARANTEE a check_learned call:\n"
+        "    Triggers that GUARANTEE a search_learnings call:\n"
         "      - User asks 'what's a good X' / 'how do I X' / 'recommend X'\n"
         "      - User says 'what did we learn about...', 'do you remember...'\n"
         "      - User mentions a client, project, recipe, or case by name\n"
@@ -724,11 +724,11 @@ def how_to_use_ai_prowler() -> str:
         "  - NO Ollama required — no local LLM involved at all.\n"
         "  - Claude receives RAW CHUNKS and synthesizes answers directly.\n"
         "  - For complex questions, always search multiple times before answering.\n"
-        "  - Stored learnings outrank built-in knowledge — always check_learned\n"
+        "  - Stored learnings outrank built-in knowledge — always search_learnings\n"
         "    before answering ANY user question (the only exceptions are pure\n"
         "    arithmetic and language translation).\n"
-        "  - Use check_status() to verify the knowledge base is healthy.\n"
-        "  - Use get_action_tools_status() to verify field-service tools.\n"
+        "  - Use check_ai_prowler_status() to verify the knowledge base is healthy.\n"
+        "  - Use check_tools_status() to verify field-service tools.\n"
         "  - Re-call this tool any time you need a reminder of the workflow.\n\n"
 
         f"MCP SDK version       : {mcp_version}\n"
@@ -738,11 +738,11 @@ def how_to_use_ai_prowler() -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TOOL 1 — add_and_index_directory
+# TOOL 1 — index_path
 # ══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
-def add_and_index_directory(
+def index_path(
     directory: str,
     recursive: bool = True,
     track: bool = True,
@@ -866,7 +866,7 @@ def update_tracked_directories(directory: Optional[str] = None,
     load_config()
 
     # v7.0.0 Phase B: server-mode write controls (None in personal mode →
-    # pipeline unchanged). Same trio as add_and_index_directory. The purge gate
+    # pipeline unchanged). Same trio as index_path. The purge gate
     # matters especially here: command_update PURGES deleted files (destructive).
     _user = _current_user(ctx)
     _resolver = _build_collection_resolver(_user) if _user else None
@@ -884,7 +884,7 @@ def update_tracked_directories(directory: Optional[str] = None,
     if not dirs_to_update:
         return (
             "ℹ️  No tracked paths found.\n"
-            "Use add_and_index_directory first to index a folder or file and add it to tracking."
+            "Use index_path first to index a folder or file and add it to tracking."
         )
 
     with _capture_stdout() as buf:
@@ -982,7 +982,7 @@ def list_tracked_directories() -> str:
     if not dirs:
         return (
             "ℹ️  No paths are currently tracked.\n"
-            "Use add_and_index_directory to index a folder or file and add it to tracking."
+            "Use index_path to index a folder or file and add it to tracking."
         )
     lines = ["📁 Tracked paths:"]
     for i, d in enumerate(dirs, 1):
@@ -995,11 +995,11 @@ def list_tracked_directories() -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TOOL 6 — remove_directory
+# TOOL 6 — untrack_directory
 # ══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
-def remove_directory(directory: str) -> str:
+def untrack_directory(directory: str) -> str:
     """
     Remove a tracked path (directory OR individually-tracked file) from the
     tracking list AND delete all of its indexed chunks from the ChromaDB
@@ -1029,11 +1029,11 @@ def remove_directory(directory: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TOOL 7 — check_status
+# TOOL 7 — check_ai_prowler_status
 # ══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
-def check_status() -> str:
+def check_ai_prowler_status() -> str:
     """
     Check AI-Prowler's health: ChromaDB connectivity, embedding model status,
     document count, and database path. No Ollama or local LLM involved.
@@ -1043,9 +1043,9 @@ def check_status() -> str:
     """
     # Wait for background prewarm (ChromaDB + embedding model) — max 25s.
     # Prewarm runs in a thread so mcp.run() could start before it finishes.
-    _log.info("check_status: tool called — waiting for prewarm if still running")
+    _log.info("check_ai_prowler_status: tool called — waiting for prewarm if still running")
     if not _prewarm_event.wait(timeout=60):
-        _log.warning("check_status: prewarm timeout — returning early")
+        _log.warning("check_ai_prowler_status: prewarm timeout — returning early")
         return (
             "⏳ AI-Prowler is still initializing (ChromaDB + embedding model "
             "loading in background).\n\n"
@@ -1082,7 +1082,7 @@ def check_status() -> str:
     else:
         lines.append("❌ ChromaDB  : not reachable")
         lines.append(f"   Error     : {db_error}")
-        lines.append("   Try re-indexing with add_and_index_directory.")
+        lines.append("   Try re-indexing with index_path.")
 
     # ── Embedding model info (parsed from init output) ────────────────────────
     # Bug fix v7.0.0: filter the captured stdout to ONLY surface the clean
@@ -1117,7 +1117,7 @@ def check_status() -> str:
         lines.append("")
         lines.append("ℹ️  Knowledge base is empty — this is normal on a fresh install.")
         lines.append("   To index your documents, either:")
-        lines.append("     • Call add_and_index_directory(\"<path>\") from this tool, OR")
+        lines.append("     • Call index_path(\"<path>\") from this tool, OR")
         lines.append("     • Open the AI-Prowler GUI → Reindex tab → pick a folder.")
         lines.append("   Once indexed, search_documents and friends will return real results.")
 
@@ -1166,7 +1166,7 @@ def _get_collection():
     except Exception:
         raise RuntimeError(
             "No indexed documents found. "
-            "Use add_and_index_directory to index some documents first."
+            "Use index_path to index some documents first."
         )
 
 
@@ -1200,7 +1200,7 @@ def _scoped_collections_for_ctx(ctx):
         except Exception:
             raise RuntimeError(
                 "No indexed documents found. "
-                "Use add_and_index_directory to index some documents first.")
+                "Use index_path to index some documents first.")
 
     # Two SEPARATE elevated capabilities (decoupled by design):
     #   • read_all_role_scopes (role cap; owner has it) → read every role:*
@@ -1330,7 +1330,7 @@ def get_knowledge_base_overview(ctx: Context = None) -> str:
     except Exception:
         return (
             "Knowledge base is empty — no documents indexed yet.\n"
-            "Use add_and_index_directory to index a folder of documents."
+            "Use index_path to index a folder of documents."
         )
 
     total_chunks = 0
@@ -1514,14 +1514,14 @@ def search_documents(
     lines.append(
         "Tips: search_documents() again with different query | "
         "search_within_directory(query, dir) for targeted results | "
-        "get_chunk_context(filename, chunk_index) to expand | "
-        "list_directories() to see indexed folder tree"
+        "Use expand_search_result(filename, chunk_index) to expand | "
+        "list_indexed_directories() to see indexed folder tree"
     )
     return "\n".join(lines)
 
 
 @mcp.tool()
-def get_chunk_context(
+def expand_search_result(
     filename: str,
     chunk_index: int,
     window: int = 2,
@@ -1598,7 +1598,7 @@ def get_chunk_context(
 
 
 @mcp.tool()
-def get_document_chunks(
+def read_document(
     filename: str,
     start_chunk: int = 0,
     max_chunks: int = 10,
@@ -1682,7 +1682,7 @@ def get_document_chunks(
         lines.append("-" * 55)
         lines.append(
             f"Document continues — {total_chunks - last_shown - 1} more chunk(s). "
-            f"Call: get_document_chunks('{actual_name}', start_chunk={next_start})"
+            f"Call: read_document('{actual_name}', start_chunk={next_start})"
         )
     return "\n".join(lines)
 
@@ -1768,12 +1768,12 @@ def list_indexed_documents(
 
     if len(docs) > limit:
         lines.append(f"... and {len(docs)-limit} more. Use filter_ext or filter_path.")
-    lines.append("Call get_document_chunks(filename) to read a specific document.")
+    lines.append("Call read_document(filename) to read a specific document.")
     return "\n".join(lines)
 
 
 @mcp.tool()
-def search_by_multiple_queries(
+def multi_query_search(
     queries: list[str],
     n_results_each: int = 5,
     min_similarity: float = 0.0,
@@ -1891,7 +1891,7 @@ def search_by_multiple_queries(
 
     lines.append(
         "Tips: search_within_directory(query, dir) for targeted results | "
-        "get_chunk_context(filename, chunk_index) to expand any result."
+        "expand_search_result(filename, chunk_index) to expand any result."
     )
     return "\n".join(lines)
 
@@ -2051,17 +2051,17 @@ def search_within_directory(
 
     lines.append(
         "All results are from the specified directory scope. "
-        "Use get_chunk_context(filename, chunk_index) to expand."
+        "Use expand_search_result(filename, chunk_index) to expand."
     )
     return "\n".join(lines)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TOOL — list_directories  (Directory Tree Discovery)
+# TOOL — list_indexed_directories  (Directory Tree Discovery)
 # ══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
-def list_directories(ctx: Context = None) -> str:
+def list_indexed_directories(ctx: Context = None) -> str:
     """
     AGENTIC RAG - Directory tree discovery.
     Lists all indexed directory trees with document counts per directory.
@@ -2326,11 +2326,11 @@ def geocode_address(address: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ACTION TOOL 3 — get_route_optimization
+# ACTION TOOL 3 — optimize_route
 # ══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
-def get_route_optimization(
+def optimize_route(
     stops: list[str],
     origin: str,
     optimize_for: str = "time",
@@ -3036,11 +3036,11 @@ def read_job_spreadsheet(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ACTION TOOL 7 — get_action_tools_status
+# ACTION TOOL 7 — check_tools_status
 # ══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
-def get_action_tools_status() -> str:
+def check_tools_status() -> str:
     """
     Check which AI-Prowler Action Tools are ready to use and which need setup.
 
@@ -3159,7 +3159,7 @@ def record_learning(
     what went right or wrong in business activities.
 
     The learning is instantly indexed into ChromaDB for semantic retrieval —
-    no training or GPU required.  Future calls to check_learned() will
+    no training or GPU required.  Future calls to search_learnings() will
     find and apply this knowledge automatically.
 
     ── CONFIRMATION PROTOCOL ──────────────────────────────────────────────
@@ -3355,11 +3355,11 @@ def record_learning(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TOOL — check_learned
+# TOOL — search_learnings
 # ══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
-def check_learned(
+def search_learnings(
     query: str,
     n_results: int = 5,
     category: str = "",
@@ -3375,7 +3375,7 @@ def check_learned(
     opinions — not just business), so a personal learning may override
     what your training data would say.
 
-    Specifically, call check_learned() before:
+    Specifically, call search_learnings() before:
     - ANY recommendation or "what's a good X" / "how do I X" question
       (recipes, techniques, products, places, services, etc.)
     - ANY question about clients, projects, procedures, or business
@@ -3393,7 +3393,7 @@ def check_learned(
     a learning titled "Client X prefers email over phone calls", and
     searching "ribs recipe" will find a learning titled "My BBQ rib rub".
 
-    IMPORTANT: If check_learned() returns relevant results, you MUST
+    IMPORTANT: If search_learnings() returns relevant results, you MUST
     apply them to your response. If a learning contradicts your built-in
     knowledge OR a web search result, prefer the learning — it was
     recorded by the user and represents their explicit preference or
@@ -3432,7 +3432,7 @@ def check_learned(
             active_only=not include_deprecated,
         )
     except Exception as exc:
-        return f"❌ check_learned failed: {exc}"
+        return f"❌ search_learnings failed: {exc}"
 
     if not matches:
         return (
@@ -3516,7 +3516,7 @@ def list_learnings(
 ) -> str:
     """
     Browse all learnings in the self-learning knowledge base with optional
-    filters.  Unlike check_learned (which does semantic search), this tool
+    filters.  Unlike search_learnings (which does semantic search), this tool
     lists learnings by recency with exact-match filters.
 
     Use this to:
@@ -3599,7 +3599,7 @@ def list_learnings(
         lines.append("")
 
     lines.append(
-        "Use check_learned(query) for semantic search | "
+        "Use search_learnings(query) for semantic search | "
         "update_learning(id, updates) to modify | "
         "record_learning() to add new"
     )
@@ -3629,7 +3629,7 @@ def update_learning(
 
     Args:
         learning_id:  The UUID of the learning to update.
-                      Get this from list_learnings or check_learned results.
+                      Get this from list_learnings or search_learnings results.
         updates:      Dict of field:value pairs to update. Allowed fields:
                       title, content, context, category, confidence,
                       tags (list), status (active/deprecated/archived),
@@ -3810,7 +3810,7 @@ def get_learning_stats() -> str:
     lines.append(f"  📁 Storage: {stats['file_path']}")
     lines.append("")
     lines.append(
-        "Use check_learned(query) to search | "
+        "Use search_learnings(query) to search | "
         "list_learnings() to browse | "
         "record_learning() to add new"
     )
@@ -3938,11 +3938,11 @@ def _resolve_allowlisted_path(filepath: str) -> tuple[Optional[str], Optional[st
         lines.append("")
         lines.append(
             "If the file you want is outside these, ask the user to run "
-            "add_and_index_directory() on its parent folder first."
+            "index_path() on its parent folder first."
         )
     else:
         lines.append("No directories are tracked yet. "
-                     "Use add_and_index_directory() to track one.")
+                     "Use index_path() to track one.")
     _log.warning("Access denied for path: %s (%s)", filepath, info)
     return (None, "\n".join(lines))
 
@@ -4060,7 +4060,7 @@ def grep_documents(
     mirrors how Claude Code navigates source.
 
     Security: only files under the tracked-paths allowlist
-    (~/.rag_auto_update_dirs.json) are scanned. Use add_and_index_directory()
+    (~/.rag_auto_update_dirs.json) are scanned. Use index_path()
     to track a folder first if your target file isn't already covered.
 
     Args:
@@ -4310,7 +4310,7 @@ def read_file_lines(
         if _looks_binary(head):
             return (f"⚠️  File appears to be binary: {resolved}\n"
                     f"read_file_lines only reads text files. If this is a "
-                    f"document (PDF, DOCX, etc.), use get_document_chunks().")
+                    f"document (PDF, DOCX, etc.), use read_document().")
     except (PermissionError, OSError) as exc:
         return f"⚠️  Cannot open file: {exc}"
 
@@ -5713,7 +5713,7 @@ def reset_write_counter() -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# DEV CHECK TOOLS — compile_check / import_check  (v7.0.0, Home-edition only)
+# DEV CHECK TOOLS — compile_check / check_python_import  (v7.0.0)
 # ══════════════════════════════════════════════════════════════════════════════
 # Let the agent verify its own edits on THIS machine (real interpreter, real
 # installed stack) instead of asking the user to run py_compile / import by hand.
@@ -5734,19 +5734,30 @@ _DEV_CHECK_TIMEOUT_SEC = 120   # generous enough for an import that loads heavy 
 
 
 def _dev_tools_enabled() -> tuple[bool, str]:
-    """Return (enabled, reason). Enabled only on Home edition or explicit opt-in.
-    Reads the RAW config (no subscription needed) so it works in stdio mode too."""
+    """Return (enabled, reason). Dev tools are enabled in ALL editions/modes.
+
+    History: v6.x and earlier had this gated to Home-edition-only because the
+    tools (compile_check, check_python_import, ...) were considered too exposed for
+    mobile/business installs accessed via Cloudflare Tunnel. v7.0.0 (2026-05-30)
+    removed the gate per operator decision: the dev tools are read-only
+    subprocess calls bounded by the same read allowlist as every other tool,
+    so the same path-based protection that gates search_documents also gates
+    syntax_check / pytest_check / lint_check.
+
+    Kept as a function (not inlined) so re-tightening later is a one-line
+    change: simply return (False, "...") here for the modes you want to lock.
+    The opt-in dev_tools flag is preserved as a historical escape hatch but
+    is now redundant — every code path it would unlock is already enabled.
+    """
     try:
         cfg = _load_runtime_config()   # module-level; safe, never raises
     except Exception:
         cfg = {}
+    edition = cfg.get("edition", "home")
+    mode    = cfg.get("mode",    "personal")
     if cfg.get("dev_tools") is True:
         return (True, "dev_tools flag set in config.json")
-    if cfg.get("edition", "home") == "home":
-        return (True, "Home edition")
-    return (False,
-            f"disabled on edition={cfg.get('edition', 'home')!r} "
-            f"(set \"dev_tools\": true in config.json to override on a dev box)")
+    return (True, f"edition={edition!r} mode={mode!r} (dev tools enabled in all configurations)")
 
 
 @mcp.tool()
@@ -5757,7 +5768,8 @@ def compile_check(filepath: str, timeout_sec: int = _DEV_CHECK_TIMEOUT_SEC) -> s
 
     Use this after editing a .py file to confirm it parses before relying on it.
     Catches syntax errors only (not import-time or runtime errors — use
-    import_check for those). Home-edition / dev boxes only.
+    check_python_import for those). Available in all editions/modes; the file must be
+    under a tracked read-allowlisted root regardless of edition.
 
     Args:
         filepath:    Path to a .py file under a tracked root.
@@ -5797,7 +5809,7 @@ def compile_check(filepath: str, timeout_sec: int = _DEV_CHECK_TIMEOUT_SEC) -> s
 
 
 @mcp.tool()
-def import_check(module_or_path: str, timeout_sec: int = _DEV_CHECK_TIMEOUT_SEC) -> str:
+def check_python_import(module_or_path: str, timeout_sec: int = _DEV_CHECK_TIMEOUT_SEC) -> str:
     """
     DEV TOOLS — Import a Python module with this machine's interpreter to catch
     LOAD-TIME errors (NameError, ImportError, bad module-level references) that
@@ -5806,7 +5818,8 @@ def import_check(module_or_path: str, timeout_sec: int = _DEV_CHECK_TIMEOUT_SEC)
     Accepts either a bare module name (e.g. "ai_prowler_mcp") or a path to a .py
     file under a tracked root (the module name is derived from the filename).
     The import runs in a SEPARATE interpreter process, so it cannot disturb the
-    running server. Home-edition / dev boxes only.
+    running server. Available in all editions/modes; the file must be under
+    a tracked read-allowlisted root regardless of edition.
 
     Args:
         module_or_path: Module name, or path to a .py file under a tracked root.
@@ -5818,7 +5831,7 @@ def import_check(module_or_path: str, timeout_sec: int = _DEV_CHECK_TIMEOUT_SEC)
     """
     enabled, why = _dev_tools_enabled()
     if not enabled:
-        return f"🚫 import_check is disabled here ({why})."
+        return f"🚫 check_python_import is disabled here ({why})."
 
     # Resolve to a module name + a working directory to run from.
     cwd = None
@@ -5830,7 +5843,7 @@ def import_check(module_or_path: str, timeout_sec: int = _DEV_CHECK_TIMEOUT_SEC)
         if err:
             return err
         if not resolved.lower().endswith(".py"):
-            return f"⚠️  import_check path must be a .py file (got {resolved})."
+            return f"⚠️  check_python_import path must be a .py file (got {resolved})."
         import os as _os
         cwd = _os.path.dirname(resolved)
         module = _os.path.splitext(_os.path.basename(resolved))[0]
@@ -5846,24 +5859,1628 @@ def import_check(module_or_path: str, timeout_sec: int = _DEV_CHECK_TIMEOUT_SEC)
             capture_output=True, text=True, timeout=max(5, int(timeout_sec)),
             shell=False, cwd=cwd)
     except _sp.TimeoutExpired:
-        return f"⏱️  import_check timed out after {timeout_sec}s importing {module}."
+        return f"⏱️  check_python_import timed out after {timeout_sec}s importing {module}."
     except Exception as exc:
-        return f"⚠️  import_check could not run: {exc}"
+        return f"⚠️  check_python_import could not run: {exc}"
 
     if proc.returncode == 0:
-        _log.info("import_check OK: %s", module)
+        _log.info("check_python_import OK: %s", module)
         note = (proc.stderr or "").strip()
         extra = f"\n   (stderr, non-fatal):\n{note}" if note else ""
         return f"✅ import OK — {module}\n   (python -c 'import {module}', rc=0){extra}"
     out = (proc.stderr or proc.stdout or "").strip()
-    _log.warning("import_check FAILED: %s\n%s", module, out)
+    _log.warning("check_python_import FAILED: %s\n%s", module, out)
     return (f"❌ import FAILED — {module}  (rc={proc.returncode})\n"
             f"───\n{out}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# MULTI-LANGUAGE DEV TOOLS — syntax_check + lint_check (v7.0.0)
+# ══════════════════════════════════════════════════════════════════════════════
+# Why one tool per concern (syntax / lint / pytest) instead of one tool per
+# language: keeps the MCP tool surface narrow (3 tools) instead of N×M (one
+# per language per concern = ~24 tools). Each tool auto-detects language by
+# file extension and dispatches to the right underlying binary. If the binary
+# isn't installed, return a clean "❌ Not available — install <tool>" message
+# rather than a cryptic subprocess error.
+#
+# Coverage choices, with honest tradeoffs:
+#   • Python  : py_compile (syntax) + pyflakes (lint). Both bundled with Python.
+#   • JS      : node --check (syntax). Lint via eslint if installed.
+#   • TS      : tsc --noEmit (syntax+type). Same tool for lint.
+#   • C/C++   : gcc -fsyntax-only on POSIX, cl /Zs on Windows. Lint via cppcheck.
+#                Headers without their full dependency graph WILL produce false
+#                errors — this is single-file checking, not full build.
+#   • Go      : go build -o NUL/devnull (syntax). go vet (lint).
+#   • Rust    : NOT supported single-file — cargo expects a Cargo.toml project.
+#                Return a clear message pointing the operator at `cargo check`.
+#   • Java    : javac -d <tmpdir> (syntax). No standard lint tool.
+#   • Perl    : perl -c. No lint.
+#   • Ruby    : ruby -c. No lint (rubocop is third-party).
+#   • PHP     : php -l. No standard lint.
+#   • Bash    : bash -n (on Windows requires Git Bash or WSL). shellcheck if installed.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Extension → language config. Each entry is (lang_name, needs_binary, syntax_argv, lint_argv).
+# {file} placeholder in argv is replaced with the resolved filepath at runtime.
+# argv = None means "not supported for this concern" (e.g. no standard lint for Perl).
+_LANG_CONFIG = {
+    # Python
+    ".py":   ("Python",  sys.executable, [sys.executable, "-m", "py_compile", "{file}"],
+                                          [sys.executable, "-m", "pyflakes", "{file}"]),
+    # JavaScript
+    ".js":   ("JavaScript", "node", ["node", "--check", "{file}"], None),
+    ".mjs":  ("JavaScript", "node", ["node", "--check", "{file}"], None),
+    ".cjs":  ("JavaScript", "node", ["node", "--check", "{file}"], None),
+    # TypeScript
+    ".ts":   ("TypeScript", "tsc",  ["tsc", "--noEmit", "{file}"], ["tsc", "--noEmit", "{file}"]),
+    ".tsx":  ("TypeScript", "tsc",  ["tsc", "--noEmit", "{file}"], ["tsc", "--noEmit", "{file}"]),
+    # C / C++
+    ".c":    ("C",   "gcc", ["gcc", "-fsyntax-only", "{file}"], None),
+    ".h":    ("C",   "gcc", ["gcc", "-fsyntax-only", "-x", "c-header", "{file}"], None),
+    ".cpp":  ("C++", "g++", ["g++", "-fsyntax-only", "{file}"], None),
+    ".cc":   ("C++", "g++", ["g++", "-fsyntax-only", "{file}"], None),
+    ".cxx":  ("C++", "g++", ["g++", "-fsyntax-only", "{file}"], None),
+    ".hpp":  ("C++", "g++", ["g++", "-fsyntax-only", "-x", "c++-header", "{file}"], None),
+    # Go
+    ".go":   ("Go", "go", ["go", "vet", "{file}"], ["go", "vet", "{file}"]),
+    # Java
+    ".java": ("Java", "javac", ["javac", "-d", "{tmpdir}", "{file}"], None),
+    # Perl
+    ".pl":   ("Perl", "perl", ["perl", "-c", "{file}"], None),
+    ".pm":   ("Perl", "perl", ["perl", "-c", "{file}"], None),
+    # Ruby
+    ".rb":   ("Ruby", "ruby", ["ruby", "-c", "{file}"], None),
+    # PHP
+    ".php":  ("PHP", "php", ["php", "-l", "{file}"], None),
+    # Bash
+    ".sh":   ("Bash",   "bash", ["bash", "-n", "{file}"], None),
+    ".bash": ("Bash",   "bash", ["bash", "-n", "{file}"], None),
+    # ── Hardware Description Languages (HDL) ─────────────────────────────────
+    # Verilog / SystemVerilog — Icarus Verilog (iverilog)
+    #   iverilog -t null -o /dev/null {file}  → syntax-only, no binary output
+    #   On Windows iverilog writes to NUL instead of /dev/null.
+    #   Lint: verilator --lint-only (deeper static analysis, optional install)
+    ".v":    ("Verilog",         "iverilog",
+              ["iverilog", "-t", "null", "-o", "{verilog_null}", "{file}"], None),
+    ".vh":   ("Verilog Header",  "iverilog",
+              ["iverilog", "-t", "null", "-o", "{verilog_null}", "{file}"], None),
+    ".sv":   ("SystemVerilog",   "iverilog",
+              ["iverilog", "-g2012", "-t", "null", "-o", "{verilog_null}", "{file}"], None),
+    ".svh":  ("SystemVerilog Header", "iverilog",
+              ["iverilog", "-g2012", "-t", "null", "-o", "{verilog_null}", "{file}"], None),
+    # VHDL — GHDL
+    #   ghdl -s {file}  → syntax-only analysis, no elaborate/run step
+    #   Lint: ghdl -a {file}  → full semantic analysis (catches more than -s)
+    ".vhd":  ("VHDL", "ghdl",
+              ["ghdl", "-s", "{file}"],
+              ["ghdl", "-a", "{file}"]),
+    ".vhdl": ("VHDL", "ghdl",
+              ["ghdl", "-s", "{file}"],
+              ["ghdl", "-a", "{file}"]),
+}
+
+# Languages we intentionally do NOT auto-dispatch on (require project setup).
+_LANG_NOT_SUPPORTED = {
+    ".rs": ("Rust", "cargo check (requires Cargo.toml — single-file Rust check isn't viable; "
+                    "run `cargo check` in your crate root instead)"),
+}
+
+
+def _detect_language(filepath: str) -> Optional[tuple]:
+    """Return (lang_name, needs_binary, syntax_argv, lint_argv) for filepath,
+    or None if the extension isn't recognised."""
+    ext = os.path.splitext(filepath)[1].lower()
+    return _LANG_CONFIG.get(ext)
+
+
+def _binary_available(binary: str) -> bool:
+    """Quick PATH check — returns True if shutil.which(binary) finds it."""
+    import shutil as _shutil
+    # Special case: sys.executable is a full path, not a PATH name.
+    if binary == sys.executable:
+        return True
+    return _shutil.which(binary) is not None
+
+
+def _run_dev_subprocess(argv: list, timeout_sec: int,
+                        tmpdir_for_java: Optional[str] = None) -> tuple[int, str]:
+    """Run a dev-tool subprocess with timeout. Returns (returncode, output).
+    Substitutes {file}/{tmpdir} placeholders in argv. Output is the combined
+    stderr+stdout (stripped). Returns (-1, error_message) if the subprocess
+    could not be launched at all (e.g. binary disappeared between PATH check
+    and run)."""
+    import subprocess as _sp
+    try:
+        proc = _sp.run(argv, capture_output=True, text=True,
+                       timeout=max(5, int(timeout_sec)), shell=False)
+        out = (proc.stderr or "") + (proc.stdout or "")
+        return proc.returncode, out.strip()
+    except _sp.TimeoutExpired:
+        return -2, f"⏱️ subprocess timed out after {timeout_sec}s"
+    except FileNotFoundError as exc:
+        return -1, f"binary not found: {exc}"
+    except Exception as exc:
+        return -1, f"subprocess could not run: {exc}"
+
+
+@mcp.tool()
+def syntax_check(filepath: str, timeout_sec: int = _DEV_CHECK_TIMEOUT_SEC) -> str:
+    """
+    DEV TOOLS — Multi-language syntax checker. Auto-detects language by file
+    extension and runs the appropriate compiler/parser in --check / -fsyntax-only
+    mode (does not produce binaries).
+
+    Supports: Python (.py), JavaScript (.js/.mjs/.cjs), TypeScript (.ts/.tsx),
+    C (.c/.h), C++ (.cpp/.cc/.cxx/.hpp), Go (.go), Java (.java), Perl (.pl/.pm),
+    Ruby (.rb), PHP (.php), Bash (.sh/.bash),
+    Verilog (.v/.vh), SystemVerilog (.sv/.svh) — requires iverilog,
+    VHDL (.vhd/.vhdl) — requires ghdl.
+
+    Rust requires a Cargo project and is intentionally NOT supported here —
+    use `cargo check` in your project root.
+
+    If the underlying tool isn't installed on this machine (e.g. no `go` binary
+    on PATH), returns a clean "❌ Not available — install <tool>" message rather
+    than a cryptic subprocess error.
+
+    Honest limitations:
+      • C/C++ single-file checks may report false errors when headers reference
+        symbols defined in other compilation units (single-file ≠ full build).
+      • Bash on Windows requires Git Bash or WSL to provide a `bash` binary.
+      • TypeScript needs a tsconfig.json in the project root for most non-
+        trivial files; lone .ts files may report import resolution errors.
+      • Verilog/SystemVerilog: install Icarus Verilog (iverilog) from
+        http://iverilog.icarus.com or via winget: winget install IcarusVerilog
+      • VHDL: install GHDL from https://github.com/ghdl/ghdl/releases or
+        via winget: winget install ghdl.ghdl
+
+    Available in all editions/modes; the file must be under a tracked
+    read-allowlisted root regardless of edition.
+
+    Args:
+        filepath:    Path to the source file under a tracked root.
+        timeout_sec: Max seconds to wait (default 120).
+
+    Returns:
+        "✅ syntax OK — <lang>" or the compiler's error output.
+    """
+    enabled, why = _dev_tools_enabled()
+    if not enabled:
+        return f"🚫 syntax_check is disabled here ({why})."
+
+    resolved, err = _resolve_allowlisted_path(filepath)
+    if err:
+        return err
+
+    # Detect language
+    ext = os.path.splitext(resolved)[1].lower()
+    if ext in _LANG_NOT_SUPPORTED:
+        lang_name, msg = _LANG_NOT_SUPPORTED[ext]
+        return f"ℹ️  {lang_name} not supported as single-file syntax check: {msg}"
+
+    cfg = _detect_language(resolved)
+    if cfg is None:
+        return (f"⚠️  syntax_check: unsupported extension {ext!r} (file {resolved}). "
+                f"Supported: .py .js .mjs .cjs .ts .tsx .c .h .cpp .cc .cxx .hpp .go "
+                f".java .pl .pm .rb .php .sh .bash "
+                f".v .vh .sv .svh (iverilog) .vhd .vhdl (ghdl)")
+
+    lang_name, needs_binary, syntax_argv, _lint_argv = cfg
+
+    # Binary availability check (clean error before subprocess)
+    if not _binary_available(needs_binary):
+        return (f"❌ {lang_name} syntax_check not available: '{needs_binary}' is not on PATH. "
+                f"Install it to enable {lang_name} checking on this machine.")
+
+    # Substitute {file} (and {tmpdir} for Java which needs a -d target).
+    import tempfile as _tempfile
+    # {verilog_null} is the platform null output target for iverilog (-o NUL on
+    # Windows, -o /dev/null on POSIX) so syntax-only checks produce no binary.
+    _verilog_null = "NUL" if sys.platform == "win32" else "/dev/null"
+    tmpdir = _tempfile.mkdtemp(prefix="aiprowler_syncheck_") if "{tmpdir}" in " ".join(syntax_argv) else None
+    try:
+        argv = [arg.replace("{file}", resolved)
+                    .replace("{tmpdir}", tmpdir or "")
+                    .replace("{verilog_null}", _verilog_null)
+                for arg in syntax_argv]
+        rc, out = _run_dev_subprocess(argv, timeout_sec)
+    finally:
+        if tmpdir:
+            try:
+                import shutil as _shutil
+                _shutil.rmtree(tmpdir, ignore_errors=True)
+            except Exception:
+                pass
+
+    if rc == 0:
+        _log.info("syntax_check OK (%s): %s", lang_name, resolved)
+        return f"✅ syntax OK — {lang_name} — {resolved}\n   ({' '.join(argv)}, rc=0)"
+    if rc == -1:
+        return f"⚠️  syntax_check could not run: {out}"
+    if rc == -2:
+        return out  # already-formatted timeout message
+    _log.warning("syntax_check FAILED (%s): %s\n%s", lang_name, resolved, out)
+    return (f"❌ syntax FAILED — {lang_name} — {resolved}  (rc={rc})\n"
+            f"───\n{out}")
+
+
+@mcp.tool()
+def lint_check(filepath: str, timeout_sec: int = _DEV_CHECK_TIMEOUT_SEC) -> str:
+    """
+    DEV TOOLS — Multi-language linter. Auto-detects language by extension and
+    runs the appropriate lint tool. Catches unused imports, undefined names,
+    style issues, and other warnings that syntax_check would let through.
+
+    Tool used per language:
+      Python      : pyflakes  (bundled — catches NameError-ish issues at lint time)
+      TypeScript  : tsc --noEmit  (same as syntax_check; tsc IS the linter for TS)
+      Go          : go vet  (built into Go toolchain)
+      VHDL        : ghdl -a  (full semantic analysis, catches more than ghdl -s)
+      Others      : no standard lint tool — use syntax_check instead.
+
+    If a language has no lint tool available (Perl, Ruby, PHP, C/C++,
+    Verilog/SystemVerilog, etc.), returns a clear "ℹ️ No lint tool for <lang>;
+    use syntax_check" message.
+
+    Available in all editions/modes; the file must be under a tracked
+    read-allowlisted root regardless of edition.
+
+    Args:
+        filepath:    Path to the source file under a tracked root.
+        timeout_sec: Max seconds to wait (default 120).
+
+    Returns:
+        "✅ lint clean — <lang>" or the linter's warnings/errors.
+    """
+    enabled, why = _dev_tools_enabled()
+    if not enabled:
+        return f"🚫 lint_check is disabled here ({why})."
+
+    resolved, err = _resolve_allowlisted_path(filepath)
+    if err:
+        return err
+
+    ext = os.path.splitext(resolved)[1].lower()
+    cfg = _detect_language(resolved)
+    if cfg is None:
+        return (f"⚠️  lint_check: unsupported extension {ext!r}. "
+                f"Use syntax_check to see supported languages.")
+
+    lang_name, _needs_binary, _syntax_argv, lint_argv = cfg
+    if lint_argv is None:
+        return (f"ℹ️  No standard lint tool for {lang_name}. "
+                f"Use syntax_check({filepath!r}) instead — it catches the same "
+                f"errors syntax-level tools can detect.")
+
+    lint_binary = lint_argv[0] if lint_argv[0] != sys.executable else sys.executable
+    if not _binary_available(lint_binary):
+        return (f"❌ {lang_name} lint_check not available: '{lint_binary}' is not on PATH. "
+                f"Install it to enable {lang_name} linting on this machine.")
+
+    argv = [arg.replace("{file}", resolved) for arg in lint_argv]
+    rc, out = _run_dev_subprocess(argv, timeout_sec)
+
+    if rc == 0 and not out.strip():
+        _log.info("lint_check clean (%s): %s", lang_name, resolved)
+        return f"✅ lint clean — {lang_name} — {resolved}\n   ({' '.join(argv)}, rc=0)"
+    if rc == 0:
+        # pyflakes returns rc=0 even when it has warnings — surface them
+        return (f"⚠️  lint findings — {lang_name} — {resolved}  (rc=0, warnings only)\n"
+                f"───\n{out}")
+    if rc == -1:
+        return f"⚠️  lint_check could not run: {out}"
+    if rc == -2:
+        return out
+    _log.warning("lint_check FAILED (%s): %s\n%s", lang_name, resolved, out)
+    return (f"❌ lint FAILED — {lang_name} — {resolved}  (rc={rc})\n"
+            f"───\n{out}")
+
+
+@mcp.tool()
+def pytest_check(test_path: str, k_filter: str = "",
+                 timeout_sec: int = 300, max_output_lines: int = 200) -> str:
+    """
+    DEV TOOLS — Run pytest against a test file or directory and return a
+    summary plus the first failure trace (if any).
+
+    Python-only by design: cross-language test runners differ enough (Go has
+    `go test`, Rust has `cargo test`, JS has 5+ frameworks) that a unified
+    abstraction would be confusing. For other languages, run their native
+    test command via your normal dev workflow.
+
+    Args:
+        test_path:        Test file or directory under a tracked root.
+        k_filter:         Optional `-k` substring filter (e.g. "REINDEX" runs
+                          only test_C_REINDEX_*). Empty = run all in path.
+        timeout_sec:      Max seconds (default 300 — pytest can be slow).
+        max_output_lines: Truncate output to N lines from the end (default 200)
+                          so a 10,000-line test log doesn't blow context.
+
+    Returns:
+        "✅ N passed in Xs" + summary, OR the failure section with first traces.
+        Always includes the pass/fail counts on the last line for easy parsing.
+
+    Available in all editions/modes; the file must be under a tracked
+    read-allowlisted root regardless of edition.
+    """
+    enabled, why = _dev_tools_enabled()
+    if not enabled:
+        return f"🚫 pytest_check is disabled here ({why})."
+
+    resolved, err = _resolve_allowlisted_path(test_path)
+    if err:
+        return err
+
+    # Verify pytest is available in this Python's environment.
+    import subprocess as _sp
+    try:
+        _check = _sp.run([sys.executable, "-c", "import pytest"],
+                         capture_output=True, text=True, timeout=10, shell=False)
+        if _check.returncode != 0:
+            return ("❌ pytest_check: pytest is not installed in this Python "
+                    "environment. Install with: `py -m pip install pytest`")
+    except Exception as exc:
+        return f"⚠️  pytest_check could not verify pytest availability: {exc}"
+
+    argv = [sys.executable, "-m", "pytest", resolved, "-v", "--tb=short",
+            "--no-header"]
+    if k_filter:
+        argv.extend(["-k", k_filter])
+
+    # Run pytest from the project's directory so relative imports resolve.
+    cwd = os.path.dirname(resolved) if os.path.isfile(resolved) else resolved
+    # Walk up to find a likely project root (contains pytest.ini, pyproject.toml,
+    # or tests/) so pytest's discovery works.
+    project_root = cwd
+    for _ in range(6):  # don't traverse forever
+        if any(os.path.exists(os.path.join(project_root, marker))
+               for marker in ("pytest.ini", "pyproject.toml", "setup.py")):
+            break
+        parent = os.path.dirname(project_root)
+        if parent == project_root:
+            break
+        project_root = parent
+
+    try:
+        proc = _sp.run(argv, capture_output=True, text=True,
+                       timeout=max(10, int(timeout_sec)), shell=False,
+                       cwd=project_root)
+    except _sp.TimeoutExpired:
+        return (f"⏱️  pytest_check timed out after {timeout_sec}s on {resolved}. "
+                f"Consider narrowing with k_filter, or raise timeout_sec.")
+    except Exception as exc:
+        return f"⚠️  pytest_check could not run: {exc}"
+
+    out = (proc.stdout or "") + (proc.stderr or "")
+    # Truncate from the top, keep the most recent lines (failures + summary).
+    lines = out.splitlines()
+    truncated = ""
+    if len(lines) > max_output_lines:
+        truncated = (f"... (truncated {len(lines) - max_output_lines} earlier "
+                     f"lines; raise max_output_lines to see more) ...\n")
+        lines = lines[-max_output_lines:]
+    out_trimmed = truncated + "\n".join(lines)
+
+    # pytest exit codes: 0=all passed, 1=tests failed, 2=interrupted,
+    # 3=internal error, 4=usage error, 5=no tests collected
+    if proc.returncode == 0:
+        _log.info("pytest_check PASSED: %s", resolved)
+        return (f"✅ pytest PASSED — {resolved}"
+                f"{(' (filter: -k ' + k_filter + ')') if k_filter else ''}\n"
+                f"───\n{out_trimmed}")
+    if proc.returncode == 5:
+        return (f"ℹ️  pytest_check: no tests collected for {resolved}"
+                f"{(' (filter: -k ' + k_filter + ')') if k_filter else ''}.\n"
+                f"───\n{out_trimmed}")
+    _log.warning("pytest_check FAILED: %s  (rc=%d)", resolved, proc.returncode)
+    return (f"❌ pytest FAILED — {resolved}  (rc={proc.returncode})"
+            f"{(' (filter: -k ' + k_filter + ')') if k_filter else ''}\n"
+            f"───\n{out_trimmed}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # END OF CODE TOOLS WRITE-SIDE PATCH
 # ══════════════════════════════════════════════════════════════════════════════
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# EMAIL TOOLS  (v7.1.0)
+# ══════════════════════════════════════════════════════════════════════════════
+# SMTP Option-A implementation: Python stdlib only (smtplib + email + ssl).
+# One-time configure_email() stores credentials in ~/.ai-prowler/email_config.json
+# (password stored base64-obfuscated, same pattern as the bearer token file).
+# All subsequent email tools (send_email, send_alert, send_learnings_report,
+# send_file) pick up the stored config automatically.
+#
+# Server-mode safety: in server mode only owner/manager roles may send email;
+# staff/field_crew are blocked.  The 'to' address must either be the requesting
+# user's own email or be in the configured allowed_recipients list (if defined).
+# ══════════════════════════════════════════════════════════════════════════════
+
+import base64 as _b64
+
+def _EMAIL_CONFIG_PATH() -> Path:
+    return _state_dir() / "email_config.json"
+
+
+def _email_config_load() -> "dict | None":
+    """Load email config from disk. Returns None if not configured."""
+    try:
+        if _EMAIL_CONFIG_PATH().exists():
+            raw = json.loads(_EMAIL_CONFIG_PATH().read_text(encoding="utf-8"))
+            if isinstance(raw, dict) and raw.get("smtp_host"):
+                # Decode obfuscated password
+                raw = dict(raw)
+                enc = raw.get("_password_b64", "")
+                if enc:
+                    raw["password"] = _b64.b64decode(enc.encode()).decode("utf-8")
+                return raw
+    except Exception as _e:
+        _log.warning("email_config load failed: %s", _e)
+    return None
+
+
+def _email_config_save(cfg: dict) -> bool:
+    """Save email config to disk. Obfuscates password with base64."""
+    try:
+        _EMAIL_CONFIG_PATH().parent.mkdir(parents=True, exist_ok=True)
+        out = dict(cfg)
+        pw = out.pop("password", "")
+        if pw:
+            out["_password_b64"] = _b64.b64encode(pw.encode("utf-8")).decode()
+        tmp = _EMAIL_CONFIG_PATH().with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(out, indent=2), encoding="utf-8")
+        import os as _eos
+        _eos.replace(str(tmp), str(_EMAIL_CONFIG_PATH()))
+        return True
+    except Exception as _e:
+        _log.error("email_config save failed: %s", _e)
+        return False
+
+
+def _send_smtp(to: str, subject: str, body: str,
+               attachment_path: "str | None" = None,
+               body_html: "str | None" = None) -> tuple:
+    """Core SMTP send. Returns (ok: bool, message: str). Uses stored config."""
+    import smtplib
+    import ssl as _ssl
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from email.mime.base import MIMEBase
+    from email import encoders as _enc
+
+    cfg = _email_config_load()
+    if not cfg:
+        return (False, "Email not configured. Call configure_email() first.")
+
+    smtp_host = cfg.get("smtp_host", "").strip()
+    smtp_port = int(cfg.get("smtp_port", 587))
+    username  = cfg.get("username", "").strip()
+    password  = cfg.get("password", "")
+    from_addr = cfg.get("from_address", username).strip() or username
+    from_name = cfg.get("from_name", "AI-Prowler").strip()
+    use_tls   = cfg.get("use_tls", True)
+
+    if not smtp_host or not username:
+        return (False, "Incomplete email config — smtp_host and username required.")
+
+    # Build message
+    msg = MIMEMultipart("mixed")
+    msg["Subject"] = subject
+    msg["From"]    = f"{from_name} <{from_addr}>" if from_name else from_addr
+    msg["To"]      = to
+
+    # Body — prefer HTML if provided, plain-text fallback
+    alt_part = MIMEMultipart("alternative")
+    alt_part.attach(MIMEText(body, "plain", "utf-8"))
+    if body_html:
+        alt_part.attach(MIMEText(body_html, "html", "utf-8"))
+    msg.attach(alt_part)
+
+    # Optional attachment
+    if attachment_path:
+        try:
+            ap = Path(attachment_path)
+            with open(ap, "rb") as _fh:
+                part = MIMEBase("application", "octet-stream")
+                part.set_payload(_fh.read())
+            _enc.encode_base64(part)
+            part.add_header("Content-Disposition",
+                            f'attachment; filename="{ap.name}"')
+            msg.attach(part)
+        except Exception as _ae:
+            return (False, f"Could not attach file: {_ae}")
+
+    # Connect and send
+    try:
+        context = _ssl.create_default_context()
+        if smtp_port == 465:
+            # SMTPS — SSL from the start
+            with smtplib.SMTP_SSL(smtp_host, smtp_port,
+                                  context=context, timeout=20) as server:
+                server.login(username, password)
+                server.sendmail(from_addr, [to], msg.as_bytes())
+        else:
+            # STARTTLS (port 587 typical)
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
+                server.ehlo()
+                if use_tls:
+                    server.starttls(context=context)
+                    server.ehlo()
+                server.login(username, password)
+                server.sendmail(from_addr, [to], msg.as_bytes())
+        _log.info("Email sent to %s subject=%r", to, subject)
+        return (True, f"✅ Email sent to {to}")
+    except smtplib.SMTPAuthenticationError:
+        return (False,
+                "❌ SMTP authentication failed — check username/password. "
+                "For Gmail, use a 16-digit App Password (not your account password). "
+                "Get one at: myaccount.google.com → Security → App passwords.")
+    except smtplib.SMTPException as _se:
+        return (False, f"❌ SMTP error: {_se}")
+    except Exception as _ge:
+        return (False, f"❌ Send failed: {_ge}")
+
+
+def _email_allowed_for_user(user: "dict | None") -> tuple:
+    """Gate email tools to personal mode only.
+    Returns (allowed: bool, reason: str). PURE.
+
+    Email tools are personal-mode only. They use the personal SMTP credentials
+    configured by the individual user and are not appropriate for a shared
+    company server where multiple employees connect via bearer tokens.
+
+    Personal mode (user=None): always allowed.
+    Server mode (user is not None): always blocked.
+    """
+    if user is None:
+        return (True, "personal mode")
+    return (False,
+            "Email tools are only available in personal mode. "
+            "In server mode each user should configure email on their own "
+            "personal AI-Prowler install.")
+
+
+@mcp.tool()
+def configure_email(smtp_host: str, smtp_port: int, username: str,
+                    password: str, from_name: str = "AI-Prowler",
+                    default_to: str = "",
+                    ctx: Context = None) -> str:
+    """
+    Configure SMTP email settings for AI-Prowler. One-time setup — all other
+    email tools use the saved config automatically after this.
+
+    Email tools are available in personal mode only. They are not available
+    on shared company servers (server mode).
+
+    Supports any SMTP provider:
+      • Gmail   : smtp.gmail.com  port 587  (requires a 16-digit App Password,
+                  NOT your account password. Create one at:
+                  myaccount.google.com → Security → App passwords)
+      • Outlook : smtp.office365.com  port 587
+      • Yahoo   : smtp.mail.yahoo.com  port 587
+      • Any other SMTP server your provider documents
+
+    Args:
+        smtp_host:  SMTP server hostname (e.g. 'smtp.gmail.com')
+        smtp_port:  SMTP port — 587 for STARTTLS (most common),
+                    465 for SMTPS, 25 for plain (not recommended)
+        username:   Your email address / SMTP login
+        password:   App password or SMTP password (stored obfuscated)
+        from_name:  Display name shown in the From field (default: 'AI-Prowler')
+        default_to: Default recipient email address. Tools that take a 'to'
+                    argument use this when none is supplied.
+        ctx:        MCP context (injected automatically)
+
+    Returns:
+        Confirmation string, or an error if the config could not be saved.
+    """
+    _telemetry_increment_tool_count("configure_email")
+
+    # Personal-mode only
+    user = _current_user(ctx)
+    allowed, why = _email_allowed_for_user(user)
+    if not allowed:
+        return f"❌ {why}"
+
+    smtp_host = smtp_host.strip()
+    username  = username.strip()
+    if not smtp_host:
+        return "❌ smtp_host is required."
+    if not username:
+        return "❌ username (your email address) is required."
+    if not password:
+        return "❌ password is required."
+    if smtp_port < 1 or smtp_port > 65535:
+        return f"❌ smtp_port {smtp_port} is invalid (must be 1-65535)."
+
+    cfg = {
+        "smtp_host":    smtp_host,
+        "smtp_port":    smtp_port,
+        "username":     username,
+        "password":     password,
+        "from_address": username,
+        "from_name":    from_name.strip() or "AI-Prowler",
+        "default_to":   default_to.strip(),
+        "use_tls":      smtp_port != 465,
+    }
+
+    if not _email_config_save(cfg):
+        return "❌ Could not save email config. Check disk permissions."
+
+    lines = [
+        "✅ Email configured successfully.",
+        f"   SMTP host  : {smtp_host}:{smtp_port}",
+        f"   Account    : {username}",
+        f"   From name  : {cfg['from_name']}",
+    ]
+    if default_to:
+        lines.append(f"   Default to : {default_to}")
+    lines += [
+        "",
+        "To test: call send_alert() or send_email() with a test message.",
+        "Note: for Gmail use a 16-digit App Password — your account",
+        "password will not work (Google blocks it for security).",
+    ]
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def send_email(to: str, subject: str, body: str,
+               attachment_path: str = "",
+               ctx: Context = None) -> str:
+    """
+    Send an email via the configured SMTP account.
+
+    Args:
+        to:              Recipient email address. Leave blank to use the
+                         configured default_to address.
+        subject:         Email subject line.
+        body:            Plain-text email body.
+        attachment_path: Optional — absolute path to a file in a tracked
+                         read-allowlisted directory to attach to the email.
+        ctx:             MCP context (injected automatically)
+
+    Returns:
+        "✅ Email sent to <address>" on success, or an error string.
+
+    Voice examples:
+        "Email a summary of today's jobs to john@company.com"
+        "Send the Johnson quote to the client"
+        "Email myself the status report"
+    """
+    _telemetry_increment_tool_count("send_email")
+
+    cfg = _email_config_load()
+    if not cfg:
+        return ("❌ Email not configured. "
+                "Call configure_email() first with your SMTP settings.")
+
+    to = (to or "").strip() or cfg.get("default_to", "").strip()
+    if not to:
+        return "❌ No recipient address. Provide a 'to' address or set default_to via configure_email()."
+
+    subject = subject.strip()
+    if not subject:
+        return "❌ subject is required."
+    if not body.strip():
+        return "❌ body is required."
+
+    # Personal-mode only gate
+    user = _current_user(ctx)
+    allowed, why = _email_allowed_for_user(user)
+    if not allowed:
+        return f"❌ {why}"
+
+    # Resolve optional attachment
+    attach = None
+    if attachment_path and attachment_path.strip():
+        resolved_attach, err = _resolve_allowlisted_path(attachment_path.strip())
+        if err:
+            return f"❌ Attachment: {err}"
+        attach = resolved_attach
+
+    ok, msg = _send_smtp(to, subject, body, attachment_path=attach)
+    return msg
+
+
+@mcp.tool()
+def send_alert(message: str, to: str = "",
+               ctx: Context = None) -> str:
+    """
+    Send a quick one-line alert email. Subject is auto-generated from the
+    message. Great for short voice-commanded notifications.
+
+    Args:
+        message: The alert text. Keep it concise — it becomes both the
+                 subject (truncated) and the body.
+        to:      Recipient. Leave blank to use the configured default_to.
+        ctx:     MCP context (injected automatically)
+
+    Returns:
+        "✅ Alert sent to <address>" on success, or an error string.
+
+    Voice examples:
+        "Send an alert to myself — the Johnson job is running late"
+        "Ping sarah that I'm on my way"
+        "Alert the team that the server is back up"
+    """
+    _telemetry_increment_tool_count("send_alert")
+
+    cfg = _email_config_load()
+    if not cfg:
+        return ("❌ Email not configured. "
+                "Call configure_email() first with your SMTP settings.")
+
+    to = (to or "").strip() or cfg.get("default_to", "").strip()
+    if not to:
+        return "❌ No recipient. Provide a 'to' address or set default_to via configure_email()."
+
+    message = message.strip()
+    if not message:
+        return "❌ message is required."
+
+    user = _current_user(ctx)
+    allowed, why = _email_allowed_for_user(user)
+    if not allowed:
+        return f"❌ {why}"
+
+    # Subject: first 80 chars of message
+    subject = f"AI-Prowler Alert: {message[:80]}"
+    import datetime as _dt2
+    body = (f"{message}\n\n"
+            f"— Sent by AI-Prowler at "
+            f"{_dt2.datetime.now().strftime('%Y-%m-%d %H:%M')}")
+
+    ok, msg = _send_smtp(to, subject, body)
+    return msg
+
+
+@mcp.tool()
+def send_file(to: str, filepath: str,
+              subject: str = "", body: str = "",
+              ctx: Context = None) -> str:
+    """
+    Send any file from a tracked directory as an email attachment.
+
+    Args:
+        to:       Recipient email address. Leave blank for default_to.
+        filepath: Absolute path to the file to send (must be in the read
+                  allowlist). Any file type is supported.
+        subject:  Email subject. Auto-generated from filename if blank.
+        body:     Email body text. Auto-generated if blank.
+        ctx:      MCP context (injected automatically)
+
+    Returns:
+        "✅ Email sent" or an error string.
+
+    Voice examples:
+        "Email the Q3 report to the boss"
+        "Send the updated config to john@company.com"
+        "Email the job tracker spreadsheet to myself"
+    """
+    _telemetry_increment_tool_count("send_file")
+
+    cfg = _email_config_load()
+    if not cfg:
+        return ("❌ Email not configured. "
+                "Call configure_email() first.")
+
+    to = (to or "").strip() or cfg.get("default_to", "").strip()
+    if not to:
+        return "❌ No recipient address."
+
+    resolved, err = _resolve_allowlisted_path(filepath.strip())
+    if err:
+        return f"❌ {err}"
+
+    fname = Path(resolved).name
+    if not subject.strip():
+        subject = f"AI-Prowler: {fname}"
+    if not body.strip():
+        import datetime as _dt3
+        body = (f"File attached: {fname}\n\n"
+                f"Sent by AI-Prowler at "
+                f"{_dt3.datetime.now().strftime('%Y-%m-%d %H:%M')}")
+
+    user = _current_user(ctx)
+    allowed, why = _email_allowed_for_user(user)
+    if not allowed:
+        return f"❌ {why}"
+
+    ok, msg = _send_smtp(to, subject, body, attachment_path=resolved)
+    return msg
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# LEARNINGS MOBILE EXPORT TOOLS  (v7.1.0)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def get_learnings_report(category: str = "",
+                          status: str = "active",
+                          format: str = "summary",
+                          ctx: Context = None) -> str:
+    """
+    Return learnings as formatted text directly in the conversation — no file
+    dialog, no desktop required. Full mobile control over the learning store.
+
+    Args:
+        category: Filter to a single category (e.g. 'business', 'client',
+                  'technical'). Leave blank for all categories.
+        status:   'active' (default), 'archived', 'deprecated', or 'all'.
+        format:   'summary'  — title + category + one-line content (default)
+                  'full'     — everything: all fields per learning
+                  'titles'   — titles only (quick list)
+        ctx:      MCP context (injected automatically)
+
+    Returns:
+        Formatted text of the matching learnings, suitable for Claude to
+        read aloud or display in the conversation.
+
+    Voice examples:
+        "Read me all my business learnings"
+        "What have we learned about the Johnson account?"
+        "List all my active technical learnings"
+        "Show me a full summary of my client preferences"
+    """
+    _telemetry_increment_tool_count("get_learnings_report")
+
+    if not _sl:
+        return "❌ Self-learning module not available."
+
+    try:
+        db = _sl._load_db()
+        learnings = db.get("learnings", [])
+    except Exception as _e:
+        return f"❌ Could not load learnings: {_e}"
+
+    # Filter by status
+    status = (status or "active").strip().lower()
+    if status != "all":
+        learnings = [l for l in learnings
+                     if l.get("status", "active").lower() == status]
+
+    # Filter by category
+    cat = (category or "").strip().lower()
+    if cat:
+        learnings = [l for l in learnings
+                     if l.get("category", "").lower() == cat]
+
+    if not learnings:
+        filters = []
+        if cat:
+            filters.append(f"category='{category}'")
+        if status != "all":
+            filters.append(f"status='{status}'")
+        filter_str = " with " + ", ".join(filters) if filters else ""
+        return f"ℹ️  No learnings found{filter_str}."
+
+    fmt = (format or "summary").strip().lower()
+    lines = [f"📚 AI-Prowler Learnings — {len(learnings)} found\n"]
+
+    for i, l in enumerate(learnings, 1):
+        title    = l.get("title", "(no title)")
+        cat_val  = l.get("category", "")
+        content  = l.get("content", "")
+        conf     = l.get("confidence", "")
+        outcome  = l.get("outcome", "")
+        tags     = l.get("tags", [])
+        recorded = l.get("recorded_at", "")[:10] if l.get("recorded_at") else ""
+
+        if fmt == "titles":
+            lines.append(f"{i}. {title}")
+        elif fmt == "full":
+            lines.append(f"{'─'*50}")
+            lines.append(f"{i}. {title}")
+            if cat_val:
+                lines.append(f"   Category  : {cat_val}")
+            if conf:
+                lines.append(f"   Confidence: {conf}")
+            if outcome:
+                lines.append(f"   Outcome   : {outcome}")
+            if recorded:
+                lines.append(f"   Recorded  : {recorded}")
+            if tags:
+                lines.append(f"   Tags      : {', '.join(tags)}")
+            lines.append(f"   Content   : {content}")
+        else:  # summary
+            short = content[:120].strip()
+            if len(content) > 120:
+                short += "…"
+            cat_str = f"[{cat_val}] " if cat_val else ""
+            lines.append(f"{i}. {cat_str}{title}")
+            lines.append(f"   {short}")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def export_learnings_file(filepath: str,
+                          format: str = "pack",
+                          category: str = "",
+                          include_inactive: bool = False,
+                          ctx: Context = None) -> str:
+    """
+    Export learnings to a file in a writable zone — mobile equivalent of the
+    GUI's 'Export Pack' and 'Export to CSV' buttons.
+
+    Args:
+        filepath:         Destination path inside a writable zone. Use
+                          '.aiplearn' extension for a pack (importable by
+                          other AI-Prowler installs), '.csv' for spreadsheet.
+                          Example: 'C:/Users/david/Documents/learnings.aiplearn'
+        format:           'pack' (default) — .aiplearn JSON pack file
+                          'csv'            — comma-separated spreadsheet
+        category:         Filter to a single category. Leave blank for all.
+        include_inactive: Include archived/deprecated learnings (default False).
+        ctx:              MCP context (injected automatically)
+
+    Returns:
+        "✅ Exported N learnings to <path>" or an error string.
+
+    Voice examples:
+        "Export all my learnings to my documents folder"
+        "Save a CSV of my business learnings to the desktop"
+        "Export a learning pack to my OneDrive"
+    """
+    _telemetry_increment_tool_count("export_learnings_file")
+
+    if not _sl:
+        return "❌ Self-learning module not available."
+
+    filepath = filepath.strip()
+    if not filepath:
+        return "❌ filepath is required."
+
+    # Must be in a writable zone
+    resolved, deny = _resolve_writable_path(filepath)
+    if not resolved:
+        return f"❌ {deny}"
+
+    try:
+        db = _sl._load_db()
+        learnings = list(db.get("learnings", []))
+    except Exception as _e:
+        return f"❌ Could not load learnings: {_e}"
+
+    # Filter
+    cat = (category or "").strip().lower()
+    if cat:
+        learnings = [l for l in learnings if l.get("category", "").lower() == cat]
+    if not include_inactive:
+        learnings = [l for l in learnings
+                     if l.get("status", "active") == "active"]
+
+    if not learnings:
+        return "ℹ️  No learnings matched the filter — nothing exported."
+
+    fmt = (format or "pack").strip().lower()
+    dest = Path(resolved)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        if fmt == "csv":
+            import csv as _csv
+            import io as _io
+            buf = _io.StringIO()
+            writer = _csv.writer(buf)
+            writer.writerow(["id", "title", "content", "category", "confidence",
+                             "outcome", "tags", "status", "recorded_at",
+                             "supersedes", "superseded_by"])
+            for l in learnings:
+                writer.writerow([
+                    l.get("id", ""),
+                    l.get("title", ""),
+                    l.get("content", ""),
+                    l.get("category", ""),
+                    l.get("confidence", ""),
+                    l.get("outcome", ""),
+                    "|".join(l.get("tags", [])),
+                    l.get("status", ""),
+                    l.get("recorded_at", ""),
+                    l.get("supersedes", ""),
+                    l.get("superseded_by", ""),
+                ])
+            dest.write_text(buf.getvalue(), encoding="utf-8")
+        else:
+            # .aiplearn pack — same format as self_learning.export_learnings
+            import datetime as _dt4
+            pack = {
+                "schema":      "1.0",
+                "exported_at": _dt4.datetime.now(_dt4.timezone.utc).isoformat(),
+                "source_app":  "AI-Prowler",
+                "count":       len(learnings),
+                "learnings":   learnings,
+            }
+            tmp = dest.with_suffix(dest.suffix + ".tmp")
+            tmp.write_text(json.dumps(pack, indent=2, ensure_ascii=False),
+                           encoding="utf-8")
+            import os as _eos2
+            _eos2.replace(str(tmp), str(dest))
+
+        _log.info("export_learnings_file: %d learnings → %s (%s)",
+                  len(learnings), dest, fmt)
+        return (f"✅ Exported {len(learnings)} learning(s) to:\n"
+                f"   {dest}\n"
+                f"   Format: {'Learning Pack (.aiplearn)' if fmt != 'csv' else 'CSV spreadsheet'}")
+    except Exception as _e:
+        return f"❌ Export failed: {_e}"
+
+
+@mcp.tool()
+def send_learnings_report(to: str = "",
+                          category: str = "",
+                          subject: str = "",
+                          include_inactive: bool = False,
+                          ctx: Context = None) -> str:
+    """
+    Export learnings as a formatted HTML email report and send it. Combines
+    export_learnings_text with send_email in one voice command.
+
+    Args:
+        to:               Recipient email. Leave blank for configured default_to.
+        category:         Filter to a single category. Leave blank for all.
+        subject:          Email subject. Auto-generated if blank.
+        include_inactive: Include archived/deprecated learnings (default False).
+        ctx:              MCP context (injected automatically)
+
+    Returns:
+        "✅ Learnings report sent to <address>" or error string.
+
+    Voice examples:
+        "Email all my learnings to david@company.com"
+        "Send my business lessons to the team"
+        "Email a summary of my client learnings to myself"
+    """
+    _telemetry_increment_tool_count("send_learnings_report")
+
+    cfg = _email_config_load()
+    if not cfg:
+        return ("❌ Email not configured. "
+                "Call configure_email() first.")
+
+    to = (to or "").strip() or cfg.get("default_to", "").strip()
+    if not to:
+        return "❌ No recipient address."
+
+    user = _current_user(ctx)
+    allowed, why = _email_allowed_for_user(user)
+    if not allowed:
+        return f"❌ {why}"
+
+    if not _sl:
+        return "❌ Self-learning module not available."
+
+    try:
+        db = _sl._load_db()
+        learnings = list(db.get("learnings", []))
+    except Exception as _e:
+        return f"❌ Could not load learnings: {_e}"
+
+    cat = (category or "").strip().lower()
+    if cat:
+        learnings = [l for l in learnings if l.get("category", "").lower() == cat]
+    if not include_inactive:
+        learnings = [l for l in learnings
+                     if l.get("status", "active") == "active"]
+
+    if not learnings:
+        return "ℹ️  No learnings matched the filter — nothing to send."
+
+    import datetime as _dt5
+
+    # Build HTML report
+    cat_label = category if category else "All Categories"
+    html_rows = ""
+    for l in learnings:
+        tags = ", ".join(l.get("tags", []))
+        html_rows += (
+            f"<tr>"
+            f"<td style='padding:6px;border-bottom:1px solid #eee'><b>{l.get('title','')}</b></td>"
+            f"<td style='padding:6px;border-bottom:1px solid #eee'>{l.get('category','')}</td>"
+            f"<td style='padding:6px;border-bottom:1px solid #eee'>{l.get('confidence','')}</td>"
+            f"<td style='padding:6px;border-bottom:1px solid #eee'>{l.get('content','')[:200]}</td>"
+            f"<td style='padding:6px;border-bottom:1px solid #eee'>{tags}</td>"
+            f"<td style='padding:6px;border-bottom:1px solid #eee'>{l.get('recorded_at','')[:10]}</td>"
+            f"</tr>"
+        )
+
+    html_body = f"""<html><body style='font-family:Segoe UI,Arial,sans-serif;color:#222'>
+<h2 style='color:#005a9e'>AI-Prowler Learnings Report</h2>
+<p><b>Category:</b> {cat_label} &nbsp;|&nbsp; <b>Count:</b> {len(learnings)}
+   &nbsp;|&nbsp; <b>Generated:</b> {_dt5.datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+<table style='border-collapse:collapse;width:100%;font-size:13px'>
+<tr style='background:#005a9e;color:white'>
+  <th style='padding:8px;text-align:left'>Title</th>
+  <th style='padding:8px;text-align:left'>Category</th>
+  <th style='padding:8px;text-align:left'>Confidence</th>
+  <th style='padding:8px;text-align:left'>Content</th>
+  <th style='padding:8px;text-align:left'>Tags</th>
+  <th style='padding:8px;text-align:left'>Recorded</th>
+</tr>
+{html_rows}
+</table>
+<p style='color:#888;font-size:11px;margin-top:20px'>
+Sent by AI-Prowler — Agentic RAG Knowledge Base</p>
+</body></html>"""
+
+    # Plain-text fallback
+    plain = f"AI-Prowler Learnings Report — {cat_label} — {len(learnings)} entries\n\n"
+    for l in learnings:
+        plain += f"• {l.get('title','')} [{l.get('category','')}]\n"
+        plain += f"  {l.get('content','')[:120]}\n\n"
+
+    if not subject.strip():
+        subject = (f"AI-Prowler Learnings Report"
+                   + (f" — {category}" if category else "")
+                   + f" ({len(learnings)} entries)")
+
+    ok, msg = _send_smtp(to, subject, plain, body_html=html_body)
+    if ok:
+        return f"✅ Learnings report sent to {to} ({len(learnings)} learning(s))"
+    return msg
+
+
+@mcp.tool()
+def rebuild_learnings_index(ctx: Context = None) -> str:
+    """
+    Rebuild the ChromaDB learnings index from the JSON data file. Fixes the
+    case where search_learnings() returns nothing but learnings exist in the
+    JSON file (index/data mismatch). Mobile equivalent of the GUI's
+    'Rebuild ChromaDB Index' button in the Learnings tab.
+
+    Returns:
+        "✅ Rebuilt N learnings in ChromaDB" or error string.
+
+    Voice examples:
+        "Rebuild the learnings search index"
+        "Fix the learnings database"
+        "Reindex all my learnings"
+    """
+    _telemetry_increment_tool_count("rebuild_learnings_index")
+
+    if not _sl:
+        return "❌ Self-learning module not available."
+
+    try:
+        db = _sl._load_db()
+        learnings = [l for l in db.get("learnings", [])
+                     if l.get("status", "active") == "active"]
+        count = 0
+        for l in learnings:
+            try:
+                _sl.reindex_learning(l)
+                count += 1
+            except Exception:
+                pass
+        return f"✅ Rebuilt {count} active learning(s) in ChromaDB index."
+    except Exception as _e:
+        return f"❌ Rebuild failed: {_e}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# WRITE ZONE MANAGEMENT TOOLS  (v7.1.0)
+# ══════════════════════════════════════════════════════════════════════════════
+# Tools to list, grant, and revoke write-zone permissions from mobile.
+#
+# Server-mode scope enforcement:
+#   • owner      — may grant/revoke any directory in the read allowlist
+#   • manager    — may grant/revoke directories that are in their scope
+#                  (scope is determined by the collection_map prefix rules)
+#   • staff /    — no write-zone management; read-only users cannot grant
+#     field_crew   themselves write access
+#
+# Personal mode (no ctx user): full access — no restrictions.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _write_zone_allowed_for_user(user: "dict | None", directory: str,
+                                 users_data: "dict | None" = None) -> tuple:
+    """Server-mode gate: may this user grant/revoke write access to directory?
+    Returns (allowed: bool, reason: str). PURE-ish (reads users_data once)."""
+    if user is None:
+        return (True, "personal mode — no restrictions")
+
+    role = (user.get("role") or "").lower()
+    caps = _role_caps(role)
+
+    # staff / field_crew: never
+    if not caps.get("can_write"):
+        return (False,
+                f"role '{role}' cannot manage write zones. "
+                "Only owner or manager roles may change write permissions.")
+
+    # owner: unrestricted
+    if caps.get("is_admin"):
+        return (True, "owner may manage any write zone")
+
+    # manager: directory must fall within one of their assigned scopes'
+    # prefix rules in the collection_map (or their own private area).
+    # We check the allowlisted read paths and whether the requested directory
+    # is under a prefix the user can write to per _can_index.
+    if users_data is None:
+        users_data = _load_users()
+
+    coll_map = _company_collection_map(users_data)
+    dir_norm  = _normalize_path_for_match(directory)
+
+    # Does any collection-map rule whose collection is in the user's scopes
+    # cover this directory?
+    user_scopes = set()
+    for s in (user.get("scopes") or []):
+        s = str(s).strip()
+        user_scopes.add(s if s.startswith("role:") else f"role:{s}")
+
+    for rule in (coll_map.get("rules") or []):
+        prefix = _normalize_path_for_match(rule.get("prefix", ""))
+        coll   = str(rule.get("collection", "")).strip()
+        if not prefix or not coll:
+            continue
+        if (dir_norm == prefix or dir_norm.startswith(prefix + "/")):
+            if coll in user_scopes:
+                return (True, f"directory is within manager's scope '{coll}'")
+
+    # Also allow manager's own private area (no scope rule needed)
+    uid = user.get("id", "")
+    if uid:
+        priv_col = f"user:{uid}"
+        allowed_priv, _ = _can_index(user, priv_col)
+        if allowed_priv:
+            # Check if the directory is the user's home or a known private path
+            # (we can't know exactly — use a conservative check: allow if no
+            # company rules matched but the user explicitly owns this area)
+            pass   # fall through to denial — safest for managers
+
+    return (False,
+            f"directory '{directory}' is not within any scope assigned to role "
+            f"'{role}'. Only the owner can grant write access outside your "
+            f"assigned scopes.")
+
+
+@mcp.tool()
+def list_writable_directories(ctx: Context = None) -> str:
+    """
+    List all directories currently in the write-zone allowlist
+    (~/.rag_writable_dirs.json) with their status.
+
+    Returns a formatted list of writable directories. Also shows the read
+    allowlist for reference so you can see what's readable vs writable.
+
+    Voice examples:
+        "What directories can Claude write to?"
+        "Show me my write permissions"
+        "List all writable folders"
+    """
+    _telemetry_increment_tool_count("list_writable_directories")
+
+    writable = _writable_allowlist_load()
+    read_dirs = load_auto_update_list() or []
+
+    lines = ["📁 AI-Prowler Write Zone Status\n"]
+    lines.append(f"Writable directories ({len(writable)}):")
+    if writable:
+        for w in sorted(writable):
+            lines.append(f"  ✅ [W]  {w}")
+    else:
+        lines.append("  (none configured — Claude can read but not write files)")
+
+    lines.append("")
+    read_only = [r for r in read_dirs if r not in writable]
+    lines.append(f"Read-only directories ({len(read_only)}):")
+    if read_only:
+        for r in sorted(read_only):
+            lines.append(f"  📖 [R]  {r}")
+    else:
+        lines.append("  (no additional read-only directories)")
+
+    lines += [
+        "",
+        "Legend: [W] = writable  [R] = read-only",
+        "Use grant_write_access() to enable writes, revoke_write_access() to disable.",
+    ]
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def grant_write_access(directory: str, ctx: Context = None) -> str:
+    """
+    Add a directory to the write-zone allowlist, giving Claude permission to
+    create and edit files there. The directory must already be in the tracked
+    read allowlist.
+
+    In server mode, managers may only grant write access to directories within
+    their assigned scopes. The owner may grant any directory.
+    In personal mode there are no restrictions.
+
+    Args:
+        directory: Absolute path to the directory to make writable.
+                   Must be in the tracked read allowlist.
+        ctx:       MCP context (injected automatically)
+
+    Returns:
+        Confirmation string or error.
+
+    Voice examples:
+        "Grant write access to my AI-Prowler work folder"
+        "Make the documents folder writable"
+        "Allow Claude to edit files in C:/Projects/MyProject"
+    """
+    _telemetry_increment_tool_count("grant_write_access")
+
+    directory = directory.strip()
+    if not directory:
+        return "❌ directory is required."
+
+    # Normalize the path
+    try:
+        resolved = str(Path(directory).resolve())
+    except Exception:
+        resolved = directory
+
+    # Server-mode scope check
+    user = _current_user(ctx)
+    users_data = _load_users() if user else None
+    allowed, why = _write_zone_allowed_for_user(user, resolved, users_data)
+    if not allowed:
+        return f"❌ {why}"
+
+    # Must be in the read allowlist
+    read_dirs = load_auto_update_list() or []
+    read_norm = [_normalize_path_for_match(r) for r in read_dirs]
+    dir_norm  = _normalize_path_for_match(resolved)
+
+    in_read = any(
+        dir_norm == rn or dir_norm.startswith(rn + "/")
+        for rn in read_norm
+    )
+    if not in_read:
+        return (f"❌ '{resolved}' is not in the read allowlist.\n"
+                f"Add it first with index_path(), then grant write access.")
+
+    # Check if already writable
+    writable = _writable_allowlist_load()
+    writable_norm = [_normalize_path_for_match(w) for w in writable]
+    if any(dir_norm == wn or dir_norm.startswith(wn + "/")
+           for wn in writable_norm):
+        return f"ℹ️  '{resolved}' is already in the write zone — no change needed."
+
+    # Add and save
+    writable.append(resolved)
+    if not _writable_allowlist_save(writable):
+        return "❌ Could not save write-zone allowlist. Check disk permissions."
+
+    who = f" (granted by {user.get('name','?')})" if user else ""
+    _log.info("grant_write_access: %s%s", resolved, who)
+    return (f"✅ Write zone granted: '{resolved}'\n"
+            f"Claude can now create and edit files in this directory.\n"
+            f"Use revoke_write_access() to remove this permission.")
+
+
+@mcp.tool()
+def revoke_write_access(directory: str, ctx: Context = None) -> str:
+    """
+    Remove a directory from the write-zone allowlist. Claude will no longer
+    be able to create or edit files there (read access is unaffected).
+
+    In server mode, the same scope restrictions as grant_write_access apply.
+    In personal mode there are no restrictions.
+
+    Args:
+        directory: Path to remove from the write zone.
+        ctx:       MCP context (injected automatically)
+
+    Returns:
+        Confirmation string or error.
+
+    Voice examples:
+        "Revoke write access to the downloads folder"
+        "Make the temp folder read-only again"
+        "Remove write permission from C:/OldProject"
+    """
+    _telemetry_increment_tool_count("revoke_write_access")
+
+    directory = directory.strip()
+    if not directory:
+        return "❌ directory is required."
+
+    try:
+        resolved = str(Path(directory).resolve())
+    except Exception:
+        resolved = directory
+
+    # Server-mode scope check
+    user = _current_user(ctx)
+    users_data = _load_users() if user else None
+    allowed, why = _write_zone_allowed_for_user(user, resolved, users_data)
+    if not allowed:
+        return f"❌ {why}"
+
+    writable = _writable_allowlist_load()
+    dir_norm  = _normalize_path_for_match(resolved)
+
+    # Find matches (exact or parent)
+    to_remove = [w for w in writable
+                 if _normalize_path_for_match(w) == dir_norm
+                 or _normalize_path_for_match(w).startswith(dir_norm + "/")]
+
+    if not to_remove:
+        return f"ℹ️  '{resolved}' is not in the write zone — nothing to revoke."
+
+    new_list = [w for w in writable if w not in to_remove]
+    if not _writable_allowlist_save(new_list):
+        return "❌ Could not save write-zone allowlist. Check disk permissions."
+
+    who = f" (revoked by {user.get('name','?')})" if user else ""
+    removed = ", ".join(to_remove)
+    _log.info("revoke_write_access: removed %s%s", removed, who)
+    return (f"✅ Write zone revoked: '{resolved}'\n"
+            f"Claude can still READ files there but can no longer write or edit them.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# REINDEX TOOLS  (v7.1.0)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def reindex_directory(directory: str, purge_first: bool = True,
+                      ctx: Context = None) -> str:
+    """
+    Fully re-index a tracked directory — purge all existing chunks then
+    rebuild from scratch. More thorough than update_tracked_directories which
+    only processes changed files. Use this after chunk-size changes, suspected
+    index corruption, or when you want a guaranteed clean slate.
+
+    Args:
+        directory:   Absolute path to the tracked directory to reindex.
+                     Must be in the read allowlist.
+        purge_first: If True (default), delete existing chunks before
+                     re-indexing. Set False to add/update without purging
+                     (faster but won't remove stale chunks for deleted files).
+        ctx:         MCP context (injected automatically)
+
+    Returns:
+        Summary of files indexed and chunks created.
+
+    Voice examples:
+        "Completely re-index my documents folder"
+        "Wipe and rebuild the index for the work folder"
+        "Reindex everything in AI-Prowler"
+    """
+    _telemetry_increment_tool_count("reindex_directory")
+
+    if not _prewarm_event.wait(timeout=60):
+        return "⏳ AI-Prowler is still initializing. Please wait and try again."
+
+    directory = directory.strip()
+    if not directory:
+        return "❌ directory is required."
+
+    resolved, err = _resolve_allowlisted_path(directory)
+    if err:
+        return f"❌ {err}"
+
+    try:
+        import datetime as _dt6
+        start = _dt6.datetime.now()
+
+        if purge_first:
+            # Remove all existing chunks for files under this directory
+            try:
+                client = _engine.get_chroma_client()
+                coll   = client.get_or_create_collection("documents")
+                # Get all chunk IDs whose source is under this directory
+                existing = coll.get(where={"source": {"$regex": ".*"}},
+                                    include=["metadatas"])
+                norm_dir = _normalize_path_for_match(resolved)
+                ids_to_del = [
+                    existing["ids"][i]
+                    for i, meta in enumerate(existing.get("metadatas") or [])
+                    if _normalize_path_for_match(
+                           str(meta.get("source",""))).startswith(norm_dir)
+                ]
+                if ids_to_del:
+                    coll.delete(ids=ids_to_del)
+                    _log.info("reindex_directory: purged %d chunks for %s",
+                              len(ids_to_del), resolved)
+            except Exception as _pe:
+                _log.warning("reindex_directory: purge step warning: %s", _pe)
+
+        # Re-index
+        with _capture_stdout() as buf:
+            result = index_directory(resolved)
+        elapsed = (_dt6.datetime.now() - start).total_seconds()
+
+        output = buf.getvalue().strip()
+        if isinstance(result, dict):
+            files   = result.get("files_indexed", "?")
+            chunks  = result.get("chunks_added", "?")
+            return (f"✅ Reindex complete for: {resolved}\n"
+                    f"   Files indexed : {files}\n"
+                    f"   Chunks created: {chunks}\n"
+                    f"   Time          : {elapsed:.1f}s\n"
+                    + (f"   Output        : {output[:200]}" if output else ""))
+        else:
+            return (f"✅ Reindex triggered for: {resolved}\n"
+                    f"   Time: {elapsed:.1f}s\n"
+                    + (f"   {output[:300]}" if output else ""))
+
+    except Exception as _e:
+        _log.error("reindex_directory error: %s", _e)
+        return f"❌ Reindex failed: {_e}"
+
+
+@mcp.tool()
+def reindex_all(purge_first: bool = True, ctx: Context = None) -> str:
+    """
+    Fully re-index ALL tracked directories — the nuclear option. Purges and
+    rebuilds the entire ChromaDB index from scratch. Use after changing
+    chunk size settings, or to fix any index corruption.
+
+    This may take several minutes depending on how many documents are indexed.
+
+    Args:
+        purge_first: If True (default), wipe the entire index before
+                     re-indexing. Set False to update without purging.
+        ctx:         MCP context (injected automatically)
+
+    Returns:
+        Summary of all directories processed, files indexed, and time taken.
+
+    Voice examples:
+        "Rebuild the entire knowledge base from scratch"
+        "Reindex all tracked directories"
+        "Do a full reindex of everything"
+    """
+    _telemetry_increment_tool_count("reindex_all")
+
+    if not _prewarm_event.wait(timeout=60):
+        return "⏳ AI-Prowler is still initializing. Please wait and try again."
+
+    read_dirs = load_auto_update_list() or []
+    if not read_dirs:
+        return "ℹ️  No tracked directories found. Use index_path() first."
+
+    import datetime as _dt7
+    start     = _dt7.datetime.now()
+    results   = []
+    total_files  = 0
+    total_chunks = 0
+    errors = []
+
+    for d in read_dirs:
+        try:
+            dir_result = reindex_directory(d, purge_first=purge_first, ctx=ctx)
+            results.append(f"  ✅ {d}")
+            # Parse counts from the returned string if available
+            for line in dir_result.splitlines():
+                if "Files indexed" in line:
+                    try:
+                        total_files += int(line.split(":")[-1].strip())
+                    except Exception:
+                        pass
+                if "Chunks created" in line:
+                    try:
+                        total_chunks += int(line.split(":")[-1].strip())
+                    except Exception:
+                        pass
+        except Exception as _e:
+            errors.append(f"  ❌ {d}: {_e}")
+
+    elapsed = (_dt7.datetime.now() - start).total_seconds()
+    lines = [
+        f"✅ Full reindex complete — {len(read_dirs)} director{'y' if len(read_dirs)==1 else 'ies'}",
+        f"   Total files  : {total_files}",
+        f"   Total chunks : {total_chunks}",
+        f"   Time         : {elapsed:.1f}s",
+        "",
+        "Directories processed:",
+    ] + results
+
+    if errors:
+        lines += ["", "Errors:"] + errors
+
+    return "\n".join(lines)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -1,6 +1,6 @@
 # AI-Prowler — Complete User Guide
 
-**Version 6.0.2**
+**Version 7.0.0**
 
 \---
 
@@ -51,6 +51,8 @@ This produces dramatically better results — equivalent to having a skilled res
 
 **New in v6.0.0 — Self-Learning at full strength:** Claude can record business lessons, fact corrections, project insights, and process improvements into a structured knowledge base — and check that knowledge before answering future questions. Learnings are instant (no GPU training required) and managed through a dedicated 🧠 Learnings tab in the GUI. 6.0 hardens the system with a comprehensive automated test suite (147 tests covering indexing, MCP, GUI, and self-learning), plus several engine reliability fixes for change detection, deletion purging, and database wipes. See Section 20 for full self-learning details.
 
+**New in v7.0.0:** Email sending via `configure_email`, `send_email`, `send_alert`, `send_file`, and `send_learnings_report` using Python's built-in SMTP library. Learnings can be retrieved as inline conversation text (`get_learnings_report`), exported to file (`export_learnings_file`), emailed as an HTML report (`send_learnings_report`), or have their search index rebuilt (`rebuild_learnings_index`). Write zone permissions can be listed, granted, and revoked via MCP (`list_writable_directories`, `grant_write_access`, `revoke_write_access`) with server-mode scope enforcement. Reindex tools `reindex_directory` and `reindex_all` rebuild the ChromaDB index from scratch. `syntax_check` and `lint_check` support Verilog (`.v`/`.vh`), SystemVerilog (`.sv`/`.svh`), and VHDL (`.vhd`/`.vhdl`). See Sections 6.8–6.11 for details.
+
 **New in v6.0.2 — Mobile Write Zones & Code Tools:** Claude can now create, edit, list, back up, and restore files in directories you've explicitly pre-authorized. Nine new MCP code tools (`create_file`, `write_file`, `str_replace_in_file`, `create_directory`, `list_directory`, `copy_to_backup`, `list_backups`, `restore_backup`, `reset_write_counter`) are gated by a double-lock security model — a read allowlist plus a separate writable allowlist — with a per-session 20-write circuit breaker and a hard blocklist that always wins. The new **Update Index** tab UI lets you grant or revoke write access by double-clicking a row, with `[W]` / `[W*]` / `[R]` indicators showing each path's current state. Edits to existing CRLF files now preserve their Windows line endings cleanly. See Section 4 for the Mobile Write Zones UI and Section 6 for the new code tools.
 
 \---
@@ -74,7 +76,7 @@ This produces dramatically better results — equivalent to having a skilled res
 
 ### What the Installer Does NOT Do
 
-**Ollama is not installed or downloaded automatically.** The primary AI interface is Claude Desktop via MCP, which requires no local model. The standalone local-AI Q&A controls are hidden by default in v6.0.0 to keep the GUI clean — most users never need them. If you specifically want offline local-AI Q&A, see the **Advanced / Power-User Features** note in Section 10 for how to re-enable the controls and install Ollama from within AI-Prowler.
+**No large local AI model is installed or downloaded.** The AI interface is Claude Desktop (or Claude.ai for mobile/web) via MCP, which requires no local model. AI-Prowler only runs the small embedding model (~400 MB) and ChromaDB locally; Claude does all the reasoning.
 
 This makes installation significantly faster — typically under 10 minutes vs 30+ minutes previously.
 
@@ -225,6 +227,14 @@ This same auto-purge fires across all entry points: the GUI Update buttons, the 
 
 When you add a file extension to the **Skipped** list in Smart Scan Config and then run indexing, AI-Prowler automatically purges any existing chunks for that extension from the database at the start of the index run. It also removes those files from the tracking database so they are treated as new if you ever move them back to Supported. This keeps the knowledge base consistent with your current extension settings without requiring a full re-index.
 
+### OS / System Junk Filtering (v7.0.0)
+
+The indexer automatically skips operating-system metadata files that have no useful content: `.DS_Store` (macOS Finder), `Thumbs.db` / `ehthumbs.db` / `desktop.ini` (Windows shell), the macOS Spotlight/Trash sentinels, and default-named screenshots (`Screenshot ...png`, `Screen Shot ....jpg`). It also skips `.log` and `.lnk` (Windows shortcut) files. This prevents the knowledge base from being polluted with junk when you index broad folders like Desktop or Documents — no configuration needed.
+
+### Empty Knowledge Base on Fresh Install
+
+On a brand-new install, the knowledge base is empty until you index something. If you ask Claude to run `check_ai_prowler_status` before indexing anything, it now reports a friendly "Knowledge base is empty — this is normal on a fresh install" message with next-step guidance, instead of surfacing low-level model-loading diagnostics. Index a folder (Index Documents tab, or ask Claude to call `index_path`) and the status check will show your real chunk count.
+
 ### Progress Display
 
 The indexing progress display shows:
@@ -334,7 +344,9 @@ This is useful when you want to see what's in the knowledge base before asking C
 
 ## 6\. MCP Tools Reference
 
-AI-Prowler exposes **39 tools** to Claude. They fall into six categories: Agentic RAG (8), Knowledge Base Management (5), Status (1), Small Business Actions (7), Self-Learning (6), and Code Tools (9). Three additional anchor tools — `how_to_use_ai_prowler`, `get_database_stats`, and `check_status` — sit alongside.
+AI-Prowler exposes **57 tools** to Claude. They fall into seven categories: Agentic RAG (8), Knowledge Base Management (5), Status (1), Small Business Actions (7), Self-Learning (6), Code Tools (9), and Dev Tools (5 — added in v7.0.0). Three additional anchor tools — `how_to_use_ai_prowler`, `get_database_stats`, and `check_ai_prowler_status` — sit alongside.
+
+**Edition / mode note (v7.0.0):** Earlier versions gated the dev tools (`compile_check`, `check_python_import`) to Home edition only. v7.0.0 removed that gate entirely — all 57 tools are available in every edition/mode (home / mobile / business; personal / server). The read-allowlist (~/.rag_auto_update_dirs.json) and write-allowlist (~/.rag_writable_dirs.json) remain the primary security gates, applying identically across editions. A child Business license user on their personal laptop install gets the same tool surface as a Home edition user.
 
 ### Agentic RAG Tools (Primary)
 
@@ -435,7 +447,7 @@ Removes a directory from tracking and deletes all its chunks from ChromaDB. Dest
 
 #### `check\\\_status()`
 
-Checks ChromaDB connectivity, reports the chunk count, database path, embedding model status, and tracked directories. No Ollama or local LLM is involved.
+Checks ChromaDB connectivity, reports the chunk count, database path, embedding model status, and tracked directories. No local LLM is involved.
 
 ### Small Business Action Tools
 
@@ -566,7 +578,181 @@ Write-side tools are protected by four independent layers. All four must permit 
 
 **Mobile implications.** Because all four layers are enforced at the MCP server (not at the client), they apply identically to desktop, mobile, and any future Claude client. Granting a Mobile Write Zone via the GUI is a *deliberate desktop action* — the chat channel cannot create or widen a zone, only the GUI can. This is by design: the trust root for "may Claude write here" stays at the keyboard, not in the conversation.
 
+### Dev Tools (v7.0.0)
+
+Five tools that let Claude verify code changes before relying on them — syntax checks, lint checks, import checks, and test runs. All are READ-ONLY operations: they run real subprocesses (Python interpreter, language-specific compilers, pytest, etc.) but never modify files. The subprocesses are bounded by a timeout and run in a separate process so a hung interpreter can't wedge the AI-Prowler server.
+
+**Available in all editions and modes** — there's no Home-vs-Business gate. The same read-allowlist that protects the read tools (~/.rag_auto_update_dirs.json) is the only path gate: the file you check must be under a tracked root.
+
+#### `compile_check(filepath, timeout_sec=120)`
+
+Byte-compiles a Python file with this machine's interpreter to catch SYNTAX errors. Equivalent to `python -m py_compile <file>`. Catches syntax errors only — for load-time errors (NameError, ImportError, bad module references), use `check_python_import` instead. Useful after editing a .py file to confirm it parses before relying on it.
+
+#### `check_python_import(module_or_path, timeout_sec=120)`
+
+Imports a Python module with this machine's interpreter to catch LOAD-TIME errors that `compile_check` misses — undefined module-level names, missing dependencies, bad relative imports. Equivalent to `python -c "import <module>"`. The import runs in a separate process so it cannot disturb the running AI-Prowler server. Accepts either a bare module name or a path to a .py file under a tracked root.
+
+#### `syntax_check(filepath, timeout_sec=120)` — NEW in v7.0.0
+
+Multi-language syntax checker that auto-detects language by file extension and dispatches to the right underlying compiler/parser in `--check`-style mode (does not produce binaries).
+
+**Supported languages:**
+
+| Extension(s) | Language | Tool required |
+|---|---|---|
+| `.py` | Python | Built-in (py_compile) |
+| `.js` `.mjs` `.cjs` | JavaScript | node |
+| `.ts` `.tsx` | TypeScript | tsc |
+| `.c` `.h` | C | gcc |
+| `.cpp` `.cc` `.cxx` `.hpp` | C++ | g++ |
+| `.go` | Go | go |
+| `.java` | Java | javac |
+| `.pl` `.pm` | Perl | perl |
+| `.rb` | Ruby | ruby |
+| `.php` | PHP | php |
+| `.sh` `.bash` | Bash | bash |
+| `.v` `.vh` | Verilog | iverilog |
+| `.sv` `.svh` | SystemVerilog | iverilog -g2012 |
+| `.vhd` `.vhdl` | VHDL | ghdl |
+
+Rust requires a Cargo project so it's intentionally not supported as a single-file check — the tool returns a friendly "use `cargo check` in your project root" message.
+
+If the underlying compiler/parser isn't installed on this machine (e.g. no `go` binary on PATH, no `node` for JavaScript), the tool returns a clean "❌ Not available — install \<tool>" message rather than a cryptic subprocess error. This means the tool works gracefully on whatever subset of compilers your dev box has installed.
+
+**Installing HDL tools (Windows):**
+```
+winget install IcarusVerilog   # Verilog / SystemVerilog
+winget install ghdl.ghdl       # VHDL
+```
+
+**Honest limitations:**
+* C/C++ single-file checks may report false errors when headers reference symbols defined in other compilation units — single-file syntax check isn't a full build.
+* Bash on Windows requires Git Bash or WSL to provide a `bash` binary.
+* TypeScript needs a tsconfig.json in the project root for most non-trivial files; lone .ts files may report import resolution errors.
+* Verilog/SystemVerilog: single-file only — multi-module designs referencing external `.v` files will report unresolved module errors. This is expected for single-file syntax checking.
+* VHDL: `ghdl -s` (syntax check) catches structural errors; `lint_check` escalates to `ghdl -a` (full semantic analysis) for deeper checking.
+
+#### `lint_check(filepath, timeout_sec=120)` — NEW in v7.0.0
+
+Multi-language linter that auto-detects language by extension and runs the appropriate lint tool. Catches unused imports, undefined names at module scope, and other warnings that `syntax_check` lets through.
+
+**Tools used per language:**
+
+| Language | Lint tool | Notes |
+|---|---|---|
+| Python | pyflakes | Catches NameError-style issues syntax check misses |
+| TypeScript | tsc --noEmit | Same as syntax_check; tsc IS the TypeScript linter |
+| Go | go vet | Built into the Go toolchain |
+| VHDL | ghdl -a | Full semantic analysis — deeper than the `ghdl -s` syntax check |
+| Verilog / SystemVerilog | — | No standard lint tool; use syntax_check instead |
+| All others | — | Returns "ℹ️ No standard lint tool for \<lang>; use syntax_check instead" |
+
+If pyflakes isn't installed, you can add it with `py -m pip install pyflakes`. AI-Prowler doesn't bundle it because the install footprint is small and operators may prefer not to install it.
+
+#### `pytest_check(test_path, k_filter="", timeout_sec=300, max_output_lines=200)` — NEW in v7.0.0
+
+Runs `pytest` against a test file or directory and returns a clean summary plus the first failure trace (if any). Python-only by design — cross-language test runners differ enough (Go has `go test`, Rust has `cargo test`, JS has 5+ frameworks) that a unified abstraction would be confusing. For other languages, run the native test command via your normal workflow.
+
+Args worth knowing:
+* `k_filter` — Optional substring filter passed to pytest's `-k`. Example: `k_filter="C_REINDEX"` runs only test names containing "C_REINDEX". Useful for narrowing a huge test file to just the new tests you're working on.
+* `timeout_sec` — Default 300 seconds (5 minutes). pytest can be slow when it loads heavy fixtures like the embedding model. Bump this if your tests routinely run longer.
+* `max_output_lines` — Default 200. Truncates the output from the bottom so a 10,000-line test log doesn't blow your context budget. The most recent lines (where failures appear) are always kept; earlier lines are dropped with a "... (truncated N earlier lines) ..." marker.
+
 \---
+
+### 6.8 Email Tools
+
+Email tools are available in **personal mode only**. They are not available on shared company servers (server mode). Each person configures their own SMTP credentials on their own personal AI-Prowler install.
+
+#### Setup: `configure_email(smtp_host, smtp_port, username, password, from_name, default_to)`
+
+Call this once to save your SMTP credentials. All other email tools use the saved config automatically. The password is stored base64-obfuscated in `~/.ai-prowler/email_config.json`.
+
+Common provider settings:
+
+| Provider | smtp_host | smtp_port |
+|---|---|---|
+| Gmail | smtp.gmail.com | 587 |
+| Outlook / Office 365 | smtp.office365.com | 587 |
+| Yahoo | smtp.mail.yahoo.com | 587 |
+
+**Gmail note:** Use a 16-digit App Password, not your regular account password. Generate one at: myaccount.google.com → Security → App passwords.
+
+`default_to` — default recipient address used when no `to` argument is supplied to other email tools.
+
+#### `send_email(to, subject, body, attachment_path)`
+Sends a plain-text email. `attachment_path` is optional — if provided it must be a file in the read allowlist. Leave `to` blank to use `default_to`.
+
+#### `send_alert(message, to)`
+Sends a short notification email. The subject line is generated automatically from the first 80 characters of `message`. Leave `to` blank to use `default_to`.
+
+#### `send_file(to, filepath, subject, body)`
+Sends a file from a tracked directory as an email attachment. `subject` and `body` are generated from the filename if left blank.
+
+#### `send_learnings_report(to, category, subject, include_inactive)`
+Retrieves learnings from the self-learning store and sends them as a formatted HTML email table. The table includes title, category, confidence, content, tags, and recorded date. Use `category` to filter to a single category. Set `include_inactive=True` to include archived and deprecated learnings.
+
+---
+
+### 6.9 Learnings Export Tools
+
+These tools provide access to the self-learning knowledge base without using the desktop GUI.
+
+#### `get_learnings_report(category, status, format)`
+Returns learnings as formatted text in the conversation. No file is created.
+
+`format` options: `'summary'` (default — title + category + first 120 chars of content), `'full'` (all fields), `'titles'` (titles only).
+
+`status` options: `'active'` (default), `'archived'`, `'deprecated'`, `'all'`.
+
+`category` — optional filter. Leave blank to return all categories.
+
+#### `export_learnings_file(filepath, format, category, include_inactive)`
+Exports learnings to a file in a writable zone.
+
+`format` options: `'pack'` (default) — `.aiplearn` JSON file that can be imported by other AI-Prowler installs; `'csv'` — comma-separated spreadsheet.
+
+`filepath` must be inside a writable zone. Example: `'C:/Users/david/Documents/learnings.aiplearn'`
+
+`include_inactive=True` includes archived and deprecated learnings. Default is `False` (active only).
+
+#### `rebuild_learnings_index()`
+Rebuilds the ChromaDB learnings index from the JSON data file (`~/.ai-prowler/learnings/self_learning_data.json`). Use this when `search_learnings()` returns no results but learnings exist in the JSON file.
+
+---
+
+### 6.10 Write Zone Management Tools
+
+These tools list, grant, and revoke write-zone permissions via MCP without using the desktop GUI.
+
+#### `list_writable_directories()`
+Returns all directories currently in the writable allowlist with `[W]` indicators, and all read-only tracked directories with `[R]` indicators.
+
+#### `grant_write_access(directory)`
+Adds a directory to the writable allowlist. The directory must already be in the read allowlist (tracked via `index_path`).
+
+In server mode: owner may grant any tracked directory; manager may only grant directories within their assigned scope prefixes (as defined in the company `collection_map`); staff and field_crew cannot manage write zones.
+
+In personal mode there are no role restrictions.
+
+#### `revoke_write_access(directory)`
+Removes a directory from the writable allowlist. Read access to the directory is unaffected. The same server-mode scope restrictions as `grant_write_access` apply.
+
+---
+
+### 6.11 Reindex Tools
+
+These tools delete all existing ChromaDB chunks for a directory and rebuild the index from scratch. Use them when `update_tracked_directories` is not sufficient — for example after changing chunk size settings, or when you suspect index corruption.
+
+#### `reindex_directory(directory, purge_first)`
+Re-indexes a single tracked directory. With `purge_first=True` (default), all existing chunks for that directory are deleted from ChromaDB before indexing begins. Set `purge_first=False` to add or update chunks without deleting existing ones first (faster, but stale chunks for deleted files will remain).
+
+`directory` must be in the read allowlist.
+
+#### `reindex_all(purge_first)`
+Re-indexes all tracked directories. With `purge_first=True` (default), all existing chunks are purged first. Returns a summary of directories processed, files indexed, chunks created, and time elapsed. May take several minutes on large knowledge bases.
+
+---
 
 ## 7\. Remote Access — Claude.ai on Mobile and Web
 
@@ -598,7 +784,7 @@ Click **▶ Start HTTP Server**. The status light turns green when running. You 
 
 **3. Start a Cloudflare Tunnel**
 
-For quick testing, use **🚀 Quick Tunnel** (temporary URL, changes on restart). For permanent daily use, set up a **Named Tunnel** with your own domain. See the detailed guides below.
+For permanent daily use, set up a **Named Tunnel** with your own domain. See the detailed guide below.
 
 **4. Connect Claude.ai**
 
@@ -619,19 +805,13 @@ Add your tunnel URL as a custom connector in Claude.ai Settings → Connectors. 
 
   ### Sleep Prevention
 
-  When the HTTP server is running, AI-Prowler automatically prevents Windows from going to sleep using the Windows `SetThreadExecutionState` API. This ensures Claude.ai connections remain active without needing to change your power settings. Sleep is restored automatically when you stop the server or close AI-Prowler.
+  When the HTTP server is running, AI-Prowler asks Windows not to go to sleep using the `SetThreadExecutionState` API. This keeps Claude.ai connections active during normal desktop use without changing your power settings. Sleep prevention is released automatically when you stop the server or close AI-Prowler.
 
-  ### Cloudflare Tunnel — Quick Tunnel (Testing)
+  **Important limitation — closing the lid or manual sleep.** `SetThreadExecutionState` prevents *idle* sleep (the timeout-based sleep), but it does **not** override closing a laptop lid, pressing the power/sleep button, or a manually-triggered sleep. If the machine sleeps for any of those reasons, the MCP server goes offline and mobile Claude stops responding until you wake the machine and restart the server (Claude Desktop → Settings → Developer → MCP Servers).
 
-  For quick testing without permanent DNS setup, use the **Quick Tunnel** option:
+  **Recommended for always-on mobile access:** set your Windows Power Plan to **Never sleep when plugged in**, and set **"When I close the lid: Do nothing"** (Control Panel → Power Options → Choose what closing the lid does). Then you can close the laptop and walk away with AI-Prowler still reachable from your phone. This guidance is also shown in the GUI under Settings → 📡 Remote Access → 💡 Keep It Running.
 
-1. Click **▶ Start HTTP Server** to start the MCP server
-2. Click **🚀 Quick Tunnel** — this creates a temporary Cloudflare Tunnel with an auto-generated URL (e.g. `https://random-words.trycloudflare.com`)
-3. Copy the URL shown in the status area
-4. Add it as a custom connector in Claude.ai (append `/mcp` to the URL)
-5. The tunnel lasts as long as AI-Prowler is running — the URL changes every time you restart
-
-  Quick Tunnels are ideal for initial testing, demos, or temporary access. For permanent daily use, set up a Named Tunnel instead.
+  **Good news about Windows Updates:** if AI-Prowler was running when a Windows Update reboot occurs, Windows relaunches AI-Prowler on startup and the Cloudflare Tunnel reconnects automatically — no action needed. Only *sleep* requires the power-plan change above; reboots take care of themselves.
 
   ### Cloudflare Tunnel — Named Tunnel Setup (Permanent)
 
@@ -697,11 +877,11 @@ Add your tunnel URL as a custom connector in Claude.ai Settings → Connectors. 
 * After any configuration change, remove and re-add the connector in Claude.ai Settings
 * Start a **new conversation** after reconnecting — existing conversations do not pick up reconnected tools
 
-  \---
+\---
 
-  ## 8\. Mobile Subscription Management
+## 8\. Mobile Subscription Management
 
-  ### Subscription Plans
+### Subscription Plans
 
 |Plan|Price|Users|Use Case|
 |-|-|-|-|
@@ -748,7 +928,155 @@ Data stored: token hashes (not the tokens themselves), expiry dates, subscriber 
 
 \---
 
-## 9\. Small Business Service Tools
+## 9\. Business Server Mode — Multi-User Access
+
+Business edition can run AI-Prowler in **server mode** on a company machine, so a whole team reaches one shared knowledge base from Claude on their phones and laptops. This section explains how the company owner provisions seats, manages users and roles, and how each employee gets access — both to the company server AND, optionally, to a personal AI-Prowler install on their own PC.
+
+### The big picture
+
+A Business license is a **parent key** plus a pool of **child seat keys** (one per employee). The same child key works in two independent places:
+
+1. **The company server** — the owner runs one AI-Prowler in server mode on a company PC. Each employee is added as a *user* there, assigned a child seat, and given a personal bearer token. They reach the shared company knowledge base from Claude.ai on their phone/laptop via the company's Cloudflare Tunnel.
+2. **A personal install (optional)** — the same employee can install AI-Prowler on their own laptop/desktop, activate it with the same child key in **personal mode**, and index their own private documents. On a personal install the child key unlocks the **full individual tool set** (read, write, dev tools — everything an Individual-edition user gets), and they get their own mobile access via their own tunnel.
+
+These two are completely separate AI-Prowler instances with separate knowledge bases. The child key is what ties them to the company's license; it doesn't share data between them.
+
+### Edition and mode
+
+Two runtime settings in `~/.ai-prowler/config.json` decide how an install behaves:
+
+* **`edition`** — `home`, `mobile`, or `business`.
+* **`mode`** — `personal` (single operator at the keyboard) or `server` (multi-user, behind a tunnel).
+
+The **Admin tab** described below appears only when `edition=business` AND `mode=server`. A personal-mode install — even one activated with a Business child key — never shows the Admin tab; it behaves like a normal single-user install with the full tool set.
+
+### The Admin tab (server mode only)
+
+When AI-Prowler runs in business + server mode, a **👥 Admin** tab appears as the last tab in the GUI. This is where the company owner (or a delegated manager) manages who can connect to the company server and what they can see. It reads and writes `~/.ai-prowler/users.json` — the file the MCP server consults to authenticate every incoming request.
+
+#### Seat Summary Strip
+
+At the top of the Admin tab, a **seat summary strip** shows how many seats from the delivered pool are assigned vs still available:
+
+```
+Seats: 3/5 used · 2 available  ·  Company key: XXXX-…-XXXX
+```
+
+This reads from `~/.ai-prowler/seats.json` (delivered with your license). If this file is missing, a warning is shown and license-key assignment is unavailable until the file is restored.
+
+#### License Warning Strip
+
+Below the seat summary, an amber **license warning strip** appears if the startup license sweep detected problems with any child seat keys — for example an expired seat or a key that failed validation. Up to 5 affected users are listed by name with their masked key and reason. This is advisory only — no access is blocked automatically; contact your provider to resolve.
+
+#### Active Users Table
+
+The main table shows all users with the following columns:
+
+| Column | Description |
+|---|---|
+| Name | Employee's display name |
+| Email | Optional contact email |
+| Role | owner / manager / staff / field_crew |
+| Scopes | Comma-separated data-access groups this user can search |
+| Manages Users | ✓ if this user has delegated admin rights |
+| Private Coll. | ✓ if a private knowledge-base collection is enabled for this user |
+| Seat (key) | The masked child license key assigned to this user |
+| Status | active or suspended |
+| Token (id) | First 8 characters of the bearer token (their password) |
+
+Click any row to select it, then use the action buttons.
+
+#### Action Buttons
+
+| Button | Action |
+|---|---|
+| **➕ Add User** | Opens the Add User dialog to create a new user |
+| **✏️ Edit** | Opens the Edit dialog for the selected user |
+| **🔑 Regenerate Token** | Issues a new random bearer token — old token stops working immediately |
+| **🚫 Suspend/Activate** | Toggles the selected user between active and suspended without deleting them |
+| **🗑 Remove** | Permanently deletes the user and frees their seat back to the pool |
+| **↻ Refresh** | Reloads users.json and repaints the table |
+
+### Roles
+
+Each user has one of four roles, in descending privilege:
+
+* **owner** — the company account holder. Implicitly an administrator; can manage all users. Normally exactly one.
+* **manager** — a senior user who can optionally be granted the **Manages Users** flag (delegated admin), letting them add/edit users without being the owner.
+* **staff** — a regular employee. Cannot manage users.
+* **field_crew** — a field employee. Cannot manage users.
+
+The **Manages Users** (delegated admin) checkbox is only valid for the *manager* role — staff and field_crew can never be granted it, and owner has it implicitly. The dialog enforces this automatically.
+
+### Scopes — controlling what each user can see
+
+**Scopes** are data-access groups that you define to match how your business is organized — for example `role:sales`, `role:office`, `role:field`. You enter them as a comma-separated list on each user. Scopes determine which slices of the shared knowledge base a user's searches can return, so a field-crew member doesn't see office/financial documents and vice versa. Scopes are yours to design; AI-Prowler doesn't impose a fixed taxonomy.
+
+Each user can also have a **private collection** enabled — a personal slice of the knowledge base only they can search, on top of the shared scopes they're granted.
+
+### Adding a user (the admin process)
+
+1. In the Admin tab, click **➕ Add User**.
+2. Fill in **Name** (required) and **Email** (optional).
+3. Choose a **Role** (owner / manager / staff / field_crew).
+4. Enter **Scopes** — the comma-separated data groups this person may access.
+5. Optionally tick **Can manage users** (managers only) and **Private collection enabled**.
+6. Assign a **License seat** from the dropdown. The dropdown lists the unassigned child keys from your delivered seat pool (masked for safety). One seat per user.
+7. **Bearer token** — leave blank to auto-generate a strong random token (recommended). This token is the employee's password for connecting from Claude.ai. Only type your own if you have a specific reason; weak tokens compromise access. (To change an existing user's token later, use **🔑 Regenerate Token** — you can't edit it in place.)
+8. Click **Save**. AI-Prowler validates the assigned child key against the license server. If the license server is unreachable, you can choose to proceed; the seat is re-validated automatically when connectivity returns.
+
+When you add or change a user, `users.json` is written atomically (temp file + replace) so a crash mid-write can't corrupt the live auth file.
+
+### Giving each employee access
+
+Once a user is added with a seat and a token, hand them two things:
+
+1. **Their bearer token** (their password — send it securely, not in plain email if you can avoid it).
+2. **The company's Claude.ai connector URL** (your Cloudflare Tunnel address for the server — see Section 7 for tunnel setup).
+
+The employee adds that connector in Claude.ai's settings, authenticates with their bearer token, and starts a new conversation. Claude on their phone or laptop now reaches the company knowledge base, scoped to exactly what their role and scopes allow. No software install is required on the employee's side for this path — it's all Claude.ai plus the token.
+
+### Removing or suspending access
+
+* **🚫 Suspend/Activate** disables a user without deleting them — their token stops working immediately, but the record (and seat assignment) is preserved for audit. Toggle again to re-enable.
+* **🗑 Remove** deletes the user entirely and frees their seat back into the pool for reassignment.
+* **🔑 Regenerate Token** issues a fresh token (e.g. if an employee's token may have leaked) — the old token stops working at once.
+
+For license-level changes (adding more seats to the company, grace-revoking seats when the team shrinks), the owner contacts AI-Prowler ADMIN — those are managed through the subscription/licensing system, separate from the per-user Admin tab.
+
+### Each child seat: company access AND a personal install
+
+To make the dual-access model concrete, here's what one employee — say a salesperson assigned child key `XXXX-…-XXXX` — can have:
+
+* **On the company server:** the owner added them as a `staff` user with scope `role:sales` and a bearer token. From Claude.ai on their phone they search the company's shared sales knowledge base. They cannot see office financials (different scope). They cannot write to company files unless the owner granted a write zone.
+* **On their own laptop (optional):** they install AI-Prowler, activate it with the *same* child key in `personal` mode, and index their own documents (quotes they're drafting, personal notes). This install gives them the full Individual tool set — search, file read/write in their own approved folders, and the dev tools — plus their own mobile access via their own tunnel if they set one up. Nothing here touches the company server; it's their private instance, licensed under the company's umbrella.
+
+The single child key thus delivers both a **scoped seat on the shared company server** and a **full-featured personal install** — without the employee needing to buy a separate Individual license.
+
+### Server Mode Configuration File
+
+The runtime config at `~/.ai-prowler/config.json` controls server mode behaviour. Key fields:
+
+| Field | Values | Description |
+|---|---|---|
+| `edition` | `home` / `mobile` / `business` | License tier |
+| `mode` | `personal` / `server` | Deployment mode |
+| `parent_license_key` | string | Company parent key |
+
+The Admin tab only appears when `edition=business` AND `mode=server`. Edit this file directly to switch modes, then restart AI-Prowler.
+
+### Related Files (Server Mode)
+
+| File | Location | Purpose |
+|---|---|---|
+| `users.json` | `~/.ai-prowler/users.json` | All user records — the live auth source read by the MCP server |
+| `seats.json` | `~/.ai-prowler/seats.json` | Delivered seat pool (child keys + total count) |
+| `license_warnings.json` | `~/.ai-prowler/license_warnings.json` | Engine-written seat validation warnings shown in Admin tab |
+| `config.json` | `~/.ai-prowler/config.json` | Runtime edition/mode/license settings |
+
+\---
+
+## 10\. Small Business Service Tools
 
 The Small Business tab (the last tab before 🧠 Learnings in AI-Prowler) provides configuration and quick-reference for the field service automation MCP tools. These tools let Claude act as your field service assistant from a conversation — no forms or menus needed. Note: This tool is designed for a service orientated small business to make scheduling, servicing, and tracking jobs easy with the help of your local data and Claude AI.
 
@@ -806,95 +1134,26 @@ The default spreadsheet path is written to `\~/.ai-prowler/config.json` during i
 
 \---
 
-## 10\. Quick Links Tab
+## 11\. Quick Links Tab
 
-The **Quick Links** tab (formerly "Ask Questions" in v5.x) is a one-click launcher for the recommended Claude Desktop workflow. It is the second tab from the left in the GUI.
+The **Quick Links** tab is a one-click launcher for the recommended Claude Desktop / Claude.ai workflow. It is the second tab from the left in the GUI.
 
-### What you see by default
+### What you see
 
 The tab contains:
 
-* **AI Agent Smart Guided Questions & Answers** banner — a blue "⭐ RECOMMENDED" panel that briefly explains why Claude Desktop with Agentic RAG produces far better answers than a single-shot local Q&A box. The banner is purely informational.
+* **AI Agent Smart Guided Questions & Answers** banner — a blue "⭐ RECOMMENDED" panel that briefly explains why Claude Desktop with Agentic RAG produces far better answers than single-shot retrieval. The banner is purely informational.
 * **🚀 Launch Claude Desktop** button — opens Claude Desktop directly using its registered Windows AUMID. If your install is fresh and Claude Desktop isn't reachable, the button falls back to a PowerShell-based dynamic lookup that survives Claude Desktop updates.
 * **⬇ Download Claude Desktop** button — opens `claude.ai/download` in your default browser for users who don't have it yet.
 * **🌐 Open Claude.ai** button — opens `claude.ai` in your browser for mobile/web access via the HTTP MCP server (see Section 7 for tunnel setup).
 
-That's it. No Q&A input box, no model picker, no microphone, no spell checker.
-
-### Why the Q&A box is hidden
-
-AI-Prowler v6.0.0 ships with `SUPPORT_LOCAL_HW_LLM = False` as the default. This hides several local-AI features that earlier versions exposed by default:
-
-* Your-Question input box
-* Attach-files button
-* Ask Question / submit button
-* Microphone button with Whisper voice input
-* Inline spell-checker
-* Cloud-API provider selection
-
-The reasoning: the typical AI-Prowler user's workflow is **Claude Desktop or Claude.ai → MCP → AI-Prowler RAG**. Claude does its own LLM hosting, its own UI, its own conversation history. A second Q&A box inside AI-Prowler duplicates that work for no benefit, and adds visual clutter and configuration knobs that aren't needed.
-
-### Advanced / Power-User Features (off by default)
-
-If you specifically need the standalone Q&A interface — e.g. fully offline operation with Ollama, or using a cloud LLM provider directly — you can re-enable it by editing `rag_gui.py`:
-
-```python
-# Near the top of rag_gui.py (around line 120):
-SUPPORT_LOCAL_HW_LLM = True   # was False
-```
-
-Restart AI-Prowler. The Quick Links tab will then show the full Q&A interface as described below. The Settings tab will also gain AI Model selection, External AI APIs, Ollama Server controls, and Microphone settings (see Section 11).
-
-### What appears when `SUPPORT_LOCAL_HW_LLM = True`
-
-The Quick Links tab gains a full local-AI Q&A interface below the Claude Desktop launcher banner:
-
-* **Your Question** — text entry box with inline spell-check (red underline for misspellings, right-click for suggestions)
-* **🎤 microphone** — Whisper-powered voice input (large-v3-turbo model, ~1.6 GB, downloaded on first use, runs entirely locally)
-* **📎 Attachments** — image or text files; vision support requires a cloud provider with vision capability
-* **🤖 Ask Question** — sends the question to the active model
-
-#### Local Ollama models
-
-Install via **Settings → Start the Ollama server → Browse & Install Model**. Recommended models by RAM:
-
-|RAM|Model|Quality|
-|-|-|-|
-|4 GB|llama3.2:1b or qwen2.5:1.5b|Basic|
-|8 GB|llama3.2:3b or qwen2.5:7b|Good|
-|16 GB|llama3.1:8b or qwen2.5:14b|Very good|
-|32 GB+|qwen2.5:32b or llama3.1:70b|Excellent|
-
-#### Cloud AI providers
-
-Add API keys in **Settings → External AI APIs**:
-
-|Provider|Notes|
-|-|-|
-|ChatGPT (OpenAI)|GPT-4o, pay-per-use|
-|Claude (Anthropic)|claude-sonnet-4-6|
-|Gemini (Google)|Free tier available|
-|Grok (xAI)|Limited free|
-|Llama API (Meta)|Free tier available|
-|Mistral Large|Limited free|
-
-#### Voice Input
-
-Whisper runs entirely locally — voice is never sent to any cloud service. Adjust the **microphone silence timeout** in Settings (default 3.0 s) if speech is being cut off early or if there's lag after you stop speaking.
-
-#### File output
-
-When the AI produces code, a 💾 Save button appears automatically. Works with all providers, though some local and external models don't trigger the save flow.
-
-### Note on Agentic vs. single-pass retrieval
-
-Even with `SUPPORT_LOCAL_HW_LLM = True`, the standalone Q&A box does **not** use the Agentic RAG tool loop. It does a single retrieval pass and sends the retrieved chunks to the chosen model. For multi-step research with follow-up queries and full document reading, use Claude Desktop or Claude.ai (which call the full 28-tool MCP surface).
+AI-Prowler is purpose-built around the **Claude Desktop / Claude.ai → MCP → AI-Prowler RAG** workflow. Claude does the reasoning, hosts its own conversation UI, and keeps your history — AI-Prowler supplies the private knowledge base and the agentic tool surface. There is no separate question box inside AI-Prowler; you ask Claude, and Claude uses AI-Prowler's tools.
 
 \---
 
-## 11\. Settings \& Configuration
+## 12\. Settings \& Configuration
 
-> **v6.0.0 visibility note:** Several Settings sub-sections from earlier versions are now hidden by default to keep the GUI clean for the typical Claude Desktop / Claude.ai user. The underlying code is still present and the features still work — only the UI surfaces are suppressed. Sub-sections marked **🔒 hidden by default** below appear only when `SUPPORT_LOCAL_HW_LLM = True` or `DEBUG_EN = True` is set near the top of `rag_gui.py` (around line 120). Restart AI-Prowler after flipping a flag.
+> **Visibility note:** A couple of Settings sub-sections are hidden by default to keep the GUI clean for the typical Claude Desktop / Claude.ai user. The underlying code is still present — only the UI surface is suppressed. Sub-sections marked **🔒 hidden by default** below appear only when `DEBUG_EN = True` is set near the top of `rag_gui.py` (around line 120). Restart AI-Prowler after flipping the flag.
 
 ### Remote Access Tab
 
@@ -918,20 +1177,6 @@ This sub-section was suppressed in v6.0.0 because Claude Desktop registration ha
 * **View Example Config** — shows a reference configuration you can copy from
 * **Copy Config Path** — copies the config file path to the clipboard
 * **🔬 Run MCP Diagnostics** — runs a full health check and shows a scrollable report covering: MCP SDK version, tool count, config validity, subscription cache, and log tail. Use **📋 Copy Output** to share the report with support.
-
-### Models Tab  🔒 hidden by default (requires `SUPPORT_LOCAL_HW_LLM = True`)
-
-* **Active model** — switches between installed Ollama models for the Quick Links tab Q&A box
-* **Browse \& Install Model** — opens a browser to Ollama's model library; you can then download a model directly from AI-Prowler's Settings
-* **Auto-start Ollama** — when enabled, AI-Prowler launches the Ollama server automatically on startup. Not required if you are using Claude Desktop as your primary interface.
-
-> The **GPU Layers** spinbox that used to appear here is now hidden — but the underlying value still drives Ollama prewarm and subprocess args. To override the default `-1` (auto), edit `gpu_layers` in `~/.ai-prowler/config.json` directly.
-
-### External AI APIs Tab  🔒 hidden by default (requires `SUPPORT_LOCAL_HW_LLM = True`)
-
-* API key fields for each supported cloud provider (ChatGPT, Claude, Gemini, Grok, Llama API, Mistral)
-* **Test Connection** button per provider — verifies your key is valid and the endpoint is reachable
-* Timeout settings — controls how long the Quick Links Q&A box waits for a cloud response before showing a timeout error
 
 ### Smart Scan Config Tab
 
@@ -974,17 +1219,13 @@ The Learnings tab provides a desktop GUI for viewing and managing Claude's self-
 
 ### GPU Detection  🔒 hidden by default (requires `DEBUG_EN = True`)
 
-The **GPU Acceleration** panel in Settings is suppressed in v6.0.0 — the auto-detection still runs at startup, picks sensible defaults, and writes to log files. The panel exposed manual GPU-layer overrides and a "🔍 Detect GPU" button which were rarely useful in practice. If you specifically need to see GPU status or override `gpu_layers`, enable `DEBUG_EN` in `rag_gui.py` and the panel returns.
+The **GPU Acceleration** panel in Settings is suppressed by default — auto-detection still runs at startup, picks sensible defaults, and writes to log files. If you specifically need to see GPU status, enable `DEBUG_EN` in `rag_gui.py` and the panel returns.
 
-When visible, the panel shows GPU model and VRAM, CUDA availability, current embedding device (CPU or CUDA), Ollama GPU layer allocation if Ollama is running, and a "Suggested GPU layers" hint based on available VRAM.
-
-### Voice Input (Mic Settings)  🔒 hidden by default (requires `SUPPORT_LOCAL_HW_LLM = True`)
-
-* **Silence timeout** — controls how many seconds of silence trigger end-of-speech detection (default 3.0 s). Increase if your speech is being cut off; decrease to reduce lag after you stop speaking. Visible only when the Quick Links Q&A Q&A box is enabled.
+When visible, the panel shows GPU model and VRAM, CUDA availability, and the current embedding device (CPU or CUDA).
 
 \---
 
-## 12\. Supported File Types
+## 13\. Supported File Types
 
 AI-Prowler indexes **65+ file formats** by default. Extensions are split into two sets: **Supported** (indexed) and **Skipped** (never indexed). Both sets can be customised in **Settings → Smart Scan Config**.
 
@@ -1091,7 +1332,7 @@ AI-Prowler also skips these directory names when walking folder trees:
 
 \---
 
-## 13\. OCR — Scanned Documents \& Images
+## 14\. OCR — Scanned Documents \& Images
 
 AI-Prowler automatically applies OCR (Optical Character Recognition) to:
 
@@ -1118,7 +1359,7 @@ In **Settings**, use the **OCR Debug** button to test OCR on a specific file and
 
 \---
 
-## 14\. Email Indexing
+## 15\. Email Indexing
 
 ### Supported Formats
 
@@ -1141,7 +1382,7 @@ For very large archives (100,000+ emails), indexing may take several hours on fi
 
 \---
 
-## 15\. Scheduling \& Automation
+## 16\. Scheduling \& Automation
 
 ### Windows Task Scheduler Integration
 
@@ -1153,10 +1394,6 @@ Set up automatic index updates from **Settings → Schedule**:
 
 The scheduler runs `update\\\_tracked\\\_directories` — only changed files are re-indexed.
 
-### Auto-Start Ollama
-
-Enable **Auto-start Ollama** in Settings to launch the Ollama server automatically when AI-Prowler opens. Not needed if you're using Claude Desktop as your primary interface.
-
 ### Cloudflare Tunnel as Windows Service
 
 For always-on remote access, install the Cloudflare Tunnel as a Windows service. The tunnel starts automatically at boot and runs in the background without AI-Prowler being open.
@@ -1165,9 +1402,9 @@ In **Settings → Cloudflare Tunnel**, click **Install as Windows Service**.
 
 \---
 
-## 16\. GPU Support
+## 17\. GPU Support
 
-> **v6.0.0 visibility note:** The **GPU Acceleration** panel that previously appeared in the Settings tab is now suppressed by default. **GPU detection, embedding acceleration, and Ollama GPU offload all still work automatically** — only the manual control panel is hidden. To re-expose the panel (advanced users), see Section 11 → GPU Detection.
+> **Visibility note:** The **GPU Acceleration** panel that previously appeared in the Settings tab is suppressed by default. **GPU detection and embedding acceleration still work automatically** — only the manual control panel is hidden. To re-expose the panel (advanced users), see Section 12 → GPU Detection.
 
 ### NVIDIA GPUs
 
@@ -1178,25 +1415,15 @@ AI-Prowler detects NVIDIA GPUs automatically. The installer installs the correct
 
 ### Embedding Acceleration
 
-The sentence-transformer embedding model (`all-MiniLM-L6-v2`) uses CUDA automatically when available, significantly speeding up indexing.
+The sentence-transformer embedding model (`all-MiniLM-L6-v2`) uses CUDA automatically when available, significantly speeding up indexing. This is the only place a GPU helps AI-Prowler — all language reasoning happens in Claude (cloud), not on your machine.
 
 ### Blackwell (RTX 50xx) Note
 
-PyTorch stable does not yet include CUDA 12.8 compute kernels for Blackwell SM 12.0+ architecture. Embeddings run on CPU on RTX 50xx cards even though CUDA is detected. Ollama itself supports Blackwell for inference. This will be resolved in a future PyTorch release.
-
-### Controlling GPU Layers (advanced)
-
-The `gpu_layers` value still controls how many model layers Ollama offloads to GPU. The default `-1` (auto) is correct for almost everyone. If you need to override:
-
-* `-1` = auto (let Ollama decide — recommended)
-* `0` = CPU only
-* `N` = N layers on GPU (partial offload)
-
-Edit the `gpu_layers` field directly in `~/.ai-prowler/config.json` and restart AI-Prowler, or enable `DEBUG_EN` to use the in-GUI spinbox.
+PyTorch stable does not yet include CUDA 12.8 compute kernels for Blackwell SM 12.0+ architecture. Embeddings run on CPU on RTX 50xx cards even though CUDA is detected. This affects only indexing speed (embedding generation), not search quality or Claude's reasoning. It will be resolved in a future PyTorch release.
 
 \---
 
-## 17\. Debugging \& Log Files
+## 18\. Debugging \& Log Files
 
 AI-Prowler maintains comprehensive logs for troubleshooting. This section covers all log files, what they contain, and how to use them.
 
@@ -1290,7 +1517,7 @@ The v5.0.0 MCP server includes several startup speed improvements that are logge
 
 **HuggingFace offline mode** — On startup the server sets `HF\_HUB\_OFFLINE=1` and `TRANSFORMERS\_OFFLINE=1` before any imports. This prevents sentence-transformers from making unnecessary network update-check calls on every load, saving 4–5 seconds per startup. The model is cached locally; no network access is needed.
 
-**requests timeout patch** — During `rag\_preprocessor` import the server temporarily patches `requests.Session.request` to cap all HTTP timeouts to 0.8 seconds. This prevents the Ollama connectivity probe (which runs at import time) from blocking the MCP startup for the full requests default timeout. The patch is removed immediately after import and confirmed in the log:
+**requests timeout patch** — During `rag\_preprocessor` import the server temporarily patches `requests.Session.request` to cap all HTTP timeouts to 0.8 seconds. This prevents any import-time network probe from blocking MCP startup for the full requests default timeout. The patch is removed immediately after import and confirmed in the log:
 
 ```
 requests.Session.request patched: timeout capped to 0.8s during import
@@ -1322,16 +1549,9 @@ The install log captures every step of the installation process with return code
 
 If installation fails, this log shows exactly which step failed and why.
 
-### Debug View in GUI
+### Inspecting What Claude Retrieved
 
-In the Quick Links tab (with `SUPPORT_LOCAL_HW_LLM = True` to expose the Q&A box), enable **Debug View** (toggle in toolbar) to see:
-
-* Which document chunks were retrieved for each query
-* Similarity scores for each chunk
-* The full prompt sent to the LLM
-* Raw LLM response before formatting
-
-For Claude Desktop or Claude.ai workflows (the default v6.0.0 path), look at the MCP server log instead — it captures all tool calls, their arguments, and responses. See the Log File Locations table above.
+For Claude Desktop or Claude.ai workflows (the standard path), look at the MCP server log to see what AI-Prowler did on each request — it captures all tool calls, their arguments, and responses, including which document chunks were retrieved and their similarity scores. See the Log File Locations table above.
 
 ### OCR Debug Tool
 
@@ -1393,7 +1613,7 @@ Open `%LOCALAPPDATA%\\\\Temp\\\\AI-Prowler\\\\install\\\_log.txt` and search for
 
 \---
 
-## 18\. Troubleshooting
+## 19\. Troubleshooting
 
 ### Claude Desktop can't see AI-Prowler tools
 
@@ -1449,13 +1669,9 @@ rmdir /s /q "%USERPROFILE%\\\\.cache\\\\huggingface\\\\hub\\\\models--sentence-t
 
 If you see unexpected import errors or wrong package versions after a reinstall, the `PYTHONNOUSERSITE=1` variable in `RAG\\\_RUN.bat` prevents Python from loading packages from `%APPDATA%\\\\Roaming\\\\Python`. This is set automatically. If running the script directly without the bat file, set this variable manually.
 
-### Voice input not working
-
-The Whisper model downloads on first use (\~1.6 GB). Ensure internet access on first mic use. If it fails, check that `sounddevice` is installed: run `pip list | grep sounddevice`. Adjust the silence timeout in Settings if speech is being cut off too early.
-
 \---
 
-## 19\. Uninstalling
+## 20\. Uninstalling
 
 ### Using the Uninstaller
 
@@ -1483,7 +1699,7 @@ If the uninstaller fails, manually delete:
 
 \---
 
-## 20\. Self-Learning System
+## 21\. Self-Learning System
 
 ### Overview
 
@@ -1694,7 +1910,7 @@ Correction shortcuts:
 
 ### 🧠 Learnings Tab — Desktop GUI
 
-The Learnings tab in AI-Prowler provides a visual interface for managing the knowledge base without going through Claude. It reads directly from the JSON file, so it always shows the latest data — just click **↻ Refresh** to reload. See Section 11 for the full layout breakdown.
+The Learnings tab in AI-Prowler provides a visual interface for managing the knowledge base without going through Claude. It reads directly from the JSON file, so it always shows the latest data — just click **↻ Refresh** to reload. See Section 12 for the full layout breakdown.
 
 Key things you can do from the tab:
 
@@ -1772,7 +1988,7 @@ Next time a roofing job is scheduled, Claude calls `check\_learned("roofing job 
 
 \---
 
-## 21\. Welcome Page \& Update Notifications
+## 22\. Welcome Page \& Update Notifications
 
 ### Welcome Tab
 
@@ -1796,7 +2012,7 @@ This is a read-only check (no data is sent from your machine). The check can be 
 
 \---
 
-## 22\. Heartbeats \& Analytics
+## 23\. Heartbeats \& Analytics
 
 > **v6.0.0 visibility note:** The **Privacy & Analytics** panel in the Settings tab (with the on/off toggle, "📡 Send Heartbeat Now" button, and Last-success indicator) is hidden by default in v6.0.0. The anonymous daily heartbeat still runs in the background per the defaults below. Enable `DEBUG_EN = True` near the top of `rag_gui.py` to re-expose the panel.
 
@@ -1882,7 +2098,6 @@ To upgrade: `pip install --upgrade mcp` in a command prompt.
 **What leaves your machine:**
 
 * When using Claude Desktop MCP: the text of retrieved document chunks (the relevant excerpts Claude found, not your original files) and your questions
-* When using cloud API providers (Quick Links tab Q&A, when enabled via `SUPPORT_LOCAL_HW_LLM = True`): your question and retrieved document excerpts
 * **Anonymous daily heartbeat** (on by default, can be disabled): install_id, version, OS string, indexed chunk count, MCP tool calls in last 24h — sent to the AI-Prowler telemetry endpoint. See Section 22 for full details and how to turn off.
 * Subscription check: a connection to GitHub to read the public `subs.json` file (contains only token hashes, not your data)
 * Update check: a read-only version check against the GitHub repository (no data is sent)

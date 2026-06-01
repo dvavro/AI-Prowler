@@ -93,14 +93,14 @@ def test_L_MCP_03_record_rejects_empty_content(sl_mcp_env):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# L-MCP-04 — check_learned output formatting
+# L-MCP-04 — search_learnings output formatting
 # ──────────────────────────────────────────────────────────────────────────────
 @pytest.mark.slow
-def test_L_MCP_04_check_learned_returns_formatted_output(
+def test_L_MCP_04_search_learnings_returns_formatted_output(
         sl_mcp_env, seeded_learnings):
-    """check_learned returns a human-readable string with the matches
+    """search_learnings returns a human-readable string with the matches
     formatted as a numbered list."""
-    output = sl_mcp_env.mcp.check_learned(
+    output = sl_mcp_env.mcp.search_learnings(
         query="how to contact Alpha",
         n_results=3,
     )
@@ -110,17 +110,17 @@ def test_L_MCP_04_check_learned_returns_formatted_output(
     )
 
 
-def test_L_MCP_05_check_learned_rejects_empty_query(sl_mcp_env):
+def test_L_MCP_05_search_learnings_rejects_empty_query(sl_mcp_env):
     """Empty query is rejected at the MCP layer."""
-    output = sl_mcp_env.mcp.check_learned(query="   ")
+    output = sl_mcp_env.mcp.search_learnings(query="   ")
     assert "❌" in output or "empty" in output.lower()
 
 
 @pytest.mark.slow
-def test_L_MCP_06_check_learned_no_matches_message(sl_mcp_env):
-    """check_learned on an empty database returns a clear no-results message,
+def test_L_MCP_06_search_learnings_no_matches_message(sl_mcp_env):
+    """search_learnings on an empty database returns a clear no-results message,
     not a stack trace or an empty string."""
-    output = sl_mcp_env.mcp.check_learned(query="anything")
+    output = sl_mcp_env.mcp.search_learnings(query="anything")
     assert "no" in output.lower() or "empty" in output.lower() or "found" in output.lower(), (
         f"Empty-DB output should mention 'no results'. Got: {output!r}"
     )
@@ -266,7 +266,7 @@ def test_L_MCP_17_stats_on_empty_database(sl_mcp_env):
 # ──────────────────────────────────────────────────────────────────────────────
 @pytest.mark.slow
 def test_L_MCP_18_record_then_check_finds_it(sl_mcp_env):
-    """Recording a learning via MCP, then querying check_learned via MCP,
+    """Recording a learning via MCP, then querying search_learnings via MCP,
     finds the new learning. End-to-end smoke test that the two tool
     wrappers share state correctly."""
     title = "WhirlyGig 9000 maintenance schedule"
@@ -279,7 +279,7 @@ def test_L_MCP_18_record_then_check_finds_it(sl_mcp_env):
         tags="whirlygig, mixer, maintenance",
     )
 
-    found = sl_mcp_env.mcp.check_learned(query="how often to lube the mixer")
+    found = sl_mcp_env.mcp.search_learnings(query="how often to lube the mixer")
     assert title in found, (
-        f"check_learned should find the recorded learning. Got: {found[:500]!r}"
+        f"search_learnings should find the recorded learning. Got: {found[:500]!r}"
     )

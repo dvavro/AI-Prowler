@@ -18,7 +18,8 @@ PLAIN-LANGUAGE SUMMARY
   - Mobile / remote access:  Connecting your AI-Prowler instance to the
     public internet through AI-Prowler's managed infrastructure
     (subdomain, Cloudflare Tunnel, license key) is an OPTIONAL paid
-    service — currently $10 USD per month per subscriber. Part 2 below
+    service. Current pricing is published on the Provider's website
+    and communicated at the time of subscription. Part 2 below
     governs that service.
 
   - Developers:  You may modify and redistribute the desktop software
@@ -317,7 +318,8 @@ The Service does NOT include:
 2.2  PRICING AND BILLING
 -------------------------
   Plan:       AI-Prowler Remote Access
-  Price:      $10 USD per month per subscriber
+  Price:      Current pricing is communicated at the time of
+              subscription and published on the Provider's website.
   Billing:    Monthly, in advance
   Payment:    PayPal, Venmo, or bank transfer
 

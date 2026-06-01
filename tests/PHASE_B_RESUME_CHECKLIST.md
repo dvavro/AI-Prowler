@@ -145,5 +145,5 @@ server launch + real requests reveal it. Build incrementally, launch between ste
   an Admin-tab concern.
 - `/license/release_install` is public (matches /heartbeat); consider admin-gating
   for the Admin Active-Installs panel.
-- Dev-check tools (`compile_check`/`import_check`) are Home-edition-gated; confirm
+- Dev-check tools (`compile_check`/`check_python_import`) are available in all editions; confirm
   they're OFF on any Business deploy.

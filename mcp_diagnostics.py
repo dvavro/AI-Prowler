@@ -491,11 +491,11 @@ if mcp_script.exists():
         _info(f"  * {t}")
 
     EXPECTED = {
-        'how_to_use_ai_prowler', 'check_status', 'get_knowledge_base_overview',
-        'search_documents', 'search_by_multiple_queries', 'get_chunk_context',
-        'get_document_chunks', 'list_indexed_documents', 'get_database_stats',
-        'add_and_index_directory', 'update_tracked_directories',
-        'list_tracked_directories', 'remove_directory'
+        'how_to_use_ai_prowler', 'check_ai_prowler_status', 'get_knowledge_base_overview',
+        'search_documents', 'multi_query_search', 'expand_search_result',
+        'read_document', 'list_indexed_documents', 'get_database_stats',
+        'index_path', 'update_tracked_directories',
+        'list_tracked_directories', 'untrack_directory'
     }
     missing = EXPECTED - set(tools_found)
     if missing:

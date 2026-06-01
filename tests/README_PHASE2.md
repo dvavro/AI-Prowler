@@ -16,7 +16,7 @@ tests/
 
 Tests every `@mcp.tool()`-decorated function in `ai_prowler_mcp.py` that touches indexing or tracking. Calls them directly as Python functions instead of spawning a JSON-RPC subprocess — that's much faster and exercises the same code paths.
 
-Covers `add_and_index_directory`, `update_tracked_directories`, `get_database_stats`, `list_tracked_directories`, `remove_directory`, error handling for non-existent paths, and the cross-component consistency that lets MCP and the GUI share state.
+Covers `index_path`, `update_tracked_directories`, `get_database_stats`, `list_tracked_directories`, `untrack_directory`, error handling for non-existent paths, and the cross-component consistency that lets MCP and the GUI share state.
 
 ### GUI layer (`tests/gui/`)
 
@@ -97,7 +97,7 @@ Every GUI test name starts with the matching test plan ID:
 test_G_IDX_01a_add_directory_to_queue        → G-IDX-01 (queue mgmt)
 test_G_UPD_03b_cancel_keeps_directory_tracked → G-UPD-03 (remove confirmation)
 test_G_DB_02_clear_database_wipes_all         → G-DB-01 + B-04 verification
-test_G_MCP_06_remove_directory_reports_real   → G-MCP-06 + B-03 verification
+test_G_MCP_06_untrack_directory_reports_real   → G-MCP-06 + B-03 verification
 ```
 
 So you can grep for an ID in the test plan Word doc and find the test, or vice versa.

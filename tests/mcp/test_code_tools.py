@@ -139,7 +139,7 @@ def code_tree(isolated_env):
     )
 
     # Wire into the per-test allowlist via the real preprocessor function —
-    # this is the same call path add_and_index_directory uses, so we exercise
+    # this is the same call path index_path uses, so we exercise
     # the production authorization surface.
     rag.add_to_auto_update_list(str(tracked_dir))
     rag.add_to_auto_update_list(str(tracked_file))
@@ -284,10 +284,10 @@ def test_C_MCP_13_denial_lists_currently_tracked(mcp_mod, code_tree):
 
 
 def test_C_MCP_14_empty_allowlist_explains_remediation(mcp_mod, empty_allowlist):
-    """When nothing's tracked, the denial points to `add_and_index_directory`."""
+    """When nothing's tracked, the denial points to `index_path`."""
     _resolved, err = mcp_mod._resolve_allowlisted_path("/some/file.txt")
     assert "No directories are tracked yet" in err
-    assert "add_and_index_directory" in err
+    assert "index_path" in err
 
 
 def test_C_MCP_15_long_allowlist_truncated_in_message(mcp_mod, isolated_env):
