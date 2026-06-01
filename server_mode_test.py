@@ -157,7 +157,7 @@ def _stage2_async(base):
             async with await _session(TOK_SALES) as (r, w, _):
                 async with ClientSession(r, w) as s:
                     await s.initialize()
-                    res = await s.call_tool("add_and_index_directory",
+                    res = await s.call_tool("index_path",
                                             {"directory": str(doc),
                                              "track": False})
                     chk("sales-mgr indexed the file (tool call succeeded)",

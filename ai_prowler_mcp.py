@@ -438,7 +438,7 @@ _log.info("FastMCP server object created OK")
 # after a successful POST to the Cloudflare Worker.
 #
 # Counter file format (v2):
-#     {"tool_calls": {"check_status": 12, "search_documents": 3, ...}}
+#     {"tool_calls": {"check_ai_prowler_status": 12, "search_documents": 3, ...}}
 #
 # v1 -> v2 migration is automatic on first read; old single-int totals are
 # discarded (they aren't recoverable as per-tool buckets).
@@ -1397,7 +1397,7 @@ def get_knowledge_base_overview(ctx: Context = None) -> str:
     lines.append(
         "Next steps: search_documents(query) for broad search | "
         "search_within_directory(query, dir) for targeted search | "
-        "list_directories() for full directory tree"
+        "list_indexed_directories() for full directory tree"
     )
     return "\n".join(lines)
 
@@ -2009,7 +2009,7 @@ def search_within_directory(
             "Possible causes:\n"
             f"  - No documents indexed from a directory matching '{directory}'\n"
             "  - Try a broader search with search_documents() first\n"
-            "  - Call list_directories() to see available directory trees"
+            "  - Call list_indexed_directories() to see available directory trees"
         )
 
     lines = [
@@ -2536,7 +2536,7 @@ def build_maps_url(
 
     Args:
         stops:  Job addresses in the OPTIMIZED visit order
-                (use the sequence returned by get_route_optimization()).
+                (use the sequence returned by optimize_route()).
         origin: Starting address (home base or depot).
         app:    "google" (default, all devices) or "apple" (iPhone/iPad only).
 
@@ -3077,7 +3077,7 @@ def check_tools_status() -> str:
         f"  {'✅' if req_ok else '❌'} geocode_address(address)",
         f"     Nominatim / OpenStreetMap — free, no key",
         "",
-        f"  {'✅' if req_ok else '❌'} get_route_optimization(stops, origin, ...)",
+        f"  {'✅' if req_ok else '❌'} optimize_route(stops, origin, ...)",
         f"     OSRM public server — TSP solver, real streets, free, no key",
         "",
         f"  ✅ build_maps_url(stops, origin, app)",
@@ -6917,7 +6917,7 @@ def send_learnings_report(to: str = "",
                           ctx: Context = None) -> str:
     """
     Export learnings as a formatted HTML email report and send it. Combines
-    export_learnings_text with send_email in one voice command.
+    get_learnings_report with send_email in one voice command.
 
     Args:
         to:               Recipient email. Leave blank for configured default_to.

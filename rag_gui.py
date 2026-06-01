@@ -1695,8 +1695,8 @@ Built with Python, ChromaDB, FastMCP, and Claude"""
                 "1. Click 'Save' or 'Connect'.",
                 "2. Claude will attempt to connect to your tunnel.",
                 "3. If successful, you'll see 'Connected' or a green indicator.",
-                "4. The 22 AI-Prowler tools will be listed (search_documents,",
-                "   add_and_index_directory, optimize_route, etc.).",
+                "4. The 57 AI-Prowler tools will be listed (search_documents,",
+                "   index_path, optimize_route, etc.).",
             ]),
 
             ("Step 5 — Test it", [
