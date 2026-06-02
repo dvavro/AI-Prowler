@@ -247,12 +247,9 @@ def test_G_IDX_04_prescan_reports_findings(gui, isolated_env):
 
     # Verify ChromaDB was NOT written to
     client, ef = isolated_env.rag.get_chroma_client()
-    try:
-        coll = client.get_collection(name=isolated_env.rag.COLLECTION_NAME,
-                                     embedding_function=ef)
-        assert coll.count() == 0, "Pre-scan should not write to ChromaDB"
-    except Exception:
-        pass   # collection doesn't exist yet — also valid
+    coll = client.get_or_create_collection(name=isolated_env.rag.COLLECTION_NAME,
+                                           embedding_function=ef)
+    assert coll.count() == 0, "Pre-scan should not write to ChromaDB"
 
 
 # ──────────────────────────────────────────────────────────────────────────────

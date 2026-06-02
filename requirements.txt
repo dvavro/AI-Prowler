@@ -2,7 +2,23 @@
 # Install with: pip install -r requirements.txt
 
 # ── Core RAG / indexing ────────────────────────────────────────────────────────
-chromadb==0.6.3
+# FIXED: Upgraded from 0.6.3 to 1.0.12.
+# chromadb 0.6.3 had a runtime incompatibility with sentence-transformers 3.3.1:
+# the _SentenceTransformerEmbedding wrapper in 0.6.3 expected a .name attribute
+# that does not exist in sentence-transformers 3.3.1, causing "Collection already
+# exists" errors and ChromaDB deadlocks on any reindex/write operation.
+# chromadb 1.0.x rewrote the core in Rust and resolves all of these issues.
+# NOTE: chromadb database migrations are irreversible — a clean install is required
+# when upgrading from 0.6.x. Uninstall AI-Prowler and delete the old ChromaDB data
+# folder before installing with this requirements.txt.
+chromadb==1.0.12
+
+# REMOVED: posthog==2.5.0 pin is no longer needed.
+# It was pinned to work around a chromadb 0.6.3 bug where chromadb's telemetry
+# called posthog.capture() with 3 positional args, which posthog 7.x broke.
+# chromadb 1.0+ no longer uses posthog for telemetry — the pin caused more
+# problems than it solved on fresh installs and can safely be dropped.
+
 # sentence-transformers and huggingface-hub are pinned together deliberately.
 # Mismatched versions cause huggingface_hub to return a cache path with a
 # trailing backslash; sentence-transformers then appends another backslash

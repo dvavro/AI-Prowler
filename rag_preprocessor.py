@@ -1102,15 +1102,9 @@ SKIP_EXTENSIONS = {
     '.db', '.sqlite', '.sqlite3', '.mdb', '.accdb',
     # Virtual machines / disk images
     '.vmdk', '.vhd', '.vhdx', '.ova', '.ovf',
-    # Temp / cache / lock / log
-    '.tmp', '.temp', '.cache', '.lock', '.bak', '.swp', '.swo', '.log',
-    # Windows shortcuts (small binary, indexed as junk)
-    '.lnk',
-    # NOTE: '.DS_Store' and '.Thumbs.db' previously lived here, but
-    # os.path.splitext doesn't actually produce those as suffixes (a leading
-    # dot is not treated as an extension separator, and Thumbs.db's suffix
-    # is '.db' which already matches). The proper match is by FILENAME, not
-    # extension — see is_system_junk_filename() below.
+    # Temp / cache / lock
+    '.tmp', '.temp', '.cache', '.lock', '.bak', '.swp', '.swo',
+    '.DS_Store', '.Thumbs.db',
 }
 
 # ----- Code Tools write-side: backup-filename pattern check -----
@@ -1136,56 +1130,6 @@ def is_backup_filename(filename: str) -> bool:
     if not filename:
         return False
     return _BACKUP_FILENAME_RE.search(filename) is not None
-
-
-# ----- OS / system junk filename patterns -----
-# Files whose BASENAME matches one of these patterns are excluded from
-# indexing. Same role as is_backup_filename() — extends the extension-based
-# SKIP_EXTENSIONS to filenames that don't have a meaningful suffix (or whose
-# suffix is too generic to skip by extension alone).
-#
-# Reported in learning 0ead289c (v6.0.2): OS / system junk like .DS_Store
-# (macOS Finder metadata), Thumbs.db / desktop.ini (Windows shell metadata),
-# and default OS Screenshot files were leaking into the knowledge base when
-# users indexed broad directories like ~/Desktop or ~/Documents.
-_SYSTEM_JUNK_NAMES = frozenset({
-    '.ds_store',         # macOS Finder folder-view metadata
-    'thumbs.db',         # Windows thumbnail cache
-    'ehthumbs.db',       # Windows thumbnail cache (older)
-    'desktop.ini',       # Windows folder customisation
-    'icon\r',            # macOS custom folder icon (literal CR in name)
-    '.localized',        # macOS localised-folder marker
-    '.spotlight-v100',   # macOS Spotlight index marker
-    '.trashes',          # macOS Trash marker
-})
-
-_SYSTEM_JUNK_RE = _bak_re_for_backup_check.compile(
-    # Default screenshot filenames on macOS ("Screen Shot 2024-01-15 at...")
-    # and Windows ("Screenshot 2024-01-15 ..."). Case-insensitive; matches
-    # the whole basename. Extensions like .png/.jpg are intentionally in
-    # SUPPORTED_EXTENSIONS for OCR, so the broad ".png skip" approach isn't
-    # appropriate — only the screenshot pattern should be filtered.
-    r'^(?:screen\s*shot|screenshot)\b.*\.(?:png|jpg|jpeg|gif|heic)$',
-    _bak_re_for_backup_check.IGNORECASE,
-)
-
-def is_system_junk_filename(filename: str) -> bool:
-    """True if `filename` is OS-level cruft that should never be indexed.
-
-    Catches: .DS_Store, Thumbs.db, desktop.ini, the macOS Spotlight/Trash
-    sentinels, and default-named screenshots from macOS/Windows. Match is on
-    the BASENAME (not full path) and case-insensitive.
-
-    Used alongside `ext in SKIP_EXTENSIONS` and is_backup_filename() at every
-    indexer/scan call site so this junk never reaches the embedder.
-    """
-    if not filename:
-        return False
-    base = filename.strip().lower()
-    if base in _SYSTEM_JUNK_NAMES:
-        return True
-    return _SYSTEM_JUNK_RE.match(base) is not None
-
 
 # Directory names to always skip when walking trees
 SKIP_DIRECTORIES = {
@@ -2854,6 +2798,22 @@ class _SentenceTransformerEmbedding:
         print(f'\u2705 Embedding model loaded on {device.upper()} '
               f'(batch_size={self._batch_size})')
 
+    # ChromaDB 1.0.x requires embedding functions to expose a name() method
+    # and a build_from_config() classmethod for collection persistence.
+    # Without name(), ChromaDB raises:
+    #   '_SentenceTransformerEmbedding' object has no attribute 'name'
+    # on ANY collection access (get, create, query, index).
+    @staticmethod
+    def name() -> str:
+        return "ai-prowler-sentence-transformer"
+
+    def get_config(self):
+        return {"model_name": self._model.device.type}
+
+    @classmethod
+    def build_from_config(cls, config):
+        return cls(config.get("model_name", "all-MiniLM-L6-v2"))
+
     def __call__(self, input):          # ChromaDB calls embedding_func(documents)
         import torch
         try:
@@ -2885,6 +2845,32 @@ class _SentenceTransformerEmbedding:
                     )
                 return vecs.tolist()
             raise
+
+def chroma_collection_name(logical: str) -> str:
+    """Convert a logical collection name to a safe ChromaDB physical collection name.
+
+    Logical names like 'user:david' or 'role:sales' contain colons which
+    ChromaDB does not allow. This sanitizes them to safe physical names.
+
+    Examples:
+        'documents'  -> 'documents'         (default personal collection, unchanged)
+        'user:david' -> 'scope-user-david'
+        'role:sales' -> 'scope-role-sales'
+
+    ChromaDB physical name rules: 3-63 chars, alphanumeric + hyphens/underscores,
+    must start and end with alphanumeric.
+    """
+    import re
+    if ':' in logical:
+        prefix, _, rest = logical.partition(':')
+        physical = f"scope-{prefix}-{rest}"
+    else:
+        physical = logical
+    # Sanitize: replace any disallowed chars with hyphens
+    physical = re.sub(r'[^a-zA-Z0-9_-]', '-', physical)
+    # Enforce 63-char ChromaDB limit
+    return physical[:63]
+
 
 def get_chroma_client():
     """
@@ -2925,73 +2911,27 @@ def get_chroma_client():
 
     return client, embedding_func
 
-def chroma_collection_name(logical_name: str) -> str:
-    """Map a LOGICAL scope name (e.g. 'role:sales', 'user:UserA01', 'shared')
-    to a ChromaDB-LEGAL physical collection name.
+def create_or_get_collection(client, embedding_func):
+    """Create or retrieve the document collection.
 
-    ChromaDB rules: 3-512 chars, start/end lowercase-alnum, middle may contain
-    only dots/dashes/underscores, no '::' (and practically no colons at all),
-    no consecutive dots, not an IPv4. Our logical names use colons and mixed
-    case, which ChromaDB REJECTS — so we deterministically rewrite them:
-      ':' and any other illegal char -> '-', lowercase everything, collapse
-      repeats, and prefix 'scope-' so the result always starts with a letter
-      and is visually distinct from the personal 'documents' collection.
-    Deterministic + collision-safe for our namespaced inputs (role:/user:/shared).
-
-    Examples:
-      'documents'             -> 'documents'        (left as-is; already legal)
-      'shared'                -> 'scope-shared'
-      'role:sales'            -> 'scope-role-sales'
-      'user:UserA00000000001' -> 'scope-user-usera00000000001'
+    Uses get_or_create_collection() — the single ChromaDB 1.0.x API call that
+    atomically gets an existing collection OR creates a new one. The old pattern
+    (get_collection in try / create_collection in except) breaks on ChromaDB
+    1.0.x because a bare except swallows the missing .name() AttributeError and
+    then create_collection raises 'Collection already exists'.
     """
-    import re as _re
-    name = (logical_name or "").strip()
-    if not name or name == COLLECTION_NAME:
-        return COLLECTION_NAME  # personal collection: unchanged
-    s = name.lower()
-    s = _re.sub(r"[^a-z0-9]+", "-", s)   # any run of illegal chars -> single '-'
-    s = s.strip("-")
-    s = f"scope-{s}"                     # guarantee legal start + namespacing
-    # Guarantee legal end (strip trailing '-') and length bounds.
-    s = s.rstrip("-")
-    if len(s) < 3:
-        s = (s + "-x").ljust(3, "x")
-    return s[:512]
-
-
-def create_or_get_collection(client, embedding_func, collection_name: str = None):
-    """Create or retrieve a document collection.
-
-    Args:
-        client, embedding_func: from get_chroma_client().
-        collection_name: LOGICAL target collection. Defaults to COLLECTION_NAME
-            ('documents') — so ALL existing callers (which pass no name) behave
-            exactly as before (single-collection personal mode). v7.0.0 Phase B
-            server-mode indexing passes a logical name (shared / role:x /
-            user:y); it is sanitized to a ChromaDB-legal physical name here, so
-            the rest of the codebase keeps using clean logical names.
-    """
-    logical = collection_name or COLLECTION_NAME
-    name = chroma_collection_name(logical)
-    try:
-        collection = client.get_collection(
-            name=name,
-            embedding_function=embedding_func
-        )
-        count = collection.count()
-        print(f"📂 Using existing collection: {logical} -> {name} ({count} chunks)")
-    except:
-        collection = client.create_collection(
-            name=name,
-            embedding_function=embedding_func,
-            metadata={
-                "description": "AI Prowler document store",
-                "logical_name": logical,
-                "created": datetime.now().isoformat()
-            }
-        )
-        print(f"✨ Created new collection: {logical} -> {name}")
-    
+    collection = client.get_or_create_collection(
+        name=COLLECTION_NAME,
+        embedding_function=embedding_func,
+        metadata={
+            "description": "AI Prowler document store",
+        }
+    )
+    count = collection.count()
+    if count > 0:
+        print(f"📂 Using existing collection: {COLLECTION_NAME} ({count} chunks)")
+    else:
+        print(f"✨ Created new collection: {COLLECTION_NAME}")
     return collection
 
 # ═══════════════════════════════════════════════════════════
@@ -3030,9 +2970,7 @@ def scan_directory(directory: str, recursive: bool = True) -> dict:
         fp   = normalise_path(directory)
         ext  = os.path.splitext(fp)[1].lower()
         result['total_seen'] = 1
-        if (ext in SKIP_EXTENSIONS
-                or is_backup_filename(os.path.basename(fp))
-                or is_system_junk_filename(os.path.basename(fp))):
+        if ext in SKIP_EXTENSIONS or is_backup_filename(os.path.basename(fp)):
             result['skipped_bin'].append((fp, ext))
         elif ext in SUPPORTED_EXTENSIONS:
             result['to_index'].append((fp, ext))
@@ -3057,9 +2995,7 @@ def scan_directory(directory: str, recursive: bool = True) -> dict:
                 fp  = os.path.join(root, fname)
                 ext = os.path.splitext(fname)[1].lower()
 
-                if (ext in SKIP_EXTENSIONS
-                        or is_backup_filename(fname)
-                        or is_system_junk_filename(fname)):
+                if ext in SKIP_EXTENSIONS or is_backup_filename(fname):
                     result['skipped_bin'].append((fp, ext))
                 elif ext in SUPPORTED_EXTENSIONS:
                     result['to_index'].append((fp, ext))
@@ -3072,9 +3008,7 @@ def scan_directory(directory: str, recursive: bool = True) -> dict:
                 continue
             result['total_seen'] += 1
             ext = os.path.splitext(fname)[1].lower()
-            if (ext in SKIP_EXTENSIONS
-                    or is_backup_filename(fname)
-                    or is_system_junk_filename(fname)):
+            if ext in SKIP_EXTENSIONS or is_backup_filename(fname):
                 result['skipped_bin'].append((fp, ext))
             elif ext in SUPPORTED_EXTENSIONS:
                 result['to_index'].append((fp, ext))
@@ -3105,8 +3039,7 @@ def index_file_list(file_paths: list, label: str = "",
                     stop_event=None, pause_event=None,
                     start_from: int = 0,
                     root_directory: str = "",
-                    collection_resolver=None,
-                    indexer_user=None, purge_gate=None) -> dict:
+                    collection_resolver=None, indexer_user=None, purge_gate=None) -> dict:
     """
     Index a specific pre-built list of file paths.
 
@@ -3124,35 +3057,12 @@ def index_file_list(file_paths: list, label: str = "",
         root_directory: Top-level directory being indexed (used for provenance
                        metadata — directory_chain breadcrumbs).  If empty, the
                        parent directory of each file is used as a fallback.
-        collection_resolver: OPTIONAL callable filepath -> collection_name
-                       (v7.0.0 Phase B server mode). None (default) => every file
-                       goes to the single default collection (original behavior).
 
     Returns dict with keys: processed, skipped, chunks, words, stopped_at
       stopped_at = 1-based index of next unprocessed file (0 if completed)
     """
     import time as _time
     client, embedding_func = get_chroma_client()
-
-    # Per-file collection routing (cached). No resolver => default collection,
-    # identical to the original single-collection behavior.
-    _collection_cache = {}
-    def _collection_for(fp):
-        name = None
-        if collection_resolver is not None:
-            try:
-                name = collection_resolver(fp)
-            except Exception as _re:
-                print(f"         ⚠️  collection_resolver failed for {fp}: {_re} "
-                      f"— using default collection")
-                name = None
-        name = name or COLLECTION_NAME
-        if name not in _collection_cache:
-            _collection_cache[name] = create_or_get_collection(
-                client, embedding_func, collection_name=name)
-        return _collection_cache[name]
-
-    # Default handle retained for any code/logging expecting `collection`.
     collection = create_or_get_collection(client, embedding_func)
 
     total     = len(file_paths)
@@ -3222,9 +3132,6 @@ def index_file_list(file_paths: list, label: str = "",
                 stop_event=stop_event,
                 pause_event=pause_event,
                 root_directory=root_directory,
-                collection_resolver=collection_resolver,
-                indexer_user=indexer_user,
-                purge_gate=purge_gate,
             )
             processed    += arc_stats["processed"]
             skipped      += arc_stats["skipped"]
@@ -3246,6 +3153,12 @@ def index_file_list(file_paths: list, label: str = "",
             print(f"{prefix}{progress} WARNING: SKIPPED "
                   f"{_rel}"
                   f" (empty, unreadable, or format not supported)")
+            # Even though we can't index this file, purge any stale chunks so
+            # an empty overwrite doesn't leave old content in ChromaDB.
+            try:
+                collection.delete(where={"filepath": normalise_path(filepath)})
+            except Exception:
+                pass
             skipped += 1
             continue
 
@@ -3258,6 +3171,11 @@ def index_file_list(file_paths: list, label: str = "",
         chunks = chunk_text(file_data['content'], CHUNK_SIZE, CHUNK_OVERLAP)
         if not chunks:
             print(f"         ⚠️  Empty — skipping")
+            # Purge stale chunks for the same reason as above.
+            try:
+                collection.delete(where={"filepath": normalise_path(filepath)})
+            except Exception:
+                pass
             skipped += 1
             continue
 
@@ -3281,45 +3199,13 @@ def index_file_list(file_paths: list, label: str = "",
             file_size_bytes=prov['file_size_bytes'],
         ) for j in range(len(chunks))]
 
-        _file_collection = _collection_for(filepath)
-
-        # v7.0.0 Phase B ownership: fetch existing chunks once (for gate +
-        # owner-preservation), gate the purge, stamp indexed_by preserving the
-        # original owner on re-index. Personal mode (both None) = unchanged.
-        _existing_metas = []
-        if indexer_user or purge_gate is not None:
-            try:
-                _ex = _file_collection.get(where={"filepath": filepath},
-                                           include=["metadatas"])
-                _existing_metas = _ex.get("metadatas", []) or []
-            except Exception:
-                _existing_metas = []
-        if purge_gate is not None:
-            try:
-                _allowed, _reason = purge_gate(_existing_metas)
-            except Exception as _ge:
-                _allowed, _reason = (False, f"purge gate error: {_ge}")
-            if not _allowed:
-                print(f"         🛡️  Skipped (ownership): {_reason}")
-                skipped += 1
-                continue
-        if indexer_user and indexer_user.get("id"):
-            _prior = None
-            for _m in _existing_metas:
-                if isinstance(_m, dict) and _m.get("indexed_by"):
-                    _prior = _m["indexed_by"]
-                    break
-            _stamp = _prior or indexer_user["id"]
-            for m in metadatas:
-                m["indexed_by"] = _stamp
-
         try:
-            _file_collection.delete(where={"filepath": filepath})
+            collection.delete(where={"filepath": filepath})
         except Exception:
             pass
 
         try:
-            _file_collection.add(ids=ids, documents=chunks, metadatas=metadatas)
+            collection.add(ids=ids, documents=chunks, metadatas=metadatas)
             processed    += 1
             total_chunks += len(chunks)
             total_words  += file_data['word_count']
@@ -3379,9 +3265,7 @@ def index_file_list(file_paths: list, label: str = "",
 def index_email_archive(filepath: str,
                         stop_event=None,
                         pause_event=None,
-                        root_directory: str = "",
-                        collection_resolver=None,
-                        indexer_user=None, purge_gate=None) -> dict:
+                        root_directory: str = "") -> dict:
     """
     Incrementally index a multi-message email archive file.
 
@@ -3427,30 +3311,7 @@ def index_email_archive(filepath: str,
     fname         = Path(filepath).name
 
     client, embedding_func = get_chroma_client()
-    # The whole archive routes to ONE collection (resolved from the archive's
-    # path). No resolver => default collection (original behavior).
-    _archive_collection_name = None
-    if collection_resolver is not None:
-        try:
-            _archive_collection_name = collection_resolver(filepath_norm)
-        except Exception as _re:
-            print(f"⚠️  collection_resolver failed for {filepath_norm}: {_re} "
-                  f"— using default collection")
-            _archive_collection_name = None
-    # ── v7.0.0 Phase B: email indexing is NOT SUPPORTED in server mode ──────────
-    # Server mode exists to SHARE company data for AI. Email is inherently
-    # private and must never be shared into company-visible collections. The
-    # presence of an indexer_user or purge_gate is the server-mode signal — when
-    # set, refuse email archives outright. Personal mode (neither set) is
-    # unchanged: email indexing works exactly as before for a single local user.
-    if indexer_user is not None or purge_gate is not None:
-        print("🚫 Email archive indexing is not supported in server mode "
-              "(email is private and never shared). Skipped.")
-        return {"processed": 0, "skipped": 0, "removed": 0,
-                "chunks": 0, "words": 0, "stopped_at": 0}
-
-    collection = create_or_get_collection(
-        client, embedding_func, collection_name=_archive_collection_name)
+    collection             = create_or_get_collection(client, embedding_func)
 
     # ── Load existing email index for this file ────────────────────────────────
     email_db     = load_email_index()
@@ -3600,18 +3461,17 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False,
                     collection_resolver=None, indexer_user=None, purge_gate=None):
     """
     Index all files in a directory
-    
+
     Args:
         directory: Path to directory to index
         recursive: Whether to search subdirectories
         quiet: Whether to suppress verbose output
-        collection_resolver: OPTIONAL callable filepath -> collection_name
-            (v7.0.0 Phase B server mode). If None (default / personal mode),
-            every file goes to the single default collection — byte-for-byte the
-            original behavior. If provided, each file is routed to the collection
-            the resolver returns, and collections are opened/cached on demand.
-            Kept as a callable (not a direct import of the resolver) so
-            rag_preprocessor stays free of any dependency on ai_prowler_mcp.
+        collection_resolver: Optional callable(filepath)->logical_collection_name
+            for v7.0.0 multi-user scoped indexing. None = personal mode (default
+            'documents' collection).
+        indexer_user: Optional user dict for ownership stamping (v7.0.0).
+        purge_gate: Optional callable(existing_metas)->bool to gate chunk purges
+            by ownership (v7.0.0). None = purge all stale chunks freely.
     """
     if not quiet:
         print(f"\n{'='*60}")
@@ -3627,30 +3487,7 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False,
     
     # Initialize database
     client, embedding_func = get_chroma_client()
-
-    # Collection access: cache opened collections by name. _collection_for(fp)
-    # returns the right collection for a file. With no resolver, every file maps
-    # to the default collection (original single-collection behavior, unchanged).
-    _collection_cache = {}
-    def _collection_for(fp):
-        name = None
-        if collection_resolver is not None:
-            try:
-                name = collection_resolver(fp)
-            except Exception as _re:
-                print(f"         ⚠️  collection_resolver failed for {fp}: {_re} "
-                      f"— using default collection")
-                name = None
-        name = name or COLLECTION_NAME
-        if name not in _collection_cache:
-            _collection_cache[name] = create_or_get_collection(
-                client, embedding_func, collection_name=name)
-        return _collection_cache[name]
-
-    # Backwards-compatible single default collection handle (used by callers/
-    # logging that expect `collection` to exist; per-file writes use _collection_for).
-    collection = _collection_for(directory) if collection_resolver is None \
-        else create_or_get_collection(client, embedding_func)
+    collection = create_or_get_collection(client, embedding_func)
     
     # Find all files — skip binaries, executables and known-useless dirs
     all_files = []
@@ -3662,17 +3499,13 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False,
             for file in files:
                 if not file.startswith('.'):
                     ext = os.path.splitext(file)[1].lower()
-                    if (ext not in SKIP_EXTENSIONS
-                            and not is_backup_filename(file)
-                            and not is_system_junk_filename(file)):
+                    if ext not in SKIP_EXTENSIONS and not is_backup_filename(file):
                         all_files.append(normalise_path(os.path.join(root, file)))
     else:
         for f in os.listdir(directory):
             if not f.startswith('.'):
                 ext = os.path.splitext(f)[1].lower()
-                if (ext not in SKIP_EXTENSIONS
-                        and not is_backup_filename(f)
-                        and not is_system_junk_filename(f)):
+                if ext not in SKIP_EXTENSIONS and not is_backup_filename(f):
                     fp = normalise_path(os.path.join(directory, f))
                     if os.path.isfile(fp):
                         all_files.append(fp)
@@ -3726,63 +3559,18 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False,
             file_modified=prov['file_modified'],
             file_size_bytes=prov['file_size_bytes'],
         ) for j in range(len(chunks))]
-
-        # Route this file to its target collection (default collection in
-        # personal mode; per-scope collection when a resolver is supplied).
-        _file_collection = _collection_for(filepath)
-
-        # Fetch any existing chunks for this path ONCE — used both for the
-        # ownership gate and to PRESERVE the original owner on re-index.
-        _existing_metas = []
-        if indexer_user or purge_gate is not None:
-            try:
-                _ex = _file_collection.get(where={"filepath": filepath},
-                                           include=["metadatas"])
-                _existing_metas = _ex.get("metadatas", []) or []
-            except Exception:
-                _existing_metas = []
-
-        # v7.0.0 Phase B ownership gate: before purging existing chunks for this
-        # path, check the indexer is allowed to remove whoever owns them. The
-        # gate is a callable supplied by the MCP layer (keeps rag_preprocessor
-        # free of ai_prowler_mcp). No gate (personal mode) → always allowed.
-        if purge_gate is not None:
-            try:
-                allowed, reason = purge_gate(_existing_metas)
-            except Exception as _ge:
-                allowed, reason = (False, f"purge gate error: {_ge}")
-            if not allowed:
-                print(f"         🛡️  Skipped (ownership): {reason}")
-                skipped_files += 1
-                continue
-
-        # v7.0.0 Phase B: stamp ownership so the purge gate can enforce
-        # "delete only your own". PRESERVE the original owner on re-index — if
-        # existing chunks already record an indexed_by, keep it (an owner/admin
-        # refreshing someone's file must NOT silently steal ownership). Only a
-        # FIRST index (no prior owner) records the current indexer. Personal
-        # mode (no indexer_user) leaves it off entirely.
-        if indexer_user and indexer_user.get("id"):
-            _prior_owner = None
-            for _m in _existing_metas:
-                if isinstance(_m, dict) and _m.get("indexed_by"):
-                    _prior_owner = _m["indexed_by"]
-                    break
-            _owner_stamp = _prior_owner or indexer_user["id"]
-            for m in metadatas:
-                m["indexed_by"] = _owner_stamp
-
+        
         # Remove any existing chunks for this file before re-adding
         # This prevents ghost chunks from shorter re-processed files and
         # duplicate accumulation from repeated indexing of the same directory
         try:
-            _file_collection.delete(where={"filepath": filepath})
+            collection.delete(where={"filepath": filepath})
         except Exception:
             pass  # Collection may not have this file yet — that's fine
         
         # Add to database
         try:
-            _file_collection.add(
+            collection.add(
                 ids=ids,
                 documents=chunks,
                 metadatas=metadatas
@@ -3862,67 +3650,49 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False,
 # RETRIEVAL
 # ═══════════════════════════════════════════════════════════
 
-def search_documents(query: str, n_results: int = 3,
-                     collection_names: list = None) -> List[Dict]:
+def search_documents(query: str, n_results: int = 3) -> List[Dict]:
     """
     Search for relevant document chunks
     
     Args:
         query: Search query
         n_results: Number of results to return
-        collection_names: OPTIONAL list of collection names to search
-            (v7.0.0 Phase B server mode). If None (default / personal mode),
-            searches the single COLLECTION_NAME — byte-for-byte the original
-            behavior. If a list, searches EACH collection and merges results by
-            distance (best first), so a user's allowed collections are queried
-            and combined. Missing/empty collections are skipped, not fatal.
     
     Returns:
-        List of matching chunks with metadata (each: content, metadata,
-        distance, similarity, and 'collection' when multi-collection).
+        List of matching chunks with metadata
     """
     client, embedding_func = get_chroma_client()
-
-    # Personal mode (no list) → single default collection, original path.
-    names = collection_names if collection_names else [COLLECTION_NAME]
-
-    all_chunks = []
-    for cname in names:
-        try:
-            collection = client.get_collection(
-                name=chroma_collection_name(cname),
-                embedding_function=embedding_func
-            )
-        except:
-            # In personal mode this means "nothing indexed yet"; in server
-            # mode a not-yet-created scope collection is simply skipped.
-            if collection_names is None:
-                print("❌ No indexed documents found. Run 'index' command first.")
-                return []
-            continue
-
-        results = collection.query(
-            query_texts=[query],
-            n_results=n_results
+    
+    try:
+        collection = client.get_or_create_collection(
+            name=COLLECTION_NAME,
+            embedding_function=embedding_func
         )
-        docs = results.get('documents') or [[]]
-        metas = results.get('metadatas') or [[]]
-        dists = results.get('distances') or [[]]
-        if not docs or not docs[0]:
-            continue
-        for i in range(len(docs[0])):
-            dist = dists[0][i]
-            all_chunks.append({
-                'content': docs[0][i],
-                'metadata': metas[0][i],
-                'distance': dist,
-                'similarity': 1 - dist,
-                'collection': cname,
-            })
+    except Exception:
+        print("❌ No indexed documents found. Run 'index' command first.")
+        return []
 
-    # Merge across collections: best (lowest distance) first, then truncate.
-    all_chunks.sort(key=lambda c: c.get('distance', float('inf')))
-    return all_chunks[:n_results]
+    if collection.count() == 0:
+        print("❌ No indexed documents found. Run 'index' command first.")
+        return []
+
+    # Search
+    results = collection.query(
+        query_texts=[query],
+        n_results=n_results
+    )
+    
+    # Format results
+    chunks = []
+    for i in range(len(results['documents'][0])):
+        chunks.append({
+            'content': results['documents'][0][i],
+            'metadata': results['metadatas'][0][i],
+            'distance': results['distances'][0][i],
+            'similarity': 1 - results['distances'][0][i]  # Convert distance to similarity
+        })
+    
+    return chunks
 
 # ═══════════════════════════════════════════════════════════
 # LLM QUERY
@@ -4516,11 +4286,16 @@ def list_indexed_files():
     client, embedding_func = get_chroma_client()
     
     try:
-        collection = client.get_collection(
+        collection = client.get_or_create_collection(
             name=COLLECTION_NAME,
             embedding_function=embedding_func
         )
-    except:
+    except Exception:
+        print("❌ No indexed documents found.")
+        print("   Run: python rag_preprocessor.py index <directory>")
+        return
+
+    if collection.count() == 0:
         print("❌ No indexed documents found.")
         print("   Run: python rag_preprocessor.py index <directory>")
         return
@@ -4566,21 +4341,20 @@ def show_stats():
     client, embedding_func = get_chroma_client()
     
     try:
-        collection = client.get_collection(
+        collection = client.get_or_create_collection(
             name=COLLECTION_NAME,
             embedding_function=embedding_func
         )
-    except:
+    except Exception:
         print("❌ No indexed documents found.")
         return
-    
-    total = collection.count()
-    
-    if total == 0:
+
+    if collection.count() == 0:
         print("📭 Database is empty.")
         return
     
     # Get sample to analyze
+    total = collection.count()
     results = collection.get(limit=min(1000, total))
     
     # Count by extension
@@ -5047,9 +4821,7 @@ def command_check(directory, recursive=True):
         print(f"To update index: rag update {directory}")
         print()
 
-def _update_tracked_file(filepath: str, auto_confirm: bool = False,
-                         collection_resolver=None,
-                         indexer_user=None, purge_gate=None) -> None:
+def _update_tracked_file(filepath: str, auto_confirm: bool = False) -> None:
     """Update a single individually-tracked file.
 
     Bypasses SKIP_EXTENSIONS (per-file tracking is explicit user opt-in).
@@ -5071,40 +4843,11 @@ def _update_tracked_file(filepath: str, auto_confirm: bool = False,
         print(f"🗑️  File no longer exists on disk: {filepath}")
         try:
             client, embedding_func = get_chroma_client()
-            # Resolve the file's actual collection. In server mode the chunks
-            # live in a scope collection (resolved by path — still works even
-            # though the file is gone); in personal mode it's COLLECTION_NAME.
-            target_name = COLLECTION_NAME
-            if collection_resolver is not None:
-                try:
-                    target_name = collection_resolver(filepath) or COLLECTION_NAME
-                except Exception:
-                    target_name = COLLECTION_NAME
             try:
-                collection = client.get_collection(
-                    name=target_name,
+                collection = client.get_or_create_collection(
+                    name=COLLECTION_NAME,
                     embedding_function=embedding_func
                 )
-                # Deleting a file's chunks is DESTRUCTIVE (no re-add). In server
-                # mode, gate it on ownership: only the owner of the chunks (or an
-                # owner/admin custodian) may purge. Personal mode (no gate) always
-                # purges. Skip the delete on denial.
-                if purge_gate is not None:
-                    try:
-                        _ex = collection.get(where={"filepath": fp_norm},
-                                             include=["metadatas"])
-                        _ex_metas = _ex.get("metadatas", []) or []
-                    except Exception:
-                        _ex_metas = []
-                    try:
-                        _ok, _why = purge_gate(_ex_metas)
-                    except Exception as _ge:
-                        _ok, _why = (False, f"purge gate error: {_ge}")
-                    if not _ok:
-                        print(f"   🛡️  Skipped purge (ownership): {_why}")
-                        # Do NOT strip from tracking DB either — the chunks
-                        # remain, so the tracking entry should remain too.
-                        return
                 collection.delete(where={"filepath": fp_norm})
                 print(f"   ✅ Chunks purged from ChromaDB")
             except Exception:
@@ -5185,9 +4928,6 @@ def _update_tracked_file(filepath: str, auto_confirm: bool = False,
             [fp_norm],
             label="1/1",
             root_directory=str(Path(filepath).parent),
-            collection_resolver=collection_resolver,
-            indexer_user=indexer_user,
-            purge_gate=purge_gate,
         )
         chunks = stats.get('chunks', 0) if stats else 0
         print(f"   ✅ {fname} — {chunks} chunk(s) indexed")
@@ -5203,6 +4943,11 @@ def command_update(directory, recursive=True, auto_confirm=False,
                    collection_resolver=None, indexer_user=None, purge_gate=None):
     """Check for changes and update index with new/modified files, and
     automatically purge deleted files from ChromaDB.
+
+    The collection_resolver, indexer_user, and purge_gate kwargs are accepted
+    for forward-compatibility with the v7.0.0 multi-user/scoped-collection MCP
+    layer. In personal (single-user) mode they are unused — routing always goes
+    to the default 'documents' collection.
 
     Handles both directories and individually-tracked files.
 
@@ -5232,10 +4977,7 @@ def command_update(directory, recursive=True, auto_confirm=False,
     # bulk directory scans only — explicit per-file tracking overrides them).
     target_path = Path(directory)
     if target_path.exists() and target_path.is_file():
-        return _update_tracked_file(directory, auto_confirm=auto_confirm,
-                                    collection_resolver=collection_resolver,
-                                    indexer_user=indexer_user,
-                                    purge_gate=purge_gate)
+        return _update_tracked_file(directory, auto_confirm=auto_confirm)
 
     print("=" * 70)
     print("🔍 CHECKING FOR CHANGES")
@@ -5281,25 +5023,6 @@ def command_update(directory, recursive=True, auto_confirm=False,
     client, embedding_func = get_chroma_client()
     collection = create_or_get_collection(client, embedding_func)
 
-    # v7.0.0 Phase B: per-file collection routing for server mode. No resolver
-    # (personal/desktop) => every file uses the default 'collection' above,
-    # unchanged. With a resolver, each file routes to its scoped collection
-    # (cached). Both the purge (delete) and re-index (add) use the per-file one.
-    _cu_cache = {}
-    def _cu_collection_for(fp):
-        if collection_resolver is None:
-            return collection
-        name = None
-        try:
-            name = collection_resolver(fp)
-        except Exception:
-            name = None
-        name = name or COLLECTION_NAME
-        if name not in _cu_cache:
-            _cu_cache[name] = create_or_get_collection(
-                client, embedding_func, collection_name=name)
-        return _cu_cache[name]
-
     # ═══════════════════════════════════════════════════════════════════════════
     # PASS 1 — PURGE DELETED FILES
     # Runs first so stale chunks are gone before we (optionally) re-index.
@@ -5322,25 +5045,7 @@ def command_update(directory, recursive=True, auto_confirm=False,
             print(f"[{i}/{deleted}] [DELETED] {filename}")
 
             try:
-                _del_col = _cu_collection_for(filepath)
-                # v7.0.0 Phase B: purging a DELETED file removes chunks outright
-                # (no re-add) — the genuinely destructive op. Gate it on the
-                # existing chunks' ownership. No gate (personal) → always purge.
-                if purge_gate is not None:
-                    try:
-                        _ex = _del_col.get(where={"filepath": filepath},
-                                           include=["metadatas"])
-                        _ex_metas = _ex.get("metadatas", []) or []
-                    except Exception:
-                        _ex_metas = []
-                    try:
-                        _ok, _why = purge_gate(_ex_metas)
-                    except Exception as _ge:
-                        _ok, _why = (False, f"purge gate error: {_ge}")
-                    if not _ok:
-                        print(f"  🛡️  Skipped purge (ownership): {_why}")
-                        continue
-                _del_col.delete(where={"filepath": filepath})
+                collection.delete(where={"filepath": filepath})
                 print(f"  ✅ Chunks purged from ChromaDB")
                 purged += 1
             except Exception as exc:
@@ -5381,9 +5086,7 @@ def command_update(directory, recursive=True, auto_confirm=False,
             # ── Email archive — incremental per-message update ─────────────
             if ext in EMAIL_ARCHIVE_EXTENSIONS:
                 arc_stats = index_email_archive(filepath,
-                                                root_directory=directory,
-                                                indexer_user=indexer_user,
-                                                purge_gate=purge_gate)
+                                                root_directory=directory)
                 if arc_stats["processed"] > 0 or arc_stats.get("removed", 0) > 0:
                     print(f"  ✅ {arc_stats['processed']} new message(s) indexed, "
                           f"{arc_stats.get('removed', 0)} removed, "
@@ -5428,39 +5131,9 @@ def command_update(directory, recursive=True, auto_confirm=False,
             ) for j in range(len(chunks))]
 
             try:
-                _cu_col = _cu_collection_for(filepath)
-                # v7.0.0 Phase B ownership: fetch existing once, gate the purge,
-                # stamp indexed_by preserving the original owner on re-index.
-                _existing = []
-                if indexer_user or purge_gate is not None:
-                    try:
-                        _ex = _cu_col.get(where={"filepath": filepath},
-                                          include=["metadatas"])
-                        _existing = _ex.get("metadatas", []) or []
-                    except Exception:
-                        _existing = []
-                if purge_gate is not None:
-                    try:
-                        _ok, _why = purge_gate(_existing)
-                    except Exception as _ge:
-                        _ok, _why = (False, f"purge gate error: {_ge}")
-                    if not _ok:
-                        print(f"  🛡️  Skipped (ownership): {_why}")
-                        failed += 1
-                        print()
-                        continue
-                if indexer_user and indexer_user.get("id"):
-                    _prior = None
-                    for _m in _existing:
-                        if isinstance(_m, dict) and _m.get("indexed_by"):
-                            _prior = _m["indexed_by"]
-                            break
-                    _stamp = _prior or indexer_user["id"]
-                    for m in metadatas:
-                        m["indexed_by"] = _stamp
                 # Remove stale chunks before re-adding (handles re-index of modified)
-                _cu_col.delete(where={"filepath": filepath})
-                _cu_col.add(ids=ids, documents=chunks, metadatas=metadatas)
+                collection.delete(where={"filepath": filepath})
+                collection.add(ids=ids, documents=chunks, metadatas=metadatas)
                 print(f"  ✅ Indexed {len(chunks)} chunk(s)")
                 updated += 1
             except Exception as exc:
@@ -5631,7 +5304,7 @@ def remove_directory_from_index(directory: str) -> dict:
     try:
         client, embedding_func = get_chroma_client()
         try:
-            collection = client.get_collection(
+            collection = client.get_or_create_collection(
                 name=COLLECTION_NAME,
                 embedding_function=embedding_func
             )

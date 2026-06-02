@@ -68,6 +68,7 @@ import io
 import json
 import contextlib
 import threading
+import queue
 import argparse
 from pathlib import Path
 from typing import Optional
@@ -528,6 +529,68 @@ _prewarm_event = threading.Event()
 _prewarm_event.set()   # default: don't block (overridden to clear() in stdio entry)
 
 # ══════════════════════════════════════════════════════════════════════════════
+# DB WRITER THREAD (v7.0.0)
+# ──────────────────────────────────────────────────────────────────────────────
+# ChromaDB's PersistentLocalHnswSegment has thread-affinity on its write/consumer
+# path. Under the HTTP transport every tool runs on a ROTATING anyio threadpool
+# worker, so a ChromaDB *write* (delete/add) arriving on a different thread than
+# the one that owns the segment lock raises "resource deadlock would occur"
+# (EDEADLK) and wedges the server — reproducibly, even for a 5-byte file.
+#
+# Fix: funnel ALL ChromaDB writes through ONE dedicated, long-lived thread. Tool
+# handlers submit a callable + wait synchronously for its result. Because the
+# same thread always performs the write, the segment lock affinity is never
+# violated. Reads are left on the pool (they tolerate cross-thread access).
+_db_write_queue: "queue.Queue" = queue.Queue()
+_db_writer_started = threading.Event()
+_db_writer_lock = threading.Lock()
+
+
+def _db_writer_loop():
+    """Single owner thread for ChromaDB writes. Runs submitted jobs serially."""
+    _log.info("DB-writer thread started (tid=%s)", threading.get_ident())
+    while True:
+        fn, args, kwargs, result_box, done = _db_write_queue.get()
+        try:
+            result_box["result"] = fn(*args, **kwargs)
+        except BaseException as exc:   # capture EVERYTHING, incl. EDEADLK OSError
+            result_box["error"] = exc
+        finally:
+            done.set()
+            _db_write_queue.task_done()
+
+
+def _ensure_db_writer():
+    """Start the writer thread once, lazily and thread-safely."""
+    if _db_writer_started.is_set():
+        return
+    with _db_writer_lock:
+        if _db_writer_started.is_set():
+            return
+        t = threading.Thread(target=_db_writer_loop, name="db-writer",
+                             daemon=True)
+        t.start()
+        _db_writer_started.set()
+
+
+def _db_write(fn, *args, timeout: float = 900.0, **kwargs):
+    """Run fn(*args, **kwargs) on the dedicated DB-writer thread and return its
+    result. Raises the worker's exception in the caller, or TimeoutError if the
+    job does not finish within `timeout` seconds. This is what makes reindex
+    safe on the HTTP transport — the write never touches the rotating pool."""
+    _ensure_db_writer()
+    result_box: dict = {}
+    done = threading.Event()
+    _db_write_queue.put((fn, args, kwargs, result_box, done))
+    if not done.wait(timeout=timeout):
+        raise TimeoutError(
+            f"DB write did not complete within {timeout:.0f}s "
+            f"(job still running on db-writer thread)")
+    if "error" in result_box:
+        raise result_box["error"]
+    return result_box.get("result")
+
+# ══════════════════════════════════════════════════════════════════════════════
 # GUIDANCE TOOL — how_to_use_ai_prowler
 # ══════════════════════════════════════════════════════════════════════════════
 # Bulletproof fallback that works on ALL FastMCP versions.
@@ -654,6 +717,22 @@ def how_to_use_ai_prowler() -> str:
         "  Useful especially for mobile users who cannot attach files —\n"
         "  ask them to index_path() the project once, then\n"
         "  use grep + read_file_lines for all subsequent code questions.\n\n"
+
+        "EDITING FILES — REINDEX WHEN DONE (v7.0.0)\n"
+        + "-" * 30 + "\n"
+        "Write tools (create_file, write_file, str_replace_in_file,\n"
+        "restore_backup) NO LONGER auto-index. They write to disk and create\n"
+        "backups, but ChromaDB is NOT updated until you ask for it.\n"
+        "  • Make ALL your edits to a file first (any number of\n"
+        "    str_replace_in_file calls).\n"
+        "  • When you are DONE editing that file, call reindex_file(path)\n"
+        "    ONCE to sync it into the database.\n"
+        "  • Do NOT call reindex_file between every edit — one call at the\n"
+        "    end of the edit session per file is correct.\n"
+        "  • For a whole folder, use reindex_directory() / index_path()\n"
+        "    instead of many reindex_file() calls.\n"
+        "  Rationale: re-embedding on every write deadlocked the HTTP server\n"
+        "  on large files; explicit end-of-session reindex avoids that.\n\n"
 
         "SELF-LEARNING WORKFLOW — PERSISTENT MEMORY\n"
         + "-" * 30 + "\n"
@@ -1062,7 +1141,7 @@ def check_ai_prowler_status() -> str:
     with _capture_stdout() as buf:
         try:
             client, embedding_func = get_chroma_client()
-            collection = client.get_collection(
+            collection = client.get_or_create_collection(
                 name=COLLECTION_NAME,
                 embedding_function=embedding_func
             )
@@ -1159,10 +1238,18 @@ def _get_collection():
     from rag_preprocessor import get_chroma_client, COLLECTION_NAME
     client, embedding_func = get_chroma_client()
     try:
-        return client.get_collection(
+        col = client.get_or_create_collection(
             name=COLLECTION_NAME,
             embedding_function=embedding_func
         )
+        if col.count() == 0:
+            raise RuntimeError(
+                "No indexed documents found. "
+                "Use index_path to index some documents first."
+            )
+        return col
+    except RuntimeError:
+        raise
     except Exception:
         raise RuntimeError(
             "No indexed documents found. "
@@ -4815,59 +4902,20 @@ def _reset_write_counter_internal() -> int:
 # ── Auto re-index helper ─────────────────────────────────────────────────────
 def _reindex_file_after_write(filepath: str, *, was_new: bool = False) -> None:
     """
-    Update ChromaDB to reflect on-disk content of filepath.
+    DISABLED in v7.0.0 — intentional no-op.
 
-    Semantics: delete-then-add (replace). For new files (was_new=True), the
-    delete is a no-op but harmless. Best-effort — failures are logged but do
-    not propagate to the tool caller (the file is on disk; next scheduled
-    re-scan will catch up).
+    Auto-reindex-on-write was removed: re-embedding the whole file on the
+    uvicorn request thread re-entered the already-open ChromaDB collection and
+    caused "resource deadlock would occur", hanging the HTTP MCP server. Large
+    files (e.g. rag_gui.py at ~700 KB) reproduced it every time.
 
-    The .bak<N> files are NEVER indexed — the indexer's SKIP_EXTENSIONS /
-    skip patterns must include .bak* (LAYER 2 of the 'backups never indexed'
-    rule; LAYER 1 is this function only ever being called with the active
-    filepath, never a backup path).
+    The database is now updated only by EXPLICIT reindex: call reindex_file()
+    once you are done editing a file, or reindex_directory()/index_path() for a
+    whole tree. Writes still create backups and land on disk immediately; they
+    just no longer touch ChromaDB. Kept as a stub so existing call sites and any
+    external references remain valid.
     """
-    try:
-        from rag_preprocessor import (
-            normalise_path, index_file_list,
-            get_chroma_client, COLLECTION_NAME,
-        )
-    except Exception as exc:
-        # If the indexer surface differs, fall back to the safer pattern:
-        # log and let the next scheduled re-scan catch up.
-        _log.warning("re-index post-write: import failure (%s) — "
-                     "next scheduled scan will catch up.", exc)
-        return
-
-    fp_norm = normalise_path(filepath)
-
-    # Step 1: purge existing chunks for this filepath (delete-then-add).
-    # Uses get_or_create_collection so this is a no-op on a fresh install
-    # where no collection exists yet. NOTE 2026-05-30 v7.0.0 bug fix: the
-    # previous import line referenced a `_get_or_create_collection` helper
-    # that doesn't exist in rag_preprocessor. The import raised silently and
-    # _reindex_file_after_write returned early WITHOUT reindexing, meaning
-    # every write tool was reporting "✅ indexed" while leaving ChromaDB
-    # stale. Replaced with the same two-step (get_chroma_client →
-    # client.get_or_create_collection) pattern that `_get_collection` at
-    # ~line 1157 uses for the read tools.
-    try:
-        client, embedding_func = get_chroma_client()
-        coll = client.get_or_create_collection(
-            name=COLLECTION_NAME,
-            embedding_function=embedding_func,
-        )
-        coll.delete(where={"filepath": fp_norm})
-    except Exception as exc:
-        _log.warning("re-index post-write: purge failed for %s: %s", fp_norm, exc)
-        # Continue anyway — index_file_list will add new chunks regardless
-
-    # Step 2: re-index the file
-    try:
-        index_file_list([fp_norm], label="post-write")
-    except Exception as exc:
-        _log.warning("re-index post-write: index_file_list failed for %s: %s",
-                     fp_norm, exc)
+    return
 
 
 # ── Parent directory must exist (helper for create_file / write_file) ────────
@@ -4972,12 +5020,9 @@ def create_file(filepath: str, content: str) -> str:
 
     _log.info("create_file: %s (%d bytes)", resolved, len(content_bytes))
 
-    # Re-index
-    _reindex_file_after_write(resolved, was_new=True)
-
     return (f"✅ Created {resolved}\n"
             f"   {len(content_bytes):,} bytes written\n"
-            f"   File indexed in ChromaDB.")
+            f"   NOT yet indexed — call reindex_file({resolved!r}) when done editing.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -5079,15 +5124,12 @@ def write_file(filepath: str, content: str, verify_after_write: bool = False) ->
     _log.info("write_file: %s (%d -> %d bytes, backup %s)",
               resolved, old_size, len(content_bytes), backup_path)
 
-    # Re-index
-    _reindex_file_after_write(resolved, was_new=False)
-
-    # Build response
+    # Build response (auto-reindex removed in v7.0.0 — see _reindex_file_after_write)
     out = [
         f"✅ Wrote {resolved}",
         f"   {old_size:,} bytes  →  {len(content_bytes):,} bytes",
         f"   Backup: {backup_path}",
-        f"   ChromaDB chunks purged and re-indexed.",
+        f"   NOT yet indexed — call reindex_file() when done editing.",
     ]
     if verify_after_write:
         out.append("")
@@ -5318,15 +5360,13 @@ def str_replace_in_file(filepath: str,
     _log.info("str_replace_in_file: %s line=%d (%d -> %d bytes, backup %s)",
               resolved, line_of_change, size, new_byte_count, backup_path)
 
-    # Re-index
-    _reindex_file_after_write(resolved, was_new=False)
-
+    # (auto-reindex removed in v7.0.0 — call reindex_file() when done editing)
     out = [
         f"✅ Edited {resolved}",
         f"   Change at line {line_of_change}",
         f"   {size:,} bytes  →  {new_byte_count:,} bytes",
         f"   Backup: {backup_path}",
-        f"   ChromaDB chunks purged and re-indexed.",
+        f"   NOT yet indexed — call reindex_file() when done editing.",
     ]
     if verify_after_write:
         out.append("")
@@ -5679,13 +5719,12 @@ def restore_backup(filepath: str, backup_number: int) -> str:
     _log.info("restore_backup: %s <- %s (%d -> %d bytes)",
               resolved, backup_path, old_size, backup_size)
 
-    # Re-index
-    _reindex_file_after_write(resolved, was_new=False)
-
+    # (auto-reindex removed in v7.0.0 — call reindex_file() if you want the
+    #  restored content re-indexed)
     return (f"✅ Restored {resolved}\n"
             f"   Source: {backup_path}\n"
             f"   {old_size:,} bytes  →  {backup_size:,} bytes\n"
-            f"   ChromaDB chunks purged and re-indexed.\n"
+            f"   NOT yet indexed — call reindex_file() if you want it indexed.\n"
             f"   .bak{n} preserved (restore is non-destructive to backups).")
 
 
@@ -7323,6 +7362,77 @@ def revoke_write_access(directory: str, ctx: Context = None) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
+def reindex_file(filepath: str, ctx: Context = None) -> str:
+    """
+    Re-index a SINGLE file in ChromaDB to match its current on-disk content.
+
+    Call this ONCE when you have finished editing a file — NOT after every
+    individual str_replace_in_file. Writes no longer auto-index (that caused an
+    HTTP-server deadlock on large files), so the database stays stale until you
+    run this. Delete-then-add: purges the file's existing chunks, then re-chunks
+    and re-embeds the current content.
+
+    Args:
+        filepath: Absolute path to the file. Must be under a tracked
+                  read-allowlisted root.
+
+    Voice examples:
+        "Re-index rag_gui.py"
+        "Update the index for the file I just edited"
+    """
+    _telemetry_increment_tool_count("reindex_file")
+    try:
+        from rag_preprocessor import (
+            normalise_path, index_file_list,
+            get_chroma_client, COLLECTION_NAME,
+        )
+    except Exception as exc:
+        return f"❌ reindex_file failed to import indexer: {exc}"
+
+    # Resolve + allowlist-gate using the SAME wrapper the write/read tools use.
+    # Returns (resolved_path, None) on allow, or (None, error_message) on deny.
+    resolved, err = _resolve_allowlisted_path(filepath)
+    if err:
+        return err
+
+    if not Path(resolved).is_file():
+        return f"❌ Not a file (or does not exist): {resolved}"
+
+    # All ChromaDB writes run on the single dedicated db-writer thread to avoid
+    # the HNSW cross-thread EDEADLK ("resource deadlock would occur") that wedges
+    # the HTTP server. purge + re-index happen together inside one job.
+    def _job():
+        try:
+            client, embedding_func = get_chroma_client()
+            coll = client.get_or_create_collection(
+                name=COLLECTION_NAME,
+                embedding_function=embedding_func,
+            )
+            coll.delete(where={"filepath": resolved})
+        except Exception as exc:
+            _log.warning("reindex_file: purge failed for %s: %s", resolved, exc)
+            # continue — index_file_list still adds fresh chunks
+        return index_file_list([resolved], label="reindex_file",
+                               root_directory=str(Path(resolved).parent))
+
+    try:
+        stats = _db_write(_job, timeout=900.0)
+    except TimeoutError as exc:
+        return f"⏱️  reindex_file timed out for {resolved}: {exc}"
+    except Exception as exc:
+        return f"❌ reindex_file failed for {resolved}: {exc}"
+
+    chunks = 0
+    try:
+        chunks = int(stats.get("chunks", 0)) if isinstance(stats, dict) else 0
+    except Exception:
+        pass
+
+    return (f"✅ Re-indexed {resolved}\n"
+            f"   {chunks:,} chunk(s) now in ChromaDB for this file.")
+
+
+@mcp.tool()
 def reindex_directory(directory: str, purge_first: bool = True,
                       ctx: Context = None) -> str:
     """
@@ -7364,34 +7474,39 @@ def reindex_directory(directory: str, purge_first: bool = True,
         import datetime as _dt6
         start = _dt6.datetime.now()
 
-        if purge_first:
-            # Remove all existing chunks for files under this directory
-            try:
-                client = _engine.get_chroma_client()
-                coll   = client.get_or_create_collection("documents")
-                # Get all chunk IDs whose source is under this directory
-                existing = coll.get(where={"source": {"$regex": ".*"}},
-                                    include=["metadatas"])
-                norm_dir = _normalize_path_for_match(resolved)
-                ids_to_del = [
-                    existing["ids"][i]
-                    for i, meta in enumerate(existing.get("metadatas") or [])
-                    if _normalize_path_for_match(
-                           str(meta.get("source",""))).startswith(norm_dir)
-                ]
-                if ids_to_del:
-                    coll.delete(ids=ids_to_del)
-                    _log.info("reindex_directory: purged %d chunks for %s",
-                              len(ids_to_del), resolved)
-            except Exception as _pe:
-                _log.warning("reindex_directory: purge step warning: %s", _pe)
+        # purge + re-index run together on the dedicated db-writer thread to
+        # avoid the HNSW cross-thread EDEADLK that wedges the HTTP server.
+        def _job():
+            if purge_first:
+                try:
+                    client = _engine.get_chroma_client()
+                    if isinstance(client, tuple):
+                        client = client[0]
+                    coll   = client.get_or_create_collection("documents")
+                    existing = coll.get(where={"source": {"$regex": ".*"}},
+                                        include=["metadatas"])
+                    norm_dir = _normalize_path_for_match(resolved)
+                    ids_to_del = [
+                        existing["ids"][i]
+                        for i, meta in enumerate(existing.get("metadatas") or [])
+                        if _normalize_path_for_match(
+                               str(meta.get("source",""))).startswith(norm_dir)
+                    ]
+                    if ids_to_del:
+                        coll.delete(ids=ids_to_del)
+                        _log.info("reindex_directory: purged %d chunks for %s",
+                                  len(ids_to_del), resolved)
+                except Exception as _pe:
+                    _log.warning("reindex_directory: purge step warning: %s", _pe)
+            with _capture_stdout() as buf:
+                _r = index_directory(resolved)
+            return _r, buf.getvalue()
 
-        # Re-index
-        with _capture_stdout() as buf:
-            result = index_directory(resolved)
+        result, _out = _db_write(_job, timeout=1800.0)
+        buf_value = _out
         elapsed = (_dt6.datetime.now() - start).total_seconds()
 
-        output = buf.getvalue().strip()
+        output = (buf_value or "").strip()
         if isinstance(result, dict):
             files   = result.get("files_indexed", "?")
             chunks  = result.get("chunks_added", "?")
@@ -10118,7 +10233,7 @@ if __name__ == "__main__":
                 from rag_preprocessor import get_chroma_client, COLLECTION_NAME
                 _pw_client, _pw_emb = get_chroma_client()
                 try:
-                    _pw_col   = _pw_client.get_collection(
+                    _pw_col   = _pw_client.get_or_create_collection(
                                     name=COLLECTION_NAME,
                                     embedding_function=_pw_emb)
                     _pw_count = _pw_col.count()

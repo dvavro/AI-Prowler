@@ -97,7 +97,7 @@ def test_G_MCP_01_index_path_directory(mcp_env, sample_files):
 
     # ChromaDB has chunks for at least one of the sample files
     client, ef = mcp_env.rag.get_chroma_client()
-    coll = client.get_collection(
+    coll = client.get_or_create_collection(
         name=mcp_env.rag.COLLECTION_NAME, embedding_function=ef)
     assert coll.count() > 0
 
@@ -200,7 +200,7 @@ def test_G_MCP_04_get_database_stats(mcp_env, sample_files):
 
     # Verify against the source of truth — the actual ChromaDB
     client, ef = mcp_env.rag.get_chroma_client()
-    coll = client.get_collection(
+    coll = client.get_or_create_collection(
         name=mcp_env.rag.COLLECTION_NAME, embedding_function=ef)
     chroma_count = coll.count()
 

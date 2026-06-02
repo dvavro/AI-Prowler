@@ -34,7 +34,7 @@ setlocal
 
 REM ── Path configuration ───────────────────────────────────────────────────
 REM Edit these two lines if you move either repo.
-set "AIPROWLER_ROOT=C:\Users\david\AI-Prowler_V602_to_V700_work\AI-Prowler"
+set "AIPROWLER_ROOT=C:\Users\david\AI-Prowler_V700_to_V701_work\AI-Prowler"
 set "SUBS_ROOT=C:\Users\david\AI-Prowler-ADMIN-V7\ai-prowler-subs"
 
 REM ── Environment sanity checks (fail fast with clear messages) ────────────

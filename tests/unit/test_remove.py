@@ -40,13 +40,13 @@ def test_F_UPD_05_remove_directory_full_cleanup(isolated_env):
     )
 
     client, ef = rag.get_chroma_client()
-    coll = client.get_collection(name=rag.COLLECTION_NAME, embedding_function=ef)
+    coll = client.get_or_create_collection(name=rag.COLLECTION_NAME, embedding_function=ef)
     assert coll.count() > 0, "Pre-condition: chunks should exist in ChromaDB"
 
     result = rag.remove_directory_from_index(str(folder))
 
     # ChromaDB chunks gone
-    coll = client.get_collection(name=rag.COLLECTION_NAME, embedding_function=ef)
+    coll = client.get_or_create_collection(name=rag.COLLECTION_NAME, embedding_function=ef)
     surviving = coll.get(
         where={"filepath": {"$in": [rag.normalise_path(str(p)) for p in files]}},
         include=["metadatas"],
@@ -100,7 +100,7 @@ def test_F_UPD_06_remove_individual_file(isolated_env):
 
     # Bystander chunks must survive
     client, ef = rag.get_chroma_client()
-    coll = client.get_collection(name=rag.COLLECTION_NAME, embedding_function=ef)
+    coll = client.get_or_create_collection(name=rag.COLLECTION_NAME, embedding_function=ef)
     surviving = coll.get(where={"filepath": rag.normalise_path(str(bystander))},
                          include=["metadatas"])
     assert surviving.get("ids"), "Bystander chunks were wrongly removed"

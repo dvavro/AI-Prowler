@@ -1,10 +1,11 @@
 """
-tests/mcp/test_reindex_after_write.py — C-REINDEX-NN: auto-reindex coverage
+tests/mcp/test_reindex_after_write.py — C-REINDEX-NN: explicit reindex coverage
 
-Exercises the REAL `_reindex_file_after_write` code path against a REAL
-(isolated) ChromaDB. Does NOT monkey-patch the reindex helper — these tests
-exist precisely to catch silent-failure modes the existing test_write_tools.py
-suite can't see because it stubs reindexing out for speed.
+Tests that writes land in ChromaDB correctly when followed by an explicit
+reindex_file() call. Auto-reindex-on-write was removed in v7.0.1 (it caused
+an HTTP-server deadlock on the uvicorn request thread). The contract is now:
+write the file, then call reindex_file() when done. These tests verify that
+contract works end-to-end against a real (isolated) ChromaDB.
 
 Test plan IDs in this file begin with `C-REINDEX-NN`, grouped:
 
@@ -103,6 +104,16 @@ def reindex_env(isolated_env, mcp_mod, monkeypatch, tmp_path):
     return e
 
 
+def _reindex(env, filepath):
+    """Explicitly reindex a file after a write — replacing the old auto-reindex
+    that was removed in v7.0.1. Call this after every create_file / write_file /
+    str_replace_in_file / restore_backup in these tests."""
+    env.rag.index_file_list(
+        [env.rag.normalise_path(str(filepath))],
+        label="test-reindex",
+    )
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers — small, well-named, reused across many tests
 # ──────────────────────────────────────────────────────────────────────────────
@@ -180,6 +191,7 @@ def test_C_REINDEX_01_create_file_indexes_new_content(reindex_env, mcp_mod):
     content = "Purple zebras are a fictional creature invented for testing. " * 20
     result = mcp_mod.create_file(filepath=str(fp), content=content)
     assert "✅" in result or "Created" in result, f"create_file did not report success: {result!r}"
+    _reindex(reindex_env, fp)
     assert _chunk_count_for_file(reindex_env.rag, str(fp)) > 0, (
         "create_file claimed success but no chunks were added to ChromaDB. "
         "_reindex_file_after_write is not running. Check the import statement."
@@ -194,9 +206,11 @@ def test_C_REINDEX_02_write_file_indexes_new_content(reindex_env, mcp_mod):
     then search for the change, expect a hit."""
     fp = reindex_env.project / "scratch.md"
     mcp_mod.create_file(filepath=str(fp), content="Original baseline content. " * 10)
+    _reindex(reindex_env, fp)
     new_content = "Magenta walruses sing at sunset in the test environment. " * 15
     result = mcp_mod.write_file(filepath=str(fp), content=new_content)
     assert "✅" in result or "Wrote" in result, f"write_file did not report success: {result!r}"
+    _reindex(reindex_env, fp)
     assert _search_finds(reindex_env.rag, "magenta walrus sunset", "Magenta walruses"), (
         "After write_file, the NEW content is not searchable. "
         "The reindex either didn't run or didn't add the new chunks."
@@ -213,12 +227,14 @@ def test_C_REINDEX_03_str_replace_indexes_new_content(reindex_env, mcp_mod):
                  + "The lazy dog yawns and falls asleep. "
                  + "Filler text to give the embedding something to work with. " * 10),
     )
+    _reindex(reindex_env, fp)
     result = mcp_mod.str_replace_in_file(
         filepath=str(fp),
         old_str="The lazy dog yawns and falls asleep.",
         new_str="A turquoise armadillo dances the tango under a glittering disco ball.",
     )
     assert "✅" in result or "Replaced" in result, f"str_replace did not report success: {result!r}"
+    _reindex(reindex_env, fp)
     assert _search_finds(reindex_env.rag, "turquoise armadillo disco", "turquoise armadillo"), (
         "After str_replace_in_file, the NEW string is not searchable. "
         "The reindex either didn't run or didn't add the new chunks."
@@ -233,6 +249,7 @@ def test_C_REINDEX_04_create_file_chunk_metadata_has_filepath(reindex_env, mcp_m
     fp = reindex_env.project / "metadata_check.md"
     content = "Indexed content for the metadata-filepath check. " * 30
     mcp_mod.create_file(filepath=str(fp), content=content)
+    _reindex(reindex_env, fp)
     chunks = _chunks_for_file(reindex_env.rag, str(fp))
     assert len(chunks["metadatas"]) > 0, "No chunks found by where={filepath:...}"
     expected = reindex_env.rag.normalise_path(str(fp))
@@ -252,6 +269,7 @@ def test_C_REINDEX_05_search_finds_file_via_metadata_route(reindex_env, mcp_mod)
         filepath=str(fp),
         content="A unique sentinel phrase indigo jaguar cathedral. " * 12,
     )
+    _reindex(reindex_env, fp)
     assert _search_returns_anything_for_file(
         reindex_env.rag, "indigo jaguar cathedral", str(fp)
     ), "Search did not return any chunks belonging to the newly-created file"
@@ -269,6 +287,7 @@ def test_C_REINDEX_06_write_file_purges_old_chunks(reindex_env, mcp_mod):
         filepath=str(fp),
         content="A cyan octopus juggles seven coconuts on Tuesdays. " * 12,
     )
+    _reindex(reindex_env, fp)
     # Sanity: the original phrase IS searchable.
     assert _search_finds(reindex_env.rag, "cyan octopus coconut", "cyan octopus"), (
         "Setup precondition failed: original content not searchable"
@@ -278,6 +297,7 @@ def test_C_REINDEX_06_write_file_purges_old_chunks(reindex_env, mcp_mod):
         filepath=str(fp),
         content="The new content has nothing in common with the old. " * 12,
     )
+    _reindex(reindex_env, fp)
     # Now the OLD phrase must be gone.
     assert not _search_finds(reindex_env.rag, "cyan octopus coconut", "cyan octopus"), (
         "After write_file, the OLD chunks were NOT purged. The delete-where "
@@ -291,15 +311,12 @@ def test_C_REINDEX_07_str_replace_purges_old_chunks(reindex_env, mcp_mod):
     """str_replace_in_file: after the surgical edit, the OLD string is not
     searchable any more — the whole file was re-chunked."""
     fp = reindex_env.project / "oldstring.md"
-    # NOTE: tokens deliberately use no markdown-special characters (no
-    # underscores, no asterisks). The markdown loader processes those during
-    # ingestion, which would cause our literal-substring assertions to miss
-    # even though semantic search returns the chunk. Use plain ASCII words.
     mcp_mod.create_file(
         filepath=str(fp),
         content=("UNIQUEOLDTOKENvermillionstarfish appears here once. "
                  + "Filler content surrounding it. " * 20),
     )
+    _reindex(reindex_env, fp)
     assert _search_finds(reindex_env.rag, "vermillion starfish",
                          "UNIQUEOLDTOKENvermillionstarfish"), (
         "Setup precondition failed: OLD token not searchable"
@@ -309,6 +326,7 @@ def test_C_REINDEX_07_str_replace_purges_old_chunks(reindex_env, mcp_mod):
         old_str="UNIQUEOLDTOKENvermillionstarfish",
         new_str="UNIQUENEWTOKENamberpuffin",
     )
+    _reindex(reindex_env, fp)
     assert not _search_finds(reindex_env.rag, "vermillion starfish",
                              "UNIQUEOLDTOKENvermillionstarfish"), (
         "After str_replace_in_file, the OLD token is still searchable. "
@@ -332,12 +350,14 @@ def test_C_REINDEX_08_repeated_writes_no_chunk_accumulation(reindex_env, mcp_mod
         filepath=str(fp),
         content="Initial content with some bulk. " * 20,
     )
+    _reindex(reindex_env, fp)
     initial = _chunk_count_for_file(reindex_env.rag, str(fp))
     for i in range(5):
         mcp_mod.write_file(
             filepath=str(fp),
             content=f"Iteration {i}: " + ("brief content " * 20),
         )
+        _reindex(reindex_env, fp)
     final = _chunk_count_for_file(reindex_env.rag, str(fp))
     # Each iteration's content is similar in length to the initial — chunk
     # counts should be within 1-2 of each other, certainly not 5x the initial.
@@ -356,10 +376,12 @@ def test_C_REINDEX_09_empty_overwrite_purges_all_chunks(reindex_env, mcp_mod):
         filepath=str(fp),
         content="Plenty of content here. " * 20,
     )
+    _reindex(reindex_env, fp)
     assert _chunk_count_for_file(reindex_env.rag, str(fp)) > 0, (
         "Setup precondition failed: file should have chunks initially"
     )
     mcp_mod.write_file(filepath=str(fp), content="")
+    _reindex(reindex_env, fp)
     # After emptying, zero or near-zero chunks. (Some chunkers may produce
     # one empty chunk; both are acceptable. What's NOT acceptable is having
     # the OLD content still present.)
@@ -380,6 +402,7 @@ def test_C_REINDEX_10_modified_content_replaces_search_results(reindex_env, mcp_
         filepath=str(fp),
         content="Penguins waddle through arctic snow. " * 20,
     )
+    _reindex(reindex_env, fp)
     client, ef = reindex_env.rag.get_chroma_client()
     coll = client.get_or_create_collection(
         name=reindex_env.rag.COLLECTION_NAME, embedding_function=ef,
@@ -393,6 +416,7 @@ def test_C_REINDEX_10_modified_content_replaces_search_results(reindex_env, mcp_
         filepath=str(fp),
         content="Camels traverse desert dunes under harsh sun. " * 20,
     )
+    _reindex(reindex_env, fp)
     after = coll.query(query_texts=["arctic animals"], n_results=3)
     after_docs = (after.get("documents") or [[]])[0]
     # The old penguin chunks should NOT be in the search results any more
@@ -411,7 +435,9 @@ def test_C_REINDEX_11_write_file_metadata_filepath_correct(reindex_env, mcp_mod)
     can't find the chunks to delete."""
     fp = reindex_env.project / "meta_after_write.md"
     mcp_mod.create_file(filepath=str(fp), content="initial content " * 30)
+    _reindex(reindex_env, fp)
     mcp_mod.write_file(filepath=str(fp), content="replacement content " * 30)
+    _reindex(reindex_env, fp)
     chunks = _chunks_for_file(reindex_env.rag, str(fp))
     expected = reindex_env.rag.normalise_path(str(fp))
     assert len(chunks["metadatas"]) > 0, "No chunks for file after write"
@@ -448,6 +474,7 @@ def test_C_REINDEX_13_purge_where_clause_finds_chunks(reindex_env, mcp_mod):
     mechanism the purge step relies on."""
     fp = reindex_env.project / "where_test.md"
     mcp_mod.create_file(filepath=str(fp), content="some content " * 30)
+    _reindex(reindex_env, fp)
     initial_count = _chunk_count_for_file(reindex_env.rag, str(fp))
     assert initial_count > 0, "Setup failed: no chunks to delete"
 
@@ -473,6 +500,7 @@ def test_C_REINDEX_14_path_normalization_is_consistent(reindex_env, mcp_mod):
     to forward slashes consistently.)"""
     fp = reindex_env.project / "norm_test.md"
     mcp_mod.create_file(filepath=str(fp), content="path normalization content " * 20)
+    _reindex(reindex_env, fp)
     # Round-trip through normalise_path twice — must be idempotent.
     once = reindex_env.rag.normalise_path(str(fp))
     twice = reindex_env.rag.normalise_path(once)
@@ -559,12 +587,15 @@ def test_C_REINDEX_18_modifying_file_A_does_not_affect_file_B(reindex_env, mcp_m
     fp_b = reindex_env.project / "file_b.md"
     mcp_mod.create_file(filepath=str(fp_a),
                         content="A-content with PhraseAlphaQuokka. " * 15)
+    _reindex(reindex_env, fp_a)
     mcp_mod.create_file(filepath=str(fp_b),
                         content="B-content with PhraseBetaNumbat. " * 15)
+    _reindex(reindex_env, fp_b)
     b_count_before = _chunk_count_for_file(reindex_env.rag, str(fp_b))
     # Now modify A
     mcp_mod.write_file(filepath=str(fp_a),
                        content="A-replaced with PhraseGammaDunnart. " * 15)
+    _reindex(reindex_env, fp_a)
     # B should be untouched
     b_count_after = _chunk_count_for_file(reindex_env.rag, str(fp_b))
     assert b_count_after == b_count_before, (
@@ -623,6 +654,7 @@ def test_C_REINDEX_21_unicode_content_searchable(reindex_env, mcp_mod):
         + "Эмодзи и кириллица работают вместе. " * 5
     )
     mcp_mod.create_file(filepath=str(fp), content=content)
+    _reindex(reindex_env, fp)
     # The file IS searchable at all (via metadata)
     assert _search_returns_anything_for_file(
         reindex_env.rag, "café français accents", str(fp)
@@ -636,6 +668,7 @@ def test_C_REINDEX_22_crlf_line_endings_searchable(reindex_env, mcp_mod):
     fp = reindex_env.project / "crlf.md"
     content = "First line of the test file.\nSecond line follows.\nThird line.\n" * 10
     mcp_mod.create_file(filepath=str(fp), content=content)
+    _reindex(reindex_env, fp)
     assert _search_returns_anything_for_file(
         reindex_env.rag, "First line of the test file", str(fp)
     ), "CRLF file is not searchable after indexing"
@@ -647,6 +680,7 @@ def test_C_REINDEX_23_very_short_file_has_chunks(reindex_env, mcp_mod):
     chunk (not get filtered out as 'too small')."""
     fp = reindex_env.project / "tiny.md"
     mcp_mod.create_file(filepath=str(fp), content="A tiny but very distinctive HUMMINGBIRD sentence.")
+    _reindex(reindex_env, fp)
     count = _chunk_count_for_file(reindex_env.rag, str(fp))
     assert count >= 1, f"Very short file produced 0 chunks (expected >= 1)"
     assert _search_finds(reindex_env.rag, "hummingbird tiny", "HUMMINGBIRD"), (
@@ -665,6 +699,7 @@ def test_C_REINDEX_24_long_file_replace_all_chunks(reindex_env, mcp_mod):
         filepath=str(fp),
         content="OriginalBanner paragraph content. " * 200,
     )
+    _reindex(reindex_env, fp)
     initial_count = _chunk_count_for_file(reindex_env.rag, str(fp))
     assert initial_count >= 2, (
         f"Setup precondition failed: long file produced only {initial_count} chunk(s); "
@@ -675,6 +710,7 @@ def test_C_REINDEX_24_long_file_replace_all_chunks(reindex_env, mcp_mod):
         filepath=str(fp),
         content="ReplacementBanner different paragraph content. " * 200,
     )
+    _reindex(reindex_env, fp)
     # NONE of the resulting chunks should contain the ORIGINAL banner
     chunks = _chunks_for_file(reindex_env.rag, str(fp))
     for doc in chunks["documents"]:
@@ -698,11 +734,13 @@ def test_C_REINDEX_25_restore_backup_reflects_restored_content(reindex_env, mcp_
         filepath=str(fp),
         content="ORIGINAL state with StarlightFalcon token. " * 12,
     )
+    _reindex(reindex_env, fp)
     # Now modify it — this creates a .bak1 of the ORIGINAL
     mcp_mod.write_file(
         filepath=str(fp),
         content="MODIFIED state with MoonbeamRaven token. " * 12,
     )
+    _reindex(reindex_env, fp)
     # Find the .bak file and restore it. restore_backup() takes (filepath, N)
     # where filepath is the ACTIVE file and N is the integer suffix of the
     # .bak<N> backup to restore, NOT the backup path itself.
@@ -715,6 +753,7 @@ def test_C_REINDEX_25_restore_backup_reflects_restored_content(reindex_env, mcp_
     backup_n = int(m.group(1))
     result = mcp_mod.restore_backup(filepath=str(fp), backup_number=backup_n)
     assert "✅" in result or "Restored" in result, f"restore_backup failed: {result!r}"
+    _reindex(reindex_env, fp)
     # NOW the index should have the ORIGINAL content, not the MODIFIED content
     assert _search_finds(reindex_env.rag, "starlight falcon", "StarlightFalcon"), (
         "After restore_backup, the ORIGINAL content is not searchable. "

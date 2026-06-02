@@ -2434,6 +2434,16 @@ or from the Help menu."""
         self.root.after(_TELEMETRY_FIRST_DELAY_SEC * 1000,
                         self._telemetry_tick)
 
+        # ── First-launch index reconcile (v7.0.0) ────────────────────────────
+        # Index any tracked path that has no chunks in ChromaDB yet — e.g. the
+        # COMPLETE_USER_GUIDE.md seeded into the tracking list by the installer,
+        # which was previously tracked but never actually indexed. Runs once,
+        # shortly after the window is up, in a background thread. Purely
+        # ADDITIVE: indexes only missing files one at a time via index_file_list
+        # (which scopes its delete to each file's own chunks). Never purges or
+        # resets the collection, so the existing database is left intact.
+        self.root.after(4000, self._reconcile_tracked_index)
+
         # ── Dismissed notifications tracking ──────────────────────────────────
         self._dismissed_path = Path.home() / '.ai-prowler' / 'dismissed_notifications.json'
         self._notif_cache_path = Path.home() / '.ai-prowler' / 'notifications_cache.json'
@@ -3399,11 +3409,12 @@ or from the Help menu."""
         dir_entry.pack(side='left', fill='x', expand=True, padx=(0, 6))
         dir_entry.bind('<Return>', lambda e: self._queue_add_directory())
 
-        # Browse buttons — two clear options, no dropdown menu needed
+        # Browse buttons — both use the unified MultiFolderDialog which shows
+        # files AND folders and supports Ctrl/Shift multi-select (v7.0.0 fix).
         ttk.Button(entry_row, text="📂 Browse Files...",
-                   command=self.browse_all).pack(side='left', padx=(0, 4))
+                   command=self.browse_directories_multi).pack(side='left', padx=(0, 4))
         ttk.Button(entry_row, text="📁 Add Folder...",
-                   command=self.browse_folder_single).pack(side='left', padx=(0, 6))
+                   command=self.browse_directories_multi).pack(side='left', padx=(0, 6))
         
         ttk.Button(entry_row, text="➕ Add to Queue",
                    command=self._queue_add_directory).pack(side='left')
@@ -10389,8 +10400,13 @@ or from the Help menu."""
         self._update_queue_count()
 
     def _update_queue_count(self):
-        n = self.queue_listbox.size()
-        self.queue_count_var.set(f"Queue: {n} director{'y' if n == 1 else 'ies'}")
+        items   = self.queue_listbox.get(0, tk.END)
+        n_files = sum(1 for p in items if Path(p).is_file())
+        n_dirs  = len(items) - n_files
+        parts   = []
+        if n_dirs:  parts.append(f"{n_dirs} folder{'s' if n_dirs  != 1 else ''}")
+        if n_files: parts.append(f"{n_files} file{'s'  if n_files != 1 else ''}")
+        self.queue_count_var.set(f"Queue: {', '.join(parts) if parts else '0 items'}")
 
     # ── Scan-only mode ────────────────────────────────────────────────────────
 
@@ -10571,6 +10587,86 @@ or from the Help menu."""
             self.status_var.set("⏸ Indexing paused — click Resume to continue")
             self._cancel_index_timer()   # freeze display at current time
 
+    def _reconcile_tracked_index(self):
+        """First-launch reconcile: index tracked files that have no chunks yet.
+
+        Reads the auto-update tracking list and, for any tracked path that is a
+        FILE with zero chunks in ChromaDB, indexes it. The canonical case is the
+        COMPLETE_USER_GUIDE.md the installer seeds into the tracking list but
+        never indexes. Runs once per launch in a background thread.
+
+        Safety: purely additive. We only ever index files we find MISSING from
+        the collection, one at a time via index_file_list (whose delete is
+        scoped to each file's own filepath). Nothing here purges, clears, or
+        resets the collection, so an existing database is never destroyed —
+        even if the tracking list is large or partly already-indexed.
+        """
+        if not RAG_AVAILABLE:
+            return
+
+        def _worker():
+            try:
+                from rag_preprocessor import (
+                    get_chroma_client, create_or_get_collection)
+                try:
+                    tracked = load_auto_update_list() or []
+                except Exception as _le:
+                    print(f"[Reconcile] Could not read tracking list: {_le}")
+                    return
+
+                # Only individual files can be probed by chunk_0; directories
+                # are left to the normal Update Index flow.
+                file_paths = [normalise_path(p) for p in tracked
+                              if os.path.isfile(p)]
+                if not file_paths:
+                    return
+
+                client, emb_fn = get_chroma_client()
+                collection = create_or_get_collection(client, emb_fn)
+
+                missing = []
+                for fp in file_paths:
+                    try:
+                        probe = collection.get(ids=[f"{fp}__chunk_0"])
+                        if not (probe and probe.get('ids')):
+                            missing.append(fp)
+                    except Exception:
+                        # If the probe itself fails, treat as missing — worst
+                        # case index_file_list refreshes the file's own chunks.
+                        missing.append(fp)
+
+                if not missing:
+                    return
+
+                print(f"[Reconcile] {len(missing)} tracked file(s) not yet "
+                      f"indexed — indexing now (additive):")
+                for fp in missing:
+                    print(f"[Reconcile]   • {fp}")
+
+                self.output_queue.put(
+                    ('status', f"Indexing {len(missing)} tracked "
+                               f"file{'s' if len(missing) != 1 else ''}…"))
+
+                # index_file_list is per-file additive; root_directory is the
+                # parent so provenance breadcrumbs match a single-file add.
+                for fp in missing:
+                    try:
+                        index_file_list(
+                            [fp],
+                            label="reconcile",
+                            root_directory=str(Path(fp).parent),
+                        )
+                    except Exception as _ie:
+                        print(f"[Reconcile] Failed to index {fp}: {_ie}")
+
+                self.output_queue.put(('status', '✅ Tracked files indexed'))
+                print("[Reconcile] Done.")
+            except Exception as _e:
+                # Never let a reconcile problem affect the running GUI.
+                print(f"[Reconcile] Skipped due to error: {_e}")
+
+        threading.Thread(target=_worker, daemon=True).start()
+
     def _index_stop(self):
         """Signal the worker to stop after the current file."""
         self._index_stop_event.set()
@@ -10666,6 +10762,7 @@ or from the Help menu."""
         try:
             n_dirs = len(directories)
             grand_processed = grand_skipped = grand_chunks = grand_words = 0
+            grand_skipped_unchanged = grand_skipped_failed = 0
 
             if is_resume:
                 print(f"\n▶  RESUMING from directory 1/{n_dirs}, "
@@ -10772,6 +10869,8 @@ or from the Help menu."""
 
                 grand_processed += stats.get('processed', 0)
                 grand_skipped   += stats.get('skipped',   0)
+                grand_skipped_unchanged += stats.get('skipped_unchanged', 0)
+                grand_skipped_failed    += stats.get('skipped_failed',    0)
                 grand_chunks    += stats.get('chunks',    0)
                 grand_words     += stats.get('words',     0)
                 print()
@@ -10808,18 +10907,29 @@ or from the Help menu."""
                 print(f"🏁 ALL DIRECTORIES COMPLETE")
                 print(f"{'='*60}")
                 if smart_scan:
-                    print(f"   Files indexed:  {grand_processed:,}")
-                    print(f"   Files skipped:  {grand_skipped:,}"
-                          f"  ← load failed (unreadable, empty, or unsupported format)")
-                    if grand_skipped > 0 and grand_processed == 0:
+                    print(f"   Files indexed:            {grand_processed:,}")
+                    if grand_skipped_unchanged:
+                        print(f"   Files unchanged:          {grand_skipped_unchanged:,}"
+                              f"  ← already up to date (skipped)")
+                    if grand_skipped_failed:
+                        print(f"   Files failed to load:     {grand_skipped_failed:,}"
+                              f"  ← unreadable, empty, or unsupported format")
+                    if grand_skipped_failed > 0 and grand_processed == 0:
                         print(f"   💡 Tip: click 'Scan Queue' to see exactly which files")
                         print(f"          and what extensions are in the directory.")
-                    print(f"   Total chunks:   {grand_chunks:,}")
-                    print(f"   Total words:    {grand_words:,}")
-                print(f"   Directories:    {n_dirs}")
+                    print(f"   Total chunks:             {grand_chunks:,}")
+                    print(f"   Total words:              {grand_words:,}")
+                # Build accurate summary — queue may contain files, folders, or both
+                _n_files = sum(1 for d in directories if os.path.isfile(d))
+                _n_fdirs = n_dirs - _n_files
+                _parts   = []
+                if _n_fdirs:  _parts.append(f"{_n_fdirs} folder{'s' if _n_fdirs != 1 else ''}")
+                if _n_files:  _parts.append(f"{_n_files} file{'s' if _n_files != 1 else ''}")
+                _items_desc = ', '.join(_parts) if _parts else f"{n_dirs} items"
+                print(f"   Processed:      {_items_desc}")
                 print(f"{'='*60}\n")
                 self.output_queue.put(('index_progress', ''))
-                self.output_queue.put(('status', f'✅ Indexing complete — {n_dirs} directories done'))
+                self.output_queue.put(('status', f'✅ Indexing complete — {_items_desc} done'))
                 self.output_queue.put(('done', 'index'))
 
         except Exception as e:
@@ -11365,6 +11475,99 @@ or from the Help menu."""
                 self.output_queue.put(('prewarm_fail', None))
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    def _derive_indexed_directories(self) -> set:
+        """Return the set of directories that currently have chunks in ChromaDB.
+
+        Derived from chunk metadata (root_directory, falling back to the parent
+        of filepath) so the Update Index tab can reflect what is ACTUALLY in the
+        database — not just the auto-update tracking list. Files indexed
+        individually (which never register a directory in the tracking list)
+        are represented by their parent directory.
+
+        Returns an empty set on any error; the caller still shows the tracking
+        list, so a DB hiccup never blanks the tab.
+        """
+        dirs = set()
+        try:
+            from rag_preprocessor import get_chroma_client, create_or_get_collection
+            client, emb_fn = get_chroma_client()
+            col = create_or_get_collection(client, emb_fn)
+            result = col.get(include=['metadatas'])
+            for meta in (result.get('metadatas') or []):
+                if not isinstance(meta, dict):
+                    continue
+                root = (meta.get('root_directory') or '').strip()
+                fp   = (meta.get('filepath') or '').strip()
+                if root:
+                    dirs.add(_rag_engine.normalise_path(root))
+                elif fp:
+                    dirs.add(_rag_engine.normalise_path(str(Path(fp).parent)))
+        except Exception as _e:
+            print(f"[TrackedList] Could not derive indexed dirs from DB: {_e}")
+        return dirs
+
+    def _derive_indexed_directories(self) -> set:
+        """Return the set of directories that currently have chunks in ChromaDB.
+
+        Derived from chunk metadata (root_directory, falling back to the parent
+        of filepath) so the Update Index tab can reflect what is ACTUALLY in the
+        database — not just the auto-update tracking list. Files indexed
+        individually (which never register a directory in the tracking list)
+        are represented by their parent directory.
+
+        Returns an empty set on any error; the caller still shows the tracking
+        list, so a DB hiccup never blanks the tab.
+        """
+        dirs = set()
+        try:
+            from rag_preprocessor import get_chroma_client, create_or_get_collection
+            client, emb_fn = get_chroma_client()
+            col = create_or_get_collection(client, emb_fn)
+            result = col.get(include=['metadatas'])
+            for meta in (result.get('metadatas') or []):
+                if not isinstance(meta, dict):
+                    continue
+                root = (meta.get('root_directory') or '').strip()
+                fp   = (meta.get('filepath') or '').strip()
+                if root:
+                    dirs.add(_rag_engine.normalise_path(root))
+                elif fp:
+                    dirs.add(_rag_engine.normalise_path(str(Path(fp).parent)))
+        except Exception as _e:
+            print(f"[TrackedList] Could not derive indexed dirs from DB: {_e}")
+        return dirs
+
+    def _derive_indexed_directories(self) -> set:
+        """Return the set of directories that currently have chunks in ChromaDB.
+
+        Derived from chunk metadata (root_directory, falling back to the parent
+        of filepath) so the Update Index tab can reflect what is ACTUALLY in the
+        database — not just the auto-update tracking list. Files indexed
+        individually (which never register a directory in the tracking list)
+        are represented by their parent directory.
+
+        Returns an empty set on any error; the caller still shows the tracking
+        list, so a DB hiccup never blanks the tab.
+        """
+        dirs = set()
+        try:
+            from rag_preprocessor import get_chroma_client, create_or_get_collection
+            client, emb_fn = get_chroma_client()
+            col = create_or_get_collection(client, emb_fn)
+            result = col.get(include=['metadatas'])
+            for meta in (result.get('metadatas') or []):
+                if not isinstance(meta, dict):
+                    continue
+                root = (meta.get('root_directory') or '').strip()
+                fp   = (meta.get('filepath') or '').strip()
+                if root:
+                    dirs.add(_rag_engine.normalise_path(root))
+                elif fp:
+                    dirs.add(_rag_engine.normalise_path(str(Path(fp).parent)))
+        except Exception as _e:
+            print(f"[TrackedList] Could not derive indexed dirs from DB: {_e}")
+        return dirs
 
     def refresh_tracked_dirs(self):
         """Refresh tracked directories list from the auto-update tracking file.

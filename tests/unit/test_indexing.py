@@ -159,7 +159,7 @@ def test_F_IDX_06_no_duplicate_chunks_on_reindex(isolated_env, small_text_file):
                         root_directory=str(small_text_file.parent))
 
     client, ef = rag.get_chroma_client()
-    coll = client.get_collection(name=rag.COLLECTION_NAME, embedding_function=ef)
+    coll = client.get_or_create_collection(name=rag.COLLECTION_NAME, embedding_function=ef)
     count_after_first = coll.count()
     assert count_after_first > 0, "First indexing should have produced chunks"
 
@@ -168,7 +168,7 @@ def test_F_IDX_06_no_duplicate_chunks_on_reindex(isolated_env, small_text_file):
                                 label="run-2",
                                 root_directory=str(small_text_file.parent))
 
-    coll = client.get_collection(name=rag.COLLECTION_NAME, embedding_function=ef)
+    coll = client.get_or_create_collection(name=rag.COLLECTION_NAME, embedding_function=ef)
     count_after_second = coll.count()
 
     # Two valid implementations:
@@ -217,7 +217,7 @@ def test_F_IDX_07_modified_file_purges_old_chunks(isolated_env):
     # similarity search will always return SOMETHING — we don't assert
     # zero hits, we assert that none of them carry the old content.
     client, ef = rag.get_chroma_client()
-    coll = client.get_collection(name=rag.COLLECTION_NAME, embedding_function=ef)
+    coll = client.get_or_create_collection(name=rag.COLLECTION_NAME, embedding_function=ef)
 
     results = coll.get(where={"filepath": rag.normalise_path(str(file_path))},
                        include=["documents"])
@@ -315,7 +315,7 @@ def test_F_IDX_12_path_normalisation_forward_slashes_only(
 
     # 2. ChromaDB metadata.filepath must be forward-slash only
     client, ef = rag.get_chroma_client()
-    coll = client.get_collection(name=rag.COLLECTION_NAME, embedding_function=ef)
+    coll = client.get_or_create_collection(name=rag.COLLECTION_NAME, embedding_function=ef)
     sample = coll.get(limit=10, include=["metadatas"])
     for meta in sample.get("metadatas") or []:
         fp = meta.get("filepath", "")
@@ -349,7 +349,7 @@ def test_F_IDX_14_unicode_filenames_and_content(isolated_env):
 
     # All three filenames survived the round-trip into metadata
     client, ef = rag.get_chroma_client()
-    coll = client.get_collection(name=rag.COLLECTION_NAME, embedding_function=ef)
+    coll = client.get_or_create_collection(name=rag.COLLECTION_NAME, embedding_function=ef)
     all_data = coll.get(limit=100, include=["metadatas"])
     indexed_filenames = {m.get("filename") for m in all_data["metadatas"]}
 

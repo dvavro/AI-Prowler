@@ -113,6 +113,10 @@
 [Setup]
 AppName=AI-Prowler
 AppVersion=7.0.0
+; AppId pins the upgrade identity so Inno reliably detects prior installations
+; of any version and runs only OUR uninstaller — never a mismatched one.
+; Must remain constant across all future releases (do NOT change this GUID).
+AppId={{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
 DefaultDirName={autopf}\AI-Prowler
 DefaultGroupName=AI-Prowler
 OutputBaseFilename=AI-Prowler_INSTALL
@@ -2141,7 +2145,17 @@ begin
     // The Job Tracker spreadsheet lives in the same Documents\AI-Prowler
     // folder — we ask about it in the same prompt so the user can make
     // one informed decision about all their AI-Prowler data at once.
+    //
+    // SILENT MODE GUARD: When Inno runs our uninstaller automatically
+    // during an upgrade it passes /SILENT, which suppresses MsgBox.
+    // In that case we always KEEP the data — never silently destroy it.
     // ----------------------------------------------------------------
+    if UninstallSilent then
+    begin
+      DeleteRagDB := False;
+      AppendUninstallLog('[RAG] Silent uninstall detected — keeping all user data (safe upgrade default).');
+    end
+    else
     DeleteRagDB := MsgBox(
       'Delete AI-Prowler data files?' + #13#10 +
       '' + #13#10 +

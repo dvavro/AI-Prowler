@@ -29,7 +29,7 @@ def test_F_UPD_01_update_modified_file(isolated_env, sample_files):
                         root_directory=str(folder))
 
     client, ef = rag.get_chroma_client()
-    coll = client.get_collection(name=rag.COLLECTION_NAME, embedding_function=ef)
+    coll = client.get_or_create_collection(name=rag.COLLECTION_NAME, embedding_function=ef)
     chunks_before = coll.count()
 
     # Modify one file with a unique sentinel that makes it easy to verify
@@ -40,7 +40,7 @@ def test_F_UPD_01_update_modified_file(isolated_env, sample_files):
 
     rag.command_update(str(folder), recursive=True, auto_confirm=True)
 
-    coll = client.get_collection(name=rag.COLLECTION_NAME, embedding_function=ef)
+    coll = client.get_or_create_collection(name=rag.COLLECTION_NAME, embedding_function=ef)
 
     # Look at the surviving chunks for the target file
     target_meta = coll.get(where={"filepath": rag.normalise_path(str(target))},

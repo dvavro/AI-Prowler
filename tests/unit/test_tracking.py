@@ -252,7 +252,7 @@ def test_F_TRK_07_only_deletions_still_purge(isolated_env, sample_files):
     )
 
     client, ef = rag.get_chroma_client()
-    coll = client.get_collection(name=rag.COLLECTION_NAME, embedding_function=ef)
+    coll = client.get_or_create_collection(name=rag.COLLECTION_NAME, embedding_function=ef)
     chunks_before = coll.count()
     assert chunks_before > 0
 
@@ -262,7 +262,7 @@ def test_F_TRK_07_only_deletions_still_purge(isolated_env, sample_files):
 
     rag.command_update(str(folder), recursive=True, auto_confirm=True)
 
-    coll = client.get_collection(name=rag.COLLECTION_NAME, embedding_function=ef)
+    coll = client.get_or_create_collection(name=rag.COLLECTION_NAME, embedding_function=ef)
     surviving = coll.get(where={"filepath": rag.normalise_path(str(f1))},
                          include=["metadatas"])
     assert not surviving.get("ids"), "Chunks for deleted f1 survived purge"
