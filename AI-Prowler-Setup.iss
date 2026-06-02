@@ -108,12 +108,11 @@
 ;     AI engine; local Ollama models can be added later from within the app
 ; ============================================================
 
-; ── Version is read from VERSION file (single source of truth) ──
-#define MyAppVersion Trim(ReadFileLine(SourcePath + "VERSION", 0))
+; ── Version is set here and kept in sync by scripts/release.py ──
 
 [Setup]
 AppName=AI-Prowler
-AppVersion={#MyAppVersion}
+AppVersion=7.0.0
 DefaultDirName={autopf}\AI-Prowler
 DefaultGroupName=AI-Prowler
 OutputBaseFilename=AI-Prowler_INSTALL
