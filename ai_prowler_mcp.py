@@ -493,6 +493,64 @@ def _telemetry_increment_tool_count(tool_name='_unknown'):
         _log.debug("telemetry counter update skipped: %s", _e)
 
 
+# ── Tier A server-mode tool suppression (v7.0.1) ─────────────────────────────
+# In server mode (Business edition, mode=server) a subset of tools must NEVER
+# appear in the MCP tool list. These are host/dev/operator tools that belong
+# only on a personal or developer install — exposing them to remote users would
+# be a security risk regardless of role.  They are suppressed at REGISTRATION
+# time inside _counting_mcp_tool below, so the functions still exist as plain
+# Python but are invisible to any MCP client connecting to the server.
+#
+# Contrast with Tier B (runtime per-call gating via _check_db_cap /
+# _send_email_cap): those tools ARE registered; they just refuse calls from
+# roles that lack the right capability.
+
+def _detect_server_mode() -> bool:
+    """Read config.json at module startup to decide whether Tier A suppression
+    should be active. Self-contained — does NOT depend on _state_dir(),
+    _CONFIG_PATH, or any other module-level symbol defined later.
+    Returns False on any error (safe-closed: treat as personal mode)."""
+    import os as _os2, json as _json2
+    try:
+        _td = _os2.environ.get("AIPROWLER_TEST_STATE_DIR", "").strip()
+        _cp = (Path(_td) if _td else Path.home() / ".ai-prowler") / "config.json"
+        if not _cp.exists():
+            return False
+        _cfg = _json2.loads(_cp.read_text(encoding="utf-8-sig")) or {}
+        return (str(_cfg.get("edition", "")).strip().lower() == "business"
+                and str(_cfg.get("mode", "")).strip().lower() == "server")
+    except Exception:
+        return False
+
+
+_IS_SERVER_MODE: bool = _detect_server_mode()
+
+# The 23 Tier A tools: suppressed for ALL roles in server mode.
+_TIER_A_SUPPRESSED: frozenset = frozenset({
+    # Dev / code-execution — run arbitrary code on the host OS
+    "compile_check", "syntax_check", "lint_check", "pytest_check",
+    "check_python_import",
+    # Host filesystem writes — create/modify/delete files on the server host
+    "create_file", "write_file", "str_replace_in_file", "create_directory",
+    "copy_to_backup", "restore_backup", "list_backups", "list_directory",
+    "reset_write_counter", "grant_write_access", "revoke_write_access",
+    # Raw filesystem reads — arbitrary path access, bypasses the RAG layer
+    "grep_documents", "read_file_lines",
+    # Email operator / high-risk tools — personal-install-only.
+    # Note: send_email and send_alert stay registered; field_crew uses them
+    # via the Tier B _send_email_cap gate.
+    "configure_email", "send_file", "send_learnings_report",
+    "export_learnings_file",
+    # Bulk index rebuild — destructive operator action, not for remote users
+    "rebuild_learnings_index",
+})
+
+_log.info(
+    "v7.0.1 Tier A suppression: server_mode=%s — %d tools will be hidden "
+    "from the MCP tool list when server_mode=True",
+    _IS_SERVER_MODE, len(_TIER_A_SUPPRESSED)
+)
+
 # ── Monkeypatch mcp.tool() ───────────────────────────────────────────────────
 import functools as _functools
 
@@ -501,11 +559,22 @@ _orig_mcp_tool = mcp.tool
 
 def _counting_mcp_tool(*tool_args, **tool_kwargs):
     """Wrap mcp.tool() so each registered tool increments the per-tool
-    counter on successful return. Uses fn.__name__ as the tool key."""
-    real_decorator = _orig_mcp_tool(*tool_args, **tool_kwargs)
+    counter on successful return. Uses fn.__name__ as the tool key.
 
+    v7.0.1 Tier A: in server mode, any tool whose name appears in
+    _TIER_A_SUPPRESSED is returned as a plain Python function without
+    being passed to the real mcp.tool() decorator, so it never appears
+    in the MCP tool list for any client connecting to the server.
+    """
     def _outer(fn):
         _tool_name = getattr(fn, '__name__', '_unknown')
+
+        # Tier A: skip registration entirely in server mode.
+        if _IS_SERVER_MODE and _tool_name in _TIER_A_SUPPRESSED:
+            _log.debug("Tier A: suppressing '%s' (not registered with MCP)", _tool_name)
+            return fn  # plain Python function — invisible to MCP clients
+
+        real_decorator = _orig_mcp_tool(*tool_args, **tool_kwargs)
 
         @_functools.wraps(fn)
         def _inner(*args, **kwargs):
@@ -869,6 +938,12 @@ def index_path(
     #   • indexer_user— stamps indexed_by for the ownership model.
     #   • purge_gate  — blocks overwriting/destroying chunks the user doesn't own.
     _user = _current_user(ctx)
+
+    # v7.0.1 Q1: staff or above required; field_crew cannot index.
+    _db_ok, _db_reason = _check_db_cap(_user, "limited")
+    if not _db_ok:
+        return f"⛔ index_path: {_db_reason}"
+
     _resolver = _build_collection_resolver(_user) if _user else None
     _indexer_user = _user
     _purge_gate = None
@@ -948,6 +1023,12 @@ def update_tracked_directories(directory: Optional[str] = None,
     # pipeline unchanged). Same trio as index_path. The purge gate
     # matters especially here: command_update PURGES deleted files (destructive).
     _user = _current_user(ctx)
+
+    # v7.0.1 Q1: full DB management required (owner or manager).
+    _db_ok, _db_reason = _check_db_cap(_user, "full")
+    if not _db_ok:
+        return f"⛔ update_tracked_directories: {_db_reason}"
+
     _resolver = _build_collection_resolver(_user) if _user else None
     _purge_gate = None
     if _user:
@@ -1078,7 +1159,7 @@ def list_tracked_directories() -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
-def untrack_directory(directory: str) -> str:
+def untrack_directory(directory: str, ctx: Context = None) -> str:
     """
     Remove a tracked path (directory OR individually-tracked file) from the
     tracking list AND delete all of its indexed chunks from the ChromaDB
@@ -1093,6 +1174,12 @@ def untrack_directory(directory: str) -> str:
     Returns:
         A summary of what was removed.
     """
+    # v7.0.1 Q1: full DB management required (owner or manager).
+    _user = _current_user(ctx)
+    _db_ok, _db_reason = _check_db_cap(_user, "full")
+    if not _db_ok:
+        return f"⛔ untrack_directory: {_db_reason}"
+
     with _capture_stdout() as buf:
         try:
             result = remove_directory_from_index(directory)
@@ -1390,7 +1477,7 @@ def _enumerate_role_collections(client) -> list:
     for phys in _enumerate_scope_collections(client, "scope-role-"):
         sub = phys[len("scope-role-"):]
         if sub:
-            role_logicals.append(f"role:{sub}")
+            role_logicals.append(f"scope:{sub}")
     return role_logicals
 
 
@@ -1523,24 +1610,64 @@ def search_documents(
 
     n_results = min(max(1, n_results), 20)
 
-    # ── Server-mode collection scoping (v7.0.0 Phase B; personal mode = None) ──
-    # In server mode the auth middleware attached a user to the request; restrict
-    # the search to that user's allowed collections. In personal mode there is
-    # no user (ctx None or no .user), so collection_names stays None and the
-    # search hits the single 'documents' collection exactly as before.
-    _scoped_collections = None
-    _user = _current_user(ctx)
-    if _user is not None:
-        _scoped_collections = _allowed_collections(_user)
-        _log.debug("search_documents scoped for user=%s to %s",
-                   _user.get("id"), _scoped_collections)
-
+    # ── Server-mode collection scoping (v7.0.0 Phase B) ────────────────────────
+    # Use _scoped_collections_for_ctx() to get the ChromaDB collection OBJECTS
+    # the current user may read, then query them directly — this is the same
+    # approach used by get_knowledge_base_overview and avoids passing
+    # collection_names through rag_preprocessor (which adds an extra import
+    # round-trip and was the source of the original collection_names error).
+    # Personal mode (no user): falls back to the single 'documents' collection.
     try:
-        from rag_preprocessor import search_documents as _search
-        chunks = _search(query, n_results=n_results,
-                         collection_names=_scoped_collections)
+        _collections = _scoped_collections_for_ctx(ctx)
+    except RuntimeError:
+        # Personal mode and no documents indexed yet.
+        return (
+            f"No results found for: '{query}'\n"
+            "No documents are indexed yet. Use index_path to index a folder."
+        )
     except Exception as exc:
-        return f"Search failed: {exc}"
+        return f"Search failed resolving collections: {exc}"
+
+    if not _collections:
+        return (
+            f"No results found for: '{query}'\n"
+            "No accessible collections found. Check that documents have been "
+            "indexed and your user account has the correct scopes."
+        )
+
+    # Query each accessible collection and merge results.
+    _all_chunks = []
+    _seen_ids   = set()
+    for _col in _collections:
+        try:
+            _safe_n = min(n_results, _col.count())
+            if _safe_n == 0:
+                continue
+            from rag_preprocessor import get_chroma_client as _gcc
+            _res = _col.query(query_texts=[query], n_results=_safe_n)
+        except Exception as _qe:
+            _log.warning("search_documents: query failed on collection %s: %s",
+                         getattr(_col, 'name', '?'), _qe)
+            continue
+        for _i in range(len(_res['documents'][0])):
+            _cid = (_res.get('ids') or [[]])[0][_i] if _res.get('ids') else None
+            if _cid and _cid in _seen_ids:
+                continue
+            if _cid:
+                _seen_ids.add(_cid)
+            _dist = _res['distances'][0][_i]
+            _all_chunks.append({
+                'content':  _res['documents'][0][_i],
+                'metadata': _res['metadatas'][0][_i],
+                'distance': _dist,
+                'similarity': 1.0 - _dist,
+            })
+
+    # Sort by similarity descending, cap at n_results.
+    _all_chunks.sort(key=lambda c: c['similarity'], reverse=True)
+    chunks = _all_chunks[:n_results]
+    _log.debug("search_documents: %d chunk(s) across %d collection(s)",
+               len(chunks), len(_collections))
 
     if not chunks:
         return (
@@ -6463,22 +6590,45 @@ def _send_smtp(to: str, subject: str, body: str,
 
 
 def _email_allowed_for_user(user: "dict | None") -> tuple:
-    """Gate email tools to personal mode only.
+    """Gate configure_email / send_file / send_learnings_report to personal mode only.
     Returns (allowed: bool, reason: str). PURE.
 
-    Email tools are personal-mode only. They use the personal SMTP credentials
-    configured by the individual user and are not appropriate for a shared
-    company server where multiple employees connect via bearer tokens.
+    These email tools use personal SMTP credentials and are not appropriate for
+    a shared company server. In server mode, field_crew may use send_email /
+    send_alert via the separate _send_email_cap gate below.
 
     Personal mode (user=None): always allowed.
-    Server mode (user is not None): always blocked.
+    Server mode (user is not None): always blocked (for these tools).
     """
     if user is None:
         return (True, "personal mode")
     return (False,
-            "Email tools are only available in personal mode. "
+            "This email tool is only available in personal mode. "
             "In server mode each user should configure email on their own "
             "personal AI-Prowler install.")
+
+
+def _send_email_cap(user: "dict | None") -> tuple:
+    """Capability gate for send_email and send_alert in server mode. PURE.
+
+    Personal mode (user=None): always allowed (personal SMTP, single user).
+    Server mode: only field_crew may send email — they have no personal
+    AI-Prowler install to use instead. Owner/manager/staff use their own
+    personal installs.
+
+    configure_email, send_file, and send_learnings_report remain personal-only
+    regardless of this capability — use _email_allowed_for_user for those.
+
+    Returns (allowed: bool, reason: str).
+    """
+    if user is None:
+        return (True, "personal mode — email permitted")
+    caps = _role_caps(user.get("role"))
+    if caps.get("can_send_email"):
+        return (True, f"role '{user.get('role')}' may send email in server mode")
+    return (False,
+            f"role '{user.get('role')}' cannot send email from the company server — "
+            "use your personal AI-Prowler install for email.")
 
 
 @mcp.tool()
@@ -6606,9 +6756,9 @@ def send_email(to: str, subject: str, body: str,
     if not body.strip():
         return "❌ body is required."
 
-    # Personal-mode only gate
+    # v7.0.1 Q5: field_crew may send email in server mode; others use personal install.
     user = _current_user(ctx)
-    allowed, why = _email_allowed_for_user(user)
+    allowed, why = _send_email_cap(user)
     if not allowed:
         return f"❌ {why}"
 
@@ -6660,8 +6810,9 @@ def send_alert(message: str, to: str = "",
     if not message:
         return "❌ message is required."
 
+    # v7.0.1 Q5: field_crew may send alerts in server mode; others use personal install.
     user = _current_user(ctx)
-    allowed, why = _email_allowed_for_user(user)
+    allowed, why = _send_email_cap(user)
     if not allowed:
         return f"❌ {why}"
 
@@ -6723,6 +6874,7 @@ def send_file(to: str, filepath: str,
                 f"Sent by AI-Prowler at "
                 f"{_dt3.datetime.now().strftime('%Y-%m-%d %H:%M')}")
 
+    # send_file: personal-mode only (arbitrary file attachment = exfiltration risk).
     user = _current_user(ctx)
     allowed, why = _email_allowed_for_user(user)
     if not allowed:
@@ -7149,7 +7301,7 @@ def _write_zone_allowed_for_user(user: "dict | None", directory: str,
     user_scopes = set()
     for s in (user.get("scopes") or []):
         s = str(s).strip()
-        user_scopes.add(s if s.startswith("role:") else f"role:{s}")
+        user_scopes.add(_canon_scope(s))
 
     for rule in (coll_map.get("rules") or []):
         prefix = _normalize_path_for_match(rule.get("prefix", ""))
@@ -7157,7 +7309,7 @@ def _write_zone_allowed_for_user(user: "dict | None", directory: str,
         if not prefix or not coll:
             continue
         if (dir_norm == prefix or dir_norm.startswith(prefix + "/")):
-            if coll in user_scopes:
+            if _canon_scope(coll) in user_scopes:
                 return (True, f"directory is within manager's scope '{coll}'")
 
     # Also allow manager's own private area (no scope rule needed)
@@ -7381,6 +7533,13 @@ def reindex_file(filepath: str, ctx: Context = None) -> str:
         "Update the index for the file I just edited"
     """
     _telemetry_increment_tool_count("reindex_file")
+
+    # v7.0.1 Q1: full DB management required.
+    _user_rf = _current_user(ctx)
+    _db_ok, _db_reason = _check_db_cap(_user_rf, "full")
+    if not _db_ok:
+        return f"⛔ reindex_file: {_db_reason}"
+
     try:
         from rag_preprocessor import (
             normalise_path, index_file_list,
@@ -7458,6 +7617,12 @@ def reindex_directory(directory: str, purge_first: bool = True,
         "Reindex everything in AI-Prowler"
     """
     _telemetry_increment_tool_count("reindex_directory")
+
+    # v7.0.1 Q1: full DB management required.
+    _user_rd = _current_user(ctx)
+    _db_ok, _db_reason = _check_db_cap(_user_rd, "full")
+    if not _db_ok:
+        return f"⛔ reindex_directory: {_db_reason}"
 
     if not _prewarm_event.wait(timeout=60):
         return "⏳ AI-Prowler is still initializing. Please wait and try again."
@@ -7548,6 +7713,12 @@ def reindex_all(purge_first: bool = True, ctx: Context = None) -> str:
         "Do a full reindex of everything"
     """
     _telemetry_increment_tool_count("reindex_all")
+
+    # v7.0.1 Q1: full DB management required.
+    _user_ra = _current_user(ctx)
+    _db_ok, _db_reason = _check_db_cap(_user_ra, "full")
+    if not _db_ok:
+        return f"⛔ reindex_all: {_db_reason}"
 
     if not _prewarm_event.wait(timeout=60):
         return "⏳ AI-Prowler is still initializing. Please wait and try again."
@@ -8206,28 +8377,106 @@ def _save_license_warnings(warnings):
 # capabilities; collection READ scope is computed per-user from role + scopes.
 _USER_ROLES = ("owner", "manager", "staff", "field_crew")
 
-# Per-role capabilities that are NOT per-collection (those come from scopes):
-#   read_all_role_scopes : owner sees every role:* collection regardless of scopes
+# Per-role capabilities that are NOT per-collection (those come from scopes).
+# v7.0.1 additions: manage_db, can_write_shared, can_send_email.
+#
+#   read_all_role_scopes : owner sees every scope:* collection (any assigned scope)
 #   read_others_private  : owner may read any user:* collection
-#   can_write            : may write/index (subject to per-collection rules in _can_index)
-#   is_admin             : may use Admin-tab/user-management tools
+#   can_write            : may write/index (subject to per-collection _can_index)
+#   can_write_shared     : may index INTO the 'shared' company commons
+#   is_admin             : may use Admin-tab / user-management tools
+#   manage_db            : DB-management tool access level
+#                          "full"    — index_path, untrack, reindex, update (owner, manager)
+#                          "limited" — index_path into own scopes/private only (staff)
+#                          "none"    — no DB management tools at all (field_crew)
+#   can_send_email       : may call send_email / send_alert in server mode.
+#                          False for owner/manager/staff (they have personal installs).
+#                          True for field_crew (no personal install available).
 _ROLE_CAPS = {
+    # owner — unrestricted: full DB management, reads all scopes, admin rights
     "owner":      {"read_all_role_scopes": True,  "read_others_private": True,
-                   "can_write": True,  "is_admin": True},
+                   "can_write": True,  "can_write_shared": True,  "is_admin": True,
+                   "manage_db": "full",    "can_send_email": False},
+    # manager — full DB management within their assigned scopes + shared
     "manager":    {"read_all_role_scopes": False, "read_others_private": False,
-                   "can_write": True,  "is_admin": False},
+                   "can_write": True,  "can_write_shared": True,  "is_admin": False,
+                   "manage_db": "full",    "can_send_email": False},
+    # staff — limited DB: may index own private + assigned scopes; NOT shared or destructive ops
     "staff":      {"read_all_role_scopes": False, "read_others_private": False,
-                   "can_write": False, "is_admin": False},
+                   "can_write": True,  "can_write_shared": False, "is_admin": False,
+                   "manage_db": "limited", "can_send_email": False},
+    # field_crew — no DB management; may send email (no personal AI-Prowler install)
     "field_crew": {"read_all_role_scopes": False, "read_others_private": False,
-                   "can_write": False, "is_admin": False},
+                   "can_write": False, "can_write_shared": False, "is_admin": False,
+                   "manage_db": "none",    "can_send_email": True},
 }
 
 _SHARED_COLLECTION = "shared"
 
 
+def _canon_scope(name: str) -> str:
+    """Canonicalize a logical data-bucket scope name to the 'scope:<name>' form.
+
+    v7.0.1 vocabulary change: data buckets used to be written 'role:<name>',
+    which collided conceptually with the owner/manager/staff/field_crew JOB
+    roles. The user-facing name is now 'scope:<name>'. This accepts all three
+    historical spellings and returns the canonical one, so comparisons line up
+    no matter what is stored in users.json / collection_map:
+
+        'sales'       -> 'scope:sales'   (bare)
+        'role:sales'  -> 'scope:sales'   (legacy)
+        'scope:sales' -> 'scope:sales'   (canonical, unchanged)
+
+    NON-bucket logical names are returned UNCHANGED (they are not buckets):
+    'shared', any 'user:<id>', and the personal 'documents' collection.
+    Physically, 'scope:<name>' and 'role:<name>' resolve to the SAME ChromaDB
+    collection via rag_preprocessor.chroma_collection_name(), so no data moves.
+    """
+    s = (name or "").strip()
+    if not s:
+        return s
+    low = s.lower()
+    if low == _SHARED_COLLECTION or low == "documents" or low.startswith("user:"):
+        return s
+    if low.startswith("scope:") or low.startswith("role:"):
+        return "scope:" + s.split(":", 1)[1].strip()
+    return "scope:" + s
+
+
 def _role_caps(role: str) -> dict:
     """Capabilities for a role; unknown roles get the most-restricted set."""
     return _ROLE_CAPS.get((role or "").strip().lower(), _ROLE_CAPS["field_crew"])
+
+
+def _check_db_cap(user: "dict | None", level: str = "full") -> tuple:
+    """Capability gate for DB-management tool calls. PURE.
+
+    Personal mode (user=None): always allowed — no role gate in single-user mode.
+    Server mode: the role's manage_db capability must be at or above `level`:
+
+        'full'    — index, untrack, reindex, update (owner, manager)
+        'limited' — index into own scopes/private only (staff + above)
+
+    Returns (allowed: bool, reason: str).
+    """
+    if user is None:
+        return (True, "personal mode — no DB management gate")
+    caps = _role_caps(user.get("role"))
+    db_level = caps.get("manage_db", "none")
+    role     = user.get("role", "unknown")
+    if level == "full":
+        if db_level == "full":
+            return (True, f"role '{role}' has full DB management")
+        return (False,
+                f"role '{role}' (manage_db={db_level!r}) cannot perform full DB "
+                "management (index/untrack/reindex). Owner or manager required.")
+    elif level == "limited":
+        if db_level in ("full", "limited"):
+            return (True, f"role '{role}' may index into permitted scopes")
+        return (False,
+                f"role '{role}' (manage_db='none') cannot index documents. "
+                "Owner, manager, or staff required.")
+    return (False, f"_check_db_cap: unknown level {level!r}")
 
 
 def _resolve_user(users_data: "dict | None", token: str) -> "dict | None":
@@ -8310,8 +8559,9 @@ def _allowed_collections(user: "dict | None",
             s = str(scope).strip()
             if not s:
                 continue
-            # Tolerate either 'role:sales' or bare 'sales' in the data.
-            col = s if s.startswith("role:") else f"role:{s}"
+            # Accept legacy 'role:sales', current 'scope:sales', or bare 'sales';
+            # all canonicalize to 'scope:sales' (same physical collection).
+            col = _canon_scope(s)
             if col not in cols:
                 cols.append(col)
 
@@ -8329,11 +8579,11 @@ def _can_index(user: "dict | None", target_collection: str,
     """Decide whether `user` may INDEX (write) into `target_collection`. PURE.
     Implements §6.5. Returns (allowed: bool, reason: str).
 
-    Rules:
-      - owner: may index into ANY collection (shared, any role:*, any user:*).
-      - manager: may index into role:* collections that are in their scopes,
-                 and into their own private collection. NOT shared, NOT others'.
-      - staff / field_crew: cannot index server-side at all.
+    Rules (v7.0.1):
+      - owner      : any collection (shared, any scope:*, any user:*)
+      - manager    : scope:* in their assigned scopes + own private + shared
+      - staff      : scope:* in their assigned scopes + own private; NOT shared
+      - field_crew : nothing (can_write=False; manage_db='none')
     """
     if not user:
         return (False, "no user context")
@@ -8349,29 +8599,25 @@ def _can_index(user: "dict | None", target_collection: str,
     if not caps["can_write"]:
         return (False, f"role '{role}' cannot index server-side")
 
-    # manager from here on.
+    # can_write roles from here (manager writes shared; staff does not).
     if target == _SHARED_COLLECTION:
-        # Option A: 'shared' is the company commons — any can_write role may
-        # ADD files here (read+write for everyone who can write server-side).
-        # The chunk-ownership gate (_can_purge_chunks) still protects each file:
-        # you own what you add, only you (+ owner/admin custody) may modify or
-        # delete it, and the owner's posted files (e.g. safety manual) can't be
-        # clobbered by anyone else.
-        return (True, "shared is the company commons — any writer may add")
+        if caps.get("can_write_shared"):
+            return (True, f"role '{role}' may write to the shared commons")
+        return (False, f"role '{role}' cannot write to the shared collection")
 
     if target.startswith("user:"):
         if target == f"user:{user.get('id')}":
             return (True, "own private collection")
         return (False, "cannot index another user's private collection")
 
-    if target.startswith("role:"):
+    if _canon_scope(target).startswith("scope:"):
         scopes = set()
         for s in (user.get("scopes") or []):
             s = str(s).strip()
-            scopes.add(s if s.startswith("role:") else f"role:{s}")
-        if target in scopes:
-            return (True, "assigned role scope")
-        return (False, "role scope not assigned to this manager")
+            scopes.add(_canon_scope(s))
+        if _canon_scope(target) in scopes:
+            return (True, "assigned scope")
+        return (False, f"scope not assigned to role '{role}'")
 
     return (False, "unrecognized collection type")
 
@@ -8842,19 +9088,57 @@ def _run_server_mode(port: int, token: str,
         _log.error("Could not get FastMCP ASGI app (%s). Falling back.", _e)
         return _run_http(port=port, token=token, public_base=public_base)
 
+    # ── OAuth state (server mode) ─────────────────────────────────────────────
+    # In server mode, /authorize accepts any token that resolves to a valid user
+    # in users.json (instead of the single bearer token used in personal mode).
+    # OAuth codes and issued access tokens are tracked in-memory; issued tokens
+    # are also cross-referenced back to the user record so _resolve_user can
+    # find the right user when subsequent MCP requests arrive.
+    import secrets as _srv_secrets
+    import urllib.parse as _srv_urlparse
+    import hashlib as _srv_hashlib
+    import base64 as _srv_base64
+
+    # code  -> {redirect_uri, code_challenge, code_challenge_method, user_token}
+    _srv_auth_codes: dict = {}
+    # issued_access_token -> original users.json bearer token (for _resolve_user)
+    _srv_access_tokens: dict = {}
+    # Pre-populate with every existing users.json token so curl/manual clients
+    # that present their raw token directly still work without OAuth dance.
+    for _ut in (users_data.get("users") or {}).keys():
+        _srv_access_tokens[_ut] = _ut
+
+    _local_host = f"127.0.0.1:{port}".encode()
+    _srv_public_base = public_base.rstrip("/")
+
+    def _srv_get_public_base(scope: dict) -> str:
+        """Derive public base URL from Host header (mirrors _run_http logic)."""
+        headers_dict = {k.lower(): v for k, v in scope.get("headers", [])}
+        host = (headers_dict.get(b"host", b"")
+                or headers_dict.get(b"x-forwarded-host", b"")).decode("utf-8", "ignore")
+        if host:
+            scheme = "http" if (host.startswith("127.") or host.startswith("localhost")) else "https"
+            return f"{scheme}://{host}"
+        return _srv_public_base
+
     # ── Pure-ASGI multi-user router (spec §6.4 steps 1-4) ─────────────────────
     # CRITICAL: this is a raw ASGI app, NOT BaseHTTPMiddleware. BaseHTTPMiddleware
     # buffers responses and breaks the MCP streamable-HTTP SSE transport (that was
     # the POST /mcp 500). This mirrors _run_http's proven _RouterASGI pattern:
-    #   1. /health, /whoami, /.well-known/* handled inline (plain JSON, no auth
-    #      except /whoami which needs the user).
+    #   1. /health, /whoami, /.well-known/*, /register, /authorize, /token
+    #      handled inline (OAuth paths exempt from bearer auth).
     #   2. every other path: bearer → _resolve_user → stash the user in
     #      scope["state"] so FastMCP's Request(scope).state.user resolves it
     #      (this is what _current_user(ctx) reads inside the tools — the keystone),
     #      then inject the MCP headers (Accept/Content-Type/Host/MCP-Protocol-
     #      Version) exactly like _run_http, then stream to mcp_asgi WITHOUT
     #      buffering so SSE works.
-    _local_host = f"127.0.0.1:{port}".encode()
+
+    _SRV_OAUTH_PATHS = {
+        "/health", "/register", "/authorize", "/token",
+        "/.well-known/oauth-authorization-server",
+        "/.well-known/oauth-protected-resource",
+    }
 
     async def _send_json(send, status, payload):
         import json as _json
@@ -8871,6 +9155,18 @@ def _run_server_mode(port: int, token: str,
                                 (b"content-length", str(len(body)).encode())]})
         await send({"type": "http.response.body", "body": body})
 
+    async def _send_html(send, status, html):
+        body = html.encode("utf-8")
+        await send({"type": "http.response.start", "status": status,
+                    "headers": [(b"content-type", b"text/html; charset=utf-8"),
+                                (b"content-length", str(len(body)).encode())]})
+        await send({"type": "http.response.body", "body": body})
+
+    async def _send_redirect(send, location):
+        await send({"type": "http.response.start", "status": 302,
+                    "headers": [(b"location", location.encode())]})
+        await send({"type": "http.response.body", "body": b""})
+
     def _bearer_from_scope(scope):
         for hk, hv in scope.get("headers", []):
             if hk.lower() == b"authorization":
@@ -8879,34 +9175,241 @@ def _run_server_mode(port: int, token: str,
                     return v[7:].strip()
         return ""
 
+    async def _read_body(receive) -> bytes:
+        """Accumulate the full request body from ASGI receive events."""
+        chunks = []
+        while True:
+            msg = await receive()
+            if msg.get("type") == "http.request":
+                chunks.append(msg.get("body", b""))
+                if not msg.get("more_body", False):
+                    break
+        return b"".join(chunks)
+
+    def _parse_qs(raw: bytes) -> dict:
+        import urllib.parse as _up
+        return {k: v[-1] for k, v in _up.parse_qs(raw.decode("utf-8", "replace")).items()}
+
     class _ServerRouterASGI:
         async def __call__(self, scope, receive, send):
-            if scope["type"] != "http":
-                # lifespan/websocket — pass straight through to FastMCP.
+            stype = scope.get("type", "")
+
+            if stype == "lifespan":
+                # Lifespan MUST go to mcp_asgi so its task group initialises.
                 await mcp_asgi(scope, receive, send)
                 return
 
-            path = scope.get("path", "")
-            method = scope.get("method", "GET")
+            if stype != "http":
+                await mcp_asgi(scope, receive, send)
+                return
 
-            # Exempt: health + OAuth discovery (no auth).
+            path   = scope.get("path", "")
+            method = scope.get("method", "GET")
+            _log.debug("SERVER-MODE REQUEST  %s %s", method, path)
+
+            # ── OAuth / health endpoints (no bearer auth required) ────────────
             if path == "/health":
                 await _send_text(send, 200, "OK")
                 return
-            if path.startswith("/.well-known/"):
-                await mcp_asgi(scope, receive, send)
+
+            if path == "/.well-known/oauth-protected-resource":
+                base = _srv_get_public_base(scope)
+                await _send_json(send, 200, {
+                    "resource": f"{base}/mcp",
+                    "authorization_servers": [base],
+                })
                 return
 
-            # Authenticate every other path.
+            if path == "/.well-known/oauth-authorization-server":
+                base = _srv_get_public_base(scope)
+                await _send_json(send, 200, {
+                    "issuer": base,
+                    "authorization_endpoint": f"{base}/authorize",
+                    "token_endpoint": f"{base}/token",
+                    "registration_endpoint": f"{base}/register",
+                    "response_types_supported": ["code"],
+                    "grant_types_supported": ["authorization_code"],
+                    "code_challenge_methods_supported": ["S256", "plain"],
+                    "token_endpoint_auth_methods_supported": ["none"],
+                    "scopes_supported": ["mcp"],
+                })
+                return
+
+            if path == "/register" and method == "POST":
+                # RFC 7591 Dynamic Client Registration — Claude.ai POSTs here
+                # before starting the OAuth flow. Accept any registration and
+                # echo back a generated client_id.
+                import time as _time
+                try:
+                    body_bytes = await _read_body(receive)
+                    import json as _rj
+                    reg_body = _rj.loads(body_bytes) if body_bytes else {}
+                except Exception:
+                    reg_body = {}
+                client_id = _srv_secrets.token_urlsafe(16)
+                _log.info("OAuth /register: issued client_id=%s…", client_id[:8])
+                await _send_json(send, 201, {
+                    "client_id": client_id,
+                    "client_id_issued_at": int(_time.time()),
+                    "grant_types": reg_body.get("grant_types", ["authorization_code"]),
+                    "response_types": reg_body.get("response_types", ["code"]),
+                    "redirect_uris": reg_body.get("redirect_uris", []),
+                    "token_endpoint_auth_method": "none",
+                    "client_name": reg_body.get("client_name", "Claude"),
+                })
+                return
+
+            if path == "/authorize" or path.startswith("/authorize"):
+                # Show a login form. User enters their personal users.json token.
+                # On success, redirect back to Claude.ai with a one-time auth code.
+                qs_raw = scope.get("query_string", b"")
+                params = _parse_qs(qs_raw) if qs_raw else {}
+                redirect_uri          = params.get("redirect_uri", "")
+                state_val             = params.get("state", "")
+                code_challenge        = params.get("code_challenge", "")
+                code_challenge_method = params.get("code_challenge_method", "plain")
+
+                error_msg = ""
+                if method == "POST":
+                    body_bytes  = await _read_body(receive)
+                    form_params = _parse_qs(body_bytes)
+                    entered     = form_params.get("token", "").strip()
+                    user        = _resolve_user(users_data, entered)
+                    if user is not None:
+                        code = _srv_secrets.token_urlsafe(32)
+                        _srv_auth_codes[code] = {
+                            "redirect_uri":          redirect_uri,
+                            "code_challenge":        code_challenge,
+                            "code_challenge_method": code_challenge_method,
+                            "user_token":            entered,
+                        }
+                        sep    = "&" if "?" in redirect_uri else "?"
+                        target = (f"{redirect_uri}{sep}code={code}"
+                                  f"&state={_srv_urlparse.quote(state_val)}")
+                        _log.info("OAuth /authorize: user=%s authenticated, issuing code",
+                                  user.get("id", "?"))
+                        await _send_redirect(send, target)
+                        return
+                    else:
+                        _log.warning("OAuth /authorize: bad token entered (last 4: …%s)",
+                                     entered[-4:] if entered else "")
+                        error_msg = "<p style='color:red;margin-top:8px'>Incorrect token — try again.</p>"
+
+                html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <title>AI-Prowler Login</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {{ font-family: Arial, sans-serif; background: #1a1a2e; color: #eee;
+            display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }}
+    .card {{ background: #16213e; border-radius: 12px; padding: 40px; width: 360px;
+             box-shadow: 0 4px 24px rgba(0,0,0,0.4); }}
+    h2 {{ margin: 0 0 8px; color: #4fc3f7; }}
+    p  {{ color: #aaa; font-size: 14px; margin: 0 0 24px; }}
+    input {{ width: 100%; padding: 10px 12px; border-radius: 6px; border: 1px solid #333;
+             background: #0f3460; color: #eee; font-size: 15px; box-sizing: border-box; }}
+    button {{ margin-top: 16px; width: 100%; padding: 11px; border-radius: 6px; border: none;
+              background: #4fc3f7; color: #111; font-size: 15px; font-weight: bold; cursor: pointer; }}
+    button:hover {{ background: #81d4fa; }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>🐾 AI-Prowler</h2>
+    <p>Enter your personal Bearer token to connect Claude to your knowledge base.</p>
+    <form method="post">
+      <input type="password" name="token" placeholder="Bearer token" autofocus>
+      <button type="submit">Connect</button>
+    </form>
+    {error_msg}
+  </div>
+</body>
+</html>"""
+                await _send_html(send, 200, html)
+                return
+
+            if path == "/token" and method == "POST":
+                # Exchange auth code for an access token (PKCE verified).
+                body_bytes  = await _read_body(receive)
+                form_params = _parse_qs(body_bytes)
+                grant_type    = form_params.get("grant_type", "")
+                code          = form_params.get("code", "")
+                code_verifier = form_params.get("code_verifier", "")
+
+                if grant_type != "authorization_code":
+                    await _send_json(send, 400, {"error": "unsupported_grant_type"})
+                    return
+                if code not in _srv_auth_codes:
+                    await _send_json(send, 400, {"error": "invalid_grant"})
+                    return
+
+                stored     = _srv_auth_codes.pop(code)
+                user_token = stored.get("user_token", "")
+
+                # Verify PKCE if code_challenge was stored.
+                if stored.get("code_challenge"):
+                    method_pkce = stored.get("code_challenge_method", "plain")
+                    if method_pkce == "S256":
+                        digest   = _srv_hashlib.sha256(code_verifier.encode()).digest()
+                        computed = _srv_base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+                    else:
+                        computed = code_verifier
+                    if computed != stored["code_challenge"]:
+                        _log.warning("OAuth /token: PKCE mismatch for code")
+                        await _send_json(send, 400, {
+                            "error": "invalid_grant",
+                            "error_description": "PKCE mismatch",
+                        })
+                        return
+
+                access_token = _srv_secrets.token_urlsafe(48)
+                # Map the new access token back to the original users.json token
+                # so _resolve_user can look up the user on subsequent MCP calls.
+                _srv_access_tokens[access_token] = user_token
+                _log.info("OAuth /token: issued access token for user_token …%s",
+                          user_token[-4:] if user_token else "?")
+                await _send_json(send, 200, {
+                    "access_token": access_token,
+                    "token_type":   "bearer",
+                    "expires_in":   31536000,  # 1 year
+                })
+                return
+
+            # ── Authenticate all other paths (MCP, whoami, etc.) ─────────────
             tok = _bearer_from_scope(scope)
             if not tok:
-                await _send_json(send, 401, {"error": "missing bearer token"})
+                base = _srv_get_public_base(scope)
+                www  = (f'Bearer realm="{base}", '
+                        f'resource_metadata="{base}/.well-known/oauth-protected-resource"')
+                body = b'{"error":"missing bearer token"}'
+                await send({"type": "http.response.start", "status": 401,
+                            "headers": [
+                                (b"content-type",    b"application/json"),
+                                (b"content-length",  str(len(body)).encode()),
+                                (b"www-authenticate", www.encode()),
+                            ]})
+                await send({"type": "http.response.body", "body": body})
                 return
-            user = _resolve_user(users_data, tok)
+
+            # Resolve the presented token: it may be an OAuth-issued access
+            # token (map back to users.json token first) or a raw users.json token.
+            raw_user_token = _srv_access_tokens.get(tok, tok)
+            user = _resolve_user(users_data, raw_user_token)
             if user is None:
                 _log.info("Auth rejected for token …%s on %s",
                           tok[-4:] if tok else "", path)
-                await _send_json(send, 401, {"error": "invalid or revoked token"})
+                base = _srv_get_public_base(scope)
+                www  = (f'Bearer realm="{base}", '
+                        f'resource_metadata="{base}/.well-known/oauth-protected-resource"')
+                body = b'{"error":"invalid or revoked token"}'
+                await send({"type": "http.response.start", "status": 401,
+                            "headers": [
+                                (b"content-type",    b"application/json"),
+                                (b"content-length",  str(len(body)).encode()),
+                                (b"www-authenticate", www.encode()),
+                            ]})
+                await send({"type": "http.response.body", "body": body})
                 return
 
             # Stash the user where FastMCP's Request(scope).state will expose it.
@@ -8921,13 +9424,14 @@ def _run_server_mode(port: int, token: str,
             _log.debug("Authenticated user=%s role=%s", user.get("id"),
                        user.get("role"))
 
-            # /whoami diagnostic (now reports scoping_active=True — tools scope).
+            # /whoami diagnostic (reports scoping_active=True — tools scope).
             if path == "/whoami":
                 await _send_json(send, 200, {
-                    "user_id": user.get("id"), "name": user.get("name"),
-                    "role": user.get("role"),
-                    "allowed_collections": state["allowed_collections"],
-                    "scoping_active": True,
+                    "user_id":              user.get("id"),
+                    "name":                 user.get("name"),
+                    "role":                 user.get("role"),
+                    "allowed_collections":  state["allowed_collections"],
+                    "scoping_active":       True,
                 })
                 return
 

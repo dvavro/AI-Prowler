@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 AI Prowler GUI - Professional Graphical Interface
 Modern GUI for AI Prowler Document Indexing and Querying
@@ -163,7 +163,7 @@ try:
         get_provider_status, get_provider_timeout_str, set_provider_timeout,
         query_external_llm, test_provider_connection,
         check_license, prompt_for_license, LICENSE_REQUIRED,
-        command_update, show_stats, clear_database,
+        command_update, show_stats, clear_database, clear_database_only,
         prewarm_ollama, prewarm_embeddings, invalidate_chroma_cache, check_ollama_available,
         generate_auto_update_script,
         detect_gpu, SUPPORTED_EXTENSIONS, SKIP_EXTENSIONS, SKIP_DIRECTORIES,
@@ -999,15 +999,19 @@ class RAGGui:
         if fn is None:
             return
 
-        # Only auto-start if a Bearer token is saved in config
+        # Only auto-start if a Bearer token is saved in config.
+        # Exception: Business server mode uses per-user tokens from users.json,
+        # so there is no single remote_token — skip the token check in that mode.
         try:
             from pathlib import Path as _P
             import json as _j
             cfg_path = _P.home() / '.ai-prowler' / 'config.json'
             if cfg_path.exists():
                 cfg = _j.loads(cfg_path.read_text(encoding='utf-8'))
+                _is_srv = (str(cfg.get('edition', '')).lower() == 'business'
+                           and str(cfg.get('mode', '')).lower() == 'server')
                 token = cfg.get('remote_token', '').strip()
-                if not token:
+                if not token and not _is_srv:
                     self.status_var.set(
                         "HTTP auto-start skipped — no Bearer token configured")
                     # Clear hint so footer doesn't hang on it
@@ -2669,10 +2673,30 @@ or from the Help menu."""
         # compatibility with the existing aggregations.
         total = sum(tool_calls.values()) if tool_calls else 0
 
+        # v7.0.1: Read actual edition and mode from the runtime config instead
+        # of hardcoding 'home'. The runtime config is ~/.ai-prowler/config.json.
+        # NOTE: do NOT use CONFIG_FILE here — that is the legacy ~/.rag_config.json
+        # (engine settings) which never contains 'edition' or 'mode' keys.
+        _edition = 'home'
+        _mode    = 'personal'
+        try:
+            _rt_cfg_path = Path.home() / '.ai-prowler' / 'config.json'
+            if _rt_cfg_path.exists():
+                import json as _tj
+                _rt_cfg  = _tj.loads(
+                    _rt_cfg_path.read_text(encoding='utf-8-sig'))
+                _edition = (str(_rt_cfg.get('edition', 'home'))
+                            .strip().lower()) or 'home'
+                _mode    = (str(_rt_cfg.get('mode', 'personal'))
+                            .strip().lower()) or 'personal'
+        except Exception:
+            pass   # config unreadable — fall back to 'home' / 'personal'
+
         return {
             'install_id': install_id,
             'version': APP_VERSION,
-            'edition': 'home',
+            'edition': _edition,
+            'mode':    _mode,
             'os': os_str,
             'chunks_indexed': self._telemetry_count_chunks(),
             'tools_called_24h': total,
@@ -4103,6 +4127,24 @@ or from the Help menu."""
         self.answer_output.bind('<Leave>', _unbind_answer_scroll)
 
 
+    def _is_business_server_mode(self):
+        """True iff runtime config.json declares edition=business AND mode=server.
+        Same gate that enables the Admin tab. In the desktop GUI there is no
+        per-user login — the operator running the GUI on the server box is the
+        owner/admin — so this is the correct gate for owner-only server-mode
+        panels such as the scope-mapping controls."""
+        try:
+            import json as _json
+            from pathlib import Path as _Path
+            p = _Path.home() / ".ai-prowler" / "config.json"
+            if not p.exists():
+                return False
+            cfg = _json.loads(p.read_text(encoding="utf-8-sig")) or {}
+            return (str(cfg.get("edition", "")).lower() == "business"
+                    and str(cfg.get("mode", "")).lower() == "server")
+        except Exception:
+            return False
+
     def create_update_tab(self):
         """Create update tab"""
         update_frame = ttk.Frame(self.notebook)
@@ -4182,6 +4224,34 @@ or from the Help menu."""
         )
         legend.pack(fill='x', pady=(4, 0))
 
+        # ── Read-scope mapping (server mode, owner-only) ───────────────────────
+        # Each tracked folder maps to ONE read scope via collection_map.rules in
+        # users.json. Hidden entirely outside Business server mode — there are no
+        # scopes in personal/home/mobile installs.
+        if self._is_business_server_mode():
+            scope_frame = ttk.LabelFrame(
+                tracked_frame,
+                text="Read Scope — who may search this folder (server mode)",
+                padding=6)
+            scope_frame.pack(fill='x', pady=(8, 0))
+            self._scope_status_var = tk.StringVar(
+                value="Select a folder above to see or set its read scope.")
+            ttk.Label(scope_frame, textvariable=self._scope_status_var,
+                      font=('Arial', 8), foreground='gray',
+                      wraplength=900, justify='left').pack(anchor='w')
+            scope_btn_row = ttk.Frame(scope_frame)
+            scope_btn_row.pack(fill='x', pady=(4, 0))
+            ttk.Button(scope_btn_row, text="🎯 Set Scope for Selected Folder",
+                       command=self._set_scope_for_selected).pack(side='left')
+            ttk.Label(scope_btn_row,
+                      text="(one scope per folder; a subfolder can add its own "
+                           "rule to override the parent)",
+                      font=('Arial', 8), foreground='gray').pack(
+                side='left', padx=(8, 0))
+            self.tracked_listbox.bind(
+                "<<ListboxSelect>>",
+                lambda _e: self._refresh_selected_scope_label(), add="+")
+
         # Buttons row: refresh + remove
         tracked_btn_row = ttk.Frame(tracked_frame)
         tracked_btn_row.pack(fill='x', pady=(6, 0))
@@ -4223,6 +4293,157 @@ or from the Help menu."""
         # Load tracked directories
         self.refresh_tracked_dirs()
     
+    def _selected_tracked_path(self):
+        """Raw filesystem path for the selected tracked-list row, or None."""
+        try:
+            sel = self.tracked_listbox.curselection()
+            if not sel:
+                return None
+            idx = sel[0]
+            if 0 <= idx < len(self._tracked_raw_paths):
+                return self._tracked_raw_paths[idx]
+        except Exception:
+            pass
+        return None
+
+    def _known_scopes(self):
+        """Scopes already in use, for the assignment dropdown: every scope held
+        by any user + every scope already mapped by a rule, plus 'shared'."""
+        data = self._admin_load_users()
+        found = set()
+        for u in (data.get("users") or {}).values():
+            if isinstance(u, dict):
+                for s in (u.get("scopes") or []):
+                    if str(s).strip():
+                        found.add(str(s).strip())
+        cm = data.get("collection_map") or {}
+        for r in (cm.get("rules") or []):
+            c = r.get("collection")
+            if c:
+                found.add(str(c).strip())
+        found.add("shared")
+        return sorted(found)
+
+    def _resolve_scope_for_path(self, path, rules=None, default=None):
+        """Show what scope a folder maps to, via the SAME pure resolver the
+        engine uses (scope_resolver.resolve_collection_for_path), so the GUI can
+        never drift from what is enforced at query time. DISPLAY only."""
+        import scope_resolver
+        if rules is None:
+            data = self._admin_load_users()
+            mapping = data.get("collection_map") or {}
+        else:
+            mapping = {"rules": rules or []}
+            if default is not None:
+                mapping["default_collection"] = default
+        return scope_resolver.resolve_collection_for_path(path, mapping)
+
+    def _refresh_selected_scope_label(self):
+        """Update the scope status line to reflect the selected folder."""
+        if not hasattr(self, "_scope_status_var"):
+            return
+        path = self._selected_tracked_path()
+        if not path:
+            self._scope_status_var.set(
+                "Select a folder above to see or set its read scope.")
+            return
+        scope = self._resolve_scope_for_path(path)
+        if scope == "documents":
+            # No matching rule AND no default_collection: the engine routes an
+            # unclassified folder to the INDEXER'S OWN private collection, never
+            # to shared. Say so plainly instead of implying a shared scope.
+            self._scope_status_var.set(
+                f"\u201c{path}\u201d  \u2192  no scope rule "
+                f"(defaults to the indexer\u2019s private collection)")
+        else:
+            self._scope_status_var.set(
+                f"\u201c{path}\u201d  \u2192  read scope: {scope}")
+
+    def _set_scope_for_selected(self):
+        """Owner-only (server mode): assign ONE read scope to the selected tracked
+        folder by upserting an exact-prefix rule in users.json's collection_map.
+        One scope per folder by design — chunks live in one physical ChromaDB
+        collection; a subfolder may add its own rule to override the parent."""
+        import tkinter as tk
+        from tkinter import ttk, messagebox
+
+        path = self._selected_tracked_path()
+        if not path:
+            messagebox.showinfo("No folder selected",
+                                "Select a tracked folder in the list above first.")
+            return
+
+        data = self._admin_load_users()
+        cm = data.get("collection_map")
+        if not isinstance(cm, dict):
+            cm = {"rules": [], "default_collection": "shared"}
+        rules = cm.get("rules")
+        if not isinstance(rules, list):
+            rules = []
+
+        current = self._resolve_scope_for_path(
+            path, rules, cm.get("default_collection", "shared"))
+        options = self._known_scopes()
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Set Read Scope")
+        dlg.transient(self.root)
+        dlg.grab_set()
+        dlg.resizable(False, False)
+        frm = ttk.Frame(dlg, padding=12)
+        frm.pack(fill='both', expand=True)
+
+        ttk.Label(frm, text="Folder:").grid(row=0, column=0, sticky='ne', padx=6, pady=4)
+        ttk.Label(frm, text=str(path), font=('Courier', 8), wraplength=420,
+                  justify='left').grid(row=0, column=1, sticky='w', padx=6, pady=4)
+
+        ttk.Label(frm, text="Read scope:").grid(row=1, column=0, sticky='e', padx=6, pady=4)
+        scope_var = tk.StringVar(value=current or "shared")
+        ttk.Combobox(frm, textvariable=scope_var, width=34,
+                     values=options).grid(row=1, column=1, sticky='w', padx=6, pady=4)
+        ttk.Label(frm,
+                  text="Pick an existing scope or type a new one (e.g. scope:sales).\n"
+                       "Any user whose record holds this scope can search this folder.",
+                  font=('Segoe UI', 8), foreground='gray').grid(
+            row=2, column=1, sticky='w', padx=6)
+
+        result = {"ok": False}
+
+        def _save():
+            new_scope = scope_var.get().strip()
+            if not new_scope:
+                messagebox.showwarning(
+                    "Scope required",
+                    "Enter a scope name or choose one from the list.")
+                return
+            result["ok"] = True
+            result["scope"] = new_scope
+            dlg.destroy()
+
+        btns = ttk.Frame(frm)
+        btns.grid(row=3, column=0, columnspan=2, pady=(10, 0))
+        ttk.Button(btns, text="Save", command=_save,
+                   style='Accent.TButton').pack(side='left', padx=4)
+        ttk.Button(btns, text="Cancel", command=dlg.destroy).pack(side='left', padx=4)
+        dlg.wait_window()
+
+        if not result.get("ok"):
+            return
+
+        import scope_resolver
+        cm["rules"] = scope_resolver.upsert_scope_rule(rules, path, result["scope"])
+        cm.setdefault("default_collection", "shared")
+        data["collection_map"] = cm
+        self._admin_save_users(data)
+
+        self._refresh_selected_scope_label()
+        messagebox.showinfo(
+            "Scope updated",
+            f"This folder now maps to read scope:  {result['scope']}\n\n"
+            "Already-indexed chunks stay in their old collection until you "
+            "re-index — use \u201cUpdate Selected\u201d on this folder so its "
+            "content moves into the new scope.")
+
     def create_scheduling_tab(self):
         """Create scheduling tab — scrollable, day-checkbox based."""
         schedule_frame = ttk.Frame(self.notebook)
@@ -5054,10 +5275,150 @@ or from the Help menu."""
         stats_btn = ttk.Button(db_frame, text="View Statistics",
                               command=self.show_stats)
         stats_btn.pack(side='left', padx=5)
-        
-        clear_btn = ttk.Button(db_frame, text="Clear Database",
-                              command=self.clear_database)
-        clear_btn.pack(side='left', padx=5)
+
+        clear_only_btn = ttk.Button(db_frame, text="Clear Database only",
+                                    command=self.clear_database_only_cmd)
+        clear_only_btn.pack(side='left', padx=5)
+
+        clear_full_btn = ttk.Button(db_frame, text="Clear Database + Database list",
+                                    command=self.clear_database)
+        clear_full_btn.pack(side='left', padx=5)
+
+        # ── Email Configuration (server mode only) ────────────────────
+        # Required for 'Forgot token?' recovery and employee token delivery.
+        # configure_email() MCP tool is Tier A suppressed in server mode,
+        # so SMTP must be configured here.
+        if _settings_is_server_mode:
+            email_cfg_frame = ttk.LabelFrame(
+                scrollable_frame,
+                text='\U0001f4e7 Email Configuration  (required for token recovery)',
+                padding=10)
+            email_cfg_frame.pack(fill='x', padx=20, pady=(0, 10))
+
+            _ep = {'padx': 6, 'pady': 3}
+            ttk.Label(email_cfg_frame, text='SMTP host:').grid(
+                row=0, column=0, sticky='e', **_ep)
+            _smtp_host_var = tk.StringVar()
+            ttk.Entry(email_cfg_frame, textvariable=_smtp_host_var,
+                      width=34).grid(row=0, column=1, **_ep)
+            ttk.Label(email_cfg_frame,
+                      text='e.g. smtp.gmail.com  /  smtp.office365.com',
+                      font=('Segoe UI', 8)).grid(row=0, column=2, sticky='w')
+
+            ttk.Label(email_cfg_frame, text='Port:').grid(
+                row=1, column=0, sticky='e', **_ep)
+            _smtp_port_var = tk.StringVar(value='587')
+            ttk.Entry(email_cfg_frame, textvariable=_smtp_port_var,
+                      width=8).grid(row=1, column=1, sticky='w', **_ep)
+            ttk.Label(email_cfg_frame,
+                      text='587 = STARTTLS (most common)  /  465 = SMTPS',
+                      font=('Segoe UI', 8)).grid(row=1, column=2, sticky='w')
+
+            ttk.Label(email_cfg_frame, text='Username:').grid(
+                row=2, column=0, sticky='e', **_ep)
+            _smtp_user_var = tk.StringVar()
+            ttk.Entry(email_cfg_frame, textvariable=_smtp_user_var,
+                      width=34).grid(row=2, column=1, **_ep)
+            ttk.Label(email_cfg_frame,
+                      text='Your email address / SMTP login',
+                      font=('Segoe UI', 8)).grid(row=2, column=2, sticky='w')
+
+            ttk.Label(email_cfg_frame, text='Password:').grid(
+                row=3, column=0, sticky='e', **_ep)
+            _smtp_pass_var = tk.StringVar()
+            _smtp_pass_entry = ttk.Entry(email_cfg_frame,
+                                         textvariable=_smtp_pass_var,
+                                         show='\u25cf', width=34)
+            _smtp_pass_entry.grid(row=3, column=1, **_ep)
+            _smtp_show_var = tk.BooleanVar(value=False)
+            def _toggle_smtp_pass():
+                _smtp_pass_entry.configure(
+                    show='' if _smtp_show_var.get() else '\u25cf')
+            ttk.Checkbutton(email_cfg_frame, text='Show',
+                            variable=_smtp_show_var,
+                            command=_toggle_smtp_pass).grid(
+                row=3, column=2, sticky='w')
+
+            ttk.Label(email_cfg_frame, text='From name:').grid(
+                row=4, column=0, sticky='e', **_ep)
+            _smtp_from_var = tk.StringVar(value='AI-Prowler')
+            ttk.Entry(email_cfg_frame, textvariable=_smtp_from_var,
+                      width=34).grid(row=4, column=1, **_ep)
+
+            _email_cfg_status = tk.StringVar(value='')
+            ttk.Label(email_cfg_frame, textvariable=_email_cfg_status,
+                      font=('Segoe UI', 9)).grid(
+                row=5, column=0, columnspan=3, sticky='w', padx=6, pady=(4, 0))
+
+            def _load_smtp_cfg():
+                import json as _j, base64 as _b
+                p = Path.home() / '.ai-prowler' / 'email_config.json'
+                if not p.exists():
+                    return
+                try:
+                    d = _j.loads(p.read_text(encoding='utf-8')) or {}
+                    _smtp_host_var.set(d.get('smtp_host', ''))
+                    _smtp_port_var.set(str(d.get('smtp_port', 587)))
+                    _smtp_user_var.set(d.get('username', ''))
+                    _smtp_from_var.set(d.get('from_name', 'AI-Prowler'))
+                    pw = ''
+                    if '_password_b64' in d:
+                        try:
+                            pw = _b.b64decode(d['_password_b64']).decode()
+                        except Exception:
+                            pass
+                    _smtp_pass_var.set(pw)
+                    _email_cfg_status.set('Loaded existing config.')
+                except Exception as _e:
+                    _email_cfg_status.set(f'Could not load config: {_e}')
+
+            def _save_smtp_cfg():
+                import json as _j, base64 as _b
+                host  = _smtp_host_var.get().strip()
+                port_s = _smtp_port_var.get().strip()
+                user  = _smtp_user_var.get().strip()
+                pw    = _smtp_pass_var.get()
+                if not host or not user:
+                    _email_cfg_status.set('SMTP host and username are required.')
+                    return
+                try:
+                    port = int(port_s)
+                except ValueError:
+                    _email_cfg_status.set('Port must be a number.')
+                    return
+                cfg = {
+                    'smtp_host':     host,
+                    'smtp_port':     port,
+                    'username':      user,
+                    '_password_b64': _b.b64encode(pw.encode()).decode(),
+                    'from_name':     _smtp_from_var.get().strip() or 'AI-Prowler',
+                    'use_tls':       True,
+                }
+                p = Path.home() / '.ai-prowler' / 'email_config.json'
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(_j.dumps(cfg, indent=2), encoding='utf-8')
+                _email_cfg_status.set('Email config saved.')
+
+            def _test_smtp_cfg():
+                _email_cfg_status.set('Sending test email...')
+                scrollable_frame.update_idletasks()
+                ok, msg = self._admin_send_email_direct(
+                    _smtp_user_var.get().strip(),
+                    'AI-Prowler SMTP Test',
+                    'This is a test email from AI-Prowler. '
+                    'If you received this, SMTP is configured correctly.')
+                _email_cfg_status.set(
+                    'Test email sent.' if ok else f'Test failed: {msg}')
+
+            _load_smtp_cfg()
+            _smtp_btn_row = ttk.Frame(email_cfg_frame)
+            _smtp_btn_row.grid(row=6, column=0, columnspan=3,
+                               pady=(8, 0), sticky='w', padx=6)
+            ttk.Button(_smtp_btn_row, text='\U0001f4be Save Config',
+                       command=_save_smtp_cfg).pack(side='left', padx=(0, 6))
+            ttk.Button(_smtp_btn_row, text='\U0001f4e7 Test Connection',
+                       command=_test_smtp_cfg).pack(side='left')
+
 
         # ── Query Output ──────────────────────────────────────────────────────
         output_frame = ttk.LabelFrame(_debug_settings_parent, text="Query Output", padding=(10, 6))
@@ -5793,76 +6154,102 @@ or from the Help menu."""
 
         ttk.Separator(remote_frame, orient='horizontal').pack(fill='x', pady=(0, 8))
 
-        # ── Token ─────────────────────────────────────────────────────────────
-        ttk.Label(remote_frame, text="Bearer Token  (required — you choose the value):",
-                  font=('Arial', 9, 'bold')).pack(anchor='w')
-        ttk.Label(remote_frame, font=('Arial', 8), foreground='gray',
-                  text="Paste this token into Claude mobile's MCP config. Anyone with this token can query your knowledge base.").pack(anchor='w', pady=(0, 4))
+        # ── Detect mode once so the two sections below can gate on it ─────────
+        _settings_is_server_mode = self._is_business_server_mode()
 
-        token_row = ttk.Frame(remote_frame)
-        token_row.pack(fill='x', pady=(0, 8))
+        # ── Token (personal/mobile mode only — hidden in Business server mode) ─
+        # In server mode each user has their own bearer token managed via the
+        # Admin tab; there is no single shared token to configure here.
+        _remote_token_var = tk.StringVar()   # always created so later refs work
+        if not _settings_is_server_mode:
+            ttk.Label(remote_frame, text="Bearer Token  (required — you choose the value):",
+                      font=('Arial', 9, 'bold')).pack(anchor='w')
+            ttk.Label(remote_frame, font=('Arial', 8), foreground='gray',
+                      text="Paste this token into Claude mobile's MCP config. "
+                           "Anyone with this token can query your knowledge base."
+                      ).pack(anchor='w', pady=(0, 4))
 
-        _remote_token_var = tk.StringVar()
-        # Load saved token from config
-        try:
-            import json as _jmod
-            _cfg_path = Path.home() / '.ai-prowler' / 'config.json'
-            if _cfg_path.exists():
-                _cfg_data = _jmod.loads(_cfg_path.read_text(encoding='utf-8'))
-                _remote_token_var.set(_cfg_data.get('remote_token', ''))
-        except Exception:
-            pass
+            token_row = ttk.Frame(remote_frame)
+            token_row.pack(fill='x', pady=(0, 8))
 
-        _token_show_var = tk.BooleanVar(value=False)
-        _token_entry = ttk.Entry(token_row, textvariable=_remote_token_var,
-                                 show='●', width=42)
-        _token_entry.pack(side='left', padx=(0, 6))
-
-        def _toggle_token_show():
-            _token_entry.configure(show='' if _token_show_var.get() else '●')
-        ttk.Checkbutton(token_row, text="Show", variable=_token_show_var,
-                        command=_toggle_token_show).pack(side='left', padx=(0, 10))
-
-        def _save_remote_token():
-            tok = _remote_token_var.get().strip()
-            if not tok:
-                messagebox.showwarning("Empty Token",
-                                       "Token cannot be empty. Choose any string — e.g. MySecretToken123")
-                return
+            # Load saved token from config
             try:
                 import json as _jmod
-                _cfg_p = Path.home() / '.ai-prowler' / 'config.json'
-                _cfg_p.parent.mkdir(parents=True, exist_ok=True)
-                _cfg_d = {}
-                if _cfg_p.exists():
-                    try:
-                        _cfg_d = _jmod.loads(_cfg_p.read_text(encoding='utf-8'))
-                    except Exception:
-                        pass
-                _cfg_d['remote_token'] = tok
-                _cfg_p.write_text(_jmod.dumps(_cfg_d, indent=2), encoding='utf-8')
-                self.status_var.set("✅ Token saved")
-                self.root.after(3000, lambda: self.status_var.set("Ready"))
-            except Exception as _e:
-                messagebox.showerror("Save Error", str(_e))
+                _cfg_path = Path.home() / '.ai-prowler' / 'config.json'
+                if _cfg_path.exists():
+                    _cfg_data = _jmod.loads(_cfg_path.read_text(encoding='utf-8'))
+                    _remote_token_var.set(_cfg_data.get('remote_token', ''))
+            except Exception:
+                pass
 
-        ttk.Button(token_row, text="💾 Save Token",
-                   command=_save_remote_token).pack(side='left')
+            _token_show_var = tk.BooleanVar(value=False)
+            _token_entry = ttk.Entry(token_row, textvariable=_remote_token_var,
+                                     show='●', width=42)
+            _token_entry.pack(side='left', padx=(0, 6))
 
-        ttk.Separator(remote_frame, orient='horizontal').pack(fill='x', pady=(4, 8))
+            def _toggle_token_show():
+                _token_entry.configure(show='' if _token_show_var.get() else '●')
+            ttk.Checkbutton(token_row, text="Show", variable=_token_show_var,
+                            command=_toggle_token_show).pack(side='left', padx=(0, 10))
 
-        # ── License Key (subscription validation) ────────────────────────────
-        ttk.Label(remote_frame, text="License Key  (provided by your AI-Prowler subscription):",
-                  font=('Arial', 9, 'bold')).pack(anchor='w')
-        ttk.Label(remote_frame, font=('Arial', 8), foreground='gray',
-                  text="Enter the license key given to you by your AI-Prowler provider. "
-                       "This controls remote access subscription status.").pack(anchor='w', pady=(0, 4))
+            def _save_remote_token():
+                tok = _remote_token_var.get().strip()
+                if not tok:
+                    messagebox.showwarning("Empty Token",
+                                           "Token cannot be empty. "
+                                           "Choose any string — e.g. MySecretToken123")
+                    return
+                try:
+                    import json as _jmod
+                    _cfg_p = Path.home() / '.ai-prowler' / 'config.json'
+                    _cfg_p.parent.mkdir(parents=True, exist_ok=True)
+                    _cfg_d = {}
+                    if _cfg_p.exists():
+                        try:
+                            _cfg_d = _jmod.loads(_cfg_p.read_text(encoding='utf-8'))
+                        except Exception:
+                            pass
+                    _cfg_d['remote_token'] = tok
+                    _cfg_p.write_text(_jmod.dumps(_cfg_d, indent=2), encoding='utf-8')
+                    self.status_var.set("✅ Token saved")
+                    self.root.after(3000, lambda: self.status_var.set("Ready"))
+                except Exception as _e:
+                    messagebox.showerror("Save Error", str(_e))
+
+            ttk.Button(token_row, text="💾 Save Token",
+                       command=_save_remote_token).pack(side='left')
+
+            ttk.Separator(remote_frame, orient='horizontal').pack(fill='x', pady=(4, 8))
+
+        # ── License Key / Parent Key ──────────────────────────────────────────
+        # Personal/mobile mode: "License Key" — the single key that activates
+        #   this installation's remote-access subscription.
+        # Business server mode: "Parent License Key" — the server-level key
+        #   that unlocks the seat pool. Individual user seats (child keys) are
+        #   managed in the Admin tab, not here.
+        _license_key_var = tk.StringVar()   # always created so later refs work
+        if _settings_is_server_mode:
+            ttk.Label(remote_frame,
+                      text="Parent License Key  (server seat pool — provided by AI-Prowler):",
+                      font=('Arial', 9, 'bold')).pack(anchor='w')
+            ttk.Label(remote_frame, font=('Arial', 8), foreground='gray',
+                      text="This is the server-level key that unlocks your seat pool. "
+                           "Individual user seat keys (child keys) are assigned per-user "
+                           "in the Admin tab — do not enter them here."
+                      ).pack(anchor='w', pady=(0, 4))
+        else:
+            ttk.Label(remote_frame,
+                      text="License Key  (provided by your AI-Prowler subscription):",
+                      font=('Arial', 9, 'bold')).pack(anchor='w')
+            ttk.Label(remote_frame, font=('Arial', 8), foreground='gray',
+                      text="Enter the license key given to you by your AI-Prowler provider. "
+                           "This controls remote access subscription status."
+                      ).pack(anchor='w', pady=(0, 4))
 
         license_row = ttk.Frame(remote_frame)
         license_row.pack(fill='x', pady=(0, 8))
 
-        _license_key_var = tk.StringVar()
-        # Load saved license key from config
+        # Load saved license key (same config.json key regardless of mode)
         try:
             import json as _jmod2
             _cfg_path2 = Path.home() / '.ai-prowler' / 'config.json'
@@ -5878,9 +6265,13 @@ or from the Help menu."""
         def _save_license_key():
             lk = _license_key_var.get().strip()
             if not lk:
-                messagebox.showwarning("Empty Key",
-                                       "License key cannot be empty.\n"
-                                       "Enter the key provided by your AI-Prowler subscription provider.")
+                messagebox.showwarning(
+                    "Empty Key",
+                    ("Parent License Key cannot be empty.\n"
+                     "Enter the server key provided by your AI-Prowler subscription.")
+                    if _settings_is_server_mode else
+                    ("License key cannot be empty.\n"
+                     "Enter the key provided by your AI-Prowler subscription provider."))
                 return
             try:
                 import json as _jmod2
@@ -5894,31 +6285,35 @@ or from the Help menu."""
                         pass
                 _cfg_d2['license_key'] = lk
                 _cfg_p2.write_text(_jmod2.dumps(_cfg_d2, indent=2), encoding='utf-8')
-                self.status_var.set("✅ License key saved")
+                self.status_var.set(
+                    "✅ Parent License Key saved" if _settings_is_server_mode
+                    else "✅ License key saved")
                 self.root.after(3000, lambda: self.status_var.set("Ready"))
                 # Re-run subscription check with new key
                 self.root.after(500, _run_status_check)
             except Exception as _e:
                 messagebox.showerror("Save Error", str(_e))
 
-        ttk.Button(license_row, text="💾 Save Key",
+        ttk.Button(license_row,
+                   text="💾 Save Key",
                    command=_save_license_key).pack(side='left')
 
         ttk.Separator(remote_frame, orient='horizontal').pack(fill='x', pady=(4, 8))
 
-        # ── Machine Activations (v7.0.0 — Phase A' Mobile License panel) ──────
-        # Architecture spec §6.7. Mobile licenses may be active on at most 2
-        # machines at once. This panel shows this machine's install_id, the
-        # current active-install count from the activation endpoint, and lets a
-        # solo user release another machine to free a slot.
-        ttk.Label(remote_frame, text="Machine Activations  (Mobile licenses: max 2 machines):",
+        # ── Mobile Activation (v7.0.1) ───────────────────────────────────────
+        # Personal/home installs: 1 machine activation per license.
+        # Hidden in server mode — server installs are not machine-limited.
+        _act_outer = ttk.Frame(remote_frame)
+        ttk.Label(_act_outer, text="Mobile Activation:",
                   font=('Arial', 9, 'bold')).pack(anchor='w')
-        ttk.Label(remote_frame, font=('Arial', 8), foreground='gray',
-                  text="Your Mobile license can be active on up to 2 machines. To use it on a "
-                       "new machine when both slots are full, release one here.").pack(
+        ttk.Label(_act_outer, font=('Arial', 8), foreground='gray',
+                  text="Your subscription is active on 1 machine at a time. "
+                       "If replacing your computer: click 'Check Activation' first, "
+                       "then 'Transfer to This Machine' to move your license. "
+                       "The previous machine will be deactivated.").pack(
                            anchor='w', pady=(0, 4))
 
-        _activations_frame = ttk.Frame(remote_frame)
+        _activations_frame = ttk.Frame(_act_outer)
         _activations_frame.pack(fill='x', pady=(0, 8))
 
         # This machine's install_id (generated at GUI launch; see __init__).
@@ -5939,7 +6334,7 @@ or from the Help menu."""
                   text=(f"This machine: {_this_install_id or '(install_id unavailable)'}")
                   ).pack(anchor='w', pady=(0, 4))
 
-        # Holds active install_ids fetched from the endpoint, for the release flow.
+        # Holds active install_ids fetched from the endpoint, for the transfer flow.
         _active_ids_box = {"ids": []}
 
         def _activation_base_url():
@@ -6011,58 +6406,84 @@ or from the Help menu."""
             import threading as _th
             _th.Thread(target=_worker, daemon=True).start()
 
-        def _release_other_machine():
-            """Release the active install_id that is NOT this machine. For a solo
-            Mobile user with 2 active machines, this frees the other slot."""
+        def _transfer_to_this_machine():
+            """Transfer the mobile activation to THIS machine — use when replacing
+            your computer. Click 'Check Activation' first, then this button."""
             lh = _token_hash_for_activation()
             if not lh:
-                messagebox.showwarning("No Token",
-                                       "Save a Bearer Token first.")
+                messagebox.showwarning("No Token", "Save a Bearer Token first.")
                 return
-            others = [i for i in _active_ids_box.get("ids", [])
-                      if i and i != _this_install_id]
+            ids = _active_ids_box.get("ids", [])
+            if not ids:
+                messagebox.showinfo(
+                    "Check First",
+                    "Click 'Check Activation' first so the app can see "
+                    "which machine is currently active.")
+                return
+            if _this_install_id and _this_install_id in ids:
+                messagebox.showinfo(
+                    "Already Active",
+                    "This machine is already the active install -- no transfer needed.")
+                return
+            others = [i for i in ids if i and i != _this_install_id]
             if not others:
                 messagebox.showinfo(
-                    "Nothing to Release",
-                    "No other active machine was found. Click “Check Activations” "
-                    "first, or there may be no second machine to release.")
+                    "Nothing to Transfer",
+                    "No other active machine was found.\n\n"
+                    "Click 'Check Activation' first to refresh the list.")
                 return
             target = others[0]
             if not messagebox.askyesno(
-                    "Release Machine",
-                    f"Release the other active machine?\n\n  {target}\n\n"
-                    "That machine's remote access will be disabled until it "
-                    "re-activates. This frees a slot for this machine."):
+                    "Transfer Activation",
+                    f"Transfer your subscription to this machine?\n\n"
+                    f"Previous: {target[:12]}...\n"
+                    f"This PC:  {(_this_install_id or 'unknown')[:12]}...\n\n"
+                    "The previous machine will be deactivated immediately.\n"
+                    "Use this when replacing your computer."):
                 return
-            _activations_status_var.set(f"Releasing {target}…")
+            _activations_status_var.set("Transferring activation to this machine...")
 
             def _worker():
                 msg = ""
-                ok = False
+                ok  = False
                 try:
                     import requests as _rq
-                    url = f"{_activation_base_url()}/license/release_install"
-                    resp = _rq.post(url,
-                                    json={"license_key_hash": lh, "install_id": target},
-                                    timeout=10,
-                                    headers={"Content-Type": "application/json",
-                                             "User-Agent": "AI-Prowler-GUI/1.0"},
-                                    proxies={"http": None, "https": None})
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        ok = bool(data.get("released"))
-                        msg = data.get("message", "")
+                    base = _activation_base_url()
+                    r1 = _rq.post(
+                        f"{base}/license/release_install",
+                        json={"license_key_hash": lh, "install_id": target},
+                        timeout=10,
+                        headers={"Content-Type": "application/json",
+                                 "User-Agent": "AI-Prowler-GUI/1.0"},
+                        proxies={"http": None, "https": None})
+                    if r1.status_code != 200:
+                        msg = f"Could not deactivate previous machine (HTTP {r1.status_code})."
                     else:
-                        msg = f"Server returned HTTP {resp.status_code}."
+                        r2 = _rq.post(
+                            f"{base}/license/activate",
+                            json={"license_key_hash": lh,
+                                  "install_id": _this_install_id or "0" * 16,
+                                  "os": "Windows-11", "version": APP_VERSION},
+                            timeout=10,
+                            headers={"Content-Type": "application/json",
+                                     "User-Agent": "AI-Prowler-GUI/1.0"},
+                            proxies={"http": None, "https": None})
+                        if r2.status_code == 200:
+                            decision = r2.json().get("decision", "")
+                            if decision == "allowed":
+                                ok  = True
+                                msg = "Transfer complete. This machine is now active."
+                            else:
+                                msg = f"Released old machine but activation returned: {decision}."
+                        else:
+                            msg = f"Released old machine but activation failed (HTTP {r2.status_code})."
                 except Exception as _e:
                     msg = f"Could not reach activation server: {_e}"
 
                 def _apply():
+                    _activations_status_var.set(msg)
                     if ok:
-                        _activations_status_var.set(
-                            "Released. Re-run the HTTP server to claim the freed slot.")
-                    else:
-                        _activations_status_var.set(msg or "Release failed.")
+                        _active_ids_box["ids"] = [_this_install_id]
                 self.root.after(0, _apply)
 
             import threading as _th
@@ -6070,10 +6491,15 @@ or from the Help menu."""
 
         _act_btn_row = ttk.Frame(_activations_frame)
         _act_btn_row.pack(fill='x', pady=(2, 0))
-        ttk.Button(_act_btn_row, text="🔄 Check Activations",
+        ttk.Button(_act_btn_row, text="Check Activation",
                    command=_check_activations).pack(side='left', padx=(0, 8))
-        ttk.Button(_act_btn_row, text="🔓 Release Other Machine",
-                   command=_release_other_machine).pack(side='left')
+        ttk.Button(_act_btn_row, text="Transfer to This Machine",
+                   command=_transfer_to_this_machine).pack(side='left')
+
+        # Gate: shown only in personal/home mode.
+        # Server installs are not machine-limited.
+        if not _settings_is_server_mode:
+            _act_outer.pack(fill='x', pady=(0, 4))
 
         ttk.Separator(remote_frame, orient='horizontal').pack(fill='x', pady=(4, 8))
 
@@ -6117,7 +6543,7 @@ or from the Help menu."""
             return _hashlib.sha256(tok.encode()).hexdigest()[:16]
 
         def _check_internet() -> bool:
-            """Quick connectivity check — tries to reach GitHub."""
+            """Quick connectivity check -- tries to reach GitHub."""
             import urllib.request as _ur
             try:
                 _ur.urlopen("https://github.com", timeout=4)
@@ -6517,7 +6943,10 @@ or from the Help menu."""
 
         def _start_http_server():
             tok = _remote_token_var.get().strip()
-            if not tok:
+            # In Business server mode there is no single bearer token —
+            # authentication is per-user via users.json. Skip the token
+            # guard entirely; the MCP server handles auth itself.
+            if not tok and not _settings_is_server_mode:
                 messagebox.showwarning("No Token", "Save a Bearer token first.")
                 return
             if self._http_server_proc is not None and self._http_server_proc.poll() is None:
@@ -9401,11 +9830,600 @@ or from the Help menu."""
                           "You can assign the seat now and it will be "
                           "re-validated automatically later.")
 
+    # ── Admin tab session state ───────────────────────────────────────────────
+    # Tracks whether the current GUI session has authenticated for Admin tab
+    # mutations. Set to True after a successful bearer-token unlock; cleared
+    # when AI-Prowler is closed (instance lifetime only — never persisted).
+    # _admin_session_unlocked is initialised in __init__ via _admin_unlock_init()
+    # which is called right before create_admin_tab().
+
+    def _admin_requires_lock(self):
+        """Return True iff the Admin tab should require a bearer-token unlock.
+
+        Locked mode is active when at least one user in users.json has
+        can_manage_users=True (owner always counts as True). If NO such user
+        exists — either because users.json is absent/empty or all managers/
+        owners have been removed — buttons are always enabled (bootstrapping
+        mode / lockout-prevention).
+        """
+        data = self._admin_load_users()
+        users = data.get("users") or {}
+        for u in users.values():
+            if not isinstance(u, dict):
+                continue
+            role = (u.get("role") or "").lower()
+            if role == "owner" or u.get("can_manage_users"):
+                return True
+        return False
+
+    def _admin_unlock_init(self):
+        """Initialise the per-session unlock flag. Called once before the
+        Admin tab is built so the attribute always exists."""
+        if not hasattr(self, "_admin_session_unlocked"):
+            self._admin_session_unlocked = False
+
+    def _admin_do_unlock(self):
+        """Show a bearer-token prompt and validate it against users.json.
+        Returns True and sets _admin_session_unlocked=True on success.
+        Returns False (no messagebox — caller decides) on cancel/wrong token.
+        Unlimited attempts; the dialog re-prompts on a wrong token.
+        """
+        import tkinter as tk
+        from tkinter import ttk, messagebox
+
+        # Build a modal dialog with a password entry
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Admin Unlock")
+        dlg.transient(self.root)
+        dlg.grab_set()
+        dlg.resizable(False, False)
+
+        frm = ttk.Frame(dlg, padding=20)
+        frm.pack(fill='both', expand=True)
+
+        ttk.Label(frm, text="🔒 Admin area is locked",
+                  font=('Segoe UI', 11, 'bold')).pack(anchor='w', pady=(0, 4))
+        ttk.Label(frm, wraplength=320, justify='left',
+                  text="Enter your bearer token (your AI-Prowler password) to "
+                       "unlock user-management actions for this session.",
+                  font=('Segoe UI', 9), foreground='gray'
+                  ).pack(anchor='w', pady=(0, 12))
+
+        err_var = tk.StringVar(value="")
+        err_lbl = ttk.Label(frm, textvariable=err_var,
+                            foreground='#cc0000', font=('Segoe UI', 9))
+        err_lbl.pack(anchor='w', pady=(0, 4))
+
+        tok_var = tk.StringVar()
+        tok_entry = ttk.Entry(frm, textvariable=tok_var, show='●', width=34,
+                              font=('Consolas', 10))
+        tok_entry.pack(fill='x', pady=(0, 12))
+        tok_entry.focus_set()
+
+        result = [False]   # mutable so inner functions can write it
+
+        def _try_unlock():
+            entered = tok_var.get().strip()
+            data = self._admin_load_users()
+            users = data.get("users") or {}
+            # v7.0.0 temp token: clean expired, accept valid ones
+            import time as _time
+            _now = _time.time()
+            _expired = [k for k, v in list(users.items())
+                        if isinstance(v, dict) and v.get('_temp_token')
+                        and v.get('_expires_at', 0) < _now]
+            if _expired:
+                for _ek in _expired:
+                    del data['users'][_ek]
+                self._admin_save_users(data)
+                users = data.get('users') or {}
+
+            user = users.get(entered)
+            if isinstance(user, dict):
+                role = (user.get('role') or '').lower()
+                _is_temp = bool(user.get('_temp_token'))
+                if role == 'owner' or user.get('can_manage_users'):
+                    self._admin_session_unlocked = True
+                    self._admin_temp_token_active = _is_temp
+                    if _is_temp:
+                        self._admin_temp_token_key = entered
+                    result[0] = True
+                    dlg.destroy()
+                    return
+                err_var.set('That token does not have admin rights.')
+            else:
+                err_var.set('Token not recognised -- try again.')
+            tok_var.set("")
+            tok_entry.focus_set()
+
+        def _cancel():
+            dlg.destroy()
+
+        btn_row = ttk.Frame(frm)
+        btn_row.pack(fill='x')
+        ttk.Button(btn_row, text="Unlock", command=_try_unlock
+                   ).pack(side='left', padx=(0, 8))
+        ttk.Button(btn_row, text="Cancel", command=_cancel
+                   ).pack(side='left')
+
+        # Allow Enter key to submit
+        dlg.bind("<Return>", lambda _e: _try_unlock())
+        dlg.bind("<Escape>", lambda _e: _cancel())
+
+        ttk.Separator(frm, orient='horizontal').pack(fill='x', pady=(12, 4))
+        ttk.Button(frm,
+                   text='Forgot your token?  Send recovery email / SMS',
+                   command=lambda: [dlg.destroy(),
+                                    self._admin_recovery_dialog()]
+                   ).pack(anchor='w', pady=(0, 8))
+
+        dlg.wait_window()
+        return result[0]
+
+    def _admin_gate(self):
+        """Call this at the top of every mutating Admin action.
+        Returns True if the action should proceed (session already unlocked,
+        or lock not required, or user just unlocked successfully).
+        Returns False if the user cancelled — caller should return immediately.
+        """
+        if not self._admin_requires_lock():
+            return True          # bootstrapping / no admins defined
+        if self._admin_session_unlocked:
+            return True          # already authenticated this session
+        # Need to unlock
+        ok = self._admin_do_unlock()
+        if ok:
+            self._admin_update_lock_ui()
+        return ok
+
+
+    # ── Token Recovery System ─────────────────────────────────────────────────
+    # Email / SMS self-service recovery for locked-out admins and employees
+    # who forget their bearer token.
+
+    # Carrier email-to-SMS gateways (US carriers)
+    _CARRIER_GATEWAYS = {
+        "att":         "txt.att.net",
+        "verizon":     "vtext.com",
+        "t-mobile":    "tmomail.net",
+        "cricket":     "sms.cricketwireless.net",
+        "boost":       "sms.myboostmobile.com",
+        "us cellular": "email.uscc.net",
+        "metro pcs":   "mymetropcs.com",
+        "sprint":      "messaging.sprintpcs.com",
+    }
+
+    def _admin_email_configured(self):
+        """Return True if email_config.json exists and has smtp_host + username."""
+        import json as _j
+        p = Path.home() / ".ai-prowler" / "email_config.json"
+        if not p.exists():
+            return False
+        try:
+            d = _j.loads(p.read_text(encoding="utf-8")) or {}
+            return bool(d.get("smtp_host", "").strip()) and                    bool(d.get("username", "").strip())
+        except Exception:
+            return False
+
+    def _admin_send_email_direct(self, to, subject, body):
+        """Send an email directly from the GUI using email_config.json.
+        Returns (success: bool, message: str)."""
+        import json as _j, smtplib, ssl as _ssl, base64 as _b
+        from email.mime.multipart import MIMEMultipart as _MM
+        from email.mime.text import MIMEText as _MT
+
+        p = Path.home() / ".ai-prowler" / "email_config.json"
+        if not p.exists():
+            return (False, "Email not configured. "
+                           "Configure SMTP in Settings -> Email Configuration.")
+        try:
+            cfg = _j.loads(p.read_text(encoding="utf-8")) or {}
+        except Exception as e:
+            return (False, f"Could not read email config: {e}")
+
+        if "_password_b64" in cfg:
+            try:
+                cfg["password"] = _b.b64decode(cfg["_password_b64"]).decode()
+            except Exception:
+                pass
+
+        smtp_host = cfg.get("smtp_host", "").strip()
+        smtp_port = int(cfg.get("smtp_port", 587))
+        username  = cfg.get("username", "").strip()
+        password  = cfg.get("password", "")
+        from_name = cfg.get("from_name", "AI-Prowler")
+
+        if not smtp_host or not username:
+            return (False, "Incomplete email config.")
+
+        msg = _MM("mixed")
+        msg["From"]    = f"{from_name} <{username}>"
+        msg["To"]      = to
+        msg["Subject"] = subject
+        msg.attach(_MT(body, "plain", "utf-8"))
+
+        try:
+            ctx = _ssl.create_default_context()
+            if smtp_port == 465:
+                with smtplib.SMTP_SSL(smtp_host, smtp_port,
+                                      context=ctx, timeout=20) as s:
+                    s.login(username, password)
+                    s.sendmail(username, [to], msg.as_bytes())
+            else:
+                with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as s:
+                    s.ehlo()
+                    if cfg.get("use_tls", True):
+                        s.starttls(context=ctx)
+                    s.login(username, password)
+                    s.sendmail(username, [to], msg.as_bytes())
+            return (True, f"Sent to {to}")
+        except Exception as e:
+            return (False, str(e))
+
+    def _admin_generate_temp_token(self, user_key, users_dict):
+        """Generate a temporary 1-hour recovery token linked to user_key.
+        Writes the temp entry into users_dict (caller must save to disk).
+        Returns the temp token string."""
+        import secrets, time as _t
+        temp_tok = secrets.token_urlsafe(24)
+        perm_rec = dict(users_dict.get(user_key, {}))
+        perm_rec["_temp_token"]   = True
+        perm_rec["_expires_at"]   = int(_t.time()) + 3600   # 1 hour
+        perm_rec["_permanent_key"] = user_key
+        users_dict[temp_tok] = perm_rec
+        return temp_tok
+
+    def _admin_cleanup_temp_tokens(self, users_dict):
+        """Remove all expired temporary tokens. Modifies users_dict in-place.
+        Returns list of removed token prefixes (for logging)."""
+        import time as _t
+        now = _t.time()
+        expired = [k for k, v in list(users_dict.items())
+                   if isinstance(v, dict) and v.get("_temp_token")
+                   and v.get("_expires_at", 0) < now]
+        for k in expired:
+            del users_dict[k]
+        return [k[:8] + "..." for k in expired]
+
+    def _admin_recovery_eligible_users(self):
+        """Return list of (display_name, user_key, user_record) tuples for
+        users who are eligible for self-service recovery (owner or manager
+        with can_manage_users). Excludes expired temp tokens."""
+        import time as _t
+        data  = self._admin_load_users()
+        users = data.get("users") or {}
+        now   = _t.time()
+        out   = []
+        for tok, rec in users.items():
+            if not isinstance(rec, dict):
+                continue
+            if rec.get("_temp_token") and rec.get("_expires_at", 0) < now:
+                continue  # skip expired temps
+            if rec.get("_temp_token"):
+                continue  # skip active temps too — show permanent records only
+            role = (rec.get("role") or "").lower()
+            if role == "owner" or rec.get("can_manage_users"):
+                name = rec.get("name") or f"({role})"
+                out.append((name, tok, rec))
+        return out
+
+    def _admin_recovery_dialog(self):
+        """'Forgot your token?' self-service recovery dialog.
+        Shows recovery-eligible users and lets the admin choose:
+          Email / SMS / Manual path.
+        Generates a 1-hour temp token, sends it, then relaunches the
+        unlock dialog so the admin can log in immediately."""
+        import tkinter as tk
+        from tkinter import ttk, messagebox
+        from pathlib import Path as _Path
+
+        eligible = self._admin_recovery_eligible_users()
+        if not eligible:
+            messagebox.showinfo(
+                "No Recovery Users",
+                "No owner or admin-manager accounts with recovery "
+                "channels are configured.\n\n"
+                "Recover manually by reading:\n"
+                f"  {_Path.home() / '.ai-prowler' / 'users.json'}")
+            return
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Admin Token Recovery")
+        dlg.transient(self.root)
+        dlg.grab_set()
+        dlg.resizable(False, False)
+        frm = ttk.Frame(dlg, padding=16)
+        frm.pack(fill="both", expand=True)
+
+        ttk.Label(frm, text="Token Recovery",
+                  font=("Segoe UI", 11, "bold")).pack(anchor="w")
+        ttk.Label(frm, wraplength=400, justify="left", foreground="gray",
+                  text="Select your name and a delivery channel. "
+                       "A temporary token (valid 1 hour) will be sent to "
+                       "your registered contact. Use it to log in, "
+                       "then set a permanent token.").pack(
+            anchor="w", pady=(4, 10))
+
+        # User selector
+        user_row = ttk.Frame(frm)
+        user_row.pack(fill="x", pady=4)
+        ttk.Label(user_row, text="Your name:").pack(side="left")
+        user_names = [e[0] for e in eligible]
+        user_var   = tk.StringVar(value=user_names[0] if user_names else "")
+        ttk.Combobox(user_row, textvariable=user_var, values=user_names,
+                     state="readonly", width=28).pack(side="left", padx=8)
+
+        def _selected_record():
+            name = user_var.get()
+            for n, k, r in eligible:
+                if n == name:
+                    return k, r
+            return None, None
+
+        # Channel radio buttons
+        channel_var = tk.StringVar(value="")
+        email_rb = ttk.Radiobutton(frm, variable=channel_var, value="email")
+        sms_rb   = ttk.Radiobutton(frm, variable=channel_var, value="sms")
+        manual_rb= ttk.Radiobutton(frm, variable=channel_var, value="manual")
+
+        _em_row = ttk.Frame(frm)
+        _em_row.pack(fill="x", pady=2)
+        email_rb = ttk.Radiobutton(_em_row, variable=channel_var, value="email")
+        email_rb.pack(side="left")
+        self._rcv_email_lbl = ttk.Label(_em_row, text="")
+        self._rcv_email_lbl.pack(side="left", padx=4)
+
+        _sms_row = ttk.Frame(frm)
+        _sms_row.pack(fill="x", pady=2)
+        sms_rb = ttk.Radiobutton(_sms_row, variable=channel_var, value="sms")
+        sms_rb.pack(side="left")
+        self._rcv_sms_lbl = ttk.Label(_sms_row, text="")
+        self._rcv_sms_lbl.pack(side="left", padx=4)
+
+        _man_row = ttk.Frame(frm)
+        _man_row.pack(fill="x", pady=2)
+        manual_rb = ttk.Radiobutton(_man_row, variable=channel_var,
+                                    value="manual")
+        manual_rb.pack(side="left")
+        _users_json_path = str(Path.home() / ".ai-prowler" / "users.json")
+        ttk.Label(_man_row,
+                  text=f"Manual -- read from: {_users_json_path}",
+                  foreground="gray").pack(side="left", padx=4)
+
+        status_var = tk.StringVar(value="")
+        ttk.Label(frm, textvariable=status_var,
+                  foreground="#1a6e1a", font=("Segoe UI", 9),
+                  wraplength=400).pack(anchor="w", pady=(8, 0))
+
+        def _mask_email(e):
+            if not e or "@" not in e:
+                return e or "(no email)"
+            local, domain = e.split("@", 1)
+            return local[:2] + "***@" + domain
+
+        def _mask_phone(p):
+            if not p or len(p) < 7:
+                return p or "(no phone)"
+            return p[:3] + "***" + p[-2:]
+
+        def _update_labels(*_):
+            _k, rec = _selected_record()
+            if not rec:
+                return
+            em = rec.get("email", "")
+            ph = rec.get("cell_phone", "")
+            ca = rec.get("cell_carrier", "")
+            gw = self._CARRIER_GATEWAYS.get(ca, "")
+
+            # Email option
+            if em and self._admin_email_configured():
+                email_rb.state(["!disabled"])
+                self._rcv_email_lbl.config(
+                    text=f"Send email to:  {_mask_email(em)}",
+                    foreground="black")
+            else:
+                email_rb.state(["disabled"])
+                reason = ("(no email address)" if not em
+                          else "(SMTP not configured in Settings)")
+                self._rcv_email_lbl.config(
+                    text=f"Send email  {reason}", foreground="gray")
+
+            # SMS option
+            if ph and ca and gw and self._admin_email_configured():
+                sms_rb.state(["!disabled"])
+                self._rcv_sms_lbl.config(
+                    text=f"Send SMS to:  {_mask_phone(ph)} "
+                         f"({ca} via {gw})",
+                    foreground="black")
+            else:
+                sms_rb.state(["disabled"])
+                reason = ("(no phone/carrier on record)"
+                          if not (ph and ca)
+                          else "(SMTP not configured)")
+                self._rcv_sms_lbl.config(
+                    text=f"Send SMS  {reason}", foreground="gray")
+
+            # Default channel selection
+            if channel_var.get() == "":
+                if em and self._admin_email_configured():
+                    channel_var.set("email")
+                elif ph and ca and gw and self._admin_email_configured():
+                    channel_var.set("sms")
+                else:
+                    channel_var.set("manual")
+
+        user_var.trace_add("write", _update_labels)
+        _update_labels()
+
+        def _send():
+            ukey, rec = _selected_record()
+            if not rec:
+                status_var.set("Select a user first.")
+                return
+            channel = channel_var.get()
+            if not channel:
+                status_var.set("Choose a delivery channel.")
+                return
+            if channel == "manual":
+                dlg.destroy()
+                messagebox.showinfo(
+                    "Manual Recovery",
+                    f"Open the following file in a text editor to "
+                    f"find your bearer token:\n\n{_users_json_path}\n\n"
+                    "The bearer tokens are the top-level keys in the JSON. "
+                    "Your record will have your name in the 'name' field.")
+                return
+
+            # Generate temp token
+            data  = self._admin_load_users()
+            users = data.get("users") or {}
+            temp  = self._admin_generate_temp_token(ukey, users)
+            data["users"] = users
+            if not self._admin_save_users(data):
+                status_var.set("Could not save temp token.")
+                return
+
+            name = rec.get("name", "Admin")
+            em   = rec.get("email", "")
+            ph   = rec.get("cell_phone", "")
+            ca   = rec.get("cell_carrier", "")
+            gw   = self._CARRIER_GATEWAYS.get(ca, "")
+
+            subject = "AI-Prowler Admin Access Recovery"
+            body = (
+                f"Hi {name},\n\n"
+                f"A temporary admin token has been generated for your "
+                f"AI-Prowler server.\n\n"
+                f"Temporary token:  {temp}\n"
+                f"Expires:          1 hour from now\n\n"
+                f"Use this token to log in to the Admin tab.\n"
+                f"You will be prompted to set a permanent token after login.\n\n"
+                f"If you did not request this recovery, someone has physical "
+                f"access to your server machine. Change your token immediately."
+            )
+
+            if channel == "email":
+                to = em
+            else:  # sms
+                to = f"{ph}@{gw}"
+
+            status_var.set(f"Sending to {to}...")
+            dlg.update_idletasks()
+            ok, msg = self._admin_send_email_direct(to, subject, body)
+            if ok:
+                status_var.set(
+                    f"Sent! Check your {'email' if channel == 'email' else 'phone'}. "
+                    f"Token expires in 1 hour.")
+                dlg.after(2000, lambda: [dlg.destroy(),
+                                         self._admin_do_unlock()])
+            else:
+                status_var.set(f"Send failed: {msg}")
+                # Cleanup the temp token we just wrote since delivery failed
+                data2 = self._admin_load_users()
+                if temp in (data2.get("users") or {}):
+                    del data2["users"][temp]
+                    self._admin_save_users(data2)
+
+        btn_row2 = ttk.Frame(frm)
+        btn_row2.pack(fill="x", pady=(12, 0))
+        ttk.Button(btn_row2, text="Send Recovery",
+                   command=_send).pack(side="left", padx=(0, 8))
+        ttk.Button(btn_row2, text="Cancel",
+                   command=dlg.destroy).pack(side="left")
+
+        dlg.wait_window()
+
+    def _admin_send_token_to_user(self):
+        """Send the selected employee's current bearer token to their
+        registered email address. Admin action -- requires unlock.
+        Only available when the selected user has an email address."""
+        from tkinter import messagebox
+        if not self._admin_gate():
+            return
+        tok = self._admin_selected_token()
+        if not tok:
+            messagebox.showinfo("No Selection", "Select a user first.")
+            return
+        data  = self._admin_load_users()
+        users = data.get("users") or {}
+        rec   = users.get(tok)
+        if not isinstance(rec, dict):
+            messagebox.showwarning("Not Found", "User record not found.")
+            return
+        em   = rec.get("email", "").strip()
+        name = rec.get("name", "the user")
+        if not em:
+            messagebox.showwarning(
+                "No Email",
+                f"{name} does not have an email address on record.\n\n"
+                "Edit the user record to add one, then try again.")
+            return
+        if not self._admin_email_configured():
+            messagebox.showwarning(
+                "Email Not Configured",
+                "SMTP is not configured on this server.\n\n"
+                "Configure email in Settings -> Email Configuration, "
+                "then try again.")
+            return
+        em_short = em[:3] + "***@" + em.split("@", 1)[-1] if "@" in em else em
+        if not messagebox.askyesno(
+                "Send Token Email",
+                f"Send {name}'s current bearer token to:\n  {em_short}\n\n"
+                "The email will contain their full bearer token "
+                "(their Claude.ai connector password). "
+                "Send only to a trusted address."):
+            return
+        subject = "Your AI-Prowler Access Token"
+        body = (
+            f"Hi {name},\n\n"
+            f"Your AI-Prowler bearer token (the password you use to connect "
+            f"Claude.ai to the company server) is:\n\n"
+            f"  {tok}\n\n"
+            f"How to connect:\n"
+            f"  1. Open Claude.ai -> Settings -> Connectors\n"
+            f"  2. Find your company AI-Prowler connector\n"
+            f"  3. If prompted to re-authenticate, enter the token above\n\n"
+            f"Keep this token private -- it is your personal access credential.\n\n"
+            f"-- AI-Prowler Server Admin"
+        )
+        ok, msg = self._admin_send_email_direct(em, subject, body)
+        if ok:
+            messagebox.showinfo(
+                "Token Sent",
+                f"Bearer token sent to {em_short}.\n\n"
+                f"{name} should check their email and reconnect Claude.ai.")
+        else:
+            messagebox.showerror(
+                "Send Failed",
+                f"Could not send email to {em_short}:\n\n{msg}\n\n"
+                "Check SMTP settings in Settings -> Email Configuration.")
+
+    def _admin_update_lock_ui(self):
+        """Refresh the lock-status label and button states in the Admin tab."""
+        if not hasattr(self, "_admin_lock_lbl"):
+            return
+        locked = self._admin_requires_lock()
+        unlocked = self._admin_session_unlocked
+        if not locked:
+            self._admin_lock_lbl.config(
+                text="🔓 Unlocked  (no admins configured — bootstrapping mode)",
+                foreground='#1f7a1f')
+        elif unlocked:
+            self._admin_lock_lbl.config(
+                text="🔓 Unlocked for this session",
+                foreground='#1f7a1f')
+        else:
+            self._admin_lock_lbl.config(
+                text="🔒 Locked — click a button to authenticate",
+                foreground='#cc0000')
+
     def create_admin_tab(self):
         """Admin tab — Active Users management for Business server mode.
         Reads/writes ~/.ai-prowler/users.json (the backend's auth source)."""
         import tkinter as tk
         from tkinter import ttk, messagebox, simpledialog
+
+        self._admin_unlock_init()
 
         outer = ttk.Frame(self.notebook)
         self.notebook.add(outer, text="👥 Admin")
@@ -9421,6 +10439,14 @@ or from the Help menu."""
                        "then send it to them securely. "
                        "Each employee also gets a license seat from your delivered pool."
                   ).pack(anchor='w', pady=(0, 8))
+
+        # ── Lock status strip ─────────────────────────────────────────────────
+        # Shows whether the session is locked or unlocked. Updated by
+        # _admin_update_lock_ui() after every unlock or users.json change.
+        self._admin_lock_lbl = ttk.Label(
+            f, text="", font=('Segoe UI', 9, 'bold'))
+        self._admin_lock_lbl.pack(anchor='w', pady=(0, 6))
+        self._admin_update_lock_ui()   # set initial text
 
         # ── Seat summary strip (read-only; pool from ~/.ai-prowler/seats.json) ─
         seat_bar = ttk.Frame(f)
@@ -9460,7 +10486,7 @@ or from the Help menu."""
             ('private', 'Private Coll.', 85,  'center'),
             ('seat',    'Seat (key)',    110, 'w'),
             ('status',  'Status',        80,  'center'),
-            ('token',   'Token (id)',    120, 'w'),
+            ('token',   'Token',        120, 'w'),   # always masked — use name/email to identify
         ]
         for col_id, heading, width, anchor in col_cfg:
             self._admin_tree.heading(col_id, text=heading)
@@ -9481,6 +10507,8 @@ or from the Help menu."""
                    command=self._admin_toggle_status).pack(side='left', padx=4)
         ttk.Button(btn_row, text="🗑 Remove",
                    command=self._admin_remove_user).pack(side='left', padx=4)
+        ttk.Button(btn_row, text="📧 Send Token Email",
+                   command=self._admin_send_token_to_user).pack(side='left', padx=4)
         ttk.Button(btn_row, text="↻ Refresh",
                    command=self._admin_refresh_table).pack(side='right')
 
@@ -9504,11 +10532,14 @@ or from the Help menu."""
             private = "✓" if u.get("private_collection_enabled") else ""
             seat = self._admin_mask_key(u.get("child_license_key", ""))
             status = u.get("status", "active")
-            tok_short = (token[:8] + "…") if len(token) > 9 else token
+            # v7.0.1 security: never expose any part of the bearer token on screen.
+            # The token IS the authentication credential — even a prefix leaks info.
+            # Name + email + role already uniquely identify each row.
+            tok_display = "●" * 8
             self._admin_tree.insert(
                 '', 'end', iid=token,
                 values=(u.get("name", "(unnamed)"), u.get("email", ""), role, scopes,
-                        admin_flag, private, seat, status, tok_short))
+                        admin_flag, private, seat, status, tok_display))
         # Seat summary strip
         if hasattr(self, "_admin_seat_label"):
             total = seats.get("seats_total") or len(seats.get("child_keys") or [])
@@ -9589,7 +10620,7 @@ or from the Help menu."""
         scopes_entry = ttk.Entry(frm, textvariable=scopes_var, width=34)
         scopes_entry.grid(row=3, column=1, **pad)
         ttk.Label(frm, text="(the data groups this user may access — you define "
-                            "these, e.g. role:sales, role:office, role:field)",
+                            "these, e.g. scope:sales, scope:office, scope:ops)",
                   font=('Segoe UI', 8)).grid(row=4, column=1, sticky='w', padx=8)
 
         manage_var = tk.BooleanVar(value=bool(ex.get("can_manage_users")))
@@ -9640,20 +10671,26 @@ or from the Help menu."""
         if not is_edit:
             ttk.Label(frm, text="Bearer token:").grid(row=9, column=0, sticky='e', **pad)
             ttk.Entry(frm, textvariable=token_var, width=34,
-                      font=('Consolas', 10)).grid(row=9, column=1, **pad)
+                      font=('Consolas', 10), show='●').grid(row=9, column=1, **pad)
             ttk.Label(frm, text="(optional — leave blank to auto-generate a "
                                 "strong token; typing a weak one is insecure)",
                       font=('Segoe UI', 8)).grid(row=10, column=1, sticky='w', padx=8)
 
-        # can_manage_users only valid for managers (spec §6.3): staff/field never;
-        # owner is implicitly an admin so the flag is moot. Enforce in the UI.
+        # can_manage_users rules (spec §6.3):
+        #   owner   → always True (implicit admin); checkbox shown checked+disabled
+        #             so the UI is honest, but value is forced True on save.
+        #   manager → configurable; checkbox enabled so admin can grant/revoke.
+        #   staff / field_crew → always False; checkbox disabled.
         def _sync_manage_state(*_a):
             r = role_var.get()
-            if r == "manager":
-                manage_cb.state(['!disabled'])
+            if r == "owner":
+                manage_var.set(True)
+                manage_cb.state(['disabled'])   # locked ON
+            elif r == "manager":
+                manage_cb.state(['!disabled'])  # freely configurable
             else:
                 manage_var.set(False)
-                manage_cb.state(['disabled'])
+                manage_cb.state(['disabled'])   # locked OFF
         role_var.trace_add('write', _sync_manage_state)
         _sync_manage_state()
 
@@ -9666,12 +10703,18 @@ or from the Help menu."""
                 return
             scopes = [s.strip() for s in scopes_var.get().split(",") if s.strip()]
             chosen_key = key_labels.get(seat_var.get(), "")
+            _role = role_var.get()
+            # Owner always has implicit management rights — force True so
+            # users.json is never written with owner+can_manage_users=False.
+            _can_manage = True if _role == "owner" else bool(manage_var.get())
             result.update({
                 "name": name,
                 "email": email_var.get().strip(),
-                "role": role_var.get(),
+                "cell_phone":   phone_var.get().strip(),
+                "cell_carrier": carrier_var.get().strip(),
+                "role": _role,
                 "scopes": scopes,
-                "can_manage_users": bool(manage_var.get()),
+                "can_manage_users": _can_manage,
                 "private_collection_enabled": bool(private_var.get()),
                 "child_license_key": chosen_key,
                 "custom_token": token_var.get().strip(),  # '' = auto-generate
@@ -9682,8 +10725,24 @@ or from the Help menu."""
             result.clear()
             dlg.destroy()
 
+
+        # Recovery contact for 'Forgot your token?' self-service
+        ttk.Label(frm, text='Cell phone:').grid(row=11, column=0, sticky='e', **pad)
+        phone_var = tk.StringVar(value=ex.get('cell_phone', ''))
+        ttk.Entry(frm, textvariable=phone_var, width=18).grid(row=11, column=1, sticky='w', **pad)
+        ttk.Label(frm, text='10 digits no dashes e.g. 3215550199', font=('Segoe UI', 8)).grid(row=11, column=2, sticky='w')
+
+        ttk.Label(frm, text='Carrier:').grid(row=12, column=0, sticky='e', **pad)
+        carrier_var = tk.StringVar(value=ex.get('cell_carrier', ''))
+        carrier_cb = ttk.Combobox(
+            frm, textvariable=carrier_var, state='readonly', width=18,
+            values=('', 'att', 'verizon', 't-mobile', 'cricket',
+                    'boost', 'us cellular', 'metro pcs', 'sprint'))
+        carrier_cb.grid(row=12, column=1, sticky='w', **pad)
+        ttk.Label(frm, text='Required for SMS recovery', font=('Segoe UI', 8)).grid(row=12, column=2, sticky='w')
+
         btns = ttk.Frame(frm)
-        btns.grid(row=11, column=0, columnspan=2, pady=(10, 0))
+        btns.grid(row=13, column=0, columnspan=3, pady=(10, 0))
         ttk.Button(btns, text="Save", command=_ok).pack(side='left', padx=4)
         ttk.Button(btns, text="Cancel", command=_cancel).pack(side='left', padx=4)
 
@@ -9717,6 +10776,8 @@ or from the Help menu."""
         """Add a new user: collect fields, generate a bearer token, write
         users.json, then show the token so the admin can send it securely."""
         from tkinter import messagebox
+        if not self._admin_gate():
+            return
         fields = self._admin_user_dialog("Add User")
         if not fields:
             return
@@ -9805,14 +10866,26 @@ or from the Help menu."""
                        "their Claude MCP connector to authenticate to this server. "
                        "Treat it like a password — this is the only time it's "
                        "shown in full.").pack(anchor='w', pady=(2, 8))
-        # Reliable readonly display: create NORMAL, insert, THEN lock. Setting a
-        # textvariable then flipping to readonly can render blank on some Tk
-        # builds, which was the bug. insert()-then-readonly always shows.
-        ent = ttk.Entry(frm, width=46, font=('Consolas', 11))
+
+        # v7.0.1 security: token is masked by default so a shoulder-surfer or
+        # screen-share cannot capture it. Admin must explicitly click Reveal.
+        _reveal_var = tk.BooleanVar(value=False)
+        ent = ttk.Entry(frm, width=46, font=('Consolas', 11), show='●')
         ent.pack(fill='x')
         ent.insert(0, token)
         ent.selection_range(0, 'end')
         ent.configure(state='readonly')
+
+        def _toggle_reveal():
+            ent.configure(state='normal')
+            ent.configure(show='' if _reveal_var.get() else '●')
+            ent.configure(state='readonly')
+
+        rev_row = ttk.Frame(frm)
+        rev_row.pack(anchor='w', pady=(4, 0))
+        ttk.Checkbutton(rev_row, text="👁 Reveal token",
+                        variable=_reveal_var,
+                        command=_toggle_reveal).pack(side='left')
 
         def _copy():
             self.root.clipboard_clear()
@@ -9826,6 +10899,8 @@ or from the Help menu."""
     def _admin_edit_user(self):
         """Edit the selected user's fields (not the token)."""
         from tkinter import messagebox
+        if not self._admin_gate():
+            return
         token = self._admin_selected_token()
         if not token:
             messagebox.showinfo("Edit", "Select a user first.")
@@ -9872,11 +10947,14 @@ or from the Help menu."""
         })
         if self._admin_save_users(data):
             self._admin_refresh_table()
+            self._admin_update_lock_ui()
 
     def _admin_regen_token(self):
         """Regenerate the selected user's bearer token (revocation in 5s, spec
         §5.3). The old token immediately stops authenticating once saved."""
         from tkinter import messagebox
+        if not self._admin_gate():
+            return
         token = self._admin_selected_token()
         if not token:
             messagebox.showinfo("Regenerate", "Select a user first.")
@@ -9901,12 +10979,15 @@ or from the Help menu."""
         del users[token]
         if self._admin_save_users(data):
             self._admin_refresh_table()
+            self._admin_update_lock_ui()
             self._admin_show_token(u.get("name", ""), new_token)
 
     def _admin_toggle_status(self):
         """Toggle a user between active and suspended (soft revoke — keeps the
         record but _resolve_user denies access)."""
         from tkinter import messagebox
+        if not self._admin_gate():
+            return
         token = self._admin_selected_token()
         if not token:
             messagebox.showinfo("Suspend", "Select a user first.")
@@ -9920,10 +11001,13 @@ or from the Help menu."""
         u["status"] = "suspended" if cur == "active" else "active"
         if self._admin_save_users(data):
             self._admin_refresh_table()
+            self._admin_update_lock_ui()
 
     def _admin_remove_user(self):
         """Permanently remove a user from users.json."""
         from tkinter import messagebox
+        if not self._admin_gate():
+            return
         token = self._admin_selected_token()
         if not token:
             messagebox.showinfo("Remove", "Select a user first.")
@@ -9947,6 +11031,7 @@ or from the Help menu."""
         del data["users"][token]
         if self._admin_save_users(data):
             self._admin_refresh_table()
+            self._admin_update_lock_ui()
 
     def _on_tab_changed(self, event=None):
         """Handle tab switches."""
@@ -10837,6 +11922,22 @@ or from the Help menu."""
                         print(f"   ⚠️  No supported files found — skipping\n")
                         continue
 
+                    # In Business server mode pass a collection_resolver so
+                    # each file lands in the correct scoped ChromaDB collection
+                    # (shared, scope:office, etc.) as defined by collection_map
+                    # in users.json. Personal/Home mode: resolver=None (unchanged).
+                    _col_resolver = None
+                    if self._is_business_server_mode():
+                        try:
+                            from rag_preprocessor import build_collection_resolver
+                            _col_resolver = build_collection_resolver()
+                            if _col_resolver is None:
+                                print("   ℹ️  No collection_map rules found in users.json"
+                                      " — indexing to default collection")
+                        except Exception as _cre:
+                            print(f"   ⚠️  collection_resolver unavailable: {_cre}"
+                                  f" — indexing to default collection")
+                            _col_resolver = None
                     stats = index_file_list(
                         file_paths,
                         label=f"{dir_idx}/{n_dirs}",
@@ -10844,6 +11945,7 @@ or from the Help menu."""
                         pause_event=self._index_pause_event,
                         start_from=start_from,
                         root_directory=str(Path(directory).parent) if is_file else directory,
+                        collection_resolver=_col_resolver,
                     )
 
                     # Register for tracking — use the file itself when a
@@ -11569,6 +12671,23 @@ or from the Help menu."""
             print(f"[TrackedList] Could not derive indexed dirs from DB: {_e}")
         return dirs
 
+    def _display_scope(self, scope):
+        """Render a logical collection name as a short, friendly scope tag for the
+        tracked-dirs listing (v7.0.1). 'role:'/'scope:' buckets show as
+        'scope:<name>'; 'shared' shows as 'shared'; a private 'user:<id>' or the
+        unclassified 'documents' fallback shows as '(private)'."""
+        s = (scope or "").strip()
+        if not s or s.lower() == "documents":
+            return "(private)"
+        low = s.lower()
+        if low == "shared":
+            return "shared"
+        if low.startswith("user:"):
+            return "(private)"
+        if low.startswith("scope:") or low.startswith("role:"):
+            return "scope:" + s.split(":", 1)[1].strip()
+        return "scope:" + s
+
     def refresh_tracked_dirs(self):
         """Refresh tracked directories list from the auto-update tracking file.
 
@@ -11588,6 +12707,19 @@ or from the Help menu."""
         try:
             dirs = load_auto_update_list()
             writable_paths = self._load_writable_paths()
+            # v7.0.1 (Q4): in Business server mode also show each folder's read
+            # SCOPE next to its write-permission prefix. Load the collection_map
+            # once here (not per-row) so the listing stays cheap. Personal/Home/
+            # Mobile installs have no scopes — the column is omitted entirely.
+            _server_scope = self._is_business_server_mode()
+            _scope_rules, _scope_default = [], None
+            if _server_scope:
+                try:
+                    _cm = (self._admin_load_users() or {}).get("collection_map") or {}
+                    _scope_rules = _cm.get("rules") or []
+                    _scope_default = _cm.get("default_collection")
+                except Exception:
+                    _scope_rules, _scope_default = [], None
             if dirs:
                 for directory in dirs:
                     state, _exact, _narrower = self._writable_state(
@@ -11603,7 +12735,10 @@ or from the Help menu."""
                         prefix = "[W*]"
                     else:
                         prefix = "[R] "
-                    self.tracked_listbox.insert(tk.END, f"{prefix} {directory}")
+                    self.tracked_listbox.insert(  # v7.0.1 Q4: scope column in server mode
+                          tk.END,
+                          (f"{prefix} {self._display_scope(self._resolve_scope_for_path(directory, _scope_rules, _scope_default)):<13} {directory}"
+                           if _server_scope else f"{prefix} {directory}"))
                     self._tracked_raw_paths.append(directory)
             else:
                 self.tracked_listbox.insert(
@@ -12035,6 +13170,15 @@ or from the Help menu."""
             sys.stdout = TextRedirector(self.output_queue, 'update')
             is_file = Path(directory).is_file()
 
+            # Build collection_resolver for server mode
+            _col_resolver_upd = None
+            if self._is_business_server_mode():
+                try:
+                    from rag_preprocessor import build_collection_resolver
+                    _col_resolver_upd = build_collection_resolver()
+                except Exception:
+                    pass
+
             if is_file:
                 # Individual tracked file — check mtime before re-indexing
                 fname = Path(directory).name
@@ -12046,11 +13190,13 @@ or from the Help menu."""
                         [normalise_path(directory)],
                         label="1/1",
                         root_directory=str(Path(directory).parent),
+                        collection_resolver=_col_resolver_upd,
                     )
                     chunks = stats.get('chunks_added', 0) if stats else 0
                     print(f"✅ {fname} — {chunks} chunk(s)")
             else:
-                command_update(directory, recursive=True, auto_confirm=True)
+                command_update(directory, recursive=True, auto_confirm=True,
+                               collection_resolver=_col_resolver_upd)
 
             self.output_queue.put(('status', 'Update complete — index synced & stale chunks purged'))
             self.output_queue.put(('done', 'update'))
@@ -12070,6 +13216,15 @@ or from the Help menu."""
                 self.output_queue.put(('update', "No tracked directories or files found.\n"
                                                  "Index a directory or file first to start tracking it.\n"))
             else:
+                # Build collection_resolver once for the whole run (server mode only)
+                _col_resolver = None
+                if self._is_business_server_mode():
+                    try:
+                        from rag_preprocessor import build_collection_resolver
+                        _col_resolver = build_collection_resolver()
+                    except Exception as _cre:
+                        print(f"   ⚠️  collection_resolver unavailable: {_cre}")
+
                 for i, entry in enumerate(dirs, 1):
                     entry_name = Path(entry).name or entry
                     is_file = Path(entry).is_file()
@@ -12085,6 +13240,7 @@ or from the Help menu."""
                                 [normalise_path(entry)],
                                 label=f"{i}/{len(dirs)}",
                                 root_directory=str(Path(entry).parent),
+                                collection_resolver=_col_resolver,
                             )
                             chunks = stats.get('chunks_added', 0) if stats else 0
                             self.output_queue.put(('update', f"   ✅ {entry_name} — {chunks} chunk(s)\n"))
@@ -12093,7 +13249,8 @@ or from the Help menu."""
                     else:
                         # Tracked directory — use standard directory update
                         self.output_queue.put(('update', f"\n[{i}/{len(dirs)}] Updating: {entry_name}\n"))
-                        command_update(entry, recursive=True, auto_confirm=True)
+                        command_update(entry, recursive=True, auto_confirm=True,
+                                       collection_resolver=_col_resolver)
 
                 self.output_queue.put(('update', "\n✅ All tracked items updated.\n"))
             self.output_queue.put(('status', 'Update complete — index synced & stale chunks purged'))
@@ -13675,13 +14832,60 @@ or from the Help menu."""
             sys.stdout = old_stdout
             messagebox.showerror("Error", f"Could not retrieve statistics: {e}")
     
-    def clear_database(self):
-        """Clear ChromaDB vectors AND the file-tracking database so all files re-index."""
+    def clear_database_only_cmd(self):
+        """Clear Database only — deletes all ChromaDB collections (documents +
+        server-mode scope-* collections) and resets file-tracking timestamps,
+        but KEEPS the tracked-directories list so folders don't need re-adding.
+        Use this after switching from server → personal mode.
+        """
         if messagebox.askyesno(
-                "Clear Database",
+                "Clear Database only",
                 "This will delete ALL indexed data:\n\n"
-                "  • ChromaDB vector store  (all document embeddings)\n"
-                "  • File-tracking timestamps  (so every file re-indexes on next scan)\n\n"
+                "  • All ChromaDB collections\n"
+                "    (documents + any server-mode scope-* collections)\n"
+                "  • File-tracking timestamps  (so every file re-indexes on next scan)\n"
+                "  • Email index\n\n"
+                "Your tracked-directories list will be KEPT.\n\n"
+                "This cannot be undone.\n\nContinue?"):
+            errors = []
+            try:
+                clear_database_only(confirm=True)
+            except Exception as e:
+                errors.append(f"ChromaDB: {e}")
+
+            # Reset in-GUI tracking timestamps too
+            try:
+                if RAG_AVAILABLE and TRACKING_DB.exists():
+                    import json as _json
+                    TRACKING_DB.write_text('{}', encoding='utf-8')
+            except Exception as e:
+                errors.append(f"Tracking DB: {e}")
+
+            if errors:
+                messagebox.showerror("Partial Error",
+                                     "Database cleared with errors:\n\n" +
+                                     "\n".join(errors))
+            else:
+                messagebox.showinfo(
+                    "Database Cleared",
+                    "✅ All ChromaDB collections deleted.\n"
+                    "✅ File-tracking timestamps reset.\n"
+                    "✅ Tracked-directories list preserved.\n\n"
+                    "Click 'Update All' in the Update Index tab to re-index.")
+            self.refresh_tracked_dirs()
+
+    def clear_database(self):
+        """Clear Database + Database list — full wipe of all ChromaDB collections,
+        file-tracking, email index, AND the tracked-directories list.
+        """
+        if messagebox.askyesno(
+                "Clear Database + Database list",
+                "This will delete ALL indexed data AND your tracked folders list:\n\n"
+                "  • All ChromaDB collections\n"
+                "    (documents + any server-mode scope-* collections)\n"
+                "  • File-tracking timestamps\n"
+                "  • Email index\n"
+                "  • Tracked-directories list  ← folders must be re-added manually\n\n"
                 "This cannot be undone.\n\nContinue?"):
             errors = []
             # 1. Clear the ChromaDB vector store

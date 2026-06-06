@@ -153,3 +153,5 @@ credentials.json
 *.tar.gz
 *.rar
 *.7z
+Output/ 
+seats.json 

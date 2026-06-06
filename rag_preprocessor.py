@@ -2855,7 +2855,8 @@ def chroma_collection_name(logical: str) -> str:
     Examples:
         'documents'  -> 'documents'         (default personal collection, unchanged)
         'user:david' -> 'scope-user-david'
-        'role:sales' -> 'scope-role-sales'
+        'role:sales' -> 'scope-role-sales'  (legacy bucket spelling)
+        'scope:sales'-> 'scope-role-sales'  (current bucket spelling; same collection)
 
     ChromaDB physical name rules: 3-63 chars, alphanumeric + hyphens/underscores,
     must start and end with alphanumeric.
@@ -2863,6 +2864,14 @@ def chroma_collection_name(logical: str) -> str:
     import re
     if ':' in logical:
         prefix, _, rest = logical.partition(':')
+        # v7.0.1 vocabulary change: 'scope:<name>' is the user-facing name for the
+        # data-bucket namespace that is PHYSICALLY stored as 'scope-role-<name>'.
+        # (The word "role" for buckets was confusing next to the owner/manager/
+        # staff/field_crew JOB roles, so the LOGICAL name moved to 'scope:'.)
+        # Map 'scope:' onto the SAME physical prefix as legacy 'role:' so existing
+        # data stays addressable and NO ChromaDB migration / reindex is needed.
+        if prefix == 'scope':
+            prefix = 'role'
         physical = f"scope-{prefix}-{rest}"
     else:
         physical = logical
@@ -2870,6 +2879,98 @@ def chroma_collection_name(logical: str) -> str:
     physical = re.sub(r'[^a-zA-Z0-9_-]', '-', physical)
     # Enforce 63-char ChromaDB limit
     return physical[:63]
+
+
+# ── Collection-map resolver (v7.0.0 server-mode scoped indexing) ──────────────
+# These helpers live here so both rag_gui.py and ai_prowler_mcp.py can import
+# them without circular dependencies. The logic is PURE (no ChromaDB calls).
+
+def _normalize_path_for_match(p: str) -> str:
+    """Lowercased, forward-slashed, trailing-slash-free path for prefix matching."""
+    s = (p or "").replace("\\", "/").strip().rstrip("/")
+    return s.lower()
+
+
+def resolve_collection_for_path(filepath: str, mapping: dict,
+                                 indexer_user: dict = None) -> str:
+    """Return the target logical collection name for filepath.
+
+    Resolution order:
+      1. Longest matching prefix rule in mapping['rules'] wins.
+      2. mapping['default_collection'] if set.
+      3. 'user:<indexer_user[id]>' if indexer_user is supplied.
+      4. 'documents' (personal/Home single-collection fallback).
+
+    Args:
+        filepath:     Absolute path of the file being indexed.
+        mapping:      {'rules': [{'prefix': ..., 'collection': ...}...],
+                       'default_collection': ...}  May be None or {}.
+        indexer_user: Optional user dict with at least an 'id' key.
+    """
+    fp = _normalize_path_for_match(filepath)
+    best_collection = None
+    best_len = -1
+    for rule in ((mapping or {}).get("rules") or []):
+        if not isinstance(rule, dict):
+            continue
+        prefix = _normalize_path_for_match(rule.get("prefix", ""))
+        coll   = str(rule.get("collection", "")).strip()
+        if not prefix or not coll:
+            continue
+        if fp == prefix or fp.startswith(prefix + "/"):
+            if len(prefix) > best_len:
+                best_len   = len(prefix)
+                best_collection = coll
+    if best_collection:
+        return best_collection
+    default_coll = str((mapping or {}).get("default_collection", "")).strip()
+    if default_coll:
+        return default_coll
+    if indexer_user and indexer_user.get("id"):
+        return f"user:{indexer_user['id']}"
+    return COLLECTION_NAME   # personal/Home fallback
+
+
+def build_collection_resolver(users_json_path: str = None) -> "callable | None":
+    """Build and return a collection_resolver(filepath)->logical_name callable
+    by reading collection_map rules from users.json.
+
+    Returns None if:
+      - users.json does not exist or is unreadable
+      - edition/mode is not business/server
+      - no collection_map rules are defined
+
+    This is the safe entry point for rag_gui.py — it never raises.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    # Determine users.json path
+    if users_json_path is None:
+        users_json_path = str(_Path.home() / ".ai-prowler" / "users.json")
+
+    try:
+        p = _Path(users_json_path)
+        if not p.exists():
+            return None
+        data = _json.loads(p.read_text(encoding="utf-8-sig"))
+        if not isinstance(data, dict):
+            return None
+        cm = data.get("collection_map")
+        if not isinstance(cm, dict):
+            return None
+        rules = cm.get("rules")
+        if not rules:
+            return None
+        # Snapshot the mapping so the closure is self-contained
+        mapping = {"rules": list(rules)}
+        if cm.get("default_collection"):
+            mapping["default_collection"] = cm["default_collection"]
+        def _resolver(fp, _m=mapping):
+            return resolve_collection_for_path(fp, _m)
+        return _resolver
+    except Exception:
+        return None
 
 
 def get_chroma_client():
@@ -3049,21 +3150,63 @@ def index_file_list(file_paths: list, label: str = "",
     (only new/changed messages are indexed; removed ones are cleaned up).
 
     Args:
-        file_paths:  List of absolute file paths to index
-        label:       Optional label for progress messages (e.g. directory name)
-        stop_event:  threading.Event — if set, stop after current file/message
-        pause_event: threading.Event — if set, block until cleared
-        start_from:  File index to resume from (skip already-indexed files)
-        root_directory: Top-level directory being indexed (used for provenance
-                       metadata — directory_chain breadcrumbs).  If empty, the
-                       parent directory of each file is used as a fallback.
+        file_paths:          List of absolute file paths to index
+        label:               Optional label for progress messages (e.g. directory name)
+        stop_event:          threading.Event — if set, stop after current file/message
+        pause_event:         threading.Event — if set, block until cleared
+        start_from:          File index to resume from (skip already-indexed files)
+        root_directory:      Top-level directory being indexed (used for provenance
+                             metadata — directory_chain breadcrumbs).  If empty, the
+                             parent directory of each file is used as a fallback.
+        collection_resolver: Optional callable(filepath)->logical_collection_name
+                             for v7.0.0 multi-user scoped indexing. None = personal
+                             mode (all files go into the default 'documents' collection).
+        indexer_user:        Optional user dict for ownership stamping (v7.0.0).
+        purge_gate:          Optional callable(existing_metas)->bool to gate chunk
+                             purges by ownership (v7.0.0). None = purge freely.
 
     Returns dict with keys: processed, skipped, chunks, words, stopped_at
       stopped_at = 1-based index of next unprocessed file (0 if completed)
     """
     import time as _time
     client, embedding_func = get_chroma_client()
-    collection = create_or_get_collection(client, embedding_func)
+
+    # ── Collection helper (v7.0.0 scoped indexing) ────────────────────────────
+    # When a collection_resolver is supplied (server/Business mode), each file
+    # is routed to the collection the resolver returns for its path.  The
+    # physical collection is created on first use and cached for the run.
+    # When collection_resolver is None (personal/Home mode), every file lands
+    # in the single default 'documents' collection — identical to v6 behaviour.
+    _col_cache: dict = {}
+
+    def _get_col_for_file(fp: str):
+        """Return the ChromaDB collection object for fp, creating if needed."""
+        if collection_resolver is None:
+            # Personal mode: always the same default collection.
+            if '__default__' not in _col_cache:
+                _col_cache['__default__'] = create_or_get_collection(
+                    client, embedding_func)
+            return _col_cache['__default__']
+        logical = collection_resolver(fp)
+        phys    = chroma_collection_name(logical)
+        if phys not in _col_cache:
+            try:
+                _col_cache[phys] = client.get_or_create_collection(
+                    name=phys, embedding_function=embedding_func)
+                print(f"   📂 Collection: {logical} → {phys}")
+            except Exception as _ce:
+                print(f"   ⚠️  Could not get/create collection {phys}: {_ce}"
+                      f" — falling back to default")
+                if '__default__' not in _col_cache:
+                    _col_cache['__default__'] = create_or_get_collection(
+                        client, embedding_func)
+                return _col_cache['__default__']
+        return _col_cache[phys]
+
+    # Pre-warm the default collection in personal mode so the variable exists
+    # for the stale-chunk delete below (which used the old module-level
+    # `collection` variable).  In server mode each file resolves its own.
+    collection = _get_col_for_file(file_paths[0]) if file_paths else create_or_get_collection(client, embedding_func)
 
     total     = len(file_paths)
     processed = skipped = total_chunks = total_words = 0
@@ -3156,7 +3299,7 @@ def index_file_list(file_paths: list, label: str = "",
             # Even though we can't index this file, purge any stale chunks so
             # an empty overwrite doesn't leave old content in ChromaDB.
             try:
-                collection.delete(where={"filepath": normalise_path(filepath)})
+                _get_col_for_file(filepath).delete(where={"filepath": normalise_path(filepath)})
             except Exception:
                 pass
             skipped += 1
@@ -3173,7 +3316,7 @@ def index_file_list(file_paths: list, label: str = "",
             print(f"         ⚠️  Empty — skipping")
             # Purge stale chunks for the same reason as above.
             try:
-                collection.delete(where={"filepath": normalise_path(filepath)})
+                _get_col_for_file(filepath).delete(where={"filepath": normalise_path(filepath)})
             except Exception:
                 pass
             skipped += 1
@@ -3199,13 +3342,14 @@ def index_file_list(file_paths: list, label: str = "",
             file_size_bytes=prov['file_size_bytes'],
         ) for j in range(len(chunks))]
 
+        _file_col = _get_col_for_file(filepath)
         try:
-            collection.delete(where={"filepath": filepath})
+            _file_col.delete(where={"filepath": filepath})
         except Exception:
             pass
 
         try:
-            collection.add(ids=ids, documents=chunks, metadatas=metadatas)
+            _file_col.add(ids=ids, documents=chunks, metadatas=metadatas)
             processed    += 1
             total_chunks += len(chunks)
             total_words  += file_data['word_count']
@@ -3484,11 +3628,40 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False,
     if not os.path.exists(directory):
         print(f"❌ Directory not found: {directory}")
         return
-    
+
     # Initialize database
     client, embedding_func = get_chroma_client()
-    collection = create_or_get_collection(client, embedding_func)
-    
+
+    # ── Collection helper (v7.0.0 scoped indexing) ────────────────────────────
+    # When collection_resolver is supplied route each file to its scope;
+    # otherwise fall back to the single default 'documents' collection.
+    _col_cache_d: dict = {}
+
+    def _get_col_d(fp: str):
+        if collection_resolver is None:
+            if '__default__' not in _col_cache_d:
+                _col_cache_d['__default__'] = create_or_get_collection(
+                    client, embedding_func)
+            return _col_cache_d['__default__']
+        logical = collection_resolver(fp)
+        phys    = chroma_collection_name(logical)
+        if phys not in _col_cache_d:
+            try:
+                _col_cache_d[phys] = client.get_or_create_collection(
+                    name=phys, embedding_function=embedding_func)
+                print(f"   📂 Collection: {logical} → {phys}")
+            except Exception as _ce:
+                print(f"   ⚠️  Could not get/create collection {phys}: {_ce}"
+                      f" — falling back to default")
+                if '__default__' not in _col_cache_d:
+                    _col_cache_d['__default__'] = create_or_get_collection(
+                        client, embedding_func)
+                return _col_cache_d['__default__']
+        return _col_cache_d[phys]
+
+    # Convenience alias used below — same as before for personal mode.
+    collection = _get_col_d
+
     # Find all files — skip binaries, executables and known-useless dirs
     all_files = []
     if recursive:
@@ -3563,14 +3736,15 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False,
         # Remove any existing chunks for this file before re-adding
         # This prevents ghost chunks from shorter re-processed files and
         # duplicate accumulation from repeated indexing of the same directory
+        _file_col_d = _get_col_d(filepath)
         try:
-            collection.delete(where={"filepath": filepath})
+            _file_col_d.delete(where={"filepath": filepath})
         except Exception:
             pass  # Collection may not have this file yet — that's fine
-        
+
         # Add to database
         try:
-            collection.add(
+            _file_col_d.add(
                 ids=ids,
                 documents=chunks,
                 metadatas=metadatas
@@ -3650,49 +3824,90 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False,
 # RETRIEVAL
 # ═══════════════════════════════════════════════════════════
 
-def search_documents(query: str, n_results: int = 3) -> List[Dict]:
+def search_documents(query: str, n_results: int = 3,
+                     collection_names: "list | None" = None) -> List[Dict]:
     """
-    Search for relevant document chunks
-    
+    Search for relevant document chunks.
+
     Args:
-        query: Search query
-        n_results: Number of results to return
-    
+        query:            Search query string.
+        n_results:        Number of results to return (per collection in
+                          multi-collection mode; deduplicated and re-ranked
+                          before returning).
+        collection_names: Optional list of LOGICAL collection names to search
+                          (v7.0.0 server-mode scoping). Each name is converted
+                          to a physical ChromaDB name via chroma_collection_name().
+                          None / empty list = personal mode: search the single
+                          default 'documents' collection (original behaviour).
+
     Returns:
-        List of matching chunks with metadata
+        List of matching chunks with metadata, sorted by similarity descending.
     """
     client, embedding_func = get_chroma_client()
-    
-    try:
-        collection = client.get_or_create_collection(
-            name=COLLECTION_NAME,
-            embedding_function=embedding_func
-        )
-    except Exception:
-        print("❌ No indexed documents found. Run 'index' command first.")
-        return []
 
-    if collection.count() == 0:
-        print("❌ No indexed documents found. Run 'index' command first.")
-        return []
+    # ── Resolve the list of collections to query ──────────────────────────────
+    if collection_names:
+        # Server mode: query each allowed collection and merge results.
+        collections = []
+        for logical in collection_names:
+            phys = chroma_collection_name(logical)
+            try:
+                col = client.get_collection(
+                    name=phys, embedding_function=embedding_func)
+                if col.count() > 0:
+                    collections.append(col)
+            except Exception:
+                pass  # Collection doesn't exist yet — skip silently
+        if not collections:
+            return []
+    else:
+        # Personal mode: single 'documents' collection — original behaviour.
+        try:
+            col = client.get_or_create_collection(
+                name=COLLECTION_NAME, embedding_function=embedding_func)
+        except Exception:
+            print("❌ No indexed documents found. Run 'index' command first.")
+            return []
+        if col.count() == 0:
+            print("❌ No indexed documents found. Run 'index' command first.")
+            return []
+        collections = [col]
 
-    # Search
-    results = collection.query(
-        query_texts=[query],
-        n_results=n_results
-    )
-    
-    # Format results
-    chunks = []
-    for i in range(len(results['documents'][0])):
-        chunks.append({
-            'content': results['documents'][0][i],
-            'metadata': results['metadatas'][0][i],
-            'distance': results['distances'][0][i],
-            'similarity': 1 - results['distances'][0][i]  # Convert distance to similarity
-        })
-    
-    return chunks
+    # ── Query each collection and merge ───────────────────────────────────────
+    all_chunks = []
+    seen_ids   = set()   # deduplicate by chunk id across collections
+
+    for col in collections:
+        try:
+            # Cap n_results to what's actually in this collection to avoid
+            # ChromaDB raising "n_results > collection size" errors.
+            safe_n = min(n_results, col.count())
+            if safe_n == 0:
+                continue
+            results = col.query(
+                query_texts=[query],
+                n_results=safe_n,
+            )
+        except Exception:
+            continue
+
+        for i in range(len(results['documents'][0])):
+            chunk_id = (results.get('ids') or [[]])[0][i] if results.get('ids') else None
+            if chunk_id and chunk_id in seen_ids:
+                continue
+            if chunk_id:
+                seen_ids.add(chunk_id)
+            dist = results['distances'][0][i]
+            all_chunks.append({
+                'content':    results['documents'][0][i],
+                'metadata':   results['metadatas'][0][i],
+                'distance':   dist,
+                'similarity': 1.0 - dist,
+            })
+
+    # Sort by similarity descending and return the top n_results overall.
+    all_chunks.sort(key=lambda c: c['similarity'], reverse=True)
+    return all_chunks[:n_results]
 
 # ═══════════════════════════════════════════════════════════
 # LLM QUERY
@@ -4337,73 +4552,137 @@ def list_indexed_files():
         print()
 
 def show_stats():
-    """Show database statistics"""
+    """Show database statistics for ALL ChromaDB collections.
+
+    v7.0.1: Previously only showed the personal 'documents' collection.
+    Now enumerates every collection so server-mode scoped collections
+    (scope-role-*, scope-user-*, shared) are visible and flagged.
+    """
     client, embedding_func = get_chroma_client()
-    
+
     try:
-        collection = client.get_or_create_collection(
-            name=COLLECTION_NAME,
-            embedding_function=embedding_func
-        )
-    except Exception:
-        print("❌ No indexed documents found.")
+        all_cols = client.list_collections()
+    except Exception as e:
+        print(f"❌ Could not list collections: {e}")
         return
 
-    if collection.count() == 0:
+    if not all_cols:
         print("📭 Database is empty.")
         return
-    
-    # Get sample to analyze
-    total = collection.count()
-    results = collection.get(limit=min(1000, total))
-    
-    # Count by extension
-    extensions = {}
-    for metadata in results['metadatas']:
-        ext = metadata.get('extension', 'unknown')
-        extensions[ext] = extensions.get(ext, 0) + 1
-    
-    # Count unique files
-    unique_files = set(m['filepath'] for m in results['metadatas'])
-    
+
+    # ── Internal collections that are not document data ──────────────────────
+    _SYSTEM = {"ai_prowler_learnings"}
+
     print(f"\n{'='*60}")
     print(f"📊 DATABASE STATISTICS")
     print(f"{'='*60}")
-    print(f"Total chunks: {total:,}")
-    print(f"Unique files: {len(unique_files):,}")
     print(f"Database path: {CHROMA_DB_PATH}")
-    print(f"\nBy file type:")
-    for ext, count in sorted(extensions.items(), key=lambda x: x[1], reverse=True):
-        percentage = (count / len(results['metadatas'])) * 100
-        print(f"  {ext:10s} {count:5d} chunks ({percentage:5.1f}%)")
+    print(f"Collections  : {len(all_cols)}")
+    print()
+
+    grand_total = 0
+    scoped_cols = []   # non-system, non-documents collections
+
+    for cm in sorted(all_cols, key=lambda c: c.name):
+        try:
+            col   = client.get_collection(name=cm.name,
+                                          embedding_function=embedding_func)
+            count = col.count()
+        except Exception:
+            count = -1
+        grand_total += max(count, 0)
+
+        n = cm.name
+        if n in _SYSTEM:
+            label = f"  🔧 Learnings KB  : {n}  ← your recorded learnings (never cleared)"
+        elif n == COLLECTION_NAME:                    # "documents"
+            label = f"  📄 Personal docs  : {n}"
+        elif n.startswith("scope-role-"):
+            label = f"  📁 Scoped bucket  : {n}  (bucket: {n[len('scope-role-'):]})"
+            scoped_cols.append(n)
+        elif n.startswith("scope-user-"):
+            label = f"  👤 Scoped private : {n}  (user: {n[len('scope-user-'):]})"
+            scoped_cols.append(n)
+        elif n in ("shared", "scope-shared"):
+            label = f"  🌐 Scoped shared  : {n}"
+            scoped_cols.append(n)
+        else:
+            label = f"  ❓ Other          : {n}"
+
+        print(label)
+        if count >= 0:
+            print(f"     Chunks : {count:,}")
+        else:
+            print(f"     Chunks : (error reading collection)")
+
+        if count and count > 0 and n not in _SYSTEM:
+            try:
+                sample   = col.get(limit=min(500, count))
+                u_files  = {m.get('filepath', '?') for m in sample['metadatas']}
+                exts     = {}
+                for m in sample['metadatas']:
+                    e = m.get('extension', '?')
+                    exts[e] = exts.get(e, 0) + 1
+                print(f"     Files  : {len(u_files):,} unique")
+                top = sorted(exts.items(), key=lambda x: x[1], reverse=True)[:5]
+                print(f"     Types  : {', '.join(f'{e}({c})' for e, c in top)}")
+            except Exception:
+                pass
+        print()
+
+    print(f"Grand total chunks : {grand_total:,}")
+    print()
+    has_docs = any(cm.name == COLLECTION_NAME for cm in all_cols)
+    if scoped_cols:
+        print(f"ℹ️  {len(scoped_cols)} scoped collection(s) found "
+              f"({', '.join(scoped_cols)}).")
+    if has_docs:
+        print("✅ Personal documents collection present.")
+    else:
+        print("ℹ️  No personal documents indexed yet.")
+        print("   Go to Update Index tab → click 'Update All' to re-index your files.")
     print(f"{'='*60}\n")
 
 def clear_database(confirm: bool = False):
-    """Clear all indexed documents AND every piece of state that depends on the
-    ChromaDB collection's existence:
-      • ChromaDB collection (vector store)
+    """Clear ALL ChromaDB collections AND every piece of state:
+      • All ChromaDB collections (documents, scope-role-*, scope-user-*, shared)
       • TRACKING_DB           (~/.rag_file_tracking.json)
       • EMAIL_INDEX_DB        (~/.rag_email_index.json)
-      • AUTO_UPDATE_LIST      (~/.rag_auto_update_dirs.json)
+      • AUTO_UPDATE_LIST      (~/.rag_auto_update_dirs.json)  ← tracked dirs LOST
 
-    Without this co-ordinated wipe, the four files drift out of sync — e.g.
-    re-indexing an .mbox after Clear Database would silently skip every
-    message because the email-index UIDs are 'known' even though the
-    corresponding chunks are gone (B-04).
+    v7.0.1: Previously only deleted the 'documents' collection. Now deletes ALL
+    collections so server-mode scoped collections are also removed.
+    The learnings collection (ai_prowler_learnings) is preserved.
+
+    Use clear_database_only() instead if you want to keep your tracked-directories
+    list (i.e. after switching from server → personal mode).
     """
     if not confirm:
-        response = input("⚠️  This will delete ALL indexed documents. Continue? (yes/NO): ")
+        response = input("⚠️  This will delete ALL indexed documents AND your tracked-directories list. Continue? (yes/NO): ")
         if response.lower() != 'yes':
             print("Cancelled.")
             return
 
-    # 1. ChromaDB collection
+    # 1. All ChromaDB collections (except the learnings system)
+    _KEEP = {"ai_prowler_learnings"}
     client, _ = get_chroma_client()
     try:
-        client.delete_collection(name=COLLECTION_NAME)
-        print("✅ Database cleared successfully.")
-    except:
-        print("ℹ️  Database was already empty or doesn't exist.")
+        all_cols = client.list_collections()
+    except Exception:
+        all_cols = []
+    _deleted = 0
+    for _cm in all_cols:
+        if _cm.name in _KEEP:
+            continue
+        try:
+            client.delete_collection(name=_cm.name)
+            _deleted += 1
+        except Exception as _e:
+            print(f"⚠️  Could not delete {_cm.name}: {_e}")
+    if _deleted > 0:
+        print(f"✅ Deleted {_deleted} collection(s) from ChromaDB.")
+    else:
+        print("ℹ️  No collections to delete (database was already empty).")
 
     # 2. File-tracking DB
     try:
@@ -4430,6 +4709,67 @@ def clear_database(confirm: bool = False):
             pass   # script regen is a nicety, not required
     except Exception as e:
         print(f"⚠️  Could not clear auto-update list: {e}")
+
+def clear_database_only(confirm: bool = False):
+    """Clear ALL ChromaDB collections + file-tracking + email-index, but
+    preserve the tracked-directories list (~/.rag_auto_update_dirs.json).
+
+    v7.0.1 — the right tool after switching from server → personal mode:
+    removes server-mode scoped collections (scope-role-*, scope-user-*, shared)
+    AND the personal 'documents' collection, then resets file-tracking timestamps
+    so every file re-indexes cleanly on the next scan. Your tracked folders are
+    kept so you don't have to re-add them manually.
+
+    Preserves:
+      • AUTO_UPDATE_LIST  (~/.rag_auto_update_dirs.json)  — tracked dirs kept
+      • ai_prowler_learnings collection                   — learnings kept
+    """
+    if not confirm:
+        response = input(
+            "⚠️  This will delete ALL indexed documents (all collections) and "
+            "reset file-tracking timestamps.\n"
+            "Your tracked-directories list will be KEPT.\nContinue? (yes/NO): ")
+        if response.lower() != 'yes':
+            print("Cancelled.")
+            return
+
+    # 1. All ChromaDB collections (except the learnings system)
+    _KEEP = {"ai_prowler_learnings"}
+    client, _ = get_chroma_client()
+    try:
+        all_cols = client.list_collections()
+    except Exception:
+        all_cols = []
+    _deleted = 0
+    for _cm in all_cols:
+        if _cm.name in _KEEP:
+            continue
+        try:
+            client.delete_collection(name=_cm.name)
+            _deleted += 1
+        except Exception as _e:
+            print(f"⚠️  Could not delete {_cm.name}: {_e}")
+    if _deleted > 0:
+        print(f"✅ Deleted {_deleted} collection(s) from ChromaDB.")
+    else:
+        print("ℹ️  No collections to delete (database was already empty).")
+
+    # 2. File-tracking timestamps
+    try:
+        save_tracking_database({})
+    except Exception as e:
+        print(f"⚠️  Could not clear tracking DB: {e}")
+
+    # 3. Per-email incremental index
+    try:
+        save_email_index({})
+    except Exception as e:
+        print(f"⚠️  Could not clear email index: {e}")
+
+    # AUTO_UPDATE_LIST is intentionally NOT cleared here.
+    print("✅ Database cleared. Tracked-directories list preserved.")
+    print("   Run 'Update All' from the Update Index tab to re-index your files.")
+
 
 # ═══════════════════════════════════════════════════════════
 # CLI INTERFACE
@@ -5021,7 +5361,36 @@ def command_update(directory, recursive=True, auto_confirm=False,
 
     # ── Open ChromaDB once for all operations ────────────────────────────────
     client, embedding_func = get_chroma_client()
-    collection = create_or_get_collection(client, embedding_func)
+
+    # ── Collection helper (v7.0.0 scoped indexing) ────────────────────────────
+    # When collection_resolver is provided route each file to its scope;
+    # otherwise use the single default 'documents' collection (personal mode).
+    _cmd_col_cache: dict = {}
+
+    def _cmd_get_col(fp: str = ""):
+        if collection_resolver is None or not fp:
+            if '__default__' not in _cmd_col_cache:
+                _cmd_col_cache['__default__'] = create_or_get_collection(
+                    client, embedding_func)
+            return _cmd_col_cache['__default__']
+        logical = collection_resolver(fp)
+        phys    = chroma_collection_name(logical)
+        if phys not in _cmd_col_cache:
+            try:
+                _cmd_col_cache[phys] = client.get_or_create_collection(
+                    name=phys, embedding_function=embedding_func)
+                print(f"   📂 Collection: {logical} -> {phys}")
+            except Exception as _ce:
+                print(f"   ⚠️  Could not get/create collection {phys}: {_ce}"
+                      f" — falling back to default")
+                if '__default__' not in _cmd_col_cache:
+                    _cmd_col_cache['__default__'] = create_or_get_collection(
+                        client, embedding_func)
+                return _cmd_col_cache['__default__']
+        return _cmd_col_cache[phys]
+
+    # Default collection (used for purge pass where we scan all collections)
+    collection = _cmd_get_col()
 
     # ═══════════════════════════════════════════════════════════════════════════
     # PASS 1 — PURGE DELETED FILES
@@ -5045,7 +5414,16 @@ def command_update(directory, recursive=True, auto_confirm=False,
             print(f"[{i}/{deleted}] [DELETED] {filename}")
 
             try:
-                collection.delete(where={"filepath": filepath})
+                # In scoped mode purge from the resolved collection AND the
+                # default collection (handles chunks written before scoping
+                # was enabled — belt-and-suspenders cleanup).
+                _purge_col = _cmd_get_col(filepath)
+                _purge_col.delete(where={"filepath": filepath})
+                if collection_resolver is not None and _purge_col is not collection:
+                    try:
+                        collection.delete(where={"filepath": filepath})
+                    except Exception:
+                        pass
                 print(f"  ✅ Chunks purged from ChromaDB")
                 purged += 1
             except Exception as exc:
@@ -5132,8 +5510,16 @@ def command_update(directory, recursive=True, auto_confirm=False,
 
             try:
                 # Remove stale chunks before re-adding (handles re-index of modified)
-                collection.delete(where={"filepath": filepath})
-                collection.add(ids=ids, documents=chunks, metadatas=metadatas)
+                _idx_col = _cmd_get_col(filepath)
+                # Also purge from default collection in case file was previously
+                # indexed before scoping was enabled.
+                if collection_resolver is not None and _idx_col is not collection:
+                    try:
+                        collection.delete(where={"filepath": filepath})
+                    except Exception:
+                        pass
+                _idx_col.delete(where={"filepath": filepath})
+                _idx_col.add(ids=ids, documents=chunks, metadatas=metadatas)
                 print(f"  ✅ Indexed {len(chunks)} chunk(s)")
                 updated += 1
             except Exception as exc:

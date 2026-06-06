@@ -380,19 +380,19 @@ def _users_doc():
                                  "scopes": [], "private_collection_enabled": True,
                                  "status": "active"},
             "mgr0000000000000": {"name": "Mona Manager", "role": "manager",
-                                 "scopes": ["role:sales", "role:office"],
+                                 "scopes": ["scope:sales", "scope:office"],
                                  "private_collection_enabled": True,
                                  "status": "active"},
             "staff00000000000": {"name": "Sam Staff", "role": "staff",
-                                 "scopes": ["role:office"],
+                                 "scopes": ["scope:office"],
                                  "private_collection_enabled": False,
                                  "status": "active"},
             "field00000000000": {"name": "Fred Field", "role": "field_crew",
-                                 "scopes": ["role:field"],
+                                 "scopes": ["scope:field"],
                                  "private_collection_enabled": False,
                                  "status": "active"},
             "suspended0000000": {"name": "Sue Suspended", "role": "manager",
-                                 "scopes": ["role:sales"], "status": "suspended"},
+                                 "scopes": ["scope:sales"], "status": "suspended"},
         },
     }
 
@@ -424,7 +424,7 @@ class TestResolveUser:
 
 
 class TestAllowedCollections:
-    ALL_ROLES = ["role:sales", "role:office", "role:field", "role:owner_only"]
+    ALL_ROLES = ["scope:sales", "scope:office", "scope:field", "scope:owner_only"]
 
     def test_C_MCP_MU_10_none_user_gets_nothing(self, mu_api):
         assert mu_api.allowed(None) == []
@@ -446,10 +446,10 @@ class TestAllowedCollections:
     def test_C_MCP_MU_13_manager_only_assigned_scopes(self, mu_api):
         u = mu_api.resolve(_users_doc(), "mgr0000000000000")
         cols = mu_api.allowed(u, self.ALL_ROLES)
-        assert "role:sales" in cols and "role:office" in cols
+        assert "scope:sales" in cols and "scope:office" in cols
         # NOT scopes they weren't assigned, even though they exist on the server.
-        assert "role:field" not in cols
-        assert "role:owner_only" not in cols
+        assert "scope:field" not in cols
+        assert "scope:owner_only" not in cols
 
     def test_C_MCP_MU_14_manager_private_collection_when_enabled(self, mu_api):
         u = mu_api.resolve(_users_doc(), "mgr0000000000000")
@@ -459,25 +459,25 @@ class TestAllowedCollections:
         u = mu_api.resolve(_users_doc(), "field00000000000")
         cols = mu_api.allowed(u, self.ALL_ROLES)
         assert not any(c.startswith("user:") for c in cols)
-        assert cols == ["shared", "role:field"]
+        assert cols == ["shared", "scope:field"]
 
     def test_C_MCP_MU_16_staff_scopes_only(self, mu_api):
         u = mu_api.resolve(_users_doc(), "staff00000000000")
         cols = mu_api.allowed(u, self.ALL_ROLES)
-        assert cols == ["shared", "role:office"]
+        assert cols == ["shared", "scope:office"]
 
-    def test_C_MCP_MU_17_bare_scope_names_get_role_prefix(self, mu_api):
-        # Tolerate a hand-written 'sales' instead of 'role:sales'.
+    def test_C_MCP_MU_17_bare_scope_names_get_scope_prefix(self, mu_api):
+        # Bare 'sales' or legacy 'role:sales' both canonicalize to 'scope:sales'.
         doc = {"users": {"x": {"role": "manager", "scopes": ["sales"],
                                "status": "active"}}}
         u = mu_api.resolve(doc, "x")
-        assert "role:sales" in mu_api.allowed(u)
+        assert "scope:sales" in mu_api.allowed(u)
 
 
 class TestCanIndex:
     def test_C_MCP_MU_20_owner_can_index_anything(self, mu_api):
         u = mu_api.resolve(_users_doc(), "owner00000000000")
-        for tgt in ("shared", "role:sales", "role:field", "user:someoneelse"):
+        for tgt in ("shared", "scope:sales", "scope:field", "user:someoneelse"):
             ok, _ = mu_api.can_index(u, tgt)
             assert ok, tgt
 
@@ -490,12 +490,12 @@ class TestCanIndex:
 
     def test_C_MCP_MU_22_manager_can_index_assigned_scope(self, mu_api):
         u = mu_api.resolve(_users_doc(), "mgr0000000000000")
-        ok, _ = mu_api.can_index(u, "role:sales")
+        ok, _ = mu_api.can_index(u, "scope:sales")
         assert ok is True
 
     def test_C_MCP_MU_23_manager_cannot_index_unassigned_scope(self, mu_api):
         u = mu_api.resolve(_users_doc(), "mgr0000000000000")
-        ok, _ = mu_api.can_index(u, "role:field")
+        ok, _ = mu_api.can_index(u, "scope:field")
         assert ok is False
 
     def test_C_MCP_MU_24_manager_own_private_ok(self, mu_api):
@@ -508,15 +508,26 @@ class TestCanIndex:
         ok, _ = mu_api.can_index(u, "user:someoneelse")
         assert ok is False
 
-    def test_C_MCP_MU_26_staff_cannot_index_at_all(self, mu_api):
+    def test_C_MCP_MU_26_staff_limited_index_access(self, mu_api):
+        # v7.0.1: staff has manage_db='limited' — may index own private and assigned
+        # scopes, but NOT the shared commons (can_write_shared=False).
         u = mu_api.resolve(_users_doc(), "staff00000000000")
-        for tgt in ("shared", "role:office", "user:staff00000000000"):
-            ok, _ = mu_api.can_index(u, tgt)
-            assert ok is False, tgt
+        # Assigned scope (scope:office) → allowed.
+        ok, _ = mu_api.can_index(u, "scope:office")
+        assert ok is True, "staff should index their assigned scope"
+        # Own private → allowed.
+        ok, _ = mu_api.can_index(u, "user:staff00000000000")
+        assert ok is True, "staff should index their own private collection"
+        # Shared commons → denied (can_write_shared=False for staff).
+        ok, _ = mu_api.can_index(u, "shared")
+        assert ok is False, "staff must not write to shared"
+        # An unassigned scope → denied.
+        ok, _ = mu_api.can_index(u, "scope:sales")
+        assert ok is False, "staff must not index scopes they are not assigned"
 
     def test_C_MCP_MU_27_field_cannot_index_at_all(self, mu_api):
         u = mu_api.resolve(_users_doc(), "field00000000000")
-        ok, _ = mu_api.can_index(u, "role:field")
+        ok, _ = mu_api.can_index(u, "scope:field")
         assert ok is False
 
     def test_C_MCP_MU_28_none_user_cannot_index(self, mu_api):
@@ -576,10 +587,10 @@ class TestAuditHelpers:
 
     def test_C_MCP_ADMIN_10_format_records_core_fields(self, admin_api):
         e = admin_api.fmt({"id": "u1", "name": "Al", "role": "manager"},
-                          "search_documents", collection="role:sales", now=self.NOW)
+                          "search_documents", collection="scope:sales", now=self.NOW)
         assert e["user_id"] == "u1"
         assert e["tool"] == "search_documents"
-        assert e["collection"] == "role:sales"
+        assert e["collection"] == "scope:sales"
         assert e["ts"].startswith("2026-05-20")
 
     def test_C_MCP_ADMIN_11_format_none_user_blank_fields(self, admin_api):
@@ -652,13 +663,13 @@ class TestMergeCollectionResults:
     def test_C_MCP_MERGE_02_cross_collection_ranked_by_distance(self, merge_api):
         per = {
             "shared":     _chroma(["s1"], ["shared hit"], [0.5]),
-            "role:sales": _chroma(["r1"], ["sales hit"],  [0.1]),
+            "scope:sales": _chroma(["r1"], ["sales hit"],  [0.1]),
             "user:bob":   _chroma(["u1"], ["bob hit"],    [0.3]),
         }
         out = merge_api(per, n_results=10)
         # Best (lowest distance) first, regardless of source collection.
         assert [h["id"] for h in out] == ["r1", "u1", "s1"]
-        assert out[0]["collection"] == "role:sales"
+        assert out[0]["collection"] == "scope:sales"
 
     def test_C_MCP_MERGE_03_truncates_to_n_results(self, merge_api):
         per = {"shared": _chroma(["a", "b", "c", "d"], ["", "", "", ""],
@@ -669,18 +680,18 @@ class TestMergeCollectionResults:
 
     def test_C_MCP_MERGE_04_provenance_tagged(self, merge_api):
         per = {
-            "role:sales": _chroma(["r1"], ["x"], [0.2]),
+            "scope:sales": _chroma(["r1"], ["x"], [0.2]),
             "user:bob":   _chroma(["u1"], ["y"], [0.1]),
         }
         out = merge_api(per, n_results=10)
         prov = {h["id"]: h["collection"] for h in out}
-        assert prov == {"u1": "user:bob", "r1": "role:sales"}
+        assert prov == {"u1": "user:bob", "r1": "scope:sales"}
 
     def test_C_MCP_MERGE_05_dedup_by_id(self, merge_api):
         # Same id in two collections → counted once (first seen wins).
         per = {
             "shared":     _chroma(["dup"], ["from shared"], [0.4]),
-            "role:sales": _chroma(["dup"], ["from sales"],  [0.1]),
+            "scope:sales": _chroma(["dup"], ["from sales"],  [0.1]),
         }
         out = merge_api(per, n_results=10)
         assert len(out) == 1
@@ -694,7 +705,7 @@ class TestMergeCollectionResults:
     def test_C_MCP_MERGE_08_empty_collection_skipped(self, merge_api):
         per = {
             "shared":     _chroma([], [], []),
-            "role:sales": _chroma(["r1"], ["x"], [0.2]),
+            "scope:sales": _chroma(["r1"], ["x"], [0.2]),
         }
         out = merge_api(per, n_results=10)
         assert [h["id"] for h in out] == ["r1"]
@@ -770,42 +781,42 @@ def _mapping(rules, default=None):
 
 
 class TestResolveCollectionForPath:
-    SALES = {"prefix": "C:/CompanyDocs/Sales", "collection": "role:sales"}
+    SALES = {"prefix": "C:/CompanyDocs/Sales", "collection": "scope:sales"}
     PUBLIC = {"prefix": "C:/CompanyDocs/Public", "collection": "shared"}
 
     def test_C_MCP_RESOLVE_01_simple_prefix_match(self, resolver_api):
         m = _mapping([self.SALES, self.PUBLIC])
-        assert resolver_api("C:/CompanyDocs/Sales/q3.pdf", m) == "role:sales"
+        assert resolver_api("C:/CompanyDocs/Sales/q3.pdf", m) == "scope:sales"
         assert resolver_api("C:/CompanyDocs/Public/flyer.pdf", m) == "shared"
 
     def test_C_MCP_RESOLVE_02_longest_prefix_wins(self, resolver_api):
         # A nested rule must beat the broader one.
         m = _mapping([
-            {"prefix": "C:/CompanyDocs/Sales", "collection": "role:sales"},
-            {"prefix": "C:/CompanyDocs/Sales/Confidential", "collection": "role:exec"},
+            {"prefix": "C:/CompanyDocs/Sales", "collection": "scope:sales"},
+            {"prefix": "C:/CompanyDocs/Sales/Confidential", "collection": "scope:exec"},
         ])
-        assert resolver_api("C:/CompanyDocs/Sales/Confidential/m.pdf", m) == "role:exec"
-        assert resolver_api("C:/CompanyDocs/Sales/normal.pdf", m) == "role:sales"
+        assert resolver_api("C:/CompanyDocs/Sales/Confidential/m.pdf", m) == "scope:exec"
+        assert resolver_api("C:/CompanyDocs/Sales/normal.pdf", m) == "scope:sales"
 
     def test_C_MCP_RESOLVE_03_segment_boundary_no_false_match(self, resolver_api):
         # 'Sales' must NOT match 'SalesArchive' (the critical leak-prevention case).
         m = _mapping([self.SALES], default="shared")
         assert resolver_api("C:/CompanyDocs/SalesArchive/old.pdf", m) == "shared"
         # but the real Sales dir still matches
-        assert resolver_api("C:/CompanyDocs/Sales/new.pdf", m) == "role:sales"
+        assert resolver_api("C:/CompanyDocs/Sales/new.pdf", m) == "scope:sales"
 
     def test_C_MCP_RESOLVE_04_exact_dir_match(self, resolver_api):
         m = _mapping([self.SALES])
         # The directory path itself (no trailing file) matches its rule.
-        assert resolver_api("C:/CompanyDocs/Sales", m) == "role:sales"
+        assert resolver_api("C:/CompanyDocs/Sales", m) == "scope:sales"
 
     def test_C_MCP_RESOLVE_05_case_insensitive(self, resolver_api):
         m = _mapping([self.SALES])
-        assert resolver_api("c:/companydocs/SALES/x.pdf", m) == "role:sales"
+        assert resolver_api("c:/companydocs/SALES/x.pdf", m) == "scope:sales"
 
     def test_C_MCP_RESOLVE_06_backslash_agnostic(self, resolver_api):
         m = _mapping([self.SALES])
-        assert resolver_api("C:\\CompanyDocs\\Sales\\x.pdf", m) == "role:sales"
+        assert resolver_api("C:\\CompanyDocs\\Sales\\x.pdf", m) == "scope:sales"
 
     def test_C_MCP_RESOLVE_07_no_match_uses_default(self, resolver_api):
         m = _mapping([self.SALES], default="shared")
@@ -829,7 +840,7 @@ class TestResolveCollectionForPath:
                        {"prefix": "C:/A", "collection": ""}, self.SALES],
              "default_collection": "shared"}
         # Only the valid SALES rule applies; the junk is skipped, not crashed on.
-        assert resolver_api("C:/CompanyDocs/Sales/x.pdf", m) == "role:sales"
+        assert resolver_api("C:/CompanyDocs/Sales/x.pdf", m) == "scope:sales"
         assert resolver_api("C:/A/y.pdf", m) == "shared"   # the ''-collection rule was skipped
 
     def test_C_MCP_RESOLVE_12_user_private_target_for_home_folder(self, resolver_api):
@@ -844,8 +855,8 @@ class TestResolveCollectionForPath:
         assert resolver_api("D:/unmatched/x.pdf", m, user) == "shared"
 
     def test_C_MCP_RESOLVE_14_trailing_slash_normalized(self, resolver_api):
-        m = _mapping([{"prefix": "C:/CompanyDocs/Sales/", "collection": "role:sales"}])
-        assert resolver_api("C:/CompanyDocs/Sales/x.pdf", m) == "role:sales"
+        m = _mapping([{"prefix": "C:/CompanyDocs/Sales/", "collection": "scope:sales"}])
+        assert resolver_api("C:/CompanyDocs/Sales/x.pdf", m) == "scope:sales"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -997,11 +1008,11 @@ def resolver_factory_api(mcp_module):
 
 
 class TestResolverFactory:
-    USERA = {"id": "usera01", "role": "manager", "scopes": ["role:sales"]}
+    USERA = {"id": "usera01", "role": "manager", "scopes": ["scope:sales"]}
     USERS = {
-        "users": {"usera01": {"role": "manager", "scopes": ["role:sales"]}},
+        "users": {"usera01": {"role": "manager", "scopes": ["scope:sales"]}},
         "collection_map": {
-            "rules": [{"prefix": "C:/CompanyDocs/Sales", "collection": "role:sales"},
+            "rules": [{"prefix": "C:/CompanyDocs/Sales", "collection": "scope:sales"},
                       {"prefix": "C:/CompanyDocs/Public", "collection": "shared"}],
         },
     }
@@ -1012,7 +1023,7 @@ class TestResolverFactory:
 
     def test_C_MCP_FACTORY_02_company_path_rule_routes(self, resolver_factory_api):
         r = resolver_factory_api.build(self.USERA, self.USERS)
-        assert r("C:/CompanyDocs/Sales/q3.pdf") == "role:sales"
+        assert r("C:/CompanyDocs/Sales/q3.pdf") == "scope:sales"
         assert r("C:/CompanyDocs/Public/flyer.pdf") == "shared"
 
     def test_C_MCP_FACTORY_03_unmatched_falls_to_user_private(self, resolver_factory_api):
@@ -1023,19 +1034,19 @@ class TestResolverFactory:
     def test_C_MCP_FACTORY_04_per_user_default_overrides_fallback(self, resolver_factory_api):
         # index_target routes unmatched files — but only to a scope the user may
         # actually write (scopes assignment). index_target alone does NOT grant
-        # access; _can_index still gates. Here usera01 IS in role:sales.
-        user = {"id": "usera01", "role": "manager", "scopes": ["role:sales"],
-                "index_target": "role:sales"}
+        # access; _can_index still gates. Here usera01 IS in scope:sales.
+        user = {"id": "usera01", "role": "manager", "scopes": ["scope:sales"],
+                "index_target": "scope:sales"}
         r = resolver_factory_api.build(user, self.USERS)
-        assert r("D:/Random/thing.pdf") == "role:sales"
+        assert r("D:/Random/thing.pdf") == "scope:sales"
 
     def test_C_MCP_FACTORY_05_path_rule_beats_user_default(self, resolver_factory_api):
-        # A matching path rule (→ role:sales) wins over the per-user default
-        # (shared). usera01 is in role:sales so the rule target is permitted.
-        user = {"id": "usera01", "role": "manager", "scopes": ["role:sales"],
+        # A matching path rule (→ scope:sales) wins over the per-user default
+        # (shared). usera01 is in scope:sales so the rule target is permitted.
+        user = {"id": "usera01", "role": "manager", "scopes": ["scope:sales"],
                 "index_target": "shared"}
         r = resolver_factory_api.build(user, self.USERS)
-        assert r("C:/CompanyDocs/Sales/x.pdf") == "role:sales"
+        assert r("C:/CompanyDocs/Sales/x.pdf") == "scope:sales"
 
     def test_C_MCP_FACTORY_06_no_map_no_default_uses_private(self, resolver_factory_api):
         r = resolver_factory_api.build(self.USERA, {"users": {}})
@@ -1071,19 +1082,19 @@ class TestResolverFactory:
         assert r("D:/x.pdf") == "user:staff9"
 
     def test_C_MCP_FACTORY_11_can_index_degrades_forbidden_role_rule(self, resolver_factory_api):
-        # A path rule routes to role:field, but USERA (sales manager) isn't in
+        # A path rule routes to scope:field, but USERA (sales manager) isn't in
         # that scope → _can_index denies → degrade to own private.
         users = {"users": {}, "collection_map": {"rules": [
-            {"prefix": "C:/Co/Field", "collection": "role:field"}]}}
+            {"prefix": "C:/Co/Field", "collection": "scope:field"}]}}
         r = resolver_factory_api.build(self.USERA, users)
         assert r("C:/Co/Field/route.pdf") == "user:usera01"
 
     def test_C_MCP_FACTORY_12_can_index_allows_own_role_rule(self, resolver_factory_api):
         # Same shape but routing to the manager's OWN assigned scope → allowed.
         users = {"users": {}, "collection_map": {"rules": [
-            {"prefix": "C:/Co/Sales", "collection": "role:sales"}]}}
+            {"prefix": "C:/Co/Sales", "collection": "scope:sales"}]}}
         r = resolver_factory_api.build(self.USERA, users)
-        assert r("C:/Co/Sales/quote.pdf") == "role:sales"
+        assert r("C:/Co/Sales/quote.pdf") == "scope:sales"
 
 
 # ═════════════════════════════════════════════════════════════════════════════

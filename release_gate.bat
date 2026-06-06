@@ -7,8 +7,10 @@ REM Runs every automated test in BOTH repos and reports a single verdict.
 REM Use this BEFORE building or releasing a new version of AI-Prowler.
 REM
 REM What's covered:
-REM   1. AI-Prowler main suite      (tests/ directory)      ~2:40 / ~496 tests
-REM   2. ai-prowler-subs CLI suite  (test_business_cli.py)  ~0:01 / ~34 tests
+REM   1. AI-Prowler main suite      (tests/ directory)      ~636 tests
+REM      Includes: unit, mcp-tool, GUI, learning, reindex, and
+REM      v7.0.1 capability-matrix tests (test_role_tool_matrix.py)
+REM   2. ai-prowler-subs CLI suite  (test_business_cli.py)  ~34 tests
 REM
 REM What is NOT covered (manual checks still required even on green):
 REM   - Live Worker /license/* endpoints (wrangler deploy + curl)
@@ -67,7 +69,7 @@ echo.
 
 REM ── Suite 1: AI-Prowler main test suite ──────────────────────────────────
 echo [1/2] Running AI-Prowler main test suite ...
-echo       Expected: ~496 tests, ~2:40 runtime
+echo       Expected: ~636 tests (includes v7.0.1 capability-matrix suite)
 echo.
 cd /d "%AIPROWLER_ROOT%"
 call tests\run_tests.bat

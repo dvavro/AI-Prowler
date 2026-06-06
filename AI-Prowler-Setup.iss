@@ -158,6 +158,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Source: "rag_gui.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "rag_preprocessor.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "ai_prowler_mcp.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: "scope_resolver.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "claude_desktop_config_example.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "RAG_RUN.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "requirements.txt"; DestDir: "{app}"; Flags: ignoreversion
