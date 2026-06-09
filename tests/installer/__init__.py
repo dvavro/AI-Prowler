@@ -1,0 +1,1 @@
+# Installer script tests package

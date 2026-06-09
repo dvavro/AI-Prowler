@@ -960,10 +960,11 @@ begin
     'try {' + #13#10 +
     '  if (Test-Path $trackFile) {' + #13#10 +
     '    $obj  = Get-Content $trackFile -Raw -Encoding UTF8 | ConvertFrom-Json' + #13#10 +
-    '    $dirs = [System.Collections.Generic.List[string]]::new()' + #13#10 +
-    '    if ($obj.directories) { foreach ($d in $obj.directories) { $dirs.Add($d) } }' + #13#10 +
-    '    if ($dirs.Contains($guidePath)) {' + #13#10 +
-    '      Write-Host "User guide already tracked — no change needed."' + #13#10 +
+    '    $dirs        = [System.Collections.Generic.List[string]]::new()' + #13#10 +
+    '    $dirsNormed  = [System.Collections.Generic.List[string]]::new()' + #13#10 +
+    '    if ($obj.directories) { foreach ($d in $obj.directories) { $dirs.Add($d); $dirsNormed.Add($d.Replace("\", "/")) } }' + #13#10 +
+    '    if ($dirsNormed.Contains($guidePath)) {' + #13#10 +
+    '      Write-Host "User guide already tracked - no change needed."' + #13#10 +
     '    } else {' + #13#10 +
     '      $dirs.Add($guidePath)' + #13#10 +
     '      [pscustomobject]@{ directories = $dirs.ToArray() } |' + #13#10 +

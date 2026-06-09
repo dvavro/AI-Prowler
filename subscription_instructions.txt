@@ -25,13 +25,23 @@ AI-Prowler with Claude Desktop on your PC.
 
 SUBSCRIPTION PLAN
 ------------------
-  AI-Prowler Remote Access  —  $10 / month per user
+  AI-Prowler Home Remote Access  —  $10 / month per user
 
   Includes:
-    - Remote access from any device with a web browser
+    - Remote access from any mobile device with claude.ai App 
     - 1 active connection per user
     - Email support
     - Cancel anytime, no penalty
+
+  AI-Prowler Buniness - $20 / month per user
+
+  Includes:
+    - AI-Prowler Personal with Remote Access from any mobile device with claude.ai App
+    - Server has Remote access from any mobile device with claude.ai App
+    - Server 1 active registered domain from claudeflare with up to 50 tunnels connections
+    - server has controller access per user with Role and Scope control and Email support for field crews
+    - Cancel anytime, no penalty
+
 
 
 HOW TO SUBSCRIBE OR RENEW

@@ -29,32 +29,6 @@ The three migration scripts handle this cleanly:
 
 ---
 
-## Do I need to uninstall v6 first?
-
-**No — and you should not.** The v7 installer performs an **in-place upgrade** over your
-existing v6 install. The setup script pins a constant `AppId` GUID that stays identical
-across every release, so Windows recognises v7 as the *same product* as v6 and simply
-overwrites the program files in `C:\Program Files\AI-Prowler`.
-
-A few consequences worth knowing:
-
-- **The uninstaller is never run during an upgrade.** It's a separate, user-initiated
-  action (Add/Remove Programs). It plays no part in the install flow, so don't go looking
-  for an "uninstall first" step — there isn't one.
-- **You will still have only ONE entry** in *Settings → Apps → Installed apps*. Because the
-  AppId is constant, both versions share the same uninstall registry key; the upgrade
-  updates that single entry's version to **7.0.0** rather than adding a second "AI-Prowler"
-  line. (Two side-by-side entries would only appear if the GUID changed between releases —
-  which the pinned AppId deliberately prevents.)
-- **This is exactly why the manual cleanup is required.** Since the uninstaller isn't run
-  (and even when it *is* run, it only *prompts* about the database rather than deleting it),
-  the old chromadb 0.6.x store would otherwise survive straight into v7. The
-  `Pre-Upgrade Cleanup` script deletes it manually so the new 1.0.x engine starts clean.
-- **No admin rights** are needed for the migration scripts — they stay entirely under
-  `%USERPROFILE%`. (The installer itself still prompts for elevation, as the uninstaller
-  path requires admin.)
-
----
 
 ## What is preserved vs. rebuilt
 
@@ -117,17 +91,27 @@ The script then:
 > If you see `WARNING: Could not fully delete ...`, AI-Prowler is almost certainly still
 > running. Close it (Step 1) and re-run the cleanup.
 
-### Step 3 — Install v7.0.0
+### Step 3 — Uninstall your existing AI-Prowler
 
-Run the v7.0.0 installer as you normally would — **do not uninstall v6 first.** This is an
-in-place upgrade (same pinned `AppId`), so it overwrites v6 and leaves a single
-"AI-Prowler" entry in *Settings → Apps*, updated to version 7.0.0. Confirm it installs to
-the default location, `C:\Program Files\AI-Prowler` (the reindex script expects this path).
+Open **Settings → Apps → Installed apps**, find **AI-Prowler**, and uninstall it.
 
-Do **not** launch the GUI yet — or if you do, close it again before Step 4 so it doesn't
+Alternatively, run the uninstaller directly:
+```
+C:\Program Files\AI-Prowler\unins000.exe
+```
+
+Your data, learnings, and settings are **not affected** — the uninstaller only removes
+program files from `C:\Program Files\AI-Prowler`.
+
+### Step 4 — Install v7.0.0
+
+Run the v7.0.0 installer. Confirm it installs to the default location,
+`C:\Program Files\AI-Prowler` (the reindex script expects this path).
+
+Do **not** launch the GUI yet — or if you do, close it again before Step 5 so it doesn't
 compete with the reindexer for the database.
 
-### Step 4 — Run the post-upgrade reindex
+### Step 5 — Run the post-upgrade reindex
 
 With v7 installed and the GUI closed, double-click
 **`AI-Prowler_PostUpgrade_Reindex.bat`** (with its `.py` companion in the same folder).
@@ -147,7 +131,7 @@ you'll see `Done. AI-Prowler's document and learning indexes have been rebuilt.`
 > The reindexer only rebuilds indexes from on-disk files and is **safe to re-run** if it's
 > interrupted or you add more tracked paths later.
 
-### Step 5 — Verify
+### Step 6 — Verify
 
 Launch AI-Prowler v7 and confirm the migration worked. Quick checks:
 
@@ -197,28 +181,15 @@ migration — but all your *source* data and settings are in the backup.)
 ```
 1. Close AI-Prowler completely.
 2. Run AI-Prowler_PreUpgrade_Cleanup.bat   → type YES   (backs up + clears old DB)
-3. Install AI-Prowler v7.0.0               → default path C:\Program Files\AI-Prowler
-4. Run AI-Prowler_PostUpgrade_Reindex.bat  → rebuilds document + learnings indexes
-5. Launch v7, verify with check_status / get_database_stats / search_learnings
+3. Uninstall AI-Prowler                    → Settings → Apps, or run unins000.exe
+4. Install AI-Prowler v7.0.0              → default path C:\Program Files\AI-Prowler
+5. Run AI-Prowler_PostUpgrade_Reindex.bat  → rebuilds document + learnings indexes
+6. Launch v7, verify with check_status / get_database_stats / search_learnings
 ```
 
 **Backup location:** `%USERPROFILE%\AI-Prowler-migration-backup-<timestamp>`
 **No admin rights needed** for the cleanup or reindex scripts.
 
-/// testing the Biz multiaccess mode
-✅ Business license issued
-   Company       : AI-Prowler LLC
-   Seat pool     : 2
-   Expires       : 2027-05-29
-   PARENT key    : D6F5-3FA5-E2A2-1AF1-1911-1BC3-1A16-E23A
-   Child seats   : 2
-      seat  1: 839C-AAB3-7694-06B6-B74C-4737-D957-FCA3
-      seat  2: BF57-63EA-3C57-5C3C-573E-7367-F45C-0E6A
-
-   ⚠️  Save the parent key — it's the company subscription. Hand each child key to one user as their license key.
-
-📦 Seats bundle written to: C:/Users/david/AI-Prowler_V700_to_V701_work/AI-Prowler/seats.json
-   Deliver this file to the customer at ~/.ai-prowler/seats.json
 
 
 
