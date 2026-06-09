@@ -26,6 +26,9 @@
 #
 #   Scenario E  - Guide already tracked but stored with backslashes (legacy format).
 #                 Contains() check uses forward slashes - should not add a duplicate.
+#
+#   Scenario F  - Written file has no BOM (Python json.load must work).
+#                 WriteAllText with UTF8Encoding($false) must not write a BOM.
 # =============================================================================
 
 $ErrorActionPreference = "Stop"
@@ -70,13 +73,13 @@ function Invoke-SeedScript($TrackFile, $GuideDest) {
                 $output = "User guide already tracked - no change needed."
             } else {
                 $dirs.Add($guidePath)
-                [pscustomobject]@{ directories = $dirs.ToArray() } |
-                    ConvertTo-Json -Compress | Set-Content $TrackFile -Encoding UTF8
+                $json = [pscustomobject]@{ directories = $dirs.ToArray() } | ConvertTo-Json -Compress
+                [System.IO.File]::WriteAllText($TrackFile, $json, [System.Text.UTF8Encoding]::new($false))
                 $output = "User guide added to tracking list."
             }
         } else {
-            @{ directories = @($guidePath) } |
-                ConvertTo-Json -Compress | Set-Content $TrackFile -Encoding UTF8
+            $json = @{ directories = @($guidePath) } | ConvertTo-Json -Compress
+            [System.IO.File]::WriteAllText($TrackFile, $json, [System.Text.UTF8Encoding]::new($false))
             $output = "Tracking file created with user guide as first entry."
         }
     } catch {
@@ -243,6 +246,36 @@ if ($guideCount -gt 1) {
     Fail "E" "BUG: Guide path duplicated ($guideCount entries) - backslash normalisation not working. Entries: $($json.directories -join ' | ')"
 } else {
     Pass "E" "Backslash-stored guide path correctly detected as duplicate - no extra entry added"
+}
+
+# =============================================================================
+Write-Header "Scenario F - Written file has no BOM (Python json.load must work)"
+# =============================================================================
+
+if (Test-Path $TrackFile) { Remove-Item $TrackFile }
+$null = Invoke-SeedScript -TrackFile $TrackFile -GuideDest $FakeGuideBS
+
+# Read raw bytes and check for UTF-8 BOM (EF BB BF)
+$bytes = [System.IO.File]::ReadAllBytes($TrackFile)
+if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+    Fail "F" "BOM DETECTED: File starts with EF BB BF - Python json.load() will fail on this file"
+} else {
+    Pass "F" "No BOM - file is clean UTF-8, Python json.load() will succeed"
+}
+
+# Verify Python can actually parse it
+$pyResult = & python -c "
+import json, sys
+try:
+    data = json.load(open(r'$TrackFile', encoding='utf-8'))
+    print('OK:' + str(len(data.get('directories',[]))))
+except Exception as e:
+    print('ERROR:' + str(e))
+" 2>&1
+if ($pyResult -like "OK:*") {
+    Pass "F" "Python json.load() succeeded: $pyResult"
+} else {
+    Fail "F" "Python json.load() failed: $pyResult"
 }
 
 # =============================================================================

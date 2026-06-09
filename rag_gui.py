@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 AI Prowler GUI - Professional Graphical Interface
 Modern GUI for AI Prowler Document Indexing and Querying
@@ -787,6 +787,7 @@ class RAGGui:
         self._index_pause_event = threading.Event()   # set = paused
         self._index_running     = False
         self._index_cancelled   = False               # True = stop was a cancel, not a save
+        self._embedding_ready    = False               # True once embedding model is loaded
         # Resume state — where to continue after a stop
         self._index_resume_dirs  = []   # remaining dirs at time of stop
         self._index_resume_file  = 0    # file index within first remaining dir
@@ -870,6 +871,21 @@ class RAGGui:
             # a previous session with SUPPORT_LOCAL_HW_LLM=True may have set
             # the service to 'auto'. Silently correct that in the background.
             self.root.after(2000, self._ensure_ollama_disabled)
+
+        # ── Embedding model prewarm — UNCONDITIONAL ──────────────────────────
+        # The sentence-transformers embedding model (all-MiniLM-L6-v2) must be
+        # downloaded and cached before ANY indexing or update operation can run.
+        # On a fresh install the model is not in the HuggingFace cache yet, so
+        # the first call to get_chroma_client() hangs the GUI thread if it
+        # happens in response to a user action (e.g. Update All).
+        #
+        # This after() fires 4 s after startup — enough for the window to draw
+        # and the MCP server to start — then downloads the model in a background
+        # thread. Update All / Update Selected are disabled until it completes.
+        # On subsequent launches the model is already cached and this returns in
+        # milliseconds, so the cost is negligible.
+        if RAG_AVAILABLE:
+            self.root.after(4000, self._prewarm_embedding_model)
 
         # MCP status bar indicator — check once on startup
         self.root.after(2000, self._refresh_mcp_status_bar)
@@ -2698,7 +2714,7 @@ or from the Help menu."""
         # ADDITIVE: indexes only missing files one at a time via index_file_list
         # (which scopes its delete to each file's own chunks). Never purges or
         # resets the collection, so the existing database is left intact.
-        self.root.after(4000, self._reconcile_tracked_index)
+        # _reconcile_tracked_index runs inside _prewarm_embedding_model worker
 
         # ── Dismissed notifications tracking ──────────────────────────────────
         self._dismissed_path = Path.home() / '.ai-prowler' / 'dismissed_notifications.json'
@@ -4531,12 +4547,14 @@ or from the Help menu."""
         buttons_frame = ttk.Frame(f)
         buttons_frame.pack(fill='x', padx=20, pady=(0, 6))
 
-        ttk.Button(buttons_frame, text="Update Selected",
-                   command=self.update_selected).pack(side='left', padx=(0, 6))
+        self.update_selected_btn = ttk.Button(buttons_frame, text="Update Selected",
+                   command=self.update_selected)
+        self.update_selected_btn.pack(side='left', padx=(0, 6))
 
-        ttk.Button(buttons_frame, text="Update All",
+        self.update_all_btn = ttk.Button(buttons_frame, text="Update All",
                    command=self.update_all,
-                   style='Accent.TButton').pack(side='left')
+                   style='Accent.TButton')
+        self.update_all_btn.pack(side='left')
 
         # Progress
         self.update_progress = ttk.Progressbar(f, mode='indeterminate')
@@ -11934,6 +11952,56 @@ or from the Help menu."""
             self.status_var.set("⏸ Indexing paused — click Resume to continue")
             self._cancel_index_timer()   # freeze display at current time
 
+    def _prewarm_embedding_model(self):
+        """
+        Download and cache the sentence-transformers embedding model on startup.
+
+        Runs unconditionally (regardless of SUPPORT_LOCAL_HW_LLM) because the
+        embedding model is required by ALL indexing and update operations, not
+        just the Ollama Q&A path.
+
+        On a fresh install the model (~90 MB) must be downloaded from HuggingFace
+        before get_chroma_client() can succeed.  If the user clicks Update All
+        before this download completes, the GUI hangs.  This method prevents that
+        by:
+          1. Disabling Update All / Update Selected while the download runs.
+          2. Showing a clear status-bar message so the user knows what is happening.
+          3. Re-enabling those buttons and running _reconcile_tracked_index()
+             once the model is cached and ChromaDB is initialised.
+
+        On subsequent launches the model is already in the HuggingFace cache so
+        get_chroma_client() returns in <1 s — the brief button-disable is invisible.
+        """
+        if not RAG_AVAILABLE:
+            return
+
+        # Disable update buttons to prevent a hang if the user clicks before ready
+        try:
+            self.update_selected_btn.configure(state='disabled')
+            self.update_all_btn.configure(state='disabled')
+        except Exception:
+            pass
+
+        self.status_var.set("⬇ Preparing embedding model…")
+
+        def _worker():
+            try:
+                # get_chroma_client() initialises ChromaDB AND downloads/loads
+                # the embedding model.  This is the exact same call that
+                # Update All makes, so completing it here guarantees Update All
+                # will not hang.
+                # NOTE: Do NOT write anything to ChromaDB here. Any write
+                # immediately after client init races the HNSW compactor and
+                # causes "Failed to apply logs to the hnsw segment writer".
+                # The user guide will be indexed on the user's first Update All.
+                from rag_preprocessor import get_chroma_client
+                get_chroma_client()
+                self.output_queue.put(('embedding_ready', None))
+            except Exception as e:
+                self.output_queue.put(('embedding_ready_error', str(e)))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
     def _reconcile_tracked_index(self):
         """First-launch reconcile: index tracked files that have no chunks yet.
 
@@ -13366,6 +13434,15 @@ or from the Help menu."""
             sys.stdout = old_stdout
 
     def update_selected(self):
+        if not self._embedding_ready:
+            import tkinter.messagebox as _mb
+            _mb.showwarning(
+                "Embedding Model Not Ready",
+                "The embedding model is still loading.\n\n"
+                "Please wait for the status bar to show\n"
+                "\u2705 Embedding model ready, then try again."
+            )
+            return
         """Update selected directory or file."""
         selection = self.tracked_listbox.curselection()
         if not selection:
@@ -13393,6 +13470,16 @@ or from the Help menu."""
     
     def update_all(self):
         """Update all tracked directories and files."""
+        if not self._embedding_ready:
+            import tkinter.messagebox as _mb
+            _mb.showwarning(
+                "Embedding Model Not Ready",
+                "The embedding model is still loading.\n\n"
+                "Please wait for the status bar to show\n"
+                "\u2705 Embedding model ready\n\n"
+                "then try Update All again."
+            )
+            return
         self.update_output.delete('1.0', tk.END)
         self.update_progress.start()
         self.status_var.set("Updating all + purging deleted...")
@@ -15358,6 +15445,26 @@ or from the Help menu."""
                 elif msg_type == 'info':
                     messagebox.showinfo("Information", msg_data)
                     
+                elif msg_type == 'embedding_ready':
+                    # Embedding model downloaded and cached — re-enable update
+                    # buttons. Reconcile runs inside the prewarm worker thread.
+                    self._embedding_ready = True
+                    try:
+                        self.update_selected_btn.configure(state='normal')
+                        self.update_all_btn.configure(state='normal')
+                    except Exception:
+                        pass
+                    self.status_var.set("\u2705 Embedding model ready")
+
+                elif msg_type == 'embedding_ready_error':
+                    # Model download failed — re-enable buttons so user can retry
+                    try:
+                        self.update_selected_btn.configure(state='normal')
+                        self.update_all_btn.configure(state='normal')
+                    except Exception:
+                        pass
+                    self.status_var.set("⚠ Embedding model load failed — check internet connection")
+
                 elif msg_type == 'index_progress':
                     self.index_progress_var.set(msg_data)
 

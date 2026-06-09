@@ -967,13 +967,13 @@ begin
     '      Write-Host "User guide already tracked - no change needed."' + #13#10 +
     '    } else {' + #13#10 +
     '      $dirs.Add($guidePath)' + #13#10 +
-    '      [pscustomobject]@{ directories = $dirs.ToArray() } |' + #13#10 +
-    '        ConvertTo-Json -Compress | Set-Content $trackFile -Encoding UTF8' + #13#10 +
+    '      $json = [pscustomobject]@{ directories = $dirs.ToArray() } | ConvertTo-Json -Compress' + #13#10 +
+    '      [System.IO.File]::WriteAllText($trackFile, $json, [System.Text.UTF8Encoding]::new($false))' + #13#10 +
     '      Write-Host "User guide added to tracking list."' + #13#10 +
     '    }' + #13#10 +
     '  } else {' + #13#10 +
-    '    @{ directories = @($guidePath) } |' + #13#10 +
-    '      ConvertTo-Json -Compress | Set-Content $trackFile -Encoding UTF8' + #13#10 +
+    '    $json = @{ directories = @($guidePath) } | ConvertTo-Json -Compress' + #13#10 +
+    '    [System.IO.File]::WriteAllText($trackFile, $json, [System.Text.UTF8Encoding]::new($false))' + #13#10 +
     '    Write-Host "Tracking file created with user guide as first entry."' + #13#10 +
     '  }' + #13#10 +
     '} catch {' + #13#10 +
