@@ -305,6 +305,16 @@ const
 
 
 // ============================================================
+// GLOBAL: Installation type selected on the wizard page.
+//   'personal' → edition=home,     mode=personal  (Individual / Home)
+//   'server'   → edition=business, mode=server    (Business Server)
+// Populated by the install-type wizard page before any install step runs.
+// ============================================================
+var
+  InstallTypePage: TInputOptionWizardPage;
+  GInstallMode: String;   // 'personal' or 'server'
+
+// ============================================================
 // HELPER: BoolToStr
 // Inno Setup's Pascal does not have a built-in BoolToStr.
 // Used in diagnostic log lines to print YES/NO for file/folder checks.
@@ -525,6 +535,37 @@ begin
   // Delete old log so each install run starts fresh (not appended)
   DeleteFileIfExists(ExpandConstant(INSTALL_LOG));
   AppendInstallLog('=== INSTALL START ===');
+
+  // ── Install-Type selection page ──────────────────────────────────────────
+  // Shown immediately after the licence page so the user picks their mode
+  // before any files are installed. The choice drives which config.json is
+  // written to ~/.ai-prowler/config.json at install time.
+  InstallTypePage := CreateInputOptionPage(
+    wpLicense,
+    'Installation Type',
+    'How will AI-Prowler be used on this PC?',
+    'Choose the option that describes your intended use. ' +
+    'This sets the edition and mode in AI-Prowler''s configuration. ' +
+    'You can change it later by editing ~/.ai-prowler/config.json.',
+    True,   // exclusive (radio buttons — only one choice allowed)
+    False   // not a scrollable list
+  );
+
+  InstallTypePage.Add(
+    'Personal / Individual  —  One person, one PC.' + #13#10 +
+    'Standard home or solo-professional install. ' +
+    'Full 60-tool set. Optional Claude.ai remote access via personal tunnel.');
+
+  InstallTypePage.Add(
+    'Business Server / Multi-User  —  Shared company server.' + #13#10 +
+    'Always-on PC that your whole team connects to via Claude.ai. ' +
+    '35 server-mode tools. Admin tab for managing employees and roles.');
+
+  // Default to Personal (index 0)
+  InstallTypePage.Values[0] := True;
+
+  // Initialise GInstallMode to the default so it is always defined
+  GInstallMode := 'personal';
 end;
 
 // ============================================================
@@ -546,6 +587,17 @@ procedure CurPageChanged(CurPageID: Integer);
 begin
   // Bring every page to the front using the flash-topmost technique.
   BringToFront(WizardForm.Handle);
+
+  // Capture install-type selection when the user leaves that page.
+  // (NextButtonClick fires too — but CurPageChanged is simpler.)
+  if (CurPageID <> InstallTypePage.ID) and (InstallTypePage <> nil) then
+  begin
+    if InstallTypePage.Values[1] then
+      GInstallMode := 'server'
+    else
+      GInstallMode := 'personal';
+    AppendInstallLog('[InstallType] Mode selected: ' + GInstallMode);
+  end;
 
   // Extra handling for the licence/EULA page: Inno Setup's RichEdit
   // control grabs focus AFTER this event fires, which pushes the window
@@ -700,6 +752,7 @@ var
   DestFolder, DestFile, CfgFile, CfgDir: String;
   ExistingJson, NewJson, ExistingPath: String;
   ExistingJsonAnsi: AnsiString;   // LoadStringFromFile requires AnsiString
+  EditionStr, ModeStr: String;    // set from GInstallMode wizard selection
 begin
   AppendInstallLog('[Spreadsheet] === Job Tracker spreadsheet setup ===');
 
@@ -771,47 +824,85 @@ begin
   else
     AppendInstallLog('[Spreadsheet] No existing config — will create.');
 
-  // Check whether default_spreadsheet_path already has a value.
-  // Simple string search — avoids needing a JSON parser in Pascal.
-  // If the key already exists AND has a non-empty value, leave it alone.
-  if (Pos('"default_spreadsheet_path"', ExistingJson) > 0) and
-     (Pos('"default_spreadsheet_path": ""', ExistingJson) = 0) then
-  begin
-    AppendInstallLog('[Spreadsheet] default_spreadsheet_path already set — preserving user value.');
-    Exit;
-  end;
+  // Do NOT exit early if default_spreadsheet_path already exists.
+  // The new merge logic below handles that key — AND also writes edition,
+  // mode, and telemetry_enabled if they are missing, which the old early-
+  // exit would skip entirely on a reinstall.
 
   // Build the JSON path string: backslashes must be doubled for JSON.
   ExistingPath := DestFile;
   StringChange(ExistingPath, '\', '\\');
 
-  // Merge the new key into the config.
-  // Strategy: if no existing config, create minimal JSON.
-  //           if existing config, insert the key before the closing brace.
-  // This is deliberately simple — the Small Business tab and the MCP server
-  // both use Python's json.load() which handles any valid JSON, so as long
-  // as the file is valid we are fine.
-  if ExistingJson = '' then
+  // Build the JSON for this install.
+  // Fresh install: write all keys (edition, mode, telemetry, spreadsheet path).
+  // Existing config: only add keys that are missing — never overwrite existing
+  // user-configured values (edition, mode, remote_token, license_key, etc.).
+  //
+  // Config templates (passwords/tokens are intentionally omitted — the user
+  // enters them via the Settings tab after install):
+  //   Personal:  { "edition": "home",     "mode": "personal", ... }
+  //   Server:    { "edition": "business", "mode": "server",   ... }
+  //
+  // GInstallMode is set by the install-type wizard page in InitializeWizard.
+  // Default is 'personal' if the page was somehow skipped.
+  if GInstallMode = 'server' then
   begin
-    NewJson :=
-      '{' + #13#10 +
-      '  "default_spreadsheet_path": "' + ExistingPath + '"' + #13#10 +
-      '}';
+    EditionStr := 'business';
+    ModeStr    := 'server';
   end
   else
   begin
-    // Insert before the last closing brace.
-    // Trim trailing whitespace/newlines first for a clean insertion point.
-    NewJson := TrimRight(ExistingJson);
-    // Remove trailing '}'
-    if (Length(NewJson) > 0) and (NewJson[Length(NewJson)] = '}') then
-      NewJson := Copy(NewJson, 1, Length(NewJson) - 1);
-    // Append the new key and close the object.
-    // The leading comma handles both "last key" and "only key" cases.
-    NewJson := NewJson +
-      ',' + #13#10 +
+    EditionStr := 'home';
+    ModeStr    := 'personal';
+  end;
+
+  if ExistingJson = '' then
+  begin
+    // Fresh install — write the complete starter config.
+    NewJson :=
+      '{' + #13#10 +
+      '  "edition": "' + EditionStr + '",' + #13#10 +
+      '  "mode": "' + ModeStr + '",' + #13#10 +
+      '  "telemetry_enabled": true,' + #13#10 +
       '  "default_spreadsheet_path": "' + ExistingPath + '"' + #13#10 +
       '}';
+    AppendInstallLog('[Config] Fresh install — writing edition=' + EditionStr +
+                     ' mode=' + ModeStr);
+  end
+  else
+  begin
+    // Existing config — add only the keys that are missing.
+    // This preserves license_key, remote_token, tunnel_domain, tunnel_token, etc.
+    NewJson := TrimRight(ExistingJson);
+    if (Length(NewJson) > 0) and (NewJson[Length(NewJson)] = '}') then
+      NewJson := Copy(NewJson, 1, Length(NewJson) - 1);
+
+    // Add edition if missing
+    if Pos('"edition"', ExistingJson) = 0 then
+    begin
+      NewJson := NewJson + ',' + #13#10 + '  "edition": "' + EditionStr + '"';
+      AppendInstallLog('[Config] Added missing edition=' + EditionStr);
+    end;
+
+    // Add mode if missing
+    if Pos('"mode"', ExistingJson) = 0 then
+    begin
+      NewJson := NewJson + ',' + #13#10 + '  "mode": "' + ModeStr + '"';
+      AppendInstallLog('[Config] Added missing mode=' + ModeStr);
+    end;
+
+    // Add telemetry_enabled if missing
+    if Pos('"telemetry_enabled"', ExistingJson) = 0 then
+      NewJson := NewJson + ',' + #13#10 + '  "telemetry_enabled": true';
+
+    // Add default_spreadsheet_path if missing or empty
+    if (Pos('"default_spreadsheet_path"', ExistingJson) = 0) or
+       (Pos('"default_spreadsheet_path": ""', ExistingJson) > 0) then
+      NewJson := NewJson + ',' + #13#10 +
+                 '  "default_spreadsheet_path": "' + ExistingPath + '"';
+
+    NewJson := NewJson + #13#10 + '}';
+    AppendInstallLog('[Config] Merged missing keys into existing config.');
   end;
 
   if SaveStringToFile(CfgFile, NewJson, False) then

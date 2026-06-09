@@ -173,6 +173,7 @@ def _index_learning(learning: dict):
             "tags":          ",".join(learning.get("tags", [])),
             "supersedes":    learning.get("supersedes", ""),
             "superseded_by": learning.get("superseded_by", ""),
+            "recorded_by":   learning.get("recorded_by", ""),
         }
         collection.upsert(
             ids=[learning["id"]],
@@ -257,6 +258,7 @@ def record_learning(
     tags: list[str] | None = None,
     supersedes_id: str = "",
     outcome: str = "unknown",
+    recorded_by: str = "",
 ) -> dict:
     """
     Record a new learning.
@@ -289,6 +291,9 @@ def record_learning(
         "applied_count":  0,
         "last_applied":   None,
         "outcome":        outcome,
+        # Server-mode attribution: name of the employee who recorded this.
+        # Empty string in personal mode (single-user install).
+        "recorded_by":    recorded_by.strip(),
         # IDs of other learnings the user has explicitly OK'd as
         # not-a-conflict (used by find_conflicts to suppress repeat
         # flags after user review). Stored bidirectionally.
@@ -400,6 +405,7 @@ def check_learned(
             "tags":         meta.get("tags", ""),
             "supersedes":   meta.get("supersedes", ""),
             "superseded_by": meta.get("superseded_by", ""),
+            "recorded_by":  meta.get("recorded_by", ""),
             "content":      results["documents"][0][i],
             "similarity":   sim,
         })

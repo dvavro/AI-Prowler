@@ -24,29 +24,9 @@ import pytest
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Fixture: combine sl_env with the MCP module so tests can use both
+# Note: sl_mcp_env fixture is defined in conftest.py so it is shared across
+# all test files in tests/mcp/. No local definition needed here.
 # ──────────────────────────────────────────────────────────────────────────────
-@pytest.fixture
-def sl_mcp_env(sl_env, mcp_module):
-    """Combined env: redirected learning paths + MCP module access. We
-    confirm the MCP module's _sl reference points at the same module
-    object whose globals we monkey-patched."""
-    # Sanity check — if MCP imported self_learning by a different alias
-    # or before our path-patching applied, our isolation wouldn't work.
-    # _sl should be the same object as sl_env.sl.
-    assert mcp_module._sl is sl_env.sl, (
-        "ai_prowler_mcp._sl does not point at the same module our fixture "
-        "patches — isolation would leak. This is an internal-wiring bug."
-    )
-
-    class SlMcpEnv:
-        pass
-    e = SlMcpEnv()
-    e.mcp = mcp_module
-    e.sl  = sl_env.sl
-    e.learnings_file = sl_env.learnings_file
-    e.learnings_dir  = sl_env.learnings_dir
-    return e
 
 
 # ──────────────────────────────────────────────────────────────────────────────

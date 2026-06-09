@@ -1007,7 +1007,7 @@ class RAGGui:
             import json as _j
             cfg_path = _P.home() / '.ai-prowler' / 'config.json'
             if cfg_path.exists():
-                cfg = _j.loads(cfg_path.read_text(encoding='utf-8'))
+                cfg = _j.loads(cfg_path.read_text(encoding='utf-8-sig'))
                 _is_srv = (str(cfg.get('edition', '')).lower() == 'business'
                            and str(cfg.get('mode', '')).lower() == 'server')
                 token = cfg.get('remote_token', '').strip()
@@ -1140,7 +1140,7 @@ then ask Claude questions from your desktop or phone.
 ─────────────────────────────────────────────────
  KNOWLEDGE BASE (RAG)
 ─────────────────────────────────────────────────
-• 57 MCP tools for Claude Desktop & Claude.ai mobile
+• 60 MCP tools for Claude Desktop & Claude.ai mobile
 • 65+ file types: PDF, Word, Excel, PowerPoint, HTML,
   CSV, email (.eml/.msg/.mbox), images & more
 • Automatic OCR for scanned PDFs and images
@@ -1631,7 +1631,7 @@ Built with Python, ChromaDB, FastMCP, and Claude"""
         try:
             cfg_path = Path.home() / '.ai-prowler' / 'config.json'
             if cfg_path.exists():
-                cfg = json.loads(cfg_path.read_text(encoding='utf-8'))
+                cfg = json.loads(cfg_path.read_text(encoding='utf-8-sig'))
                 domain = cfg.get('tunnel_domain', '').strip()
                 if domain:
                     # Strip protocol/path if user pasted full URL
@@ -1699,7 +1699,7 @@ Built with Python, ChromaDB, FastMCP, and Claude"""
                 "1. Click 'Save' or 'Connect'.",
                 "2. Claude will attempt to connect to your tunnel.",
                 "3. If successful, you'll see 'Connected' or a green indicator.",
-                "4. The 57 AI-Prowler tools will be listed (search_documents,",
+                "4. The 60 AI-Prowler tools will be listed (search_documents,",
                 "   index_path, optimize_route, etc.).",
             ]),
 
@@ -1835,12 +1835,138 @@ Built with Python, ChromaDB, FastMCP, and Claude"""
                           foreground='#cccccc', spacing1=4, spacing3=4)
         txt.tag_configure('body', font=('Segoe UI', 10))
 
+        # ── Table tags ────────────────────────────────────────────────────────
+        # Tables are rendered with box-drawing characters in a monospace font
+        # so columns align perfectly regardless of content width.
+        txt.tag_configure('tbl_border',
+                          font=('Consolas', 9), foreground='#999999')
+        txt.tag_configure('tbl_head',
+                          font=('Consolas', 9, 'bold'),
+                          background='#dce8f7', foreground='#00336e')
+        txt.tag_configure('tbl_row',
+                          font=('Consolas', 9), background='#ffffff')
+        txt.tag_configure('tbl_row_alt',
+                          font=('Consolas', 9), background='#f4f8ff')
+
         # ── Parse and render markdown ─────────────────────────────────────────
         # Maps TOC entry index → text index string so clicking jumps correctly.
         toc_entries   = []   # list of (display_label, mark_name)
         section_marks = {}   # mark_name → inserted mark in txt widget
         in_code_block = False
         code_buf      = []
+        table_buf     = []   # accumulates consecutive | lines
+
+        def _flush_table(rows):
+            """Render a markdown table as an embedded tk.Frame grid.
+            Each cell is a tk.Label with wraplength set to its column width,
+            so content wraps downward inside the cell — the table never needs
+            horizontal scrolling and the window never needs to be widened."""
+            if not rows:
+                return
+            import re as _re2
+
+            # ── Parse rows into cell lists ───────────────────────────────
+            parsed = []
+            for r in rows:
+                stripped = r.strip()
+                if stripped.startswith('|'):
+                    stripped = stripped[1:]
+                if stripped.endswith('|'):
+                    stripped = stripped[:-1]
+                cells = [c.strip() for c in stripped.split('|')]
+                parsed.append(cells)
+
+            # ── Remove the separator row (---|---|---) ───────────────────
+            data_rows = []
+            for row in parsed:
+                if all(_re2.match(r'^:?-+:?$', c.strip() or '-') for c in row):
+                    continue
+                data_rows.append(row)
+
+            if not data_rows:
+                return
+
+            # ── Normalise column count ───────────────────────────────────
+            ncols = max(len(r) for r in data_rows)
+            for r in data_rows:
+                while len(r) < ncols:
+                    r.append('')
+
+            # ── Build embedded frame grid ────────────────────────────────
+            # outer frame provides the table border colour as a background
+            BORDER  = '#b0b8c8'
+            HEAD_BG = '#dce8f7'
+            HEAD_FG = '#00336e'
+            ROW_BG  = ('#ffffff', '#f0f4fb')   # alternating even/odd
+
+            outer = tk.Frame(txt, bg=BORDER, padx=1, pady=1)
+            inner = tk.Frame(outer, bg=BORDER)
+            inner.pack(fill='both', expand=True)
+
+            # ── Scroll-forward helper ────────────────────────────────────
+            # Embedded frames/labels absorb <MouseWheel> and stop it
+            # reaching the Text widget. Bind every table widget to forward
+            # the event so the user can scroll while hovering over a table.
+            def _fwd(e):
+                txt.yview_scroll(int(-1 * (e.delta / 120)), 'units')
+
+            def _bind_scroll(w):
+                w.bind('<MouseWheel>', _fwd, add='+')
+
+            _bind_scroll(outer)
+            _bind_scroll(inner)
+
+            # Track every label so we can update wraplength on resize
+            _labels_by_col = [[] for _ in range(ncols)]
+
+            for row_idx, row in enumerate(data_rows):
+                is_head = (row_idx == 0)
+                row_bg  = HEAD_BG if is_head else ROW_BG[(row_idx - 1) % 2]
+
+                for col_idx, cell_text in enumerate(row):
+                    cell_frame = tk.Frame(inner, bg=row_bg, bd=0)
+                    cell_frame.grid(row=row_idx, column=col_idx,
+                                    sticky='nsew', padx=1, pady=1)
+                    _bind_scroll(cell_frame)
+
+                    lbl = tk.Label(
+                        cell_frame,
+                        text=cell_text,
+                        font=('Segoe UI', 9, 'bold') if is_head
+                             else ('Segoe UI', 9),
+                        bg=row_bg,
+                        fg=HEAD_FG if is_head else '#1a1a1a',
+                        padx=8, pady=5,
+                        anchor='nw', justify='left',
+                        wraplength=160    # updated dynamically below
+                    )
+                    lbl.pack(fill='both', expand=True, anchor='nw')
+                    _bind_scroll(lbl)
+                    _labels_by_col[col_idx].append(lbl)
+
+            for col_idx in range(ncols):
+                inner.columnconfigure(col_idx, weight=1)
+
+            # ── Dynamic wraplength — recalculate on every window resize ──
+            # Subtract borders, scrollbar, TOC sidebar, and cell padding
+            # then divide evenly across columns.
+            def _update_wrap(event=None):
+                try:
+                    w = txt.winfo_width()
+                    if w < 80:
+                        return
+                    col_px = max(60, (w - 40) // ncols - 16)
+                    for col_labels in _labels_by_col:
+                        for lbl in col_labels:
+                            lbl.configure(wraplength=col_px)
+                except Exception:
+                    pass
+
+            txt.bind('<Configure>', lambda e: _update_wrap(), add='+')
+            txt.after(80, _update_wrap)   # initial pass after layout settles
+
+            txt.window_create(tk.END, window=outer)
+            txt.insert(tk.END, '\n\n')
 
         def _clean(line):
             """Strip common markdown escapes used in the .md file."""
@@ -1862,6 +1988,10 @@ Built with Python, ChromaDB, FastMCP, and Claude"""
 
             # Code fence toggle
             if line.strip().startswith('```'):
+                # Flush any pending table first
+                if table_buf:
+                    _flush_table(table_buf)
+                    table_buf.clear()
                 if in_code_block:
                     _flush_code(code_buf)
                     in_code_block = False
@@ -1872,6 +2002,18 @@ Built with Python, ChromaDB, FastMCP, and Claude"""
             if in_code_block:
                 code_buf.append(line)
                 continue
+
+            # ── Table row detection ───────────────────────────────────────
+            # Buffer consecutive lines that look like markdown table rows
+            # (start with optional whitespace then '|').
+            # A blank line or any non-table line flushes the buffer.
+            if line.strip().startswith('|'):
+                table_buf.append(line)
+                continue
+            else:
+                if table_buf:
+                    _flush_table(table_buf)
+                    table_buf.clear()
 
             line = _clean(line)
 
@@ -1922,6 +2064,9 @@ Built with Python, ChromaDB, FastMCP, and Claude"""
 
         if in_code_block:
             _flush_code(code_buf)
+        if table_buf:
+            _flush_table(table_buf)
+            table_buf.clear()
 
         txt.config(state='disabled')
 
@@ -1948,40 +2093,146 @@ Built with Python, ChromaDB, FastMCP, and Claude"""
         toc_list.bind('<<ListboxSelect>>', _on_toc_select)
         toc_list.bind('<Double-Button-1>', _on_toc_select)
 
+        # ── Highlight tag for search matches ──────────────────────────────────
+        txt.tag_configure('find_match',
+                          background='#ffee00', foreground='#000000')
+        # Raise above other tags so yellow always shows on top
+        txt.tag_raise('find_match')
+
+        # ── Track which pane was last clicked ─────────────────────────────────
+        _active_pane = ['txt']   # 'txt' or 'toc'
+        toc_list.bind('<Button-1>',
+                      lambda e: _active_pane.__setitem__(0, 'toc'), add='+')
+        txt.bind('<Button-1>',
+                 lambda e: _active_pane.__setitem__(0, 'txt'), add='+')
+
         # ── Bottom buttons ────────────────────────────────────────────────────
         btn_row = tk.Frame(win)
         btn_row.pack(fill='x', padx=6, pady=6)
 
         # Search bar
-        tk.Label(btn_row, text="Find:", font=('Segoe UI', 9)).pack(side='left')
+        tk.Label(btn_row, text="Find:",
+                 font=('Segoe UI', 9)).pack(side='left')
         search_var = tk.StringVar()
         search_entry = ttk.Entry(btn_row, textvariable=search_var, width=22)
-        search_entry.pack(side='left', padx=(2, 4))
-        _search_pos = [None]   # mutable cell for last match position
+        search_entry.pack(side='left', padx=(2, 2))
 
-        def _do_search(*_):
+        # ── Search state ──────────────────────────────────────────────────────
+        _fwd_pos  = ['1.0']    # forward cursor in text widget
+        _bwd_pos  = [tk.END]   # backward cursor in text widget
+        _toc_idx  = [0]        # current TOC search index
+
+        def _clear_highlights():
+            txt.tag_remove('find_match', '1.0', tk.END)
+
+        def _on_query_change(*_):
+            """Reset positions whenever the search string changes."""
+            _clear_highlights()
+            _fwd_pos[0] = '1.0'
+            _bwd_pos[0] = tk.END
+            _toc_idx[0] = 0
+
+        search_var.trace_add('write', _on_query_change)
+
+        def _search_toc(direction):
+            """Search TOC entries; select matching entry and jump to its
+            section in the text pane."""
+            query = search_var.get().strip().lower()
+            if not query or not toc_entries:
+                return
+            n   = len(toc_entries)
+            cur = _toc_idx[0]
+
+            # Build a search order: from cur+direction, then wrap
+            order = []
+            i = cur + direction
+            while 0 <= i < n:
+                order.append(i)
+                i += direction
+            # Wrap-around portion
+            if direction > 0:
+                i = 0
+                while i <= cur:
+                    order.append(i)
+                    i += 1
+            else:
+                i = n - 1
+                while i >= cur:
+                    order.append(i)
+                    i -= 1
+
+            for idx in order:
+                label, mark = toc_entries[idx]
+                if query in label.lower():
+                    _toc_idx[0] = idx
+                    toc_list.selection_clear(0, tk.END)
+                    toc_list.selection_set(idx)
+                    toc_list.see(idx)
+                    # Jump to the section in the text pane as well
+                    try:
+                        mark_index = txt.index(mark)
+                        txt.see(mark_index)
+                        txt.update_idletasks()
+                        txt.yview_scroll(-5, 'units')
+                        txt.see(mark_index)
+                    except Exception:
+                        pass
+                    return
+
+        def _search_text(direction):
+            """Find next (direction=+1) or previous (direction=-1) match in
+            the text pane, highlight it in yellow, and scroll it into view."""
             query = search_var.get().strip()
             if not query:
                 return
-            txt.tag_remove('sel', '1.0', tk.END)
-            start = _search_pos[0] or '1.0'
-            pos = txt.search(query, start, nocase=True, stopindex=tk.END)
-            if not pos:
-                # Wrap around
-                pos = txt.search(query, '1.0', nocase=True, stopindex=tk.END)
+            _clear_highlights()
+
+            if direction > 0:
+                start = _fwd_pos[0] or '1.0'
+                pos = txt.search(query, start, nocase=True, stopindex=tk.END)
+                if not pos:  # wrap around
+                    pos = txt.search(query, '1.0', nocase=True,
+                                     stopindex=tk.END)
+            else:
+                start = _bwd_pos[0] or tk.END
+                pos = txt.search(query, start, nocase=True,
+                                 stopindex='1.0', backwards=True)
+                if not pos:  # wrap around
+                    pos = txt.search(query, tk.END, nocase=True,
+                                     stopindex='1.0', backwards=True)
+
             if pos:
                 end_pos = f'{pos}+{len(query)}c'
-                txt.tag_add('sel', pos, end_pos)
+                txt.tag_add('find_match', pos, end_pos)
                 txt.see(pos)
-                _search_pos[0] = end_pos
+                # Advance cursors for next call
+                _fwd_pos[0] = end_pos
+                _bwd_pos[0] = pos
             else:
-                _search_pos[0] = None
+                # Nothing found — reset so next search starts fresh
+                _fwd_pos[0] = '1.0'
+                _bwd_pos[0] = tk.END
 
-        search_entry.bind('<Return>', _do_search)
-        ttk.Button(btn_row, text="Find", command=_do_search,
-                   width=6).pack(side='left', padx=(0, 12))
+        def _do_search(direction=1):
+            """Route search to the pane that was last clicked."""
+            if _active_pane[0] == 'toc':
+                _search_toc(direction)
+            else:
+                _search_text(direction)
 
-        ttk.Button(btn_row, text="Close", command=win.destroy,
+        # Bind Enter → find down, Shift+Enter → find up
+        search_entry.bind('<Return>',       lambda e: _do_search(1))
+        search_entry.bind('<Shift-Return>', lambda e: _do_search(-1))
+
+        ttk.Button(btn_row, text="▲ Prev",
+                   command=lambda: _do_search(-1),
+                   width=7).pack(side='left', padx=(0, 2))
+        ttk.Button(btn_row, text="▼ Next",
+                   command=lambda: _do_search(1),
+                   width=7).pack(side='left', padx=(0, 12))
+
+        ttk.Button(btn_row, text="Close",
+                   command=win.destroy,
                    width=8).pack(side='right')
     
     def get_quick_start_content(self):
@@ -1994,7 +2245,7 @@ Version {APP_VERSION}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 AI-Prowler is an Agentic RAG platform — it gives Claude
-57 MCP tools to search, cross-reference, and synthesize
+60 MCP tools to search, cross-reference, and synthesize
 answers from your own documents. You ask a question;
 Claude researches your knowledge base and answers it.
 
@@ -2546,7 +2797,7 @@ or from the Help menu."""
         try:
             cfg_path = Path.home() / '.ai-prowler' / 'config.json'
             if cfg_path.exists():
-                data = json.loads(cfg_path.read_text(encoding='utf-8'))
+                data = json.loads(cfg_path.read_text(encoding='utf-8-sig'))
                 if 'telemetry_enabled' in data:
                     cfg['enabled'] = bool(data['telemetry_enabled'])
                 if data.get('telemetry_endpoint'):
@@ -2563,7 +2814,7 @@ or from the Help menu."""
             data = {}
             if cfg_path.exists():
                 try:
-                    data = json.loads(cfg_path.read_text(encoding='utf-8'))
+                    data = json.loads(cfg_path.read_text(encoding='utf-8-sig'))
                 except Exception:
                     data = {}
             if enabled is not None:
@@ -2571,7 +2822,7 @@ or from the Help menu."""
             if endpoint is not None:
                 data['telemetry_endpoint'] = str(endpoint)
             cfg_path.write_text(
-                json.dumps(data, indent=2), encoding='utf-8')
+                json.dumps(data, indent=2), encoding='utf-8-sig')
         except Exception:
             pass
 
@@ -5020,6 +5271,10 @@ or from the Help menu."""
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
 
+        # Resolve server-mode flag once at the top of the function so it is
+        # available everywhere in create_settings_tab() regardless of order.
+        _settings_is_server_mode = self._is_business_server_mode()
+
         # Stretch the inner frame to fill the canvas width whenever canvas resizes
         def _on_canvas_resize(event):
             canvas.itemconfig(canvas.find_withtag("all")[0], width=event.width)
@@ -6177,7 +6432,7 @@ or from the Help menu."""
                 import json as _jmod
                 _cfg_path = Path.home() / '.ai-prowler' / 'config.json'
                 if _cfg_path.exists():
-                    _cfg_data = _jmod.loads(_cfg_path.read_text(encoding='utf-8'))
+                    _cfg_data = _jmod.loads(_cfg_path.read_text(encoding='utf-8-sig'))
                     _remote_token_var.set(_cfg_data.get('remote_token', ''))
             except Exception:
                 pass
@@ -6206,11 +6461,11 @@ or from the Help menu."""
                     _cfg_d = {}
                     if _cfg_p.exists():
                         try:
-                            _cfg_d = _jmod.loads(_cfg_p.read_text(encoding='utf-8'))
+                            _cfg_d = _jmod.loads(_cfg_p.read_text(encoding='utf-8-sig'))
                         except Exception:
                             pass
                     _cfg_d['remote_token'] = tok
-                    _cfg_p.write_text(_jmod.dumps(_cfg_d, indent=2), encoding='utf-8')
+                    _cfg_p.write_text(_jmod.dumps(_cfg_d, indent=2), encoding='utf-8-sig')
                     self.status_var.set("✅ Token saved")
                     self.root.after(3000, lambda: self.status_var.set("Ready"))
                 except Exception as _e:
@@ -6280,11 +6535,11 @@ or from the Help menu."""
                 _cfg_d2 = {}
                 if _cfg_p2.exists():
                     try:
-                        _cfg_d2 = _jmod2.loads(_cfg_p2.read_text(encoding='utf-8'))
+                        _cfg_d2 = _jmod2.loads(_cfg_p2.read_text(encoding='utf-8-sig'))
                     except Exception:
                         pass
                 _cfg_d2['license_key'] = lk
-                _cfg_p2.write_text(_jmod2.dumps(_cfg_d2, indent=2), encoding='utf-8')
+                _cfg_p2.write_text(_jmod2.dumps(_cfg_d2, indent=2), encoding='utf-8-sig')
                 self.status_var.set(
                     "✅ Parent License Key saved" if _settings_is_server_mode
                     else "✅ License key saved")
@@ -7755,7 +8010,7 @@ or from the Help menu."""
             _cfg_path.parent.mkdir(parents=True, exist_ok=True)
             d = _load_cfg()
             d.update(updates)
-            _cfg_path.write_text(_json.dumps(d, indent=2), encoding='utf-8')
+            _cfg_path.write_text(_json.dumps(d, indent=2), encoding='utf-8-sig')
 
         # ── 1. OVERVIEW BANNER ────────────────────────────────────────────────
         banner = ttk.LabelFrame(f, text="🔧 Small Business Service Tools — Overview",
@@ -7764,7 +8019,7 @@ or from the Help menu."""
 
         ttk.Label(banner, justify='left', font=('Arial', 9),
                   text=(
-                      "6 MCP tools that let Claude act as your field-service assistant.\n"
+                      "7 MCP tools that let Claude act as your field-service assistant (plus check_tools_status for a quick status report).\n"
                       "Ask Claude in a conversation — no forms to fill out, no menus to navigate.\n\n"
                       "Free tools (weather, routing, maps) work immediately — no setup.\n"
                       "Spreadsheet tools use the default path from Settings if filepath is omitted."

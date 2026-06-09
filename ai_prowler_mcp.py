@@ -525,7 +525,7 @@ def _detect_server_mode() -> bool:
 
 _IS_SERVER_MODE: bool = _detect_server_mode()
 
-# The 23 Tier A tools: suppressed for ALL roles in server mode.
+# The 25 Tier A tools: suppressed for ALL roles in server mode.
 _TIER_A_SUPPRESSED: frozenset = frozenset({
     # Dev / code-execution — run arbitrary code on the host OS
     "compile_check", "syntax_check", "lint_check", "pytest_check",
@@ -534,6 +534,8 @@ _TIER_A_SUPPRESSED: frozenset = frozenset({
     "create_file", "write_file", "str_replace_in_file", "create_directory",
     "copy_to_backup", "restore_backup", "list_backups", "list_directory",
     "reset_write_counter", "grant_write_access", "revoke_write_access",
+    # Backup cleanup — deletes files on the host, operator/dev action only
+    "cleanup_backups",
     # Raw filesystem reads — arbitrary path access, bypasses the RAG layer
     "grep_documents", "read_file_lines",
     # Email operator / high-risk tools — personal-install-only.
@@ -3363,6 +3365,7 @@ def record_learning(
     supersedes_id: str = "",
     outcome: str = "unknown",
     auto_detected: bool = False,
+    ctx: Context = None,
 ) -> str:
     """
     Record a new learning into AI-Prowler's self-learning knowledge base.
@@ -3451,6 +3454,10 @@ def record_learning(
                         This changes the confirmation message to clearly flag
                         that Claude initiated this and to ask for approval.
                         Default: False (operator explicitly asked).
+        ctx:            MCP context (injected automatically). In server mode
+                        this identifies the employee recording the learning;
+                        their name is stamped in the `recorded_by` field so
+                        managers can see who added each entry.
 
     Returns:
         Confirmation with the learning details for the user to verify.
@@ -3466,6 +3473,16 @@ def record_learning(
 
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
 
+    # Server-mode attribution: resolve the calling user and stamp their name.
+    # In personal mode _current_user() returns None → recorded_by stays "".
+    _user = _current_user(ctx)
+    _recorded_by = ""
+    if _user is not None:
+        _recorded_by = (_user.get("name") or "").strip()
+        if not _recorded_by:
+            # Fallback: use role if name is missing (should not happen in practice)
+            _recorded_by = _user.get("role", "").strip()
+
     try:
         learning = _sl.record_learning(
             title=title,
@@ -3477,6 +3494,7 @@ def record_learning(
             tags=tag_list,
             supersedes_id=supersedes_id,
             outcome=outcome,
+            recorded_by=_recorded_by,
         )
     except Exception as exc:
         return f"❌ Failed to record learning: {exc}"
@@ -3532,6 +3550,8 @@ def record_learning(
         if learning.get("supersedes"):
             lines.append(f"  Replaces   : {learning['supersedes']}")
             lines.append("  ↳ Previous version automatically deprecated")
+        if learning.get("recorded_by"):
+            lines.append(f"  Recorded by: {learning['recorded_by']}")
         lines.append(f"  ID         : {learning['id']}")
         lines.append("")
         lines.append("═" * 50)
@@ -3558,6 +3578,8 @@ def record_learning(
         if learning.get("supersedes"):
             lines.append(f"  Replaces   : {learning['supersedes']}")
             lines.append("  ↳ Previous version automatically deprecated")
+        if learning.get("recorded_by"):
+            lines.append(f"  Recorded by: {learning['recorded_by']}")
         lines.append(f"  ID         : {learning['id']}")
         lines.append("")
         lines.append(
@@ -3685,6 +3707,8 @@ def search_learnings(
         lines.append(f"    Category   : {m.get('category', 'general')}")
         lines.append(f"    Source     : {m.get('source', 'unknown')}")
         lines.append(f"    Created    : {m.get('created_at', '?')}")
+        if m.get("recorded_by"):
+            lines.append(f"    Recorded by: {m['recorded_by']}")
 
         outcome = m.get("outcome", "unknown")
         if outcome != "unknown":
@@ -3803,6 +3827,8 @@ def list_learnings(
             f"applied: {l.get('applied_count', 0)}x"
         )
         lines.append(f"    Created: {l.get('created_at', '?')}")
+        if l.get("recorded_by"):
+            lines.append(f"    Recorded by: {l['recorded_by']}")
         lines.append(f"    ID: {l['id']}")
 
         # Show first 120 chars of content
@@ -5856,6 +5882,123 @@ def restore_backup(filepath: str, backup_number: int) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# TOOL 9 — cleanup_backups  (Tier A: personal mode only)
+# ══════════════════════════════════════════════════════════════════════════════
+@mcp.tool()
+def cleanup_backups(path: str = "", dry_run: bool = True) -> str:
+    """
+    CODE TOOLS — Find and delete .bakN backup files created by str_replace_in_file.
+
+    Always call with dry_run=True first (the default) — it lists every backup
+    file it would delete without removing anything.  Then call again with
+    dry_run=False to actually delete them.
+
+    Not available in server mode (Tier A suppressed).
+
+    Args:
+        path:     • Empty string (default) — scan every tracked directory.
+                  • A file path — find only .bakN backups of that specific file.
+                  • A directory path — scan that directory recursively.
+        dry_run:  True (default) = list only, nothing deleted.
+                  False = delete all found backups.
+
+    Examples:
+        cleanup_backups()
+            → lists all .bakN files across tracked directories (dry run)
+        cleanup_backups(dry_run=False)
+            → deletes all of them
+        cleanup_backups(path="rag_gui.py")
+            → lists backups of rag_gui.py only
+        cleanup_backups(path="rag_gui.py", dry_run=False)
+            → deletes rag_gui.py.bak1, .bak2, etc.
+        cleanup_backups(path="C:/Projects/MyApp/")
+            → lists all .bakN files under that directory
+    """
+    import re as _re_bak
+    from pathlib import Path as _Pbak
+
+    _bak_pattern = _re_bak.compile(r'\.bak\d+$', _re_bak.IGNORECASE)
+
+    def _find_baks(root: _Pbak):
+        """Yield .bakN Paths under root.
+        File: finds backups of that specific file only.
+        Dir:  recursive glob for any .bakN file."""
+        if root.is_file():
+            base = root.name
+            for f in root.parent.iterdir():
+                if (f.is_file()
+                        and _bak_pattern.search(f.name)
+                        and f.name.startswith(base + ".bak")):
+                    yield f
+        elif root.is_dir():
+            for f in root.rglob("*"):
+                if f.is_file() and _bak_pattern.search(f.name):
+                    yield f
+
+    # Gather candidate files
+    found: list[_Pbak] = []
+    if path and path.strip():
+        p = _Pbak(path.strip())
+        if not p.exists():
+            return f"❌ Path not found: {path}"
+        found = sorted(set(_find_baks(p)))
+    else:
+        try:
+            from rag_preprocessor import load_auto_update_list as _lau
+            tracked = _lau() or []
+        except Exception:
+            tracked = []
+        for t in tracked:
+            tp = _Pbak(t)
+            found.extend(_find_baks(tp))
+        found = sorted(set(found))
+
+    if not found:
+        where = str(path).strip() or "tracked directories"
+        return f"✅ No .bakN backup files found in: {where}"
+
+    # Measure sizes
+    sizes: dict[_Pbak, int] = {}
+    for f in found:
+        try:
+            sizes[f] = f.stat().st_size
+        except Exception:
+            sizes[f] = 0
+    total = sum(sizes.values())
+
+    if dry_run:
+        lines = [
+            f"🔍 Dry run — found {len(found)} backup file(s) totalling {total:,} bytes.",
+            "   Nothing deleted. Re-run with dry_run=False to delete all, or",
+            "   pass a path= to limit scope.",
+            "",
+        ]
+        for f in found:
+            lines.append(f"  • {f}  ({sizes[f]:,} bytes)")
+        return "\n".join(lines)
+
+    # ── Actually delete ────────────────────────────────────────────────────
+    deleted: list[str] = []
+    failed:  list[str] = []
+    for f in found:
+        try:
+            f.unlink()
+            deleted.append(str(f))
+        except Exception as exc:
+            failed.append(f"{f}: {exc}")
+
+    freed = sum(sizes[f] for f in found if str(f) in deleted)
+    lines = [f"🗑️  Deleted {len(deleted)} backup file(s) — {freed:,} bytes freed."]
+    for d in deleted:
+        lines.append(f"  ✅ {d}")
+    if failed:
+        lines.append(f"\n⚠️  Failed to delete {len(failed)} file(s):")
+        for e in failed:
+            lines.append(f"  ❌ {e}")
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # BONUS — reset_write_counter (admin tool, not part of the 8)
 # ══════════════════════════════════════════════════════════════════════════════
 @mcp.tool()
@@ -5876,6 +6019,175 @@ def reset_write_counter() -> str:
     return (f"✅ Write counter reset\n"
             f"   Was: {old} / {_WRITES_PER_SESSION_LIMIT}\n"
             f"   Now: 0 / {_WRITES_PER_SESSION_LIMIT}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# diff_files — compare two text files and return a unified diff
+# Available in both personal and server mode.
+# Server mode: all roles may use it for files within their assigned scopes.
+#              Owners and managers can diff any tracked file.
+# ══════════════════════════════════════════════════════════════════════════════
+@mcp.tool()
+def diff_files(
+    file_a: str,
+    file_b: str,
+    context_lines: int = 3,
+    max_lines: int = 150,
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Compare two text files and return a unified diff that Claude can read and
+    reason about directly — no external diff tool required.
+
+    Especially useful for:
+      • Verifying what str_replace_in_file just changed
+          diff_files("rag_gui.py", "rag_gui.py.bak1")
+      • Comparing a file to an older backup
+          diff_files("config.json", "config.json.bak3")
+      • Spotting differences between two versions of any file
+          diff_files("setup_v1.iss", "setup_v2.iss")
+      • Confirming a fix was applied correctly before running tests
+
+    Both files must be inside tracked directories (or be .bakN backups of
+    tracked files).  In server mode all roles may diff files within their
+    assigned scopes; owners and managers may diff any tracked file.
+
+    Args:
+        file_a:        First file path. May be a .bakN backup.
+        file_b:        Second file path. May be a .bakN backup.
+        context_lines: Lines of unchanged context shown around each change.
+                       Default 3. Use 0 for a compact view, 8+ for full context.
+        max_lines:     Maximum number of diff lines returned.  Default 150 —
+                       keeps responses concise.  Use max_lines=500 for large diffs.
+
+    Returns:
+        Unified diff with a summary header, or a confirmation that the files
+        are identical.  Output is truncated with a notice if it exceeds max_lines.
+    """
+    import difflib as _difflib
+    import re as _re_diff
+    from pathlib import Path as _Pdiff
+
+    _bak_re_diff = _re_diff.compile(r'\.bak\d+$', _re_diff.IGNORECASE)
+    user = _current_user(ctx)
+
+    # ── Access validator ───────────────────────────────────────────────────────
+    def _check_access(filepath: str) -> "tuple[list[str] | None, str | None]":
+        """Load file lines if accessible, else return (None, error_message)."""
+        fp = _Pdiff(filepath.strip())
+
+        # Determine the "base" path for allowlist check —
+        # .bakN files share their base file's allowlist entry.
+        is_bak = bool(_bak_re_diff.search(fp.name))
+        base_str = _re_diff.sub(r'\.bak\d+$', '', str(fp), flags=_re_diff.IGNORECASE)
+        check_str = base_str if is_bak else str(fp)
+
+        if not fp.exists():
+            return None, f"File not found: {filepath}"
+        if not fp.is_file():
+            return None, f"Not a file: {filepath}"
+
+        # Allowlist check (covers both the file and its .bakN siblings)
+        resolved, err = _resolve_allowlisted_path(check_str)
+        if err:
+            resolved, err = _resolve_allowlisted_path(str(fp))
+            if err:
+                return None, f"'{filepath}' is not in a tracked directory."
+
+        # ── Server-mode scope check ────────────────────────────────────────
+        # Owners and managers: unrestricted across all tracked files.
+        # Staff and field_crew: file must resolve to one of their scopes.
+        if user is not None:
+            role = (user.get("role") or "").strip().lower()
+            if role not in ("owner", "manager"):
+                try:
+                    company_map = _company_collection_map()
+                    from scope_resolver import resolve_collection_for_path as _rcfp
+                    file_coll = _rcfp(check_str, company_map)
+                    user_scopes = set(user.get("scopes") or [])
+                    # "documents" is the default collection — accessible to all roles
+                    if file_coll not in user_scopes and file_coll not in ("documents", ""):
+                        return None, (
+                            f"'{filepath}' is in collection '{file_coll}' which is "
+                            f"outside your assigned scopes {sorted(user_scopes)}."
+                        )
+                except Exception:
+                    pass  # scope check failure is non-fatal for a read tool
+
+        # Read the file — detect binary first (null bytes), then try encodings
+        raw_bytes = fp.read_bytes()
+        if b'\x00' in raw_bytes:
+            return None, f"Cannot read '{filepath}' — binary file (contains null bytes)."
+        for enc in ("utf-8-sig", "utf-8", "latin-1"):
+            try:
+                return raw_bytes.decode(enc).splitlines(keepends=True), None
+            except UnicodeDecodeError:
+                continue
+        return None, f"Cannot read '{filepath}' — unknown encoding."
+
+    # ── Load both files ────────────────────────────────────────────────────────
+    lines_a, err_a = _check_access(file_a)
+    if err_a:
+        return f"❌ {err_a}"
+    lines_b, err_b = _check_access(file_b)
+    if err_b:
+        return f"❌ {err_b}"
+
+    pa = _Pdiff(file_a.strip())
+    pb = _Pdiff(file_b.strip())
+
+    # ── Generate unified diff ──────────────────────────────────────────────────
+    diff = list(_difflib.unified_diff(
+        lines_a, lines_b,
+        fromfile=pa.name,
+        tofile=pb.name,
+        n=max(0, int(context_lines)),
+    ))
+
+    if not diff:
+        try:
+            sa = pa.stat().st_size
+            sb = pb.stat().st_size
+        except Exception:
+            sa = sb = 0
+        return (
+            f"✅ Files are identical.\n"
+            f"   {pa.name}  ({sa:,} bytes)\n"
+            f"   {pb.name}  ({sb:,} bytes)"
+        )
+
+    # ── Summary statistics ─────────────────────────────────────────────────────
+    added   = sum(1 for ln in diff if ln.startswith('+') and not ln.startswith('+++'))
+    removed = sum(1 for ln in diff if ln.startswith('-') and not ln.startswith('---'))
+    hunks   = sum(1 for ln in diff if ln.startswith('@@'))
+    try:
+        sa, sb = pa.stat().st_size, pb.stat().st_size
+        size_info = f"size: {sa:,} → {sb:,} bytes  ({sb - sa:+,})"
+    except Exception:
+        size_info = ""
+
+    header = (
+        f"diff  {pa.name}  →  {pb.name}\n"
+        f"      {hunks} hunk(s)   +{added} added   -{removed} removed"
+        + (f"   {size_info}" if size_info else "") + "\n"
+        + "─" * 62 + "\n"
+    )
+
+    # ── Truncate if needed ─────────────────────────────────────────────────────
+    diff_lines = "".join(diff).splitlines()
+    total_diff_lines = len(diff_lines)
+    truncated = total_diff_lines > int(max_lines)
+    if truncated:
+        diff_lines = diff_lines[:int(max_lines)]
+
+    output = header + "\n".join(diff_lines)
+    if truncated:
+        output += (
+            f"\n\n⚠️  Truncated at {max_lines} lines "
+            f"({total_diff_lines - int(max_lines)} more lines not shown). "
+            f"Use max_lines={int(max_lines) * 2} to see more."
+        )
+    return output
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -6507,8 +6819,18 @@ def _email_config_save(cfg: dict) -> bool:
 
 def _send_smtp(to: str, subject: str, body: str,
                attachment_path: "str | None" = None,
-               body_html: "str | None" = None) -> tuple:
-    """Core SMTP send. Returns (ok: bool, message: str). Uses stored config."""
+               body_html: "str | None" = None,
+               reply_to: "str | None" = None,
+               sender_display: "str | None" = None) -> tuple:
+    """Core SMTP send. Returns (ok: bool, message: str). Uses stored config.
+
+    reply_to:       Optional Reply-To header value (e.g. employee's personal
+                    email). When set, the mail client's Reply button goes to
+                    this address rather than the From address.
+    sender_display: Optional override for the From display name — used in
+                    server mode to show the employee's name alongside the
+                    company address (e.g. 'Jake Smith via ABC Cleaning').
+    """
     import smtplib
     import ssl as _ssl
     from email.mime.multipart import MIMEMultipart
@@ -6525,7 +6847,7 @@ def _send_smtp(to: str, subject: str, body: str,
     username  = cfg.get("username", "").strip()
     password  = cfg.get("password", "")
     from_addr = cfg.get("from_address", username).strip() or username
-    from_name = cfg.get("from_name", "AI-Prowler").strip()
+    from_name = sender_display or cfg.get("from_name", "AI-Prowler").strip()
     use_tls   = cfg.get("use_tls", True)
 
     if not smtp_host or not username:
@@ -6536,6 +6858,11 @@ def _send_smtp(to: str, subject: str, body: str,
     msg["Subject"] = subject
     msg["From"]    = f"{from_name} <{from_addr}>" if from_name else from_addr
     msg["To"]      = to
+
+    # Reply-To — directs replies to the employee's personal email rather than
+    # the server's shared SMTP address. Works with all providers.
+    if reply_to:
+        msg["Reply-To"] = reply_to
 
     # Body — prefer HTML if provided, plain-text fallback
     alt_part = MIMEMultipart("alternative")
@@ -6762,6 +7089,21 @@ def send_email(to: str, subject: str, body: str,
     if not allowed:
         return f"❌ {why}"
 
+    # Server mode: personalise From display name and set Reply-To to the
+    # employee's registered email so the recipient can reply directly to them.
+    reply_to       = None
+    sender_display = None
+    if user is not None:
+        emp_email = (user.get("email") or "").strip()
+        emp_name  = (user.get("name")  or "").strip()
+        if emp_email:
+            reply_to = (f"{emp_name} <{emp_email}>"
+                        if emp_name else emp_email)
+        if emp_name:
+            cfg_name = (_email_config_load() or {}).get("from_name", "")
+            sender_display = (f"{emp_name} via {cfg_name}"
+                              if cfg_name else emp_name)
+
     # Resolve optional attachment
     attach = None
     if attachment_path and attachment_path.strip():
@@ -6770,7 +7112,8 @@ def send_email(to: str, subject: str, body: str,
             return f"❌ Attachment: {err}"
         attach = resolved_attach
 
-    ok, msg = _send_smtp(to, subject, body, attachment_path=attach)
+    ok, msg = _send_smtp(to, subject, body, attachment_path=attach,
+                         reply_to=reply_to, sender_display=sender_display)
     return msg
 
 
@@ -6816,6 +7159,20 @@ def send_alert(message: str, to: str = "",
     if not allowed:
         return f"❌ {why}"
 
+    # Server mode: personalise From display name and set Reply-To to employee's email.
+    reply_to       = None
+    sender_display = None
+    if user is not None:
+        emp_email = (user.get("email") or "").strip()
+        emp_name  = (user.get("name")  or "").strip()
+        if emp_email:
+            reply_to = (f"{emp_name} <{emp_email}>"
+                        if emp_name else emp_email)
+        if emp_name:
+            cfg_name = (_email_config_load() or {}).get("from_name", "")
+            sender_display = (f"{emp_name} via {cfg_name}"
+                              if cfg_name else emp_name)
+
     # Subject: first 80 chars of message
     subject = f"AI-Prowler Alert: {message[:80]}"
     import datetime as _dt2
@@ -6823,7 +7180,8 @@ def send_alert(message: str, to: str = "",
             f"— Sent by AI-Prowler at "
             f"{_dt2.datetime.now().strftime('%Y-%m-%d %H:%M')}")
 
-    ok, msg = _send_smtp(to, subject, body)
+    ok, msg = _send_smtp(to, subject, body,
+                         reply_to=reply_to, sender_display=sender_display)
     return msg
 
 

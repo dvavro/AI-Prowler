@@ -108,3 +108,28 @@ from tests.learning_fixtures import (  # noqa: F401, E402
     sl_env,
     seeded_learnings,
 )
+
+
+@pytest.fixture
+def sl_mcp_env(sl_env, mcp_module):
+    """Combined env: redirected learning paths + MCP module access.
+
+    Defined here (rather than only in test_learning_mcp_tools.py) so that
+    any test file in tests/mcp/ can use it — including test_recorded_by.py.
+
+    Confirms the MCP module's _sl reference points at the same module object
+    whose globals the sl_env fixture monkey-patched, so isolation is guaranteed.
+    """
+    assert mcp_module._sl is sl_env.sl, (
+        "ai_prowler_mcp._sl does not point at the same module our fixture "
+        "patches — isolation would leak. This is an internal-wiring bug."
+    )
+
+    class SlMcpEnv:
+        pass
+    e = SlMcpEnv()
+    e.mcp = mcp_module
+    e.sl  = sl_env.sl
+    e.learnings_file = sl_env.learnings_file
+    e.learnings_dir  = sl_env.learnings_dir
+    return e

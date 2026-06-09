@@ -63,11 +63,8 @@ from pathlib import Path
 
 import pytest
 
-# ── Import sl_mcp_env fixture so EL tests can find it ──────────────────────
-# sl_mcp_env is defined in test_learning_mcp_tools.py; pytest only
-# auto-discovers fixtures from conftest.py files, not sibling test files.
-# Re-exporting it here via noqa import makes it available in this module.
-from tests.mcp.test_learning_mcp_tools import sl_mcp_env  # noqa: F401
+# sl_mcp_env is now defined in tests/mcp/conftest.py and is auto-discovered
+# by pytest — no import needed here.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
