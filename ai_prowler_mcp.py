@@ -696,7 +696,7 @@ def how_to_use_ai_prowler() -> str:
         "AI-Prowler — Agentic RAG Knowledge Base\n"
         + "=" * 50 + "\n\n"
 
-        "TOOL CATEGORIES (30 tools total)\n"
+        "TOOL CATEGORIES (60 tools total)\n"
         + "-" * 30 + "\n"
         "AI-Prowler exposes five tool families. Most question-answering\n"
         "tasks use the first two; the others are for code, actions and admin.\n\n"
