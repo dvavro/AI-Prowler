@@ -119,38 +119,43 @@ def test_G_IDX_01e_clear_queue(gui, isolated_env):
 # ──────────────────────────────────────────────────────────────────────────────
 def test_G_IDX_02a_initial_button_states_are_idle(gui):
     """On a freshly opened Index Docs tab, Start+Scan are enabled and
-    Pause+Stop are disabled."""
-    assert str(gui.app.index_start_btn.cget("state")) == "normal"
-    assert str(gui.app.index_scan_btn.cget("state"))  == "normal"
-    assert str(gui.app.index_pause_btn.cget("state")) == "disabled"
-    assert str(gui.app.index_stop_btn.cget("state"))  == "disabled"
+    Pause+Stop+Cancel are disabled."""
+    assert str(gui.app.index_start_btn.cget("state"))  == "normal"
+    assert str(gui.app.index_scan_btn.cget("state"))   == "normal"
+    assert str(gui.app.index_pause_btn.cget("state"))  == "disabled"
+    assert str(gui.app.index_stop_btn.cget("state"))   == "disabled"
+    assert str(gui.app.index_cancel_btn.cget("state")) == "disabled"
 
 
 def test_G_IDX_02b_button_states_after_state_helper(gui):
     """The _index_set_buttons helper is the single source of truth for
     button state. Verify it transitions correctly."""
-    # Running
+    # Running — Cancel enabled alongside Stop
     gui.app._index_set_buttons("running")
     gui.pump()
-    assert str(gui.app.index_start_btn.cget("state")) == "disabled"
-    assert str(gui.app.index_pause_btn.cget("state")) == "normal"
-    assert str(gui.app.index_stop_btn.cget("state"))  == "normal"
-    assert str(gui.app.index_scan_btn.cget("state"))  == "disabled"
+    assert str(gui.app.index_start_btn.cget("state"))  == "disabled"
+    assert str(gui.app.index_pause_btn.cget("state"))  == "normal"
+    assert str(gui.app.index_stop_btn.cget("state"))   == "normal"
+    assert str(gui.app.index_cancel_btn.cget("state")) == "normal"
+    assert str(gui.app.index_scan_btn.cget("state"))   == "disabled"
 
-    # Stopped — Start gets re-labelled "Resume Indexing"
+    # Stopped — Start gets re-labelled "Resume Indexing", Cancel stays enabled
     gui.app._index_set_buttons("stopped")
     gui.pump()
     assert str(gui.app.index_start_btn.cget("state")) == "normal"
     assert "Resume" in str(gui.app.index_start_btn.cget("text")), (
         f"Stopped state should re-label Start. Got: {gui.app.index_start_btn.cget('text')!r}"
     )
-    assert str(gui.app.index_pause_btn.cget("state")) == "disabled"
+    assert str(gui.app.index_pause_btn.cget("state"))  == "disabled"
+    assert str(gui.app.index_stop_btn.cget("state"))   == "disabled"
+    assert str(gui.app.index_cancel_btn.cget("state")) == "normal"
 
-    # Back to idle — label should revert to "Start Indexing Queue"
+    # Back to idle — label should revert to "Start Indexing Queue", Cancel disabled
     gui.app._index_set_buttons("idle")
     gui.pump()
-    assert str(gui.app.index_start_btn.cget("state")) == "normal"
+    assert str(gui.app.index_start_btn.cget("state"))  == "normal"
     assert "Start" in str(gui.app.index_start_btn.cget("text"))
+    assert str(gui.app.index_cancel_btn.cget("state")) == "disabled"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -278,4 +283,122 @@ def test_G_IDX_06_output_text_widget_starts_empty(gui):
     # fixture teardowns).
     assert len(text) < 500, (
         f"Output widget should start mostly empty; has {len(text)} chars"
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# G-IDX-07 — Cancel button: discard resume state and return to idle
+# ──────────────────────────────────────────────────────────────────────────────
+
+def test_G_IDX_07a_cancel_btn_exists_and_starts_disabled(gui):
+    """The '✕ Cancel & Discard' button must exist and be disabled at startup
+    (nothing is running, so there is nothing to cancel)."""
+    btn = gui.app.index_cancel_btn
+    assert btn is not None, "index_cancel_btn not found on the GUI"
+    assert str(btn.cget('state')) == 'disabled', (
+        f"Cancel button should be disabled at startup, got: {btn.cget('state')}"
+    )
+
+
+def test_G_IDX_07b_cancel_from_stopped_returns_to_idle(gui):
+    """After _index_set_buttons('stopped'), clicking Cancel should:
+      - reset _index_resume_dirs and _index_resume_file to empty/zero
+      - relabel Start back to '▶ Start Indexing Queue'
+      - disable the Cancel button
+      - leave the queue listbox untouched
+    """
+    # Simulate a stopped state with saved resume data
+    gui.app._index_resume_dirs = ['C:\\some\\dir']
+    gui.app._index_resume_file = 5
+    gui.app._index_set_buttons('stopped')
+    gui.pump()
+
+    # Verify we are in stopped state
+    assert gui.app.index_start_btn.cget('text') == '▶ Resume Indexing', (
+        "Precondition: button should say Resume Indexing in stopped state"
+    )
+    assert str(gui.app.index_cancel_btn.cget('state')) == 'normal', (
+        "Precondition: Cancel button should be enabled in stopped state"
+    )
+
+    # Now cancel
+    gui.app._index_cancel()
+    gui.pump()
+
+    assert gui.app._index_resume_dirs == [], (
+        "_index_resume_dirs should be cleared after cancel"
+    )
+    assert gui.app._index_resume_file == 0, (
+        "_index_resume_file should be reset to 0 after cancel"
+    )
+    assert gui.app.index_start_btn.cget('text') == '▶ Start Indexing Queue', (
+        "Start button should revert to original label after cancel"
+    )
+    assert str(gui.app.index_cancel_btn.cget('state')) == 'disabled', (
+        "Cancel button should be disabled after returning to idle"
+    )
+
+
+def test_G_IDX_07c_cancel_from_stopped_leaves_queue_intact(gui, isolated_env):
+    """Cancel must not touch the queue listbox — the user needs to be able
+    to remove the unwanted directory after cancelling."""
+    folder = isolated_env.sample_root / "do_not_want"
+    folder.mkdir()
+
+    # Add the directory to the queue
+    gui.app.index_dir_var.set(str(folder))
+    gui.app._queue_add_directory()
+    gui.pump()
+
+    # Simulate stopped state
+    gui.app._index_resume_dirs = [str(folder)]
+    gui.app._index_resume_file = 0
+    gui.app._index_set_buttons('stopped')
+    gui.pump()
+
+    # Cancel
+    gui.app._index_cancel()
+    gui.pump()
+
+    # Queue should still contain the directory
+    queue_items = list(gui.app.queue_listbox.get(0, 'end'))
+    assert str(folder) in queue_items, (
+        "Cancel should NOT remove items from the queue — user removes them manually. "
+        f"Queue after cancel: {queue_items}"
+    )
+
+
+def test_G_IDX_07d_cancel_sets_idle_button_command_to_fresh_start(gui):
+    """After cancel, the Start button's command must be start_indexing (not
+    the resume lambda) so the next run is a fresh index, not a resume."""
+    gui.app._index_resume_dirs = ['C:\\fake\\dir']
+    gui.app._index_set_buttons('stopped')
+    gui.pump()
+
+    gui.app._index_cancel()
+    gui.pump()
+
+    # The command= of a ttk.Button isn't directly inspectable, but we can
+    # verify the label switched back — that is set in the same branch as
+    # the command reassignment, so if the label is right the command is right.
+    assert '▶ Start Indexing Queue' in gui.app.index_start_btn.cget('text'), (
+        "Start button text should revert to 'Start Indexing Queue' after cancel, "
+        f"got: {gui.app.index_start_btn.cget('text')!r}"
+    )
+
+
+def test_G_IDX_07e_cancel_while_running_sets_cancelled_flag(gui):
+    """If _index_cancel is called while _index_running is True, it must set
+    _index_cancelled so the done-handler knows to go idle, not stopped."""
+    # Fake a running state
+    gui.app._index_running = True
+    gui.app._index_set_buttons('running')
+    gui.pump()
+
+    gui.app._index_cancel()
+    gui.pump()
+
+    assert gui.app._index_cancelled is True, (
+        "_index_cancelled should be True after cancel-while-running so the "
+        "done-handler switches to idle instead of stopped"
     )

@@ -786,6 +786,7 @@ class RAGGui:
         self._index_stop_event  = threading.Event()   # set = stop requested
         self._index_pause_event = threading.Event()   # set = paused
         self._index_running     = False
+        self._index_cancelled   = False               # True = stop was a cancel, not a save
         # Resume state — where to continue after a stop
         self._index_resume_dirs  = []   # remaining dirs at time of stop
         self._index_resume_file  = 0    # file index within first remaining dir
@@ -3757,7 +3758,12 @@ or from the Help menu."""
         self.index_stop_btn = ttk.Button(btn_row, text="⏹ Stop & Save Position",
                                          command=self._index_stop,
                                          state='disabled')
-        self.index_stop_btn.pack(side='left', padx=(0, 16))
+        self.index_stop_btn.pack(side='left', padx=(0, 6))
+
+        self.index_cancel_btn = ttk.Button(btn_row, text="✕ Cancel & Discard",
+                                           command=self._index_cancel,
+                                           state='disabled')
+        self.index_cancel_btn.pack(side='left', padx=(0, 16))
 
         self.index_scan_btn = ttk.Button(btn_row, text="🔍 Scan Queue",
                                          command=self._run_prescan)
@@ -3766,7 +3772,8 @@ or from the Help menu."""
         # Clarify the difference between Pause and Stop for the user
         ttk.Label(f,
                   text="⏸ Pause = suspend instantly, click again to resume  |  "
-                       "⏹ Stop = save position & exit — use ▶ Resume Indexing to continue later",
+                       "⏹ Stop = save position, use ▶ Resume to continue later  |  "
+                       "✕ Cancel = discard stop & return to idle (queue unchanged)",
                   font=('Arial', 8), foreground='gray').pack(anchor='w', padx=20, pady=(0, 4))
 
         # Progress
@@ -12015,6 +12022,32 @@ or from the Help menu."""
         self.index_pause_btn.configure(state='disabled')
         self.status_var.set("⏹ Stopping after current file…")
 
+    def _index_cancel(self):
+        """
+        Discard any saved resume state and return to idle.
+
+        Works from two situations:
+          - While running: signals the worker to stop (same as Stop), then
+            clears the resume state so Start goes back to a fresh queue run.
+          - After stopped: simply clears the resume state and returns to idle.
+
+        The queue contents are left untouched so the user can remove the
+        unwanted directory/file before starting again.
+        """
+        # If the worker is still running, signal it to abort first.
+        if self._index_running:
+            self._index_cancelled = True   # tell the done-handler to ignore index_stopped
+            self._index_stop_event.set()
+            self._index_pause_event.clear()
+
+        # Discard resume state — next Start is a clean run.
+        self._index_resume_dirs = []
+        self._index_resume_file = 0
+
+        self._stop_index_timer()
+        self._index_set_buttons('idle')
+        self.status_var.set("✕ Indexing cancelled — queue unchanged")
+
     def _register_directory_for_tracking(self, directory: str, recursive: bool):
         """
         Register a directory OR individual file in the auto-update tracking
@@ -12065,9 +12098,9 @@ or from the Help menu."""
     def _index_set_buttons(self, state: str):
         """
         Switch the button bar between states:
-          'idle'    — Start + Scan active, Pause/Stop disabled
-          'running' — Pause + Stop active, Start/Scan disabled
-          'stopped' — Start (labelled Resume) + Scan active, Pause/Stop disabled
+          'idle'    — Start + Scan active, Pause/Stop/Cancel disabled
+          'running' — Pause + Stop + Cancel active, Start/Scan disabled
+          'stopped' — Start (Resume) + Cancel + Scan active, Pause/Stop disabled
         """
         if state == 'idle':
             self.index_start_btn.configure(text="▶ Start Indexing Queue",
@@ -12075,12 +12108,14 @@ or from the Help menu."""
                                            command=self.start_indexing)
             self.index_pause_btn.configure(state='disabled', text="⏸ Pause")
             self.index_stop_btn.configure(state='disabled')
+            self.index_cancel_btn.configure(state='disabled')
             self.index_scan_btn.configure(state='normal')
 
         elif state == 'running':
             self.index_start_btn.configure(state='disabled')
             self.index_pause_btn.configure(state='normal', text="⏸ Pause")
             self.index_stop_btn.configure(state='normal')
+            self.index_cancel_btn.configure(state='normal')
             self.index_scan_btn.configure(state='disabled')
 
         elif state == 'stopped':
@@ -12089,6 +12124,7 @@ or from the Help menu."""
                                            command=lambda: self.start_indexing(resume=True))
             self.index_pause_btn.configure(state='disabled', text="⏸ Pause")
             self.index_stop_btn.configure(state='disabled')
+            self.index_cancel_btn.configure(state='normal')
             self.index_scan_btn.configure(state='normal')
 
     def index_worker(self, directories, recursive, smart_scan,
@@ -15336,9 +15372,16 @@ or from the Help menu."""
                         self._last_index_time = _dt.datetime.now().strftime('%Y-%m-%d  %H:%M:%S')
                     elif msg_data == 'index_stopped':
                         self.index_progress.stop()
-                        self._cancel_index_timer()      # freeze at stopped time
-                        self._index_set_buttons('stopped')
-                        self.refresh_tracked_dirs()  # show dirs completed before stop
+                        if self._index_cancelled:
+                            # User hit Cancel — discard resume state, go idle
+                            self._index_cancelled = False
+                            self._stop_index_timer()
+                            self._index_set_buttons('idle')
+                            self.refresh_tracked_dirs()
+                        else:
+                            self._cancel_index_timer()      # freeze at stopped time
+                            self._index_set_buttons('stopped')
+                            self.refresh_tracked_dirs()  # show dirs completed before stop
                     elif msg_data == 'query':
                         self.query_progress.stop()
                         # Disable Stop button — query is finished
