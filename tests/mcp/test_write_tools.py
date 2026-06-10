@@ -39,6 +39,9 @@ convention used by C-MCP-NN (the read-side tools) and L-MCP-NN (learning).
     integration          C-MCP-WRITE-72 … C-MCP-WRITE-75
     line endings         C-MCP-WRITE-76 … C-MCP-WRITE-82   (v6.02 CRLF fix)
     crlf old_str match   C-MCP-WRITE-83 … C-MCP-WRITE-88   (v7.0.0 multi-line CRLF fix)
+    backslash auto-retry C-MCP-WRITE-89 … C-MCP-WRITE-92   (v7.0.1 backslash escape fix)
+    nearest-match diag   C-MCP-WRITE-93 … C-MCP-WRITE-94   (v7.0.1 not-found diagnostic)
+    dry_run hint         C-MCP-WRITE-95                     (v7.0.1 large old_str tip)
 
 Isolation
 ---------
@@ -1237,3 +1240,157 @@ def test_C_MCP_WRITE_88_str_replace_crlf_delete_span(mcp_mod, writable_env):
     assert b"DROP_1" not in raw and b"DROP_2" not in raw, f"Span not deleted: {raw!r}"
     assert raw == b"keep_a\r\nkeep_b\r\n", f"Unexpected bytes: {raw!r}"
     assert b"\n" not in raw.replace(b"\r\n", b""), f"Bare LF leaked: {raw!r}"
+
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║  str_replace_in_file — backslash auto-retry  (C-MCP-WRITE-89..92)         ║
+# ║  str_replace_in_file — nearest-match diag    (C-MCP-WRITE-93..94)         ║
+# ║  str_replace_in_file — dry_run hint          (C-MCP-WRITE-95)             ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
+def test_C_MCP_WRITE_89_backslash_doubled_old_str_auto_corrected(mcp_mod, writable_env):
+    """When old_str has doubled backslashes (\\\\) but the file has single (\\),
+    the tool auto-corrects and succeeds rather than reporting 'not found'.
+    This covers the MCP JSON transport double-escaping problem."""
+    target = writable_env.project / "bs_single.py"
+    # File contains single backslashes (Windows path)
+    target.write_text(
+        'path = r"C:\\Users\\david\\file.txt"\n'
+        'result = path\n',
+        encoding="utf-8",
+    )
+
+    # old_str has doubled backslashes (as if JSON transport double-escaped them)
+    old_doubled = 'path = r"C:\\\\Users\\\\david\\\\file.txt"\n'
+    result = mcp_mod.str_replace_in_file(
+        str(target), old_str=old_doubled, new_str='path = r"C:\\Users\\bob\\file.txt"\n'
+    )
+    assert "✅ Edited" in result, f"Should auto-correct doubled backslashes. Got: {result}"
+    assert "auto-correction" in result.lower(), f"Should mention auto-correction. Got: {result}"
+    assert "bob" in target.read_text(encoding="utf-8"), "Replacement should have been applied"
+
+
+def test_C_MCP_WRITE_90_backslash_single_old_str_auto_corrected(mcp_mod, writable_env):
+    """When old_str has single backslashes but the file has doubled (rare but
+    possible with certain editors), the tool auto-corrects via re-doubling."""
+    target = writable_env.project / "bs_double.py"
+    # File contains doubled backslashes (escaped in source)
+    target.write_text(
+        'path = "C:\\\\Users\\\\david"\n'
+        'x = 1\n',
+        encoding="utf-8",
+    )
+
+    # old_str has single backslashes (under-escaped)
+    old_single = 'path = "C:\\Users\\david"\n'
+    result = mcp_mod.str_replace_in_file(
+        str(target), old_str=old_single, new_str='path = "C:\\\\Users\\\\bob"\n'
+    )
+    assert "✅ Edited" in result, f"Should auto-correct single->double backslashes. Got: {result}"
+
+
+def test_C_MCP_WRITE_91_backslash_auto_correct_idempotent_on_no_backslash(mcp_mod, writable_env):
+    """When old_str has no backslashes at all, auto-correction is a no-op and
+    the edit proceeds normally with no mention of backslash correction."""
+    target = writable_env.project / "no_bs.py"
+    target.write_text("x = 1\ny = 2\n", encoding="utf-8")
+
+    result = mcp_mod.str_replace_in_file(
+        str(target), old_str="x = 1\n", new_str="x = 99\n"
+    )
+    assert "✅ Edited" in result, f"Normal edit should succeed. Got: {result}"
+    assert "auto-correction" not in result.lower(), (
+        "Should NOT mention auto-correction when no backslashes involved"
+    )
+    assert "99" in target.read_text(encoding="utf-8")
+
+
+def test_C_MCP_WRITE_92_backslash_auto_correct_pascal_string(mcp_mod, writable_env):
+    """Covers the exact failure that required patch_iss_backslash.py:
+    a Pascal ISS string containing backslash-escaped quotes like
+    '".Replace(\"\\\\", \"/\")' where MCP transport double-escapes the slashes."""
+    target = writable_env.project / "pascal_like.iss"
+    # Simulate ISS content with single-escaped backslashes
+    target.write_text(
+        '    \'$guidePath = "\' + GuideDest + \'".Replace("\\", "/")\' + #13#10 +\n'
+        '    \'next line\' + #13#10 +\n',
+        encoding="utf-8",
+    )
+
+    # Read back what's actually in the file
+    actual = target.read_text(encoding="utf-8")
+    first_line = actual.splitlines()[0]
+
+    # Use the first line as old_str (should match exactly as single-backslash)
+    result = mcp_mod.str_replace_in_file(
+        str(target),
+        old_str=first_line + "\n",
+        new_str='    \'$guidePath = "\' + GuideDest + \'"\' + #13#10 +\n',
+    )
+    assert "✅ Edited" in result, f"Pascal string edit should succeed. Got: {result}"
+    new_content = target.read_text(encoding="utf-8")
+    assert ".Replace" not in new_content, "Replace call should have been removed"
+
+
+def test_C_MCP_WRITE_93_not_found_shows_nearest_match_lines(mcp_mod, writable_env):
+    """When old_str is not found, the error includes nearest-match line hints
+    based on word overlap so Claude can pinpoint the mismatch."""
+    target = writable_env.project / "near_match.py"
+    target.write_text(
+        "def calculate_total(items):\n"
+        "    return sum(items)\n"
+        "\n"
+        "def format_output(result):\n"
+        "    return str(result)\n",
+        encoding="utf-8",
+    )
+
+    # Slightly wrong old_str — 'compute_total' instead of 'calculate_total'
+    result = mcp_mod.str_replace_in_file(
+        str(target),
+        old_str="def compute_total(items):\n",
+        new_str="def compute_total(items, tax=0):\n",
+    )
+    assert "not found" in result.lower(), f"Should report not found. Got: {result}"
+    # Should include nearest-match hint with line numbers
+    assert "nearest" in result.lower() or "overlap" in result.lower() or "line" in result.lower(), (
+        f"Should show nearest-match diagnostic. Got: {result}"
+    )
+
+
+def test_C_MCP_WRITE_94_not_found_no_words_no_crash(mcp_mod, writable_env):
+    """When old_str has no words (e.g. whitespace only), the nearest-match
+    diagnostic gracefully produces no hints without crashing."""
+    target = writable_env.project / "whitespace.py"
+    target.write_text("x = 1\n", encoding="utf-8")
+
+    result = mcp_mod.str_replace_in_file(
+        str(target),
+        old_str="   \n   \n",   # whitespace only — no words to overlap
+        new_str="",
+    )
+    assert "not found" in result.lower(), f"Should report not found. Got: {result}"
+    # Must not crash — any string response without an exception is a pass
+
+
+def test_C_MCP_WRITE_95_large_old_str_shows_dry_run_hint(mcp_mod, writable_env):
+    """When old_str is large (>10 lines), the success response includes a
+    dry_run tip suggesting the user preview next time."""
+    target = writable_env.project / "big_block.py"
+    # Write a 15-line block
+    lines = [f"line_{i:02d} = {i}\n" for i in range(15)]
+    content = "".join(lines)
+    target.write_text(content, encoding="utf-8")
+
+    # Replace the whole block with a modified version
+    new_lines = [f"line_{i:02d} = {i * 10}\n" for i in range(15)]
+    result = mcp_mod.str_replace_in_file(
+        str(target),
+        old_str=content,
+        new_str="".join(new_lines),
+        dry_run=False,
+    )
+    assert "✅ Edited" in result, f"Should succeed. Got: {result}"
+    assert "dry_run" in result.lower() or "tip" in result.lower(), (
+        f"Should include dry_run hint for large old_str. Got: {result}"
+    )

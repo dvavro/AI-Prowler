@@ -227,12 +227,12 @@ def test_C_MCP_07_nonexistent_descendant_still_evaluates(mcp_mod, code_tree):
     assert ok is True
 
 
-def test_C_MCP_08_returns_normalised_forward_slash_path(mcp_mod, code_tree):
-    """Allowed path returns a forward-slash, resolved string."""
+def test_C_MCP_08_returns_normalised_backslash_path(mcp_mod, code_tree):
+    """Allowed path returns a backslash, resolved string."""
     messy = str(code_tree.tracked_dir / "." / "project" / "main.py")
     ok, info = mcp_mod._is_path_under_tracked_roots(messy)
     assert ok is True
-    assert "\\" not in info
+    assert "/" not in info
     assert "/./" not in info
 
 
@@ -305,7 +305,7 @@ def test_C_MCP_15_long_allowlist_truncated_in_message(mcp_mod, isolated_env):
 def test_C_MCP_16_iter_walks_recursively(mcp_mod, code_tree):
     """Recursive walk reaches nested subdirectories."""
     files = [fp for fp, _ext in mcp_mod._iter_allowlisted_files()]
-    assert any(f.endswith("subdir/helper.py") for f in files), files
+    assert any(f.endswith("subdir\\helper.py") for f in files), files
 
 
 def test_C_MCP_17_iter_includes_single_file_entries(mcp_mod, code_tree):

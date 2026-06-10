@@ -292,34 +292,33 @@ def test_F_IDX_11_mbox_removes_deleted_messages(isolated_env, mbox_file):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# F-IDX-12 — path normalisation: no backslashes anywhere
+# F-IDX-12 — path normalisation: backslashes everywhere (Windows-native)
 # ──────────────────────────────────────────────────────────────────────────────
-def test_F_IDX_12_path_normalisation_forward_slashes_only(
+def test_F_IDX_12_path_normalisation_backslashes_only(
         isolated_env, small_text_file):
-    """After indexing, every stored path uses forward slashes regardless of
-    the platform's native separator. Critical because ChromaDB
-    where={'filepath': ...} is exact-match and will silently fail to find
-    'C:\\Foo\\bar.txt' if the metadata says 'C:/Foo/bar.txt'."""
+    """After indexing, every stored path uses Windows backslashes. Critical
+    because ChromaDB where={'filepath': ...} is exact-match — both writes and
+    lookups go through normalise_path() so they must use the same separator."""
     rag = isolated_env.rag
 
     rag.index_file_list([rag.normalise_path(str(small_text_file))],
                         label="norm",
                         root_directory=str(small_text_file.parent))
 
-    # 1. Tracking DB keys must be forward-slash only
+    # 1. Tracking DB keys must be backslash only
     tracking = json.loads(isolated_env.tracking_db.read_text(encoding="utf-8"))
     for dir_key, dir_data in tracking.items():
-        assert "\\" not in dir_key, f"Tracking dir_key has backslash: {dir_key!r}"
+        assert "/" not in dir_key, f"Tracking dir_key has forward slash: {dir_key!r}"
         for fp in dir_data.get("files", {}):
-            assert "\\" not in fp, f"Tracking file path has backslash: {fp!r}"
+            assert "/" not in fp, f"Tracking file path has forward slash: {fp!r}"
 
-    # 2. ChromaDB metadata.filepath must be forward-slash only
+    # 2. ChromaDB metadata.filepath must be backslash only
     client, ef = rag.get_chroma_client()
     coll = client.get_or_create_collection(name=rag.COLLECTION_NAME, embedding_function=ef)
     sample = coll.get(limit=10, include=["metadatas"])
     for meta in sample.get("metadatas") or []:
         fp = meta.get("filepath", "")
-        assert "\\" not in fp, f"ChromaDB metadata has backslash: {fp!r}"
+        assert "/" not in fp, f"ChromaDB metadata has forward slash: {fp!r}"
 
 
 # ──────────────────────────────────────────────────────────────────────────────

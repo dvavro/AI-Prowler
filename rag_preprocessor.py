@@ -266,17 +266,19 @@ EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 def normalise_path(filepath: str) -> str:
     """
-    Normalise a file path to forward slashes for consistent storage and lookup.
+    Normalise a file path to Windows backslashes for consistent storage and
+    lookup across ChromaDB metadata, tracking files, and the GUI.
 
     On Windows, filedialog returns forward slashes but Path.resolve() returns
     backslashes. If we store one form in ChromaDB metadata and query with the
     other, collection.delete(where={"filepath": ...}) silently matches nothing
     and stale chunks from modified files are never removed.
 
-    Using forward slashes everywhere (as Python's pathlib does on all platforms)
-    gives a single canonical form safe for cross-platform use and JSON storage.
+    Using backslashes everywhere gives a single canonical form that is native
+    to Windows, matches what Explorer and cmd show, and allows users to
+    copy-paste paths from the GUI directly into cmd/Explorer without conversion.
     """
-    return str(filepath).replace('\\', '/')
+    return str(filepath).replace('/', '\\')
 
 # When False, rag_query only prints the AI answer — no headers, chunk info,
 # source list, or timing. Saved to config so the GUI toggle persists.
@@ -5572,21 +5574,23 @@ def command_update(directory, recursive=True, auto_confirm=False,
 AUTO_UPDATE_LIST = Path.home() / '.rag_auto_update_dirs.json'
 
 def load_auto_update_list():
-    """Load list of directories to auto-update"""
+    """Load list of directories to auto-update.
+    Returns paths normalised to Windows backslashes."""
     if AUTO_UPDATE_LIST.exists():
         try:
             with open(AUTO_UPDATE_LIST, 'r') as f:
                 data = json.load(f)
-                return data.get('directories', [])
+                return [normalise_path(d) for d in data.get('directories', [])]
         except:
             return []
     return []
 
 def save_auto_update_list(directories):
-    """Save list of directories to auto-update"""
+    """Save list of directories to auto-update.
+    Normalises all paths to Windows backslashes before writing."""
     try:
         data = {
-            'directories': directories,
+            'directories': [normalise_path(d) for d in directories],
             'last_updated': datetime.now().isoformat()
         }
         with open(AUTO_UPDATE_LIST, 'w') as f:
@@ -5597,19 +5601,19 @@ def save_auto_update_list(directories):
         return False
 
 def add_to_auto_update_list(directory):
-    """Add directory to auto-update list and regenerate script"""
-    directory = str(Path(directory).resolve())
+    """Add directory to auto-update list and regenerate script."""
+    directory = normalise_path(str(Path(directory).resolve()))
     dirs = load_auto_update_list()
-    
+
     if directory not in dirs:
         dirs.append(directory)
         save_auto_update_list(dirs)
-        
+
         # Auto-regenerate script with updated list
         generate_auto_update_script()
-        
+
         return True  # New directory added
-    
+
     return False  # Directory already in list
 
 def remove_from_auto_update_list(directory):
@@ -5676,7 +5680,7 @@ def remove_directory_from_index(directory: str) -> dict:
         else:
             keys_to_remove = [k for k in tracking_db
                               if normalise_path(k) == directory
-                              or normalise_path(k).startswith(directory + '/')]
+                              or normalise_path(k).startswith(directory + '\\')]
             for k in keys_to_remove:
                 del tracking_db[k]
             if keys_to_remove:
@@ -5737,7 +5741,7 @@ def remove_directory_from_index(directory: str) -> dict:
                         break
                     for doc_id, meta in zip(batch['ids'], batch['metadatas']):
                         fp = normalise_path(meta.get('filepath', ''))
-                        if fp == directory or fp.startswith(directory + '/'):
+                        if fp == directory or fp.startswith(directory + '\\'):
                             ids_to_delete.append(doc_id)
                             files_seen.add(fp)
                     offset += pagesize

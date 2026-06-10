@@ -2839,7 +2839,7 @@ or from the Help menu."""
             if endpoint is not None:
                 data['telemetry_endpoint'] = str(endpoint)
             cfg_path.write_text(
-                json.dumps(data, indent=2), encoding='utf-8-sig')
+                json.dumps(data, indent=2), encoding='utf-8')
         except Exception:
             pass
 
@@ -6490,7 +6490,7 @@ or from the Help menu."""
                         except Exception:
                             pass
                     _cfg_d['remote_token'] = tok
-                    _cfg_p.write_text(_jmod.dumps(_cfg_d, indent=2), encoding='utf-8-sig')
+                    _cfg_p.write_text(_jmod.dumps(_cfg_d, indent=2), encoding='utf-8')
                     self.status_var.set("✅ Token saved")
                     self.root.after(3000, lambda: self.status_var.set("Ready"))
                 except Exception as _e:
@@ -6564,7 +6564,7 @@ or from the Help menu."""
                     except Exception:
                         pass
                 _cfg_d2['license_key'] = lk
-                _cfg_p2.write_text(_jmod2.dumps(_cfg_d2, indent=2), encoding='utf-8-sig')
+                _cfg_p2.write_text(_jmod2.dumps(_cfg_d2, indent=2), encoding='utf-8')
                 self.status_var.set(
                     "✅ Parent License Key saved" if _settings_is_server_mode
                     else "✅ License key saved")
@@ -8035,7 +8035,7 @@ or from the Help menu."""
             _cfg_path.parent.mkdir(parents=True, exist_ok=True)
             d = _load_cfg()
             d.update(updates)
-            _cfg_path.write_text(_json.dumps(d, indent=2), encoding='utf-8-sig')
+            _cfg_path.write_text(_json.dumps(d, indent=2), encoding='utf-8')
 
         # ── 1. OVERVIEW BANNER ────────────────────────────────────────────────
         banner = ttk.LabelFrame(f, text="🔧 Small Business Service Tools — Overview",

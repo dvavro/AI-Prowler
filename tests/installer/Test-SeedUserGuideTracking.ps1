@@ -29,6 +29,9 @@
 #
 #   Scenario F  - Written file has no BOM (Python json.load must work).
 #                 WriteAllText with UTF8Encoding($false) must not write a BOM.
+#
+#   Scenario G  - Stored paths use Windows backslashes.
+#                 guidePath must NOT be converted to forward slashes.
 # =============================================================================
 
 $ErrorActionPreference = "Stop"
@@ -62,14 +65,13 @@ function Fail($scenario, $message) {
 function Invoke-SeedScript($TrackFile, $GuideDest) {
     $output = ""
     try {
-        $guidePath = $GuideDest.Replace("\", "/")
+        $guidePath = $GuideDest
 
         if (Test-Path $TrackFile) {
             $obj  = Get-Content $TrackFile -Raw -Encoding UTF8 | ConvertFrom-Json
-            $dirs       = [System.Collections.Generic.List[string]]::new()
-            $dirsNormed = [System.Collections.Generic.List[string]]::new()
-            if ($obj.directories) { foreach ($d in $obj.directories) { $dirs.Add($d); $dirsNormed.Add($d.Replace("\", "/")) } }
-            if ($dirsNormed.Contains($guidePath)) {
+            $dirs = [System.Collections.Generic.List[string]]::new()
+            if ($obj.directories) { foreach ($d in $obj.directories) { $dirs.Add($d) } }
+            if ($dirs.Contains($guidePath)) {
                 $output = "User guide already tracked - no change needed."
             } else {
                 $dirs.Add($guidePath)
@@ -121,8 +123,8 @@ if (Test-Path $TrackFile) {
 }
 
 $json = Get-Content $TrackFile -Raw | ConvertFrom-Json
-if ($json.directories -contains $FakeGuide) {
-    Pass "A" "Guide path present in new file (forward slashes)"
+if ($json.directories -contains $FakeGuideBS) {
+    Pass "A" "Guide path present in new file (backslashes)"
 } else {
     Fail "A" "Guide path MISSING from new file. Contents: $($json.directories)"
 }
@@ -166,7 +168,7 @@ if ($allPreserved) {
     Pass "B" "All $($ExistingDirs.Count) pre-existing directories preserved"
 }
 
-if ($json.directories -contains $FakeGuide) {
+if ($json.directories -contains $FakeGuideBS) {
     Pass "B" "Guide path added alongside existing entries"
 } else {
     Fail "B" "Guide path MISSING after merge. Entries: $($json.directories -join ', ')"
@@ -227,7 +229,7 @@ if ($out -like "WARNING:*") {
 }
 
 # =============================================================================
-Write-Header "Scenario E - Guide already tracked but stored with backslashes (legacy format)"
+Write-Header "Scenario E - Guide already tracked (backslash path, exact match)"
 # =============================================================================
 
 $legacyDirs = @($ExistingDirs[0], $FakeGuideBS)
@@ -240,12 +242,12 @@ Write-Host "  Script output: $out"
 
 $json = Get-Content $TrackFile -Raw | ConvertFrom-Json
 
-$guideCount = ($json.directories | Where-Object { $_ -replace "\\","/" -eq $FakeGuide }).Count
+$guideCount = ($json.directories | Where-Object { $_ -eq $FakeGuideBS }).Count
 
 if ($guideCount -gt 1) {
     Fail "E" "BUG: Guide path duplicated ($guideCount entries) - backslash normalisation not working. Entries: $($json.directories -join ' | ')"
 } else {
-    Pass "E" "Backslash-stored guide path correctly detected as duplicate - no extra entry added"
+    Pass "E" "Guide path correctly detected as duplicate (exact backslash match) - no extra entry added"
 }
 
 # =============================================================================
@@ -278,6 +280,32 @@ if ($pyResult -like "OK:*") {
     Fail "F" "Python json.load() failed: $pyResult"
 }
 
+
+# =============================================================================
+Write-Header "Scenario G - Stored paths use Windows backslashes"
+# =============================================================================
+
+if (Test-Path $TrackFile) { Remove-Item $TrackFile }
+$null = Invoke-SeedScript -TrackFile $TrackFile -GuideDest $FakeGuideBS
+
+$json = Get-Content $TrackFile -Raw | ConvertFrom-Json
+$hasForwardSlash = $false
+foreach ($entry in $json.directories) {
+    if ($entry -match '/') {
+        $hasForwardSlash = $true
+        Fail "G" "Entry uses forward slashes: $entry"
+    }
+}
+if (-not $hasForwardSlash) {
+    Pass "G" "All stored paths use Windows backslashes"
+}
+
+# Verify $FakeGuideBS is stored exactly as-is
+if ($json.directories -contains $FakeGuideBS) {
+    Pass "G" "Guide path stored with exact backslash format"
+} else {
+    Fail "G" "Guide path not found in stored format. Stored: $($json.directories -join ' | ')"
+}
 # =============================================================================
 Write-Header "TEST SUMMARY"
 # =============================================================================

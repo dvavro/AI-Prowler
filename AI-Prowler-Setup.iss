@@ -929,7 +929,7 @@ procedure SeedUserGuideTracking;
 //   - Idempotent: safe to run on reinstall — skips if path already present.
 //   - Single-file tracking: the guide is listed as a file path, not a
 //     directory, so the smart-scan SKIP_DIRECTORIES filter does not apply.
-//   - Forward slashes: AI-Prowler normalises all paths to forward slashes
+//   - Backslashes: AI-Prowler normalises all paths to Windows backslashes
 //     internally; we store the guide path the same way.
 //   - Fresh install (file absent): creates the JSON from scratch.
 //   - Existing install (file present): reads, merges, writes back.
@@ -955,7 +955,7 @@ begin
   PsContents :=
     '$ErrorActionPreference = "Stop"' + #13#10 +
     '$trackFile  = "' + TrackFile  + '"' + #13#10 +
-    '$guidePath  = "' + GuideDest  + '".Replace("\", "/")' + #13#10 +
+    '$guidePath  = "' + GuideDest  + '"' + #13#10 +
     '' + #13#10 +
     'try {' + #13#10 +
     '  if (Test-Path $trackFile) {' + #13#10 +

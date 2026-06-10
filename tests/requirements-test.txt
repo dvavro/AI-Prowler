@@ -7,6 +7,7 @@
 
 pytest>=7.4
 pytest-timeout>=2.1     # safety net so a hanging test can't run forever
+pyflakes>=3.0           # used by dev tools tests (test_dev_tools.py)
 
 # MCP tests need the SDK to be importable — same SDK ai_prowler_mcp.py uses.
 # Already installed if you've ever run the MCP server, but pinning here so a

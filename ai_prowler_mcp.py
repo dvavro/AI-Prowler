@@ -5365,17 +5365,25 @@ def str_replace_in_file(filepath: str,
                 f"{_STR_REPLACE_MAX_OLD_STR_LEN:,}). Use a smaller distinctive "
                 f"snippet or write_file for whole-file rewrites.")
 
-    # ── CRLF FIX (v7.0.0) ──────────────────────────────────────────────────────
-    # The file is read and LF-normalized by _read_text_preserving_endings(), but
-    # old_str / new_str arrive straight from the MCP client. When a multi-line
-    # snippet is copied from a CRLF (Windows) source — which is every file in this
-    # codebase — old_str carries '\r\n' while the in-memory file text carries only
-    # '\n'. text.count(old_str) then compares a CRLF needle against LF-normalized
-    # text and returns 0, so the edit fails with "old_str not found". Single-line
-    # old_str has no newline and so was never affected — which is exactly why this
-    # bug only manifested on multi-line matches. Normalize both args to LF here so
-    # all matching logic below is line-ending-agnostic; the file's original ending
-    # is re-applied at write time by _apply_line_ending().
+    # ── CRLF + BACKSLASH NORMALISATION ─────────────────────────────────────────
+    # CRLF FIX (v7.0.0): The file is read and LF-normalized by
+    # _read_text_preserving_endings(), but old_str / new_str arrive straight
+    # from the MCP client. When a multi-line snippet is copied from a CRLF
+    # (Windows) source, old_str carries '\r\n' while the in-memory file text
+    # carries only '\n'. Normalize both args to LF so all matching logic below
+    # is line-ending-agnostic; the file's original ending is re-applied at
+    # write time by _apply_line_ending().
+    #
+    # BACKSLASH FIX (v7.0.1): When old_str contains backslash sequences (e.g.
+    # Pascal string literals like '".Replace(\"\\", \"/\")', Windows paths like
+    # 'C:\\Users\\...', or escape sequences like '\r\n'), the MCP JSON transport
+    # and Claude's own string handling can double-interpret the backslashes so
+    # what arrives here differs from what is actually in the file.
+    #
+    # Strategy: after CRLF normalisation, if old_str is NOT found in the
+    # normalised file text, try common backslash escape variants automatically
+    # before giving up. This makes the tool robust against the most frequent
+    # escaping mismatches without requiring Claude to manually debug encoding.
     old_str = old_str.replace("\r\n", "\n").replace("\r", "\n")
     new_str = new_str.replace("\r\n", "\n").replace("\r", "\n")
 
@@ -5417,13 +5425,84 @@ def str_replace_in_file(filepath: str,
     except Exception as exc:
         return f"⚠️  Read failed: {exc}"
 
-    # Count occurrences
-    count = text.count(old_str)
+    # Count occurrences — with automatic backslash-variant fallback.
+    #
+    # When old_str contains backslashes (Windows paths, Pascal string literals,
+    # escape sequences), the MCP JSON transport or Claude's string formatting
+    # can double-escape them so '\\' in the file arrives as '\\\\' in old_str,
+    # or vice-versa.  Rather than forcing Claude to debug the escaping manually,
+    # we silently try a small set of common backslash variants and use the first
+    # one that produces exactly one match.  The variant used is logged in the
+    # success message so the behaviour is transparent.
+    _backslash_variants = [
+        old_str,                                    # as-received (already LF-normalised)
+        old_str.replace("\\\\", "\\"),              # de-double: \\\\ -> \\
+        old_str.replace("\\", "\\\\"),              # re-double: \\ -> \\\\
+        old_str.replace("\\\\", "\\").replace("\\\\", "\\"),   # two passes of de-double
+    ]
+    # Deduplicate while preserving order
+    seen_variants: list[str] = []
+    for _v in _backslash_variants:
+        if _v not in seen_variants:
+            seen_variants.append(_v)
+
+    _matched_variant = None
+    count = 0
+    for _v in seen_variants:
+        _c = text.count(_v)
+        if _c == 1:
+            _matched_variant = _v
+            count = 1
+            break
+        if _c > 1:
+            _matched_variant = _v
+            count = _c
+            break   # ambiguous — report it below
+
+    if _matched_variant is not None and _matched_variant != old_str:
+        # Log the auto-correction so it's visible in the response
+        _backslash_note = (
+            f"   ℹ️  Backslash auto-correction applied — "
+            f"original old_str had a different escape level than the file.\n"
+        )
+        old_str = _matched_variant
+    else:
+        _backslash_note = ""
+        if _matched_variant is None:
+            count = 0   # no variant matched
+
     if count == 0:
-        return (f"⚠️  old_str not found in {resolved}.\n"
-                f"Possible causes: typo in old_str, file already edited, "
-                f"whitespace difference (tabs vs spaces, trailing newline). "
-                f"Tip: use grep_documents to verify the exact text first.")
+        # ── Nearest-match diagnostic (Problem 4) ────────────────────────────
+        # Find the closest line(s) in the file to old_str using a simple
+        # token-overlap heuristic so Claude can pinpoint where the mismatch is.
+        diag_lines = []
+        try:
+            needle_words = set(old_str.split())
+            if needle_words:
+                file_lines = text.splitlines()
+                scored = []
+                for ln, line_text in enumerate(file_lines, 1):
+                    line_words = set(line_text.split())
+                    overlap = len(needle_words & line_words)
+                    if overlap:
+                        scored.append((overlap, ln, line_text))
+                scored.sort(key=lambda x: -x[0])
+                top = scored[:5]
+                if top:
+                    diag_lines.append("Nearest matching lines by word overlap:")
+                    for overlap, ln, line_text in top:
+                        preview = line_text[:120] + ("..." if len(line_text) > 120 else "")
+                        diag_lines.append(f"  line {ln:>5} ({overlap} word(s) match): {preview}")
+        except Exception:
+            pass
+        diag = ("\n" + "\n".join(diag_lines)) if diag_lines else ""
+        return (
+            f"⚠️  old_str not found in {resolved}.\n"
+            f"Possible causes: typo in old_str, file already edited, "
+            f"whitespace difference (tabs vs spaces, trailing newline). "
+            f"Tip: use grep_documents to verify the exact text first."
+            f"{diag}"
+        )
     if count > 1:
         # Find each occurrence and report its line number for disambiguation
         lines_of_match = []
@@ -5442,6 +5521,16 @@ def str_replace_in_file(filepath: str,
                 + ("  (more not listed)" if count > 20 else "") + "\n"
                 f"old_str must match EXACTLY ONCE. Add surrounding context "
                 f"(a few lines before/after) until it's unique, then retry.")
+
+    # ── DRY-RUN SUGGESTION for long old_str (Problem 5) ────────────────────────
+    # If old_str is large (> 10 lines or > 500 chars) and dry_run is False,
+    # append a suggestion — but don't block the edit.
+    _dry_run_hint = ""
+    if not dry_run and (old_str.count("\n") > 10 or len(old_str) > 500):
+        _dry_run_hint = (
+            "   💡 Tip: for large old_str blocks, use dry_run=True first "
+            "to preview the diff before committing.\n"
+        )
 
     # Compute the change
     new_text = text.replace(old_str, new_str, 1)
@@ -5521,6 +5610,10 @@ def str_replace_in_file(filepath: str,
         f"   Backup: {backup_path}",
         f"   NOT yet indexed — call reindex_file() when done editing.",
     ]
+    if _backslash_note:
+        out.append(_backslash_note.rstrip())
+    if _dry_run_hint:
+        out.append(_dry_run_hint.rstrip())
     if verify_after_write:
         out.append("")
         out.append("─── Verify (5 lines before, change region, 5 lines after) ───")
