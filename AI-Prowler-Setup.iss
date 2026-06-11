@@ -18,6 +18,8 @@
 ;     to prevent the Windows Errno 22 double-backslash path bug
 ;   - Clears stale HuggingFace model cache before pip install to ensure a
 ;     clean model download with the pinned package versions
+;   - Installs Microsoft Visual C++ 2022 x64 Redistributable if not already present
+;     (required by PyTorch on all machines — prevents WinError 1114 on fresh installs)
 ;   - Installs PyTorch: CUDA 12.8 build if NVIDIA GPU detected, CPU build otherwise
 ;     (CUDA 12.8 / cu128 required for Blackwell GPUs — RTX 50xx series)
 ;   - Downloads and silently installs Tesseract OCR 5.x (UB-Mannheim build)
@@ -1100,7 +1102,7 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  PyFolder, ModelPath, TessSetup, TessFolder, TessTask, TessBat, RoamingPython: String;
+  PyFolder, ModelPath, TessSetup, TessFolder, TessTask, TessBat, RoamingPython, VCRedistPs: String;
   CfgFile: String;
   McpPythonPath, McpScriptPath, McpConfigJson, McpConfigFile: String;
   PsFile, PsContents: String;
@@ -1338,6 +1340,53 @@ begin
       // Detect NVIDIA GPU via registry  -  install CUDA build if found,
       // CPU-only build otherwise. This keeps the install lean on machines
       // without a GPU while still giving CUDA acceleration where available.
+        // ----------------------------------------------------------
+        // VISUAL C++ REDISTRIBUTABLE  (before PyTorch, progress 63 -> 65)
+        //
+        // PyTorch (torch\lib\c10.dll) requires the Microsoft Visual C++
+        // 2019/2022 x64 Runtime. On fresh Windows installs - especially
+        // headless server boxes with no other software - this runtime is
+        // absent and torch fails at startup with WinError 1114:
+        //   'DLL initialization routine failed. Error loading c10.dll'
+        //
+        // Detection: VC++ 2022 x64 runtime writes a registry key at
+        //   HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64
+        // If absent, download and silently install via PowerShell.
+        // If already present (common on desktop machines), skip silently.
+        // ----------------------------------------------------------
+        SetProgress(63, 'Checking Visual C++ 2022 runtime (required by PyTorch)...');
+        AppendInstallLog('[VCRedist] === Checking Visual C++ 2022 x64 runtime ===');
+        if not RegKeyExists(HKLM, 'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64') then
+        begin
+          AppendInstallLog('[VCRedist] Runtime NOT found - downloading and installing silently...');
+          SetProgress(64, 'Downloading Visual C++ 2022 runtime...');
+          VCRedistPs := MakeTempFile('vcredist');
+          VCRedistPs := Copy(VCRedistPs, 1, Length(VCRedistPs) - 4) + '.ps1';
+          SaveStringToFile(VCRedistPs,
+            '$ErrorActionPreference = "Stop"' + #13#10 +
+            'try {' + #13#10 +
+            '  $out = "$env:TEMP\vc_redist.x64.exe"' + #13#10 +
+            '  Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile $out -UseBasicParsing' + #13#10 +
+            '  Start-Process -FilePath $out -ArgumentList @("/install","/quiet","/norestart") -Wait' + #13#10 +
+            '  Remove-Item $out -Force -ErrorAction SilentlyContinue' + #13#10 +
+            '  Write-Host "VC++ 2022 runtime installed successfully."' + #13#10 +
+            '} catch {' + #13#10 +
+            '  Write-Host "WARNING: VC++ runtime install failed: $_"' + #13#10 +
+            '}' + #13#10,
+            False);
+          ExecWithLogging(True, '[VCRedist]', 'powershell.exe',
+            '-NoProfile -ExecutionPolicy Bypass -File "' + VCRedistPs + '"');
+          DeleteFileIfExists(VCRedistPs);
+          if RegKeyExists(HKLM, 'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64') then
+            AppendInstallLog('[VCRedist] SUCCESS - VC++ 2022 x64 runtime installed.')
+          else
+            AppendInstallLog('[VCRedist] WARNING: Runtime registry key still absent. ' +
+              'PyTorch may fail with WinError 1114. ' +
+              'Manual fix: https://aka.ms/vs/17/release/vc_redist.x64.exe');
+        end
+        else
+          AppendInstallLog('[VCRedist] VC++ 2022 x64 runtime already present - skipping.');
+
       // ----------------------------------------------------------
       if RegKeyExists(HKLM, 'SOFTWARE\NVIDIA Corporation\Global') or
          RegKeyExists(HKLM, 'SYSTEM\CurrentControlSet\Services\nvlddmkm') then
