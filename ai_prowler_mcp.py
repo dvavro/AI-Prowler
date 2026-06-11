@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 AI-Prowler MCP Server
 =====================
@@ -5003,16 +5003,71 @@ def _read_text_preserving_endings(filepath: str) -> tuple[str, str]:
     the returned line ending before writing back.
 
     Caller has already verified the file exists and is small enough.
-    Decoding errors are replaced (matches the previous read behavior).
+
+    ENCODING DETECTION (v7.0.1):
+    Files are not always UTF-8. ISS installer scripts, legacy Windows batch
+    files, and many text editors write Latin-1 / Windows-1252. If we decode
+    with utf-8 errors='replace', non-ASCII bytes (e.g. em-dashes U+0097 in
+    Windows-1252) become U+FFFD replacement characters. old_str then contains
+    the real Unicode character but the file content contains U+FFFD — they
+    never match, and str_replace silently fails.
+
+    Detection cascade (each attempted in order):
+      1. utf-8-sig  — strips BOM if present, valid UTF-8 otherwise
+      2. utf-8      — strict, no BOM
+      3. chardet    — statistical detection if available (optional dependency)
+      4. latin-1    — fallback: accepts every byte value, never raises
+
+    The detected encoding is stored alongside the content so the write path
+    can round-trip the file in its original encoding. This preserves the
+    file's byte content for non-ASCII characters instead of corrupting them.
     """
     with open(filepath, "rb") as f:
         raw = f.read()
     line_ending = _detect_line_ending(raw)
-    decoded = raw.decode("utf-8", errors="replace")
+
+    # Encoding detection cascade
+    detected_encoding = "latin-1"  # safe fallback — accepts all byte values
+
+    # Check for actual BOM presence before trying utf-8-sig.
+    # utf-8-sig always succeeds on valid UTF-8 even without a BOM, which
+    # would cause us to write a BOM back into files that never had one.
+    has_bom = raw[:3] == b"\xef\xbb\xbf"
+
+    # 1. Try UTF-8 with BOM strip (only if BOM actually present)
+    if has_bom:
+        try:
+            decoded = raw.decode("utf-8-sig")
+            detected_encoding = "utf-8-sig"
+        except UnicodeDecodeError:
+            has_bom = False  # malformed BOM, fall through
+
+    if not has_bom:
+        # 2. Try strict UTF-8
+        try:
+            decoded = raw.decode("utf-8")
+            detected_encoding = "utf-8"
+        except UnicodeDecodeError:
+            # 3. Try chardet if available
+            try:
+                import chardet
+                result = chardet.detect(raw)
+                enc = result.get("encoding") or "latin-1"
+                confidence = result.get("confidence", 0)
+                if confidence >= 0.7 and enc.lower() not in ("ascii",):
+                    decoded = raw.decode(enc, errors="replace")
+                    detected_encoding = enc
+                else:
+                    raise ValueError("low confidence")
+            except Exception:
+                # 4. Latin-1 fallback — always succeeds
+                decoded = raw.decode("latin-1")
+                detected_encoding = "latin-1"
+
     # Normalize all endings to LF for consistent in-memory editing.
     # Order matters: handle \r\n before bare \r.
     normalized = decoded.replace("\r\n", "\n").replace("\r", "\n")
-    return (normalized, line_ending)
+    return (normalized, line_ending, detected_encoding)
 
 
 def _apply_line_ending(text: str, line_ending: str) -> str:
@@ -5421,7 +5476,7 @@ def str_replace_in_file(filepath: str,
     # preserves CRLF files on the round-trip; without it Python's text-mode
     # write silently strips \r bytes from every Windows file we edit.
     try:
-        text, line_ending = _read_text_preserving_endings(resolved)
+        text, line_ending, file_encoding = _read_text_preserving_endings(resolved)
     except Exception as exc:
         return f"⚠️  Read failed: {exc}"
 
@@ -5539,8 +5594,13 @@ def str_replace_in_file(filepath: str,
     change_idx = text.find(old_str)
     line_of_change = text.count("\n", 0, change_idx) + 1
     # Report the size as it will be on disk — i.e. AFTER re-applying the
-    # original line ending. Otherwise size previews are wrong for CRLF files.
-    new_bytes_on_disk = _apply_line_ending(new_text, line_ending).encode("utf-8")
+    # original line ending and encoding. Otherwise size previews are wrong
+    # for CRLF files or non-UTF-8 files.
+    # Use file_encoding for the encode so Latin-1/Windows-1252 files are
+    # written back in their original encoding rather than corrupted to UTF-8.
+    new_bytes_on_disk = _apply_line_ending(new_text, line_ending).encode(
+        file_encoding, errors="replace"
+    )
     new_byte_count = len(new_bytes_on_disk)
 
     # ── DRY RUN ──
@@ -5607,6 +5667,7 @@ def str_replace_in_file(filepath: str,
         f"✅ Edited {resolved}",
         f"   Change at line {line_of_change}",
         f"   {size:,} bytes  →  {new_byte_count:,} bytes",
+        f"   Encoding: {file_encoding}",
         f"   Backup: {backup_path}",
         f"   NOT yet indexed — call reindex_file() when done editing.",
     ]

@@ -1243,6 +1243,234 @@ def test_C_MCP_WRITE_88_str_replace_crlf_delete_span(mcp_mod, writable_env):
 
 
 # ╔════════════════════════════════════════════════════════════════════════════╗
+# ║  str_replace_in_file — encoding detection  (C-MCP-WRITE-96..104)          ║
+# ║                                                                            ║
+# ║  Covers the 4 real-world failure modes discovered when editing the         ║
+# ║  AI-Prowler-Setup.iss installer script:                                    ║
+# ║                                                                            ║
+# ║  Problem 1 — Latin-1/Windows-1252 encoding (THE ROOT CAUSE)               ║
+# ║    ISS files contain Windows-1252 em-dashes (0x97). Old code decoded      ║
+# ║    with utf-8 errors='replace', turning 0x97 into U+FFFD. old_str         ║
+# ║    contains the real em-dash so match always failed silently.              ║
+# ║                                                                            ║
+# ║  Problem 2 — CRLF line endings (already fixed in v7.0.0, regression test) ║
+# ║    ISS files use CRLF. Multi-line old_str with LF didn't match.           ║
+# ║                                                                            ║
+# ║  Problem 3 — Backslash double-escaping (already fixed in v7.0.1)          ║
+# ║    Pascal string literals contain backslashes that MCP transport           ║
+# ║    double-escapes. Auto-retry with escape variants is the fix.             ║
+# ║                                                                            ║
+# ║  Problem 4 — False-positive patch detection                               ║
+# ║    patch script checked for "VCRedist" in content, found it in the        ║
+# ║    var declaration, and reported "already present" — skipping the actual   ║
+# ║    code block insertion.                                                   ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
+def test_C_MCP_WRITE_96_latin1_file_edit_succeeds(mcp_mod, writable_env):
+    """Problem 1: str_replace correctly edits a Latin-1 encoded file.
+    Old code decoded with utf-8 errors='replace', turning Windows-1252
+    em-dash (0x97) into U+FFFD. old_str contained real em-dash so match failed.
+    Fixed by encoding detection cascade: utf-8-sig -> utf-8 -> latin-1."""
+    target = writable_env.project / "latin1_file.iss"
+    # Write a file with Latin-1 encoded em-dash (Windows-1252 byte 0x97)
+    content = b"; AI-Prowler Installer\r\n; Installs PyTorch \x97 CPU build\r\nSomeCode = True\r\n"
+    target.write_bytes(content)
+
+    # old_str contains the real em-dash character (U+2014 or Latin-1 0x97)
+    result = mcp_mod.str_replace_in_file(
+        str(target),
+        old_str="SomeCode = True",
+        new_str="SomeCode = False",
+    )
+    assert "✅ Edited" in result, f"Latin-1 file edit should succeed. Got: {result}"
+    new_content = target.read_bytes()
+    assert b"SomeCode = False" in new_content, "Replacement should be in file"
+    assert b"SomeCode = True" not in new_content, "Old value should be gone"
+
+
+def test_C_MCP_WRITE_97_latin1_file_encoding_reported(mcp_mod, writable_env):
+    """Problem 1: Success response reports the detected encoding so it's transparent."""
+    target = writable_env.project / "latin1_enc.iss"
+    content = b"; Test\r\nold_value = 1\r\n"
+    # Force non-UTF-8 byte to trigger latin-1 detection
+    content = b"; Test with em-dash \x97\r\nold_value = 1\r\n"
+    target.write_bytes(content)
+
+    result = mcp_mod.str_replace_in_file(
+        str(target),
+        old_str="old_value = 1",
+        new_str="old_value = 2",
+    )
+    assert "✅ Edited" in result, f"Should succeed. Got: {result}"
+    assert "Encoding:" in result, f"Should report detected encoding. Got: {result}"
+
+
+def test_C_MCP_WRITE_98_latin1_with_emdash_in_old_str(mcp_mod, writable_env):
+    """Problem 1: old_str containing a Latin-1 em-dash matches correctly.
+    This is the exact ISS failure case — comment lines like
+    '; prevents WinError 1114' with an em-dash in Windows-1252."""
+    target = writable_env.project / "iss_emdash.iss"
+    # em-dash as Windows-1252 byte 0x96 (en-dash) in CRLF file
+    content = (
+        b"; Installs PyTorch \x96 CPU build only\r\n"
+        b"if RegKeyExists(HKLM, 'SOFTWARE\\NVIDIA') then\r\n"
+        b"  DoInstall();\r\n"
+    )
+    target.write_bytes(content)
+
+    # Read back decoded to get the exact character to use in old_str
+    decoded = content.decode("latin-1")
+    first_line = decoded.splitlines()[0]
+
+    result = mcp_mod.str_replace_in_file(
+        str(target),
+        old_str=first_line,
+        new_str="; Installs PyTorch - CPU build only",
+    )
+    assert "✅ Edited" in result, f"Em-dash in old_str should match. Got: {result}"
+    new_bytes = target.read_bytes()
+    assert b"CPU build only" in new_bytes
+
+
+def test_C_MCP_WRITE_99_utf8_bom_file_edit_succeeds(mcp_mod, writable_env):
+    """Problem 1 (BOM variant): UTF-8 BOM files are handled by utf-8-sig detection.
+    The BOM is stripped from in-memory content so old_str doesn't need to
+    include it, and the file is written back without BOM corruption."""
+    target = writable_env.project / "bom_file.py"
+    # Write UTF-8 with BOM
+    content = "\ufeffx = 1\ny = 2\n"
+    target.write_bytes(content.encode("utf-8-sig"))
+
+    result = mcp_mod.str_replace_in_file(
+        str(target),
+        old_str="x = 1",
+        new_str="x = 99",
+    )
+    assert "✅ Edited" in result, f"BOM file edit should succeed. Got: {result}"
+    assert "99" in target.read_text(encoding="utf-8-sig")
+
+
+def test_C_MCP_WRITE_100_latin1_file_roundtrip_preserves_encoding(mcp_mod, writable_env):
+    """Problem 1: After editing, non-ASCII Latin-1 bytes are preserved.
+    Old code encoded output as UTF-8, corrupting Windows-1252 characters."""
+    target = writable_env.project / "latin1_roundtrip.iss"
+    # Windows-1252 em-dash 0x97 should survive the edit unchanged
+    original = b"; Comment with em-dash \x97 here\r\nchange_me = old\r\n"
+    target.write_bytes(original)
+
+    result = mcp_mod.str_replace_in_file(
+        str(target),
+        old_str="change_me = old",
+        new_str="change_me = new",
+    )
+    assert "✅ Edited" in result, f"Should succeed. Got: {result}"
+    new_bytes = target.read_bytes()
+    # The em-dash byte 0x97 must be preserved — not become UTF-8 0xC2 0x97
+    assert b"\x97" in new_bytes, "Latin-1 em-dash byte should be preserved after edit"
+    assert b"change_me = new" in new_bytes
+
+
+def test_C_MCP_WRITE_101_crlf_multiline_old_str_matches(mcp_mod, writable_env):
+    """Problem 2 (regression): CRLF multi-line old_str matches correctly.
+    This was fixed in v7.0.0 — ensure it still works with encoding detection."""
+    target = writable_env.project / "crlf_multiline.iss"
+    target.write_bytes(
+        b"line_one = 1\r\n"
+        b"line_two = 2\r\n"
+        b"line_three = 3\r\n"
+    )
+    # old_str uses LF only — should match CRLF file via normalisation
+    result = mcp_mod.str_replace_in_file(
+        str(target),
+        old_str="line_one = 1\nline_two = 2",
+        new_str="line_one = 10\nline_two = 20",
+    )
+    assert "✅ Edited" in result, f"CRLF multi-line match should work. Got: {result}"
+    content = target.read_bytes()
+    assert b"line_one = 10\r\n" in content, "CRLF preserved after edit"
+    assert b"line_two = 20\r\n" in content
+
+
+def test_C_MCP_WRITE_102_latin1_crlf_combined(mcp_mod, writable_env):
+    """Problems 1+2 combined: Latin-1 CRLF file (exact ISS file profile).
+    Both encoding detection AND CRLF normalisation must work together."""
+    target = writable_env.project / "latin1_crlf.iss"
+    # Latin-1 CRLF file with non-ASCII byte — exact profile of AI-Prowler-Setup.iss
+    target.write_bytes(
+        b"; Header with em-dash \x97\r\n"
+        b"; Second comment line\r\n"
+        b"if RegKeyExists(HKLM, 'SOFTWARE\\NVIDIA') then\r\n"
+        b"begin\r\n"
+        b"  DoInstall();\r\n"
+        b"end;\r\n"
+    )
+
+    # Multi-line old_str with LF endings (as Claude would send it)
+    result = mcp_mod.str_replace_in_file(
+        str(target),
+        old_str="begin\n  DoInstall();\nend;",
+        new_str="begin\n  DoNewInstall();\nend;",
+    )
+    assert "✅ Edited" in result, f"Latin-1 CRLF multi-line edit should succeed. Got: {result}"
+    new_bytes = target.read_bytes()
+    assert b"DoNewInstall" in new_bytes, "Replacement should be applied"
+    assert b"\x97" in new_bytes, "Latin-1 em-dash should be preserved"
+    assert b"\r\n" in new_bytes, "CRLF line endings should be preserved"
+
+
+def test_C_MCP_WRITE_103_backslash_in_latin1_file(mcp_mod, writable_env):
+    """Problem 3 in Latin-1 context: Pascal string literals with backslashes
+    in a Latin-1 CRLF file — all three fixes must work together."""
+    target = writable_env.project / "pascal_latin1.iss"
+    target.write_bytes(
+        b"; VC++ check \x97 required by PyTorch\r\n"
+        b"if RegKeyExists(HKLM, 'SOFTWARE\\NVIDIA Corporation\\Global') then\r\n"
+        b"  Install();\r\n"
+    )
+
+    result = mcp_mod.str_replace_in_file(
+        str(target),
+        old_str="  Install();",
+        new_str="  InstallCUDA();",
+    )
+    assert "✅ Edited" in result, f"Latin-1 Pascal backslash file should work. Got: {result}"
+    assert b"InstallCUDA" in target.read_bytes()
+
+
+def test_C_MCP_WRITE_104_patch_false_positive_detection(mcp_mod, writable_env):
+    """Problem 4: Verifies that a partial keyword match in a var declaration
+    does NOT prevent the full code block from being inserted.
+    Regression for the patch_vcredist.py false positive where 'VCRedist'
+    was found in the var declaration and incorrectly reported as 'already present'."""
+    target = writable_env.project / "false_positive.iss"
+    # File has VCRedistPs in var declaration but NOT the code block
+    target.write_text(
+        "var\n"
+        "  SomeVar, VCRedistPs: String;\n"
+        "begin\n"
+        "  DoSomething();\n"
+        "end;\n",
+        encoding="utf-8",
+    )
+
+    # Verify 'VCRedistPs' IS in the file
+    content = target.read_text(encoding="utf-8")
+    assert "VCRedistPs" in content, "Setup: VCRedistPs should be in var declaration"
+    assert "AppendInstallLog" not in content, "Setup: code block should NOT be present yet"
+
+    # Insert the code block — should succeed even though 'VCRedistPs' exists elsewhere
+    result = mcp_mod.str_replace_in_file(
+        str(target),
+        old_str="  DoSomething();",
+        new_str="  AppendInstallLog('[VCRedist] Checking...');\n  VCRedistPs := 'test.ps1';\n  DoSomething();",
+    )
+    assert "✅ Edited" in result, f"Should insert code block successfully. Got: {result}"
+    new_content = target.read_text(encoding="utf-8")
+    assert "AppendInstallLog" in new_content, "Code block should now be present"
+    assert new_content.count("VCRedistPs") == 2, "Should have 2 occurrences: var decl + code"
+
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
 # ║  str_replace_in_file — backslash auto-retry  (C-MCP-WRITE-89..92)         ║
 # ║  str_replace_in_file — nearest-match diag    (C-MCP-WRITE-93..94)         ║
 # ║  str_replace_in_file — dry_run hint          (C-MCP-WRITE-95)             ║
