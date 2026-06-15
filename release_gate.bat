@@ -70,10 +70,13 @@ echo.
 
 REM ── Suite 1: AI-Prowler main test suite ──────────────────────────────────
 echo [1/3] Running AI-Prowler main test suite ...
-echo       Expected: ~637 tests (unit, mcp, gui, learning, reindex, installer)
+echo       Expected: ~1300 tests (unit, mcp, gui, learning, reindex, installer)
 echo.
 cd /d "%AIPROWLER_ROOT%"
-py -m pytest tests -m "not e2e" -v
+py -m pytest tests -m "not e2e" -v -p no:logging --tb=short --junit-xml="%TEMP%\suite1_results.xml"
+REM Parse the JUnit XML for pass/fail — immune to teardown crashes since
+REM pytest writes the XML before teardown. Zero failures = PASS.
+py -c "import sys,xml.etree.ElementTree as ET; r=ET.parse(r'%TEMP%\suite1_results.xml').getroot(); f=int(r.get('failures',0))+int(r.get('errors',0)); sys.exit(0 if f==0 else 1)"
 set "SUITE1_RC=%ERRORLEVEL%"
 echo.
 if "%SUITE1_RC%"=="0" (

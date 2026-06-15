@@ -3655,7 +3655,8 @@ def index_email_archive(filepath: str,
 
 
 def index_directory(directory: str, recursive: bool = True, quiet: bool = False,
-                    collection_resolver=None, indexer_user=None, purge_gate=None):
+                    collection_resolver=None, indexer_user=None, purge_gate=None,
+                    track: bool = True):
     """
     Index all files in a directory
 
@@ -3851,8 +3852,10 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False,
                     print(f"✅ File tracking enabled for this directory")
                     print(f"   Use 'rag update {directory}' to keep index current\n")
 
-                # Add to auto-update list
-                is_new = add_to_auto_update_list(directory)
+                # Add to auto-update list (only if tracking is enabled)
+                is_new = False
+                if track:
+                    is_new = add_to_auto_update_list(directory)
 
                 if is_new and not quiet:
                     print(f"✅ Added to auto-update list")
@@ -5667,6 +5670,10 @@ def command_update(directory, recursive=True, auto_confirm=False,
 # ═══════════════════════════════════════════════════════════
 
 AUTO_UPDATE_LIST = Path.home() / '.rag_auto_update_dirs.json'
+
+# Redirect tracking file to sandbox when running under E2E tests
+if _TEST_STATE_DIR:
+    AUTO_UPDATE_LIST = Path(_TEST_STATE_DIR) / '.rag_auto_update_dirs.json'
 
 def load_auto_update_list():
     """Load list of directories to auto-update.

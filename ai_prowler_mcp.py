@@ -997,7 +997,8 @@ def index_path(
                 index_directory(str(target), recursive=recursive,
                                 collection_resolver=_resolver,
                                 indexer_user=_indexer_user,
-                                purge_gate=_purge_gate)
+                                purge_gate=_purge_gate,
+                                track=track)
         except Exception as exc:
             return f"❌ Indexing failed: {exc}"
 
