@@ -1,6 +1,6 @@
 @echo off
 REM ──────────────────────────────────────────────────────────────────────────
-REM AI-Prowler 6.0.0 — Windows test runner (Phase 2)
+REM AI-Prowler v7.0.1 — Windows test runner
 REM
 REM Run from your AI-Prowler source root:
 REM     C:\Users\david\AI-Prowler> tests\run_tests.bat
@@ -11,6 +11,9 @@ REM     mcp      run only the MCP-tool tests (Section G-MCP-*)
 REM     gui      run only the GUI tests (Section G-IDX/G-UPD/G-DB)
 REM     fast     skip @pytest.mark.slow tests (no embedding-model load)
 REM     bugs     run only the bug-exercising tests (now expected to pass)
+REM     status   run only the SC-* status/chunk-count regression tests (v7.0.1)
+REM     stats    run only the DS-* database stats regression tests (v7.0.1)
+REM     server   run only the SS-* server status tab GUI tests (v7.0.1)
 REM     <name>   pass through to pytest -k (substring match)
 REM ──────────────────────────────────────────────────────────────────────────
 
@@ -47,12 +50,47 @@ if "%1"=="bugs" (
     goto :end
 )
 
+if "%1"=="watchdog" (
+    py -m pytest tests\unit\test_file_watchdog.py tests\unit\test_watchdog_cross_session.py -v
+    goto :end
+)
+
+if "%1"=="status" (
+    py -m pytest tests\mcp\test_status_chunk_count.py -v
+    goto :end
+)
+
+if "%1"=="stats" (
+    py -m pytest tests\mcp\test_database_stats_collections.py -v
+    goto :end
+)
+
+if "%1"=="server" (
+    py -m pytest tests\gui\test_server_status_tab.py -v
+    goto :end
+)
+
+if "%1"=="e2e" (
+    py -m pytest tests\e2e -v -m e2e
+    goto :end
+)
+
+if "%1"=="e2e-stage1" (
+    py -m pytest tests\e2e -v -m e2e -k "stage1"
+    goto :end
+)
+
+if "%1"=="e2e-stage2" (
+    py -m pytest tests\e2e -v -m e2e -k "stage2"
+    goto :end
+)
+
 if not "%1"=="" (
     py -m pytest tests -k "%1"
     goto :end
 )
 
-REM Default: run everything
+REM Default: run everything including E2E
 py -m pytest tests
 
 :end

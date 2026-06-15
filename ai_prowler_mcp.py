@@ -246,6 +246,28 @@ finally:
 # to show "Claude's response was interrupted".
 _STDIO_MODE = False  # bool — set True in stdio entry point before mcp.run()
 
+# Claude model identifier — stamped as `source` on learnings that Claude
+# auto-detects (auto_detected=True). Matches the Anthropic model string so
+# the Learnings tab shows exactly which Claude version created the entry
+# e.g. "claude-sonnet-4-6". Updated here when the bundled model changes.
+_MODEL_ID = "claude-sonnet-4-6"
+
+
+def _get_personal_owner_name() -> str:
+    """Return the owner's display name for personal-mode source attribution.
+
+    Reads OWNER_NAME from rag_preprocessor globals (loaded at startup from
+    ~/.rag_config.json via load_config()). Returns "" if not set — callers
+    fall back to "operator" in that case.
+
+    v7.0.1 — introduced so personal installs show the owner's name in the
+    Learnings tab Source column instead of the generic "operator" label.
+    """
+    try:
+        return (_engine.OWNER_NAME or "").strip()
+    except Exception:
+        return ""
+
 
 @contextlib.contextmanager
 def _capture_stdout():
@@ -1079,9 +1101,21 @@ def get_database_stats(ctx: Context = None) -> str:
     # print output.  This is safe in BOTH stdio mode (where sys.stdout is the
     # MCP pipe and must never be redirected) and HTTP mode.
     try:
-        from rag_preprocessor import CHROMA_DB_PATH
+        from rag_preprocessor import CHROMA_DB_PATH, get_chroma_client
         try:
-            _collections = _scoped_collections_for_ctx(ctx)
+            # Fix v7.0.1: always enumerate ALL collections via list_collections()
+            # so the count matches check_ai_prowler_status exactly regardless of
+            # edition or mode. _scoped_collections_for_ctx(ctx) in personal mode
+            # (ctx=None) only returns the single default 'documents' collection,
+            # missing any scoped collections written by Business Server mode.
+            client, embedding_func = get_chroma_client()
+            all_cols = client.list_collections()
+            if not all_cols:
+                return "📭 Database is empty or not yet created."
+            _collections = [
+                client.get_collection(name=col.name, embedding_function=embedding_func)
+                for col in all_cols
+            ]
         except RuntimeError:
             return "📭 Database is empty or not yet created."
 
@@ -1222,20 +1256,35 @@ def check_ai_prowler_status() -> str:
         )
     _log.info("check_status: prewarm ready, executing")
 
-    from rag_preprocessor import get_chroma_client, COLLECTION_NAME, CHROMA_DB_PATH
+    from rag_preprocessor import get_chroma_client, CHROMA_DB_PATH
 
     lines = ["🔍 AI-Prowler Status Check", "─" * 40]
 
     # ── ChromaDB & embedding model ────────────────────────────────────────────
     with _capture_stdout() as buf:
         try:
+            # Trigger embedding model load for the output capture
             client, embedding_func = get_chroma_client()
-            collection = client.get_or_create_collection(
-                name=COLLECTION_NAME,
-                embedding_function=embedding_func
-            )
+            # Fix v7.0.1: count chunks across ALL collections in the database
+            # rather than calling get_or_create_collection() (which returns only
+            # the default 'documents' collection and ignores scoped collections
+            # in Business Server mode) or _scoped_collections_for_ctx(None)
+            # (which also falls back to personal/single-collection mode when
+            # ctx=None). Instead enumerate every existing collection directly
+            # from the ChromaDB client — this always reflects the true total
+            # regardless of edition or mode.
+            try:
+                all_collections = client.list_collections()
+                chunk_count = sum(
+                    client.get_collection(
+                        name=col.name,
+                        embedding_function=embedding_func
+                    ).count()
+                    for col in all_collections
+                )
+            except Exception:
+                chunk_count = 0
             db_ok = True
-            chunk_count = collection.count()
         except Exception as exc:
             db_ok = False
             chunk_count = 0
@@ -1381,20 +1430,17 @@ def _scoped_collections_for_ctx(ctx):
     # Two SEPARATE elevated capabilities (decoupled by design):
     #   • read_all_role_scopes (role cap; owner has it) → read every role:*
     #     collection ("see all team knowledge bases").
-    #   • can_manage_users (per-user flag in users.json, independent of role) →
-    #     read every user:* PRIVATE collection ("data custodian": cleanup when an
-    #     employee leaves, administer the database). This is deliberately a flag,
-    #     not a role, so an owner can DELEGATE custody to e.g. an office manager
-    #     without making them a full owner. NOTE: company-server user: collections
-    #     are administrative workspace, NOT true privacy — real privacy is a
-    #     separate AI-Prowler install on the employee's own PC. Communicate this
-    #     to employees in onboarding.
+    #   • owner only → read every user:* PRIVATE collection for browsing.
+    #     can_manage_users grants ADMIN/DELETE rights (via _can_manage_user_data)
+    #     but NOT read-browse rights over other employees' private dirs.
+    #     Every user sees only their own private dir when browsing; the owner
+    #     sees all. This separation was clarified in v7.0.1 (Vicki bug fix).
     caps = _role_caps(user.get("role"))
     can_read_all_roles    = bool(caps.get("read_all_role_scopes")) or _is_admin(user)
-    # Owner ALWAYS has custody (implicit can_manage_users); a non-owner needs the
-    # flag explicitly set. The owner reads all privates incl. their own; admins
-    # read all employees' privates but are blocked from the owner's (below).
-    can_read_all_privates = _user_has_role(user, "owner") or bool(user.get("can_manage_users"))
+    # Only the owner gets full custody read over all user: private collections.
+    # Non-owner admins (can_manage_users=True) use _can_manage_user_data for
+    # cleanup operations but never browse other employees' private dirs.
+    can_read_all_privates = _user_has_role(user, "owner")
 
     if can_read_all_roles or can_read_all_privates:
         # Build the elevated set from physical collections directly (avoids any
@@ -1425,19 +1471,38 @@ def _scoped_collections_for_ctx(ctx):
                 _add_phys(phys)
 
         # Elevated private/custody visibility (can_manage_users). The OWNER's
-        # private collection is PROTECTED: an admin (can_manage_users but not the
-        # owner) can read every employee's private collection EXCEPT the owner's.
-        # The owner's private space is private even from their own admins. The
-        # owner themself reads everything (they're not excluded from their own).
+        # private collection is PROTECTED from every non-owner, including admins
+        # with can_manage_users=True (the "Vicki bug" fix, v7.0.1).
+        #
+        # FAIL-CLOSED: if the owner's id cannot be determined at read-time,
+        # a non-owner admin is DENIED access to ALL user: private collections
+        # rather than accidentally granting access to the owner's directory.
+        # The owner themselves is never excluded from their own collection.
         if can_read_all_privates:
             requester_is_owner = _user_has_role(user, "owner")
-            owner_id = None if requester_is_owner else _owner_user_id()
-            owner_priv_phys = (chroma_collection_name(f"user:{owner_id}")
-                               if owner_id else None)
-            for phys in _enumerate_scope_collections(client, "scope-user-"):
-                if owner_priv_phys and phys == owner_priv_phys:
-                    continue  # protect the owner's private data from admins
-                _add_phys(phys)
+            if requester_is_owner:
+                # Owner sees all user: private collections including their own.
+                for phys in _enumerate_scope_collections(client, "scope-user-"):
+                    _add_phys(phys)
+            else:
+                # Non-owner admin (can_manage_users=True): enumerate all
+                # employee private collections but NEVER the owner's.
+                # Fail-closed: if we cannot identify the owner, deny the
+                # entire scope-user-* enumeration to this requester.
+                owner_id = _owner_user_id()
+                if owner_id is None:
+                    _log.warning(
+                        "_scoped_collections_for_ctx: owner_id unknown — "
+                        "denying scope-user-* to non-owner admin '%s' (fail-closed)",
+                        user.get("id", "?"),
+                    )
+                    # Skip scope-user-* entirely for this requester.
+                else:
+                    owner_priv_phys = chroma_collection_name(f"user:{owner_id}")
+                    for phys in _enumerate_scope_collections(client, "scope-user-"):
+                        if phys == owner_priv_phys:
+                            continue  # owner's personal dir is off-limits
+                        _add_phys(phys)
 
         return cols
 
@@ -3359,7 +3424,7 @@ def record_learning(
     content: str,
     category: str = "general",
     context: str = "",
-    source: str = "operator",
+    source: str = "",
     confidence: float = 0.8,
     tags: str = "",
     supersedes_id: str = "",
@@ -3438,7 +3503,16 @@ def record_learning(
         context:        WHY this learning was created — the situation or trigger.
                         Example: "Discovered during the March 2026 HVAC project
                         when we couldn't reach Client X for 2 days by phone."
-        source:         How this learning originated (default: operator).
+        source:         How this learning originated. Leave BLANK — the system
+                        automatically stamps the correct value:
+                          • Server mode, user recorded it → user's display name
+                            e.g. "David Vavro" or "Vicki Vavro"
+                          • Claude auto-detected it       → model id
+                            e.g. "claude-sonnet-4-6"
+                          • Personal mode, owner recorded → owner name from
+                            Settings, or "operator" if not configured.
+                        Only supply a custom value when importing from another
+                        system and you need to preserve the original attribution.
         confidence:     How confident we are in this learning, 0.0 to 1.0
                         (default: 0.8).  Use lower values for uncertain insights,
                         higher for verified facts.
@@ -3473,15 +3547,37 @@ def record_learning(
 
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
 
-    # Server-mode attribution: resolve the calling user and stamp their name.
-    # In personal mode _current_user() returns None → recorded_by stays "".
+    # Server-mode attribution: resolve the calling user and stamp their name
+    # AND their token ID for ownership enforcement on delete/update.
+    # In personal mode _current_user() returns None → both stay "".
     _user = _current_user(ctx)
-    _recorded_by = ""
+    _recorded_by    = ""
+    _recorded_by_id = ""
     if _user is not None:
-        _recorded_by = (_user.get("name") or "").strip()
+        _recorded_by_id = (_user.get("id") or "").strip()
+        _recorded_by    = (_user.get("name") or "").strip()
         if not _recorded_by:
-            # Fallback: use role if name is missing (should not happen in practice)
             _recorded_by = _user.get("role", "").strip()
+
+    # Resolve the source label:
+    #   - Claude auto-detected it          → model name e.g. "claude-sonnet-4-6"
+    #   - Server mode, user recorded it    → user's display name e.g. "David Vavro"
+    #   - Personal mode, owner recorded it → owner_name from config, or "operator"
+    #   - Caller supplied a meaningful source → use it as-is
+    #
+    # NOTE: Claude historically passed source="operator" explicitly because the
+    # old docstring said "(default: operator)". We treat "operator" the same as
+    # blank — auto-resolve it — so the user identity is always stamped correctly
+    # regardless of what Claude passes. Only a genuinely custom source (not
+    # "operator" and not empty) is preserved as-is.
+    _source_is_auto = not source or source.strip() == "operator"
+    if _source_is_auto:
+        if auto_detected:
+            source = _MODEL_ID
+        elif _recorded_by:
+            source = _recorded_by
+        else:
+            source = _get_personal_owner_name() or "operator"
 
     try:
         learning = _sl.record_learning(
@@ -3496,6 +3592,13 @@ def record_learning(
             outcome=outcome,
             recorded_by=_recorded_by,
         )
+        # Stamp the token-based owner ID for ownership enforcement.
+        # recorded_by is a display name (may change); recorded_by_id is
+        # the stable bearer-token key from users.json — used by
+        # delete_learning / update_learning to check "is this yours?".
+        if _recorded_by_id:
+            learning["recorded_by_id"] = _recorded_by_id
+            _sl._save_db_for_learning(learning)   # persist the id field
     except Exception as exc:
         return f"❌ Failed to record learning: {exc}"
 
@@ -3854,18 +3957,16 @@ def list_learnings(
 def update_learning(
     learning_id: str,
     updates: dict,
+    ctx: Context = None,
 ) -> str:
     """
     Update an existing learning's fields.
 
-    Use this to refine a learning after new information becomes available,
-    change its confidence level, update the outcome after seeing results,
-    or archive/deprecate it manually.
-
-    IMPORTANT: Also use this when the user says a recorded learning is
-    wrong or needs adjustment after seeing a confirmation message.
-    This is part of the Confirmation Protocol — if the user corrects
-    a learning, call this immediately.
+    Ownership rules (server mode):
+      • Each employee may only update learnings they personally recorded.
+      • Managers may update any employee's learning.
+      • The owner may update any learning.
+      • Nobody except the owner may update the owner's own learnings.
 
     Args:
         learning_id:  The UUID of the learning to update.
@@ -3874,8 +3975,7 @@ def update_learning(
                       title, content, context, category, confidence,
                       tags (list), status (active/deprecated/archived),
                       outcome (positive/negative/neutral/unknown)
-                      Example: {"confidence": 0.95, "outcome": "positive",
-                                "status": "active"}
+        ctx:          MCP context (injected automatically).
 
     Returns:
         Confirmation of updated fields, or error if learning not found.
@@ -3889,6 +3989,15 @@ def update_learning(
         return "❌ learning_id is required."
     if not updates:
         return "❌ No updates provided."
+
+    # ── Ownership gate ──────────────────────────────────────────────────────
+    _user_ul = _current_user(ctx)
+    if _user_ul is not None:
+        existing = _sl.get_learning_by_id(learning_id.strip())
+        _oid = _owner_user_id()
+        _ok, _reason = _can_modify_learning(_user_ul, existing, _oid)
+        if not _ok:
+            return f"⛔ update_learning: {_reason}"
 
     try:
         result = _sl.update_learning(learning_id.strip(), updates)
@@ -3914,12 +4023,65 @@ def update_learning(
     return "\n".join(lines)
 
 
+def _can_modify_learning(actor: "dict | None", learning: "dict | None",
+                         owner_id: "str | None") -> tuple:
+    """Decide whether `actor` may DELETE or UPDATE `learning`. PURE.
+
+    Ownership rules (server mode):
+      • Personal mode (actor is None) — always allowed.
+      • Owner role — may modify any learning.
+      • Manager (can_manage_users) — may modify any employee's learning
+        but NEVER the owner's (same fail-closed logic as _can_manage_user_data).
+      • Staff / field_crew — may only modify learnings they recorded
+        (recorded_by_id == actor["id"]).
+      • Nobody may modify a learning whose recorded_by_id is the owner's id
+        unless they ARE the owner.
+
+    Returns (allowed: bool, reason: str).
+    """
+    if actor is None:
+        return (True, "personal mode — no ownership gate")
+    if learning is None:
+        return (False, "learning not found")
+
+    learning_owner_id = (learning.get("recorded_by_id") or "").strip()
+    actor_id          = (actor.get("id") or "").strip()
+
+    # Owner role: unrestricted.
+    if _user_has_role(actor, "owner"):
+        return (True, "owner may modify any learning")
+
+    # Is this learning owned by the system owner? Only owner role may touch it.
+    # Fail-closed: if owner_id is unknown, deny to avoid risk.
+    if owner_id and learning_owner_id == owner_id:
+        return (False, "only the owner may modify their own learnings")
+    if not owner_id and learning_owner_id:
+        return (False,
+                "owner id unknown — refusing to risk owner learning (fail closed)")
+
+    # Manager with can_manage_users: may modify any employee's learning.
+    if actor.get("can_manage_users"):
+        return (True, "manager may modify employee learnings")
+
+    # Staff / field_crew: only their own.
+    if learning_owner_id and actor_id and learning_owner_id == actor_id:
+        return (True, "actor is the learning's author")
+
+    # Unattributed learning (personal mode / legacy, recorded_by_id is empty).
+    if not learning_owner_id:
+        return (True, "unattributed learning — no ownership restriction")
+
+    return (False,
+            "learning belongs to another user — only the author, "
+            "a manager, or the owner may modify it")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # TOOL — delete_learning
 # ══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
-def delete_learning(learning_id: str) -> str:
+def delete_learning(learning_id: str, ctx: Context = None) -> str:
     """
     Permanently delete a learning from both the JSON file and ChromaDB index.
 
@@ -3927,14 +4089,18 @@ def delete_learning(learning_id: str) -> str:
     Consider using update_learning with status='archived' instead if you
     want to keep it for historical reference.
 
-    Use this when the user rejects a learning after seeing the confirmation
-    message and says to remove it entirely (part of Confirmation Protocol).
+    Ownership rules (server mode):
+      • Each employee may only delete learnings they personally recorded.
+      • Managers may delete any employee's learning (for moderation/offboarding).
+      • The owner may delete any learning.
+      • Nobody except the owner may delete the owner's own learnings.
 
     Args:
         learning_id:  The UUID of the learning to delete.
+        ctx:          MCP context (injected automatically).
 
     Returns:
-        Confirmation or error if not found.
+        Confirmation or error if not found / not authorized.
     """
     if not _SELF_LEARNING_AVAILABLE:
         return ("❌ Self-Learning module not available.\n"
@@ -3943,6 +4109,15 @@ def delete_learning(learning_id: str) -> str:
 
     if not learning_id.strip():
         return "❌ learning_id is required."
+
+    # ── Ownership gate ──────────────────────────────────────────────────────
+    _user_dl = _current_user(ctx)
+    if _user_dl is not None:
+        existing = _sl.get_learning_by_id(learning_id.strip())
+        _oid = _owner_user_id()
+        _ok, _reason = _can_modify_learning(_user_dl, existing, _oid)
+        if not _ok:
+            return f"⛔ delete_learning: {_reason}"
 
     try:
         deleted = _sl.delete_learning(learning_id.strip())
@@ -8991,9 +9166,41 @@ def _check_db_cap(user: "dict | None", level: str = "full") -> tuple:
     return (False, f"_check_db_cap: unknown level {level!r}")
 
 
+def _make_user_id(name: str) -> str:
+    """Generate a stable, lowercase slug id from a display name.
+
+    Examples:
+        "David Vavro"  -> "david-vavro"
+        "Vicki Vavro"  -> "vicki-vavro"
+        "Field Crew 1" -> "field-crew-1"
+
+    Rules:
+        - Lowercase
+        - Spaces and underscores become hyphens
+        - All non-alphanumeric/hyphen characters stripped
+        - Multiple consecutive hyphens collapsed to one
+        - Leading/trailing hyphens removed
+    """
+    import re
+    slug = name.strip().lower()
+    slug = re.sub(r'[\s_]+', '-', slug)       # spaces/underscores -> hyphens
+    slug = re.sub(r'[^a-z0-9-]', '', slug)    # strip non-alphanumeric/hyphen
+    slug = re.sub(r'-+', '-', slug)            # collapse multiple hyphens
+    slug = slug.strip('-')                     # remove leading/trailing hyphens
+    return slug or "unknown-user"
+
+
 def _resolve_user(users_data: "dict | None", token: str) -> "dict | None":
     """Look up a bearer token in users.json data. Returns the user dict
     (augmented with 'id') if found AND active, else None. PURE.
+
+    v7.0.1 — The users.json dict key is the bearer token (legacy design).
+    The stable user ID is now derived from the display name as a lowercase
+    hyphenated slug (e.g. "David Vavro" -> "david-vavro"), NOT from the
+    bearer token. This decouples identity from credentials so that:
+      - Token regeneration never changes a user's ChromaDB collection name
+      - Private collections have human-readable names (scope-user-david-vavro)
+      - collection_map entries use predictable, stable ids
 
     A non-active status ('suspended'/'revoked') resolves to None — a soft-revoke
     that denies access without losing the audit record. Matches §6.4 steps 1-2.
@@ -9001,14 +9208,15 @@ def _resolve_user(users_data: "dict | None", token: str) -> "dict | None":
     if not token or not users_data:
         return None
     users = users_data.get("users", {})
+    # The dict key is the legacy bearer token; look it up directly.
     entry = users.get(token)
     if not isinstance(entry, dict):
         return None
     if entry.get("status", "active") != "active":
         return None
-    # Return a shallow copy with the id folded in, so callers have everything.
+    # Return a shallow copy with the stable slug id derived from display name.
     user = dict(entry)
-    user["id"] = token
+    user["id"] = _make_user_id(user.get("name", token))
     # Normalize role to the known set (defense against a hand-edited users.json).
     if user.get("role") not in _USER_ROLES:
         user["role"] = "field_crew"
@@ -9020,12 +9228,6 @@ def _current_user(ctx) -> "dict | None":
     to this request, via the FastMCP Context. Returns None in personal mode
     (no server-mode middleware, so no user on request.state) or if anything in
     the chain is absent. PURE-ish (only reads ctx; no other I/O). Never raises.
-
-    The access path (ctx.request_context.request.state.user) was confirmed
-    against the live FastMCP version by the Step-2 context probe: the auth
-    middleware sets request.state.user, and FastMCP exposes the genuine
-    per-call Starlette Request here — so this is the safe per-request identity,
-    not ambient/thread-local state.
     """
     if ctx is None:
         return None
@@ -9336,6 +9538,17 @@ def _build_collection_resolver(user: "dict | None", users_data: "dict | None" = 
         except Exception:
             allowed = False
         if allowed:
+            # Warn if the file matched no rule and fell to the default collection.
+            # In server mode, an unmatched file silently landing in 'shared' is a
+            # data-leakage risk — the operator should fix their collection_map rules.
+            if (target == mapping.get("default_collection")
+                    and mapping.get("rules")
+                    and target in ("shared", _SHARED_COLLECTION)):
+                _log.warning(
+                    "collection_map: no rule matched '%s' — fell to default '%s'. "
+                    "All users can read the shared collection. "
+                    "Add a matching prefix rule to prevent unintended exposure.",
+                    filepath, target)
             return target
         own_private = f"user:{user.get('id')}" if user.get("id") else "documents"
         return own_private
@@ -9456,18 +9669,23 @@ def _load_users() -> "dict | None":
 
 
 def _owner_user_id(users_data: "dict | None" = None) -> "str | None":
-    """Return the user id (token) of the OWNER from users.json, or None if no
+    """Return the stable slug id of the OWNER from users.json, or None if no
     owner is defined / users.json absent. Used to PROTECT the owner's private
     collection from admins (can_manage_users grants read of all OTHER users'
     privates, but never the owner's). If multiple owners exist (unusual), the
-    first found is returned. PURE given users_data; loads it if not supplied."""
+    first found is returned. PURE given users_data; loads it if not supplied.
+
+    v7.0.1: returns the slug id derived from the owner's display name
+    (e.g. "david-vavro"), NOT the bearer token key. Consistent with
+    _resolve_user which also derives id from name.
+    """
     if users_data is None:
         users_data = _load_users()
     if not users_data:
         return None
     for uid, entry in (users_data.get("users") or {}).items():
         if isinstance(entry, dict) and (entry.get("role") or "").strip().lower() == "owner":
-            return uid
+            return _make_user_id(entry.get("name", uid))
     return None
 
 
@@ -9616,7 +9834,10 @@ def _run_server_mode(port: int, token: str,
     # issued_access_token -> original users.json bearer token (for _resolve_user)
     _srv_access_tokens: dict = {}
     # Pre-populate with every existing users.json token so curl/manual clients
-    # that present their raw token directly still work without OAuth dance.
+    # that present their raw bearer token directly still work without OAuth dance.
+    # The dict key in users.json IS the bearer token (legacy schema), so we
+    # map token -> token here. _resolve_user will derive the stable slug id
+    # from the user's display name — the token never becomes the id.
     for _ut in (users_data.get("users") or {}).keys():
         _srv_access_tokens[_ut] = _ut
 
@@ -9906,8 +10127,14 @@ def _run_server_mode(port: int, token: str,
 
             # Resolve the presented token: it may be an OAuth-issued access
             # token (map back to users.json token first) or a raw users.json token.
+            # Hot-reload users.json so suspensions/additions take effect
+            # immediately without a server restart.
+            _live_users = _load_users() or users_data
+            for _new_tok in (_live_users.get("users") or {}).keys():
+                if _new_tok not in _srv_access_tokens:
+                    _srv_access_tokens[_new_tok] = _new_tok
             raw_user_token = _srv_access_tokens.get(tok, tok)
-            user = _resolve_user(users_data, raw_user_token)
+            user = _resolve_user(_live_users, raw_user_token)
             if user is None:
                 _log.info("Auth rejected for token …%s on %s",
                           tok[-4:] if tok else "", path)
@@ -10947,16 +11174,7 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
             #              Accept: application/json, text/event-stream
             #   GET  /mcp: Accept: text/event-stream
             #
-            # Log ALL incoming headers on /mcp requests so we can see exactly
-            # what Claude.ai sends (invaluable for debugging transport issues).
             if path == "/mcp":
-                # Dump headers to log for diagnosis
-                incoming_hdrs = scope.get("headers", [])
-                _log.debug("--- HEADERS from Claude.ai (%s %s) ---", method, path)
-                for hk, hv in incoming_hdrs:
-                    _log.debug("  %s: %s", hk.decode("utf-8","replace"), hv.decode("utf-8","replace"))
-                _log.debug("--- END HEADERS ---")
-
                 # Shallow-copy scope so we can modify headers safely
                 scope = dict(scope)
                 headers = list(scope.get("headers", []))
@@ -11034,24 +11252,19 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
 
                 scope["headers"] = new_hdrs
 
-            # Wrap send() to log what status code FastMCP actually returns.
-            # This is critical for diagnosis — we can see if it's still 421
-            # and whether our header injections took effect.
+            # Wrap send() to log error status codes from FastMCP.
             _resp_status = []
             async def _logging_send(message):
                 if message.get("type") == "http.response.start":
                     _resp_status.append(message.get("status", "?"))
-                    _log.info("FASTMCP RESPONSE: %s %s → HTTP %s",
-                              method, path, message.get("status", "?"))
-                    if message.get("status", 200) >= 400:
-                        resp_hdrs = message.get("headers", [])
-                        for rk, rv in resp_hdrs:
-                            _log.debug("  RESP-HDR  %s: %s",
-                                       rk.decode("utf-8","replace"),
-                                       rv.decode("utf-8","replace"))
+                    status = message.get("status", 200)
+                    if status >= 400:
+                        _log.warning("FASTMCP RESPONSE: %s %s → HTTP %s",
+                                     method, path, status)
                 await send(message)
 
             _log.debug("AUTH OK  -> mcp_asgi  (%s %s)", method, path)
+
             await mcp_asgi(scope, receive, _logging_send)
 
     app = _RouterASGI()

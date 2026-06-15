@@ -60,10 +60,12 @@ def _path_in_list(path: str, path_list: list) -> bool:
 
 def _path_in_text(path: str, text: str) -> bool:
     """True iff `path` appears in `text` (e.g. tool output) regardless of
-    separator. We try both the forward-slash and backslash forms because
-    text output isn't normalised at all."""
+    separator or case. We try both the forward-slash and backslash forms, and
+    both the original and lowercase variants, since tool output may normalise
+    separators but preserves user case."""
     p = str(Path(path).resolve())
-    return p in text or p.replace("\\", "/") in text or p.replace("/", "\\") in text
+    candidates = {p, p.replace("\\", "/"), p.replace("/", "\\")}
+    return any(c in text or c.lower() in text.lower() for c in candidates)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

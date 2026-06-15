@@ -402,7 +402,7 @@ class TestResolveUser:
         u = mu_api.resolve(_users_doc(), "mgr0000000000000")
         assert u is not None
         assert u["role"] == "manager"
-        assert u["id"] == "mgr0000000000000"   # id folded in
+        assert u["id"] == "mona-manager"   # slug from "Mona Manager" via _make_user_id()
 
     def test_C_MCP_MU_02_unknown_token_is_none(self, mu_api):
         assert mu_api.resolve(_users_doc(), "nope") is None
@@ -440,8 +440,8 @@ class TestAllowedCollections:
         cols = mu_api.allowed(u, self.ALL_ROLES)
         for rc in self.ALL_ROLES:
             assert rc in cols, rc
-        # Owner has private enabled too.
-        assert "user:owner00000000000" in cols
+        # Owner has private enabled too — slug from "Olive Owner".
+        assert "user:olive-owner" in cols
 
     def test_C_MCP_MU_13_manager_only_assigned_scopes(self, mu_api):
         u = mu_api.resolve(_users_doc(), "mgr0000000000000")
@@ -453,7 +453,8 @@ class TestAllowedCollections:
 
     def test_C_MCP_MU_14_manager_private_collection_when_enabled(self, mu_api):
         u = mu_api.resolve(_users_doc(), "mgr0000000000000")
-        assert "user:mgr0000000000000" in mu_api.allowed(u, self.ALL_ROLES)
+        # Private collection key is "user:<slug>" where slug = _make_user_id("Mona Manager")
+        assert "user:mona-manager" in mu_api.allowed(u, self.ALL_ROLES)
 
     def test_C_MCP_MU_15_field_no_private_when_disabled(self, mu_api):
         u = mu_api.resolve(_users_doc(), "field00000000000")
@@ -500,7 +501,8 @@ class TestCanIndex:
 
     def test_C_MCP_MU_24_manager_own_private_ok(self, mu_api):
         u = mu_api.resolve(_users_doc(), "mgr0000000000000")
-        ok, _ = mu_api.can_index(u, "user:mgr0000000000000")
+        # Own private uses slug id: _make_user_id("Mona Manager") = "mona-manager"
+        ok, _ = mu_api.can_index(u, "user:mona-manager")
         assert ok is True
 
     def test_C_MCP_MU_25_manager_cannot_index_others_private(self, mu_api):
@@ -515,8 +517,8 @@ class TestCanIndex:
         # Assigned scope (scope:office) → allowed.
         ok, _ = mu_api.can_index(u, "scope:office")
         assert ok is True, "staff should index their assigned scope"
-        # Own private → allowed.
-        ok, _ = mu_api.can_index(u, "user:staff00000000000")
+        # Own private → allowed. slug from "Sam Staff" = "sam-staff"
+        ok, _ = mu_api.can_index(u, "user:sam-staff")
         assert ok is True, "staff should index their own private collection"
         # Shared commons → denied (can_write_shared=False for staff).
         ok, _ = mu_api.can_index(u, "shared")
@@ -964,10 +966,11 @@ class TestDataManagement:
 
     def test_C_MCP_MANAGE_08_owner_id_lookup(self, manage_api):
         users = {"users": {
-            "tokOwner": {"role": "owner"},
-            "tokMgr":   {"role": "manager"},
+            "tokOwner": {"name": "Owner Person", "role": "owner"},
+            "tokMgr":   {"name": "Mgr Person",   "role": "manager"},
         }}
-        assert manage_api.owner_id(users) == "tokOwner"
+        # _owner_user_id now returns slug from display name, not the dict key
+        assert manage_api.owner_id(users) == "owner-person"
 
     def test_C_MCP_MANAGE_09_owner_id_none_when_no_owner(self, manage_api):
         users = {"users": {"tokMgr": {"role": "manager"}}}

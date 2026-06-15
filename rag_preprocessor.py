@@ -277,8 +277,45 @@ def normalise_path(filepath: str) -> str:
     Using backslashes everywhere gives a single canonical form that is native
     to Windows, matches what Explorer and cmd show, and allows users to
     copy-paste paths from the GUI directly into cmd/Explorer without conversion.
+
+    NOTE: case is intentionally PRESERVED here. Windows is case-insensitive
+    at the filesystem level, but we store the user's original casing so the
+    GUI displays what the admin typed. All path COMPARISONS (tracking DB
+    lookup, auto-update list deduplication, untrack operations) must use
+    path_equals() or path_startswith() which do case-insensitive comparison
+    on Windows — never raw string equality.
     """
     return str(filepath).replace('/', '\\')
+
+
+def path_equals(a: str, b: str) -> bool:
+    """Case-insensitive path equality on Windows, case-sensitive on POSIX.
+    Always compares backslash-normalised forms. Use this everywhere two
+    tracked paths need to be compared — never use raw string equality.
+
+    v7.0.1 — introduced to fix the case-mismatch bug where untracking
+    'David-Vavro-Private' would fail to find 'david-vavro-private' in the
+    tracking DB even though Windows treats them as the same folder."""
+    import sys as _sys
+    na, nb = normalise_path(a), normalise_path(b)
+    if _sys.platform == 'win32':
+        return na.lower() == nb.lower()
+    return na == nb
+
+
+def path_startswith(child: str, parent: str) -> bool:
+    """Return True if `child` is equal to or underneath `parent`, using
+    case-insensitive comparison on Windows. Handles the trailing-separator
+    edge case so 'C:\\Foo' does not spuriously match 'C:\\FooBar'.
+
+    v7.0.1 — use this for ChromaDB chunk filepath matching and collection_map
+    prefix resolution instead of raw str.startswith()."""
+    import sys as _sys
+    nc = normalise_path(child)
+    np = normalise_path(parent).rstrip('\\')
+    if _sys.platform == 'win32':
+        nc, np = nc.lower(), np.lower()
+    return nc == np or nc.startswith(np + '\\')
 
 # When False, rag_query only prints the AI answer — no headers, chunk info,
 # source list, or timing. Saved to config so the GUI toggle persists.
@@ -722,10 +759,22 @@ _embedding_func_cache = None
 # Configuration file location
 CONFIG_FILE = Path.home() / '.rag_config.json'
 
+# Owner's display name for personal mode — shown as `source` in learnings
+# recorded by the owner on a personal install. Set via Settings tab.
+OWNER_NAME: str = ""
+
+# Allow the test sandbox (and power users) to redirect ChromaDB to a different
+# directory via env var. AIPROWLER_TEST_STATE_DIR is the sandbox root; we place
+# the DB in a 'rag_database' subdir there — same layout as production.
+# If neither env var is set, defaults to the standard production location.
+_TEST_STATE_DIR = os.environ.get("AIPROWLER_TEST_STATE_DIR", "").strip()
+if _TEST_STATE_DIR:
+    CHROMA_DB_PATH = str(Path(_TEST_STATE_DIR) / 'rag_database')
+
 def load_config():
     """Load configuration from file"""
     global OLLAMA_MODEL, OLLAMA_URL, CHUNK_SIZE, CHUNK_OVERLAP, SHOW_SOURCES, GPU_LAYERS, DEBUG_OUTPUT
-    global ACTIVE_PROVIDER, PROVIDER_API_KEYS, PROVIDER_TIMEOUTS, OCR_DEBUG
+    global ACTIVE_PROVIDER, PROVIDER_API_KEYS, PROVIDER_TIMEOUTS, OCR_DEBUG, OWNER_NAME
 
     config = {}
     if CONFIG_FILE.exists():
@@ -742,6 +791,7 @@ def load_config():
                 OCR_DEBUG        = config.get('ocr_debug',       OCR_DEBUG)
                 ACTIVE_PROVIDER  = config.get('active_provider', ACTIVE_PROVIDER)
                 PROVIDER_API_KEYS= config.get('provider_api_keys', {})
+                OWNER_NAME       = config.get('owner_name',      OWNER_NAME)
                 # Load timeouts but discard any that have already expired
                 raw_timeouts = config.get('provider_timeouts', {})
                 now = time.time()
@@ -797,7 +847,7 @@ def save_config(model=None, url=None, chunk_size=None, chunk_overlap=None,
                 show_sources=None, gpu_layers=None, mic_silence_secs=None,
                 debug_output=None, debug_view=None, auto_start_ollama=None,
                 active_provider=None, provider_api_keys=None, provider_timeouts=None,
-                ocr_debug=None):
+                ocr_debug=None, owner_name=None):
     """Save configuration to file"""
     config = {}
 
@@ -822,6 +872,7 @@ def save_config(model=None, url=None, chunk_size=None, chunk_overlap=None,
     if provider_api_keys  is not None: config['provider_api_keys']  = provider_api_keys
     if provider_timeouts  is not None: config['provider_timeouts']  = provider_timeouts
     if ocr_debug          is not None: config['ocr_debug']          = ocr_debug
+    if owner_name         is not None: config['owner_name']         = owner_name.strip()
 
     try:
         with open(CONFIG_FILE, 'w') as f:
@@ -4844,14 +4895,51 @@ def save_email_index(db: dict) -> bool:
 EMAIL_ARCHIVE_EXTENSIONS = {'.mbox', '.rmail', '.babyl', '.mmdf'}
 
 def load_tracking_database():
-    """Load file tracking database"""
+    """Load file tracking database. On Windows, collapses any case-variant
+    duplicate keys into one canonical entry (keeping the most recently scanned)
+    so a DB corrupted by pre-fix adds is self-healed on first load."""
+    import sys as _sys
+    raw = {}
     if TRACKING_DB.exists():
         try:
             with open(TRACKING_DB, 'r') as f:
-                return json.load(f)
+                raw = json.load(f)
         except:
             return {}
-    return {}
+
+    if _sys.platform != 'win32' or not raw:
+        return raw
+
+    # Self-heal: collapse case-variant duplicate keys.
+    # Group all keys by their lowercase form; if a group has more than one
+    # entry keep the one with the most recent last_scan, then re-key it under
+    # the Path.resolve() casing so it matches what Windows shows on disk.
+    from collections import defaultdict
+    groups = defaultdict(list)
+    for k in raw:
+        groups[k.lower()].append(k)
+
+    healed = {}
+    for lower_key, variants in groups.items():
+        if len(variants) == 1:
+            healed[variants[0]] = raw[variants[0]]
+        else:
+            # Pick the entry with the latest last_scan
+            def _scan_ts(k):
+                ts = raw[k].get('last_scan') or raw[k].get('first_scan') or ''
+                return ts
+            winner = max(variants, key=_scan_ts)
+            healed[winner] = raw[winner]
+
+    if len(healed) != len(raw):
+        # Write the healed DB back immediately so future loads are clean
+        try:
+            with open(TRACKING_DB, 'w') as f:
+                json.dump(healed, f, indent=2)
+        except Exception:
+            pass
+
+    return healed
 
 def save_tracking_database(db):
     """Save file tracking database"""
@@ -4902,8 +4990,15 @@ def scan_directory_for_changes(directory, recursive=True, quiet=False):
     # Load tracking database
     tracking_db = load_tracking_database()
     dir_key = normalise_path(str(root_path))
-    
-    if dir_key not in tracking_db:
+
+    # Find any existing case-variant key (e.g. "David-Vavro-Private" when we
+    # resolved to "david-vavro-private"). Reuse and rename it so we never
+    # create two entries pointing at the same physical folder on Windows.
+    existing_key = next((k for k in tracking_db if path_equals(k, dir_key)), None)
+    if existing_key is not None and existing_key != dir_key:
+        # Rename to current resolved casing, preserving all scan history
+        tracking_db[dir_key] = tracking_db.pop(existing_key)
+    elif existing_key is None:
         tracking_db[dir_key] = {
             'first_scan': datetime.now().isoformat(),
             'last_scan': None,
@@ -5575,15 +5670,43 @@ AUTO_UPDATE_LIST = Path.home() / '.rag_auto_update_dirs.json'
 
 def load_auto_update_list():
     """Load list of directories to auto-update.
-    Returns paths normalised to Windows backslashes."""
+    Returns paths normalised to Windows backslashes. On Windows, collapses
+    any case-variant duplicates into one entry (keeps the first occurrence)
+    so a list corrupted by pre-fix adds is self-healed on first load."""
+    import sys as _sys
     if AUTO_UPDATE_LIST.exists():
         try:
             with open(AUTO_UPDATE_LIST, 'r') as f:
                 data = json.load(f)
-                return [normalise_path(d) for d in data.get('directories', [])]
+            dirs = [normalise_path(d) for d in data.get('directories', [])]
         except:
             return []
-    return []
+    else:
+        return []
+
+    if _sys.platform != 'win32':
+        return dirs
+
+    # Self-heal: deduplicate case-variant entries, preserving first occurrence.
+    seen_lower = set()
+    deduped = []
+    for d in dirs:
+        key = d.lower()
+        if key not in seen_lower:
+            seen_lower.add(key)
+            deduped.append(d)
+
+    if len(deduped) != len(dirs):
+        # Write healed list back immediately
+        try:
+            data = {'directories': deduped,
+                    'last_updated': datetime.now().isoformat()}
+            with open(AUTO_UPDATE_LIST, 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception:
+            pass
+
+    return deduped
 
 def save_auto_update_list(directories):
     """Save list of directories to auto-update.
@@ -5601,30 +5724,60 @@ def save_auto_update_list(directories):
         return False
 
 def add_to_auto_update_list(directory):
-    """Add directory to auto-update list and regenerate script."""
+    """Add directory to auto-update list and regenerate script.
+
+    On Windows, if a case-variant of this path is already tracked (e.g.
+    'David-Vavro-Private' exists when adding 'david-vavro-private'), the old
+    entry is silently removed and replaced with the new casing. Windows is
+    case-insensitive so both names point to the same physical folder — only
+    one entry should ever exist in the list.
+
+    Returns:
+        True   — new directory added (no prior entry existed)
+        str    — warning message if a case-variant was replaced (caller should
+                 surface this to the user so they know the old entry was removed)
+        False  — directory already tracked under the exact same casing (no-op)
+    """
+    import sys as _sys
     directory = normalise_path(str(Path(directory).resolve()))
     dirs = load_auto_update_list()
 
-    if directory not in dirs:
-        dirs.append(directory)
-        save_auto_update_list(dirs)
+    # Exact match — already tracked, nothing to do
+    if any(d == directory for d in dirs):
+        return False
 
-        # Auto-regenerate script with updated list
-        generate_auto_update_script()
+    # On Windows, check for a case-variant of the same physical folder
+    if _sys.platform == 'win32':
+        variant = next((d for d in dirs if path_equals(d, directory)), None)
+        if variant is not None:
+            # Replace the old casing with the new one
+            dirs = [directory if path_equals(d, directory) else d for d in dirs]
+            save_auto_update_list(dirs)
+            generate_auto_update_script()
+            return (
+                f"⚠️  '{Path(variant).name}' was already tracked. "
+                f"Windows treats '{Path(variant).name}' and "
+                f"'{Path(directory).name}' as the same folder — "
+                f"the old entry has been replaced with the new name."
+            )
 
-        return True  # New directory added
-
-    return False  # Directory already in list
+    # Genuinely new — add it
+    dirs.append(directory)
+    save_auto_update_list(dirs)
+    generate_auto_update_script()
+    return True
 
 def remove_from_auto_update_list(directory):
     """Remove directory from auto-update list"""
     directory = normalise_path(str(Path(directory).resolve()))
     dirs = [normalise_path(d) for d in load_auto_update_list()]
 
-    if directory in dirs:
-        dirs.remove(directory)
+    matching = [d for d in dirs if path_equals(d, directory)]
+    if matching:
+        for m in matching:
+            dirs.remove(m)
         save_auto_update_list(dirs)
-        
+
         # Auto-regenerate script with updated list
         generate_auto_update_script()
 
@@ -5649,8 +5802,10 @@ def remove_directory_from_index(directory: str) -> dict:
     # 1. Remove from auto-update list
     try:
         dirs = [normalise_path(d) for d in load_auto_update_list()]
-        if directory in dirs:
-            dirs.remove(directory)
+        matching = [d for d in dirs if path_equals(d, directory)]
+        if matching:
+            for m in matching:
+                dirs.remove(m)
             save_auto_update_list(dirs)
     except Exception as e:
         errors.append(f"Auto-update list: {e}")
@@ -5665,22 +5820,24 @@ def remove_directory_from_index(directory: str) -> dict:
             parent_key = normalise_path(str(target_path.parent.resolve()))
             mutated = False
             # File may have been registered under its own key
-            if directory in tracking_db:
-                del tracking_db[directory]
+            matching_keys = [k for k in tracking_db if path_equals(k, directory)]
+            for k in matching_keys:
+                del tracking_db[k]
                 mutated = True
             # Or it may live inside its parent's 'files' map
-            if parent_key in tracking_db:
-                files_map = tracking_db[parent_key].get('files', {}) or {}
-                if directory in files_map:
-                    del files_map[directory]
-                    tracking_db[parent_key]['files'] = files_map
+            parent_keys = [k for k in tracking_db if path_equals(k, parent_key)]
+            for pk in parent_keys:
+                files_map = tracking_db[pk].get('files', {}) or {}
+                file_keys = [fk for fk in files_map if path_equals(fk, directory)]
+                for fk in file_keys:
+                    del files_map[fk]
                     mutated = True
+                tracking_db[pk]['files'] = files_map
             if mutated:
                 save_tracking_database(tracking_db)
         else:
             keys_to_remove = [k for k in tracking_db
-                              if normalise_path(k) == directory
-                              or normalise_path(k).startswith(directory + '\\')]
+                              if path_startswith(k, directory)]
             for k in keys_to_remove:
                 del tracking_db[k]
             if keys_to_remove:
@@ -5741,7 +5898,7 @@ def remove_directory_from_index(directory: str) -> dict:
                         break
                     for doc_id, meta in zip(batch['ids'], batch['metadatas']):
                         fp = normalise_path(meta.get('filepath', ''))
-                        if fp == directory or fp.startswith(directory + '\\'):
+                        if path_startswith(fp, directory):
                             ids_to_delete.append(doc_id)
                             files_seen.add(fp)
                     offset += pagesize
@@ -5763,8 +5920,7 @@ def remove_directory_from_index(directory: str) -> dict:
     try:
         email_db = load_email_index()
         keys_to_remove = [k for k in email_db
-                          if k == directory
-                          or k.startswith(directory + '/')]
+                          if path_startswith(k, directory)]
         for k in keys_to_remove:
             del email_db[k]
         if keys_to_remove:

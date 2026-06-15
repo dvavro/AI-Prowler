@@ -63,12 +63,17 @@ VALID_CATEGORIES = [
 ]
 
 VALID_SOURCES = [
-    "operator",              # Explicitly told by the user/operator
-    "claude_detected",       # Claude identified superseding information
+    "operator",              # Personal mode, no owner name configured
+    "claude_detected",       # Legacy — Claude identified superseding information
     "project_review",        # Post-project review / retrospective
     "post_mortem",           # After-incident analysis
     "research",              # From web search or document research
     "observation",           # Noticed pattern across conversations
+    # v7.0.1: source is now a free-form attribution field — user display
+    # names (e.g. "David Vavro") and model ids (e.g. "claude-sonnet-4-6")
+    # are valid sources. The whitelist check is no longer enforced so any
+    # non-empty source string is accepted as-is. VALID_SOURCES is kept for
+    # documentation and legacy import compatibility only.
 ]
 
 VALID_STATUSES  = ["active", "deprecated", "archived"]
@@ -174,6 +179,7 @@ def _index_learning(learning: dict):
             "supersedes":    learning.get("supersedes", ""),
             "superseded_by": learning.get("superseded_by", ""),
             "recorded_by":   learning.get("recorded_by", ""),
+            "recorded_by_id": learning.get("recorded_by_id", ""),
         }
         collection.upsert(
             ids=[learning["id"]],
@@ -222,6 +228,30 @@ def _remove_from_index(learning_id: str):
         ) from e
 
 
+def _save_db_for_learning(learning: dict):
+    """Update a single learning record in the JSON store (by id) and
+    re-index it in ChromaDB.  Used to stamp fields like recorded_by_id
+    that are set after record_learning() returns.  NOOP if id not found."""
+    db = _load_db()
+    for i, existing in enumerate(db["learnings"]):
+        if existing.get("id") == learning.get("id"):
+            db["learnings"][i] = learning
+            _save_db(db)
+            _index_learning(learning)
+            return
+
+
+def get_learning_by_id(learning_id: str) -> "dict | None":
+    """Return the learning dict for the given UUID, or None if not found.
+    Used by delete_learning / update_learning to fetch ownership metadata
+    before deciding whether to allow the operation."""
+    db = _load_db()
+    for l in db["learnings"]:
+        if l.get("id") == learning_id:
+            return l
+    return None
+
+
 def reindex_all_learnings():
     """Rebuild the entire learnings ChromaDB collection from the JSON file."""
     db = _load_db()
@@ -267,8 +297,13 @@ def record_learning(
     """
     if category not in VALID_CATEGORIES:
         category = "general"
-    if source not in VALID_SOURCES:
+    # v7.0.1: source is a free-form attribution field (user display name,
+    # model id, or legacy label). Only fall back to "operator" if blank —
+    # never reject a non-empty source just because it's not in VALID_SOURCES.
+    if not source or not source.strip():
         source = "operator"
+    else:
+        source = source.strip()
     if outcome not in VALID_OUTCOMES:
         outcome = "unknown"
     confidence = max(0.0, min(1.0, confidence))
@@ -294,6 +329,11 @@ def record_learning(
         # Server-mode attribution: name of the employee who recorded this.
         # Empty string in personal mode (single-user install).
         "recorded_by":    recorded_by.strip(),
+        # Server-mode ownership: the bearer-token user ID of the employee
+        # who recorded this learning. Used by delete_learning /
+        # update_learning to enforce "only edit your own" in server mode.
+        # Empty string in personal mode (single-user install).
+        "recorded_by_id": "",  # stamped by ai_prowler_mcp.record_learning
         # IDs of other learnings the user has explicitly OK'd as
         # not-a-conflict (used by find_conflicts to suppress repeat
         # flags after user review). Stored bidirectionally.

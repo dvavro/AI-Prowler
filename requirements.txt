@@ -71,6 +71,13 @@ pillow>=10.0.0
 # ── Email parsing ──────────────────────────────────────────────────────────────
 extract-msg>=0.45.0
 
+# ── File system watching (watchdog daemon for real-time auto-indexing) ────────
+# watchdog: cross-platform filesystem event library used by file_watchdog.py.
+# Monitors all tracked directories and triggers reindex_file whenever a file
+# is created, modified, or moved in — zero-touch auto-indexing.
+# Default-on feature controlled via the ⏰ Schedule tab in the GUI.
+watchdog>=4.0.0
+
 # ── HTTP / API ──────────────────────────────────────────────────────────────────────────────
 requests>=2.31.0
 
@@ -93,5 +100,5 @@ numpy>=1.24.0
 # NVIDIA GPU is present and installs the correct build automatically:
 #   - NVIDIA GPU found : pip install torch --index-url .../whl/cu121  (~2.5 GB)
 #   - No GPU found     : pip install torch                            (~200 MB)
-# To install manually with CUDA:  pip install torch --index-url https://download.pytorch.org/whl/cu121
+# To install manually with CUDA:  pip install torch --index-url https://download.pytorch.org/whl/cu128
 # To install manually (CPU only): pip install torch

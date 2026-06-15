@@ -2567,23 +2567,158 @@ or from the Help menu."""
         vsb.grid(row=0, column=1, sticky='ns')
         return inner
 
+    def _create_server_status_tab(self):
+        """Build a minimal Server Status tab for Business Server mode.
+
+        Replaces the full Home/welcome tab so the GUI is clean and
+        purpose-built for a server environment. No ad content, no
+        notification banners, no outbound GitHub fetches.
+
+        Shows: edition/mode badge, version, database path, chunk count,
+        tracked directory count, and a manual Refresh button.
+        """
+        server_frame = ttk.Frame(self.notebook)
+        self.notebook.add(server_frame, text="🖥️ Server")
+
+        # Stub out ad/notification attributes so any shared code that
+        # references them doesn't crash (e.g. _display_notifications).
+        self._notif_frame         = ttk.Frame(server_frame)
+        self._notif_widgets       = []
+        self._update_banner_widget = None
+        self._update_available    = False
+        self._notif_debug_var     = tk.StringVar(value="")
+        self._dismissed_path      = Path.home() / '.ai-prowler' / 'dismissed_notifications.json'
+        self._notif_cache_path    = Path.home() / '.ai-prowler' / 'notifications_cache.json'
+        self._ad_cache_path       = Path.home() / '.ai-prowler' / 'welcome_ad_cache.json'
+        self._ad_local_path       = Path.home() / '.ai-prowler' / 'welcome_config.json'
+        self._notif_url           = ""
+        self._ad_url              = ""
+        self._install_id_path     = Path.home() / '.ai-prowler' / 'install_id'
+        self._telemetry_counter_path = Path.home() / '.ai-prowler' / 'telemetry_counter.json'
+        self._telemetry_last_path    = Path.home() / '.ai-prowler' / 'telemetry_last_success.txt'
+        self._telemetry_lock_path    = Path.home() / '.ai-prowler' / 'telemetry_lock.txt'
+
+        # Schedule telemetry tick (same as Home mode — server still phones home)
+        self.root.after(_TELEMETRY_FIRST_DELAY_SEC * 1000, self._telemetry_tick)
+
+        # ── Layout ────────────────────────────────────────────────────────────
+        container = ttk.Frame(server_frame, padding=(40, 30))
+        container.pack(fill='both', expand=True)
+
+        # Icon
+        try:
+            _icon_path = Path(__file__).parent / 'rag_icon.ico'
+            if _icon_path.exists():
+                from PIL import Image, ImageTk
+                img = Image.open(str(_icon_path))
+                img = img.resize((128, 128), Image.LANCZOS)
+                self._server_icon_ref = ImageTk.PhotoImage(img)
+                ttk.Label(container, image=self._server_icon_ref).pack(anchor='center', pady=(0, 10))
+        except Exception:
+            ttk.Label(container, text="🖥️", font=('Arial', 48)).pack(anchor='center', pady=(0, 10))
+
+        # Title + edition badge
+        ttk.Label(container,
+                  text="AI-Prowler  —  Business Server",
+                  font=('Arial', 16, 'bold')).pack(anchor='center')
+        ttk.Label(container,
+                  text=f"v{APP_VERSION}",
+                  font=('Arial', 10), foreground='gray').pack(anchor='center', pady=(2, 16))
+
+        ttk.Separator(container, orient='horizontal').pack(fill='x', pady=(0, 16))
+
+        # Status grid
+        status_frame = ttk.LabelFrame(container, text="Server Status", padding=(20, 12))
+        status_frame.pack(fill='x', pady=(0, 16))
+
+        self._srv_status_vars = {}
+
+        def _add_row(label, key, value="—"):
+            row = ttk.Frame(status_frame)
+            row.pack(fill='x', pady=3)
+            ttk.Label(row, text=f"{label}:", font=('Arial', 10, 'bold'),
+                      width=20, anchor='w').pack(side='left')
+            var = tk.StringVar(value=value)
+            self._srv_status_vars[key] = var
+            ttk.Label(row, textvariable=var, font=('Arial', 10),
+                      anchor='w').pack(side='left', fill='x', expand=True)
+
+        _add_row("Edition / Mode",  "edition",   "Business / Server")
+        _add_row("Database path",   "db_path",   "—")
+        _add_row("Total chunks",    "chunks",    "—")
+        _add_row("Documents",       "docs",      "—")
+        _add_row("Tracked folders", "tracked",   "—")
+
+        # Refresh button
+        ttk.Button(
+            container,
+            text="↻  Refresh Status",
+            command=self._refresh_server_status
+        ).pack(anchor='center', pady=(8, 0))
+
+        # Initial populate after mainloop starts
+        self.root.after(500, self._refresh_server_status)
+
+    def _refresh_server_status(self):
+        """Populate / refresh the Server Status tab fields from live data."""
+        try:
+            import rag_preprocessor as _rp
+            client, emb = _rp.get_chroma_client()
+            all_cols = client.list_collections()
+            chunks = sum(
+                client.get_collection(name=c.name, embedding_function=emb).count()
+                for c in all_cols
+            )
+            # Unique document count via metadata scan
+            docs = set()
+            for c in all_cols:
+                col = client.get_collection(name=c.name, embedding_function=emb)
+                n = col.count()
+                if n:
+                    sample = col.get(limit=min(5000, n), include=["metadatas"])
+                    for m in sample.get("metadatas", []):
+                        fp = m.get("filepath", "")
+                        if fp:
+                            docs.add(fp)
+
+            self._srv_status_vars["db_path"].set(str(_rp.CHROMA_DB_PATH))
+            self._srv_status_vars["chunks"].set(f"{chunks:,}")
+            self._srv_status_vars["docs"].set(str(len(docs)))
+        except Exception as e:
+            self._srv_status_vars["chunks"].set(f"error: {e}")
+
+        try:
+            from rag_preprocessor import load_auto_update_list
+            tracked = load_auto_update_list()
+            self._srv_status_vars["tracked"].set(str(len(tracked)))
+        except Exception:
+            pass
+
     def create_welcome_tab(self):
-        """Create the Welcome / Home tab with large icon, branding, and ad space.
+        """Create the Welcome / Home tab.
 
-        Ad content is refreshed:
-          - Immediately on startup (background thread)
-          - Once every 24 hours while AI-Prowler is running (configurable)
+        In Business Server mode: shows a minimal Server Status panel —
+        no ad content, no notifications, no GitHub fetches. The server
+        runs headless so these features are irrelevant and the outbound
+        traffic is undesirable.
 
-        When fresh content arrives from GitHub, the Welcome tab updates
-        live — no restart needed.
+        In Home (personal) mode: shows the full welcome page with icon,
+        ad/promo content, and notification banners refreshed from GitHub.
 
-        Ad content loading priority:
+        Ad content loading priority (Home mode only):
           1. GitHub raw URL (fetched in background)
           2. Local cache (~/.ai-prowler/welcome_ad_cache.json)
           3. Local override (~/.ai-prowler/welcome_config.json)
           4. Built-in defaults
         """
         import json as _json
+
+        # ── Detect server mode ────────────────────────────────────────────────
+        _is_server_mode = self._is_business_server_mode()
+
+        if _is_server_mode:
+            self._create_server_status_tab()
+            return
 
         welcome_frame = ttk.Frame(self.notebook)
         self.notebook.add(welcome_frame, text="🏠 Home")
@@ -4720,6 +4855,135 @@ or from the Help menu."""
             "re-index — use \u201cUpdate Selected\u201d on this folder so its "
             "content moves into the new scope.")
 
+    # ── Watchdog helpers ──────────────────────────────────────────────────────
+
+    def _watchdog_is_running(self) -> bool:
+        """Return True if file_watchdog.py daemon is currently running."""
+        try:
+            import file_watchdog
+            return file_watchdog.is_running()
+        except Exception:
+            return False
+
+    def _watchdog_refresh_status(self):
+        """Update the watchdog status label, dot color, and toggle button text."""
+        running = self._watchdog_is_running()
+        if running:
+            self._watchdog_status_var.set("Running — auto-indexing all tracked directories")
+            self._watchdog_btn.config(text="Stop Watchdog")
+            if hasattr(self, '_watchdog_dot_canvas'):
+                self._watchdog_dot_canvas.itemconfig(
+                    self._watchdog_dot, fill='#27ae60', outline='#27ae60')
+        else:
+            self._watchdog_status_var.set("Stopped")
+            self._watchdog_btn.config(text="Start Watchdog")
+            if hasattr(self, '_watchdog_dot_canvas'):
+                self._watchdog_dot_canvas.itemconfig(
+                    self._watchdog_dot, fill='#e74c3c', outline='#e74c3c')
+
+    def _watchdog_auto_refresh(self):
+        """Auto-refresh the watchdog status every 5 seconds using root.after().
+        Runs on the main thread so no Tkinter cross-thread issues. Stops
+        automatically if the root window is destroyed."""
+        try:
+            self._watchdog_refresh_status()
+            self.root.after(5000, self._watchdog_auto_refresh)
+        except Exception:
+            pass  # window destroyed — stop polling silently
+
+    def _watchdog_toggle(self):
+        """Start or stop the file watchdog daemon."""
+        import subprocess, sys as _sys
+        watchdog_script = Path(__file__).parent / "file_watchdog.py"
+
+        if self._watchdog_is_running():
+            # ── Stop ──────────────────────────────────────────────────────────
+            try:
+                import file_watchdog
+                ok, msg = file_watchdog.stop_daemon()
+                if ok:
+                    messagebox.showinfo("Watchdog", "File watchdog stopped.")
+                else:
+                    messagebox.showwarning("Watchdog", msg)
+            except Exception as exc:
+                messagebox.showerror("Watchdog", f"Could not stop watchdog:\n{exc}")
+        else:
+            # ── Start — check watchdog package is installed first ─────────────
+            try:
+                import watchdog  # noqa: F401
+            except ImportError:
+                answer = messagebox.askyesno(
+                    "Install required",
+                    "The 'watchdog' package is not installed.\n\n"
+                    "Install it now?  (pip install watchdog)"
+                )
+                if not answer:
+                    return
+                result = subprocess.run(
+                    [_sys.executable, "-m", "pip", "install", "watchdog",
+                     "--break-system-packages"],
+                    capture_output=True, text=True
+                )
+                if result.returncode != 0:
+                    messagebox.showerror(
+                        "Install failed",
+                        f"pip install watchdog failed:\n\n{result.stderr}"
+                    )
+                    return
+                messagebox.showinfo("Installed", "watchdog installed successfully.")
+
+            # ── Launch daemon as a detached background process ────────────────
+            try:
+                # Always use python.exe not pythonw.exe — pythonw suppresses
+                # stdout/stderr which breaks the watchdog's logging entirely.
+                import re as _re
+                py_exe = _sys.executable
+                if _sys.platform == 'win32':
+                    py_exe = _re.sub(r'(?i)pythonw\.exe$', 'python.exe', py_exe)
+
+                subprocess.Popen(
+                    [py_exe, str(watchdog_script)],
+                    creationflags=subprocess.DETACHED_PROCESS
+                    | subprocess.CREATE_NEW_PROCESS_GROUP,
+                )
+                # Poll for PID file in a background thread so the main thread
+                # (and Tkinter) stays responsive. The thread calls back to the
+                # main thread via root.after() for any messagebox calls —
+                # messagebox MUST run on the main thread or Tkinter raises
+                # "<class 'tkinter.messagebox.Message'> returned a result with
+                # an exception set". On CPU-only machines startup takes 3-5s.
+                import threading as _threading
+                import time as _time
+
+                def _poll_and_notify():
+                    started = False
+                    for _ in range(16):      # 16 × 0.5s = 8s max wait
+                        _time.sleep(0.5)
+                        if self._watchdog_is_running():
+                            started = True
+                            break
+                    if started:
+                        # No popup — the LED flipping green is confirmation enough
+                        self.root.after(0, self._watchdog_refresh_status)
+                    else:
+                        self.root.after(0, lambda: (
+                            messagebox.showwarning(
+                                "Watchdog",
+                                "Watchdog may not have started correctly.\n"
+                                "Check: ~/AI-Prowler/logs/file_watchdog.log"
+                            ),
+                            self._watchdog_refresh_status()
+                        ))
+
+                _threading.Thread(target=_poll_and_notify, daemon=True).start()
+                return   # status refresh happens inside the thread callback
+            except Exception as exc:
+                messagebox.showerror("Watchdog", f"Could not start watchdog:\n{exc}")
+
+        self._watchdog_refresh_status()
+
+    # ── Tab builder ───────────────────────────────────────────────────────────
+
     def create_scheduling_tab(self):
         """Create scheduling tab — scrollable, day-checkbox based."""
         schedule_frame = ttk.Frame(self.notebook)
@@ -4733,10 +4997,70 @@ or from the Help menu."""
                        "Updates will re-index all tracked directories at the specified time.",
                   justify=tk.CENTER).pack(pady=(0, 8))
 
+        # ── File Watchdog section (always-on real-time indexing) ──────────────
+        watchdog_frame = ttk.LabelFrame(f, text="🐾  File Watchdog — Real-Time Auto-Index",
+                                        padding=15)
+        watchdog_frame.pack(fill=tk.X, padx=40, pady=(0, 16))
+
+        ttk.Label(watchdog_frame,
+                  text="Watches all tracked directories continuously. "
+                       "Any file added or changed is indexed automatically within a few seconds.",
+                  font=('Arial', 9), foreground='#444', wraplength=620,
+                  justify='left').pack(anchor='w', pady=(0, 8))
+
+        self._watchdog_status_var = tk.StringVar(value="Checking...")
+        self._watchdog_dot_var    = tk.StringVar(value="⬤")
+
+        status_row = ttk.Frame(watchdog_frame)
+        status_row.pack(anchor='w', pady=(0, 8))
+
+        # Colored dot — Canvas oval matches the MCP dot style used elsewhere
+        self._watchdog_dot_canvas = tk.Canvas(
+            status_row, width=12, height=12,
+            highlightthickness=0, bg=self.root.cget('bg')
+        )
+        self._watchdog_dot_canvas.pack(side='left', padx=(0, 6))
+        self._watchdog_dot = self._watchdog_dot_canvas.create_oval(
+            1, 1, 11, 11, fill='#aaaaaa', outline='#888888', width=1
+        )
+
+        ttk.Label(status_row, textvariable=self._watchdog_status_var,
+                  font=('Arial', 10, 'bold')).pack(side='left')
+
+        btn_row = ttk.Frame(watchdog_frame)
+        btn_row.pack(anchor='w')
+        self._watchdog_btn = ttk.Button(btn_row, text="Start Watchdog",
+                                        command=self._watchdog_toggle,
+                                        style='Accent.TButton')
+        self._watchdog_btn.pack(side='left', padx=(0, 8))
+
+        ttk.Label(watchdog_frame,
+                  text="Log: ~/AI-Prowler/logs/file_watchdog.log",
+                  font=('Arial', 8), foreground='gray').pack(anchor='w', pady=(6, 0))
+
+        # Populate status immediately then auto-refresh every 5 seconds
+        self._watchdog_refresh_status()
+        self._watchdog_auto_refresh()
+
         # ── Current schedule status ───────────────────────────────────────────
         current_frame = ttk.LabelFrame(f, text="Current Schedule", padding=15)
         current_frame.pack(fill=tk.X, padx=40, pady=(0, 10))
-        self.schedule_status = tk.StringVar(value="Checking...")
+
+        sched_dot_row = ttk.Frame(current_frame)
+        sched_dot_row.pack(anchor='w', pady=(0, 4))
+        self._sched_dot_canvas = tk.Canvas(
+            sched_dot_row, width=12, height=12,
+            highlightthickness=0, bg=self.root.cget('bg')
+        )
+        self._sched_dot_canvas.pack(side='left', padx=(0, 6))
+        self._sched_dot = self._sched_dot_canvas.create_oval(
+            1, 1, 11, 11, fill='#aaaaaa', outline='#888888', width=1
+        )
+        self._sched_active_var = tk.StringVar(value="Checking...")
+        ttk.Label(sched_dot_row, textvariable=self._sched_active_var,
+                  font=('Arial', 10, 'bold')).pack(side='left')
+
+        self.schedule_status = tk.StringVar(value="")
         ttk.Label(current_frame, textvariable=self.schedule_status,
                   justify=tk.LEFT).pack(anchor='w')
 
@@ -4943,24 +5267,34 @@ or from the Help menu."""
                             "AI Prowler last indexed:  not yet this session")
 
                 self.schedule_status.set(
-                    f"✅ Schedule Active\n"
                     f"  Task status:   {status}\n"
                     f"  Last run:      {last_run}\n"
                     f"  Next run:      {next_run}\n"
                     f"  {app_line}"
                 )
+                if hasattr(self, '_sched_dot_canvas'):
+                    self._sched_active_var.set("Schedule Active")
+                    self._sched_dot_canvas.itemconfig(
+                        self._sched_dot, fill='#27ae60', outline='#27ae60')
             else:
                 app_last = getattr(self, '_last_index_time', None)
                 app_line = (f"AI Prowler last indexed:  {app_last}"
                             if app_last else
                             "AI Prowler last indexed:  not yet this session")
                 self.schedule_status.set(
-                    f"❌ No schedule set\n"
                     f"  Use Schedule Setup above to create one.\n"
                     f"  {app_line}"
                 )
+                if hasattr(self, '_sched_dot_canvas'):
+                    self._sched_active_var.set("No Schedule Set")
+                    self._sched_dot_canvas.itemconfig(
+                        self._sched_dot, fill='#e74c3c', outline='#e74c3c')
         except Exception as e:
-            self.schedule_status.set(f"⚠️ Error checking status: {str(e)}")
+            self.schedule_status.set(f"Error checking status: {str(e)}")
+            if hasattr(self, '_sched_dot_canvas'):
+                self._sched_active_var.set("Error")
+                self._sched_dot_canvas.itemconfig(
+                    self._sched_dot, fill='#f5a623', outline='#f5a623')
     
     # ─────────────────────────────────────────────────────────────────────────
     def create_scan_config_tab(self):
@@ -5329,6 +5663,44 @@ or from the Help menu."""
         title = ttk.Label(scrollable_frame, text="Configuration", 
                          font=('Arial', 16, 'bold'))
         title.pack(pady=10)
+
+        # ── Owner Name (personal mode only) ──────────────────────────────────
+        # Shown as the `source` field in learnings recorded by the owner on a
+        # personal install. In server mode each user's identity comes from their
+        # bearer token (set in the Admin tab) — this panel is not needed there.
+        if not _settings_is_server_mode:
+            owner_frame = ttk.LabelFrame(scrollable_frame, text="👤 Owner Name", padding=10)
+            owner_frame.pack(fill='x', padx=20, pady=(0, 10))
+
+            ttk.Label(owner_frame,
+                      text="Your name as it will appear in the Learnings tab Source column "
+                           "when you record a learning on a personal install.",
+                      font=('Arial', 9), foreground='gray', wraplength=600,
+                      justify='left').pack(anchor='w', pady=(0, 6))
+
+            _owner_row = ttk.Frame(owner_frame)
+            _owner_row.pack(fill='x')
+            ttk.Label(_owner_row, text="Full name:").pack(side='left', padx=(0, 6))
+
+            _owner_name_var = tk.StringVar(
+                value=_rag_engine.OWNER_NAME if RAG_AVAILABLE else "")
+            _owner_entry = ttk.Entry(_owner_row, textvariable=_owner_name_var, width=30)
+            _owner_entry.pack(side='left')
+
+            def _save_owner_name():
+                name = _owner_name_var.get().strip()
+                if RAG_AVAILABLE:
+                    _rag_engine.OWNER_NAME = name
+                    save_config(owner_name=name)
+                self.status_var.set(
+                    f"✅ Owner name saved: '{name}'" if name else "✅ Owner name cleared")
+                self.root.after(3000, lambda: self.status_var.set("Ready"))
+
+            ttk.Button(_owner_row, text="💾 Save",
+                       command=_save_owner_name).pack(side='left', padx=(8, 0))
+            ttk.Label(owner_frame,
+                      text="Leave blank to show 'operator' in the Source column instead.",
+                      font=('Arial', 8), foreground='gray').pack(anchor='w', pady=(4, 0))
 
         # ── Visibility-controlled parent frames ──────────────────────────────
         # Sections that are hidden when their feature flag is off get parented
@@ -8368,13 +8740,16 @@ or from the Help menu."""
                                      padding=(12, 8))
         table_frame.pack(fill='x', padx=16, pady=(0, 6))
 
-        # Filter row
-        filter_row = ttk.Frame(table_frame)
-        filter_row.pack(fill='x', pady=(0, 6))
+        # Filter rows — split into two rows to avoid overcrowding
+        filter_row1 = ttk.Frame(table_frame)
+        filter_row1.pack(fill='x', pady=(0, 3))
+        filter_row2 = ttk.Frame(table_frame)
+        filter_row2.pack(fill='x', pady=(0, 6))
 
-        ttk.Label(filter_row, text="Category:", font=('Arial', 8)).pack(side='left')
+        # ── Row 1: Category, Status, Outcome, Source ─────────────────────
+        ttk.Label(filter_row1, text="Category:", font=('Arial', 8)).pack(side='left')
         self._sl_filter_cat = tk.StringVar(value="All")
-        cat_combo = ttk.Combobox(filter_row, textvariable=self._sl_filter_cat,
+        cat_combo = ttk.Combobox(filter_row1, textvariable=self._sl_filter_cat,
                                  width=18, state='readonly',
                                  values=["All", "fact_correction", "business_lesson",
                                          "project_insight", "process_improvement",
@@ -8382,31 +8757,51 @@ or from the Help menu."""
                                          "client_preference", "technical_note", "general"])
         cat_combo.pack(side='left', padx=(4, 12))
 
-        ttk.Label(filter_row, text="Status:", font=('Arial', 8)).pack(side='left')
+        ttk.Label(filter_row1, text="Status:", font=('Arial', 8)).pack(side='left')
         self._sl_filter_status = tk.StringVar(value="active")
-        status_combo = ttk.Combobox(filter_row, textvariable=self._sl_filter_status,
+        status_combo = ttk.Combobox(filter_row1, textvariable=self._sl_filter_status,
                                     width=12, state='readonly',
                                     values=["All", "active", "deprecated", "archived"])
         status_combo.pack(side='left', padx=(4, 12))
 
-        ttk.Label(filter_row, text="Search:", font=('Arial', 8)).pack(side='left')
+        ttk.Label(filter_row1, text="Outcome:", font=('Arial', 8)).pack(side='left')
+        self._sl_filter_outcome = tk.StringVar(value="All")
+        outcome_combo = ttk.Combobox(filter_row1, textvariable=self._sl_filter_outcome,
+                                     width=10, state='readonly',
+                                     values=["All", "positive", "negative",
+                                             "neutral", "unknown"])
+        outcome_combo.pack(side='left', padx=(4, 12))
+
+        ttk.Label(filter_row1, text="Source:", font=('Arial', 8)).pack(side='left')
+        self._sl_filter_source = tk.StringVar(value="All")
+        self._sl_source_combo = ttk.Combobox(filter_row1,
+                                             textvariable=self._sl_filter_source,
+                                             width=16, state='readonly',
+                                             values=["All"])
+        self._sl_source_combo.pack(side='left', padx=(4, 0))
+
+        # ── Row 2: Search text, Semantic, Filter, Reset ───────────────────
+        ttk.Label(filter_row2, text="Search:", font=('Arial', 8)).pack(side='left')
         self._sl_filter_search = tk.StringVar(value="")
-        search_entry = ttk.Entry(filter_row, textvariable=self._sl_filter_search, width=24)
+        search_entry = ttk.Entry(filter_row2, textvariable=self._sl_filter_search, width=30)
         search_entry.pack(side='left', padx=(4, 8))
+        ttk.Label(filter_row2,
+                  text="(searches title, content, context, tags, source)",
+                  font=('Arial', 7), foreground='gray').pack(side='left', padx=(0, 12))
 
         # Semantic search toggle — when on, the search box runs through
         # ChromaDB so "client emails" matches a learning titled "phone vs
         # email contact preferences" even though the words don't overlap.
         # When off, falls back to the substring matcher in _refresh_table.
         self._sl_semantic_search = tk.BooleanVar(value=False)
-        ttk.Checkbutton(filter_row, text="🧠 Semantic",
+        ttk.Checkbutton(filter_row2, text="🧠 Semantic",
                         variable=self._sl_semantic_search,
                         command=lambda: _refresh_table()).pack(side='left',
                                                                padx=(0, 8))
 
-        ttk.Button(filter_row, text="🔍 Filter",
+        ttk.Button(filter_row2, text="🔍 Filter",
                    command=lambda: _refresh_table()).pack(side='left', padx=(0, 4))
-        ttk.Button(filter_row, text="↻ Reset",
+        ttk.Button(filter_row2, text="↻ Reset",
                    command=lambda: _reset_filters()).pack(side='left')
 
         # Treeview
@@ -8544,6 +8939,8 @@ or from the Help menu."""
         def _reset_filters():
             self._sl_filter_cat.set("All")
             self._sl_filter_status.set("active")
+            self._sl_filter_outcome.set("All")
+            self._sl_filter_source.set("All")
             self._sl_filter_search.set("")
             self._sl_semantic_search.set(False)
             _refresh_table()
@@ -8580,20 +8977,27 @@ or from the Help menu."""
         def _refresh_table():
             learnings = _load_learnings()
 
-            cat_filter    = self._sl_filter_cat.get()
-            status_filter = self._sl_filter_status.get()
-            search_text   = self._sl_filter_search.get().strip()
-            semantic_on   = (self._sl_semantic_search.get()
-                             and bool(search_text)
-                             and SELF_LEARNING_AVAILABLE)
+            cat_filter     = self._sl_filter_cat.get()
+            status_filter  = self._sl_filter_status.get()
+            outcome_filter = self._sl_filter_outcome.get()
+            source_filter  = self._sl_filter_source.get()
+            search_text    = self._sl_filter_search.get().strip()
+            semantic_on    = (self._sl_semantic_search.get()
+                              and bool(search_text)
+                              and SELF_LEARNING_AVAILABLE)
+
+            # Dynamically populate the Source dropdown with values from the DB
+            all_sources = sorted({
+                l.get('source', 'operator') or 'operator'
+                for l in learnings
+                if l.get('source')
+            })
+            self._sl_source_combo['values'] = ["All"] + all_sources
 
             # Similarity scores get attached when semantic search ran.
             similarity_by_id: dict = {}
 
             if semantic_on:
-                # Run the query through ChromaDB. We don't track applications
-                # for GUI browsing — just because a user scrolls past a
-                # learning doesn't mean it was 'applied'.
                 try:
                     matches = _sl_engine.check_learned(
                         search_text,
@@ -8613,14 +9017,18 @@ or from the Help menu."""
                     continue
                 if status_filter != "All" and l.get('status', 'active') != status_filter:
                     continue
+                if outcome_filter != "All" and l.get('outcome', 'unknown') != outcome_filter:
+                    continue
+                if source_filter != "All" and l.get('source', 'operator') != source_filter:
+                    continue
                 if semantic_on:
-                    # Only keep rows that the semantic search hit
                     if l['id'] not in similarity_by_id:
                         continue
                 elif search_text:
                     haystack = (
                         f"{l.get('title', '')} {l.get('content', '')} "
-                        f"{l.get('context', '')} {' '.join(l.get('tags', []))}"
+                        f"{l.get('context', '')} {' '.join(l.get('tags', []))} "
+                        f"{l.get('source', '')} {l.get('recorded_by', '')}"
                     ).lower()
                     if search_text.lower() not in haystack:
                         continue
@@ -9955,11 +10363,16 @@ or from the Help menu."""
 
     def _admin_save_users(self, data):
         """Write users.json atomically (temp + replace) so a crash mid-write
-        can't corrupt the live auth file. Returns True on success."""
+        can't corrupt the live auth file. Returns True on success.
+
+        v7.0.1: auto-syncs collection_map private rules before writing so
+        the admin never has to edit collection_map by hand."""
         import json as _json, os as _os
         from pathlib import Path as _Path
         p = self._admin_users_path()
         try:
+            # Auto-generate private collection_map rules from user list.
+            self._admin_sync_collection_map(data)
             p.parent.mkdir(parents=True, exist_ok=True)
             tmp = p.with_suffix(".json.tmp")
             tmp.write_text(_json.dumps(data, indent=2), encoding="utf-8")
@@ -10865,9 +11278,25 @@ or from the Help menu."""
     def _admin_user_dialog(self, title, existing=None):
         """Modal dialog to add/edit a user. Returns a dict of fields or None.
         `existing` is the current user dict when editing (role/scopes/flags
-        prefilled). Does NOT include the token — that's managed separately."""
+        prefilled). Does NOT include the token — that's managed separately.
+
+        v7.0.1: Name is now split into separate First name / Last name fields.
+        This guarantees the stable slug id (firstname-lastname) is unambiguous
+        and consistent — the admin can't accidentally create 'David  Vavro' vs
+        'David Vavro'. A read-only slug preview updates live so the admin sees
+        exactly what the private collection name will be."""
         import tkinter as tk
         from tkinter import ttk, messagebox
+        import re as _re
+
+        def _to_slug(first, last):
+            """firstname-lastname slug matching _make_user_id in ai_prowler_mcp.py."""
+            full = f"{first.strip()} {last.strip()}".strip()
+            s = full.lower()
+            s = _re.sub(r'[\s_]+', '-', s)
+            s = _re.sub(r'[^a-z0-9-]', '', s)
+            s = _re.sub(r'-+', '-', s)
+            return s.strip('-') or "unknown-user"
 
         dlg = tk.Toplevel(self.root)
         dlg.title(title)
@@ -10877,56 +11306,88 @@ or from the Help menu."""
         pad = {'padx': 8, 'pady': 4}
 
         ex = existing or {}
+
+        # Split existing "Full Name" back into first / last for the edit case.
+        _existing_name = ex.get("name", "")
+        _name_parts = _existing_name.split(" ", 1)
+        _ex_first = _name_parts[0] if _name_parts else ""
+        _ex_last  = _name_parts[1] if len(_name_parts) > 1 else ""
+
         frm = ttk.Frame(dlg, padding=12)
         frm.pack(fill='both', expand=True)
 
-        ttk.Label(frm, text="Name:").grid(row=0, column=0, sticky='e', **pad)
-        name_var = tk.StringVar(value=ex.get("name", ""))
-        ttk.Entry(frm, textvariable=name_var, width=34).grid(row=0, column=1, **pad)
+        # ── Row 0: First name ──────────────────────────────────────────────
+        ttk.Label(frm, text="First name:").grid(row=0, column=0, sticky='e', **pad)
+        first_var = tk.StringVar(value=_ex_first)
+        ttk.Entry(frm, textvariable=first_var, width=16).grid(
+            row=0, column=1, sticky='w', **pad)
 
-        ttk.Label(frm, text="Email:").grid(row=1, column=0, sticky='e', **pad)
+        # ── Row 1: Last name ───────────────────────────────────────────────
+        ttk.Label(frm, text="Last name:").grid(row=1, column=0, sticky='e', **pad)
+        last_var = tk.StringVar(value=_ex_last)
+        ttk.Entry(frm, textvariable=last_var, width=16).grid(
+            row=1, column=1, sticky='w', **pad)
+
+        # ── Row 2: Slug preview (read-only) ────────────────────────────────
+        ttk.Label(frm, text="User ID (slug):").grid(row=2, column=0, sticky='e', **pad)
+        slug_var = tk.StringVar(value=_to_slug(_ex_first, _ex_last))
+        slug_lbl = ttk.Label(frm, textvariable=slug_var,
+                             font=('Consolas', 9), foreground='#336699')
+        slug_lbl.grid(row=2, column=1, sticky='w', **pad)
+        ttk.Label(frm, text="(auto-generated — used for private collection name)",
+                  font=('Segoe UI', 8)).grid(row=2, column=2, sticky='w')
+
+        def _update_slug(*_):
+            slug_var.set(_to_slug(first_var.get(), last_var.get()))
+        first_var.trace_add('write', _update_slug)
+        last_var.trace_add('write',  _update_slug)
+
+        # ── Row 3: Email ───────────────────────────────────────────────────
+        ttk.Label(frm, text="Email:").grid(row=3, column=0, sticky='e', **pad)
         email_var = tk.StringVar(value=ex.get("email", ""))
-        ttk.Entry(frm, textvariable=email_var, width=34).grid(row=1, column=1, **pad)
+        ttk.Entry(frm, textvariable=email_var, width=34).grid(row=3, column=1,
+                                                               columnspan=2, **pad)
 
-        ttk.Label(frm, text="Role:").grid(row=2, column=0, sticky='e', **pad)
+        # ── Row 4: Role ────────────────────────────────────────────────────
+        ttk.Label(frm, text="Role:").grid(row=4, column=0, sticky='e', **pad)
         role_var = tk.StringVar(value=ex.get("role", "field_crew"))
         role_cb = ttk.Combobox(frm, textvariable=role_var, state='readonly',
                                width=31, values=("owner", "manager",
                                                  "staff", "field_crew"))
-        role_cb.grid(row=2, column=1, **pad)
+        role_cb.grid(row=4, column=1, columnspan=2, **pad)
 
-        ttk.Label(frm, text="Scopes:").grid(row=3, column=0, sticky='ne', **pad)
+        # ── Row 5: Scopes ──────────────────────────────────────────────────
+        ttk.Label(frm, text="Scopes:").grid(row=5, column=0, sticky='ne', **pad)
         scopes_var = tk.StringVar(value=", ".join(ex.get("scopes") or []))
         scopes_entry = ttk.Entry(frm, textvariable=scopes_var, width=34)
-        scopes_entry.grid(row=3, column=1, **pad)
+        scopes_entry.grid(row=5, column=1, columnspan=2, **pad)
         ttk.Label(frm, text="(the data groups this user may access — you define "
                             "these, e.g. scope:sales, scope:office, scope:ops)",
-                  font=('Segoe UI', 8)).grid(row=4, column=1, sticky='w', padx=8)
+                  font=('Segoe UI', 8)).grid(row=6, column=1, columnspan=2,
+                                             sticky='w', padx=8)
 
+        # ── Row 7: Manage users checkbox ───────────────────────────────────
         manage_var = tk.BooleanVar(value=bool(ex.get("can_manage_users")))
         manage_cb = ttk.Checkbutton(
             frm, text="Can manage users (delegated admin)", variable=manage_var)
-        manage_cb.grid(row=5, column=1, sticky='w', **pad)
+        manage_cb.grid(row=7, column=1, columnspan=2, sticky='w', **pad)
 
+        # ── Row 8: Private collection ──────────────────────────────────────
         private_var = tk.BooleanVar(
             value=bool(ex.get("private_collection_enabled", True)))
         ttk.Checkbutton(frm, text="Private collection enabled",
-                        variable=private_var).grid(row=6, column=1, sticky='w', **pad)
+                        variable=private_var).grid(row=8, column=1, columnspan=2,
+                                                   sticky='w', **pad)
 
-        # ── License seat (child key) dropdown ──────────────────────────────
-        # Options = unassigned keys from the delivered pool, plus the user's
-        # CURRENT key when editing (so it stays selectable), plus a blank
-        # '(none)' option. Display masked; map the label back to the full key.
-        ttk.Label(frm, text="License seat:").grid(row=7, column=0, sticky='e', **pad)
+        # ── Row 9: License seat dropdown ───────────────────────────────────
+        ttk.Label(frm, text="License seat:").grid(row=9, column=0, sticky='e', **pad)
         cur_key = ex.get("child_license_key", "")
         avail = list(self._admin_unassigned_keys())
         if cur_key and cur_key not in avail:
             avail = [cur_key] + avail
-        # label->key map; blank label means no seat
         key_labels = {"(no seat assigned)": ""}
         for k in avail:
             key_labels[self._admin_mask_key(k) + f"   [{k[:8]}…]"] = k
-        # Choose initial label
         init_label = "(no seat assigned)"
         for lbl, k in key_labels.items():
             if k == cur_key and cur_key:
@@ -10935,60 +11396,59 @@ or from the Help menu."""
         seat_var = tk.StringVar(value=init_label)
         seat_cb = ttk.Combobox(frm, textvariable=seat_var, state='readonly',
                                width=31, values=list(key_labels.keys()))
-        seat_cb.grid(row=7, column=1, **pad)
-        if len(key_labels) == 1:  # only the '(no seat)' entry → pool empty
+        seat_cb.grid(row=9, column=1, columnspan=2, **pad)
+        if len(key_labels) == 1:
             ttk.Label(frm, text="(no unassigned seats in the pool)",
-                      font=('Segoe UI', 8)).grid(row=8, column=1, sticky='w', padx=8)
+                      font=('Segoe UI', 8)).grid(row=10, column=1, columnspan=2,
+                                                 sticky='w', padx=8)
 
-        # ── Optional custom bearer token (Add only) ────────────────────────
-        # A bearer token is a SECRET (the employee's password). Leave blank to
-        # auto-generate a strong random one (recommended). Only type your own if
-        # you have a specific reason (e.g. matching a pre-distributed value) —
-        # weak/guessable tokens compromise access. Ignored when editing (use the
-        # Regenerate Token button to change an existing user's token).
+        # ── Row 11: Bearer token (Add only) ────────────────────────────────
         is_edit = bool(existing)
         token_var = tk.StringVar(value="")
         if not is_edit:
-            ttk.Label(frm, text="Bearer token:").grid(row=9, column=0, sticky='e', **pad)
+            ttk.Label(frm, text="Bearer token:").grid(row=11, column=0, sticky='e', **pad)
             ttk.Entry(frm, textvariable=token_var, width=34,
-                      font=('Consolas', 10), show='●').grid(row=9, column=1, **pad)
+                      font=('Consolas', 10), show='●').grid(row=11, column=1,
+                                                            columnspan=2, **pad)
             ttk.Label(frm, text="(optional — leave blank to auto-generate a "
                                 "strong token; typing a weak one is insecure)",
-                      font=('Segoe UI', 8)).grid(row=10, column=1, sticky='w', padx=8)
+                      font=('Segoe UI', 8)).grid(row=12, column=1, columnspan=2,
+                                                 sticky='w', padx=8)
 
-        # can_manage_users rules (spec §6.3):
-        #   owner   → always True (implicit admin); checkbox shown checked+disabled
-        #             so the UI is honest, but value is forced True on save.
-        #   manager → configurable; checkbox enabled so admin can grant/revoke.
-        #   staff / field_crew → always False; checkbox disabled.
+        # can_manage_users rules (spec §6.3)
         def _sync_manage_state(*_a):
             r = role_var.get()
             if r == "owner":
                 manage_var.set(True)
-                manage_cb.state(['disabled'])   # locked ON
+                manage_cb.state(['disabled'])
             elif r == "manager":
-                manage_cb.state(['!disabled'])  # freely configurable
+                manage_cb.state(['!disabled'])
             else:
                 manage_var.set(False)
-                manage_cb.state(['disabled'])   # locked OFF
+                manage_cb.state(['disabled'])
         role_var.trace_add('write', _sync_manage_state)
         _sync_manage_state()
 
         result = {}
 
         def _ok():
-            name = name_var.get().strip()
-            if not name:
-                messagebox.showwarning("Missing", "Name is required.", parent=dlg)
+            first = first_var.get().strip()
+            last  = last_var.get().strip()
+            if not first or not last:
+                messagebox.showwarning("Missing",
+                                       "Both First name and Last name are required.",
+                                       parent=dlg)
                 return
+            full_name = f"{first} {last}"
             scopes = [s.strip() for s in scopes_var.get().split(",") if s.strip()]
             chosen_key = key_labels.get(seat_var.get(), "")
             _role = role_var.get()
-            # Owner always has implicit management rights — force True so
-            # users.json is never written with owner+can_manage_users=False.
             _can_manage = True if _role == "owner" else bool(manage_var.get())
             result.update({
-                "name": name,
+                "name":  full_name,
+                "first_name": first,
+                "last_name":  last,
+                "slug":  _to_slug(first, last),
                 "email": email_var.get().strip(),
                 "cell_phone":   phone_var.get().strip(),
                 "cell_carrier": carrier_var.get().strip(),
@@ -10997,7 +11457,7 @@ or from the Help menu."""
                 "can_manage_users": _can_manage,
                 "private_collection_enabled": bool(private_var.get()),
                 "child_license_key": chosen_key,
-                "custom_token": token_var.get().strip(),  # '' = auto-generate
+                "custom_token": token_var.get().strip(),
             })
             dlg.destroy()
 
@@ -11005,29 +11465,107 @@ or from the Help menu."""
             result.clear()
             dlg.destroy()
 
-
-        # Recovery contact for 'Forgot your token?' self-service
-        ttk.Label(frm, text='Cell phone:').grid(row=11, column=0, sticky='e', **pad)
+        # ── Row 13-14: Recovery contact ────────────────────────────────────
+        ttk.Label(frm, text='Cell phone:').grid(row=13, column=0, sticky='e', **pad)
         phone_var = tk.StringVar(value=ex.get('cell_phone', ''))
-        ttk.Entry(frm, textvariable=phone_var, width=18).grid(row=11, column=1, sticky='w', **pad)
-        ttk.Label(frm, text='10 digits no dashes e.g. 3215550199', font=('Segoe UI', 8)).grid(row=11, column=2, sticky='w')
+        ttk.Entry(frm, textvariable=phone_var, width=18).grid(
+            row=13, column=1, sticky='w', **pad)
+        ttk.Label(frm, text='10 digits no dashes e.g. 3215550199',
+                  font=('Segoe UI', 8)).grid(row=13, column=2, sticky='w')
 
-        ttk.Label(frm, text='Carrier:').grid(row=12, column=0, sticky='e', **pad)
+        ttk.Label(frm, text='Carrier:').grid(row=14, column=0, sticky='e', **pad)
         carrier_var = tk.StringVar(value=ex.get('cell_carrier', ''))
         carrier_cb = ttk.Combobox(
             frm, textvariable=carrier_var, state='readonly', width=18,
             values=('', 'att', 'verizon', 't-mobile', 'cricket',
                     'boost', 'us cellular', 'metro pcs', 'sprint'))
-        carrier_cb.grid(row=12, column=1, sticky='w', **pad)
-        ttk.Label(frm, text='Required for SMS recovery', font=('Segoe UI', 8)).grid(row=12, column=2, sticky='w')
+        carrier_cb.grid(row=14, column=1, sticky='w', **pad)
+        ttk.Label(frm, text='Required for SMS recovery',
+                  font=('Segoe UI', 8)).grid(row=14, column=2, sticky='w')
 
         btns = ttk.Frame(frm)
-        btns.grid(row=13, column=0, columnspan=3, pady=(10, 0))
+        btns.grid(row=15, column=0, columnspan=3, pady=(10, 0))
         ttk.Button(btns, text="Save", command=_ok).pack(side='left', padx=4)
         ttk.Button(btns, text="Cancel", command=_cancel).pack(side='left', padx=4)
 
         dlg.wait_window()
         return result or None
+
+    def _admin_sync_collection_map(self, data):
+        """Auto-generate collection_map private-directory rules from users.json.
+
+        v7.0.1 — called automatically on every Add / Edit user save so the
+        admin never has to touch collection_map by hand.
+
+        For each user with private_collection_enabled=True, ensures a rule
+        exists that maps:
+            <privates_root>/<First>-<Last>-Private  →  user:<slug>
+
+        where <slug> = firstname-lastname (lowercase, hyphens) and
+        <privates_root> is derived from the server's home directory:
+            <home>/Documents/AI-Prowler-Server-privates
+
+        IMPORTANT: if a rule for user:<slug> already exists with a custom path
+        (set via the folder-setup dialog), that path is preserved. The default
+        is only applied when no rule exists yet for that user.
+
+        Rules for users who no longer have private_collection_enabled are
+        removed. Rules for non-user collections (scope:*, shared) are left
+        untouched. The default_collection is preserved.
+        """
+        import re as _re
+        from pathlib import Path as _Path
+
+        def _slug(name):
+            s = (name or "").strip().lower()
+            s = _re.sub(r'[\s_]+', '-', s)
+            s = _re.sub(r'[^a-z0-9-]', '', s)
+            s = _re.sub(r'-+', '-', s)
+            return s.strip('-') or "unknown-user"
+
+        def _folder_name(slug):
+            """Convert slug 'david-vavro' → 'david-vavro-private' (always lowercase).
+            Consistent with _admin_setup_private_folder and _make_user_id."""
+            return slug + "-private"
+
+        import os as _os
+        privates_root = str(_Path.home() / "Documents" / "AI-Prowler-Server-privates")
+
+        # Build the set of slugs we WANT (users with private enabled).
+        want = {}   # slug → default prefix path
+        for rec in (data.get("users") or {}).values():
+            if not isinstance(rec, dict):
+                continue
+            if not rec.get("private_collection_enabled"):
+                continue
+            name = rec.get("name", "")
+            if not name:
+                continue
+            slug   = _slug(name)
+            folder = _folder_name(slug)
+            want[slug] = privates_root + _os.sep + folder
+
+        # Build a lookup of EXISTING user rules so we can preserve custom paths.
+        cmap = data.setdefault("collection_map", {})
+        old_rules = cmap.get("rules") or []
+        existing_user_paths = {}   # slug → existing prefix (if already set)
+        kept_non_user = []
+        for r in old_rules:
+            col = r.get("collection", "")
+            if col.startswith("user:"):
+                slug = col[len("user:"):]
+                existing_user_paths[slug] = r.get("prefix", "")
+            else:
+                kept_non_user.append(r)
+
+        # Build new user rules: preserve existing paths, use default for new users.
+        new_user_rules = []
+        for slug, default_prefix in sorted(want.items()):
+            prefix = existing_user_paths.get(slug) or default_prefix
+            new_user_rules.append({"prefix": prefix, "collection": f"user:{slug}"})
+
+        cmap["rules"] = kept_non_user + new_user_rules
+        cmap.setdefault("default_collection", "shared")
 
     def _admin_confirm_child_key(self, child_key):
         """Validate an assigned child key on Save. Returns True to proceed,
@@ -11127,6 +11665,8 @@ or from the Help menu."""
             return
         self._admin_refresh_table()
         self._admin_show_token(fields["name"], token)
+        if fields.get("private_collection_enabled"):
+            self._admin_setup_private_folder(fields["name"], fields.get("slug", ""))
 
     def _admin_show_token(self, name, token):
         """Show the freshly generated bearer token with a Copy button. This is
@@ -11176,6 +11716,153 @@ or from the Help menu."""
         ttk.Button(frm, text="Close", command=dlg.destroy).pack(pady=(6, 0))
         ent.focus_set()
 
+    def _admin_setup_private_folder(self, name, slug):
+        """After adding a user with private_collection_enabled, show a dialog
+        that prompts the admin to create the private directory on disk.
+
+        The expected path is pre-filled and editable — the admin can correct
+        the drive letter, root, or folder name if their setup differs from the
+        default. A 'Create Folder' button calls os.makedirs() right there.
+        Skipping leaves the collection_map rule in place; the folder can be
+        created later, but a reminder note is shown.
+
+        v7.0.1 — prevents the silent failure where the rule exists but the
+        folder doesn't, causing all private queries to return zero results.
+        """
+        import tkinter as tk
+        from tkinter import ttk, messagebox, filedialog
+        import os, re as _re
+        from pathlib import Path as _Path
+
+        # Build default folder name: "David Vavro" → "david-vavro-private" (always lowercase)
+        # Uses the same slug logic as _make_user_id so folder name and user id are consistent.
+        folder_name = (slug or "unknown-user") + "-private"
+        default_root = str(_Path.home() / "Documents" / "AI-Prowler-Server-privates")
+        default_path = default_root + os.sep + folder_name
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Set Up Private Folder")
+        dlg.transient(self.root)
+        dlg.grab_set()
+        dlg.resizable(True, False)
+        dlg.minsize(520, 0)
+
+        frm = ttk.Frame(dlg, padding=16)
+        frm.pack(fill='both', expand=True)
+
+        ttk.Label(frm, text=f"📁  Private folder for {name}",
+                  font=('Segoe UI', 11, 'bold')).pack(anchor='w')
+        ttk.Label(frm, wraplength=480, justify='left', foreground='gray',
+                  text=(f"This user has a private collection enabled. "
+                        f"Create the folder below so their private documents "
+                        f"can be indexed. The path is editable — change it if "
+                        f"your server layout differs from the default.")
+                  ).pack(anchor='w', pady=(4, 10))
+
+        # Editable path row
+        path_row = ttk.Frame(frm)
+        path_row.pack(fill='x', pady=(0, 4))
+        path_var = tk.StringVar(value=default_path)
+        path_entry = ttk.Entry(path_row, textvariable=path_var,
+                               font=('Consolas', 9), width=52)
+        path_entry.pack(side='left', fill='x', expand=True)
+
+        def _browse():
+            chosen = filedialog.askdirectory(
+                title="Select or create parent folder",
+                initialdir=default_root if _Path(default_root).exists() else str(_Path.home()))
+            if chosen:
+                # Append the folder name so the admin picks the parent, not the full path
+                path_var.set(chosen.rstrip('/\\') + os.sep + folder_name)
+
+        ttk.Button(path_row, text="Browse…", command=_browse).pack(
+            side='left', padx=(6, 0))
+
+        status_var = tk.StringVar(value="")
+        status_lbl = ttk.Label(frm, textvariable=status_var,
+                               font=('Segoe UI', 9), wraplength=480, justify='left')
+        status_lbl.pack(anchor='w', pady=(4, 0))
+
+        def _create():
+            p = path_var.get().strip()
+            if not p:
+                messagebox.showwarning("No path", "Enter a folder path first.", parent=dlg)
+                return
+            try:
+                _Path(p).mkdir(parents=True, exist_ok=True)
+                status_var.set(f"✅  Folder created:  {p}")
+                status_lbl.configure(foreground='#1a7a1a')
+                # Update collection_map in users.json so the rule points to
+                # the actual path the admin chose (may differ from default).
+                self._admin_update_private_rule(slug, p)
+                create_btn.configure(state='disabled')
+            except Exception as e:
+                status_var.set(f"❌  Could not create folder: {e}")
+                status_lbl.configure(foreground='#cc0000')
+
+        def _skip():
+            status_var.set(
+                "⚠  Skipped — remember to create the folder before indexing "
+                "private documents for this user.")
+            status_lbl.configure(foreground='#a05a00')
+            dlg.after(2200, dlg.destroy)
+
+        btn_row = ttk.Frame(frm)
+        btn_row.pack(fill='x', pady=(12, 0))
+        create_btn = ttk.Button(btn_row, text="📁 Create Folder",
+                                command=_create, style='Accent.TButton')
+        create_btn.pack(side='left', padx=(0, 8))
+        ttk.Button(btn_row, text="Skip for now", command=_skip).pack(side='left')
+        ttk.Button(btn_row, text="Close", command=dlg.destroy).pack(side='right')
+
+        dlg.wait_window()
+
+    def _admin_get_private_rule_path(self, slug):
+        """Return the current collection_map prefix for user:<slug>, or None
+        if no rule exists. Used to check whether a custom path was already
+        set before deciding whether to show the folder setup popup."""
+        if not slug:
+            return None
+        try:
+            data = self._admin_load_users()
+            rules = (data.get("collection_map") or {}).get("rules") or []
+            target = f"user:{slug}"
+            for rule in rules:
+                if rule.get("collection") == target:
+                    return rule.get("prefix") or None
+        except Exception:
+            pass
+        return None
+
+    def _admin_update_private_rule(self, slug, actual_path):
+        """Update the collection_map rule for user:<slug> to point to actual_path.
+        Called when the admin edits the default path in the private-folder dialog.
+        No-op if the path already matches or the user has no rule."""
+        if not slug or not actual_path:
+            return
+        try:
+            data = self._admin_load_users()
+            cmap = data.get("collection_map") or {}
+            rules = cmap.get("rules") or []
+            target = f"user:{slug}"
+            updated = False
+            for rule in rules:
+                if rule.get("collection") == target:
+                    rule["prefix"] = actual_path
+                    updated = True
+                    break
+            if updated:
+                cmap["rules"] = rules
+                data["collection_map"] = cmap
+                # Write directly without re-syncing (we want to keep the admin's path)
+                import json as _json, os as _os
+                p = self._admin_users_path()
+                tmp = p.with_suffix(".json.tmp")
+                tmp.write_text(_json.dumps(data, indent=2), encoding="utf-8")
+                _os.replace(str(tmp), str(p))
+        except Exception as e:
+            print(f"[admin] could not update private rule for {slug}: {e}")
+
     def _admin_edit_user(self):
         """Edit the selected user's fields (not the token)."""
         from tkinter import messagebox
@@ -11191,6 +11878,7 @@ or from the Help menu."""
             messagebox.showerror("Edit", "User not found (refresh the table).")
             return
         was_owner = (u.get("role") == "owner")
+        had_private = bool(u.get("private_collection_enabled"))
         fields = self._admin_user_dialog(f"Edit User — {u.get('name','')}", existing=u)
         if not fields:
             return
@@ -11225,9 +11913,30 @@ or from the Help menu."""
             "private_collection_enabled": fields["private_collection_enabled"],
             "child_license_key": new_key,
         })
+        # Persist optional recovery contact fields if provided.
+        if fields.get("cell_phone"):
+            u["cell_phone"] = fields["cell_phone"]
+        if fields.get("cell_carrier"):
+            u["cell_carrier"] = fields["cell_carrier"]
         if self._admin_save_users(data):
             self._admin_refresh_table()
             self._admin_update_lock_ui()
+            # Show the private folder setup popup if:
+            #   (a) private collection is enabled, AND
+            #   (b) the folder doesn't exist on disk yet
+            # This covers both "newly enabled" and "was already enabled but
+            # admin never created the folder" (e.g. migrated from old schema).
+            if fields["private_collection_enabled"]:
+                slug = fields.get("slug", "")
+                from pathlib import Path as _Path
+                import os as _os
+                folder_name = (slug or "unknown-user") + "-private"
+                privates_root = str(_Path.home() / "Documents" / "AI-Prowler-Server-privates")
+                expected_path = privates_root + _os.sep + folder_name
+                # Also check any custom path already in collection_map
+                existing_path = self._admin_get_private_rule_path(slug) or expected_path
+                if not _Path(existing_path).exists():
+                    self._admin_setup_private_folder(fields["name"], slug)
 
     def _admin_regen_token(self):
         """Regenerate the selected user's bearer token (revocation in 5s, spec
@@ -12133,9 +12842,15 @@ or from the Help menu."""
 
         try:
             added = add_to_auto_update_list(directory)
-            if added:
+            if added is True:
                 kind = "file" if is_file else "directory"
                 print(f"   ✅ Added {kind} to Update Index tracking list")
+            elif isinstance(added, str):
+                # Case-variant replacement — warn the user in the output log
+                # and show a popup so it's not missed.
+                print(f"   {added}")
+                self.root.after(0, lambda msg=added: messagebox.showwarning(
+                    "Duplicate Folder Name (Case Variant)", msg))
             else:
                 print(f"   ℹ️  Already in tracking list")
 
@@ -12936,37 +13651,6 @@ or from the Help menu."""
                 self.output_queue.put(('prewarm_fail', None))
 
         threading.Thread(target=_worker, daemon=True).start()
-
-    def _derive_indexed_directories(self) -> set:
-        """Return the set of directories that currently have chunks in ChromaDB.
-
-        Derived from chunk metadata (root_directory, falling back to the parent
-        of filepath) so the Update Index tab can reflect what is ACTUALLY in the
-        database — not just the auto-update tracking list. Files indexed
-        individually (which never register a directory in the tracking list)
-        are represented by their parent directory.
-
-        Returns an empty set on any error; the caller still shows the tracking
-        list, so a DB hiccup never blanks the tab.
-        """
-        dirs = set()
-        try:
-            from rag_preprocessor import get_chroma_client, create_or_get_collection
-            client, emb_fn = get_chroma_client()
-            col = create_or_get_collection(client, emb_fn)
-            result = col.get(include=['metadatas'])
-            for meta in (result.get('metadatas') or []):
-                if not isinstance(meta, dict):
-                    continue
-                root = (meta.get('root_directory') or '').strip()
-                fp   = (meta.get('filepath') or '').strip()
-                if root:
-                    dirs.add(_rag_engine.normalise_path(root))
-                elif fp:
-                    dirs.add(_rag_engine.normalise_path(str(Path(fp).parent)))
-        except Exception as _e:
-            print(f"[TrackedList] Could not derive indexed dirs from DB: {_e}")
-        return dirs
 
     def _derive_indexed_directories(self) -> set:
         """Return the set of directories that currently have chunks in ChromaDB.

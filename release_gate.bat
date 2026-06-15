@@ -69,22 +69,22 @@ echo ============================================================
 echo.
 
 REM ── Suite 1: AI-Prowler main test suite ──────────────────────────────────
-echo [1/2] Running AI-Prowler main test suite ...
+echo [1/3] Running AI-Prowler main test suite ...
 echo       Expected: ~637 tests (unit, mcp, gui, learning, reindex, installer)
 echo.
 cd /d "%AIPROWLER_ROOT%"
-call tests\run_tests.bat
+py -m pytest tests -m "not e2e" -v
 set "SUITE1_RC=%ERRORLEVEL%"
 echo.
 if "%SUITE1_RC%"=="0" (
-    echo [1/2] AI-Prowler main suite: PASSED
+    echo [1/3] AI-Prowler main suite: PASSED
 ) else (
-    echo [1/2] AI-Prowler main suite: FAILED ^(exit code %SUITE1_RC%^)
+    echo [1/3] AI-Prowler main suite: FAILED ^(exit code %SUITE1_RC%^)
 )
 echo.
 
 REM ── Suite 2: subscription manager CLI test suite ─────────────────────────
-echo [2/2] Running ai-prowler-subs CLI test suite ...
+echo [2/3] Running ai-prowler-subs CLI test suite ...
 echo       Expected: ~34 tests, ~0:01 runtime
 echo.
 cd /d "%SUBS_ROOT%"
@@ -92,9 +92,26 @@ py -m pytest test_business_cli.py -v
 set "SUITE2_RC=%ERRORLEVEL%"
 echo.
 if "%SUITE2_RC%"=="0" (
-    echo [2/2] ai-prowler-subs CLI suite: PASSED
+    echo [2/3] ai-prowler-subs CLI suite: PASSED
 ) else (
-    echo [2/2] ai-prowler-subs CLI suite: FAILED ^(exit code %SUITE2_RC%^)
+    echo [2/3] ai-prowler-subs CLI suite: FAILED ^(exit code %SUITE2_RC%^)
+)
+echo.
+
+REM ── Suite 3: E2E server isolation tests ──────────────────────────────────
+echo [3/3] Running E2E server isolation tests ...
+echo       Spawns a real AI-Prowler Server subprocess, probes over HTTP.
+echo       Covers: auth/identity (ST1), scope isolation (ST2), concurrent (ST3)
+echo       Requires: pip install mcp[cli]
+echo.
+cd /d "%AIPROWLER_ROOT%"
+py -m pytest tests/e2e -v -m e2e
+set "SUITE3_RC=%ERRORLEVEL%"
+echo.
+if "%SUITE3_RC%"=="0" (
+    echo [3/3] E2E server isolation suite: PASSED
+) else (
+    echo [3/3] E2E server isolation suite: FAILED ^(exit code %SUITE3_RC%^)
 )
 echo.
 
@@ -106,18 +123,23 @@ echo  Started: %START_TIME%
 echo  Ended  : %TIME%
 echo.
 if "%SUITE1_RC%"=="0" (
-    echo   Suite 1 ^(AI-Prowler main^):     PASS
+    echo   Suite 1 ^(AI-Prowler main^):         PASS
 ) else (
-    echo   Suite 1 ^(AI-Prowler main^):     FAIL
+    echo   Suite 1 ^(AI-Prowler main^):         FAIL
 )
 if "%SUITE2_RC%"=="0" (
-    echo   Suite 2 ^(ai-prowler-subs CLI^): PASS
+    echo   Suite 2 ^(ai-prowler-subs CLI^):     PASS
 ) else (
-    echo   Suite 2 ^(ai-prowler-subs CLI^): FAIL
+    echo   Suite 2 ^(ai-prowler-subs CLI^):     FAIL
+)
+if "%SUITE3_RC%"=="0" (
+    echo   Suite 3 ^(E2E server isolation^):    PASS
+) else (
+    echo   Suite 3 ^(E2E server isolation^):    FAIL
 )
 echo.
 
-if "%SUITE1_RC%"=="0" if "%SUITE2_RC%"=="0" (
+if "%SUITE1_RC%"=="0" if "%SUITE2_RC%"=="0" if "%SUITE3_RC%"=="0" (
     echo  [OK] ALL TESTS PASSED -- safe to release.
     echo.
     echo  MANUAL CHECKS STILL REQUIRED before tagging:
