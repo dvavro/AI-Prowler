@@ -185,16 +185,6 @@ def test_G_UPD_04_remove_actually_removes_when_confirmed(gui, isolated_env):
 # ──────────────────────────────────────────────────────────────────────────────
 # G-UPD-05 — Reload List button works after external state change
 # ──────────────────────────────────────────────────────────────────────────────
-@pytest.mark.skip(
-    reason=(
-        "ChromaDB Rust extension (chroma-hnswlib) triggers a Windows access "
-        "violation (0xC0000005) killing the entire pytest process when "
-        "remove_directory_from_index calls collection.get() on an RTX 5070 Ti "
-        "Blackwell GPU (SM 12.0). xfail cannot catch OS-level crashes. "
-        "Pre-existing hardware incompatibility — not a regression. "
-        "Re-enable when chromadb ships SM 12.0 Blackwell support."
-    )
-)
 def test_G_UPD_05_reload_picks_up_external_changes(gui, isolated_env):
     """Edit the auto-update list outside the GUI (e.g. simulating an MCP
     add), then click Reload — listbox should reflect the change."""

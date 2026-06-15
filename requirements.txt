@@ -11,7 +11,7 @@
 # NOTE: chromadb database migrations are irreversible — a clean install is required
 # when upgrading from 0.6.x. Uninstall AI-Prowler and delete the old ChromaDB data
 # folder before installing with this requirements.txt.
-chromadb==1.0.12
+chromadb==1.5.9
 
 # REMOVED: posthog==2.5.0 pin is no longer needed.
 # It was pinned to work around a chromadb 0.6.3 bug where chromadb's telemetry

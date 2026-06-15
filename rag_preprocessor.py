@@ -2867,7 +2867,8 @@ class _SentenceTransformerEmbedding:
     def build_from_config(cls, config):
         return cls(config.get("model_name", "all-MiniLM-L6-v2"))
 
-    def __call__(self, input):          # ChromaDB calls embedding_func(documents)
+    def _encode(self, input):
+        """Internal encode — shared by __call__, embed_documents, embed_query."""
         import torch
         try:
             with torch.no_grad():
@@ -2898,6 +2899,18 @@ class _SentenceTransformerEmbedding:
                     )
                 return vecs.tolist()
             raise
+
+    def __call__(self, input):          # ChromaDB 1.0.x protocol
+        return self._encode(input)
+
+    def embed_documents(self, input):   # ChromaDB 1.5.x protocol (index time)
+        return self._encode(input)
+
+    def embed_query(self, input):       # ChromaDB 1.5.x protocol (query time)
+        # embed_query receives a single string; wrap in list, return first result
+        if isinstance(input, str):
+            return self._encode([input])[0]
+        return self._encode(input)
 
 def chroma_collection_name(logical: str) -> str:
     """Convert a logical collection name to a safe ChromaDB physical collection name.
