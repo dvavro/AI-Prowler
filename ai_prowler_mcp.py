@@ -256,13 +256,30 @@ _MODEL_ID = "claude-sonnet-4-6"
 def _get_personal_owner_name() -> str:
     """Return the owner's display name for personal-mode source attribution.
 
-    Reads OWNER_NAME from rag_preprocessor globals (loaded at startup from
-    ~/.rag_config.json via load_config()). Returns "" if not set — callers
-    fall back to "operator" in that case.
+    Reads owner_name fresh from ~/.ai-prowler/config.json on every call so
+    that the name is picked up immediately after the user sets it in the
+    Settings tab — no MCP server restart required (fixes live-update bug).
+
+    Falls back to _engine.OWNER_NAME (loaded at startup from ~/.rag_config.json)
+    for backwards compatibility, then "" if neither is set — callers fall back
+    to "operator" in that case.
 
     v7.0.1 — introduced so personal installs show the owner's name in the
     Learnings tab Source column instead of the generic "operator" label.
+    v7.0.2 — moved to fresh file read so name is picked up mid-session and
+    survives reinstall (owner_name now stored in ~/.ai-prowler/config.json).
     """
+    try:
+        _ai_cfg_path = Path.home() / '.ai-prowler' / 'config.json'
+        if _ai_cfg_path.exists():
+            with open(_ai_cfg_path, 'r', encoding='utf-8') as _f:
+                _ai_cfg = json.load(_f)
+            name = _ai_cfg.get('owner_name', '').strip()
+            if name:
+                return name
+    except Exception:
+        pass
+    # Fallback: in-memory global loaded at startup
     try:
         return (_engine.OWNER_NAME or "").strip()
     except Exception:

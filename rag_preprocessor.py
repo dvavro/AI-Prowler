@@ -799,6 +799,19 @@ def load_config():
         except:
             pass
 
+    # owner_name is now stored in ~/.ai-prowler/config.json — read it from
+    # there so it survives reinstall. Takes priority over any legacy value
+    # that may still exist in ~/.rag_config.json.
+    try:
+        _ai_cfg_path = Path.home() / '.ai-prowler' / 'config.json'
+        if _ai_cfg_path.exists():
+            with open(_ai_cfg_path, 'r', encoding='utf-8') as f:
+                _ai_cfg = json.load(f)
+            if _ai_cfg.get('owner_name', '').strip():
+                OWNER_NAME = _ai_cfg['owner_name'].strip()
+    except Exception:
+        pass
+
     return config
 
 
@@ -872,14 +885,36 @@ def save_config(model=None, url=None, chunk_size=None, chunk_overlap=None,
     if provider_api_keys  is not None: config['provider_api_keys']  = provider_api_keys
     if provider_timeouts  is not None: config['provider_timeouts']  = provider_timeouts
     if ocr_debug          is not None: config['ocr_debug']          = ocr_debug
-    if owner_name         is not None: config['owner_name']         = owner_name.strip()
 
     try:
         with open(CONFIG_FILE, 'w') as f:
             json.dump(config, f, indent=2)
-        return True
     except:
         return False
+
+    # owner_name is stored in ~/.ai-prowler/config.json (not CONFIG_FILE) so
+    # it survives reinstall — the uninstaller always deletes ~/.rag_config.json
+    # but never touches ~/.ai-prowler/. Also allows _get_personal_owner_name()
+    # to read it fresh on every call without depending on the stale in-memory
+    # OWNER_NAME global (fixes live-update bug when name is set mid-session).
+    if owner_name is not None:
+        try:
+            _ai_cfg_path = Path.home() / '.ai-prowler' / 'config.json'
+            _ai_cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            _ai_cfg = {}
+            if _ai_cfg_path.exists():
+                try:
+                    with open(_ai_cfg_path, 'r', encoding='utf-8') as f:
+                        _ai_cfg = json.load(f)
+                except Exception:
+                    pass
+            _ai_cfg['owner_name'] = owner_name.strip()
+            with open(_ai_cfg_path, 'w', encoding='utf-8') as f:
+                json.dump(_ai_cfg, f, indent=2)
+        except Exception:
+            return False
+
+    return True
 
 
 def validate_model_config():
