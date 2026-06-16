@@ -116,9 +116,17 @@ class TestPersonalModeSource:
     Source should be the owner name from config, or 'operator' if not set."""
 
     def test_C_SL_SOURCE_01_personal_mode_no_owner_name_is_operator(self, sl_mcp_env):
-        """No owner name set → source = 'operator'."""
-        mcp = sl_mcp_env.mcp
-        with patch.object(_rp, 'OWNER_NAME', ''):
+        """No owner name set → source = 'operator'.
+
+        Patches both read paths of _get_personal_owner_name():
+          1. rag_preprocessor.OWNER_NAME (in-memory fallback)
+          2. _get_personal_owner_name itself (primary config.json read, v7.0.2+)
+        Without patching both, config.json returns the real owner name on
+        machines where it is populated, defeating the 'no owner name' scenario.
+        """
+        import ai_prowler_mcp as _mcp_mod
+        with patch.object(_rp, 'OWNER_NAME', ''), \
+             patch.object(_mcp_mod, '_get_personal_owner_name', return_value=''):
             _call_record(sl_mcp_env, user=None, auto_detected=False,
                          title="Personal mode no name test")
         learning = _load_latest_learning(sl_mcp_env)
@@ -140,9 +148,19 @@ class TestPersonalModeSource:
         )
 
     def test_C_SL_SOURCE_01c_personal_mode_owner_name_not_operator(self, sl_mcp_env):
-        """When owner name is set, source must NOT be 'operator'."""
+        """When owner name is set, source must NOT be 'operator'.
+
+        Patches both read paths of _get_personal_owner_name():
+          1. rag_preprocessor.OWNER_NAME (in-memory fallback)
+          2. ~/.ai-prowler/config.json   (primary live read, v7.0.2+)
+        Without patching both, the config.json read returns the real owner name
+        and the patch has no effect on machines where config.json is populated.
+        """
         mcp = sl_mcp_env.mcp
-        with patch.object(_rp, 'OWNER_NAME', 'Rick Vavro'):
+        import ai_prowler_mcp as _mcp_mod
+        with patch.object(_rp, 'OWNER_NAME', 'Rick Vavro'), \
+             patch.object(_mcp_mod, '_get_personal_owner_name',
+                          return_value='Rick Vavro'):
             _call_record(sl_mcp_env, user=None, auto_detected=False,
                          title="Personal mode Rick")
         learning = _load_latest_learning(sl_mcp_env)
@@ -415,9 +433,19 @@ class TestImportExportSourceFidelity:
     def test_C_SL_SOURCE_19b_operator_preserved_in_personal_mode(self, sl_mcp_env):
         """'operator' source is preserved when there is no authenticated user
         (personal mode, no owner name set) — it legitimately means the owner
-        recorded it on a personal install without configuring their name."""
+        recorded it on a personal install without configuring their name.
+
+        Patches both read paths of _get_personal_owner_name():
+          1. rag_preprocessor.OWNER_NAME (in-memory fallback)
+          2. _get_personal_owner_name itself (primary config.json read, v7.0.2+)
+        Without patching both, config.json returns the real owner name on
+        machines where it is populated, causing the test to get the owner name
+        instead of the expected 'operator' fallback.
+        """
         import rag_preprocessor as _rp
-        with patch.object(_rp, 'OWNER_NAME', ''):
+        import ai_prowler_mcp as _mcp_mod
+        with patch.object(_rp, 'OWNER_NAME', ''), \
+             patch.object(_mcp_mod, '_get_personal_owner_name', return_value=''):
             _call_record(sl_mcp_env, user=None, auto_detected=False,
                          source="", title="Operator personal mode")
         learning = _load_latest_learning(sl_mcp_env)
@@ -1277,11 +1305,21 @@ class TestRouterStateInjection:
         The real fix verification is:
           1. H04b/H05 prove the mechanism works when user IS in state
           2. Manual integration test on the Server: deploy fix, have Vicki
-             record a learning, confirm Source column shows 'Vicki Vavro'"""
+             record a learning, confirm Source column shows 'Vicki Vavro'
+
+        Patches both read paths of _get_personal_owner_name() (v7.0.2+):
+          1. rag_preprocessor.OWNER_NAME (in-memory fallback)
+          2. _get_personal_owner_name itself (primary config.json read)
+        Without patching both, config.json returns the real owner name on
+        David's machine, causing this server-mode bug test to get 'David Vavro'
+        instead of the expected 'operator' fallback.
+        """
+        import ai_prowler_mcp as _mcp_mod
         mcp = sl_mcp_env.mcp
         ctx = self._make_ctx_router_unfixed()
 
-        with patch.object(_rp, 'OWNER_NAME', ''):
+        with patch.object(_rp, 'OWNER_NAME', ''), \
+             patch.object(_mcp_mod, '_get_personal_owner_name', return_value=''):
             mcp.record_learning(
                 title="Bug confirmation test",
                 content="Vicki recorded this but router never injected her identity",

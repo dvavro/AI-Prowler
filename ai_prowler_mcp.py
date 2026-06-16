@@ -567,7 +567,8 @@ _IS_SERVER_MODE: bool = _detect_server_mode()
 # The 25 Tier A tools: suppressed for ALL roles in server mode.
 _TIER_A_SUPPRESSED: frozenset = frozenset({
     # Dev / code-execution — run arbitrary code on the host OS
-    "compile_check", "syntax_check", "lint_check", "pytest_check",
+    "compile_check", "syntax_check", "lint_check",
+    "run_script", "run_script_start", "run_script_status", "run_script_kill",
     "check_python_import",
     # Host filesystem writes — create/modify/delete files on the server host
     "create_file", "write_file", "str_replace_in_file", "create_directory",
@@ -5338,7 +5339,7 @@ def _parent_dir_check(filepath: str) -> Optional[str]:
 # TOOL 1 — create_file
 # ══════════════════════════════════════════════════════════════════════════════
 @mcp.tool()
-def create_file(filepath: str, content: str) -> str:
+def create_file(filepath: str, content: str, encoding: str = "text") -> str:
     """
     CODE TOOLS — Create a NEW file. FAILS if the file already exists.
 
@@ -5357,7 +5358,13 @@ def create_file(filepath: str, content: str) -> str:
 
     Args:
         filepath:  Absolute path of the file to create.
-        content:   Full file contents as a string. Empty string is allowed.
+        content:   Full file contents as a string. For text mode, pass the
+                   text directly. For binary mode, pass base64-encoded bytes.
+        encoding:  Write mode — 'text' (default) for plain text, source code,
+                   markdown, JSON, etc. Use 'base64' for binary files such as
+                   .docx, .xlsx, .pdf, .png, .zip — content must be a valid
+                   base64 string. Line-ending normalisation is skipped in
+                   base64 mode.
 
     Returns:
         Success: confirmation with byte count and a note that the file is now
@@ -5367,6 +5374,11 @@ def create_file(filepath: str, content: str) -> str:
     """
     if not _prewarm_event.wait(timeout=60):
         return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
+
+    # Validate encoding parameter
+    encoding = (encoding or "text").lower().strip()
+    if encoding not in ("text", "base64"):
+        return f"⚠️  Unknown encoding '{encoding}'. Use 'text' or 'base64'."
 
     # Authorize
     resolved, deny = _resolve_writable_path(filepath)
@@ -5385,24 +5397,28 @@ def create_file(filepath: str, content: str) -> str:
     if parent_err:
         return parent_err
 
-    # Size cap
-    # Line-ending handling for NEW files: if the caller passed pure-LF content
-    # and we're on Windows, translate to CRLF so the new file matches the
-    # rest of the codebase. If the caller passed content with explicit \r
-    # bytes, respect their choice exactly. Empty content is untouched.
-    if "\r" in content:
-        # Caller chose their endings explicitly — write as-is.
-        final_content = content
-    elif "\n" in content and os.linesep != "\n":
-        # Pure-LF content on a non-LF platform: convert to native.
-        # On Windows os.linesep == "\r\n"; on Linux/macOS it's "\n" already.
-        final_content = content.replace("\n", os.linesep)
+    # ── Encode content to bytes ───────────────────────────────────────────────
+    if encoding == "base64":
+        # Binary mode: decode base64 → raw bytes; skip all line-ending logic.
+        import base64 as _b64
+        try:
+            content_bytes = _b64.b64decode(content, validate=True)
+        except Exception as exc:
+            return (f"⚠️  base64 decode failed: {exc}\n"
+                    f"Ensure content is a valid base64 string with no extra whitespace.")
     else:
-        final_content = content
-    try:
-        content_bytes = final_content.encode("utf-8")
-    except Exception as exc:
-        return f"⚠️  Content could not be encoded as UTF-8: {exc}"
+        # Text mode: apply platform line-ending normalisation (existing behaviour).
+        if "\r" in content:
+            final_content = content
+        elif "\n" in content and os.linesep != "\n":
+            final_content = content.replace("\n", os.linesep)
+        else:
+            final_content = content
+        try:
+            content_bytes = final_content.encode("utf-8")
+        except Exception as exc:
+            return f"⚠️  Content could not be encoded as UTF-8: {exc}"
+
     if len(content_bytes) > _WRITE_MAX_BYTES:
         return (f"⚠️  Content too large ({len(content_bytes):,} bytes, "
                 f"cap {_WRITE_MAX_BYTES:,}).")
@@ -5419,9 +5435,10 @@ def create_file(filepath: str, content: str) -> str:
     except Exception as exc:
         return f"⚠️  Write failed: {exc}"
 
-    _log.info("create_file: %s (%d bytes)", resolved, len(content_bytes))
+    _log.info("create_file: %s (%d bytes, encoding=%s)", resolved, len(content_bytes), encoding)
 
-    return (f"✅ Created {resolved}\n"
+    mode_note = " [binary/base64]" if encoding == "base64" else ""
+    return (f"✅ Created {resolved}{mode_note}\n"
             f"   {len(content_bytes):,} bytes written\n"
             f"   NOT yet indexed — call reindex_file({resolved!r}) when done editing.")
 
@@ -5430,7 +5447,7 @@ def create_file(filepath: str, content: str) -> str:
 # TOOL 2 — write_file
 # ══════════════════════════════════════════════════════════════════════════════
 @mcp.tool()
-def write_file(filepath: str, content: str, verify_after_write: bool = False) -> str:
+def write_file(filepath: str, content: str, verify_after_write: bool = False, encoding: str = "text") -> str:
     """
     CODE TOOLS — Overwrite an EXISTING file with new content. FAILS if the
     file does not exist.
@@ -5449,11 +5466,18 @@ def write_file(filepath: str, content: str, verify_after_write: bool = False) ->
 
     Args:
         filepath:           Absolute path to overwrite.
-        content:            Full new file contents.
-        verify_after_write: If True (default False for write_file), re-read the
-                            file after writing and include the first/last 5
-                            lines of the new content in the response so you
-                            can confirm the write landed.
+        content:            Full new file contents. For text mode, pass the
+                            text directly. For binary mode, pass base64-encoded
+                            bytes.
+        verify_after_write: If True (default False), re-read the file after
+                            writing and include the first/last 5 lines of the
+                            new content in the response so you can confirm the
+                            write landed. Skipped in base64 mode.
+        encoding:           Write mode — 'text' (default) for plain text,
+                            source code, markdown, JSON, etc. Use 'base64' for
+                            binary files such as .docx, .xlsx, .pdf, .png,
+                            .zip — content must be a valid base64 string.
+                            Line-ending normalisation is skipped in base64 mode.
 
     Returns:
         Success: confirmation including backup path and byte counts.
@@ -5461,6 +5485,11 @@ def write_file(filepath: str, content: str, verify_after_write: bool = False) ->
     """
     if not _prewarm_event.wait(timeout=60):
         return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
+
+    # Validate encoding parameter
+    encoding = (encoding or "text").lower().strip()
+    if encoding not in ("text", "base64"):
+        return f"⚠️  Unknown encoding '{encoding}'. Use 'text' or 'base64'."
 
     # Authorize
     resolved, deny = _resolve_writable_path(filepath)
@@ -5475,30 +5504,32 @@ def write_file(filepath: str, content: str, verify_after_write: bool = False) ->
     if not Path(resolved).is_file():
         return f"⚠️  Path is not a regular file: {resolved}"
 
-    # Detect the existing file's line-ending convention so we can preserve
-    # it when writing the new content. The user passes `content` with \n
-    # newlines (the normal Python convention); we translate to whatever
-    # the file currently uses. Without this, every Windows file we touch
-    # silently loses its CRLF endings on write.
-    # Read up to 64 KB — plenty to find the first CRLF in any real file.
-    try:
-        with open(resolved, "rb") as f:
-            existing_head = f.read(65536)
-        line_ending = _detect_line_ending(existing_head)
-    except Exception as exc:
-        return f"⚠️  Cannot probe existing file for line endings: {exc}"
+    # ── Encode content to bytes ───────────────────────────────────────────────
+    if encoding == "base64":
+        # Binary mode: decode base64 → raw bytes; skip all line-ending logic.
+        import base64 as _b64
+        try:
+            content_bytes = _b64.b64decode(content, validate=True)
+        except Exception as exc:
+            return (f"⚠️  base64 decode failed: {exc}\n"
+                    f"Ensure content is a valid base64 string with no extra whitespace.")
+    else:
+        # Text mode: detect existing line-ending convention and preserve it.
+        try:
+            with open(resolved, "rb") as f:
+                existing_head = f.read(65536)
+            line_ending = _detect_line_ending(existing_head)
+        except Exception as exc:
+            return f"⚠️  Cannot probe existing file for line endings: {exc}"
 
-    # Normalize incoming content to LF, then re-apply the detected ending.
-    # Normalization makes the behavior predictable: whether the caller
-    # passes \n or \r\n, the output uses the file's existing convention.
-    normalized_content = content.replace("\r\n", "\n").replace("\r", "\n")
-    final_content = _apply_line_ending(normalized_content, line_ending)
+        normalized_content = content.replace("\r\n", "\n").replace("\r", "\n")
+        final_content = _apply_line_ending(normalized_content, line_ending)
 
-    # Size cap on new content
-    try:
-        content_bytes = final_content.encode("utf-8")
-    except Exception as exc:
-        return f"⚠️  Content could not be encoded as UTF-8: {exc}"
+        try:
+            content_bytes = final_content.encode("utf-8")
+        except Exception as exc:
+            return f"⚠️  Content could not be encoded as UTF-8: {exc}"
+
     if len(content_bytes) > _WRITE_MAX_BYTES:
         return (f"⚠️  Content too large ({len(content_bytes):,} bytes, "
                 f"cap {_WRITE_MAX_BYTES:,}).")
@@ -5522,17 +5553,17 @@ def write_file(filepath: str, content: str, verify_after_write: bool = False) ->
         return (f"⚠️  Write failed (backup preserved at {backup_path}): {exc}\n"
                 f"Use restore_backup to recover if needed.")
 
-    _log.info("write_file: %s (%d -> %d bytes, backup %s)",
-              resolved, old_size, len(content_bytes), backup_path)
+    _log.info("write_file: %s (%d -> %d bytes, encoding=%s, backup %s)",
+              resolved, old_size, len(content_bytes), encoding, backup_path)
 
-    # Build response (auto-reindex removed in v7.0.0 — see _reindex_file_after_write)
+    mode_note = " [binary/base64]" if encoding == "base64" else ""
     out = [
-        f"✅ Wrote {resolved}",
+        f"✅ Wrote {resolved}{mode_note}",
         f"   {old_size:,} bytes  →  {len(content_bytes):,} bytes",
         f"   Backup: {backup_path}",
         f"   NOT yet indexed — call reindex_file() when done editing.",
     ]
-    if verify_after_write:
+    if verify_after_write and encoding == "text":
         out.append("")
         out.append("─── Verify (first 5 / last 5 lines of new content) ───")
         try:
@@ -5549,6 +5580,8 @@ def write_file(filepath: str, content: str, verify_after_write: bool = False) ->
                     out.append(f"  {i:>4}  {ln}")
         except Exception as exc:
             out.append(f"  (verify read failed: {exc})")
+    elif verify_after_write and encoding == "base64":
+        out.append("   (verify skipped — binary file)")
     return "\n".join(out)
 
 
@@ -6567,7 +6600,7 @@ def _dev_tools_enabled() -> tuple[bool, str]:
     removed the gate per operator decision: the dev tools are read-only
     subprocess calls bounded by the same read allowlist as every other tool,
     so the same path-based protection that gates search_documents also gates
-    syntax_check / pytest_check / lint_check.
+    syntax_check / lint_check.
 
     Kept as a function (not inlined) so re-tightening later is a one-line
     change: simply return (False, "...") here for the modes you want to lock.
@@ -7002,83 +7035,210 @@ def lint_check(filepath: str, timeout_sec: int = _DEV_CHECK_TIMEOUT_SEC) -> str:
             f"───\n{out}")
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOL — run_script
+# ══════════════════════════════════════════════════════════════════════════════
 @mcp.tool()
-def pytest_check(test_path: str, k_filter: str = "",
-                 timeout_sec: int = 300, max_output_lines: int = 200) -> str:
+def run_script(script_path: str, args: str = "",
+               timeout_sec: int = 120, max_output_lines: int = 200) -> str:
     """
-    DEV TOOLS — Run pytest against a test file or directory and return a
-    summary plus the first failure trace (if any).
+    DEV TOOLS — Execute a script or compiled program and return its output.
 
-    Python-only by design: cross-language test runners differ enough (Go has
-    `go test`, Rust has `cargo test`, JS has 5+ frameworks) that a unified
-    abstraction would be confusing. For other languages, run their native
-    test command via your normal dev workflow.
+    Use run_script for short scripts that complete within ~60 seconds.
+    For long-running tasks (full test suites, builds, etc.) use
+    run_script_start / run_script_status / run_script_kill instead —
+    those run async and won't time out the MCP connection.
+
+    To run pytest with a -k filter use run_script_start with args:
+      run_script_start("run_tests.bat", args="tests\\mcp\\ -k binary_write")
+
+    IMPORTANT — NEVER elevated: all scripts run as the current Windows user
+    (david). Admin-requiring operations (service installs, UAC-gated writes)
+    must be run manually at the desktop.
+
+    Supported file types and their runners:
+      .bat / .cmd   →  cmd.exe /c <script> (shell=True, Windows only)
+      .py           →  Python311 (same interpreter as run_script_start)
+      .js / .mjs    →  node
+      .sh / .bash   →  bash (requires Git Bash or WSL on Windows)
+      .rb           →  ruby
+      .pl / .pm     →  perl
+      .go           →  go run
+      .c            →  gcc compile to temp binary → run → delete binary
+      .cpp/.cc/.cxx →  g++ compile to temp binary → run → delete binary
+      .java         →  javac compile → java run → delete .class
+
+    Security guardrails (same as all Dev Tools):
+      • Script must be under the tracked read-allowlist — no running arbitrary
+        files from outside the knowledge base.
+      • Never runs as administrator / elevated — no UAC, no runas.
+      • Suppressed in server mode (Tier A).
+      • Hard timeout enforced — runaway scripts are killed.
+      • Output truncated to max_output_lines from the end.
 
     Args:
-        test_path:        Test file or directory under a tracked root.
-        k_filter:         Optional `-k` substring filter (e.g. "REINDEX" runs
-                          only test_C_REINDEX_*). Empty = run all in path.
-        timeout_sec:      Max seconds (default 300 — pytest can be slow).
-        max_output_lines: Truncate output to N lines from the end (default 200)
-                          so a 10,000-line test log doesn't blow context.
+        script_path:      Absolute path to the script or source file.
+                          Must be under a tracked read-allowlisted root.
+        args:             Optional command-line arguments as a single string
+                          (e.g. "tests\\mcp\\ -v"). Split on whitespace.
+        timeout_sec:      Max seconds before the process is killed (default 120).
+        max_output_lines: Truncate stdout+stderr to this many lines from the
+                          end (default 200). Raise for verbose build output.
 
     Returns:
-        "✅ N passed in Xs" + summary, OR the failure section with first traces.
-        Always includes the pass/fail counts on the last line for easy parsing.
-
-    Available in all editions/modes; the file must be under a tracked
-    read-allowlisted root regardless of edition.
+        "✅ rc=0 — <script>" + captured output, OR
+        "❌ rc=N — <script>" + captured output on non-zero exit.
+        Always includes the return code for easy parsing.
     """
     enabled, why = _dev_tools_enabled()
     if not enabled:
-        return f"🚫 pytest_check is disabled here ({why})."
+        return f"🚫 run_script is disabled here ({why})."
 
-    resolved, err = _resolve_allowlisted_path(test_path)
+    resolved, err = _resolve_allowlisted_path(script_path)
     if err:
         return err
 
-    # Verify pytest is available in this Python's environment.
     import subprocess as _sp
+    import tempfile as _tmp
+
+    ext = os.path.splitext(resolved)[1].lower()
+    extra_args = args.split() if args.strip() else []
+    cwd = os.path.dirname(resolved)
+    use_shell = False
+    cleanup_bin = None  # temp binary to delete after run (C/C++/Java)
+
+    # ── Resolve runner ────────────────────────────────────────────────────────
+    if ext in (".bat", ".cmd"):
+        # cmd.exe /c is the only sane way to run batch files on Windows.
+        # shell=True is required; the script path is passed as a single arg.
+        argv = ["cmd.exe", "/c", resolved] + extra_args
+        use_shell = False
+
+    elif ext == ".py":
+        # Reuse the same Python-finder logic as run_script_start.
+        def _find_py() -> str:
+            candidates = [
+                os.path.join(os.environ.get("LocalAppData", ""),
+                             "Programs", "Python", "Python311", "python.exe"),
+                os.path.join(os.environ.get("LocalAppData", ""),
+                             "Programs", "Python", "Python312", "python.exe"),
+                os.path.join(os.environ.get("LocalAppData", ""),
+                             "Programs", "Python", "Python310", "python.exe"),
+                sys.executable,
+            ]
+            for c in candidates:
+                if c and os.path.isfile(c):
+                    return c
+            return sys.executable
+        argv = [_find_py(), resolved] + extra_args
+
+    elif ext in (".js", ".mjs", ".cjs"):
+        argv = ["node", resolved] + extra_args
+
+    elif ext in (".sh", ".bash"):
+        argv = ["bash", resolved] + extra_args
+
+    elif ext in (".rb",):
+        argv = ["ruby", resolved] + extra_args
+
+    elif ext in (".pl", ".pm"):
+        argv = ["perl", resolved] + extra_args
+
+    elif ext == ".go":
+        argv = ["go", "run", resolved] + extra_args
+
+    elif ext in (".c", ".h"):
+        # Compile to a temp binary, run it, clean up.
+        tmp_bin = os.path.join(_tmp.gettempdir(),
+                               f"_aip_run_{os.getpid()}.exe")
+        compile_proc = _sp.run(
+            ["gcc", resolved, "-o", tmp_bin],
+            capture_output=True, text=True, timeout=60, shell=False, cwd=cwd)
+        if compile_proc.returncode != 0:
+            return (f"❌ gcc compile failed for {resolved}\n"
+                    f"{compile_proc.stderr or compile_proc.stdout}")
+        argv = [tmp_bin] + extra_args
+        cleanup_bin = tmp_bin
+
+    elif ext in (".cpp", ".cc", ".cxx", ".hpp"):
+        tmp_bin = os.path.join(_tmp.gettempdir(),
+                               f"_aip_run_{os.getpid()}.exe")
+        compile_proc = _sp.run(
+            ["g++", resolved, "-o", tmp_bin],
+            capture_output=True, text=True, timeout=60, shell=False, cwd=cwd)
+        if compile_proc.returncode != 0:
+            return (f"❌ g++ compile failed for {resolved}\n"
+                    f"{compile_proc.stderr or compile_proc.stdout}")
+        argv = [tmp_bin] + extra_args
+        cleanup_bin = tmp_bin
+
+    elif ext == ".java":
+        # Compile first, then run.
+        compile_proc = _sp.run(
+            ["javac", resolved],
+            capture_output=True, text=True, timeout=60, shell=False, cwd=cwd)
+        if compile_proc.returncode != 0:
+            return (f"❌ javac compile failed for {resolved}\n"
+                    f"{compile_proc.stderr or compile_proc.stdout}")
+        class_name = os.path.splitext(os.path.basename(resolved))[0]
+        argv = ["java", "-cp", cwd, class_name] + extra_args
+
+    else:
+        return (f"⚠️  run_script: unsupported file type '{ext}'.\n"
+                f"Supported: .bat .cmd .py .js .mjs .sh .bash .rb .pl "
+                f".go .c .cpp .cc .cxx .java")
+
+    # ── Content preview — forces script into Claude's context before execution ─
+    # This is the primary security gate: Claude's built-in values mean it will
+    # never have called run_script on something destructive it can see.
+    # For binary formats (compiled C/C++) we skip the preview since the source
+    # was already read; for all text scripts we show the first 50 lines.
+    _preview_note = ""
+    if ext not in (".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".java"):
+        try:
+            with open(resolved, "r", encoding="utf-8", errors="replace") as _pf:
+                _preview_lines = _pf.readlines()
+            _total = len(_preview_lines)
+            _shown = _preview_lines[:50]
+            _omitted = _total - len(_shown)
+            _preview_note = (
+                f"📄 Script preview ({_total} lines"
+                f"{f', showing first 50' if _omitted else ''}):\n"
+                f"{'─' * 60}\n"
+                + "".join(_shown)
+                + (f"{'─' * 60}\n... ({_omitted} more lines)\n" if _omitted else
+                   f"{'─' * 60}\n")
+            )
+        except Exception as _pe:
+            _preview_note = f"(preview unavailable: {_pe})\n"
+
+    # ── Execute ───────────────────────────────────────────────────────────────
     try:
-        _check = _sp.run([sys.executable, "-c", "import pytest"],
-                         capture_output=True, text=True, timeout=10, shell=False)
-        if _check.returncode != 0:
-            return ("❌ pytest_check: pytest is not installed in this Python "
-                    "environment. Install with: `py -m pip install pytest`")
-    except Exception as exc:
-        return f"⚠️  pytest_check could not verify pytest availability: {exc}"
-
-    argv = [sys.executable, "-m", "pytest", resolved, "-v", "--tb=short",
-            "--no-header"]
-    if k_filter:
-        argv.extend(["-k", k_filter])
-
-    # Run pytest from the project's directory so relative imports resolve.
-    cwd = os.path.dirname(resolved) if os.path.isfile(resolved) else resolved
-    # Walk up to find a likely project root (contains pytest.ini, pyproject.toml,
-    # or tests/) so pytest's discovery works.
-    project_root = cwd
-    for _ in range(6):  # don't traverse forever
-        if any(os.path.exists(os.path.join(project_root, marker))
-               for marker in ("pytest.ini", "pyproject.toml", "setup.py")):
-            break
-        parent = os.path.dirname(project_root)
-        if parent == project_root:
-            break
-        project_root = parent
-
-    try:
-        proc = _sp.run(argv, capture_output=True, text=True,
-                       timeout=max(10, int(timeout_sec)), shell=False,
-                       cwd=project_root)
+        proc = _sp.run(
+            argv,
+            capture_output=True, text=True,
+            timeout=max(5, int(timeout_sec)),
+            shell=use_shell,
+            cwd=cwd,
+        )
+    except FileNotFoundError as exc:
+        return (f"⚠️  run_script: runner not found — {exc}\n"
+                f"Install the required runtime and ensure it is on PATH.")
     except _sp.TimeoutExpired:
-        return (f"⏱️  pytest_check timed out after {timeout_sec}s on {resolved}. "
-                f"Consider narrowing with k_filter, or raise timeout_sec.")
+        return (f"⏱️  run_script timed out after {timeout_sec}s — {resolved}\n"
+                f"Raise timeout_sec if the script legitimately needs more time.")
     except Exception as exc:
-        return f"⚠️  pytest_check could not run: {exc}"
+        return f"⚠️  run_script could not execute: {exc}"
+    finally:
+        # Always clean up temp binaries even if execution raised.
+        if cleanup_bin and os.path.exists(cleanup_bin):
+            try:
+                os.remove(cleanup_bin)
+            except Exception:
+                pass
 
+    # ── Format output ─────────────────────────────────────────────────────────
     out = (proc.stdout or "") + (proc.stderr or "")
-    # Truncate from the top, keep the most recent lines (failures + summary).
     lines = out.splitlines()
     truncated = ""
     if len(lines) > max_output_lines:
@@ -7087,21 +7247,471 @@ def pytest_check(test_path: str, k_filter: str = "",
         lines = lines[-max_output_lines:]
     out_trimmed = truncated + "\n".join(lines)
 
-    # pytest exit codes: 0=all passed, 1=tests failed, 2=interrupted,
-    # 3=internal error, 4=usage error, 5=no tests collected
-    if proc.returncode == 0:
-        _log.info("pytest_check PASSED: %s", resolved)
-        return (f"✅ pytest PASSED — {resolved}"
-                f"{(' (filter: -k ' + k_filter + ')') if k_filter else ''}\n"
-                f"───\n{out_trimmed}")
-    if proc.returncode == 5:
-        return (f"ℹ️  pytest_check: no tests collected for {resolved}"
-                f"{(' (filter: -k ' + k_filter + ')') if k_filter else ''}.\n"
-                f"───\n{out_trimmed}")
-    _log.warning("pytest_check FAILED: %s  (rc=%d)", resolved, proc.returncode)
-    return (f"❌ pytest FAILED — {resolved}  (rc={proc.returncode})"
-            f"{(' (filter: -k ' + k_filter + ')') if k_filter else ''}\n"
+    rc = proc.returncode
+    icon = "✅" if rc == 0 else "❌"
+    _log.info("run_script: %s rc=%d", resolved, rc)
+    return (f"{_preview_note}"
+            f"{icon} rc={rc} — {resolved}\n"
             f"───\n{out_trimmed}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ASYNC JOB TOOLS — run_script_start / run_script_status / run_script_kill
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Jobs directory: ~/.ai-prowler/jobs/
+# Each job writes two files:
+#   <job_id>.json  — manifest (pid, status, exit_code, paths, timestamps)
+#   <job_id>.log   — live stdout+stderr from the process
+
+_JOBS_DIR = Path.home() / ".ai-prowler" / "jobs"
+
+
+def _jobs_dir() -> Path:
+    """Return the jobs directory, creating it if needed."""
+    _JOBS_DIR.mkdir(parents=True, exist_ok=True)
+    return _JOBS_DIR
+
+
+def _job_manifest_path(job_id: str) -> Path:
+    return _jobs_dir() / f"{job_id}.json"
+
+
+def _job_log_path(job_id: str) -> Path:
+    return _jobs_dir() / f"{job_id}.log"
+
+
+def _read_manifest(job_id: str) -> dict:
+    p = _job_manifest_path(job_id)
+    if not p.exists():
+        return {}
+    try:
+        import json as _j
+        return _j.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _resolve_run_argv(script_path: str, extra_args: list) -> tuple:
+    """
+    Return (argv, use_shell, needs_compile, error_str).
+    Mirrors the runner-selection logic in run_script.
+    """
+    import tempfile as _tmp
+    ext = os.path.splitext(script_path)[1].lower()
+
+    if ext in (".bat", ".cmd"):
+        return (["cmd.exe", "/c", script_path] + extra_args, False, False, "")
+
+    elif ext == ".py":
+        candidates = [
+            os.path.join(os.environ.get("LocalAppData", ""),
+                         "Programs", "Python", "Python311", "python.exe"),
+            os.path.join(os.environ.get("LocalAppData", ""),
+                         "Programs", "Python", "Python312", "python.exe"),
+            os.path.join(os.environ.get("LocalAppData", ""),
+                         "Programs", "Python", "Python310", "python.exe"),
+            sys.executable,
+        ]
+        py = next((c for c in candidates if c and os.path.isfile(c)), sys.executable)
+        return ([py, script_path] + extra_args, False, False, "")
+
+    elif ext in (".js", ".mjs", ".cjs"):
+        return (["node", script_path] + extra_args, False, False, "")
+
+    elif ext in (".sh", ".bash"):
+        return (["bash", script_path] + extra_args, False, False, "")
+
+    elif ext in (".rb",):
+        return (["ruby", script_path] + extra_args, False, False, "")
+
+    elif ext in (".pl", ".pm"):
+        return (["perl", script_path] + extra_args, False, False, "")
+
+    elif ext == ".go":
+        return (["go", "run", script_path] + extra_args, False, False, "")
+
+    elif ext in (".c", ".h", ".cpp", ".cc", ".cxx", ".hpp"):
+        compiler = "gcc" if ext in (".c", ".h") else "g++"
+        tmp_bin = os.path.join(_tmp.gettempdir(), f"_aip_async_{os.getpid()}.exe")
+        import subprocess as _sp2
+        cp = _sp2.run([compiler, script_path, "-o", tmp_bin],
+                      capture_output=True, text=True, timeout=60, shell=False)
+        if cp.returncode != 0:
+            return ([], False, False,
+                    f"❌ {compiler} compile failed:\n{cp.stderr or cp.stdout}")
+        return ([tmp_bin] + extra_args, False, True, "")
+
+    elif ext == ".java":
+        cwd = os.path.dirname(script_path)
+        import subprocess as _sp2
+        cp = _sp2.run(["javac", script_path],
+                      capture_output=True, text=True, timeout=60, shell=False,
+                      cwd=cwd)
+        if cp.returncode != 0:
+            return ([], False, False,
+                    f"❌ javac compile failed:\n{cp.stderr or cp.stdout}")
+        class_name = os.path.splitext(os.path.basename(script_path))[0]
+        return (["java", "-cp", cwd, class_name] + extra_args, False, False, "")
+
+    else:
+        return ([], False, False,
+                f"⚠️  Unsupported file type '{ext}'. "
+                f"Supported: .bat .cmd .py .js .mjs .sh .bash .rb .pl "
+                f".go .c .cpp .cc .cxx .java")
+
+
+@mcp.tool()
+def run_script_start(script_path: str, args: str = "",
+                     timeout_sec: int = 1800) -> str:
+    """
+    DEV TOOLS — Launch a script in the background and return a job_id immediately.
+
+    Unlike run_script (which blocks until done), this returns in under a second.
+    The process runs independently on your machine. Use run_script_status to
+    check progress and read log output, and run_script_kill to terminate it.
+
+    Ideal for long-running tasks: full test suites, build scripts, compilers,
+    data processing jobs — anything that might exceed the MCP transport timeout.
+
+    Supported file types: same as run_script (.bat, .cmd, .py, .js, .sh, .rb,
+    .pl, .go, .c, .cpp, .java).
+
+    NEVER elevated: runs as current user (david). No UAC, no runas.
+    Suppressed in server mode (Tier A).
+
+    Args:
+        script_path: Absolute path to the script. Must be under a tracked root.
+        args:        Optional command-line arguments (space-separated string).
+        timeout_sec: Max wall-clock seconds before the wrapper kills the process
+                     (default 1800 = 30 minutes). The wrapper enforces this.
+
+    Returns:
+        job_id string on success (e.g. "job_20260615_143022_a3f7").
+        Use this id with run_script_status and run_script_kill.
+    """
+    enabled, why = _dev_tools_enabled()
+    if not enabled:
+        return f"🚫 run_script_start is disabled here ({why})."
+
+    resolved, err = _resolve_allowlisted_path(script_path)
+    if err:
+        return err
+
+    import json as _j
+    import subprocess as _sp
+    import datetime as _dt
+    import random, string
+
+    extra_args = args.split() if args.strip() else []
+    argv, use_shell, _compiled, compile_err = _resolve_run_argv(resolved, extra_args)
+    if compile_err:
+        return compile_err
+
+    # ── Content preview — forces script into Claude's context before launch ───
+    # Same security gate as run_script: Claude sees the content before it runs.
+    # Skipped for compiled source files (already reviewed during compile step).
+    _ext = os.path.splitext(resolved)[1].lower()
+    _preview_note = ""
+    if _ext not in (".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".java"):
+        try:
+            with open(resolved, "r", encoding="utf-8", errors="replace") as _pf:
+                _preview_lines = _pf.readlines()
+            _total = len(_preview_lines)
+            _shown = _preview_lines[:50]
+            _omitted = _total - len(_shown)
+            _preview_note = (
+                f"📄 Script preview ({_total} lines"
+                f"{f', showing first 50' if _omitted else ''}):\n"
+                f"{'─' * 60}\n"
+                + "".join(_shown)
+                + (f"{'─' * 60}\n... ({_omitted} more lines)\n" if _omitted else
+                   f"{'─' * 60}\n")
+            )
+        except Exception as _pe:
+            _preview_note = f"(preview unavailable: {_pe})\n"
+
+    # Generate unique job id
+    suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
+    job_id = f"job_{_dt.datetime.now().strftime('%Y%m%d_%H%M%S')}_{suffix}"
+    log_path  = str(_job_log_path(job_id))
+    mani_path = str(_job_manifest_path(job_id))
+
+    # Build the wrapper script that runs the target and updates the manifest.
+    wrapper_src = f"""
+import subprocess, json, datetime, sys, os, signal
+
+MANIFEST = {_j.dumps(mani_path)}
+LOG      = {_j.dumps(log_path)}
+ARGV     = {_j.dumps(argv)}
+TIMEOUT  = {int(timeout_sec)}
+USE_SHELL= {use_shell}
+
+def _update(status, rc=None):
+    try:
+        with open(MANIFEST, "r", encoding="utf-8") as f:
+            m = json.load(f)
+        m["status"]      = status
+        m["exit_code"]   = rc
+        m["finished_at"] = datetime.datetime.now().isoformat()
+        with open(MANIFEST, "w", encoding="utf-8") as f:
+            json.dump(m, f, indent=2)
+    except Exception as e:
+        pass  # manifest update failure is non-fatal
+
+with open(LOG, "a", encoding="utf-8", buffering=1) as lf:
+    try:
+        # For bat/cmd files ARGV[0] is cmd.exe — use the script path instead.
+        # ARGV[2] is the actual script when cmd.exe /c <script> is used.
+        if USE_SHELL or (len(ARGV) >= 3 and ARGV[0].lower().endswith("cmd.exe")):
+            _cwd = os.path.dirname(ARGV[2]) if len(ARGV) >= 3 else None
+        else:
+            _cwd = os.path.dirname(ARGV[0])
+        proc = subprocess.Popen(
+            ARGV,
+            stdout=lf, stderr=lf,
+            shell=USE_SHELL,
+            cwd=_cwd or None,
+        )
+        # Update manifest with real PID
+        try:
+            with open(MANIFEST, "r", encoding="utf-8") as f:
+                m = json.load(f)
+            m["pid"] = proc.pid
+            with open(MANIFEST, "w", encoding="utf-8") as f:
+                json.dump(m, f, indent=2)
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=TIMEOUT)
+            _update("done" if proc.returncode == 0 else "failed", proc.returncode)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            _update("timeout", -1)
+            lf.write(f"\\n[wrapper] TIMEOUT after {{TIMEOUT}}s — process killed\\n")
+    except Exception as exc:
+        lf.write(f"\\n[wrapper] LAUNCH ERROR: {{exc}}\\n")
+        _update("error", -1)
+"""
+
+    # Write wrapper to jobs dir
+    wrapper_path = str(_jobs_dir() / f"{job_id}_wrapper.py")
+    Path(wrapper_path).write_text(wrapper_src, encoding="utf-8")
+
+    # Write initial manifest
+    manifest = {
+        "job_id":      job_id,
+        "script":      resolved,
+        "args":        args,
+        "pid":         None,     # updated by wrapper once child spawns
+        "wrapper_pid": None,
+        "status":      "running",
+        "started_at":  _dt.datetime.now().isoformat(),
+        "finished_at": None,
+        "exit_code":   None,
+        "log_file":    log_path,
+        "manifest":    mani_path,
+        "timeout_sec": timeout_sec,
+    }
+    Path(mani_path).write_text(_j.dumps(manifest, indent=2), encoding="utf-8")
+
+    # Touch the log file so run_script_status can read it immediately
+    Path(log_path).touch()
+
+    # Find Python for the wrapper
+    py_candidates = [
+        os.path.join(os.environ.get("LocalAppData", ""),
+                     "Programs", "Python", "Python311", "python.exe"),
+        sys.executable,
+    ]
+    wrapper_py = next((c for c in py_candidates if c and os.path.isfile(c)),
+                      sys.executable)
+
+    # Launch wrapper as a detached background process
+    try:
+        wp = _sp.Popen(
+            [wrapper_py, wrapper_path],
+            stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+            creationflags=getattr(_sp, "DETACHED_PROCESS", 0)
+                          | getattr(_sp, "CREATE_NEW_PROCESS_GROUP", 0),
+        )
+        # Record wrapper PID in manifest
+        manifest["wrapper_pid"] = wp.pid
+        Path(mani_path).write_text(_j.dumps(manifest, indent=2), encoding="utf-8")
+    except Exception as exc:
+        return f"⚠️  run_script_start: could not launch wrapper: {exc}"
+
+    _log.info("run_script_start: job_id=%s script=%s wrapper_pid=%d",
+              job_id, resolved, wp.pid)
+    return (f"{_preview_note}"
+            f"✅ Job started — id: {job_id}\n"
+            f"   Script:  {resolved}\n"
+            f"   Log:     {log_path}\n"
+            f"   Timeout: {timeout_sec}s\n"
+            f"   Use run_script_status('{job_id}') to check progress.")
+
+
+@mcp.tool()
+def run_script_status(job_id: str, tail_lines: int = 50) -> str:
+    """
+    DEV TOOLS — Check the status of a background job and tail its log output.
+
+    Call this after run_script_start to see what the job has printed so far,
+    whether it is still running, and its exit code when done.
+
+    Args:
+        job_id:     The id returned by run_script_start.
+        tail_lines: How many lines from the end of the log to return
+                    (default 50). Raise for more context.
+
+    Returns:
+        Status block with manifest info + log tail.
+        Status values: running / done / failed / timeout / error / killed
+    """
+    enabled, why = _dev_tools_enabled()
+    if not enabled:
+        return f"🚫 run_script_status is disabled here ({why})."
+
+    m = _read_manifest(job_id)
+    if not m:
+        return (f"⚠️  No job found with id '{job_id}'.\n"
+                f"Jobs are stored in {_JOBS_DIR}. "
+                f"Check the id returned by run_script_start.")
+
+    log_path = m.get("log_file", "")
+    status   = m.get("status", "unknown")
+    rc       = m.get("exit_code")
+    started  = m.get("started_at", "?")
+    finished = m.get("finished_at", "")
+    script   = m.get("script", "?")
+    pid      = m.get("pid", "?")
+
+    # Status icon
+    icons = {
+        "running": "⏳", "done": "✅", "failed": "❌",
+        "timeout": "⏱️", "error": "💥", "killed": "🛑",
+    }
+    icon = icons.get(status, "❓")
+
+    lines_out = [
+        f"{icon} Job {job_id}  [{status.upper()}]",
+        f"   Script:    {script}",
+        f"   PID:       {pid}",
+        f"   Started:   {started}",
+        f"   Finished:  {finished or '(still running)'}",
+        f"   Exit code: {rc if rc is not None else '(pending)'}",
+        f"   Log:       {log_path}",
+        "───",
+    ]
+
+    # Read log tail
+    try:
+        log_text = Path(log_path).read_text(encoding="utf-8", errors="replace")
+        log_lines = log_text.splitlines()
+        total = len(log_lines)
+        if total > tail_lines:
+            lines_out.append(
+                f"... ({total - tail_lines} earlier lines omitted — "
+                f"raise tail_lines or use read_file_lines for full log) ...")
+            log_lines = log_lines[-tail_lines:]
+        lines_out.extend(log_lines)
+    except Exception as exc:
+        lines_out.append(f"(log unreadable: {exc})")
+
+    return "\n".join(lines_out)
+
+
+@mcp.tool()
+def run_script_kill(job_id: str) -> str:
+    """
+    DEV TOOLS — Kill a running background job and all its child processes.
+
+    Use when a job is hung, taking too long, or you want to cancel it.
+    After killing, the manifest status is updated to 'killed' and the
+    final log tail is returned.
+
+    Args:
+        job_id: The id returned by run_script_start.
+
+    Returns:
+        Confirmation of kill + final log tail.
+    """
+    enabled, why = _dev_tools_enabled()
+    if not enabled:
+        return f"🚫 run_script_kill is disabled here ({why})."
+
+    import json as _j
+
+    m = _read_manifest(job_id)
+    if not m:
+        return f"⚠️  No job found with id '{job_id}'."
+
+    status = m.get("status", "unknown")
+    if status not in ("running",):
+        return (f"ℹ️  Job {job_id} is already in status '{status}' — "
+                f"nothing to kill.")
+
+    pid         = m.get("pid")
+    wrapper_pid = m.get("wrapper_pid")
+    killed      = []
+    errors      = []
+
+    def _kill_pid(p, label):
+        if not p:
+            return
+        try:
+            import signal
+            # Try psutil first for child-tree kill
+            try:
+                import psutil as _ps
+                proc_obj = _ps.Process(int(p))
+                children = proc_obj.children(recursive=True)
+                for child in children:
+                    try:
+                        child.kill()
+                    except Exception:
+                        pass
+                proc_obj.kill()
+                killed.append(f"{label} PID {p} (+ {len(children)} children)")
+            except ImportError:
+                # psutil not available — kill just the pid
+                os.kill(int(p), signal.SIGTERM)
+                killed.append(f"{label} PID {p}")
+        except ProcessLookupError:
+            killed.append(f"{label} PID {p} (already gone)")
+        except Exception as exc:
+            errors.append(f"{label} PID {p}: {exc}")
+
+    _kill_pid(pid, "script")
+    _kill_pid(wrapper_pid, "wrapper")
+
+    # Update manifest
+    mani_path = _job_manifest_path(job_id)
+    try:
+        import datetime as _dt
+        m["status"]      = "killed"
+        m["exit_code"]   = -9
+        m["finished_at"] = _dt.datetime.now().isoformat()
+        mani_path.write_text(_j.dumps(m, indent=2), encoding="utf-8")
+    except Exception as exc:
+        errors.append(f"manifest update: {exc}")
+
+    lines_out = [f"🛑 Killed job {job_id}"]
+    lines_out += [f"   {k}" for k in killed]
+    if errors:
+        lines_out += [f"   ⚠️  {e}" for e in errors]
+    lines_out.append("───")
+
+    # Final log tail
+    log_path = m.get("log_file", "")
+    try:
+        log_lines = Path(log_path).read_text(
+            encoding="utf-8", errors="replace").splitlines()
+        lines_out.extend(log_lines[-30:])
+    except Exception as exc:
+        lines_out.append(f"(log unreadable: {exc})")
+
+    return "\n".join(lines_out)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

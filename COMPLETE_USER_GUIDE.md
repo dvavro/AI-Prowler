@@ -57,15 +57,20 @@ This produces dramatically better results — equivalent to having a skilled res
 * **Business Server Mode** — run AI-Prowler on a company server so a whole team reaches one shared knowledge base from Claude on their phones and laptops. Managed through a new 👥 Admin tab.
 * **Roles and Scopes** — four user roles (owner, manager, staff, field\_crew) with fine-grained data-access scopes that control what each employee can search. Scopes are defined by you to match your business structure (e.g. `scope:sales`, `scope:office`, `scope:field`).
 * **Role-based tool access (Tier B)** — tools are gated per role in server mode. owner and manager get full database management; staff get limited indexing; field\_crew get field-service tools only.
-* **Tier A tool suppression** — 23 developer/operator tools (code execution, host filesystem write, configure\_email, etc.) are hidden from the MCP tool list entirely when running in server mode. They never appear for any role in server mode — they are registered only on personal installs.
+* **Tier A tool suppression** — 28 developer/operator tools (code execution, host filesystem write, configure\_email, etc.) are hidden from the MCP tool list entirely when running in server mode. They never appear for any role in server mode — they are registered only on personal installs.
 * **Email tools** — `configure_email`, `send_email`, `send_alert`, `send_file`, `send_learnings_report` using Python's built-in SMTP library. Available on personal installs; not exposed in server mode.
-* **Dev tools** — `compile_check`, `check_python_import`, `syntax_check`, `lint_check`, `pytest_check` — available on personal installs; suppressed in server mode.
+* **Dev tools** — `compile_check`, `check_python_import`, `syntax_check`, `lint_check`, `run_script`, `run_script_start`, `run_script_status`, `run_script_kill` — available on personal installs; suppressed in server mode.
 * **Code Tools (Write-Side)** — `create_file`, `write_file`, `str_replace_in_file`, `create_directory`, `list_directory`, `copy_to_backup`, `list_backups`, `restore_backup`, `reset_write_counter` — available on personal installs; suppressed in server mode.
 * **Database management** — Settings tab Database section now has three distinct buttons: **View Statistics** (shows all ChromaDB collections including any server-mode scoped ones), **Clear Database only** (wipes all document collections but keeps your tracked-directories list and learnings), and **Clear Database + Database list** (full wipe including tracked directories).
 * **Mobile Activation** — the machine-activation panel in Settings is now hidden in server mode (irrelevant for server installs) and correctly documented as 1 machine per install for personal mode. The **Transfer to This Machine** button atomically releases the old machine and activates the new one — the right tool when replacing your computer.
 * **Admin tab security** — bearer tokens in the Admin tab are fully masked (●●●●●●●●) in the user table, masked while typing in the Add User dialog, and masked by default in the Show Token dialog with a Reveal toggle.
 * **Telemetry accuracy** — the daily heartbeat now sends the actual `edition` and `mode` from config.json rather than a hardcoded `home` value, so your analytics correctly distinguish home, mobile, and business installs.
 * **Windows 11 required** — Windows 10 is not supported. The installer requires Windows 11 (64-bit).
+* **Binary file write** — `create_file` and `write_file` now accept `encoding="base64"` to write binary files (`.docx`, `.xlsx`, `.pdf`, `.png`, `.zip`, etc.) directly to your machine from Claude. Claude generates the file, base64-encodes it, and AI-Prowler decodes and writes it — no download step needed.
+* **Script execution tools** — four new Dev Tools (personal installs only): `run_script` (blocking, short scripts), `run_script_start` (async background job launcher), `run_script_status` (poll progress + log tail), `run_script_kill` (terminate running job). Supports `.bat`, `.cmd`, `.py`, `.js`, `.sh`, `.rb`, `.pl`, `.go`, `.c`, `.cpp`, `.java`. Never runs elevated.
+* **Script content preview** — before executing any script, AI-Prowler shows Claude the first 50 lines of the script content so Claude's built-in values apply before any execution occurs.
+* **Learning source attribution** — `record_learning` automatically stamps the owner's name into the `source` field on personal installs (reads from Settings). Server mode stamps the authenticated employee's name into `recorded_by`. No action required from Claude or the user in either case.
+* **Total tools: 63** — up from 60; net +4 execution tools, `pytest_check` removed (replaced by `run_script` family).
 
 ---
 
@@ -109,7 +114,7 @@ After install, AI-Prowler opens automatically. Claude Desktop is also installed.
 1. Go to Quick links Tab in AI-Prowler and hit Launch Claude Desktop button and verify it shows "AI-Prowler" in the MCP tools panel (Desktop should find it automatically).
 2. In AI-Prowler, go to **Index Documents** and add your first document folder (if you skip this step Claude may complain about the database not being available).
 3. In Claude Desktop, create a free account in Claude, Go to Quick Links and copy the Initial Connection test command and paste (ctrl v) and then you can ask a question about your documents that you just indexed.
-4. For Mobile Access or Web access consider subscribing to Mobile. You will have to upgrade your Claude account to Pro paid tier to get Web based MCP support. In addition to all of the Claude AI capabilities, Mobile operation allows/extends Claude to search your local documents, edit documents, create documents, write code and compile code, record learning, check learning, draft and send email, and small business action tools, and others from the 60 MCP tools all locally to your computer — all with the convenience of voice command or text using the Claude App. For the person who does not want to be chained to their desk it is a great addition to Claude.
+4. For Mobile Access or Web access consider subscribing to Mobile. You will have to upgrade your Claude account to Pro paid tier to get Web based MCP support. In addition to all of the Claude AI capabilities, Mobile operation allows/extends Claude to search your local documents, edit documents, create documents, write code and compile code, record learning, check learning, draft and send email, and small business action tools, and others from the 63 MCP tools all locally to your computer — all with the convenience of voice command or text using the Claude App. For the person who does not want to be chained to their desk it is a great addition to Claude.
 
 ### Launch Script (RAG\_RUN.bat)
 
@@ -255,7 +260,7 @@ Step 6 — Synthesize
 
 ## 6. MCP Tools Reference
 
-AI-Prowler exposes **60 tools** to Claude across nine categories. The table below lists every tool with a plain-English description of what it does.
+AI-Prowler exposes **63 tools** to Claude across nine categories. The table below lists every tool with a plain-English description of what it does.
 
 ### 6.1 Tool Counts by Mode
 
@@ -263,19 +268,19 @@ The number of tools Claude sees depends on where AI-Prowler is running:
 
 | Install type | Mode | Tools visible | Notes |
 |---|---|---|---|
-| Personal / Home | personal | **60** | All tools available |
-| Business — employee personal install | personal | **60** | Full individual tool set |
+| Personal / Home | personal | **63** | All tools available |
+| Business — employee personal install | personal | **63** | Full individual tool set |
 | Business — company server | server | **35** | Tier A tools suppressed; remaining tools further gated by role |
 
-**Why the difference?** In server mode, 25 Tier A tools (developer/operator tools) are suppressed at registration time — they never appear in Claude's tool list for any user, regardless of role. This is a server-wide security boundary. The remaining 35 tools are further gated per role (see Role-Based Tool Access below).
+**Why the difference?** In server mode, 28 Tier A tools (developer/operator tools) are suppressed at registration time — they never appear in Claude's tool list for any user, regardless of role. This is a server-wide security boundary. The remaining 35 tools are further gated per role (see Role-Based Tool Access below).
 
 ### 6.2 Tier A Tool Suppression (Server Mode Only)
 
-The following 25 tools are **never registered** when AI-Prowler runs in server mode. They are completely invisible to any Claude client connecting to the server:
+The following 28 tools are **never registered** when AI-Prowler runs in server mode. They are completely invisible to any Claude client connecting to the server:
 
 | Category | Suppressed tools |
 |---|---|
-| Dev / code execution | `compile_check`, `syntax_check`, `lint_check`, `pytest_check`, `check_python_import` |
+| Dev / code execution | `compile_check`, `syntax_check`, `lint_check`, `run_script`, `run_script_start`, `run_script_status`, `run_script_kill`, `check_python_import` |
 | Host filesystem writes | `create_file`, `write_file`, `str_replace_in_file`, `create_directory`, `copy_to_backup`, `restore_backup`, `list_backups`, `list_directory`, `reset_write_counter`, `grant_write_access`, `revoke_write_access` |
 | Raw filesystem reads | `grep_documents`, `read_file_lines` |
 | Email operator tools | `configure_email`, `send_file`, `send_learnings_report`, `export_learnings_file` |
@@ -410,9 +415,11 @@ All write operations are protected by four independent layers: read allowlist, w
 | `reset_write_counter()` | Resets the per-session 20-write circuit breaker so large editing sessions can continue without restarting the server. | Personal |
 | `list_writable_directories()` | Lists all directories currently in the write-zone allowlist along with the read allowlist for reference. | Personal |
 
-#### Dev Tools (5 tools — Personal Installs Only)
+#### Dev Tools (8 tools — Personal Installs Only)
 
-Five tools for code verification. **Suppressed in server mode.**
+Eight tools for code verification and script execution. **Suppressed in server mode.**
+
+**Verification tools** (check code without running it):
 
 | Tool | What It Does | Mode |
 |---|---|---|
@@ -420,7 +427,17 @@ Five tools for code verification. **Suppressed in server mode.**
 | `check_python_import(module_or_path, timeout_sec)` | Imports a Python module in a separate process to catch load-time errors that `compile_check` misses (NameError, ImportError, bad module-level references). | Personal |
 | `syntax_check(filepath, timeout_sec)` | Multi-language syntax checker. Supports Python, JavaScript, TypeScript, C, C++, Go, Java, Perl, Ruby, PHP, Bash, Verilog, SystemVerilog, VHDL. | Personal |
 | `lint_check(filepath, timeout_sec)` | Multi-language linter — catches unused imports, undefined names, and style issues. Uses pyflakes (Python), tsc (TypeScript), go vet (Go), ghdl -a (VHDL). | Personal |
-| `pytest_check(test_path, k_filter, timeout_sec, max_output_lines)` | Runs pytest and returns a clean pass/fail summary plus the first failure trace. Python only. | Personal |
+
+**Execution tools** (actually run scripts and programs):
+
+| Tool | What It Does | Mode |
+|---|---|---|
+| `run_script(script_path, args, timeout_sec, max_output_lines)` | Runs a script synchronously and returns combined stdout+stderr. **Always shows a content preview of the script (first 50 lines) before executing** — this puts the script in Claude's context so Claude's built-in values apply before any execution occurs. Best for short scripts under ~60 seconds. Supports `.bat`, `.cmd`, `.py`, `.js`, `.sh`, `.rb`, `.pl`, `.go`, `.c`, `.cpp`, `.java`. Never elevated — runs as current user only. | Personal |
+| `run_script_start(script_path, args, timeout_sec)` | Launches a script as a **background job** and returns a `job_id` immediately. **Also shows a content preview before launching** for the same transparency reason. Use for long-running tasks (full test suites, builds) that would time out the MCP connection. Timeout defaults to 30 minutes. | Personal |
+| `run_script_status(job_id, tail_lines)` | Checks the status of a background job and returns a tail of its log output. Status values: `running`, `done`, `failed`, `timeout`, `error`, `killed`. Call repeatedly to poll progress. | Personal |
+| `run_script_kill(job_id)` | Terminates a running background job and all its child processes. Updates the manifest to `killed` and returns the final log tail. | Personal |
+
+> **Tip:** Use `run_script` for quick one-off executions. Use `run_script_start` + `run_script_status` for anything that takes more than a minute — including the full test suite (`run_script_start("run_tests.bat")`). Pass pytest `-k` filters via the `args` parameter: `run_script_start("run_tests.bat", args="tests\\mcp\\ -k binary_write")`.
 
 #### Status & System (2 tools)
 
@@ -874,7 +891,7 @@ The employee adds that connector in Claude.ai settings, authenticates with their
 One employee — for example a salesperson with child key `XXXX`:
 
 * **On the company server:** added as `staff` with scope `scope:sales` and a bearer token. From Claude.ai on their phone they search the company's shared sales knowledge base. They cannot see office financials (different scope).
-* **On their own laptop (optional):** install AI-Prowler, activate with the same child key in `personal` mode, and index their own documents. This gives them the full 60-tool individual set — search, file read/write in their own folders, dev tools — plus their own mobile access to their personal knowledge base via Claude.ai using their own Cloudflare Tunnel. Nothing here touches the company server; it is their private instance, licensed under the company's umbrella.
+* **On their own laptop (optional):** install AI-Prowler, activate with the same child key in `personal` mode, and index their own documents. This gives them the full 63-tool individual set — search, file read/write in their own folders, dev tools — plus their own mobile access to their personal knowledge base via Claude.ai using their own Cloudflare Tunnel. Nothing here touches the company server; it is their private instance, licensed under the company's umbrella.
 
 ### Replacing the Server Machine
 
@@ -1244,21 +1261,27 @@ No GPU. No training. New knowledge is queryable within roughly 1 second of being
 | `technical_note` | Technical fact, configuration, or gotcha |
 | `general` | Catch-all |
 
-### Server Mode — Employee Attribution (`recorded_by`)
+### Learning Source Attribution (`source` and `recorded_by`)
 
-In personal mode a single person uses the system, so there is no need to track who recorded what. In **server mode**, multiple employees share the same self-learning knowledge base and it matters who added each entry.
+AI-Prowler automatically stamps the identity of whoever recorded a learning — no manual action required from the user or Claude. This works in both personal and server mode.
 
-When a server-mode user records a learning, AI-Prowler automatically stamps their name into a `recorded_by` field on the learning. This happens without any action from the employee — Claude resolves the identity from the authenticated bearer token and fills the field in silently.
+**Personal mode — owner name stamped in `source`:**
 
-**Where `recorded_by` appears:**
+When you record a learning on a personal install, AI-Prowler reads your name from Settings and stamps it into the `source` field automatically. The `source` field appears in list and search output so you always know the provenance of each learning. If no name is configured in Settings, `source` falls back to `"operator"`.
 
-- **Confirmation message** — immediately after recording, Claude shows `Recorded by: <name>` in the summary so the employee can verify it was attributed correctly.
-- **`list_learnings()` output** — each entry shows `Recorded by: <name>` when the field is set, so a manager auditing the knowledge base can see who contributed what.
-- **`search_learnings()` output** — search results include `Recorded by: <name>` so Claude (and the user) know the provenance of each retrieved learning.
+**Server mode — employee name stamped in `recorded_by`:**
 
-**Fallback behaviour:** If an employee's user record has no name configured, `recorded_by` falls back to their role (e.g. `staff`, `field_crew`) so attribution is never completely blank.
+In server mode, multiple employees share the same self-learning knowledge base and it matters who added each entry. When a server-mode user records a learning, AI-Prowler automatically stamps their name into a `recorded_by` field. This happens without any action from the employee — Claude resolves the identity from the authenticated bearer token and fills the field in silently.
 
-**Personal mode:** `recorded_by` is always an empty string and is never shown in any output — there is only one user so attribution adds no value.
+**Where attribution appears:**
+
+- **Confirmation message** — immediately after recording, Claude shows `Recorded by: <name>` (server) or `Source: <name>` (personal) in the summary so the user can verify attribution.
+- **`list_learnings()` output** — each entry shows the attribution field when set, so anyone auditing the knowledge base can see who contributed what.
+- **`search_learnings()` output** — search results include the attribution field so Claude and the user know the provenance of each retrieved learning.
+
+**Fallback behaviour:**
+- Server mode: if an employee's user record has no name configured, `recorded_by` falls back to their role (e.g. `staff`, `field_crew`) so attribution is never completely blank.
+- Personal mode: if no owner name is set in Settings, `source` is set to `"operator"`.
 
 **Example — server mode list output:**
 ```
@@ -1270,6 +1293,16 @@ When a server-mode user records a learning, AI-Prowler automatically stamps thei
     → Client confirmed preference after scheduling conflict in May 2026...
 ```
 
+**Example — personal mode list output:**
+```
+[1] ✅ Always use the soft-bristle brush on painted window frames
+    best_practice | ✅ confirmed | confidence: 98% | applied: 12x
+    Created: 2026-06-10T14:30:00
+    Source: David Vavro
+    ID: e5f6g7h8-...
+    → Learned after a customer complaint about scratching in March 2026...
+```
+
 ### Example Workflow
 
 ```
@@ -1277,7 +1310,8 @@ You: "Remember this: Crabby's Daytona prefers we wash the windows on
       the second Tuesday of the month, not the first."
 
 Claude: [calls record_learning(...)] — shows confirmation including
-        "Recorded by: Jake Smith" in server mode.
+        "Recorded by: Jake Smith" in server mode,
+        or "Source: David Vavro" in personal mode.
 
 You (in a new chat): "When should I schedule Crabby's next window cleaning?"
 
