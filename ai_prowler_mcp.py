@@ -3340,7 +3340,7 @@ def read_job_spreadsheet(
 # ══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
-def check_tools_status() -> str:
+def check_tools_status(ctx: "Context | None" = None) -> str:
     """
     Check which AI-Prowler Action Tools are ready to use and which need setup.
 
@@ -3420,7 +3420,1446 @@ def check_tools_status() -> str:
         "Spreadsheet tools use the default path from Settings if filepath is omitted.",
     ]
 
+    # ── SMS — Twilio only ──────────────────────────────────────────────────────
+    cfg_path = Path.home() / '.ai-prowler' / 'config.json'
+    twilio_configured = False
+    try:
+        if cfg_path.exists():
+            import json as _jck
+            _ck = _jck.loads(cfg_path.read_text(encoding='utf-8'))
+            twilio_configured = bool(
+                _ck.get('twilio_sms_enabled') and
+                _ck.get('twilio_account_sid') and
+                _ck.get('twilio_auth_token')  and
+                _ck.get('twilio_from_number')
+            )
+    except Exception:
+        pass
+    saved_contacts = len(_contacts_cache_load(_current_user(ctx)).get('contacts', {}))
+
+    lines += [
+        "─" * 50,
+        "",
+        "SMS (Twilio — paid):",
+        "",
+        f"  {'✅' if twilio_configured else '⚠️ '} send_sms(to, message)",
+        f"     {'✅ Twilio configured' if twilio_configured else '⚠️  Not configured — see Settings → SMS (Twilio — Paid)'}",
+        f"     The free email-to-SMS carrier-gateway approach was removed —",
+        f"     carriers are shutting those gateways down industry-wide.",
+        f"     Server mode: field_crew only. They share one company number,",
+        f"     so check_sms_replies shows everyone's replies, not just yours.",
+        "",
+        f"  {'✅' if twilio_configured else '⚠️ '} check_sms_replies(since_hours?, from_number?)",
+        f"     Check for inbound SMS replies on your Twilio number.",
+        "",
+        f"  ✅ save_contact(name, phone?, email?)",
+        f"     Save a person by name so 'text David' / 'email Vicki' works",
+        f"     without repeating their number/address every time.",
+        f"     {saved_contacts} contact(s) currently saved in contacts_cache.json",
+        "",
+        "─" * 50,
+        "",
+        "CONTRACTOR WORKFLOW TOOLS:",
+        "",
+        f"  {'✅' if opx_ok else '❌'} email_invoice(invoice_id, to?, filepath?)",
+        f"     Reads Invoices sheet, sends branded HTML invoice via SMTP",
+        f"     {xl_status}",
+        "",
+        f"  {'✅' if opx_ok else '❌'} schedule_next_recurring_job(job_id, filepath?)",
+        f"     Auto-creates next job based on customer frequency (W/BW/M/Q)",
+        "",
+        f"  {'✅' if opx_ok else '❌'} log_time_entry(job_id, action, filepath?)",
+        f"     Clock in / out — records TimeLog, writes Actual Duration to Jobs_Schedule",
+        "",
+        f"  {'✅' if opx_ok else '❌'} get_ar_aging_report(filepath?, as_of_date?)",
+        f"     AR aging buckets: Current / 1-30 / 31-60 / 61-90 / 90+ days",
+        "",
+        "─" * 50,
+        "",
+        "SMS (Twilio paid): configure in Settings → SMS / Text Messaging (Twilio — Paid).",
+    ]
+
     return "\n".join(lines)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 8 — email_invoice
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def email_invoice(
+    invoice_identifier: str,
+    to:                 str  = "",
+    filepath:           str  = "",
+    ctx:                "Context | None" = None,
+) -> str:
+    """
+    Email a professional HTML invoice to a customer directly from the spreadsheet.
+
+    Reads the matching invoice row from the Invoices sheet, formats it as a
+    clean HTML email, and sends it via the configured SMTP account.
+
+    Args:
+        invoice_identifier: InvoiceID (e.g. "INV-0001") or customer name
+                            (partial match accepted, e.g. "Torres").
+        to:                 Recipient email address. If omitted, looks up the
+                            customer email in the Customers sheet automatically.
+        filepath:           Path to the .xlsx job tracker. Uses the default
+                            path from Settings if omitted.
+        ctx:                MCP context (injected automatically).
+
+    Returns:
+        Confirmation with invoice total and recipient, or an error message.
+
+    Voice examples:
+        "Email the invoice for INV-0001 to the customer"
+        "Send Karen's invoice"
+        "Email the Blue Wave Cafe invoice"
+    """
+    _telemetry_increment_tool_count("email_invoice")
+
+    try:
+        import openpyxl as _opx
+    except ImportError:
+        return "❌ openpyxl not installed. Run: pip install openpyxl"
+
+    if not filepath:
+        filepath = _get_default_spreadsheet_path()
+    if not filepath:
+        return "❌ No spreadsheet path configured. Set one in Settings → Small Business."
+
+    fp = filepath.replace("\\", "/")
+    if not os.path.exists(fp):
+        return f"❌ Spreadsheet not found: {fp}"
+
+    try:
+        wb = _opx.load_workbook(fp, data_only=True)
+    except Exception as exc:
+        return f"❌ Could not open spreadsheet: {exc}"
+
+    # ── Find invoice row ──────────────────────────────────────────────────────
+    inv_sheet = wb["Invoices"] if "Invoices" in wb.sheetnames else wb.active
+    header_row_idx, headers = None, []
+    for r in inv_sheet.iter_rows(min_row=1, max_row=5):
+        non_empty = [c for c in r if c.value is not None]
+        if len(non_empty) >= 3:
+            header_row_idx = r[0].row
+            headers = [str(c.value).strip().replace('\n', ' ') if c.value else '' for c in r]
+            break
+
+    if not headers:
+        return "❌ Could not detect header row in Invoices sheet."
+
+    inv_row = None
+    for row in inv_sheet.iter_rows(min_row=header_row_idx + 1):
+        vals = [c.value for c in row]
+        row_text = " ".join(str(v) for v in vals if v)
+        if invoice_identifier.lower() in row_text.lower():
+            inv_row = dict(zip(headers, vals))
+            break
+
+    if not inv_row:
+        return f"❌ No invoice found matching '{invoice_identifier}' in Invoices sheet."
+
+    # ── Look up customer email if not provided ────────────────────────────────
+    if not to:
+        cust_id = str(inv_row.get("CustomerID", "") or "")
+        cust_name = str(inv_row.get("Customer Name / Company", "") or "")
+        if "Customers" in wb.sheetnames:
+            cust_sheet = wb["Customers"]
+            cust_hdrs = []
+            cust_hdr_row = None
+            for r in cust_sheet.iter_rows(min_row=1, max_row=5):
+                ne = [c for c in r if c.value is not None]
+                if len(ne) >= 3:
+                    cust_hdr_row = r[0].row
+                    cust_hdrs = [str(c.value).strip().replace('\n',' ') if c.value else '' for c in r]
+                    break
+            if cust_hdrs:
+                for row in cust_sheet.iter_rows(min_row=cust_hdr_row + 1):
+                    cvals = [c.value for c in row]
+                    crow = dict(zip(cust_hdrs, cvals))
+                    cid = str(crow.get("CustomerID (CUST-####)", "") or "")
+                    cname = str(crow.get("Company Name", "") or crow.get("First Name","") or "")
+                    if (cust_id and cust_id == cid) or (cust_name and cust_name.lower() in str(cvals).lower()):
+                        to = str(crow.get("Email", "") or "")
+                        break
+        if not to:
+            return (f"❌ No recipient email provided and could not auto-find customer email.\n"
+                    f"Pass a 'to' address: email_invoice('{invoice_identifier}', to='email@example.com')")
+
+    # ── Build HTML invoice ────────────────────────────────────────────────────
+    import datetime as _dt
+
+    def _fv(key, default="—"):
+        v = inv_row.get(key)
+        if v is None or str(v).strip() == "":
+            return default
+        if isinstance(v, _dt.datetime):
+            return v.strftime("%B %d, %Y")
+        if isinstance(v, _dt.date):
+            return v.strftime("%B %d, %Y")
+        return str(v).strip()
+
+    def _fmt_money(key):
+        v = inv_row.get(key)
+        try:
+            return f"${float(v):,.2f}"
+        except (TypeError, ValueError):
+            return "—"
+
+    inv_id    = _fv("InvoiceID (INV-####)")
+    job_id    = _fv("JobID (JOB-####)")
+    cust      = _fv("Customer Name / Company")
+    inv_date  = _fv("Invoice Date")
+    due_date  = _fv("Due Date (Net 30)")
+    svc_date  = _fv("Service Date")
+    svc_type  = _fv("Service Type")
+    desc      = _fv("Description")
+    subtotal  = _fmt_money("Subtotal ($)")
+    discount  = _fmt_money("Discount ($)")
+    tax       = _fmt_money("Tax 7% ($)")
+    total_due = _fmt_money("TOTAL DUE ($)")
+    balance   = _fmt_money("Balance Due ($)")
+    pmt_status= _fv("Payment Status", "Unpaid")
+
+    html_body = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8">
+<style>
+  body {{ font-family: Arial, sans-serif; color: #333; max-width: 650px; margin: 0 auto; }}
+  .header {{ background: #1a3c5e; color: white; padding: 24px 32px; }}
+  .header h1 {{ margin: 0; font-size: 28px; letter-spacing: 1px; }}
+  .header p  {{ margin: 4px 0 0; font-size: 13px; opacity: 0.85; }}
+  .section   {{ padding: 20px 32px; }}
+  .row       {{ display: flex; justify-content: space-between; margin: 6px 0; }}
+  .label     {{ color: #666; font-size: 14px; }}
+  .value     {{ font-weight: 600; font-size: 14px; }}
+  table      {{ width: 100%; border-collapse: collapse; margin-top: 8px; }}
+  th         {{ background: #f0f4f8; text-align: left; padding: 10px; font-size: 13px; color: #555; }}
+  td         {{ padding: 10px; border-bottom: 1px solid #eee; font-size: 14px; }}
+  .totals    {{ background: #f9f9f9; padding: 16px 32px; }}
+  .total-row {{ display: flex; justify-content: space-between; padding: 4px 0; font-size: 14px; }}
+  .grand     {{ font-size: 18px; font-weight: bold; color: #1a3c5e; border-top: 2px solid #1a3c5e; margin-top: 8px; padding-top: 8px; }}
+  .footer    {{ background: #f0f4f8; padding: 16px 32px; font-size: 12px; color: #888; }}
+  .badge     {{ display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold;
+                background: {'#e8f5e9' if pmt_status == 'Paid' else '#fff3e0'}; 
+                color: {'#2e7d32' if pmt_status == 'Paid' else '#e65100'}; }}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>INVOICE</h1>
+  <p>{inv_id} &nbsp;|&nbsp; {job_id}</p>
+</div>
+<div class="section">
+  <div class="row"><span class="label">Bill To</span><span class="value">{cust}</span></div>
+  <div class="row"><span class="label">Service Date</span><span class="value">{svc_date}</span></div>
+  <div class="row"><span class="label">Invoice Date</span><span class="value">{inv_date}</span></div>
+  <div class="row"><span class="label">Due Date</span><span class="value">{due_date}</span></div>
+  <div class="row"><span class="label">Status</span><span class="value"><span class="badge">{pmt_status}</span></span></div>
+</div>
+<div class="section">
+  <table>
+    <tr><th>Service</th><th>Description</th><th>Amount</th></tr>
+    <tr><td>{svc_type}</td><td>{desc}</td><td>{subtotal}</td></tr>
+  </table>
+</div>
+<div class="totals">
+  <div class="total-row"><span>Subtotal</span><span>{subtotal}</span></div>
+  <div class="total-row"><span>Discount</span><span>({discount})</span></div>
+  <div class="total-row"><span>Tax (7%)</span><span>{tax}</span></div>
+  <div class="total-row grand"><span>TOTAL DUE</span><span>{total_due}</span></div>
+  {"" if pmt_status == "Paid" else f'<div class="total-row" style="color:#e65100"><span>Balance Due</span><span>{balance}</span></div>'}
+</div>
+<div class="footer">
+  <p>Thank you for your business! Questions? Reply to this email.</p>
+  <p>Please make payment by <strong>{due_date}</strong>.</p>
+</div>
+</body>
+</html>"""
+
+    subject = f"Invoice {inv_id} — {cust} — {total_due}"
+
+    # ── Send via existing send_email infrastructure ───────────────────────────
+    cfg = _email_config_load()
+    if not cfg:
+        return ("❌ Email not configured. Call configure_email() first.")
+
+    to = (to or "").strip()
+    if not to:
+        return "❌ Could not determine recipient email address."
+
+    import smtplib as _smtp
+    import email.mime.multipart as _mp
+    import email.mime.text as _mt
+
+    try:
+        msg = _mp.MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"]    = f"{cfg.get('from_name','AI-Prowler')} <{cfg['from_email']}>"
+        msg["To"]      = to
+        msg.attach(_mt.MIMEText(html_body, "html", "utf-8"))
+
+        port = int(cfg.get("smtp_port", 587))
+        host = cfg.get("smtp_host", "")
+        user = cfg.get("smtp_user", "")
+        pwd  = cfg.get("smtp_password", "")
+
+        if port == 465:
+            with _smtp.SMTP_SSL(host, port, timeout=30) as server:
+                server.login(user, pwd)
+                server.sendmail(cfg["from_email"], [to], msg.as_string())
+        else:
+            with _smtp.SMTP(host, port, timeout=30) as server:
+                server.ehlo()
+                server.starttls()
+                server.login(user, pwd)
+                server.sendmail(cfg["from_email"], [to], msg.as_string())
+
+        return (
+            f"✅ Invoice emailed\n"
+            f"   Invoice:   {inv_id}  ({job_id})\n"
+            f"   Customer:  {cust}\n"
+            f"   Total Due: {total_due}\n"
+            f"   Sent to:   {to}\n"
+            f"   Subject:   {subject}"
+        )
+    except Exception as exc:
+        return f"❌ Email send failed: {exc}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 9 — save_contact  +  send_sms
+#
+# SMS is sent via Twilio (paid) — see send_sms() below.
+#
+# NOTE (v8.0.1): the free email-to-SMS carrier-gateway approach (sending
+# email to <number>@vtext.com, txt.att.net, etc.) was removed. Carriers are
+# shutting these gateways down industry-wide: AT&T's gateway is already
+# gone (June 2025), T-Mobile's went offline December 2024, and Verizon's
+# is mid-shutdown through March 2027. The remaining gateways are also
+# unreliable while active — aggressive spam filtering on the sending side,
+# no delivery confirmation, and no two-way reply support. Twilio (paid)
+# replaces it entirely; see check_sms_replies() for inbound reply checking.
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+@mcp.tool()
+def save_contact(
+    name:    str,
+    phone:   str = "",
+    email:   str = "",
+    ctx:     "Context | None" = None,
+) -> str:
+    """
+    Save or update a personal contact (phone and/or email) so future
+    send_sms / send_email calls can use their name directly — e.g.
+    "text David" or "email Vicki" — instead of repeating the number or
+    address every time.
+
+    This is for personal contacts (you, family, crew you message by name),
+    not for customers — customers belong in the Customers spreadsheet sheet,
+    which is checked automatically by send_sms/send_email and takes priority.
+
+    Call this automatically (no need to ask first) whenever the operator
+    tells you a name + phone number or name + email for the first time, e.g.
+    "David's number is 386-555-0101" or "Vicki's email is vicki@gmail.com".
+
+    Args:
+        name:    Contact's name (e.g. "David", "Vicki"). Case-insensitive,
+                 used as the lookup key — saving the same name again merges
+                 with the existing record instead of overwriting it.
+        phone:   Phone number, any format (digits are normalised).
+        email:   Email address.
+        ctx:     MCP context (injected automatically).
+
+    Returns:
+        Confirmation of what was saved.
+
+    Voice examples:
+        "David's number is 386-555-0101"
+        "Save Vicki's email as vicki@gmail.com"
+        "Remember that Jake's phone is 555-0199 and his email is jake@x.com"
+    """
+    _telemetry_increment_tool_count("save_contact")
+
+    if not name.strip():
+        return "❌ A contact name is required."
+    if not phone.strip() and not email.strip():
+        return "❌ Provide at least a phone number or an email address."
+
+    _sc_user = _current_user(ctx)
+    rec = _contact_save(name, phone=phone, email=email, user=_sc_user)
+
+    cache_file = (f"contacts_cache_{(_sc_user.get('username') or _sc_user.get('name') or 'me').lower()}.json"
+                  if _sc_user is not None and _sc_user.get('role') == 'field_crew'
+                  else 'contacts_cache.json')
+
+    lines = [f"✅ Contact saved: {name.strip()}"]
+    if rec.get('phone'):
+        lines.append(f"   Phone:   {rec['phone']}")
+    if rec.get('email'):
+        lines.append(f"   Email:   {rec['email']}")
+    lines.append(f"   (saved to {cache_file})")
+    return '\n'.join(lines)
+
+
+@mcp.tool()
+def send_sms(
+    to:      str,
+    message: str,
+    ctx:     "Context | None" = None,
+) -> str:
+    """
+    Send an SMS text message to a crew member, customer, or saved contact.
+
+    Requires Twilio (paid) to be configured in Settings → SMS / Text
+    Messaging (Twilio — Paid). The free email-to-SMS carrier-gateway
+    approach (vtext.com, txt.att.net, etc.) was removed — those gateways
+    are being shut down industry-wide (AT&T's is already gone, Verizon's
+    is mid-shutdown through 2027) and were unreliable even while active
+    (spam filtering, no delivery confirmation, no two-way replies).
+
+    'to' accepts a phone number OR a saved contact name (e.g. "David") —
+    if it doesn't look like a number, contacts_cache.json is checked first,
+    along with the Customers sheet and users.json by name.
+
+    Server mode: only field_crew may send SMS here, since they have no
+    personal AI-Prowler install — owner/manager/staff use their own personal
+    installs for SMS instead. All field_crew share the one company Twilio
+    number, so if a customer replies, check_sms_replies() will show that
+    reply to any field_crew member who checks — it cannot yet be routed to
+    only the crew member who sent the original text. Keep that in mind for
+    anything where mixing up whose conversation a reply belongs to matters.
+
+    Args:
+        to:      Recipient's phone number (10-digit US) or a saved contact
+                 name. Accepts any format: 3865550101, 386-555-0101,
+                 (386) 555-0101.
+        message: Text message body (keep under 160 chars for one SMS segment).
+        ctx:     MCP context (injected automatically).
+
+    Returns:
+        Confirmation, or an error string with setup instructions.
+
+    Voice examples:
+        "Text Torres that we're 20 minutes away"
+        "Text David that the afternoon job is cancelled"
+        "Send Karen Walsh a reminder that her appointment is tomorrow at 9am"
+    """
+    _telemetry_increment_tool_count("send_sms")
+
+    # Server-mode gate — field_crew only (see _send_sms_cap docstring).
+    _sms_user = _current_user(ctx)
+    _sms_allowed, _sms_why = _send_sms_cap(_sms_user)
+    if not _sms_allowed:
+        return f"❌ {_sms_why}"
+
+    import re as _re
+
+    # ── Resolve a name to a phone number ───────────────────────────────────────
+    # Lookup order: Customers sheet (by name/company) → users.json (crew, by
+    # name) → contacts_cache (personal/per-field_crew, by name). Lets "text
+    # David" or "text Torres" work without repeating numbers.
+    _to_digits_check = _re.sub(r'\D', '', to)
+    if len(_to_digits_check) < 10:
+        _resolved_phone = None
+
+        # 1. Customers sheet — match by name/company in any column
+        try:
+            import openpyxl as _opxn
+            _xln = _get_default_spreadsheet_path()
+            if _xln and os.path.exists(_xln):
+                _wbn = _opxn.load_workbook(_xln, data_only=True)
+                if 'Customers' in _wbn.sheetnames:
+                    _wsn = _wbn['Customers']
+                    _hn, _hrn = [], None
+                    for _rn in _wsn.iter_rows(min_row=1, max_row=5):
+                        if len([c for c in _rn if c.value]) >= 3:
+                            _hrn = _rn[0].row
+                            _hn = [str(c.value or '').replace('\n', ' ').strip()
+                                   for c in _rn]
+                            break
+                    if _hrn:
+                        _pcn = next((i for i, h in enumerate(_hn)
+                                    if 'phone' in h.lower()), None)
+                        if _pcn is not None:
+                            _needle = to.strip().lower()
+                            for _rown in _wsn.iter_rows(min_row=_hrn + 1):
+                                _valsn = [str(c.value or '').strip() for c in _rown]
+                                if _needle and _needle in ' '.join(_valsn).lower():
+                                    if _valsn[_pcn]:
+                                        _resolved_phone = _valsn[_pcn]
+                                        break
+        except Exception:
+            pass
+
+        # 2. users.json crew — match by name (server mode only)
+        if not _resolved_phone:
+            try:
+                _ud_n = _load_users()
+                if _ud_n and isinstance(_ud_n.get('users'), dict):
+                    _needle2 = to.strip().lower()
+                    for _un in _ud_n['users'].values():
+                        if isinstance(_un, dict) and _needle2 in (_un.get('name') or '').lower():
+                            if _un.get('cell_phone'):
+                                _resolved_phone = _un['cell_phone']
+                                break
+            except Exception:
+                pass
+
+        # 3. contacts_cache (personal, or per-field_crew in server mode)
+        if not _resolved_phone:
+            _contact = _contact_lookup(to, _sms_user)
+            if _contact and _contact.get('phone'):
+                _resolved_phone = _contact['phone']
+            elif _contact:
+                return (
+                    f"❌ Found contact '{_contact.get('name', to)}' but no phone "
+                    f"number is saved for them.\n"
+                    f"Tell Claude: \"{_contact.get('name', to)}'s number is <phone>\" to add it."
+                )
+
+        if _resolved_phone:
+            to = _resolved_phone
+        # else: leave `to` as-is — the digit-count check below gives a clear error
+
+    # ── Normalise phone number to 10 digits ───────────────────────────────────
+    digits = _re.sub(r'\D', '', to)
+    if len(digits) == 11 and digits[0] == '1':
+        digits = digits[1:]
+    if len(digits) != 10:
+        return (
+            f"❌ '{to}' does not look like a valid 10-digit US number or a "
+            f"known contact/customer/crew name.\n"
+            f"Provide a phone number, or save a contact first: "
+            f"\"David's number is 386-555-0101\""
+        )
+
+    if not message.strip():
+        return "❌ message cannot be empty."
+
+    # ── Append callback signature if configured ───────────────────────────────
+    try:
+        _cfg_path = Path.home() / '.ai-prowler' / 'config.json'
+        _full_cfg: dict = {}
+        if _cfg_path.exists():
+            import json as _jcfg
+            _full_cfg = _jcfg.loads(_cfg_path.read_text(encoding='utf-8'))
+        _sig = _full_cfg.get('sms_callback_signature', '').strip()
+        if _sig and _sig not in message:
+            message = f"{message.rstrip()}\n{_sig}"
+    except Exception:
+        pass
+
+    # ── Twilio (paid) is required — the free email-to-SMS path was removed ───
+    try:
+        _cfg_path2 = Path.home() / '.ai-prowler' / 'config.json'
+        _cfg2: dict = {}
+        if _cfg_path2.exists():
+            import json as _jcfg2
+            _cfg2 = _jcfg2.loads(_cfg_path2.read_text(encoding='utf-8'))
+        _tw_sid  = _cfg2.get('twilio_account_sid',  '').strip()
+        _tw_tok  = _cfg2.get('twilio_auth_token',   '').strip()
+        _tw_from = _cfg2.get('twilio_from_number',  '').strip()
+        _use_twilio = bool(_cfg2.get('twilio_sms_enabled') and
+                           _tw_sid and _tw_tok and _tw_from)
+    except Exception:
+        _use_twilio = False
+        _tw_sid = _tw_tok = _tw_from = ''
+
+    if not _use_twilio:
+        return (
+            "❌ Twilio is not configured.\n\n"
+            "SMS sending requires Twilio (paid) — the free email-to-SMS\n"
+            "carrier gateway approach was removed since carriers are shutting\n"
+            "those gateways down industry-wide.\n\n"
+            "Go to Settings → SMS / Text Messaging (Twilio — Paid), enable it,\n"
+            "and enter your Account SID, Auth Token, and From Number."
+        )
+
+    to_e164 = f"+1{digits}"
+    try:
+        import requests as _req
+    except ImportError:
+        return "❌ requests not installed. Run: pip install requests"
+    try:
+        resp = _req.post(
+            f"https://api.twilio.com/2010-04-01/Accounts/{_tw_sid}/Messages.json",
+            auth=(_tw_sid, _tw_tok),
+            data={"From": _tw_from, "To": to_e164, "Body": message},
+            timeout=15,
+        )
+    except Exception as exc:
+        return f"❌ Twilio request failed: {exc}"
+    if resp.status_code in (200, 201):
+        data = resp.json()
+        return (
+            f"✅ SMS sent via Twilio\n"
+            f"   To:      {to_e164}\n"
+            f"   Message: {message[:80]}{'...' if len(message) > 80 else ''}\n"
+            f"   SID:     {data.get('sid', 'unknown')}"
+        )
+    try:
+        err = resp.json()
+        return (f"❌ Twilio error {resp.status_code}: "
+                f"{err.get('message', resp.text[:200])}")
+    except Exception:
+        return f"❌ Twilio HTTP {resp.status_code}: {resp.text[:200]}"
+
+
+@mcp.tool()
+def check_sms_replies(
+    since_hours: int = 24,
+    from_number: str = "",
+    mark_read:   bool = True,
+    ctx:         "Context | None" = None,
+) -> str:
+    """
+    Check for inbound SMS replies received on your Twilio number.
+
+    Twilio (paid) is the only SMS path that supports two-way replies reliably.
+    The free email-to-SMS carrier gateways (vtext.com, txt.att.net, etc.) do
+    NOT support this — those gateways are being phased out industry-wide
+    (AT&T's already shut down, Verizon's is mid-shutdown through 2027) and
+    replies sent that way land in your personal email inbox, disconnected
+    from any conversation with Claude. If two-way replies matter — e.g.
+    confirming a reschedule before driving to a job — use Twilio for that
+    contact, not the free path.
+
+    This tool queries Twilio's message log directly (no webhook server
+    required) for inbound messages to your Twilio number, optionally
+    filtered to one sender. Call it whenever you want to check for replies:
+    after sending a time-sensitive SMS, at the start of your day, or anytime
+    you ask "did anyone reply?"
+
+    Server mode: all field_crew share one company Twilio number, so this
+    shows every inbound reply to that number — not just replies to texts
+    you personally sent. Use from_number to narrow to a specific customer
+    if you need to check on a particular conversation.
+
+    Args:
+        since_hours: How far back to look, in hours (default 24).
+        from_number: Optional — filter to replies from one phone number only
+                     (any format, digits are normalised). Leave blank to see
+                     all inbound replies.
+        mark_read:   If True (default), remembers the latest message SID seen
+                     so a future enhancement could skip already-seen replies.
+                     Currently informational only — every call within the
+                     since_hours window still shows all matching messages.
+        ctx:         MCP context (injected automatically).
+
+    Returns:
+        A list of inbound messages (sender, time, body), or a note that
+        there are none, or setup instructions if Twilio isn't configured.
+
+    Voice examples:
+        "Did Vicki reply to that text?"
+        "Check for SMS replies"
+        "Any texts come in today?"
+    """
+    _telemetry_increment_tool_count("check_sms_replies")
+
+    try:
+        _cfg_path = Path.home() / '.ai-prowler' / 'config.json'
+        _cfg: dict = {}
+        if _cfg_path.exists():
+            import json as _jcfg
+            _cfg = _jcfg.loads(_cfg_path.read_text(encoding='utf-8'))
+        _tw_sid  = _cfg.get('twilio_account_sid',  '').strip()
+        _tw_tok  = _cfg.get('twilio_auth_token',   '').strip()
+        _tw_from = _cfg.get('twilio_from_number',  '').strip()
+        _enabled = bool(_cfg.get('twilio_sms_enabled'))
+    except Exception:
+        _tw_sid = _tw_tok = _tw_from = ''
+        _enabled = False
+
+    if not (_enabled and _tw_sid and _tw_tok and _tw_from):
+        return (
+            "❌ Twilio isn't configured, so there's no inbound number to check.\n\n"
+            "The free email-to-SMS path can't receive replies through Claude —\n"
+            "any reply lands in your personal email inbox instead.\n\n"
+            "To enable two-way SMS: Settings → SMS / Text Messaging "
+            "(Twilio — Paid) → Enable, then fill in your Twilio credentials."
+        )
+
+    import re as _re5
+    digits_filter = ''
+    if from_number.strip():
+        digits_filter = _re5.sub(r'\D', '', from_number)
+        if len(digits_filter) == 11 and digits_filter[0] == '1':
+            digits_filter = digits_filter[1:]
+
+    try:
+        import requests as _req2
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    except ImportError:
+        return "❌ requests not installed. Run: pip install requests"
+
+    since_dt = _dt.now(_tz.utc) - _td(hours=max(1, since_hours))
+
+    try:
+        resp = _req2.get(
+            f"https://api.twilio.com/2010-04-01/Accounts/{_tw_sid}/Messages.json",
+            auth=(_tw_sid, _tw_tok),
+            params={
+                "To": _tw_from,          # inbound messages are TO your Twilio number
+                "DateSent>": since_dt.strftime("%Y-%m-%d"),
+                "PageSize": 50,
+            },
+            timeout=15,
+        )
+    except Exception as exc:
+        return f"❌ Twilio request failed: {exc}"
+
+    if resp.status_code != 200:
+        try:
+            err = resp.json()
+            return (f"❌ Twilio error {resp.status_code}: "
+                    f"{err.get('message', resp.text[:200])}")
+        except Exception:
+            return f"❌ Twilio HTTP {resp.status_code}: {resp.text[:200]}"
+
+    all_msgs = resp.json().get('messages', [])
+    # Inbound = direction starts with "inbound"; filter explicitly since the
+    # To=our-number query also returns outbound messages we sent ourselves.
+    inbound = [m for m in all_msgs if str(m.get('direction', '')).startswith('inbound')]
+
+    if digits_filter:
+        def _norm(p):
+            d = _re5.sub(r'\D', '', p or '')
+            if len(d) == 11 and d[0] == '1':
+                d = d[1:]
+            return d
+        inbound = [m for m in inbound if _norm(m.get('from', '')) == digits_filter]
+
+    if not inbound:
+        scope = f" from {from_number}" if from_number.strip() else ""
+        return f"📭 No SMS replies{scope} in the last {since_hours} hour(s)."
+
+    # Sort oldest first so a conversation reads top-to-bottom naturally
+    inbound.sort(key=lambda m: m.get('date_sent', ''))
+
+    if mark_read and inbound:
+        try:
+            _user_crm = _current_user(ctx)
+            _cache = _contacts_cache_load(_user_crm)
+            _cache['_last_sms_reply_sid'] = inbound[-1].get('sid', '')
+            _contacts_cache_save(_cache, _user_crm)
+        except Exception:
+            pass
+
+    lines = [f"📬 {len(inbound)} SMS repl{'y' if len(inbound)==1 else 'ies'} "
+             f"in the last {since_hours} hour(s):", ""]
+    for m in inbound:
+        from_e164 = m.get('from', 'unknown')
+        from_digits = _re5.sub(r'\D', '', from_e164)
+        if len(from_digits) == 11 and from_digits[0] == '1':
+            from_digits = from_digits[1:]
+        display_name = from_digits
+        try:
+            _ctc = _contact_lookup(from_digits, _current_user(ctx))
+            if _ctc and _ctc.get('name'):
+                display_name = f"{_ctc['name']} ({from_digits})"
+        except Exception:
+            pass
+        sent_at = m.get('date_sent', 'unknown time')
+        body = (m.get('body') or '').strip()
+        lines.append(f"  From: {display_name}")
+        lines.append(f"  When: {sent_at}")
+        lines.append(f"  Msg:  {body}")
+        lines.append("")
+
+    return '\n'.join(lines).rstrip()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 10 — schedule_next_recurring_job
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def schedule_next_recurring_job(
+    job_identifier: str,
+    filepath:       str = "",
+) -> str:
+    """
+    Auto-create the next recurring job after a job is marked complete.
+
+    Looks up the completed job to find the customer, then reads the customer's
+    service frequency (Weekly / Biweekly / Monthly / Quarterly / One-time) from
+    the Customers sheet and calculates the next service date accordingly.
+    Writes the new job row to Jobs_Schedule and returns the new JobID.
+
+    Handles all standard frequencies:
+      W  / Weekly      → +7 days
+      BW / Biweekly    → +14 days
+      M  / Monthly     → +1 month (same day)
+      Q  / Quarterly   → +3 months (same day)
+      OT / One-time    → no next job created
+
+    Args:
+        job_identifier: JobID (e.g. "JOB-0001") or customer name/company.
+        filepath:       Path to the .xlsx tracker. Uses default if omitted.
+
+    Returns:
+        New JobID and scheduled date, or explanation if no recurring job applies.
+
+    Voice examples:
+        "Schedule the next recurring job after JOB-0003"
+        "Set up the next job for Blue Wave Cafe"
+        "Auto-book the next visit after today's Sunshine Realty job"
+    """
+    _telemetry_increment_tool_count("schedule_next_recurring_job")
+
+    try:
+        import openpyxl as _opx
+    except ImportError:
+        return "❌ openpyxl not installed. Run: pip install openpyxl"
+
+    import datetime as _dt
+    import calendar as _cal
+
+    if not filepath:
+        filepath = _get_default_spreadsheet_path()
+    if not filepath:
+        return "❌ No spreadsheet path configured."
+
+    fp = filepath.replace("\\", "/")
+    if not os.path.exists(fp):
+        return f"❌ Spreadsheet not found: {fp}"
+
+    backup_msg = _backup_spreadsheet(fp)
+    if backup_msg.startswith("⚠️") or backup_msg.startswith("❌"):
+        return f"{backup_msg}\nSpreadsheet was NOT modified."
+
+    try:
+        wb = _opx.load_workbook(fp)
+    except Exception as exc:
+        return f"❌ Could not open spreadsheet: {exc}"
+
+    # ── Read Jobs_Schedule ────────────────────────────────────────────────────
+    if "Jobs_Schedule" not in wb.sheetnames:
+        return "❌ 'Jobs_Schedule' sheet not found in spreadsheet."
+    ws_jobs = wb["Jobs_Schedule"]
+
+    job_hdr_row, job_hdrs = None, []
+    for r in ws_jobs.iter_rows(min_row=1, max_row=5):
+        ne = [c for c in r if c.value is not None]
+        if len(ne) >= 3:
+            job_hdr_row = r[0].row
+            job_hdrs = [str(c.value).strip().replace('\n',' ') if c.value else '' for c in r]
+            break
+
+    if not job_hdrs:
+        return "❌ Could not detect header row in Jobs_Schedule."
+
+    found_job = None
+    for row in ws_jobs.iter_rows(min_row=job_hdr_row + 1):
+        vals = [c.value for c in row]
+        row_text = " ".join(str(v) for v in vals if v)
+        if job_identifier.lower() in row_text.lower():
+            found_job = dict(zip(job_hdrs, vals))
+            break
+
+    if not found_job:
+        return f"❌ No job found matching '{job_identifier}' in Jobs_Schedule."
+
+    cust_id   = str(found_job.get("CustomerID (Customers!A)", "") or "")
+    cust_name = str(found_job.get("Customer Name / Company",  "") or "")
+    svc_date  = found_job.get("Service Date")
+    crew      = str(found_job.get("Crew / Technician", "") or "")
+    svc_type  = str(found_job.get("Service Type", "") or "")
+    est_dur   = found_job.get("Est. Duration (min)", "")
+    svc_notes = str(found_job.get("Service Details / Notes", "") or "")
+
+    # Parse service date
+    if isinstance(svc_date, _dt.datetime):
+        base_date = svc_date.date()
+    elif isinstance(svc_date, _dt.date):
+        base_date = svc_date
+    elif svc_date:
+        for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y'):
+            try:
+                base_date = _dt.datetime.strptime(str(svc_date).strip(), fmt).date()
+                break
+            except ValueError:
+                continue
+        else:
+            return f"❌ Could not parse service date: {svc_date}"
+    else:
+        return "❌ Completed job has no Service Date — cannot compute next date."
+
+    # ── Look up customer frequency ────────────────────────────────────────────
+    frequency = ""
+    cust_addr = str(found_job.get("Street Address ★ AI Route", "") or "")
+    cust_city = str(found_job.get("City ★ AI Route", "") or "")
+    cust_zip  = str(found_job.get("ZIP ★ AI Route", "") or "")
+
+    if "Customers" in wb.sheetnames:
+        ws_cust = wb["Customers"]
+        cust_hdr_row, cust_hdrs = None, []
+        for r in ws_cust.iter_rows(min_row=1, max_row=5):
+            ne = [c for c in r if c.value is not None]
+            if len(ne) >= 3:
+                cust_hdr_row = r[0].row
+                cust_hdrs = [str(c.value).strip().replace('\n',' ') if c.value else '' for c in r]
+                break
+        if cust_hdrs:
+            for row in ws_cust.iter_rows(min_row=cust_hdr_row + 1):
+                cvals = [c.value for c in row]
+                crow  = dict(zip(cust_hdrs, cvals))
+                cid   = str(crow.get("CustomerID (CUST-####)", "") or "")
+                cn    = str(crow.get("Company Name", "") or crow.get("First Name", "") or "")
+                if (cust_id and cid == cust_id) or (cust_name and cust_name.lower() in str(cvals).lower()):
+                    frequency = str(crow.get("Frequency W/BW/M/Q/OT", "") or "")
+                    pref_day  = str(crow.get("Preferred Day(s)", "") or "")
+                    pref_time = str(crow.get("Pref. Time Window", "") or "")
+                    break
+
+    freq_norm = frequency.strip().upper()
+
+    # Frequency → delta mapping
+    _FREQ_MAP = {
+        "W":         lambda d: d + _dt.timedelta(weeks=1),
+        "WEEKLY":    lambda d: d + _dt.timedelta(weeks=1),
+        "BW":        lambda d: d + _dt.timedelta(weeks=2),
+        "BIWEEKLY":  lambda d: d + _dt.timedelta(weeks=2),
+        "M":         lambda d: d.replace(month=(d.month % 12) + 1,
+                                          year=d.year + (1 if d.month == 12 else 0)),
+        "MONTHLY":   lambda d: d.replace(month=(d.month % 12) + 1,
+                                          year=d.year + (1 if d.month == 12 else 0)),
+        "Q":         lambda d: d.replace(month=((d.month - 1 + 3) % 12) + 1,
+                                          year=d.year + ((d.month - 1 + 3) // 12)),
+        "QUARTERLY": lambda d: d.replace(month=((d.month - 1 + 3) % 12) + 1,
+                                          year=d.year + ((d.month - 1 + 3) // 12)),
+    }
+
+    if freq_norm in ("OT", "ONE-TIME", "ONE TIME", "ONETIME", ""):
+        return (
+            f"ℹ️  No recurring job scheduled — {cust_name} is a one-time customer\n"
+            f"   (Frequency: '{frequency or 'not set'}')\n"
+            "   To add a recurring schedule, update the Customers sheet first."
+        )
+
+    delta_fn = _FREQ_MAP.get(freq_norm)
+    if delta_fn is None:
+        return (
+            f"❌ Unrecognised frequency '{frequency}' for {cust_name}.\n"
+            "   Expected: W / BW / M / Q / OT"
+        )
+
+    next_date = delta_fn(base_date)
+
+    # ── Generate next JobID ───────────────────────────────────────────────────
+    existing_ids = []
+    for row in ws_jobs.iter_rows(min_row=job_hdr_row + 1):
+        jid_cell = row[0].value
+        if jid_cell and str(jid_cell).startswith("JOB-"):
+            try:
+                existing_ids.append(int(str(jid_cell).split("-")[1]))
+            except ValueError:
+                pass
+    next_num = (max(existing_ids) + 1) if existing_ids else 1
+    new_job_id = f"JOB-{next_num:04d}"
+
+    # ── Build new row matching Jobs_Schedule columns ──────────────────────────
+    # Find the next empty row
+    last_row = job_hdr_row
+    for row in ws_jobs.iter_rows(min_row=job_hdr_row + 1):
+        if any(c.value for c in row):
+            last_row = row[0].row
+
+    new_row_data = {
+        "JobID (JOB-####)":          new_job_id,
+        "CustomerID (Customers!A)":  cust_id,
+        "Customer Name / Company":   cust_name,
+        "Customer Type":             str(found_job.get("Customer Type", "") or ""),
+        "Street Address ★ AI Route": cust_addr,
+        "City ★ AI Route":           cust_city,
+        "State":                     str(found_job.get("State", "") or ""),
+        "ZIP ★ AI Route":            cust_zip,
+        "Service Date":              next_date.strftime('%Y-%m-%d'),
+        "Day of Week":               next_date.strftime('%A'),
+        "Service Type":              svc_type,
+        "Service Details / Notes":   svc_notes,
+        "Crew / Technician":         crew,
+        "Est. Duration (min)":       est_dur,
+        "Job Status":                "Scheduled",
+    }
+
+    new_row_num = last_row + 1
+    for col_idx, col_name in enumerate(job_hdrs, 1):
+        if col_name in new_row_data:
+            ws_jobs.cell(row=new_row_num, column=col_idx).value = new_row_data[col_name]
+
+    try:
+        wb.save(fp)
+    except Exception as exc:
+        return f"❌ Could not save spreadsheet: {exc}"
+
+    return (
+        f"✅ Next recurring job scheduled\n"
+        f"   New Job ID:   {new_job_id}\n"
+        f"   Customer:     {cust_name}\n"
+        f"   Frequency:    {frequency}  ({freq_norm})\n"
+        f"   Last Service: {base_date.strftime('%Y-%m-%d')}\n"
+        f"   Next Service: {next_date.strftime('%Y-%m-%d')} ({next_date.strftime('%A')})\n"
+        f"   Crew:         {crew or '(unassigned)'}\n"
+        f"   Service:      {svc_type}\n"
+        f"   {backup_msg}"
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 11 — log_time_entry
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def log_time_entry(
+    job_identifier: str,
+    action:         str,
+    filepath:       str = "",
+) -> str:
+    """
+    Clock in or out for a job. Records timestamps to the TimeLog sheet for
+    accurate job costing, crew payroll, and actual-vs-estimated duration.
+
+    On clock-out, automatically calculates elapsed minutes and writes the
+    Actual Duration back to the Jobs_Schedule sheet.
+
+    Args:
+        job_identifier: JobID (e.g. "JOB-0001") or customer name.
+        action:         "start" to clock in, "stop" to clock out.
+        filepath:       Path to the .xlsx tracker. Uses default if omitted.
+
+    Returns:
+        Confirmation with timestamp and elapsed time (on stop), or error.
+
+    Voice examples:
+        "Clock in for JOB-0003"
+        "Start the timer for Blue Wave Cafe"
+        "Clock out — I just finished the Harbor Inn job"
+        "Stop the timer for JOB-0001"
+    """
+    _telemetry_increment_tool_count("log_time_entry")
+
+    try:
+        import openpyxl as _opx
+    except ImportError:
+        return "❌ openpyxl not installed. Run: pip install openpyxl"
+
+    import datetime as _dt
+
+    action = action.strip().lower()
+    if action not in ("start", "stop"):
+        return "❌ action must be 'start' or 'stop'."
+
+    if not filepath:
+        filepath = _get_default_spreadsheet_path()
+    if not filepath:
+        return "❌ No spreadsheet path configured."
+
+    fp = filepath.replace("\\", "/")
+    if not os.path.exists(fp):
+        return f"❌ Spreadsheet not found: {fp}"
+
+    backup_msg = _backup_spreadsheet(fp)
+    if backup_msg.startswith("⚠️") or backup_msg.startswith("❌"):
+        return f"{backup_msg}\nSpreadsheet was NOT modified."
+
+    try:
+        wb = _opx.load_workbook(fp)
+    except Exception as exc:
+        return f"❌ Could not open spreadsheet: {exc}"
+
+    # ── Ensure TimeLog sheet exists ───────────────────────────────────────────
+    _TIMELOG_HEADERS = [
+        "EntryID", "JobID", "Customer Name / Company",
+        "Clock In", "Clock Out", "Elapsed (min)", "Crew / Technician", "Notes"
+    ]
+    if "TimeLog" not in wb.sheetnames:
+        ws_log = wb.create_sheet("TimeLog")
+        ws_log.append(["⏱️  TIME LOG — Job Clock In / Clock Out"])
+        ws_log.append(_TIMELOG_HEADERS)
+    else:
+        ws_log = wb["TimeLog"]
+
+    # Detect header row in TimeLog
+    log_hdr_row, log_hdrs = None, []
+    for r in ws_log.iter_rows(min_row=1, max_row=5):
+        ne = [c for c in r if c.value is not None]
+        if len(ne) >= 3:
+            log_hdr_row = r[0].row
+            log_hdrs = [str(c.value).strip().replace('\n',' ') if c.value else '' for c in r]
+            break
+
+    if not log_hdrs:
+        return "❌ Could not detect header row in TimeLog sheet."
+
+    # ── Find the job in Jobs_Schedule ─────────────────────────────────────────
+    cust_name, job_id_found, crew = job_identifier, job_identifier, ""
+    if "Jobs_Schedule" in wb.sheetnames:
+        ws_jobs = wb["Jobs_Schedule"]
+        job_hdr_row, job_hdrs = None, []
+        for r in ws_jobs.iter_rows(min_row=1, max_row=5):
+            ne = [c for c in r if c.value is not None]
+            if len(ne) >= 3:
+                job_hdr_row = r[0].row
+                job_hdrs = [str(c.value).strip().replace('\n',' ') if c.value else '' for c in r]
+                break
+        if job_hdrs:
+            for row in ws_jobs.iter_rows(min_row=job_hdr_row + 1):
+                vals = [c.value for c in row]
+                row_text = " ".join(str(v) for v in vals if v)
+                if job_identifier.lower() in row_text.lower():
+                    jrow = dict(zip(job_hdrs, vals))
+                    job_id_found = str(jrow.get("JobID (JOB-####)", job_identifier) or job_identifier)
+                    cust_name    = str(jrow.get("Customer Name / Company", job_identifier) or job_identifier)
+                    crew         = str(jrow.get("Crew / Technician", "") or "")
+                    break
+
+    now_ts = _dt.datetime.now()
+    now_str = now_ts.strftime('%Y-%m-%d %H:%M:%S')
+
+    if action == "start":
+        # Check for already-open entry
+        for row in ws_log.iter_rows(min_row=log_hdr_row + 1):
+            rvals = [c.value for c in row]
+            rdict = dict(zip(log_hdrs, rvals))
+            if (job_id_found.lower() in str(rdict.get("JobID", "")).lower()
+                    and not rdict.get("Clock Out")):
+                return (
+                    f"⚠️  A clock-in for {job_id_found} is already open.\n"
+                    f"   Clocked in at: {rdict.get('Clock In')}\n"
+                    "   Call log_time_entry with action='stop' to clock out first."
+                )
+
+        # Generate entry ID
+        existing_ids = []
+        for row in ws_log.iter_rows(min_row=log_hdr_row + 1):
+            eid = row[0].value
+            if eid and str(eid).startswith("TE-"):
+                try:
+                    existing_ids.append(int(str(eid).split("-")[1]))
+                except ValueError:
+                    pass
+        next_num  = (max(existing_ids) + 1) if existing_ids else 1
+        entry_id  = f"TE-{next_num:04d}"
+
+        # Find next empty row
+        last_log_row = log_hdr_row
+        for row in ws_log.iter_rows(min_row=log_hdr_row + 1):
+            if any(c.value for c in row):
+                last_log_row = row[0].row
+
+        new_row = {
+            "EntryID":                  entry_id,
+            "JobID":                    job_id_found,
+            "Customer Name / Company":  cust_name,
+            "Clock In":                 now_str,
+            "Crew / Technician":        crew,
+        }
+        new_row_num = last_log_row + 1
+        for col_idx, col_name in enumerate(log_hdrs, 1):
+            if col_name in new_row:
+                ws_log.cell(row=new_row_num, column=col_idx).value = new_row[col_name]
+
+        try:
+            wb.save(fp)
+        except Exception as exc:
+            return f"❌ Could not save spreadsheet: {exc}"
+
+        return (
+            f"⏱️  Clocked IN\n"
+            f"   Entry ID:  {entry_id}\n"
+            f"   Job:       {job_id_found}\n"
+            f"   Customer:  {cust_name}\n"
+            f"   Clock In:  {now_str}\n"
+            f"   Crew:      {crew or '(unspecified)'}\n"
+            "   Call log_time_entry(action='stop') when finished."
+        )
+
+    else:  # action == "stop"
+        # Find open entry for this job
+        open_row_num = None
+        open_entry   = None
+        for row in ws_log.iter_rows(min_row=log_hdr_row + 1):
+            rvals = [c.value for c in row]
+            rdict = dict(zip(log_hdrs, rvals))
+            if (job_id_found.lower() in str(rdict.get("JobID", "")).lower()
+                    and not rdict.get("Clock Out")):
+                open_row_num = row[0].row
+                open_entry   = (rdict, row)
+                break
+
+        if open_entry is None:
+            return (
+                f"❌ No open clock-in found for '{job_identifier}'.\n"
+                "   Call log_time_entry(action='start') first."
+            )
+
+        rdict, row_cells = open_entry
+        clock_in_val = rdict.get("Clock In")
+        if isinstance(clock_in_val, _dt.datetime):
+            clock_in_dt = clock_in_val
+        else:
+            try:
+                clock_in_dt = _dt.datetime.strptime(str(clock_in_val).strip(), '%Y-%m-%d %H:%M:%S')
+            except Exception:
+                return f"❌ Could not parse Clock In time: {clock_in_val}"
+
+        elapsed_td   = now_ts - clock_in_dt
+        elapsed_mins = round(elapsed_td.total_seconds() / 60)
+
+        # Write Clock Out and Elapsed
+        for col_idx, col_name in enumerate(log_hdrs, 1):
+            if col_name == "Clock Out":
+                ws_log.cell(row=open_row_num, column=col_idx).value = now_str
+            elif col_name == "Elapsed (min)":
+                ws_log.cell(row=open_row_num, column=col_idx).value = elapsed_mins
+
+        # Also update Actual Duration in Jobs_Schedule
+        if "Jobs_Schedule" in wb.sheetnames:
+            ws_jobs = wb["Jobs_Schedule"]
+            job_hdr_row2, job_hdrs2 = None, []
+            for r in ws_jobs.iter_rows(min_row=1, max_row=5):
+                ne = [c for c in r if c.value is not None]
+                if len(ne) >= 3:
+                    job_hdr_row2 = r[0].row
+                    job_hdrs2 = [str(c.value).strip().replace('\n',' ') if c.value else '' for c in r]
+                    break
+            if job_hdrs2:
+                for row in ws_jobs.iter_rows(min_row=job_hdr_row2 + 1):
+                    vals = [c.value for c in row]
+                    row_text = " ".join(str(v) for v in vals if v)
+                    if job_id_found.lower() in row_text.lower():
+                        for col_idx, col_name in enumerate(job_hdrs2, 1):
+                            if "Actual" in col_name and "Duration" in col_name:
+                                ws_jobs.cell(row=row[0].row, column=col_idx).value = elapsed_mins
+                        break
+
+        try:
+            wb.save(fp)
+        except Exception as exc:
+            return f"❌ Could not save spreadsheet: {exc}"
+
+        hours, mins = divmod(elapsed_mins, 60)
+        elapsed_str = (f"{hours}h {mins}m" if hours else f"{mins}m")
+
+        return (
+            f"⏱️  Clocked OUT\n"
+            f"   Job:          {job_id_found}\n"
+            f"   Customer:     {cust_name}\n"
+            f"   Clock In:     {clock_in_dt.strftime('%I:%M %p')}\n"
+            f"   Clock Out:    {now_ts.strftime('%I:%M %p')}\n"
+            f"   Elapsed:      {elapsed_str}  ({elapsed_mins} min)\n"
+            f"   Actual Duration written to Jobs_Schedule ✅\n"
+            f"   {backup_msg}"
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 12 — get_ar_aging_report
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def get_ar_aging_report(
+    filepath:    str  = "",
+    as_of_date:  str  = "today",
+) -> str:
+    """
+    Generate an Accounts Receivable aging report from the Invoices sheet.
+
+    Reads all unpaid/partial invoices and buckets them by days overdue:
+      Current (not yet due) | 1-30 | 31-60 | 61-90 | 90+ days
+
+    This is the fastest way to see cash flow on your phone — ask Claude
+    "What invoices are overdue?" and get a clean summary in seconds.
+
+    Args:
+        filepath:   Path to the .xlsx tracker. Uses default if omitted.
+        as_of_date: Date to calculate aging from. Default "today".
+                    Accepts: "today", "2026-04-15", "04/15/2026".
+
+    Returns:
+        AR aging summary grouped by bucket with subtotals and a grand total.
+
+    Voice examples:
+        "Show me my overdue invoices"
+        "What's my AR aging report?"
+        "Which customers owe me money?"
+        "How much is outstanding past 30 days?"
+    """
+    _telemetry_increment_tool_count("get_ar_aging_report")
+
+    try:
+        import openpyxl as _opx
+    except ImportError:
+        return "❌ openpyxl not installed. Run: pip install openpyxl"
+
+    import datetime as _dt
+
+    if not filepath:
+        filepath = _get_default_spreadsheet_path()
+    if not filepath:
+        return "❌ No spreadsheet path configured."
+
+    fp = filepath.replace("\\", "/")
+    if not os.path.exists(fp):
+        return f"❌ Spreadsheet not found: {fp}"
+
+    try:
+        wb = _opx.load_workbook(fp, data_only=True)
+    except Exception as exc:
+        return f"❌ Could not open spreadsheet: {exc}"
+
+    if "Invoices" not in wb.sheetnames:
+        return "❌ 'Invoices' sheet not found in spreadsheet."
+
+    ws = wb["Invoices"]
+
+    # Detect header row
+    hdr_row, headers = None, []
+    for r in ws.iter_rows(min_row=1, max_row=5):
+        ne = [c for c in r if c.value is not None]
+        if len(ne) >= 3:
+            hdr_row = r[0].row
+            headers = [str(c.value).strip().replace('\n', ' ') if c.value else '' for c in r]
+            break
+
+    if not headers:
+        return "❌ Could not detect header row in Invoices sheet."
+
+    # Parse as_of_date
+    aod_str = as_of_date.strip().lower()
+    if aod_str == 'today' or not aod_str:
+        as_of = _dt.date.today()
+    else:
+        for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y'):
+            try:
+                as_of = _dt.datetime.strptime(aod_str, fmt).date()
+                break
+            except ValueError:
+                continue
+        else:
+            return f"❌ Could not parse as_of_date '{as_of_date}'."
+
+    # ── Bucket definitions ────────────────────────────────────────────────────
+    buckets = {
+        "current":  {"label": "Current (not yet due)", "rows": [], "total": 0.0},
+        "1_30":     {"label": "1 – 30 days overdue",   "rows": [], "total": 0.0},
+        "31_60":    {"label": "31 – 60 days overdue",  "rows": [], "total": 0.0},
+        "61_90":    {"label": "61 – 90 days overdue",  "rows": [], "total": 0.0},
+        "over_90":  {"label": "90+ days overdue",      "rows": [], "total": 0.0},
+    }
+
+    def _parse_date(v):
+        if isinstance(v, _dt.datetime):
+            return v.date()
+        if isinstance(v, _dt.date):
+            return v
+        if v:
+            for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y'):
+                try:
+                    return _dt.datetime.strptime(str(v).strip(), fmt).date()
+                except ValueError:
+                    continue
+        return None
+
+    total_outstanding = 0.0
+    rows_processed    = 0
+
+    for row in ws.iter_rows(min_row=hdr_row + 1):
+        vals   = [c.value for c in row]
+        if all(v is None or str(v).strip() == '' for v in vals):
+            continue
+        rdict  = dict(zip(headers, vals))
+
+        pmt_status = str(rdict.get("Payment Status", "") or "").strip().upper()
+        if pmt_status in ("PAID",):
+            continue  # fully paid — skip
+
+        balance_raw = rdict.get("Balance Due ($)")
+        try:
+            balance = float(balance_raw) if balance_raw is not None else 0.0
+        except (TypeError, ValueError):
+            balance = 0.0
+
+        if balance <= 0:
+            continue  # zero balance — skip
+
+        due_date = _parse_date(rdict.get("Due Date (Net 30)"))
+        inv_id   = str(rdict.get("InvoiceID (INV-####)", "") or "—")
+        customer = str(rdict.get("Customer Name / Company", "") or "—")
+        inv_date = _parse_date(rdict.get("Invoice Date"))
+
+        if due_date is None:
+            bucket_key = "current"
+        else:
+            days_over = (as_of - due_date).days
+            if days_over <= 0:
+                bucket_key = "current"
+            elif days_over <= 30:
+                bucket_key = "1_30"
+            elif days_over <= 60:
+                bucket_key = "31_60"
+            elif days_over <= 90:
+                bucket_key = "61_90"
+            else:
+                bucket_key = "over_90"
+
+        due_str  = due_date.strftime('%Y-%m-%d') if due_date else "—"
+        days_str = (f"{(as_of - due_date).days}d overdue" if due_date and (as_of - due_date).days > 0
+                    else ("due " + due_date.strftime('%m/%d') if due_date else "no due date"))
+        row_line = f"  {inv_id:<12}  {customer:<28}  ${balance:>9,.2f}   {days_str}"
+
+        buckets[bucket_key]["rows"].append(row_line)
+        buckets[bucket_key]["total"] += balance
+        total_outstanding += balance
+        rows_processed += 1
+
+    if rows_processed == 0:
+        return (
+            f"✅ No outstanding invoices as of {as_of.strftime('%Y-%m-%d')}.\n"
+            "   All invoices are paid or have zero balance."
+        )
+
+    # ── Build report ──────────────────────────────────────────────────────────
+    lines = [
+        f"💰 AR AGING REPORT",
+        f"   As of: {as_of.strftime('%B %d, %Y')}",
+        f"   File:  {os.path.basename(fp)}",
+        "═" * 60,
+        "",
+    ]
+
+    _BUCKET_ORDER = ["over_90", "61_90", "31_60", "1_30", "current"]
+    for bkey in _BUCKET_ORDER:
+        b = buckets[bkey]
+        if not b["rows"]:
+            continue
+        lines.append(f"  {'⚠️' if bkey != 'current' else '📋'}  {b['label']}")
+        lines.append(f"  {'─' * 56}")
+        lines.append(f"  {'Invoice':<12}  {'Customer':<28}  {'Balance':>11}   Days")
+        for r in b["rows"]:
+            lines.append(r)
+        lines.append(f"  {'─' * 56}")
+        lines.append(f"  {'Subtotal':<42}  ${b['total']:>9,.2f}")
+        lines.append("")
+
+    lines += [
+        "═" * 60,
+        f"  TOTAL OUTSTANDING:              ${total_outstanding:>12,.2f}",
+        "═" * 60,
+    ]
+
+    if buckets["over_90"]["total"] > 0 or buckets["61_90"]["total"] > 0:
+        lines.append("")
+        lines.append("  🚨 Action recommended: send payment reminders for 60+ day items.")
+        lines.append("     Ask: \"Send payment reminders for all overdue invoices\"")
+
+    return "\n".join(lines)
+
 
 # ── Import the self-learning engine ──────────────────────────────────────────
 try:
@@ -7728,15 +9167,152 @@ def run_script_kill(job_id: str) -> str:
 # All subsequent email tools (send_email, send_alert, send_learnings_report,
 # send_file) pick up the stored config automatically.
 #
-# Server-mode safety: in server mode only owner/manager roles may send email;
-# staff/field_crew are blocked.  The 'to' address must either be the requesting
-# user's own email or be in the configured allowed_recipients list (if defined).
+# Server-mode safety: in server mode only field_crew may use send_email /
+# send_alert / send_sms — they have no personal AI-Prowler install to use instead.
+# Owner/manager/staff use their own personal installs for email and SMS.
+# configure_email, send_file, send_learnings_report remain personal-only.
+#
+# RECIPIENT SOURCES for field_crew in server mode:
+#   Email (send_email / send_alert):
+#     1. Customers sheet — matched by name, company, CustomerID, or email address.
+#        The 'Email' column is used automatically; no need to know the address.
+#     2. Registered server users — matched by email address or name (users.json).
+#   SMS (send_sms):
+#     1. users.json crew records — cell_phone + cell_carrier → gateway auto-resolved.
+#     2. Customers sheet — Phone column match; SMS Gateway (pinned) or
+#        Cell Carrier column → gateway auto-resolved via _carrier_to_gateway().
+#     3. contacts_cache.json — saved contacts with a manually pinned gateway.
+#     4. Twilio (paid) — unrestricted, any US number.
 # ══════════════════════════════════════════════════════════════════════════════
 
 import base64 as _b64
 
 def _EMAIL_CONFIG_PATH() -> Path:
     return _state_dir() / "email_config.json"
+
+
+def _CONTACTS_CACHE_PATH(user: "dict | None" = None) -> Path:
+    """Personal contacts directory — one entry per person, holding phone,
+    email, SMS gateway, and carrier together so a name like 'David' or
+    'Vicki' resolves directly to everything needed to reach them.
+
+    Structure:
+    {
+      "contacts": {
+        "david": {"phone": "4807470358", "email": "david@x.com",
+                   "gateway": "txt.att.net", "carrier": "AT&T Mobility LLC"},
+        "vicki": {"phone": "4805437595", "email": "", "gateway": "vtext.com",
+                   "carrier": ""}
+      }
+    }
+    Looked up by name (case-insensitive) or by 10-digit phone number,
+    whichever the caller has on hand.
+
+    Personal mode (user=None): single shared contacts_cache.json — there's
+    only one person using this install, so there's nothing to separate.
+
+    Server mode (user is not None): only field_crew get a private, per-user
+    file (contacts_cache_<username>.json). Owner/manager/staff each have
+    their own personal AI-Prowler install with its own contacts_cache.json,
+    so the server doesn't need to maintain contacts for them — calling this
+    for a non-field_crew server user falls back to the shared file, which
+    in practice should stay empty for those roles.
+    """
+    if user is not None and user.get('role') == 'field_crew':
+        uname = (user.get('username') or user.get('id') or
+                 user.get('name') or 'unknown').strip().lower()
+        # Sanitise to a safe filename component
+        import re as _rsan
+        uname = _rsan.sub(r'[^a-z0-9_-]', '_', uname) or 'unknown'
+        return _state_dir() / f"contacts_cache_{uname}.json"
+    return _state_dir() / "contacts_cache.json"
+
+
+def _contacts_cache_load(user: "dict | None" = None) -> dict:
+    """Load the relevant contacts_cache.json for this user (see
+    _CONTACTS_CACHE_PATH), returning {'contacts': {}} if missing."""
+    try:
+        p = _CONTACTS_CACHE_PATH(user)
+        if p.exists():
+            import json as _jsc
+            data = _jsc.loads(p.read_text(encoding="utf-8")) or {}
+            data.setdefault('contacts', {})
+            return data
+    except Exception:
+        pass
+    return {'contacts': {}}
+
+
+def _contacts_cache_save(data: dict, user: "dict | None" = None) -> bool:
+    """Save the relevant contacts_cache.json for this user. Atomic write."""
+    try:
+        import json as _jscs
+        p = _CONTACTS_CACHE_PATH(user)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(_jscs.dumps(data, indent=2), encoding="utf-8")
+        import os as _eos2
+        _eos2.replace(str(tmp), str(p))
+        return True
+    except Exception:
+        return False
+
+
+def _contact_lookup(name_or_phone: str, user: "dict | None" = None) -> "dict | None":
+    """Resolve a name or phone number to its contact record, scoped to the
+    calling user (field_crew get their own private file in server mode;
+    everyone else uses the shared/personal contacts_cache.json).
+    Returns the record dict (with 'name' key added) or None if not found."""
+    import re as _rclk
+    data = _contacts_cache_load(user)
+    contacts = data.get('contacts', {})
+
+    digits = _rclk.sub(r'\D', '', name_or_phone)
+    if len(digits) == 11 and digits[0] == '1':
+        digits = digits[1:]
+
+    key = name_or_phone.strip().lower()
+
+    # Try exact name match first
+    if key in contacts:
+        rec = dict(contacts[key])
+        rec['name'] = key
+        return rec
+
+    # Try phone number match across all contacts
+    if len(digits) == 10:
+        for nm, rec in contacts.items():
+            rec_digits = _rclk.sub(r'\D', '', rec.get('phone', ''))
+            if len(rec_digits) == 11 and rec_digits[0] == '1':
+                rec_digits = rec_digits[1:]
+            if rec_digits == digits:
+                out = dict(rec)
+                out['name'] = nm
+                return out
+
+    return None
+
+
+def _contact_save(name: str, phone: str = "", email: str = "",
+                   user: "dict | None" = None) -> dict:
+    """Create or update a contact record for the calling user's scope
+    (field_crew's own private file in server mode; shared/personal
+    contacts_cache.json otherwise). Merges with any existing fields for
+    that name so a partial update doesn't wipe other known info."""
+    data = _contacts_cache_load(user)
+    key = name.strip().lower()
+    rec = data['contacts'].get(key, {})
+    if phone.strip():
+        import re as _rcs
+        d = _rcs.sub(r'\D', '', phone)
+        if len(d) == 11 and d[0] == '1':
+            d = d[1:]
+        rec['phone'] = d
+    if email.strip():
+        rec['email'] = email.strip()
+    data['contacts'][key] = rec
+    _contacts_cache_save(data, user)
+    return rec
 
 
 def _email_config_load() -> "dict | None":
@@ -7753,6 +9329,47 @@ def _email_config_load() -> "dict | None":
                 return raw
     except Exception as _e:
         _log.warning("email_config load failed: %s", _e)
+    return None
+
+
+def _lookup_customer_email(name_or_id: str) -> "str | None":
+    """Look up a customer's email address from the Customers sheet by name or ID.
+
+    Matches CustomerID (CUST-####), Company Name, First+Last Name, or any
+    partial name match (case-insensitive). Returns the email string or None.
+    Used by send_email / send_alert in server mode so field crew can address
+    customers by name without knowing their email.
+
+    v8.0.0 — enables customer email from the job spreadsheet.
+    """
+    try:
+        import openpyxl as _opx
+        _xl_path = _get_default_spreadsheet_path()
+        if not (_xl_path and os.path.exists(_xl_path)):
+            return None
+        _wb = _opx.load_workbook(_xl_path, data_only=True)
+        if 'Customers' not in _wb.sheetnames:
+            return None
+        _ws = _wb['Customers']
+        _hdrs, _hdr_row = [], None
+        for _r in _ws.iter_rows(min_row=1, max_row=5):
+            if len([c for c in _r if c.value]) >= 3:
+                _hdr_row = _r[0].row
+                _hdrs = [str(c.value or '').replace('\n', ' ').strip() for c in _r]
+                break
+        if not _hdr_row:
+            return None
+        _email_col = next((i for i, h in enumerate(_hdrs) if h.lower() == 'email'), None)
+        if _email_col is None:
+            return None
+        _needle = name_or_id.strip().lower()
+        for _row in _ws.iter_rows(min_row=_hdr_row + 1):
+            _vals = [str(c.value or '').strip() for c in _row]
+            _row_str = ' '.join(_vals).lower()
+            if _needle in _row_str and _vals[_email_col]:
+                return _vals[_email_col]
+    except Exception:
+        pass
     return None
 
 
@@ -7900,6 +9517,11 @@ def _send_email_cap(user: "dict | None") -> tuple:
     AI-Prowler install to use instead. Owner/manager/staff use their own
     personal installs.
 
+    Recipients in server mode: customers in the job spreadsheet (Customers
+    sheet, Email column — matched by name/company/ID) OR registered server
+    users (users.json, email field). Name-to-email resolution is handled
+    in send_email / send_alert before the SMTP call.
+
     configure_email, send_file, and send_learnings_report remain personal-only
     regardless of this capability — use _email_allowed_for_user for those.
 
@@ -7913,6 +9535,31 @@ def _send_email_cap(user: "dict | None") -> tuple:
     return (False,
             f"role '{user.get('role')}' cannot send email from the company server — "
             "use your personal AI-Prowler install for email.")
+
+
+def _send_sms_cap(user: "dict | None") -> tuple:
+    """Capability gate for send_sms in server mode. PURE.
+
+    Personal mode (user=None): always allowed (single-user desktop install).
+    Server mode: only field_crew may call send_sms — they have no personal
+    AI-Prowler install to use instead. Owner/manager/staff use their own
+    personal installs for SMS (Twilio).
+
+    KNOWN LIMITATION: field_crew all share the one company Twilio number,
+    so check_sms_replies() can't yet attribute an inbound reply to whichever
+    crew member sent the original outbound text — every reply to that number
+    is visible to all field_crew. Accepted as a temporary gap.
+
+    Returns (allowed: bool, reason: str).
+    """
+    if user is None:
+        return (True, "personal mode — SMS permitted")
+    caps = _role_caps(user.get("role"))
+    if caps.get("can_send_sms"):
+        return (True, f"role '{user.get('role')}' may send SMS in server mode")
+    return (False,
+            f"role '{user.get('role')}' cannot send SMS from the company server — "
+            "use your personal AI-Prowler install for SMS (Twilio).")
 
 
 @mcp.tool()
@@ -8006,9 +9653,15 @@ def send_email(to: str, subject: str, body: str,
     """
     Send an email via the configured SMTP account.
 
+    In server mode, field crew may email:
+      • Other registered users of this server (by email address or name).
+      • Customers listed in the job spreadsheet (by name, company, or CustomerID).
+        The Customers sheet Email column is used — no need to know the address.
+
     Args:
-        to:              Recipient email address. Leave blank to use the
-                         configured default_to address.
+        to:              Recipient email address, or a customer/user name to look
+                         up automatically (e.g. "Torres", "Blue Wave Cafe",
+                         "CUST-0003"). Leave blank to use the configured default_to.
         subject:         Email subject line.
         body:            Plain-text email body.
         attachment_path: Optional — absolute path to a file in a tracked
@@ -8019,11 +9672,16 @@ def send_email(to: str, subject: str, body: str,
         "✅ Email sent to <address>" on success, or an error string.
 
     Voice examples:
-        "Email a summary of today's jobs to john@company.com"
-        "Send the Johnson quote to the client"
-        "Email myself the status report"
+        "Email Torres that his job is confirmed for Saturday"
+        "Send the Blue Wave Cafe invoice to the customer"
+        "Email Jake a summary of today's jobs"
+        "Send Maria the updated schedule"
     """
     _telemetry_increment_tool_count("send_email")
+
+    # Resolve user early so contact-name lookups can be scoped correctly
+    # (field_crew get their own private contacts_cache_<username>.json).
+    user = _current_user(ctx)
 
     cfg = _email_config_load()
     if not cfg:
@@ -8032,7 +9690,45 @@ def send_email(to: str, subject: str, body: str,
 
     to = (to or "").strip() or cfg.get("default_to", "").strip()
     if not to:
-        return "❌ No recipient address. Provide a 'to' address or set default_to via configure_email()."
+        return "❌ No recipient address. Provide a 'to' address or name, or set default_to via configure_email()."
+
+    # v8.0.0: if 'to' doesn't look like an email address, try to resolve it
+    # from the Customers sheet (by name/company/ID), users.json (by name),
+    # or the personal contacts_cache.json (by name) — in that order.
+    if '@' not in to:
+        _resolved = _lookup_customer_email(to)
+        if _resolved:
+            to = _resolved
+        else:
+            # Try registered users by name
+            try:
+                _ud = _load_users()
+                if _ud:
+                    _needle = to.lower()
+                    for _u in (_ud.get('users') or {}).values():
+                        if isinstance(_u, dict):
+                            if _needle in (_u.get('name') or '').lower():
+                                _em = (_u.get('email') or '').strip()
+                                if _em:
+                                    to = _em
+                                    break
+            except Exception:
+                pass
+        if '@' not in to:
+            # Try personal contacts_cache.json by name
+            try:
+                _pc = _contact_lookup(to, user)
+                if _pc and _pc.get('email'):
+                    to = _pc['email']
+            except Exception:
+                pass
+        if '@' not in to:
+            return (
+                f"❌ Could not resolve '{to}' to an email address.\n"
+                "Check that the name matches a customer in the Customers sheet, "
+                "a registered user in the Admin tab, or a saved contact "
+                "(\"<name>'s email is ...\"), and that their Email is filled in."
+            )
 
     subject = subject.strip()
     if not subject:
@@ -8041,7 +9737,6 @@ def send_email(to: str, subject: str, body: str,
         return "❌ body is required."
 
     # v7.0.1 Q5: field_crew may send email in server mode; others use personal install.
-    user = _current_user(ctx)
     allowed, why = _send_email_cap(user)
     if not allowed:
         return f"❌ {why}"
@@ -8081,19 +9776,25 @@ def send_alert(message: str, to: str = "",
     Send a quick one-line alert email. Subject is auto-generated from the
     message. Great for short voice-commanded notifications.
 
+    In server mode, field crew may alert:
+      • Other registered users of this server (by email address or name).
+      • Customers listed in the job spreadsheet (by name, company, or CustomerID).
+
     Args:
         message: The alert text. Keep it concise — it becomes both the
                  subject (truncated) and the body.
-        to:      Recipient. Leave blank to use the configured default_to.
+        to:      Recipient email address, or a customer/user name to look up
+                 (e.g. "Torres", "Blue Wave Cafe"). Leave blank for default_to.
         ctx:     MCP context (injected automatically)
 
     Returns:
         "✅ Alert sent to <address>" on success, or an error string.
 
     Voice examples:
-        "Send an alert to myself — the Johnson job is running late"
-        "Ping sarah that I'm on my way"
-        "Alert the team that the server is back up"
+        "Alert Torres that we're 20 minutes away"
+        "Ping the Blue Wave Cafe that we're done"
+        "Alert Jake that I'm running late"
+        "Ping the owner that the gate code isn't working"
     """
     _telemetry_increment_tool_count("send_alert")
 
@@ -8104,7 +9805,33 @@ def send_alert(message: str, to: str = "",
 
     to = (to or "").strip() or cfg.get("default_to", "").strip()
     if not to:
-        return "❌ No recipient. Provide a 'to' address or set default_to via configure_email()."
+        return "❌ No recipient. Provide a 'to' address or name, or set default_to via configure_email()."
+
+    # v8.0.0: name → email resolution (Customers sheet first, then users.json)
+    if '@' not in to:
+        _resolved = _lookup_customer_email(to)
+        if _resolved:
+            to = _resolved
+        else:
+            try:
+                _ud = _load_users()
+                if _ud:
+                    _needle = to.lower()
+                    for _u in (_ud.get('users') or {}).values():
+                        if isinstance(_u, dict):
+                            if _needle in (_u.get('name') or '').lower():
+                                _em = (_u.get('email') or '').strip()
+                                if _em:
+                                    to = _em
+                                    break
+            except Exception:
+                pass
+        if '@' not in to:
+            return (
+                f"❌ Could not resolve '{to}' to an email address.\n"
+                "Check that the name matches a customer in the Customers sheet "
+                "or a registered user in the Admin tab, and that their Email is filled in."
+            )
 
     message = message.strip()
     if not message:
@@ -9694,6 +11421,7 @@ _USER_ROLES = ("owner", "manager", "staff", "field_crew")
 
 # Per-role capabilities that are NOT per-collection (those come from scopes).
 # v7.0.1 additions: manage_db, can_write_shared, can_send_email.
+# v8.0.0 addition:  can_send_sms — mirrors can_send_email; field_crew only.
 #
 #   read_all_role_scopes : owner sees every scope:* collection (any assigned scope)
 #   read_others_private  : owner may read any user:* collection
@@ -9707,23 +11435,36 @@ _USER_ROLES = ("owner", "manager", "staff", "field_crew")
 #   can_send_email       : may call send_email / send_alert in server mode.
 #                          False for owner/manager/staff (they have personal installs).
 #                          True for field_crew (no personal install available).
+#                          Restricted to registered server users as recipients —
+#                          only users.json email addresses are available.
+#   can_send_sms         : may call send_sms in server mode.
+#                          True for field_crew — they have no personal install
+#                          and are the primary users of action tools in the
+#                          field. False for owner/manager/staff (use their own
+#                          personal installs for SMS instead).
+#                          KNOWN LIMITATION: all field_crew share one Twilio
+#                          number, so inbound replies (check_sms_replies) can't
+#                          yet be attributed to which crew member sent the
+#                          original text — everyone sees all replies to that
+#                          number. Accepted as a temporary gap; revisit if a
+#                          per-crew-member reply-routing design is built.
 _ROLE_CAPS = {
     # owner — unrestricted: full DB management, reads all scopes, admin rights
     "owner":      {"read_all_role_scopes": True,  "read_others_private": True,
                    "can_write": True,  "can_write_shared": True,  "is_admin": True,
-                   "manage_db": "full",    "can_send_email": False},
+                   "manage_db": "full",    "can_send_email": False, "can_send_sms": False},
     # manager — full DB management within their assigned scopes + shared
     "manager":    {"read_all_role_scopes": False, "read_others_private": False,
                    "can_write": True,  "can_write_shared": True,  "is_admin": False,
-                   "manage_db": "full",    "can_send_email": False},
+                   "manage_db": "full",    "can_send_email": False, "can_send_sms": False},
     # staff — limited DB: may index own private + assigned scopes; NOT shared or destructive ops
     "staff":      {"read_all_role_scopes": False, "read_others_private": False,
                    "can_write": True,  "can_write_shared": False, "is_admin": False,
-                   "manage_db": "limited", "can_send_email": False},
-    # field_crew — no DB management; may send email (no personal AI-Prowler install)
+                   "manage_db": "limited", "can_send_email": False, "can_send_sms": False},
+    # field_crew — no DB management; may send email and SMS (no personal AI-Prowler install)
     "field_crew": {"read_all_role_scopes": False, "read_others_private": False,
                    "can_write": False, "can_write_shared": False, "is_admin": False,
-                   "manage_db": "none",    "can_send_email": True},
+                   "manage_db": "none",    "can_send_email": True,  "can_send_sms": True},
 }
 
 _SHARED_COLLECTION = "shared"
@@ -11949,7 +13690,100 @@ if __name__ == "__main__":
                              'https://john.dvavro-ai-prowler.com  '
                              'Falls back to tunnel_domain in ~/.ai-prowler/config.json '
                              'then to the built-in default.')
+    parser.add_argument('--force', action='store_true',
+                        help='If the target port is already in use, kill the '
+                             'occupying process (requires admin rights on Windows) '
+                             'and start fresh. Safe for dev/test use.')
     args = parser.parse_args()
+
+    # ── Port conflict detection & cleanup (HTTP mode only) ────────────────────
+    # When running --transport http, check whether the target port is already
+    # bound. This catches the common case where a previous manual test run or
+    # crashed GUI server left a zombie python.exe holding port 8000.
+    #
+    # Without --force: print a clear error with the PID and exit cleanly.
+    # With --force:    kill the occupying process and proceed (dev/test use).
+    #
+    # This replaces the confusing "address already in use" uvicorn crash.
+    if args.transport == 'http':
+        import socket as _sock
+        import subprocess as _sp
+        import platform as _pf
+
+        def _find_pid_on_port(port: int):
+            """Return the PID holding `port` on 127.0.0.1, or None."""
+            try:
+                result = _sp.run(
+                    ['netstat', '-ano'],
+                    capture_output=True, text=True, timeout=5
+                )
+                for line in result.stdout.splitlines():
+                    if f':{port}' in line and 'LISTENING' in line:
+                        parts = line.split()
+                        if parts:
+                            try:
+                                return int(parts[-1])
+                            except ValueError:
+                                pass
+            except Exception:
+                pass
+            return None
+
+        def _port_in_use(port: int) -> bool:
+            """True if something is already bound to 127.0.0.1:port."""
+            with _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM) as s:
+                s.settimeout(1)
+                return s.connect_ex(('127.0.0.1', port)) == 0
+
+        if _port_in_use(args.port):
+            pid = _find_pid_on_port(args.port)
+            pid_str = f"PID {pid}" if pid else "unknown PID"
+            if args.force:
+                print(f"⚠️  Port {args.port} is in use by {pid_str} — --force specified, killing it...",
+                      flush=True)
+                if pid:
+                    try:
+                        if _pf.system() == 'Windows':
+                            _sp.run(['taskkill', '/PID', str(pid), '/F'],
+                                    capture_output=True, timeout=5)
+                        else:
+                            import signal as _sig
+                            import os as _os
+                            _os.kill(pid, _sig.SIGKILL)
+                        import time as _t
+                        _t.sleep(1)  # give the OS a moment to release the port
+                        print(f"✅  Killed {pid_str} — proceeding on port {args.port}",
+                              flush=True)
+                    except Exception as _ke:
+                        print(f"❌  Could not kill {pid_str}: {_ke}", flush=True)
+                        print(f"   Run as Administrator and try again, or free port {args.port} manually.",
+                              flush=True)
+                        raise SystemExit(1)
+                else:
+                    print(f"❌  Port {args.port} is busy but PID could not be identified.",
+                          flush=True)
+                    print(f"   Run: netstat -ano | findstr :{args.port}  then taskkill /PID <pid> /F",
+                          flush=True)
+                    raise SystemExit(1)
+            else:
+                print(f"\n❌  AI-Prowler cannot start: port {args.port} is already in use ({pid_str}).",
+                      flush=True)
+                print(f"", flush=True)
+                print(f"   This usually means a previous AI-Prowler server process", flush=True)
+                print(f"   was not shut down cleanly (crash, Ctrl+C, or test run).", flush=True)
+                print(f"", flush=True)
+                if pid:
+                    print(f"   To fix — run as Administrator:", flush=True)
+                    print(f"     taskkill /PID {pid} /F", flush=True)
+                    print(f"", flush=True)
+                    print(f"   Or restart with --force to kill it automatically:", flush=True)
+                    print(f"     python ai_prowler_mcp.py --transport http --force", flush=True)
+                else:
+                    print(f"   To fix:", flush=True)
+                    print(f"     netstat -ano | findstr :{args.port}", flush=True)
+                    print(f"     taskkill /PID <pid> /F   (run as Administrator)", flush=True)
+                print(f"", flush=True)
+                raise SystemExit(1)
 
     # ── Resolve public_base ───────────────────────────────────────────────────
     # Priority: --public-base CLI arg > config.json tunnel_domain > built-in default

@@ -265,8 +265,25 @@ if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $by
     Pass "F" "No BOM - file is clean UTF-8, Python json.load() will succeed"
 }
 
-# Verify Python can actually parse it
-$pyResult = & python -c "
+# Verify Python can actually parse it.
+# Resolve the Python executable without relying on bare 'python' being on
+# PATH (it often isn't in a non-interactive PowerShell session on Windows).
+$PythonExe = $null
+try { $PythonExe = (Get-Command python -ErrorAction Stop).Source } catch {}
+if (-not $PythonExe) {
+    # Fall back to the standard user-install location for Python 3.11
+    $candidate = "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe"
+    if (Test-Path $candidate) { $PythonExe = $candidate }
+}
+if (-not $PythonExe) {
+    # Last resort: check py launcher
+    try { $PythonExe = (Get-Command py -ErrorAction Stop).Source } catch {}
+}
+
+if (-not $PythonExe) {
+    Fail "F" "Could not locate a Python executable to verify json.load()"
+} else {
+    $pyResult = & "$PythonExe" -c "
 import json, sys
 try:
     data = json.load(open(r'$TrackFile', encoding='utf-8'))
@@ -274,10 +291,11 @@ try:
 except Exception as e:
     print('ERROR:' + str(e))
 " 2>&1
-if ($pyResult -like "OK:*") {
-    Pass "F" "Python json.load() succeeded: $pyResult"
-} else {
-    Fail "F" "Python json.load() failed: $pyResult"
+    if ($pyResult -like "OK:*") {
+        Pass "F" "Python json.load() succeeded: $pyResult"
+    } else {
+        Fail "F" "Python json.load() failed: $pyResult"
+    }
 }
 
 

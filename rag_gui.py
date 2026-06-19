@@ -5936,140 +5936,571 @@ or from the Help menu."""
                                     command=self.clear_database)
         clear_full_btn.pack(side='left', padx=5)
 
-        # ── Email Configuration (server mode only) ────────────────────
-        # Required for 'Forgot token?' recovery and employee token delivery.
-        # configure_email() MCP tool is Tier A suppressed in server mode,
-        # so SMTP must be configured here.
+        # ── Email Configuration ────────────────────────────────────────────
+        # Shown in BOTH personal and server mode, but serves different purposes:
+        #
+        # Personal mode: this is YOUR email account. Claude uses send_email /
+        #   send_alert to send from it. configure_email() MCP tool is also
+        #   available for Claude to set this from conversation.
+        #
+        # Server mode: this is the COMPANY'S shared SMTP account. Field crew
+        #   members cannot configure email themselves (configure_email() is
+        #   Tier A suppressed). All outbound email uses this account, but
+        #   AI-Prowler personalises each message using the employee's name and
+        #   personal email from the Admin tab:
+        #     From display:  "Jake Smith via ABC Window Cleaning"
+        #     Reply-To:      jake.smith@gmail.com  (from user record)
+        #   So the customer's Reply goes directly to the field tech's phone.
+        _email_section_title = (
+            '\U0001f4e7 Email Configuration  '
+            '(company SMTP — field crew identity set in Admin tab)'
+            if _settings_is_server_mode else
+            '\U0001f4e7 Email Configuration  '
+            '(your personal SMTP — used by send_email / send_alert tools)'
+        )
+        email_cfg_frame = ttk.LabelFrame(
+            scrollable_frame,
+            text=_email_section_title,
+            padding=10)
+        email_cfg_frame.pack(fill='x', padx=20, pady=(0, 10))
+
+        # Context hint — different message for each mode
         if _settings_is_server_mode:
-            email_cfg_frame = ttk.LabelFrame(
-                scrollable_frame,
-                text='\U0001f4e7 Email Configuration  (required for token recovery)',
-                padding=10)
-            email_cfg_frame.pack(fill='x', padx=20, pady=(0, 10))
+            ttk.Label(email_cfg_frame, justify='left',
+                      font=('Segoe UI', 8), foreground='gray',
+                      text=(
+                          "Server mode: configure the company SMTP account here.\n"
+                          "Field crew send_email / send_alert use this account to send,\n"
+                          "but each message is personalised with the employee's name and\n"
+                          "Reply-To from their user record in the Admin tab."
+                      )).grid(row=0, column=0, columnspan=3, sticky='w', padx=6, pady=(0, 6))
+            _email_row_start = 1
+        else:
+            ttk.Label(email_cfg_frame, justify='left',
+                      font=('Segoe UI', 8), foreground='gray',
+                      text=(
+                          "Personal mode: configure your own email account here.\n"
+                          "Claude can also set this by telling it your email and app password\n"
+                          "in a conversation (configure_email() MCP tool)."
+                      )).grid(row=0, column=0, columnspan=3, sticky='w', padx=6, pady=(0, 6))
+            _email_row_start = 1
 
-            _ep = {'padx': 6, 'pady': 3}
-            ttk.Label(email_cfg_frame, text='SMTP host:').grid(
-                row=0, column=0, sticky='e', **_ep)
-            _smtp_host_var = tk.StringVar()
-            ttk.Entry(email_cfg_frame, textvariable=_smtp_host_var,
-                      width=34).grid(row=0, column=1, **_ep)
-            ttk.Label(email_cfg_frame,
-                      text='e.g. smtp.gmail.com  /  smtp.office365.com',
-                      font=('Segoe UI', 8)).grid(row=0, column=2, sticky='w')
+        _ep = {'padx': 6, 'pady': 3}
+        ttk.Label(email_cfg_frame, text='Your Email Address:').grid(
+            row=_email_row_start+0, column=0, sticky='e', **_ep)
+        _smtp_user_var = tk.StringVar()
+        ttk.Entry(email_cfg_frame, textvariable=_smtp_user_var,
+                  width=34).grid(row=_email_row_start+0, column=1, **_ep)
+        ttk.Label(email_cfg_frame,
+                  text='This is also your SMTP login',
+                  font=('Segoe UI', 8)).grid(row=_email_row_start+0, column=2, sticky='w')
 
-            ttk.Label(email_cfg_frame, text='Port:').grid(
-                row=1, column=0, sticky='e', **_ep)
-            _smtp_port_var = tk.StringVar(value='587')
-            ttk.Entry(email_cfg_frame, textvariable=_smtp_port_var,
-                      width=8).grid(row=1, column=1, sticky='w', **_ep)
-            ttk.Label(email_cfg_frame,
-                      text='587 = STARTTLS (most common)  /  465 = SMTPS',
-                      font=('Segoe UI', 8)).grid(row=1, column=2, sticky='w')
+        ttk.Label(email_cfg_frame, text='SMTP host:').grid(
+            row=_email_row_start+1, column=0, sticky='e', **_ep)
+        _smtp_host_var = tk.StringVar()
+        ttk.Entry(email_cfg_frame, textvariable=_smtp_host_var,
+                  width=34).grid(row=_email_row_start+1, column=1, **_ep)
+        ttk.Label(email_cfg_frame,
+                  text='Auto-filled from your email address above',
+                  font=('Segoe UI', 8)).grid(row=_email_row_start+1, column=2, sticky='w')
 
-            ttk.Label(email_cfg_frame, text='Username:').grid(
-                row=2, column=0, sticky='e', **_ep)
-            _smtp_user_var = tk.StringVar()
-            ttk.Entry(email_cfg_frame, textvariable=_smtp_user_var,
-                      width=34).grid(row=2, column=1, **_ep)
-            ttk.Label(email_cfg_frame,
-                      text='Your email address / SMTP login',
-                      font=('Segoe UI', 8)).grid(row=2, column=2, sticky='w')
+        ttk.Label(email_cfg_frame, text='Port:').grid(
+            row=_email_row_start+2, column=0, sticky='e', **_ep)
+        _smtp_port_var = tk.StringVar(value='587')
+        ttk.Entry(email_cfg_frame, textvariable=_smtp_port_var,
+                  width=8).grid(row=_email_row_start+2, column=1, sticky='w', **_ep)
+        ttk.Label(email_cfg_frame,
+                  text='587 = STARTTLS (most common)  /  465 = SMTPS',
+                  font=('Segoe UI', 8)).grid(row=_email_row_start+2, column=2, sticky='w')
 
-            ttk.Label(email_cfg_frame, text='Password:').grid(
-                row=3, column=0, sticky='e', **_ep)
-            _smtp_pass_var = tk.StringVar()
-            _smtp_pass_entry = ttk.Entry(email_cfg_frame,
-                                         textvariable=_smtp_pass_var,
-                                         show='\u25cf', width=34)
-            _smtp_pass_entry.grid(row=3, column=1, **_ep)
-            _smtp_show_var = tk.BooleanVar(value=False)
-            def _toggle_smtp_pass():
-                _smtp_pass_entry.configure(
-                    show='' if _smtp_show_var.get() else '\u25cf')
-            ttk.Checkbutton(email_cfg_frame, text='Show',
-                            variable=_smtp_show_var,
-                            command=_toggle_smtp_pass).grid(
-                row=3, column=2, sticky='w')
+        ttk.Label(email_cfg_frame, text='Password:').grid(
+            row=_email_row_start+3, column=0, sticky='e', **_ep)
+        _smtp_pass_var = tk.StringVar()
+        _smtp_pass_entry = ttk.Entry(email_cfg_frame,
+                                     textvariable=_smtp_pass_var,
+                                     show='\u25cf', width=34)
+        _smtp_pass_entry.grid(row=_email_row_start+3, column=1, **_ep)
+        _smtp_show_var = tk.BooleanVar(value=False)
+        def _toggle_smtp_pass():
+            _smtp_pass_entry.configure(
+                show='' if _smtp_show_var.get() else '\u25cf')
+        ttk.Checkbutton(email_cfg_frame, text='Show',
+                        variable=_smtp_show_var,
+                        command=_toggle_smtp_pass).grid(
+            row=_email_row_start+3, column=2, sticky='w')
 
-            ttk.Label(email_cfg_frame, text='From name:').grid(
-                row=4, column=0, sticky='e', **_ep)
-            _smtp_from_var = tk.StringVar(value='AI-Prowler')
-            ttk.Entry(email_cfg_frame, textvariable=_smtp_from_var,
-                      width=34).grid(row=4, column=1, **_ep)
+        # ── Provider info: SMTP host/port + app-password link, keyed by domain ──
+        # SMTP hosts/ports verified against each provider's official docs:
+        #   Gmail:    smtp.gmail.com:587 (STARTTLS) / 465 (SSL)
+        #   Outlook.com: smtp-mail.outlook.com:587 (STARTTLS) — NOT smtp.outlook.com
+        #   Microsoft 365: smtp.office365.com:587 (STARTTLS)
+        #   Yahoo/Ymail: smtp.mail.yahoo.com:587
+        #   AOL:      smtp.aol.com:587 (STARTTLS) / 465 (SSL)
+        #   iCloud:   smtp.mail.me.com:587 (STARTTLS) — NOT smtp.icloud.com
+        #   Zoho:     smtp.zoho.com:587 (STARTTLS) / 465 (SSL)
+        #   GMX:      mail.gmx.com:587 (no app password needed as of 2026)
+        #   ProtonMail: requires Proton Mail Bridge running locally; no direct
+        #               public SMTP host — left without auto-fill, link only.
+        _PROVIDER_INFO = {
+            'gmail.com':      {'host': 'smtp.gmail.com', 'port': '587',
+                                'label': 'Google App Passwords',
+                                'url': 'https://myaccount.google.com/apppasswords'},
+            'googlemail.com': {'host': 'smtp.gmail.com', 'port': '587',
+                                'label': 'Google App Passwords',
+                                'url': 'https://myaccount.google.com/apppasswords'},
+            'outlook.com':    {'host': 'smtp-mail.outlook.com', 'port': '587',
+                                'label': 'Microsoft App Passwords',
+                                'url': 'https://account.live.com/proofs/AppPassword'},
+            'hotmail.com':    {'host': 'smtp-mail.outlook.com', 'port': '587',
+                                'label': 'Microsoft App Passwords',
+                                'url': 'https://account.live.com/proofs/AppPassword'},
+            'live.com':       {'host': 'smtp-mail.outlook.com', 'port': '587',
+                                'label': 'Microsoft App Passwords',
+                                'url': 'https://account.live.com/proofs/AppPassword'},
+            'msn.com':        {'host': 'smtp-mail.outlook.com', 'port': '587',
+                                'label': 'Microsoft App Passwords',
+                                'url': 'https://account.live.com/proofs/AppPassword'},
+            'office365.com':  {'host': 'smtp.office365.com', 'port': '587',
+                                'label': 'Microsoft 365 Security Info',
+                                'url': 'https://mysignins.microsoft.com/security-info'},
+            'yahoo.com':      {'host': 'smtp.mail.yahoo.com', 'port': '587',
+                                'label': 'Yahoo App Passwords',
+                                'url': 'https://login.yahoo.com/account/security/app-passwords'},
+            'ymail.com':      {'host': 'smtp.mail.yahoo.com', 'port': '587',
+                                'label': 'Yahoo App Passwords',
+                                'url': 'https://login.yahoo.com/account/security/app-passwords'},
+            'aol.com':        {'host': 'smtp.aol.com', 'port': '587',
+                                'label': 'AOL App Passwords',
+                                'url': 'https://login.aol.com/account/security/app-passwords'},
+            'icloud.com':     {'host': 'smtp.mail.me.com', 'port': '587',
+                                'label': 'Apple App-Specific Passwords',
+                                'url': 'https://account.apple.com/account/manage'},
+            'me.com':         {'host': 'smtp.mail.me.com', 'port': '587',
+                                'label': 'Apple App-Specific Passwords',
+                                'url': 'https://account.apple.com/account/manage'},
+            'mac.com':        {'host': 'smtp.mail.me.com', 'port': '587',
+                                'label': 'Apple App-Specific Passwords',
+                                'url': 'https://account.apple.com/account/manage'},
+            'zoho.com':       {'host': 'smtp.zoho.com', 'port': '587',
+                                'label': 'Zoho App Passwords',
+                                'url': 'https://accounts.zoho.com/home#security/app-passwords'},
+            'gmx.com':        {'host': 'mail.gmx.com', 'port': '587',
+                                'label': 'GMX Account (no app password needed)',
+                                'url': 'https://www.gmx.com/mail/'},
+            'protonmail.com': {'host': '', 'port': '',
+                                'label': 'ProtonMail Bridge / SMTP Setup',
+                                'url': 'https://proton.me/support/smtp-submission'},
+            'proton.me':      {'host': '', 'port': '',
+                                'label': 'ProtonMail Bridge / SMTP Setup',
+                                'url': 'https://proton.me/support/smtp-submission'},
+        }
+        # Back-compat alias used by the app-password link block below
+        _APP_PASSWORD_LINKS = {k: (v['label'], v['url'])
+                                for k, v in _PROVIDER_INFO.items()}
 
-            _email_cfg_status = tk.StringVar(value='')
-            ttk.Label(email_cfg_frame, textvariable=_email_cfg_status,
-                      font=('Segoe UI', 9)).grid(
-                row=5, column=0, columnspan=3, sticky='w', padx=6, pady=(4, 0))
+        _app_pw_frame = ttk.Frame(email_cfg_frame)
+        _app_pw_frame.grid(row=_email_row_start+3, column=3,
+                           sticky='w', padx=(10, 0))
 
-            def _load_smtp_cfg():
-                import json as _j, base64 as _b
-                p = Path.home() / '.ai-prowler' / 'email_config.json'
-                if not p.exists():
+        # Tracks whether the host/port were auto-filled by domain detection,
+        # so we don't clobber a value the user deliberately typed themselves.
+        _host_autofilled = {'value': True}   # True until the user edits it manually
+        _port_autofilled = {'value': True}
+
+        def _on_host_edit(*_a):
+            _host_autofilled['value'] = False
+        def _on_port_edit(*_a):
+            _port_autofilled['value'] = False
+
+        def _update_app_pw_link(*_args):
+            email = _smtp_user_var.get().strip().lower()
+            domain = email.split('@')[-1] if '@' in email else ''
+            info = _PROVIDER_INFO.get(domain)
+
+            # Auto-fill SMTP host/port — but only if the user hasn't typed
+            # their own value into those fields, so we never clobber a
+            # deliberate custom entry (e.g. a company's own mail server).
+            if info:
+                if info['host'] and _host_autofilled['value']:
+                    _smtp_host_var.set(info['host'])
+                if info['port'] and _port_autofilled['value']:
+                    _smtp_port_var.set(info['port'])
+                # Re-arm the autofill flags since the programmatic .set()
+                # above also fires the trace — without this, the next
+                # keystroke would look like a "manual edit" even though
+                # nothing else changed.
+                _host_autofilled['value'] = True
+                _port_autofilled['value'] = True
+
+            for w in _app_pw_frame.winfo_children():
+                w.destroy()
+            if info:
+                ttk.Button(
+                    _app_pw_frame,
+                    text=f"🔑 Get App Password ({info['label']})",
+                    command=lambda u=info['url']: webbrowser.open(u)
+                ).pack(side='left')
+            elif domain:
+                # Unknown provider — generic guidance, no broken link
+                ttk.Label(
+                    _app_pw_frame,
+                    text=f"Check {domain}'s account security settings\nfor an \"App Password\" option.",
+                    font=('Segoe UI', 7), foreground='gray',
+                    justify='left'
+                ).pack(side='left')
+
+        _smtp_user_var.trace_add('write', _update_app_pw_link)
+        _smtp_host_var.trace_add('write', _on_host_edit)
+        _smtp_port_var.trace_add('write', _on_port_edit)
+
+        ttk.Label(email_cfg_frame, text='From name:').grid(
+            row=_email_row_start+4, column=0, sticky='e', **_ep)
+        _smtp_from_var = tk.StringVar(value='AI-Prowler')
+        ttk.Entry(email_cfg_frame, textvariable=_smtp_from_var,
+                  width=34).grid(row=_email_row_start+4, column=1, **_ep)
+
+        _email_cfg_status = tk.StringVar(value='')
+        ttk.Label(email_cfg_frame, textvariable=_email_cfg_status,
+                  font=('Segoe UI', 9)).grid(
+            row=_email_row_start+5, column=0, columnspan=3, sticky='w', padx=6, pady=(4, 0))
+
+        def _load_smtp_cfg():
+            import json as _j, base64 as _b
+            p = Path.home() / '.ai-prowler' / 'email_config.json'
+            if not p.exists():
+                # No saved config yet (first run) — leave the autofill flags
+                # armed so typing an email address fills in host/port.
+                return
+            try:
+                d = _j.loads(p.read_text(encoding='utf-8')) or {}
+                saved_host = d.get('smtp_host', '')
+                saved_port = str(d.get('smtp_port', 587))
+                _smtp_host_var.set(saved_host)
+                _smtp_port_var.set(saved_port)
+                # A non-blank saved host/port means the user (or a prior
+                # auto-fill) already settled on a value — treat it as
+                # "manually set" so re-typing the same email doesn't
+                # silently overwrite a deliberately customised host.
+                # A blank saved value (older config, or never configured)
+                # leaves autofill armed so it still works for this user.
+                _host_autofilled['value'] = not bool(saved_host)
+                _port_autofilled['value'] = not bool(saved_port)
+                _smtp_user_var.set(d.get('username', ''))
+                _smtp_from_var.set(d.get('from_name', 'AI-Prowler'))
+                pw = ''
+                if '_password_b64' in d:
+                    try:
+                        pw = _b.b64decode(d['_password_b64']).decode()
+                    except Exception:
+                        pass
+                _smtp_pass_var.set(pw)
+                _email_cfg_status.set('Loaded existing config.')
+            except Exception as _e:
+                _email_cfg_status.set(f'Could not load config: {_e}')
+
+        def _save_smtp_cfg():
+            import json as _j, base64 as _b
+            host  = _smtp_host_var.get().strip()
+            port_s = _smtp_port_var.get().strip()
+            user  = _smtp_user_var.get().strip()
+            pw    = _smtp_pass_var.get()
+            if not host or not user:
+                _email_cfg_status.set('SMTP host and username are required.')
+                return
+            try:
+                port = int(port_s)
+            except ValueError:
+                _email_cfg_status.set('Port must be a number.')
+                return
+            cfg = {
+                'smtp_host':     host,
+                'smtp_port':     port,
+                'username':      user,
+                '_password_b64': _b.b64encode(pw.encode()).decode(),
+                'from_name':     _smtp_from_var.get().strip() or 'AI-Prowler',
+                'use_tls':       True,
+            }
+            p = Path.home() / '.ai-prowler' / 'email_config.json'
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(_j.dumps(cfg, indent=2), encoding='utf-8')
+            _email_cfg_status.set('Email config saved.')
+
+        def _test_smtp_cfg():
+            _email_cfg_status.set('Sending test email...')
+            scrollable_frame.update_idletasks()
+            ok, msg = self._admin_send_email_direct(
+                _smtp_user_var.get().strip(),
+                'AI-Prowler SMTP Test',
+                'This is a test email from AI-Prowler. '
+                'If you received this, SMTP is configured correctly.')
+            _email_cfg_status.set(
+                'Test email sent.' if ok else f'Test failed: {msg}')
+
+        _load_smtp_cfg()
+        _smtp_btn_row = ttk.Frame(email_cfg_frame)
+        _smtp_btn_row.grid(row=_email_row_start+6, column=0, columnspan=3,
+                           pady=(8, 0), sticky='w', padx=6)
+        ttk.Button(_smtp_btn_row, text='\U0001f4be Save Config',
+                   command=_save_smtp_cfg).pack(side='left', padx=(0, 6))
+        ttk.Button(_smtp_btn_row, text='\U0001f4e7 Test Connection',
+                   command=_test_smtp_cfg).pack(side='left')
+
+
+        # ── SMS / Text Messaging (Twilio) ─────────────────────────────────────
+        # Available in both personal and server mode.
+        # Credentials stored in ~/.ai-prowler/config.json alongside other keys.
+        sms_frame = ttk.LabelFrame(
+            scrollable_frame,
+            text='\U0001f4f1 SMS / Text Messaging  (Twilio \u2014 Paid)',
+            padding=10)
+        sms_frame.pack(fill='x', padx=20, pady=(0, 10))
+
+        # ── Enable toggle ────────────────────────────────────────────────────
+        # Defaults to OFF — Twilio costs money and requires buying a phone
+        # number plus per-message usage fees, on top of the free email-to-SMS
+        # option above. The whole credential block stays collapsed (not just
+        # greyed out) until the user explicitly opts in, so it doesn't clutter
+        # the Settings tab for the large majority who'll just use the free path.
+        _sms_enabled_var = tk.BooleanVar(value=False)
+        _sp = {'padx': 6, 'pady': 3}
+
+        _sms_enable_row = ttk.Frame(sms_frame)
+        _sms_enable_row.grid(row=0, column=0, columnspan=3, sticky='w', **_sp)
+        ttk.Checkbutton(
+            _sms_enable_row,
+            text='Enable Paid Twilio Messaging  (requires purchasing a phone\n'
+                 'number and usage fees from Twilio)',
+            variable=_sms_enabled_var,
+            command=lambda: _toggle_sms_fields(),
+        ).pack(side='left')
+
+        # ── Collapsible credential block ──────────────────────────────────────
+        # A single sub-frame holds every Twilio field; the whole thing is
+        # grid-removed (not just disabled) when the checkbox is off.
+        _sms_fields_frame = ttk.Frame(sms_frame)
+        _sms_fields_frame.grid(row=1, column=0, columnspan=3, sticky='w')
+
+        _sms_signup_row = ttk.Frame(_sms_fields_frame)
+        _sms_signup_row.grid(row=0, column=0, columnspan=3, sticky='w', pady=(4, 6))
+        ttk.Button(
+            _sms_signup_row,
+            text='\U0001f517 Sign Up at Twilio.com',
+            command=lambda: __import__('webbrowser').open('https://console.twilio.com/'),
+        ).pack(side='left')
+        ttk.Label(
+            _sms_signup_row,
+            text='Trial credit available — a phone number and usage fees still apply',
+            font=('Segoe UI', 8),
+            foreground='gray',
+        ).pack(side='left', padx=6)
+
+        # ── Credential fields ─────────────────────────────────────────────────
+        ttk.Label(_sms_fields_frame, text='Account SID:').grid(
+            row=1, column=0, sticky='e', **_sp)
+        _sms_sid_var = tk.StringVar()
+        _sms_sid_entry = ttk.Entry(_sms_fields_frame, textvariable=_sms_sid_var, width=40)
+        _sms_sid_entry.grid(row=1, column=1, **_sp)
+        ttk.Label(_sms_fields_frame, text='Starts with AC…  (from Twilio console home)',
+                  font=('Segoe UI', 8)).grid(row=1, column=2, sticky='w')
+
+        ttk.Label(_sms_fields_frame, text='Auth Token:').grid(
+            row=2, column=0, sticky='e', **_sp)
+        _sms_token_var = tk.StringVar()
+        _sms_token_entry = ttk.Entry(_sms_fields_frame, textvariable=_sms_token_var,
+                                     show='●', width=40)
+        _sms_token_entry.grid(row=2, column=1, **_sp)
+        _sms_show_token_var = tk.BooleanVar(value=False)
+        def _toggle_sms_token():
+            _sms_token_entry.configure(
+                show='' if _sms_show_token_var.get() else '●')
+        ttk.Checkbutton(_sms_fields_frame, text='Show',
+                        variable=_sms_show_token_var,
+                        command=_toggle_sms_token).grid(row=2, column=2, sticky='w')
+
+        ttk.Label(_sms_fields_frame, text='From Number:').grid(
+            row=3, column=0, sticky='e', **_sp)
+        _sms_from_var = tk.StringVar()
+        _sms_from_entry = ttk.Entry(_sms_fields_frame, textvariable=_sms_from_var, width=20)
+        _sms_from_entry.grid(row=3, column=1, sticky='w', **_sp)
+        ttk.Label(_sms_fields_frame, text='Your Twilio phone number  e.g. +13865550100',
+                  font=('Segoe UI', 8)).grid(row=3, column=2, sticky='w')
+
+        ttk.Label(_sms_fields_frame, text='Test recipient:').grid(
+            row=4, column=0, sticky='e', **_sp)
+        _sms_test_to_var = tk.StringVar()
+        _sms_test_to_entry = ttk.Entry(_sms_fields_frame, textvariable=_sms_test_to_var, width=20)
+        _sms_test_to_entry.grid(row=4, column=1, sticky='w', **_sp)
+        ttk.Label(_sms_fields_frame, text='Your phone number to receive the test message',
+                  font=('Segoe UI', 8)).grid(row=4, column=2, sticky='w')
+
+        ttk.Label(_sms_fields_frame, text='Callback signature:').grid(
+            row=5, column=0, sticky='e', **_sp)
+        _sms_sig_var = tk.StringVar()
+        _sms_sig_entry = ttk.Entry(_sms_fields_frame, textvariable=_sms_sig_var, width=40)
+        _sms_sig_entry.grid(row=5, column=1, sticky='w', **_sp)
+        ttk.Label(_sms_fields_frame,
+                  text='Appended to every SMS so customers know your real number',
+                  font=('Segoe UI', 8)).grid(row=5, column=2, sticky='w')
+        ttk.Label(_sms_fields_frame,
+                  text='e.g.  — Call/text Dave back: 386-555-0100',
+                  font=('Segoe UI', 7), foreground='gray').grid(
+            row=6, column=1, sticky='w', padx=6)
+
+        _sms_status_var = tk.StringVar(value='')
+        ttk.Label(_sms_fields_frame, textvariable=_sms_status_var,
+                  font=('Segoe UI', 9)).grid(
+            row=7, column=0, columnspan=3, sticky='w', padx=6, pady=(4, 0))
+
+        # ── Helper: collapse/expand the whole credential block ───────────────
+        # Hides the entire frame (not just disabling inputs) so the Settings
+        # tab stays compact for users who don't want paid Twilio messaging.
+        def _toggle_sms_fields():
+            if _sms_enabled_var.get():
+                _sms_fields_frame.grid()
+            else:
+                _sms_fields_frame.grid_remove()
+
+        # ── Load / Save helpers ───────────────────────────────────────────────
+        def _load_sms_cfg():
+            import json as _j
+            p = Path.home() / '.ai-prowler' / 'config.json'
+            if not p.exists():
+                return
+            try:
+                d = _j.loads(p.read_text(encoding='utf-8')) or {}
+                sid   = d.get('twilio_account_sid', '')
+                token = d.get('twilio_auth_token', '')
+                frm   = d.get('twilio_from_number', '')
+                sig   = d.get('sms_callback_signature', '')
+                if sid or token or frm:
+                    _sms_enabled_var.set(True)
+                    _sms_sid_var.set(sid)
+                    _sms_token_var.set(token)
+                    _sms_from_var.set(frm)
+                    _sms_sig_var.set(sig)
+                    _sms_status_var.set('Loaded existing Twilio config.')
+            except Exception as _e:
+                _sms_status_var.set(f'Could not load config: {_e}')
+            _toggle_sms_fields()
+
+        def _save_sms_cfg():
+            import json as _j
+            sid   = _sms_sid_var.get().strip()
+            token = _sms_token_var.get().strip()
+            frm   = _sms_from_var.get().strip()
+            if _sms_enabled_var.get():
+                if not sid or not token or not frm:
+                    _sms_status_var.set('All three fields are required to enable SMS.')
                     return
-                try:
-                    d = _j.loads(p.read_text(encoding='utf-8')) or {}
-                    _smtp_host_var.set(d.get('smtp_host', ''))
-                    _smtp_port_var.set(str(d.get('smtp_port', 587)))
-                    _smtp_user_var.set(d.get('username', ''))
-                    _smtp_from_var.set(d.get('from_name', 'AI-Prowler'))
-                    pw = ''
-                    if '_password_b64' in d:
-                        try:
-                            pw = _b.b64decode(d['_password_b64']).decode()
-                        except Exception:
-                            pass
-                    _smtp_pass_var.set(pw)
-                    _email_cfg_status.set('Loaded existing config.')
-                except Exception as _e:
-                    _email_cfg_status.set(f'Could not load config: {_e}')
-
-            def _save_smtp_cfg():
-                import json as _j, base64 as _b
-                host  = _smtp_host_var.get().strip()
-                port_s = _smtp_port_var.get().strip()
-                user  = _smtp_user_var.get().strip()
-                pw    = _smtp_pass_var.get()
-                if not host or not user:
-                    _email_cfg_status.set('SMTP host and username are required.')
+                if not sid.startswith('AC'):
+                    _sms_status_var.set('Account SID must start with "AC".')
                     return
-                try:
-                    port = int(port_s)
-                except ValueError:
-                    _email_cfg_status.set('Port must be a number.')
-                    return
-                cfg = {
-                    'smtp_host':     host,
-                    'smtp_port':     port,
-                    'username':      user,
-                    '_password_b64': _b.b64encode(pw.encode()).decode(),
-                    'from_name':     _smtp_from_var.get().strip() or 'AI-Prowler',
-                    'use_tls':       True,
-                }
-                p = Path.home() / '.ai-prowler' / 'email_config.json'
-                p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_text(_j.dumps(cfg, indent=2), encoding='utf-8')
-                _email_cfg_status.set('Email config saved.')
+                if not frm.startswith('+'):
+                    frm = '+1' + frm.replace('-', '').replace(' ', '')
+                    _sms_from_var.set(frm)
 
-            def _test_smtp_cfg():
-                _email_cfg_status.set('Sending test email...')
-                scrollable_frame.update_idletasks()
-                ok, msg = self._admin_send_email_direct(
-                    _smtp_user_var.get().strip(),
-                    'AI-Prowler SMTP Test',
-                    'This is a test email from AI-Prowler. '
-                    'If you received this, SMTP is configured correctly.')
-                _email_cfg_status.set(
-                    'Test email sent.' if ok else f'Test failed: {msg}')
+            p = Path.home() / '.ai-prowler' / 'config.json'
+            p.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                existing = _j.loads(p.read_text(encoding='utf-8')) if p.exists() else {}
+            except Exception:
+                existing = {}
 
-            _load_smtp_cfg()
-            _smtp_btn_row = ttk.Frame(email_cfg_frame)
-            _smtp_btn_row.grid(row=6, column=0, columnspan=3,
-                               pady=(8, 0), sticky='w', padx=6)
-            ttk.Button(_smtp_btn_row, text='\U0001f4be Save Config',
-                       command=_save_smtp_cfg).pack(side='left', padx=(0, 6))
-            ttk.Button(_smtp_btn_row, text='\U0001f4e7 Test Connection',
-                       command=_test_smtp_cfg).pack(side='left')
+            if _sms_enabled_var.get():
+                existing['twilio_account_sid']       = sid
+                existing['twilio_auth_token']        = token
+                existing['twilio_from_number']       = frm
+                existing['twilio_sms_enabled']       = True
+                existing['sms_callback_signature']   = _sms_sig_var.get().strip()
+            else:
+                for k in ('twilio_account_sid', 'twilio_auth_token',
+                          'twilio_from_number', 'twilio_sms_enabled',
+                          'sms_callback_signature'):
+                    existing.pop(k, None)
+
+            p.write_text(_j.dumps(existing, indent=2), encoding='utf-8')
+            _sms_status_var.set(
+                'SMS config saved.' if _sms_enabled_var.get() else 'SMS config cleared.')
+
+        def _test_sms_cfg():
+            import requests as _req
+            sid   = _sms_sid_var.get().strip()
+            token = _sms_token_var.get().strip()
+            frm   = _sms_from_var.get().strip()
+            to    = _sms_test_to_var.get().strip()
+            if not (sid and token and frm and to):
+                _sms_status_var.set('Fill in all fields + test recipient before testing.')
+                return
+            if not to.startswith('+'):
+                to = '+1' + to.replace('-', '').replace(' ', '')
+            _sms_status_var.set('Sending test SMS…')
+            sms_frame.update_idletasks()
+            try:
+                resp = _req.post(
+                    f'https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json',
+                    auth=(sid, token),
+                    data={'From': frm, 'To': to,
+                          'Body': 'AI-Prowler SMS test — if you got this, Twilio is configured correctly!'},
+                    timeout=15,
+                )
+                if resp.status_code in (200, 201):
+                    _sms_status_var.set(
+                        f'✅ Test message sent!  SID: {resp.json().get("sid", "")}')
+                else:
+                    _sms_status_var.set(
+                        f'❌ Twilio error {resp.status_code}: '
+                        f'{resp.json().get("message", resp.text[:120])}')
+            except Exception as _e:
+                _sms_status_var.set(f'❌ Request failed: {_e}')
+
+        _load_sms_cfg()
+
+        def _clear_sms_cfg():
+            """Explicitly wipe all Twilio keys from config.json, regardless of
+            the checkbox state. This is the reliable way to remove saved
+            credentials — unlike unchecking the box, which only clears them
+            if 'Save Config' is clicked afterward."""
+            if not messagebox.askyesno(
+                    "Clear Twilio Settings",
+                    "Remove all saved Twilio credentials from config.json?\n\n"
+                    "This cannot be undone — you'll need to re-enter them\n"
+                    "if you want to use paid Twilio messaging again."):
+                return
+            p = Path.home() / '.ai-prowler' / 'config.json'
+            try:
+                import json as _j
+                existing = {}
+                if p.exists():
+                    existing = _j.loads(p.read_text(encoding='utf-8'))
+                for k in ('twilio_account_sid', 'twilio_auth_token',
+                          'twilio_from_number', 'twilio_sms_enabled',
+                          'sms_callback_signature'):
+                    existing.pop(k, None)
+                p.write_text(_j.dumps(existing, indent=2), encoding='utf-8')
+            except Exception as _e:
+                _sms_status_var.set(f'❌ Could not clear: {_e}')
+                return
+            _sms_sid_var.set('')
+            _sms_token_var.set('')
+            _sms_from_var.set('')
+            _sms_test_to_var.set('')
+            _sms_sig_var.set('')
+            _sms_enabled_var.set(False)
+            _toggle_sms_fields()
+            _sms_status_var.set('✅ Twilio settings cleared from config.json.')
+
+        # ── Button row ────────────────────────────────────────────────────────
+        # Lives inside _sms_fields_frame so it collapses along with the rest
+        # of the Twilio block when the feature is disabled.
+        _sms_btn_row = ttk.Frame(_sms_fields_frame)
+        _sms_btn_row.grid(row=7, column=0, columnspan=3,
+                          pady=(8, 0), sticky='w', padx=6)
+        ttk.Button(_sms_btn_row, text='\U0001f4be Save Config',
+                   command=_save_sms_cfg).pack(side='left', padx=(0, 6))
+        ttk.Button(_sms_btn_row, text='\U0001f4f1 Send Test SMS',
+                   command=_test_sms_cfg).pack(side='left', padx=(0, 6))
+        ttk.Button(_sms_btn_row, text='\U0001f5d1\ufe0f Clear Twilio Settings',
+                   command=_clear_sms_cfg).pack(side='left')
 
 
         # ── Query Output ──────────────────────────────────────────────────────
@@ -6781,31 +7212,6 @@ or from the Help menu."""
         # are SAFE — AI-Prowler restarts itself and reconnects the tunnel
         # automatically, so the only thing the operator has to worry about
         # is sleep, not reboots.
-        keep_running = ttk.Frame(remote_frame)
-        keep_running.pack(fill='x', pady=(0, 8))
-        ttk.Label(keep_running, text="💡 Keep It Running",
-                  font=('Arial', 9, 'bold'),
-                  foreground='#1f5fa1').pack(anchor='w')
-        ttk.Label(keep_running, justify='left', font=('Arial', 9),
-                  foreground='gray',
-                  wraplength=520,
-                  text=(
-                      "Sleep mode disconnects the MCP server — mobile Claude will "
-                      "stop responding until you wake the laptop AND restart the "
-                      "server via Claude Desktop → Settings → Developer → MCP Servers.\n"
-                      "\n"
-                      "Recommended: set Windows Power Plan to ‘Never sleep’ while "
-                      "plugged in. Then you can close the lid and walk away — "
-                      "AI-Prowler stays online for mobile use.\n"
-                      "\n"
-                      "Good news: Windows Update auto-reboots are SAFE. If "
-                      "AI-Prowler was running before the reboot, Windows re-launches "
-                      "it automatically and the tunnel reconnects on its own — no "
-                      "operator action needed."
-                  )).pack(anchor='w', pady=(2, 4))
-
-        ttk.Separator(remote_frame, orient='horizontal').pack(fill='x', pady=(0, 8))
-
         # ── Detect mode once so the two sections below can gate on it ─────────
         _settings_is_server_mode = self._is_business_server_mode()
 
@@ -7796,7 +8202,122 @@ or from the Help menu."""
         ttk.Button(http_btn_row, text="▶ Start HTTP Server",
                    command=_start_http_server).pack(side='left', padx=(0, 6))
         ttk.Button(http_btn_row, text="■ Stop",
-                   command=_stop_http_server).pack(side='left')
+                   command=_stop_http_server).pack(side='left', padx=(0, 6))
+
+        def _force_kill_port():
+            """Kill any process holding the configured HTTP port — useful when
+            a crashed or interrupted server run leaves a zombie process on port
+            8000 that prevents a clean restart.
+
+            Priority 1: if this GUI session has a tracked subprocess for the
+            HTTP server (self._http_server_proc), kill that PID directly —
+            no netstat needed at all. This is the common case and is instant.
+
+            Priority 2 (fallback): if no tracked subprocess (e.g. a previous
+            GUI session was closed without stopping the server, or it was
+            started outside the GUI), fall back to netstat to find the PID.
+            netstat -ano can be slow while a server with a Cloudflare Tunnel
+            or many open connections is running, so this path has a longer
+            timeout and a clear message if it still doesn't return in time.
+            """
+            port_str = _http_port_var.get().strip()
+            try:
+                port = int(port_str)
+            except ValueError:
+                messagebox.showerror("Bad Port", f"Port must be a number, got: {port_str}")
+                return
+
+            pid = None
+            via_tracked_proc = False
+
+            # ── Priority 1: use the PID we already know about ────────────────────
+            if (self._http_server_proc is not None
+                    and self._http_server_proc.poll() is None):
+                pid = self._http_server_proc.pid
+                via_tracked_proc = True
+
+            # ── Priority 2: netstat fallback (only if PID isn't already known) ───
+            if pid is None:
+                try:
+                    result = subprocess.run(
+                        f'netstat -ano | findstr ":{port} "',
+                        shell=True, capture_output=True, text=True, timeout=20
+                    )
+                    for line in result.stdout.splitlines():
+                        if 'LISTENING' in line:
+                            parts = line.split()
+                            if parts:
+                                try:
+                                    pid = int(parts[-1])
+                                    break
+                                except ValueError:
+                                    pass
+                except subprocess.TimeoutExpired:
+                    messagebox.showerror(
+                        "netstat Timed Out",
+                        f"netstat did not respond within 20 seconds.\n\n"
+                        f"This can happen while a server with a Cloudflare Tunnel\n"
+                        f"or many open connections is running.\n\n"
+                        f"Try manually in an Administrator command prompt:\n\n"
+                        f"  netstat -ano | findstr :{port}\n"
+                        f"  taskkill /PID <pid> /F")
+                    return
+                except Exception as _ne:
+                    messagebox.showerror("netstat Error", str(_ne))
+                    return
+
+            if pid is None:
+                # Double-check with a socket probe
+                import socket as _sock
+                with _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM) as _s:
+                    _s.settimeout(1)
+                    in_use = _s.connect_ex(('127.0.0.1', port)) == 0
+                if in_use:
+                    messagebox.showwarning(
+                        "Port In Use",
+                        f"Port {port} is in use but the PID could not be identified.\n\n"
+                        f"Run this in an Administrator command prompt:\n"
+                        f"  netstat -ano | findstr :{port}\n"
+                        f"  taskkill /PID <pid> /F")
+                else:
+                    messagebox.showinfo("Port Free", f"Port {port} is not in use — nothing to kill.")
+                return
+
+            source_note = ("tracked HTTP server process" if via_tracked_proc
+                            else "found via netstat")
+            if not messagebox.askyesno(
+                    "Force Kill Port",
+                    f"Kill process PID {pid} holding port {port}?\n"
+                    f"({source_note})\n\n"
+                    f"Use this when a crashed server is blocking a restart.\n"
+                    + ("" if via_tracked_proc else
+                       "This requires Administrator privileges.")):
+                return
+
+            try:
+                result = subprocess.run(
+                    ['taskkill', '/PID', str(pid), '/F'],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0:
+                    _http_status_var.set(f"⬤ Killed PID {pid} — port {port} free")
+                    _http_status_lbl.configure(foreground='#1a7a1a')
+                    messagebox.showinfo(
+                        "Process Killed",
+                        f"✅ PID {pid} terminated — port {port} is now free.\n\n"
+                        f"You can now click ▶ Start HTTP Server.")
+                else:
+                    err = result.stderr.strip() or result.stdout.strip()
+                    messagebox.showerror(
+                        "Kill Failed",
+                        f"Could not kill PID {pid}.\n\n"
+                        f"Error: {err}\n\n"
+                        f"Try running AI-Prowler as Administrator.")
+            except Exception as _ke:
+                messagebox.showerror("Kill Error", str(_ke))
+
+        ttk.Button(http_btn_row, text="🔨 Force Kill Port",
+                   command=_force_kill_port).pack(side='left')
 
         ttk.Separator(remote_frame, orient='horizontal').pack(fill='x', pady=(0, 8))
 
@@ -8170,7 +8691,298 @@ or from the Help menu."""
         ttk.Button(tun_btn_row, text="■ Stop Tunnel",
                    command=_stop_tunnel).pack(side='left')
 
-        # ── Claude Mobile Config snippet ───────────────────────────────────────
+        # ── Keep It Running — power/sleep help panel ───────────────────────────
+        kir_frame = ttk.LabelFrame(remote_frame,
+                                   text=" 💡 Keep It Running ",
+                                   padding=(8, 4))
+        kir_frame.pack(fill='x', pady=(10, 6))
+
+        ttk.Label(kir_frame, foreground='gray',
+                  text=("Sleep mode disconnects the MCP server \u2014 mobile Claude will\n"
+                        "stop responding until you wake the laptop AND restart the server\n"
+                        "via Claude Desktop \u2192 Settings \u2192 Developer \u2192 MCP Servers.")
+                  ).pack(anchor='w')
+
+        ttk.Label(kir_frame, foreground='gray',
+                  text=("\nRecommended: set Windows Power Plan to \u2018Never sleep\u2019 while\n"
+                        "plugged in. Then you can close the lid and walk away \u2014\n"
+                        "AI-Prowler stays online for mobile use.")
+                  ).pack(anchor='w')
+
+        # ── Helper functions defined first so buttons can reference them ───────
+        def _show_keep_running_help():
+            dlg = tk.Toplevel(self.root)
+            dlg.title("Keep AI-Prowler Running \u2014 Power Settings Guide")
+            dlg.resizable(False, False)
+            dlg.grab_set()
+
+            outer = ttk.Frame(dlg, padding=16)
+            outer.pack(fill='both', expand=True)
+
+            txt = tk.Text(outer, wrap='word', width=62, height=34,
+                          font=('Arial', 9), relief='flat',
+                          background=dlg.cget('background'), cursor='arrow')
+            sb  = ttk.Scrollbar(outer, orient='vertical', command=txt.yview)
+            txt.configure(yscrollcommand=sb.set)
+            sb.pack(side='right', fill='y')
+            txt.pack(side='left', fill='both', expand=True)
+
+            txt.tag_configure('h1',   font=('Arial', 11, 'bold'), spacing1=10)
+            txt.tag_configure('h2',   font=('Arial', 10, 'bold'), spacing1=8)
+            txt.tag_configure('body', font=('Arial', 9),          lmargin1=8, lmargin2=8)
+            txt.tag_configure('code', font=('Courier', 9),
+                              background='#e8e8e8', lmargin1=20, lmargin2=20)
+            txt.tag_configure('note', font=('Arial', 9, 'italic'), foreground='gray',
+                              lmargin1=8, lmargin2=8)
+
+            def h1(t):  txt.insert('end', t + '\n', 'h1')
+            def h2(t):  txt.insert('end', t + '\n', 'h2')
+            def ln(t):  txt.insert('end', t + '\n', 'body')
+            def cd(t):  txt.insert('end', '  ' + t + '\n', 'code')
+            def nt(t):  txt.insert('end', t + '\n', 'note')
+            def sp():   txt.insert('end', '\n')
+
+            h1("Power Settings \u2014 Keep AI-Prowler Online")
+            nt("Follow these three steps once. AI-Prowler will then stay\n"
+               "online whenever the laptop is plugged in.")
+
+            sp()
+            h2("Step 1 \u2014 Set Sleep to Never (Plugged In)")
+            ln("1.  Start \u2192 Settings \u2192 System \u2192 Power & battery")
+            ln("2.  Click \u2018Screen, sleep, & hibernate timeouts\u2019 to expand it")
+            ln("3.  Under Plugged in, set:")
+            ln("      \u2022  Make my device sleep after  \u2192  Never")
+            ln("      \u2022  Turn my screen off after    \u2192  Never  (or 2 hours)")
+            ln("4.  Scroll down to \u2018Lid, power & sleep button controls\u2019 and expand it")
+            ln("5.  Under Plugged in, set all three dropdowns to Do Nothing:")
+            ln("      \u2022  Pressing the power button will make my PC  \u2192  Do Nothing")
+            ln("      \u2022  Pressing the sleep button will make my PC  \u2192  Do Nothing")
+            ln("      \u2022  Closing the lid will make my PC           \u2192  Do Nothing")
+
+            sp()
+            h2("Step 2 \u2014 Disable Hibernate")
+            ln("Hibernate saves RAM to disk and powers off \u2014 it also kills")
+            ln("the MCP server.  Disable it permanently with one command.")
+            sp()
+            ln("1.  Click Start and type:  cmd")
+            ln("2.  Right-click Command Prompt \u2192 Run as administrator \u2192 Yes")
+            ln("3.  Type this command exactly and press Enter:")
+            cd("powercfg /h off")
+            ln("4.  Close Command Prompt")
+
+            sp()
+            h2("Step 3 \u2014 Prevent Unattended Windows Update Restarts")
+            ln("Windows Update can restart the server mid-day and take it")
+            ln("offline.  Set Active Hours so restarts only happen overnight.")
+            sp()
+            ln("1.  Start \u2192 Settings \u2192 Windows Update \u2192 Advanced options")
+            ln("2.  Click \u2018Adjust active hours\u2019 and set:")
+            ln("      \u2022  Start:  6:00 AM")
+            ln("      \u2022  End:    11:00 PM")
+            ln("3.  Turn ON   \u2018Notify me when a restart is required\u2019")
+            ln("4.  Turn OFF  \u2018Restart as soon as possible when a restart is required\u2019")
+            sp()
+            nt("Windows will now only restart outside your active hours\n"
+               "and will notify you first.")
+
+            sp()
+            h2("Good News \u2014 Windows Update Auto-Reboots Are Safe")
+            ln("If AI-Prowler was running before a reboot, Windows re-launches")
+            ln("it automatically and the tunnel reconnects on its own \u2014 no")
+            ln("operator action needed.")
+
+            txt.configure(state='disabled')
+
+            btn_row = ttk.Frame(outer)
+            btn_row.pack(fill='x', pady=(10, 0))
+
+            def _copy_cmd():
+                dlg.clipboard_clear()
+                dlg.clipboard_append("powercfg /h off")
+                copy_btn.configure(text="Copied!")
+                dlg.after(2000, lambda: copy_btn.configure(text="Copy  powercfg /h off"))
+
+            copy_btn = ttk.Button(btn_row, text="Copy  powercfg /h off",
+                                  command=_copy_cmd)
+            copy_btn.pack(side='left', padx=(0, 8))
+            ttk.Button(btn_row, text="Close",
+                       command=dlg.destroy).pack(side='right')
+
+            dlg.update_idletasks()
+            w, h = dlg.winfo_reqwidth(), dlg.winfo_reqheight()
+            x = self.root.winfo_x() + (self.root.winfo_width()  - w) // 2
+            y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
+            dlg.geometry(f"+{x}+{y}")
+
+        def _apply_power_settings():
+            """Run all power settings commands elevated via UAC."""
+            import tempfile, os
+            script = (
+                "@echo off\n"
+                "net session >nul 2>&1\n"
+                "if %errorlevel% neq 0 (\n"
+                "    echo Must be run as Administrator & pause & exit /b 1\n"
+                ")\n"
+                "echo Applying AI-Prowler power settings...\n"
+                "echo.\n"
+                "echo [1/4] Sleep (plugged in) -- Never...\n"
+                "powercfg /change standby-timeout-ac 0\n"
+                "echo [2/4] Hibernate -- Disabled...\n"
+                "powercfg /h off\n"
+                "echo [3/4] Windows Update active hours -- 6:00 AM to 11:00 PM...\n"
+                "reg add \"HKLM\\SOFTWARE\\Microsoft\\WindowsUpdate\\UX\\Settings\" "
+                    "/v ActiveHoursStart /t REG_DWORD /d 6 /f >nul 2>&1\n"
+                "reg add \"HKLM\\SOFTWARE\\Microsoft\\WindowsUpdate\\UX\\Settings\" "
+                    "/v ActiveHoursEnd /t REG_DWORD /d 23 /f >nul 2>&1\n"
+                "echo [4/4] Auto-restart for updates -- Off...\n"
+                "reg add \"HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU\" "
+                    "/v NoAutoRebootWithLoggedOnUsers /t REG_DWORD /d 1 /f >nul 2>&1\n"
+                "echo.\n"
+                "echo All done! Settings applied:\n"
+                "echo   Sleep (plugged in)       -- Never\n"
+                "echo   Hibernate                -- Disabled\n"
+                "echo   Windows Update hours     -- 6:00 AM to 11:00 PM\n"
+                "echo   Auto-restart for updates -- Off\n"
+                "echo.\n"
+                "echo Click Check Power Settings in AI-Prowler to verify.\n"
+                "echo.\n"
+                "pause\n"
+                "del \"%~f0\"\n"
+            )
+            tmp = tempfile.NamedTemporaryFile(suffix='.bat', mode='w',
+                                              delete=False, encoding='utf-8',
+                                              prefix='aip_power_')
+            tmp.write(script)
+            tmp.close()
+            try:
+                import ctypes
+                ret = ctypes.windll.shell32.ShellExecuteW(
+                    None, "runas", tmp.name, None, None, 1)
+                if ret <= 32:
+                    messagebox.showerror("Power Setup",
+                                         "UAC prompt was cancelled or elevation failed.\n"
+                                         "Run AI-Prowler-Power-Setup.bat as administrator manually.")
+                    os.unlink(tmp.name)
+                else:
+                    self.status_var.set("\u26a1 Power settings script launched \u2014 approve UAC prompt")
+                    self.root.after(4000, lambda: self.status_var.set("Ready"))
+            except Exception as e:
+                messagebox.showerror("Power Setup Error", str(e))
+                try:
+                    os.unlink(tmp.name)
+                except Exception:
+                    pass
+
+        # ── LED status grid ────────────────────────────────────────────────────
+        ttk.Separator(kir_frame, orient='horizontal').pack(fill='x', pady=(8, 6))
+
+        led_grid = ttk.Frame(kir_frame)
+        led_grid.pack(fill='x', anchor='w')
+
+        LED_OK  = ('\u2b24', '#27ae60')
+        LED_BAD = ('\u2b24', '#cc0000')
+        LED_UNK = ('\u2b24', '#aaaaaa')
+
+        _kir_checks = [
+            "Sleep (plugged in)       \u2192 Never",
+            "Hibernate                \u2192 Disabled",
+            "Update active hours      \u2192 before 6 AM & after 11 PM",
+            "Auto-restart for updates \u2192 Off",
+        ]
+        _led_vars    = []
+        _detail_vars = []
+        for i, label in enumerate(_kir_checks):
+            lv = tk.StringVar(value=LED_UNK[0])
+            dv = tk.StringVar(value="")
+            row = ttk.Frame(led_grid)
+            row.pack(fill='x', pady=1)
+            led_lbl = tk.Label(row, textvariable=lv, font=('Arial', 9),
+                               fg=LED_UNK[1], width=2)
+            led_lbl.pack(side='left')
+            ttk.Label(row, text=label, font=('Arial', 9), width=42,
+                      anchor='w').pack(side='left')
+            ttk.Label(row, textvariable=dv, font=('Arial', 8),
+                      foreground='gray').pack(side='left')
+            _led_vars.append((lv, led_lbl))
+            _detail_vars.append(dv)
+
+        def _set_led(idx, ok, detail=""):
+            char, color = (LED_OK if ok else LED_BAD)
+            lv, lbl = _led_vars[idx]
+            lv.set(char)
+            lbl.configure(fg=color)
+            _detail_vars[idx].set(detail)
+
+        def _check_power_settings():
+            import subprocess, winreg
+            CREATE_NO_WIN = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+
+            def _powercfg_query(sub, setting):
+                try:
+                    r = subprocess.run(
+                        ['powercfg', '/query', 'SCHEME_CURRENT', sub, setting],
+                        capture_output=True, text=True, creationflags=CREATE_NO_WIN)
+                    for line in r.stdout.splitlines():
+                        if 'AC Power Setting Index' in line:
+                            return int(line.split(':')[-1].strip(), 16)
+                except Exception:
+                    pass
+                return None
+
+            def _reg_dword(hive, path, name, default=None):
+                try:
+                    with winreg.OpenKey(hive, path) as k:
+                        val, _ = winreg.QueryValueEx(k, name)
+                        return int(val)
+                except Exception:
+                    return default
+
+            # LED 0: Sleep (plugged in) — must be Never (0)
+            v = _powercfg_query('SUB_SLEEP', 'STANDBYIDLE')
+            _set_led(0, v == 0, f"({v//60} min)" if v and v > 0 else "")
+
+            # LED 1: Hibernate — disabled when hiberfil.sys absent
+            import os as _os
+            hib_off = not _os.path.exists(r'C:\hiberfil.sys')
+            _set_led(1, hib_off, "(hiberfil.sys present)" if not hib_off else "")
+
+            # LED 2: Active hours — green if start <= 6 AND end >= 23
+            WU_PATH = r'SOFTWARE\Microsoft\WindowsUpdate\UX\Settings'
+            ah_start = _reg_dword(winreg.HKEY_LOCAL_MACHINE, WU_PATH, 'ActiveHoursStart')
+            ah_end   = _reg_dword(winreg.HKEY_LOCAL_MACHINE, WU_PATH, 'ActiveHoursEnd')
+            if ah_start is not None and ah_end is not None:
+                ah_ok = (ah_start <= 6 and ah_end >= 23)
+                _set_led(2, ah_ok, f"({ah_start}:00\u2013{ah_end}:00)")
+            else:
+                _set_led(2, False, "(not set)")
+
+            # LED 3: Auto-restart off
+            AU_PATH = r'SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
+            no_reboot = _reg_dword(winreg.HKEY_LOCAL_MACHINE, AU_PATH,
+                                   'NoAutoRebootWithLoggedOnUsers')
+            _set_led(3, no_reboot == 1, "(not set)" if no_reboot is None else "")
+
+        def _check_power_bg():
+            threading.Thread(target=_check_power_settings, daemon=True).start()
+
+        # ── Button row ─────────────────────────────────────────────────────────
+        ttk.Separator(kir_frame, orient='horizontal').pack(fill='x', pady=(8, 6))
+        kir_btn_row = ttk.Frame(kir_frame)
+        kir_btn_row.pack(fill='x', anchor='w')
+
+        ttk.Button(kir_btn_row, text="\U0001f50d Check Power Settings",
+                   command=_check_power_bg).pack(side='left', padx=(0, 8))
+        ttk.Button(kir_btn_row, text="\U0001f4cb Power Settings Guide",
+                   command=_show_keep_running_help).pack(side='left', padx=(0, 8))
+        ttk.Button(kir_btn_row, text="\u26a1 Apply Power Settings Now",
+                   command=_apply_power_settings).pack(side='left')
+
+        # Auto-check on startup (after 2s so GUI is fully drawn)
+        self.root.after(2000, _check_power_bg)
+
+
+
+
         # Hidden when DEBUG_EN is False (most users don't paste config snippets
         # by hand). Widgets are still constructed so _refresh_snippet and
         # _copy_snippet bindings stay live, but they're parented to an unpacked
@@ -8416,10 +9228,11 @@ or from the Help menu."""
 
         ttk.Label(banner, justify='left', font=('Arial', 9),
                   text=(
-                      "7 MCP tools that let Claude act as your field-service assistant (plus check_tools_status for a quick status report).\n"
+                      "12 MCP tools that let Claude act as your field-service assistant (plus check_tools_status for a quick status report).\n"
                       "Ask Claude in a conversation — no forms to fill out, no menus to navigate.\n\n"
                       "Free tools (weather, routing, maps) work immediately — no setup.\n"
-                      "Spreadsheet tools use the default path from Settings if filepath is omitted."
+                      "Spreadsheet tools use the default path from Settings if filepath is omitted.\n"
+                        "Contractor tools (invoicing, SMS, time logging, AR aging) require Twilio/SMTP — see Settings."
                   )).pack(anchor='w')
 
         # Claude prompt examples
@@ -8431,6 +9244,10 @@ or from the Help menu."""
             ("🌤  Weather",      '"What is the weather forecast for New Smyrna Beach for the next 3 days?"'),
             ("🗺  Route",        '"Optimize my route for these 6 jobs today and give me a Google Maps link."'),
             ("📊  Spreadsheet",  '"Mark the Miller Windows job complete in my jobs.xlsx and record invoice #1048."'),
+            ("🧾  Invoice",      '"Email invoice #1048 to the Miller account."'),
+            ("⏱  Time log",     '"Clock me in on job J-205."'),
+            ("📱  SMS",          '"Text the Johnson job that I am on my way."'),
+            ("💰  AR aging",     '"Show me my accounts receivable aging report."'),
             ("🔍  Status check", '"Call check_tools_status() and tell me what is ready to use."'),
         ]
         for icon_label, prompt in examples:
@@ -8622,6 +9439,93 @@ or from the Help menu."""
         ttk.Button(route_btn_row, text="🍎  Open Apple Maps",
                    command=lambda: webbrowser.open("https://maps.apple.com")
                    ).pack(side='left')
+
+        ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
+
+        # ── 5. CONTRACTOR WORKFLOW TOOLS ──────────────────────────────────────
+        cw_outer = ttk.LabelFrame(f,
+                                  text="🧰 Contractor Workflow Tools — Require Setup (SMTP / Twilio)",
+                                  padding=(12, 8))
+        cw_outer.pack(fill='x', padx=16, pady=(0, 6))
+
+        ttk.Label(cw_outer, justify='left', font=('Arial', 8), foreground='gray',
+                  text=(
+                      "Five tools that automate the admin side of running a service business.\n"
+                      "email_invoice and schedule_next_recurring_job require SMTP email (configure in Settings → Email).\n"
+                      "send_sms requires a Twilio account (configure in Settings → Small Business → SMS)."
+                  )).pack(anchor='w', pady=(0, 8))
+
+        contractor_tools = [
+            (
+                "email_invoice(invoice_id, to, filepath)",
+                "Reads the Invoices sheet in your job tracker, builds a branded HTML invoice,\n"
+                "and emails it directly to the customer — no copy-paste, no manual attachment.\n"
+                'Example: "Email invoice #1048 to the Miller account."',
+                "Requires SMTP email configured in Settings",
+            ),
+            (
+                "send_sms(to, message)",
+                "Sends an SMS text message to a customer or crew member via Twilio.\n"
+                "Perfect for on-my-way notifications, reminders, and appointment confirmations.\n"
+                'Example: "Text the Johnson job that I am 20 minutes out."',
+                "Requires Twilio account SID, auth token, and From number in Settings",
+            ),
+            (
+                "schedule_next_recurring_job(job_id, filepath)",
+                "After completing a recurring job, auto-creates the next scheduled instance\n"
+                "based on the customer's service frequency (Weekly / Bi-weekly / Monthly / Quarterly).\n"
+                'Example: "Schedule the next recurring visit for the Smith account."',
+                "Uses the default spreadsheet path — set in Settings → Small Business",
+            ),
+            (
+                "log_time_entry(job_id, action, filepath)",
+                "Clocks you in or out on a specific job. Records timestamps to the TimeLog sheet\n"
+                "and writes the Actual Duration back to the Jobs_Schedule row when you clock out.\n"
+                'Example: "Clock me in on job J-205." / "Clock me out of J-205."',
+                "Uses the default spreadsheet path — set in Settings → Small Business",
+            ),
+            (
+                "get_ar_aging_report(filepath, as_of_date)",
+                "Generates an Accounts Receivable aging report from your Invoices sheet,\n"
+                "bucketed into Current / 1-30 / 31-60 / 61-90 / 90+ days outstanding.\n"
+                'Example: "Show me my AR aging report." / "Who owes me money past 30 days?"',
+                "Uses the default spreadsheet path — set in Settings → Small Business",
+            ),
+        ]
+
+        for tool_name, description, requirement in contractor_tools:
+            tool_row = ttk.Frame(cw_outer)
+            tool_row.pack(fill='x', pady=(0, 10))
+            ttk.Label(tool_row, text=f"🔧 {tool_name}", font=('Courier New', 9, 'bold'),
+                      foreground='#7c3400').pack(anchor='w')
+            ttk.Label(tool_row, text=description, font=('Arial', 8), justify='left',
+                      foreground='#333333').pack(anchor='w', padx=(20, 0))
+            ttk.Label(tool_row, text=f"  ⚙ {requirement}", font=('Arial', 8),
+                      foreground='#888888').pack(anchor='w', padx=(20, 0))
+
+        # Quick-link to Settings for setup
+        cw_btn_row = ttk.Frame(cw_outer)
+        cw_btn_row.pack(fill='x', pady=(4, 0))
+        ttk.Button(cw_btn_row, text="⚙  Open Settings (to configure Email / SMS)",
+                   command=lambda: self.notebook.select(self._TAB_INDEX_SETTINGS)
+                   ).pack(side='left')
+
+        ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
+
+        # ── 6. READ SPREADSHEET TOOL ──────────────────────────────────────────
+        rs_outer = ttk.LabelFrame(f,
+                                  text="📖 Read Spreadsheet — read_job_spreadsheet()",
+                                  padding=(12, 8))
+        rs_outer.pack(fill='x', padx=16, pady=(0, 10))
+        ttk.Label(rs_outer, justify='left', font=('Arial', 8), foreground='#333333',
+                  text=(
+                      "read_job_spreadsheet(filepath, sheet, date, max_rows)\n"
+                      "  • Reads any sheet in your job tracker — Jobs_Schedule, Customers, Invoices, etc.\n"
+                      "  • Supports date filtering: specify a date to see only that day's jobs.\n"
+                      "  • Returns structured data Claude can reason over and summarise.\n\n"
+                      'Example: "What jobs do I have scheduled for tomorrow?"\n'
+                      'Example: "Show me all open invoices from the Invoices sheet."'
+                  )).pack(anchor='w')
 
     # ══════════════════════════════════════════════════════════════════════════
     # 🧠  SELF-LEARNING TAB
@@ -10645,7 +11549,7 @@ or from the Help menu."""
 
         ttk.Separator(frm, orient='horizontal').pack(fill='x', pady=(12, 4))
         ttk.Button(frm,
-                   text='Forgot your token?  Send recovery email / SMS',
+                   text='Forgot your token?  Send recovery email',
                    command=lambda: [dlg.destroy(),
                                     self._admin_recovery_dialog()]
                    ).pack(anchor='w', pady=(0, 8))
@@ -10671,20 +11575,8 @@ or from the Help menu."""
 
 
     # ── Token Recovery System ─────────────────────────────────────────────────
-    # Email / SMS self-service recovery for locked-out admins and employees
+    # Email-only self-service recovery for locked-out admins and employees
     # who forget their bearer token.
-
-    # Carrier email-to-SMS gateways (US carriers)
-    _CARRIER_GATEWAYS = {
-        "att":         "txt.att.net",
-        "verizon":     "vtext.com",
-        "t-mobile":    "tmomail.net",
-        "cricket":     "sms.cricketwireless.net",
-        "boost":       "sms.myboostmobile.com",
-        "us cellular": "email.uscc.net",
-        "metro pcs":   "mymetropcs.com",
-        "sprint":      "messaging.sprintpcs.com",
-    }
 
     def _admin_email_configured(self):
         """Return True if email_config.json exists and has smtp_host + username."""
@@ -10855,9 +11747,6 @@ or from the Help menu."""
 
         # Channel radio buttons
         channel_var = tk.StringVar(value="")
-        email_rb = ttk.Radiobutton(frm, variable=channel_var, value="email")
-        sms_rb   = ttk.Radiobutton(frm, variable=channel_var, value="sms")
-        manual_rb= ttk.Radiobutton(frm, variable=channel_var, value="manual")
 
         _em_row = ttk.Frame(frm)
         _em_row.pack(fill="x", pady=2)
@@ -10865,13 +11754,6 @@ or from the Help menu."""
         email_rb.pack(side="left")
         self._rcv_email_lbl = ttk.Label(_em_row, text="")
         self._rcv_email_lbl.pack(side="left", padx=4)
-
-        _sms_row = ttk.Frame(frm)
-        _sms_row.pack(fill="x", pady=2)
-        sms_rb = ttk.Radiobutton(_sms_row, variable=channel_var, value="sms")
-        sms_rb.pack(side="left")
-        self._rcv_sms_lbl = ttk.Label(_sms_row, text="")
-        self._rcv_sms_lbl.pack(side="left", padx=4)
 
         _man_row = ttk.Frame(frm)
         _man_row.pack(fill="x", pady=2)
@@ -10894,19 +11776,11 @@ or from the Help menu."""
             local, domain = e.split("@", 1)
             return local[:2] + "***@" + domain
 
-        def _mask_phone(p):
-            if not p or len(p) < 7:
-                return p or "(no phone)"
-            return p[:3] + "***" + p[-2:]
-
         def _update_labels(*_):
             _k, rec = _selected_record()
             if not rec:
                 return
             em = rec.get("email", "")
-            ph = rec.get("cell_phone", "")
-            ca = rec.get("cell_carrier", "")
-            gw = self._CARRIER_GATEWAYS.get(ca, "")
 
             # Email option
             if em and self._admin_email_configured():
@@ -10921,27 +11795,10 @@ or from the Help menu."""
                 self._rcv_email_lbl.config(
                     text=f"Send email  {reason}", foreground="gray")
 
-            # SMS option
-            if ph and ca and gw and self._admin_email_configured():
-                sms_rb.state(["!disabled"])
-                self._rcv_sms_lbl.config(
-                    text=f"Send SMS to:  {_mask_phone(ph)} "
-                         f"({ca} via {gw})",
-                    foreground="black")
-            else:
-                sms_rb.state(["disabled"])
-                reason = ("(no phone/carrier on record)"
-                          if not (ph and ca)
-                          else "(SMTP not configured)")
-                self._rcv_sms_lbl.config(
-                    text=f"Send SMS  {reason}", foreground="gray")
-
             # Default channel selection
             if channel_var.get() == "":
                 if em and self._admin_email_configured():
                     channel_var.set("email")
-                elif ph and ca and gw and self._admin_email_configured():
-                    channel_var.set("sms")
                 else:
                     channel_var.set("manual")
 
@@ -10978,9 +11835,6 @@ or from the Help menu."""
 
             name = rec.get("name", "Admin")
             em   = rec.get("email", "")
-            ph   = rec.get("cell_phone", "")
-            ca   = rec.get("cell_carrier", "")
-            gw   = self._CARRIER_GATEWAYS.get(ca, "")
 
             subject = "AI-Prowler Admin Access Recovery"
             body = (
@@ -10995,18 +11849,13 @@ or from the Help menu."""
                 f"access to your server machine. Change your token immediately."
             )
 
-            if channel == "email":
-                to = em
-            else:  # sms
-                to = f"{ph}@{gw}"
-
-            status_var.set(f"Sending to {to}...")
+            status_var.set(f"Sending to {em}...")
             dlg.update_idletasks()
-            ok, msg = self._admin_send_email_direct(to, subject, body)
+            ok, msg = self._admin_send_email_direct(em, subject, body)
+
             if ok:
                 status_var.set(
-                    f"Sent! Check your {'email' if channel == 'email' else 'phone'}. "
-                    f"Token expires in 1 hour.")
+                    f"Sent! Check your email. Token expires in 1 hour.")
                 dlg.after(2000, lambda: [dlg.destroy(),
                                          self._admin_do_unlock()])
             else:
@@ -11091,6 +11940,108 @@ or from the Help menu."""
                 f"Could not send email to {em_short}:\n\n{msg}\n\n"
                 "Check SMTP settings in Settings -> Email Configuration.")
 
+    def _admin_send_token_via_sms(self):
+        """Send the selected employee's bearer token to their cell phone via SMS.
+        Requires cell_phone to be set on the user record, and Twilio (paid)
+        configured in Settings → SMS / Text Messaging (Twilio — Paid).
+        Admin action — requires unlock.
+
+        NOTE: the free email-to-SMS gateway approach was removed — carriers
+        are shutting those gateways down industry-wide (AT&T's is already
+        gone, Verizon's is mid-shutdown through 2027). Twilio is now the
+        only SMS path."""
+        from tkinter import messagebox
+        if not self._admin_gate():
+            return
+        tok = self._admin_selected_token()
+        if not tok:
+            messagebox.showinfo("No Selection", "Select a user first.")
+            return
+        data  = self._admin_load_users()
+        users = data.get("users") or {}
+        rec   = users.get(tok)
+        if not isinstance(rec, dict):
+            messagebox.showwarning("Not Found", "User record not found.")
+            return
+        name    = rec.get("name", "the user")
+        phone   = rec.get("cell_phone", "").strip()
+        if not phone:
+            messagebox.showwarning(
+                "No Phone Number",
+                f"{name} does not have a cell phone number on record.\n\n"
+                "Edit the user record to add one, then try again.")
+            return
+
+        import json as _jtw
+        cfg_path = Path.home() / '.ai-prowler' / 'config.json'
+        cfg = {}
+        if cfg_path.exists():
+            try:
+                cfg = _jtw.loads(cfg_path.read_text(encoding='utf-8'))
+            except Exception:
+                cfg = {}
+        tw_sid  = cfg.get('twilio_account_sid',  '').strip()
+        tw_tok  = cfg.get('twilio_auth_token',   '').strip()
+        tw_from = cfg.get('twilio_from_number',  '').strip()
+        tw_on   = bool(cfg.get('twilio_sms_enabled'))
+        if not (tw_on and tw_sid and tw_tok and tw_from):
+            messagebox.showwarning(
+                "Twilio Not Configured",
+                "SMS delivery requires Twilio (paid).\n\n"
+                "Go to Settings → SMS / Text Messaging (Twilio — Paid), "
+                "enable it, and enter your Account SID, Auth Token, and "
+                "From Number, then try again.")
+            return
+
+        import re as _re
+        digits = _re.sub(r'\D', '', phone)
+        if len(digits) == 11 and digits[0] == '1':
+            digits = digits[1:]
+        if len(digits) != 10:
+            messagebox.showerror(
+                "Invalid Phone",
+                f"The phone number on record ({phone!r}) does not look like "
+                "a valid 10-digit US number.  Edit the user record to correct it.")
+            return
+
+        ph_display = f"{'*' * 6}{digits[-4:]}"
+        if not messagebox.askyesno(
+                "Send Token SMS",
+                f"Send {name}'s bearer token to {ph_display} via SMS (Twilio)?\n\n"
+                "The message will contain their full bearer token "
+                "(their Claude.ai connector password). "
+                "Send only to a trusted number."):
+            return
+
+        body = (
+            f"AI-Prowler access token for {name}:\n{tok}\n"
+            f"Paste into Claude.ai Settings > Connectors. Keep private."
+        )
+        try:
+            import requests as _treq
+            resp = _treq.post(
+                f"https://api.twilio.com/2010-04-01/Accounts/{tw_sid}/Messages.json",
+                auth=(tw_sid, tw_tok),
+                data={"From": tw_from, "To": f"+1{digits}", "Body": body},
+                timeout=15,
+            )
+            ok = resp.status_code in (200, 201)
+            msg = '' if ok else (resp.json().get('message', resp.text[:200])
+                                  if resp.text else f"HTTP {resp.status_code}")
+        except Exception as _exc:
+            ok, msg = False, str(_exc)
+
+        if ok:
+            messagebox.showinfo(
+                "Token Sent",
+                f"Bearer token sent via SMS to {ph_display}.\n\n"
+                f"{name} should check their phone and reconnect Claude.ai.")
+        else:
+            messagebox.showerror(
+                "Send Failed",
+                f"Could not send SMS to {ph_display}:\n\n{msg}\n\n"
+                "Check Twilio settings in Settings → SMS (Twilio — Paid).")
+
     def _admin_update_lock_ui(self):
         """Refresh the lock-status label and button states in the Admin tab."""
         if not hasattr(self, "_admin_lock_lbl"):
@@ -11162,7 +12113,7 @@ or from the Help menu."""
         table_frame = ttk.Frame(f)
         table_frame.pack(fill='both', expand=True, pady=(0, 6))
 
-        columns = ('name', 'email', 'role', 'scopes', 'admin', 'private', 'seat', 'status', 'token')
+        columns = ('name', 'email', 'phone', 'carrier', 'role', 'scopes', 'admin', 'private', 'seat', 'status', 'token')
         tree_scroll = ttk.Scrollbar(table_frame, orient='vertical')
         self._admin_tree = ttk.Treeview(table_frame, columns=columns,
                                         show='headings', height=12,
@@ -11171,15 +12122,17 @@ or from the Help menu."""
         tree_scroll.config(command=self._admin_tree.yview)
 
         col_cfg = [
-            ('name',    'Name',          140, 'w'),
-            ('email',   'Email',         180, 'w'),
-            ('role',    'Role',          90,  'center'),
-            ('scopes',  'Scopes',        150, 'w'),
-            ('admin',   'Manages Users', 95,  'center'),
-            ('private', 'Private Coll.', 85,  'center'),
-            ('seat',    'Seat (key)',    110, 'w'),
-            ('status',  'Status',        80,  'center'),
-            ('token',   'Token',        120, 'w'),   # always masked — use name/email to identify
+            ('name',    'Name',          130, 'w'),
+            ('email',   'Email',         160, 'w'),
+            ('phone',   'Cell Phone',     95, 'center'),
+            ('carrier', 'Carrier',        70, 'center'),
+            ('role',    'Role',           80, 'center'),
+            ('scopes',  'Scopes',        130, 'w'),
+            ('admin',   'Manages Users',  90, 'center'),
+            ('private', 'Private Coll.',  80, 'center'),
+            ('seat',    'Seat (key)',     110, 'w'),
+            ('status',  'Status',         70, 'center'),
+            ('token',   'Token',         120, 'w'),   # always masked — use name/email to identify
         ]
         for col_id, heading, width, anchor in col_cfg:
             self._admin_tree.heading(col_id, text=heading)
@@ -11202,6 +12155,8 @@ or from the Help menu."""
                    command=self._admin_remove_user).pack(side='left', padx=4)
         ttk.Button(btn_row, text="📧 Send Token Email",
                    command=self._admin_send_token_to_user).pack(side='left', padx=4)
+        ttk.Button(btn_row, text="📱 Send Token SMS",
+                   command=self._admin_send_token_via_sms).pack(side='left', padx=4)
         ttk.Button(btn_row, text="↻ Refresh",
                    command=self._admin_refresh_table).pack(side='right')
 
@@ -11225,14 +12180,16 @@ or from the Help menu."""
             private = "✓" if u.get("private_collection_enabled") else ""
             seat = self._admin_mask_key(u.get("child_license_key", ""))
             status = u.get("status", "active")
+            phone   = u.get("cell_phone", "")
+            carrier = u.get("cell_carrier", "")
             # v7.0.1 security: never expose any part of the bearer token on screen.
             # The token IS the authentication credential — even a prefix leaks info.
             # Name + email + role already uniquely identify each row.
             tok_display = "●" * 8
             self._admin_tree.insert(
                 '', 'end', iid=token,
-                values=(u.get("name", "(unnamed)"), u.get("email", ""), role, scopes,
-                        admin_flag, private, seat, status, tok_display))
+                values=(u.get("name", "(unnamed)"), u.get("email", ""), phone, carrier,
+                        role, scopes, admin_flag, private, seat, status, tok_display))
         # Seat summary strip
         if hasattr(self, "_admin_seat_label"):
             total = seats.get("seats_total") or len(seats.get("child_keys") or [])
@@ -11348,39 +12305,77 @@ or from the Help menu."""
         ttk.Entry(frm, textvariable=email_var, width=34).grid(row=3, column=1,
                                                                columnspan=2, **pad)
 
-        # ── Row 4: Role ────────────────────────────────────────────────────
-        ttk.Label(frm, text="Role:").grid(row=4, column=0, sticky='e', **pad)
+        # ── Row 4: Cell phone ──────────────────────────────────────────────
+        ttk.Label(frm, text='Cell phone:').grid(row=4, column=0, sticky='e', **pad)
+        phone_var = tk.StringVar(value=ex.get('cell_phone', ''))
+        ttk.Entry(frm, textvariable=phone_var, width=18).grid(
+            row=4, column=1, sticky='w', **pad)
+        ttk.Label(frm, text='10 digits, no dashes  e.g. 3215550199',
+                  font=('Segoe UI', 8)).grid(row=4, column=2, sticky='w')
+
+        # ── Row 5: Carrier ─────────────────────────────────────────────────
+        ttk.Label(frm, text='Carrier:').grid(row=5, column=0, sticky='e', **pad)
+        carrier_var = tk.StringVar(value=ex.get('cell_carrier', ''))
+        _CARRIER_CHOICES = (
+            '',
+            'verizon',           # vtext.com
+            'att',               # txt.att.net
+            't-mobile',          # tmomail.net
+            'sprint',            # messaging.sprintpcs.com
+            'boost',             # sms.myboostmobile.com
+            'cricket',           # sms.cricketwireless.net
+            'metro pcs',         # mymetropcs.com
+            'us cellular',       # email.uscc.net
+            'google fi',         # msg.fi.google.com
+            'mint mobile',       # tmomail.net  (T-Mobile network)
+            'visible',           # vtext.com    (Verizon network)
+            'spectrum mobile',   # vtext.com    (Verizon network)
+            'xfinity mobile',    # vtext.com    (Verizon network)
+            'republic wireless', # text.republicwireless.com
+            'consumer cellular', # mailmymobile.net
+            'straight talk',     # vtext.com    (varies by SIM)
+            'tracfone',          # mmst5.tracfone.com
+        )
+        carrier_cb = ttk.Combobox(
+            frm, textvariable=carrier_var, width=22,
+            values=_CARRIER_CHOICES)
+        carrier_cb.grid(row=5, column=1, sticky='w', **pad)
+        ttk.Label(frm, text='Required for SMS delivery — gateway auto-resolved',
+                  font=('Segoe UI', 8)).grid(row=5, column=2, sticky='w')
+
+        # ── Row 6: Role ────────────────────────────────────────────────────
+        ttk.Label(frm, text="Role:").grid(row=6, column=0, sticky='e', **pad)
         role_var = tk.StringVar(value=ex.get("role", "field_crew"))
         role_cb = ttk.Combobox(frm, textvariable=role_var, state='readonly',
                                width=31, values=("owner", "manager",
                                                  "staff", "field_crew"))
-        role_cb.grid(row=4, column=1, columnspan=2, **pad)
+        role_cb.grid(row=6, column=1, columnspan=2, **pad)
 
-        # ── Row 5: Scopes ──────────────────────────────────────────────────
-        ttk.Label(frm, text="Scopes:").grid(row=5, column=0, sticky='ne', **pad)
+        # ── Row 7: Scopes ──────────────────────────────────────────────────
+        ttk.Label(frm, text="Scopes:").grid(row=7, column=0, sticky='ne', **pad)
         scopes_var = tk.StringVar(value=", ".join(ex.get("scopes") or []))
         scopes_entry = ttk.Entry(frm, textvariable=scopes_var, width=34)
-        scopes_entry.grid(row=5, column=1, columnspan=2, **pad)
+        scopes_entry.grid(row=7, column=1, columnspan=2, **pad)
         ttk.Label(frm, text="(the data groups this user may access — you define "
                             "these, e.g. scope:sales, scope:office, scope:ops)",
-                  font=('Segoe UI', 8)).grid(row=6, column=1, columnspan=2,
+                  font=('Segoe UI', 8)).grid(row=8, column=1, columnspan=2,
                                              sticky='w', padx=8)
 
-        # ── Row 7: Manage users checkbox ───────────────────────────────────
+        # ── Row 9: Manage users checkbox ───────────────────────────────────
         manage_var = tk.BooleanVar(value=bool(ex.get("can_manage_users")))
         manage_cb = ttk.Checkbutton(
             frm, text="Can manage users (delegated admin)", variable=manage_var)
-        manage_cb.grid(row=7, column=1, columnspan=2, sticky='w', **pad)
+        manage_cb.grid(row=9, column=1, columnspan=2, sticky='w', **pad)
 
-        # ── Row 8: Private collection ──────────────────────────────────────
+        # ── Row 10: Private collection ─────────────────────────────────────
         private_var = tk.BooleanVar(
             value=bool(ex.get("private_collection_enabled", True)))
         ttk.Checkbutton(frm, text="Private collection enabled",
-                        variable=private_var).grid(row=8, column=1, columnspan=2,
+                        variable=private_var).grid(row=10, column=1, columnspan=2,
                                                    sticky='w', **pad)
 
-        # ── Row 9: License seat dropdown ───────────────────────────────────
-        ttk.Label(frm, text="License seat:").grid(row=9, column=0, sticky='e', **pad)
+        # ── Row 11: License seat dropdown ──────────────────────────────────
+        ttk.Label(frm, text="License seat:").grid(row=11, column=0, sticky='e', **pad)
         cur_key = ex.get("child_license_key", "")
         avail = list(self._admin_unassigned_keys())
         if cur_key and cur_key not in avail:
@@ -11396,23 +12391,23 @@ or from the Help menu."""
         seat_var = tk.StringVar(value=init_label)
         seat_cb = ttk.Combobox(frm, textvariable=seat_var, state='readonly',
                                width=31, values=list(key_labels.keys()))
-        seat_cb.grid(row=9, column=1, columnspan=2, **pad)
+        seat_cb.grid(row=11, column=1, columnspan=2, **pad)
         if len(key_labels) == 1:
             ttk.Label(frm, text="(no unassigned seats in the pool)",
-                      font=('Segoe UI', 8)).grid(row=10, column=1, columnspan=2,
+                      font=('Segoe UI', 8)).grid(row=12, column=1, columnspan=2,
                                                  sticky='w', padx=8)
 
-        # ── Row 11: Bearer token (Add only) ────────────────────────────────
+        # ── Row 13: Bearer token (Add only) ────────────────────────────────
         is_edit = bool(existing)
         token_var = tk.StringVar(value="")
         if not is_edit:
-            ttk.Label(frm, text="Bearer token:").grid(row=11, column=0, sticky='e', **pad)
+            ttk.Label(frm, text="Bearer token:").grid(row=13, column=0, sticky='e', **pad)
             ttk.Entry(frm, textvariable=token_var, width=34,
-                      font=('Consolas', 10), show='●').grid(row=11, column=1,
+                      font=('Consolas', 10), show='●').grid(row=13, column=1,
                                                             columnspan=2, **pad)
             ttk.Label(frm, text="(optional — leave blank to auto-generate a "
                                 "strong token; typing a weak one is insecure)",
-                      font=('Segoe UI', 8)).grid(row=12, column=1, columnspan=2,
+                      font=('Segoe UI', 8)).grid(row=14, column=1, columnspan=2,
                                                  sticky='w', padx=8)
 
         # can_manage_users rules (spec §6.3)
@@ -11464,24 +12459,6 @@ or from the Help menu."""
         def _cancel():
             result.clear()
             dlg.destroy()
-
-        # ── Row 13-14: Recovery contact ────────────────────────────────────
-        ttk.Label(frm, text='Cell phone:').grid(row=13, column=0, sticky='e', **pad)
-        phone_var = tk.StringVar(value=ex.get('cell_phone', ''))
-        ttk.Entry(frm, textvariable=phone_var, width=18).grid(
-            row=13, column=1, sticky='w', **pad)
-        ttk.Label(frm, text='10 digits no dashes e.g. 3215550199',
-                  font=('Segoe UI', 8)).grid(row=13, column=2, sticky='w')
-
-        ttk.Label(frm, text='Carrier:').grid(row=14, column=0, sticky='e', **pad)
-        carrier_var = tk.StringVar(value=ex.get('cell_carrier', ''))
-        carrier_cb = ttk.Combobox(
-            frm, textvariable=carrier_var, state='readonly', width=18,
-            values=('', 'att', 'verizon', 't-mobile', 'cricket',
-                    'boost', 'us cellular', 'metro pcs', 'sprint'))
-        carrier_cb.grid(row=14, column=1, sticky='w', **pad)
-        ttk.Label(frm, text='Required for SMS recovery',
-                  font=('Segoe UI', 8)).grid(row=14, column=2, sticky='w')
 
         btns = ttk.Frame(frm)
         btns.grid(row=15, column=0, columnspan=3, pady=(10, 0))
@@ -11653,6 +12630,8 @@ or from the Help menu."""
         users[token] = {
             "name": fields["name"],
             "email": fields["email"],
+            "cell_phone": fields.get("cell_phone", ""),
+            "cell_carrier": fields.get("cell_carrier", ""),
             "role": fields["role"],
             "scopes": fields["scopes"],
             "can_manage_users": fields["can_manage_users"],
@@ -15912,6 +16891,7 @@ or from the Help menu."""
             errors = []
             try:
                 clear_database_only(confirm=True)
+                invalidate_chroma_cache()  # force fresh PersistentClient
             except Exception as e:
                 errors.append(f"ChromaDB: {e}")
 
@@ -15953,6 +16933,13 @@ or from the Help menu."""
             # 1. Clear the ChromaDB vector store
             try:
                 clear_database(confirm=True)
+                # Belt-and-suspenders: force a fresh PersistentClient so the
+                # next index operation does not hit the stale Rust segment
+                # manager that still references the now-deleted HNSW files.
+                # clear_database() already calls invalidate_chroma_cache()
+                # internally, but calling it here too is safe (idempotent) and
+                # ensures the GUI path is covered even if the backend changes.
+                invalidate_chroma_cache()
             except Exception as e:
                 errors.append(f"ChromaDB: {e}")
 

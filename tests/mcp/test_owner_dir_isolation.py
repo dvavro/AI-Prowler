@@ -206,6 +206,7 @@ class TestReadAccessMatrix:
 
     @pytest.fixture(autouse=True)
     def _setup(self, tmp_path, monkeypatch, mcp_mod):
+        import gc
         import chromadb as _chromadb
         self.client = _make_chroma(tmp_path)
         self.phys   = _seed_all(self.client, mcp_mod)
@@ -218,6 +219,22 @@ class TestReadAccessMatrix:
         monkeypatch.setattr(mcp_mod, "_load_users", lambda: _USERS_DATA)
 
         self.m = mcp_mod
+
+        yield
+
+        # Explicitly release the ChromaDB client so the Rust segment manager
+        # closes its SQLite/HNSW file handles promptly. Without this, 65 tests
+        # × ~65 leaked kernel handles = 4,000+ accumulated handles, which
+        # exhausts the process limit long before the suite finishes.
+        client = self.client
+        self.client = None
+        try:
+            if hasattr(client, "clear_system_cache"):
+                client.clear_system_cache()
+        except Exception:
+            pass
+        del client
+        gc.collect()
 
     def _cols(self, token):
         return {c.name for c in self.m._scoped_collections_for_ctx(_ctx(self.m, token))}

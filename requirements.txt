@@ -64,9 +64,24 @@ odfpy>=1.4.1
 #   (downloads from https://github.com/UB-Mannheim/tesseract).
 # pypdfium2: renders PDF pages to PIL images (no poppler needed — pure pip).
 # pillow: image I/O used by both pytesseract and pypdfium2.
+# pillow-heif: adds HEIC/HEIF read support to Pillow so iPhone photos (.heic)
+#   can be OCR-indexed without conversion. Registers itself as a Pillow plugin
+#   via pillow_heif.register_heif_opener() — no API changes required.
 pytesseract>=0.3.10
 pypdfium2>=4.0.0
 pillow>=10.0.0
+pillow-heif>=0.13.0
+
+# ── SMS notifications (Action Tool: send_sms) ─────────────────────────────────
+# twilio: official Twilio SDK — sends SMS for on-my-way texts, appointment
+#   reminders, payment reminders, and post-job review requests.
+#   Requires a free Twilio account (https://console.twilio.com).
+#   Note: send_sms uses the requests package (already installed) as a lighter
+#   alternative to the full SDK for simple SMS sends. The SDK is listed here
+#   for users who prefer the higher-level API or need MMS/voice features.
+#   The send_sms tool works with or without the SDK installed — it uses
+#   requests directly via the Twilio REST API.
+# twilio>=8.0.0  # optional — uncomment if you prefer the SDK over raw requests
 
 # ── Email parsing ──────────────────────────────────────────────────────────────
 extract-msg>=0.45.0

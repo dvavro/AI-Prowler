@@ -227,6 +227,20 @@ except ImportError as e:
     print("Please run: pip install pytesseract pypdfium2 pillow")
     sys.exit(1)
 
+# ── HEIC/HEIF support (iPhone photos) — optional ──────────────────────────────
+# pillow-heif registers itself as a Pillow plugin so _PILImage.open() gains the
+# ability to read .heic / .heif files with no other code changes.
+# If the package is missing we set a flag so load_image_ocr() can print a
+# helpful warning instead of a cryptic Pillow "cannot identify image" error.
+try:
+    import pillow_heif as _pillow_heif
+    _pillow_heif.register_heif_opener()
+    _HEIF_AVAILABLE = True
+except ImportError:
+    _HEIF_AVAILABLE = False
+    print("⚠️  pillow-heif not installed — .heic/.heif files will not be indexed.")
+    print("   Run: pip install pillow-heif")
+
 # ── Auto-locate Tesseract binary on Windows ───────────────────────────────────
 # The .iss installer puts Tesseract in the default location below.
 # If it's already on PATH this has no effect; it only matters when PATH wasn't
@@ -756,6 +770,27 @@ _MCP_MODE = False
 _chroma_client_cache = None
 _embedding_func_cache = None
 
+# ── Indexing serialisation lock ───────────────────────────────────────────────
+# Protects against concurrent writes to ChromaDB from two independent sources:
+#   1. MCP tool calls (index_path / reindex_file / reindex_directory) running
+#      inside the uvicorn async event loop (serialized within one process, but
+#      the event loop itself may interleave with OS threads).
+#   2. The file watchdog daemon (file_watchdog.py) which runs its debounce
+#      flush loop in a separate OS thread and calls index_file_list() directly.
+#
+# Without this lock the two can interleave their ChromaDB delete+add sequences,
+# producing duplicate chunks or HNSW index corruption (the same root cause as
+# the v7.0.0 E2E test contamination incident).
+#
+# RLock (reentrant) is used so that code paths that call index_file_list()
+# from within another index_file_list() call (e.g. email archive expansion)
+# don't deadlock on the same thread.
+#
+# The lock does NOT serialise read-only calls (search_documents, get_stats,
+# etc.) — only write operations that modify ChromaDB collections.
+import threading as _threading
+_index_write_lock = _threading.RLock()
+
 # Configuration file location
 CONFIG_FILE = Path.home() / '.rag_config.json'
 
@@ -1144,12 +1179,22 @@ SUPPORTED_EXTENSIONS = {
     # Code / markup
     '.py', '.js', '.ts', '.jsx', '.tsx', '.cs', '.java', '.cpp', '.c', '.h',
     '.hpp', '.go', '.rs', '.rb', '.php', '.swift', '.kt', '.scala', '.r',
+    # Extra code-file aliases that must match every member of
+    # CODE_SCAN_EXTENSIONS below — without these, files with these
+    # extensions are silently never indexed at all (they're filtered out
+    # before load_file() or chunking ever runs).
+    '.cc', '.cxx',          # C++ alternate extensions (siblings of .cpp)
+    '.mjs', '.cjs',         # JS module variants (siblings of .js)
+    '.groovy',              # JVM language (sibling of .java/.kt/.scala)
+    '.pl', '.pm',           # Perl
     '.html', '.htm', '.css', '.scss', '.sass', '.less', '.xml', '.xhtml',
     '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf', '.env',
     # Data / logs
     '.csv', '.tsv', '.log', '.sql',
     # Images — OCR extracts text content via Tesseract
     '.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.gif',
+    '.webp',             # WebP (Android / Google Photos)
+    '.heic', '.heif',    # HEIC/HEIF (iPhone default since iOS 11) — needs pillow-heif
     # Email — single-message files (one email per file)
     '.eml', '.msg', '.emlx',
     # Email — archive/export files (multiple messages, handled by incremental indexer)
@@ -1161,6 +1206,22 @@ SUPPORTED_EXTENSIONS = {
     '.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd',
     '.gitignore', '.dockerignore', '.editorconfig',
 }
+
+# ── Code / script extensions — security-scan only ────────────────────────────
+# Indexed as ONE chunk containing only the first 500 lines, prefixed with
+# [SECURITY SCAN ONLY]. Lets Claude detect malicious scripts without flooding
+# semantic search with code boilerplate. Use grep for code search.
+CODE_SCAN_EXTENSIONS = {
+    '.py', '.rb', '.pl', '.pm', '.r',
+    '.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs',
+    '.java', '.kt', '.scala', '.groovy',
+    '.cs', '.cpp', '.c', '.h', '.hpp', '.cc', '.cxx',
+    '.go', '.rs', '.swift', '.php',
+    '.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd',
+    '.css', '.scss', '.sass', '.less',
+    '.sql',
+}
+CODE_SCAN_LINES = 500
 
 # Extensions to always skip — binary, compiled, executable, media, archive
 SKIP_EXTENSIONS = {
@@ -1178,7 +1239,7 @@ SKIP_EXTENSIONS = {
     '.deb', '.rpm', '.msi', '.pkg', '.dmg', '.iso', '.img',
     # Media — images (common formats moved to SUPPORTED_EXTENSIONS for OCR indexing)
     # Camera RAW and design-tool formats remain skipped — no OCR value.
-    '.webp', '.ico', '.svg', '.psd', '.ai', '.eps', '.raw',
+    '.ico', '.svg', '.psd', '.ai', '.eps', '.raw',  # .webp moved to SUPPORTED_EXTENSIONS
     '.cr2', '.nef', '.orf', '.arw',
     # Media — audio / video
     '.mp3', '.mp4', '.wav', '.flac', '.aac', '.ogg', '.wma',
@@ -1428,7 +1489,7 @@ def _ocr_pdf(filepath: str) -> str:
         n_pages = len(pdf_doc)
         for i in range(n_pages):
             page_img  = _pdf_page_to_pil(pdf_doc, i, dpi=300)
-            page_text = pytesseract.image_to_string(page_img, lang='eng')
+            page_text = pytesseract.image_to_string(page_img, lang='eng+spa')
             if page_text.strip():
                 parts.append(f"--- Page {i + 1} ---\n{page_text.strip()}")
                 if OCR_DEBUG and GUI_MODE:
@@ -1446,14 +1507,27 @@ def _ocr_pdf(filepath: str) -> str:
 
 def load_image_ocr(filepath: str) -> str:
     """
-    Extract text from a standalone image file (.jpg, .png, .tiff, etc.)
-    using Tesseract OCR.  This allows image files to be indexed just like
-    any other document.
+    Extract text from a standalone image file (.jpg, .jpeg, .png, .webp,
+    .heic, .heif, .tiff, etc.) using Tesseract OCR.
+
+    .heic / .heif support requires pillow-heif (pip install pillow-heif).
+    If it is not installed, a warning is printed and an empty string returned
+    rather than crashing — the rest of the index run continues normally.
     """
     global _last_ocr_text, _last_ocr_source
+    ext = os.path.splitext(filepath)[1].lower()
+    if ext in ('.heic', '.heif') and not _HEIF_AVAILABLE:
+        print(f"⚠️  Skipping {os.path.basename(filepath)} — pillow-heif not installed.")
+        print("   Run: pip install pillow-heif")
+        return ""
     try:
         img  = _PILImage.open(filepath)
-        text = pytesseract.image_to_string(img, lang='eng')
+        # HEIC images may arrive in a non-RGB mode (e.g. RGBA, P).
+        # Convert to RGB before handing to Tesseract so colour-space errors
+        # don't abort the OCR.
+        if img.mode not in ('RGB', 'L'):
+            img = img.convert('RGB')
+        text = pytesseract.image_to_string(img, lang='eng+spa')
         result = text.strip()
         # Store for "View Last OCR Output" dialog in Settings
         _last_ocr_text   = result
@@ -1467,32 +1541,65 @@ def load_image_ocr(filepath: str) -> str:
 
 
 def load_pdf(filepath: str) -> str:
-    """Extract text from a PDF file with automatic OCR for scanned documents.
+    """Extract text and structured tables from a PDF file with automatic OCR
+    for scanned documents.
 
     Strategy
     --------
     1. pdfplumber — fast; perfect for PDFs that have a real text layer.
+       Also extracts tables structurally using extract_tables(), rendered as
+       [PDF Table: page N, table M] [Row R]\nColumn: Value blocks so that
+       Claude can answer "what is column X for row Y?" reliably.
     2. If the total extracted text is under OCR_MIN_CHARS the file is an
        image-only PDF (living trust, court docs, old contracts, scanned pages).
        pypdfium2 renders each page at 300 DPI and Tesseract reads the image.
+       (Scanned PDFs have no text layer, so table extraction is skipped.)
 
     Both paths always run — no user toggle required.
     """
     text = ""
+    table_parts = []
     try:
         with pdfplumber.open(filepath) as pdf:
-            for page in pdf.pages:
+            for page_num, page in enumerate(pdf.pages, 1):
                 page_text = page.extract_text()
                 if page_text:
                     text += page_text + "\n"
+
+                # Structural table extraction — mirrors the xlsx/xls approach.
+                # Each row becomes a self-contained "Column: Value" block so
+                # every chunk carries full column context after splitting.
+                try:
+                    tables = page.extract_tables()
+                except Exception:
+                    tables = []
+                for table_idx, table in enumerate(tables, 1):
+                    if not table or len(table) < 2:
+                        continue
+                    headers = [str(h).strip() if h else f"Col{i+1}"
+                               for i, h in enumerate(table[0])]
+                    for row_idx, row in enumerate(table[1:], 1):
+                        cells = [str(c).strip() if c is not None else "" for c in row]
+                        if not any(cells):
+                            continue
+                        block = [f"[PDF Table: page {page_num}, table {table_idx}] [Row {row_idx}]"]
+                        for header, value in zip(headers, cells):
+                            if value:
+                                block.append(f"{header}: {value}")
+                        table_parts.append("\n".join(block))
     except Exception as e:
         print(f"⚠️  Error reading PDF {filepath}: {e}")
+
+    # Append structured table blocks after the prose text.
+    if table_parts:
+        text += "\n\n--- Extracted Tables ---\n\n" + "\n\n".join(table_parts)
 
     # Text layer has sufficient content — OCR not needed.
     if len(text.strip()) >= OCR_MIN_CHARS:
         return text
 
     # Scanned PDF detected — run OCR automatically.
+    # (Scanned PDFs have no text layer so table_parts will always be empty here.)
     fname = os.path.basename(filepath)
     print(f"   🔍 Scanned PDF detected: '{fname}' — running Tesseract OCR…")
     ocr_text = _ocr_pdf(filepath)
@@ -2374,13 +2481,36 @@ def load_file(filepath: str) -> Optional[Dict[str, str]]:
     elif ext in ('.md', '.rst', '.markdown'):
         content = load_md(filepath)
         print(f"   [load_md] {os.path.basename(filepath)} → {len(content) if content else 0} chars")
-    elif ext in ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.gif'):
+    elif ext in ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.gif',
+               '.webp', '.heic', '.heif'):
         content = load_image_ocr(filepath)
     elif ext in ('.mbox', '.rmail', '.babyl', '.mmdf'):
         # Legacy blob fallback — normal GUI path uses index_email_archive() instead
         content = _load_archive_as_blob(filepath)
     elif ext == '.emlx':
         content = load_emlx(filepath)
+    elif ext in CODE_SCAN_EXTENSIONS:
+        # Security scan: read first CODE_SCAN_LINES lines only — stored as one chunk.
+        try:
+            with open(filepath, 'r', encoding='utf-8', errors='replace') as _f:
+                _lines = []
+                for _i, _line in enumerate(_f):
+                    if _i >= CODE_SCAN_LINES:
+                        break
+                    _lines.append(_line)
+            _total_lines = sum(1 for _ in open(
+                filepath, 'r', encoding='utf-8', errors='replace'))
+            _truncated = _total_lines > CODE_SCAN_LINES
+            _header = (
+                f"[SECURITY SCAN ONLY — first {CODE_SCAN_LINES} of "
+                f"{_total_lines} lines]\n"
+                if _truncated else
+                f"[SECURITY SCAN ONLY — {_total_lines} lines]\n"
+            )
+            content = _header + "".join(_lines)
+        except Exception as _e:
+            print(f"⚠️  Error reading code file {filepath}: {_e}")
+            content = ""
     else:
         content = load_text_file(filepath)
     
@@ -3250,6 +3380,12 @@ def index_file_list(file_paths: list, label: str = "",
     per-message progress, near-instant stop response, and incremental indexing
     (only new/changed messages are indexed; removed ones are cleaned up).
 
+    Thread safety: acquires _index_write_lock before touching ChromaDB so that
+    concurrent callers (MCP tool calls + file watchdog daemon) are serialised
+    and cannot interleave their delete+add sequences.  RLock allows the same
+    thread to re-enter (e.g. email archive expansion calling back into this
+    function) without deadlocking.
+
     Args:
         file_paths:          List of absolute file paths to index
         label:               Optional label for progress messages (e.g. directory name)
@@ -3269,6 +3405,23 @@ def index_file_list(file_paths: list, label: str = "",
     Returns dict with keys: processed, skipped, chunks, words, stopped_at
       stopped_at = 1-based index of next unprocessed file (0 if completed)
     """
+    with _index_write_lock:
+        return _index_file_list_impl(
+            file_paths, label=label, stop_event=stop_event,
+            pause_event=pause_event, start_from=start_from,
+            root_directory=root_directory,
+            collection_resolver=collection_resolver,
+            indexer_user=indexer_user, purge_gate=purge_gate,
+        )
+
+
+def _index_file_list_impl(file_paths: list, label: str = "",
+                          stop_event=None, pause_event=None,
+                          start_from: int = 0,
+                          root_directory: str = "",
+                          collection_resolver=None, indexer_user=None,
+                          purge_gate=None) -> dict:
+    """Internal implementation — called under _index_write_lock."""
     import time as _time
     client, embedding_func = get_chroma_client()
 
@@ -3412,7 +3565,13 @@ def index_file_list(file_paths: list, label: str = "",
         print(f"{prefix}{progress} {_rel}  "
               f"({file_data['word_count']} words)")
 
-        chunks = chunk_text(file_data['content'], CHUNK_SIZE, CHUNK_OVERLAP)
+        # Code/script files: store as ONE security-scan chunk — no splitting.
+        # grep is the right tool for code; semantic chunking produces noise.
+        _file_ext = file_data.get('extension', '')
+        if _file_ext in CODE_SCAN_EXTENSIONS:
+            chunks = [file_data['content']]
+        else:
+            chunks = chunk_text(file_data['content'], CHUNK_SIZE, CHUNK_OVERLAP)
         if not chunks:
             print(f"         ⚠️  Empty — skipping")
             # Purge stale chunks for the same reason as above.
@@ -3450,11 +3609,19 @@ def index_file_list(file_paths: list, label: str = "",
             pass
 
         try:
-            _file_col.add(ids=ids, documents=chunks, metadatas=metadatas)
+            # Batch add — ChromaDB fails silently on >166 docs per call.
+            _CHROMA_BATCH = 166
+            _chunks_added = 0
+            for _b_start in range(0, len(chunks), _CHROMA_BATCH):
+                _b_ids  = ids[_b_start:_b_start + _CHROMA_BATCH]
+                _b_docs = chunks[_b_start:_b_start + _CHROMA_BATCH]
+                _b_meta = metadatas[_b_start:_b_start + _CHROMA_BATCH]
+                _file_col.add(ids=_b_ids, documents=_b_docs, metadatas=_b_meta)
+                _chunks_added += len(_b_ids)
             processed    += 1
-            total_chunks += len(chunks)
+            total_chunks += _chunks_added
             total_words  += file_data['word_count']
-            print(f"         ✅ {len(chunks)} chunks added")
+            print(f"         ✅ {_chunks_added} chunks added")
 
             # Capture mtime/size for tracking-DB baseline (written at end of run)
             try:
@@ -3806,8 +3973,17 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False,
         print(f"{progress} Processing: {filepath}")
         print(f"         Size: {file_data['word_count']} words")
         
-        # Chunk content
-        chunks = chunk_text(file_data['content'], CHUNK_SIZE, CHUNK_OVERLAP)
+        # Code/script files: store as ONE security-scan chunk — no splitting.
+        # grep is the right tool for code; semantic chunking produces noise.
+        # (Mirrors the same fix applied to index_file_list() — index_directory()
+        # is a separate code path used by some GUI workflows and had not
+        # received the fix, causing code files to still be word-chunked even
+        # though load_file() already capped them to 500 lines.)
+        _file_ext_d = file_data.get('extension', '')
+        if _file_ext_d in CODE_SCAN_EXTENSIONS:
+            chunks = [file_data['content']]
+        else:
+            chunks = chunk_text(file_data['content'], CHUNK_SIZE, CHUNK_OVERLAP)
         
         if len(chunks) == 0:
             print(f"         ⚠️  Empty file, skipping\n")
@@ -3846,17 +4022,22 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False,
 
         # Add to database
         try:
-            _file_col_d.add(
-                ids=ids,
-                documents=chunks,
-                metadatas=metadatas
-            )
-            
+            # Batch add — ChromaDB silently fails on >166 docs per call.
+            # (Mirrors the same fix applied to index_file_list().)
+            _CHROMA_BATCH_D = 166
+            _chunks_added_d = 0
+            for _bd_start in range(0, len(chunks), _CHROMA_BATCH_D):
+                _bd_ids  = ids[_bd_start:_bd_start + _CHROMA_BATCH_D]
+                _bd_docs = chunks[_bd_start:_bd_start + _CHROMA_BATCH_D]
+                _bd_meta = metadatas[_bd_start:_bd_start + _CHROMA_BATCH_D]
+                _file_col_d.add(ids=_bd_ids, documents=_bd_docs, metadatas=_bd_meta)
+                _chunks_added_d += len(_bd_ids)
+
             processed_files += 1
-            total_chunks += len(chunks)
+            total_chunks += _chunks_added_d
             total_words += file_data['word_count']
             if not quiet:
-                print(f"         ✅ Added {len(chunks)} chunks\n")
+                print(f"         ✅ Added {_chunks_added_d} chunks\n")
             
         except Exception as e:
             print(f"         ❌ Error adding to database: {e}\n")
@@ -4153,10 +4334,42 @@ def invalidate_chroma_cache():
 
     Call this when EMBEDDING_MODEL changes so the next get_chroma_client()
     call reloads with the new model instead of using the stale cached one.
+
+    File-handle safety (ChromaDB 1.5.x Rust core):
+    ------------------------------------------------
+    PersistentClient holds SQLite WAL and HNSW index file handles inside its
+    Rust segment manager. Simply setting the Python variable to None is not
+    enough — the Rust runtime only releases those handles when the object is
+    garbage-collected, which under heavy test load (1,400+ tests, each with
+    their own client) can lag far behind object creation and exhaust the OS
+    file-handle limit (Errno 24 "Too many open files").
+
+    To release handles promptly we:
+      1. Call client.clear_system_cache() if available (ChromaDB 1.0+) — this
+         flushes and closes the Rust-side segment manager.
+      2. Explicitly delete the Python reference and run gc.collect() to
+         trigger immediate Rust-side finalisation rather than waiting for the
+         cyclic GC to get around to it.
     """
+    import gc as _gc
     global _chroma_client_cache, _embedding_func_cache
+    client = _chroma_client_cache
     _chroma_client_cache = None
     _embedding_func_cache = None
+    if client is not None:
+        # Flush and close the Rust segment manager's file handles.
+        # clear_system_cache() is the supported hook in ChromaDB 1.x for
+        # releasing in-process state without destroying on-disk data.
+        # Fall back silently if the method is absent (older SDK builds).
+        try:
+            if hasattr(client, "clear_system_cache"):
+                client.clear_system_cache()
+        except Exception:
+            pass
+        # Drop the reference and force GC to reclaim the Rust object now
+        # rather than waiting for the next GC cycle.
+        del client
+        _gc.collect()
 
 def query_ollama(prompt: str, max_tokens: int = 2000, images_b64: list = None) -> str:
     """
@@ -4814,6 +5027,20 @@ def clear_database(confirm: bool = False):
     except Exception as e:
         print(f"⚠️  Could not clear auto-update list: {e}")
 
+    # 5. Invalidate the cached ChromaDB client so the next operation creates a
+    #    fresh PersistentClient against the now-empty database directory.
+    #
+    #    CRITICAL — ChromaDB 1.5.x (Rust core): the PersistentClient keeps an
+    #    in-memory segment manager that caches HNSW index state. After
+    #    delete_collection() the on-disk HNSW files are gone but the Rust
+    #    segment manager still references them. If the same client instance is
+    #    reused for the next index operation the Rust core tries to open the
+    #    missing HNSW files and throws:
+    #      "Error loading hnsw index"
+    #    Forcing a new PersistentClient gives the Rust core a clean slate.
+    invalidate_chroma_cache()
+    print("🔄 ChromaDB client cache cleared — ready for fresh indexing.")
+
 def clear_database_only(confirm: bool = False):
     """Clear ALL ChromaDB collections + file-tracking + email-index, but
     preserve the tracked-directories list (~/.rag_auto_update_dirs.json).
@@ -4873,6 +5100,13 @@ def clear_database_only(confirm: bool = False):
     # AUTO_UPDATE_LIST is intentionally NOT cleared here.
     print("✅ Database cleared. Tracked-directories list preserved.")
     print("   Run 'Update All' from the Update Index tab to re-index your files.")
+
+    # Invalidate the cached ChromaDB client — same reason as clear_database().
+    # Without this the stale PersistentClient's Rust segment manager references
+    # deleted HNSW files and the next index operation throws "Error loading
+    # hnsw index". See clear_database() comment for full explanation.
+    invalidate_chroma_cache()
+    print("🔄 ChromaDB client cache cleared — ready for fresh indexing.")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -5630,11 +5864,19 @@ def command_update(directory, recursive=True, auto_confirm=False,
                 failed += 1
                 continue
 
-            chunks = chunk_text(file_data['content'], CHUNK_SIZE, CHUNK_OVERLAP)
-            if not chunks:
-                print(f"  ⚠️  Empty file — skipping")
-                failed += 1
-                continue
+            # Code/script files: store as ONE security-scan chunk — no splitting.
+            # grep is the right tool for code; semantic chunking produces noise.
+            # (Third code path with this fix — see index_file_list() and
+            # index_directory() for the same logic. This is the function
+            # actually used by the GUI's Update Selected/Update All buttons,
+            # the update_tracked_directories MCP tool, and the scheduled
+            # rag_auto_update.bat task — confirmed via a live Update run that
+            # still word-chunked .py files after the first two fixes landed.)
+            _file_ext_u = file_data.get('extension', '')
+            if _file_ext_u in CODE_SCAN_EXTENSIONS:
+                chunks = [file_data['content']]
+            else:
+                chunks = chunk_text(file_data['content'], CHUNK_SIZE, CHUNK_OVERLAP)
 
             # ── Rich provenance metadata ──────────────────────────────────
             prov = get_file_provenance(filepath, directory)
@@ -5667,8 +5909,18 @@ def command_update(directory, recursive=True, auto_confirm=False,
                     except Exception:
                         pass
                 _idx_col.delete(where={"filepath": filepath})
-                _idx_col.add(ids=ids, documents=chunks, metadatas=metadatas)
-                print(f"  ✅ Indexed {len(chunks)} chunk(s)")
+                # Batch add — ChromaDB silently fails on >166 docs per call.
+                # (Mirrors the same fix applied to index_file_list() and
+                # index_directory().)
+                _CHROMA_BATCH_U = 166
+                _chunks_added_u = 0
+                for _bu_start in range(0, len(chunks), _CHROMA_BATCH_U):
+                    _bu_ids  = ids[_bu_start:_bu_start + _CHROMA_BATCH_U]
+                    _bu_docs = chunks[_bu_start:_bu_start + _CHROMA_BATCH_U]
+                    _bu_meta = metadatas[_bu_start:_bu_start + _CHROMA_BATCH_U]
+                    _idx_col.add(ids=_bu_ids, documents=_bu_docs, metadatas=_bu_meta)
+                    _chunks_added_u += len(_bu_ids)
+                print(f"  ✅ Indexed {_chunks_added_u} chunk(s)")
                 updated += 1
             except Exception as exc:
                 print(f"  ❌ Error: {exc}")

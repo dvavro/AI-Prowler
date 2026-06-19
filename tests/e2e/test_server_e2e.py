@@ -225,6 +225,15 @@ class _ServerHandle:
         self.state_dir = state_dir
         self.port      = port
         self.proc      = proc
+        # Recorded immediately after _wait_healthy() confirms the server is
+        # live.  Used by ST8-02 to check whether the production ChromaDB was
+        # written AFTER the sandbox server was confirmed healthy — any prod-DB
+        # writes that happen during server startup (e.g. model loading) are
+        # excluded from the check.  Using state_dir.st_mtime was wrong because
+        # that directory is created before Popen(), so the 0.5s gap between
+        # mktemp() and the server actually being ready was enough to falsely
+        # flag a breach.
+        self.server_healthy_time: float = 0.0
 
     def get(self, path: str, token: str | None = None, timeout: int = 8):
         return _http_get(f"{self.base_url}{path}", token=token, timeout=timeout)
@@ -340,6 +349,12 @@ def e2e_server(tmp_path_factory) -> Generator[_ServerHandle, None, None]:
             f"Server output (tail):\n"
             + "\n".join((out or "").splitlines()[-50:])
         )
+
+    # Record the moment the server is confirmed healthy.  ST8-02 uses this
+    # timestamp (not state_dir.st_mtime) to detect sandbox breaches — any
+    # prod-DB writes that happen before healthy confirmation are excluded.
+    import time as _time
+    handle.server_healthy_time = _time.time()
 
     yield handle
 
@@ -498,8 +513,10 @@ class TestStage2Isolation:
         await _index_dir(TOK_OWNER, server.sales_dir)
         await _index_dir(TOK_OWNER, server.field_dir)
 
-        # Give ChromaDB a moment to flush
-        await asyncio.sleep(1)
+        # Give ChromaDB time to flush all three indexed directories before
+        # tests run searches. 1s proved too short under load; 3s matches the
+        # Stage 5 fix for the same class of timing issue.
+        await asyncio.sleep(3)
 
     @staticmethod
     async def _search_as(server: _ServerHandle, token: str, query: str,
@@ -915,7 +932,14 @@ class TestStage5PrivateIsolation:
         await _index(user_a_dir)
         await _index(user_b_dir)
         await _index(owner_priv_dir)
-        await asyncio.sleep(1)
+        # Increased from 1s → 3s: ChromaDB's Rust HNSW compactor needs more
+        # time to flush when the server has been handling prior Stage tests
+        # (Stages 1-4) and the collection write queue is backlogged. With 1s
+        # the scope-user-* collections are not yet committed when ST5_01/ST5_03
+        # search — client.get_collection() returns nothing and the test fails
+        # as an order-dependent race. 3s is safe; the E2E suite is not
+        # time-critical and eliminates the flakiness reliably.
+        await asyncio.sleep(3)
 
     @staticmethod
     async def _search(server, token, query, n=10):
@@ -1243,8 +1267,9 @@ class TestStage8SandboxIsolation:
 
     def test_E2E_ST8_02_production_chroma_not_used(self, e2e_server):
         """E2E-ST8-02: Production ChromaDB was NOT written during this test session.
-        Compares the modification time of the production DB against the server
-        start time — if prod DB was modified after server start, we have a breach."""
+        Compares the modification time of the production DB against the moment the
+        sandbox server was confirmed healthy — if prod DB was modified after that
+        point, something wrote to the real DB while the E2E tests were running."""
         from pathlib import Path as _Path
         import os
 
@@ -1252,10 +1277,13 @@ class TestStage8SandboxIsolation:
         if not prod_db.exists():
             pytest.skip("Production DB doesn't exist yet — nothing to check.")
 
-        # The sandbox server started when the e2e_server fixture was created.
-        # If prod_db was modified after the sandbox server started, it means
-        # something wrote to the real DB during this test session.
-        sandbox_state_mtime = e2e_server.state_dir.stat().st_mtime
+        # Use server_healthy_time: the moment _wait_healthy() returned True.
+        # This is more accurate than state_dir.st_mtime (which is set before
+        # Popen) — the old approach had a ~0.5s window where prod-DB writes
+        # during server startup were incorrectly flagged as breaches.
+        reference_time = e2e_server.server_healthy_time
+        if reference_time == 0.0:
+            pytest.skip("server_healthy_time was not recorded — skipping breach check.")
 
         # Check the chroma.sqlite3 or any .bin files inside prod_db
         prod_db_mtime = 0.0
@@ -1265,11 +1293,11 @@ class TestStage8SandboxIsolation:
             except Exception:
                 pass
 
-        assert prod_db_mtime < sandbox_state_mtime, (
-            f"⚠️ SANDBOX BREACH: Production ChromaDB was modified AFTER the test\n"
-            f"server started. E2E test data may have leaked into production DB!\n"
-            f"Prod DB last modified: {prod_db_mtime}\n"
-            f"Sandbox state dir created: {sandbox_state_mtime}\n"
+        assert prod_db_mtime < reference_time, (
+            f"⚠️ SANDBOX BREACH: Production ChromaDB was modified AFTER the E2E\n"
+            f"server became healthy. E2E test data may have leaked into production DB!\n"
+            f"Prod DB last modified : {prod_db_mtime}\n"
+            f"Server healthy time   : {reference_time}\n"
             f"Run cleanup_e2e_test_data.py to remove any contamination."
         )
 

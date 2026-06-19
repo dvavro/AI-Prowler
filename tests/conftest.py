@@ -31,8 +31,25 @@ from __future__ import annotations
 
 import json
 import os
+import gc
 import shutil
 import sys
+
+# ── Raise the Windows CRT stdio handle limit ─────────────────────────────────
+# Python on Windows defaults to 512 open file descriptors (the CRT _setmaxstdio
+# default). A 1,400+ test suite that creates a ChromaDB PersistentClient per
+# test exhausts this rapidly — leading to OSError [Errno 24] "Too many open
+# files" late in the run even after the per-test invalidate_chroma_cache()
+# teardown. Raising to 2048 (the CRT maximum) gives the GC headroom to reclaim
+# handles before the limit is hit. This is a no-op on non-Windows platforms.
+try:
+    import ctypes as _ctypes
+    _crt = _ctypes.cdll.msvcrt
+    _new_limit = _crt._setmaxstdio(2048)
+    print(f"\n[conftest] _setmaxstdio(2048) returned {_new_limit} "
+          f"(2048=success, negative=error)", flush=True)
+except (AttributeError, OSError) as _e:
+    print(f"\n[conftest] _setmaxstdio failed: {_e}", flush=True)
 from pathlib import Path
 
 import pytest
@@ -145,7 +162,21 @@ def isolated_env(tmp_path, rag, monkeypatch):
 
     # Teardown — invalidate the cache one more time so the NEXT test gets a
     # fresh client, not the one we just opened against the now-deleted tmp dir.
+    # invalidate_chroma_cache() now also calls clear_system_cache() + gc.collect()
+    # internally to release Rust-side SQLite/HNSW file handles promptly.
+    # Without this, 1,400+ tests accumulate orphaned PersistentClient objects
+    # faster than the GC can reclaim them, exhausting the OS file-handle limit
+    # (Errno 24 "Too many open files") late in the full suite run.
     rag.invalidate_chroma_cache()
+    # Belt-and-suspenders: run gc.collect() three times — each pass may
+    # free more cyclic garbage that the previous pass made unreachable.
+    # This is especially important for ChromaDB's Rust-backed PersistentClient
+    # which holds ~35 kernel handles that only close when Python GC drops the
+    # object. Three generations ensures even long-lived cyclic structures
+    # are collected before the next test creates a new client.
+    gc.collect()
+    gc.collect()
+    gc.collect()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -207,6 +238,19 @@ def mbox_file(isolated_env):
 # ──────────────────────────────────────────────────────────────────────────────
 # Markers
 # ──────────────────────────────────────────────────────────────────────────────
+def pytest_addoption(parser):
+    """Add --fd-track option for the handle leak tracker."""
+    try:
+        parser.addoption(
+            "--fd-track",
+            action="store_true",
+            default=False,
+            help="Enable per-test OS handle leak tracking (writes fd_track.log).",
+        )
+    except ValueError:
+        pass  # already registered (e.g. if fd_tracker.py is also on sys.path)
+
+
 def pytest_configure(config):
     """Register custom markers so `pytest --strict-markers` doesn't complain."""
     config.addinivalue_line(
@@ -221,3 +265,20 @@ def pytest_configure(config):
         "markers",
         "regression: 10-minute smoke test (Section 8 of the test plan)",
     )
+
+    # Load and register the fd_tracker plugin when --fd-track is requested.
+    # We do this here (rather than via -p fd_tracker on the command line) so
+    # pytest can find it without sys.path gymnastics — it lives in tests/.
+    if config.getoption("--fd-track", default=False):
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location(
+            "fd_tracker",
+            Path(__file__).parent / "fd_tracker.py",
+        )
+        _mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        # Instantiate and register the plugin directly; pytest_addoption was
+        # already handled above so FdTrackerPlugin can safely call getoption.
+        config.pluginmanager.register(
+            _mod.FdTrackerPlugin(config), "fd_tracker_plugin"
+        )

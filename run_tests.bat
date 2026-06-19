@@ -8,11 +8,16 @@ REM  install (Scripts folder not on PATH, Windows Store Python alias
 REM  conflicts, etc.).
 REM
 REM  Usage:
-REM    run_tests.bat                    — run all tests
-REM    run_tests.bat tests\gui\         — run GUI tests only
-REM    run_tests.bat tests\mcp\         — run MCP tests only
-REM    run_tests.bat tests\gui\test_config_encoding.py   — single file
-REM    run_tests.bat tests\ -k encoding — run tests matching a keyword
+REM    run_tests.bat                                        — run all tests
+REM    run_tests.bat tests\gui\                             — run GUI tests only
+REM    run_tests.bat tests\mcp\                             — run MCP tests only
+REM    run_tests.bat tests\unit\                            — run unit tests only
+REM    run_tests.bat tests\unit\test_pdf_extraction.py      — PDF table extraction tests
+REM    run_tests.bat tests\unit\test_image_formats.py       — HEIC/WebP image OCR tests
+REM    run_tests.bat tests\unit\test_contractor_tools.py    — email/SMS/scheduling/time/AR tests
+REM    run_tests.bat tests\gui\test_config_encoding.py      — single file
+REM    run_tests.bat tests\ -k encoding                     — run tests matching a keyword
+REM    run_tests.bat tests\ -k PDF                          — run all PDF-* tests
 REM =====================================================================
 setlocal
 
