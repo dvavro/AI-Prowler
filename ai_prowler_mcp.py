@@ -579,9 +579,9 @@ _TIER_A_SUPPRESSED: frozenset = frozenset({
     # Raw filesystem reads — arbitrary path access, bypasses the RAG layer
     "grep_documents", "read_file_lines",
     # Email operator / high-risk tools — personal-install-only.
-    # Note: send_email and send_alert stay registered; field_crew uses them
-    # via the Tier B _send_email_cap gate.
-    "configure_email", "send_file", "send_learnings_report",
+    # Note: send_email, send_alert, and send_learnings_report stay registered;
+    # all roles use them via the Tier B _send_email_cap gate.
+    "configure_email", "send_file",
     "export_learnings_file",
     # Bulk index rebuild — destructive operator action, not for remote users
     "rebuild_learnings_index",
@@ -712,7 +712,7 @@ def _db_write(fn, *args, timeout: float = 900.0, **kwargs):
 # ══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
-def how_to_use_ai_prowler() -> str:
+def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
     """
     Returns the recommended workflow for using AI-Prowler as an Agentic RAG
     knowledge base with Claude.
@@ -720,9 +720,16 @@ def how_to_use_ai_prowler() -> str:
     CALL THIS TOOL FIRST at the start of any new research or question-answering
     session to understand the correct tool sequence and capabilities.
 
+    Ends with a "THIS CONNECTION" section that's computed live from the
+    actual server-mode role gates (_ROLE_CAPS) for whichever connector this
+    was called on — so when both a personal install and a company server
+    are connected in the same conversation, calling this tool on each one
+    tells you exactly what's different for that specific connection, instead
+    of a generic description you'd have to mentally apply yourself.
+
     Returns:
         Step-by-step guidance on which tools to use and in what order,
-        plus key facts about capabilities.
+        plus key facts about capabilities, plus a connection-specific footer.
     """
     import mcp as _mcp_pkg
     try:
@@ -732,37 +739,61 @@ def how_to_use_ai_prowler() -> str:
 
     instructions_active = "instructions" in _fastmcp_params
 
-    return (
+    base_text = (
         "AI-Prowler — Agentic RAG Knowledge Base\n"
         + "=" * 50 + "\n\n"
 
-        "TOOL CATEGORIES (60 tools total)\n"
+        "TOOL CATEGORIES (77 tools total)\n"
         + "-" * 30 + "\n"
-        "AI-Prowler exposes five tool families. Most question-answering\n"
-        "tasks use the first two; the others are for code, actions and admin.\n\n"
+        "AI-Prowler exposes nine tool families. Most question-answering\n"
+        "tasks use the first two; the others cover indexing, code editing,\n"
+        "dev tooling, communications, and contractor/field-service workflows.\n\n"
 
         "  • Knowledge retrieval (RAG over indexed documents):\n"
         "      get_knowledge_base_overview, list_indexed_documents,\n"
         "      list_indexed_directories, search_documents, search_within_directory,\n"
-        "      multi_query_search, expand_search_result,\n"
-        "      read_document\n\n"
+        "      multi_query_search, expand_search_result, read_document\n\n"
 
         "  • Code-aware retrieval (exact match + line-accurate reads):\n"
         "      grep_documents, read_file_lines\n\n"
 
         "  • Self-learning memory (corrections, post-mortems, preferences):\n"
         "      search_learnings, record_learning, list_learnings,\n"
-        "      update_learning, delete_learning, get_learning_stats\n\n"
+        "      update_learning, delete_learning, get_learning_stats,\n"
+        "      get_learnings_report, export_learnings_file,\n"
+        "      send_learnings_report, rebuild_learnings_index\n\n"
 
         "  • Field service actions (free public APIs, no key needed):\n"
         "      geocode_address, get_weather, optimize_route,\n"
         "      build_maps_url, read_job_spreadsheet, update_job_spreadsheet,\n"
         "      check_tools_status\n\n"
 
+        "  • Contractor / business workflow:\n"
+        "      email_invoice, schedule_next_recurring_job, log_time_entry,\n"
+        "      get_ar_aging_report\n\n"
+
+        "  • Communications (email + SMS + WhatsApp — every role in both\n"
+        "    personal and server mode):\n"
+        "      configure_email, send_email, send_alert, send_file,\n"
+        "      save_contact, send_sms, check_sms_replies, check_sms_inbox,\n"
+        "      get_sms_thread, list_sms_contacts_with_replies,\n"
+        "      send_whatsapp, check_whatsapp_replies\n\n"
+
+        "  • File editing (write tools — see EDITING FILES section below):\n"
+        "      create_file, write_file, str_replace_in_file,\n"
+        "      fuzzy_replace_in_file, line_replace_in_file, create_directory,\n"
+        "      list_directory, copy_to_backup, list_backups, restore_backup,\n"
+        "      cleanup_backups, reset_write_counter, diff_files\n\n"
+
+        "  • Dev tools (run/check code without leaving the conversation):\n"
+        "      syntax_check, compile_check, check_python_import, lint_check,\n"
+        "      run_script, run_script_start, run_script_status, run_script_kill\n\n"
+
         "  • Indexing & admin:\n"
-        "      index_path, update_tracked_directories,\n"
-        "      list_tracked_directories, untrack_directory,\n"
-        "      get_database_stats, check_ai_prowler_status\n\n"
+        "      index_path, update_tracked_directories, list_tracked_directories,\n"
+        "      untrack_directory, get_database_stats, check_ai_prowler_status,\n"
+        "      reindex_file, reindex_directory, reindex_all,\n"
+        "      list_writable_directories, grant_write_access, revoke_write_access\n\n"
 
         "PREFERRED TOOL SEQUENCE — KNOWLEDGE RETRIEVAL\n"
         + "-" * 30 + "\n"
@@ -824,26 +855,91 @@ def how_to_use_ai_prowler() -> str:
         "    original fidelity. Returns numbered lines so you can keep\n"
         "    paging through with start_line=last_seen+1.\n\n"
 
+        "  Note: program/script files (CODE_SCAN_EXTENSIONS — .py, .js, .java,\n"
+        "  .cs, .cpp, .go, .rs, .sh, .ps1, .css, .sql, and others) are indexed\n"
+        "  as a single truncated chunk (first 500 lines only, headed\n"
+        "  '[SECURITY SCAN ONLY]') rather than fully semantically chunked —\n"
+        "  this keeps the vector DB free of code-boilerplate noise. grep_documents\n"
+        "  + read_file_lines read the file fresh from disk every time, so they\n"
+        "  always see the FULL current file regardless of that indexing cap.\n\n"
+
         "  Both tools read only files under the tracked-paths allowlist.\n"
         "  Useful especially for mobile users who cannot attach files —\n"
         "  ask them to index_path() the project once, then\n"
         "  use grep + read_file_lines for all subsequent code questions.\n\n"
 
-        "EDITING FILES — REINDEX WHEN DONE (v7.0.0)\n"
+        "EDITING FILES — REINDEX WHEN DONE\n"
         + "-" * 30 + "\n"
         "Write tools (create_file, write_file, str_replace_in_file,\n"
-        "restore_backup) NO LONGER auto-index. They write to disk and create\n"
-        "backups, but ChromaDB is NOT updated until you ask for it.\n"
+        "fuzzy_replace_in_file, line_replace_in_file, restore_backup) do NOT\n"
+        "auto-index. They write to disk and create backups, but ChromaDB is\n"
+        "NOT updated until you ask for it.\n"
         "  • Make ALL your edits to a file first (any number of\n"
-        "    str_replace_in_file calls).\n"
+        "    str_replace_in_file / fuzzy_replace_in_file / line_replace_in_file\n"
+        "    calls).\n"
         "  • When you are DONE editing that file, call reindex_file(path)\n"
         "    ONCE to sync it into the database.\n"
         "  • Do NOT call reindex_file between every edit — one call at the\n"
         "    end of the edit session per file is correct.\n"
-        "  • For a whole folder, use reindex_directory() / index_path()\n"
-        "    instead of many reindex_file() calls.\n"
+        "  • For a whole folder, use reindex_directory() instead of many\n"
+        "    reindex_file() calls; reindex_all() rebuilds every tracked path\n"
+        "    (the nuclear option — slow, rarely needed).\n"
+        "  • All writes go through a per-session write circuit breaker. If it\n"
+        "    trips after many writes in one conversation, call\n"
+        "    reset_write_counter() to continue — this is a runaway-loop\n"
+        "    safeguard, not an error.\n"
+        "  • Before relying on freshly-edited code, run syntax_check() or\n"
+        "    compile_check() to catch typos, then check_python_import() to\n"
+        "    catch load-time errors syntax checking alone would miss.\n"
         "  Rationale: re-embedding on every write deadlocked the HTTP server\n"
         "  on large files; explicit end-of-session reindex avoids that.\n\n"
+
+        "DEV TOOLS — VERIFY CODE WITHOUT LEAVING THE CONVERSATION\n"
+        + "-" * 30 + "\n"
+        "  syntax_check(filepath)       — multi-language syntax check\n"
+        "  compile_check(filepath)      — Python-specific byte-compile check\n"
+        "  check_python_import(module)  — catches load-time errors syntax misses\n"
+        "  lint_check(filepath)         — style/unused-import warnings — pyflakes\n"
+        "                                  (Python), tsc (TypeScript), go vet (Go),\n"
+        "                                  verilator --lint-only (Verilog/SystemVerilog),\n"
+        "                                  ghdl -a (VHDL); other languages fall back\n"
+        "                                  to syntax_check, which has no lint tool\n"
+        "  run_script(path)             — execute a script, return its output\n"
+        "  run_script_start / _status / _kill — background job runner for\n"
+        "                                  long-running scripts (tests, builds)\n\n"
+
+        "COMMUNICATIONS — EMAIL, SMS, WHATSAPP\n"
+        + "-" * 30 + "\n"
+        "Personal mode: configure_email() once, then send_email / send_alert /\n"
+        "send_file / send_sms / send_whatsapp all work from that one account.\n"
+        "Recipients can be a raw address/number, a name in the job spreadsheet's\n"
+        "Customers sheet (checked FIRST — same data read_job_spreadsheet() and\n"
+        "update_job_spreadsheet() use), or a saved contact name (checked after) —\n"
+        "save_contact(name, phone?, email?) once, then 'text David' or 'email\n"
+        "Vicki' resolves automatically via contacts_cache.json.\n\n"
+        "Server mode: email, SMS, and WhatsApp are available to EVERY role —\n"
+        "owner, manager, staff, and field_crew — via the company's shared SMTP\n"
+        "and SMS/WhatsApp provider account. Same recipient lookup order as\n"
+        "personal mode (Customers sheet first, then users.json by name, then\n"
+        "your private contacts_cache_<username>.json) — and read_job_spreadsheet /\n"
+        "update_job_spreadsheet are themselves available to every role too, with\n"
+        "no DB-management or communications gate applied. SMS works with Twilio,\n"
+        "SignalWire, or Vonage (set via sms_provider in config); WhatsApp always\n"
+        "goes through Twilio specifically, reusing the same Twilio credentials\n"
+        "even if SMS itself is configured to use SignalWire or Vonage instead.\n"
+        "Inbound replies ARE correctly attributed per user — check_sms_replies()\n"
+        "and check_whatsapp_replies() filter to only the threads YOU personally\n"
+        "sent (Mike sees Karen's reply, not Jake's reply to Bob), via a local\n"
+        "webhook-backed inbox (sms_inbox.json / sms_threads.json) rather than\n"
+        "polling the provider's API. Every server-mode role also gets their\n"
+        "own private contacts_cache_<username>.json — saved contacts are never\n"
+        "shared between users.\n\n"
+        "check_sms_inbox / get_sms_thread / list_sms_contacts_with_replies —\n"
+        "local SMS/WhatsApp inbox tools for reviewing conversation history.\n"
+        "The free email-to-SMS carrier-gateway approach (vtext.com, etc.) was\n"
+        "removed — carriers are shutting those gateways down industry-wide.\n"
+        "A real SMS/WhatsApp provider (Twilio, SignalWire, or Vonage) is now\n"
+        "the only path.\n\n"
 
         "SELF-LEARNING WORKFLOW — PERSISTENT MEMORY\n"
         + "-" * 30 + "\n"
@@ -884,6 +980,14 @@ def how_to_use_ai_prowler() -> str:
         "    Refine or retire learnings when the user provides better\n"
         "    information. Always confirm destructive actions first.\n\n"
 
+        "  STEP E  get_learnings_report() / export_learnings_file() /\n"
+        "          send_learnings_report()\n"
+        "    Produce a readable summary of everything learned — inline,\n"
+        "    as a file, or emailed as an HTML report. Use\n"
+        "    rebuild_learnings_index() if learnings stop showing up in\n"
+        "    search_learnings (rebuilds the ChromaDB index from the JSON\n"
+        "    source of truth).\n\n"
+
         "DOCUMENT PROVENANCE — CRITICAL\n"
         + "-" * 30 + "\n"
         "  Every search result includes rich provenance metadata:\n"
@@ -918,13 +1022,80 @@ def how_to_use_ai_prowler() -> str:
         "    before answering ANY user question (the only exceptions are pure\n"
         "    arithmetic and language translation).\n"
         "  - Use check_ai_prowler_status() to verify the knowledge base is healthy.\n"
-        "  - Use check_tools_status() to verify field-service tools.\n"
+        "  - Use check_tools_status() to verify field-service/business/SMS tools.\n"
+        "  - Server mode role gating (owner/manager/staff/field_crew) restricts\n"
+        "    DB-management and admin tools by role; email/SMS/WhatsApp are open\n"
+        "    to every role. A clear ⛔/❌ message explains any restriction that\n"
+        "    applies to a specific tool call.\n"
         "  - Re-call this tool any time you need a reminder of the workflow.\n\n"
 
         f"MCP SDK version       : {mcp_version}\n"
         f"instructions= active  : {'yes — guidance sent at every handshake' if instructions_active else 'no — upgrade with: pip install --upgrade mcp'}\n"
         "AI-Prowler Agentic RAG ready."
     )
+
+    # ── THIS CONNECTION — computed live from the real role-gate tables ──────────
+    # Tells Claude exactly what's true for the connector this call was made on,
+    # so when both a personal install and a company server are connected in the
+    # same conversation, each one's how_to_use_ai_prowler() call reports its own
+    # situation rather than a generic description Claude has to mentally apply.
+    _user = _current_user(ctx)
+    footer_lines = ["", "─" * 50, "", "THIS CONNECTION", "─" * 30]
+
+    if _user is None:
+        footer_lines += [
+            "Mode: Personal (single-user desktop install)",
+            "- No role restrictions apply — every tool listed above is available.",
+            "- contacts_cache.json is yours alone; nothing here is shared with",
+            "  any other AI-Prowler install.",
+        ]
+    else:
+        role  = (_user.get("role") or "field_crew").strip().lower()
+        caps  = _role_caps(role)
+        name  = _user.get("name") or _user.get("username") or "you"
+        footer_lines += [
+            f"Mode: Server  (role: {role}, user: {name})",
+            "",
+            "Database / admin (index_path, update_tracked_directories, reindex_*,",
+            "untrack_directory, grant/revoke_write_access):",
+        ]
+        manage_db = caps.get("manage_db", "none")
+        if manage_db == "full":
+            footer_lines.append("  ✅ Full access — your role may manage the whole knowledge base.")
+        elif manage_db == "limited":
+            footer_lines.append("  ⚠️  Limited — you may index into your own private/assigned scopes")
+            footer_lines.append("     only; shared-collection and destructive operations are blocked.")
+        else:
+            footer_lines.append("  ⛔ Not available to your role — ask an owner or manager.")
+
+        footer_lines.append("")
+        footer_lines.append("Email / SMS / WhatsApp:")
+        if caps.get("can_send_email") or caps.get("can_send_sms"):
+            footer_lines.append("  ✅ Available — your role may send email, SMS, and WhatsApp via")
+            footer_lines.append("     the company's shared SMTP / SMS-provider account.")
+        else:
+            footer_lines.append("  ⛔ Not available to your role on this server.")
+        footer_lines.append("  Your contacts_cache_" + (
+            _CONTACTS_CACHE_PATH(_user).stem.replace('contacts_cache_', '')
+            if _user else 'unknown'
+        ) + ".json is private to you — other users' saved contacts are not")
+        footer_lines.append("  visible to you, and vice versa.")
+        footer_lines.append("  Inbound SMS/WhatsApp replies (check_sms_replies /")
+        footer_lines.append("  check_whatsapp_replies) are filtered to only the threads YOU")
+        footer_lines.append("  personally sent — you will not see another user's conversations.")
+
+        footer_lines.append("")
+        footer_lines.append("Shared-collection writes (can_write_shared):")
+        footer_lines.append(
+            "  ✅ Allowed" if caps.get("can_write_shared")
+            else "  ⛔ Not allowed — your writes are confined to your own scopes/private area."
+        )
+
+        if caps.get("is_admin"):
+            footer_lines.append("")
+            footer_lines.append("Admin tab: ✅ you have admin rights (user management, recovery, etc.)")
+
+    return base_text + "\n".join(footer_lines)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3006,6 +3177,10 @@ def update_job_spreadsheet(
     AI-Prowler Settings → Small Business → Default Spreadsheet Path is used
     automatically — no need to specify the path every time.
 
+    Available to every role in every mode — personal and ALL server-mode
+    roles (owner, manager, staff, field_crew) — no DB-management or
+    communications gate applies here.
+
     Args:
         job_identifier: Value to search for in id_column.
                         Example: "Crabby's Daytona" (partial matches accepted)
@@ -3183,6 +3358,12 @@ def read_job_spreadsheet(
     AI-Prowler Settings -> Small Business -> Default Spreadsheet Path is used
     automatically.
 
+    Available to every role in every mode — personal and ALL server-mode
+    roles (owner, manager, staff, field_crew) — no DB-management or
+    communications gate applies here. The Customers sheet specifically is
+    also the FIRST place send_email() and send_sms() look up a recipient
+    by name/company/ID, so this is the same data those tools draw on.
+
     Args:
         filepath:    Full path to the .xlsx spreadsheet.
                      If omitted, uses the path saved in AI-Prowler Settings.
@@ -3347,6 +3528,9 @@ def check_tools_status(ctx: "Context | None" = None) -> str:
     Returns a full status report covering:
     - Free tools (weather, geocoding, routing, navigation URLs)
     - Spreadsheet update tool readiness
+    - Email, SMS (Twilio), and WhatsApp configuration
+    - Contractor workflow tools
+    - Dev tools and file-editing tools (always available — no setup needed)
 
     Call this tool first when planning to use action tools, to confirm
     everything is configured before starting a workflow.
@@ -3411,6 +3595,11 @@ def check_tools_status(ctx: "Context | None" = None) -> str:
         f"     openpyxl — updates .xlsx job tracking files in place",
         f"     {xl_status}",
         "",
+        "     💡 Available to every role, in both personal and server mode —",
+        "        no DB-management or communications gate applies to these two",
+        "        tools. The Customers sheet is also the FIRST place send_email",
+        "        and send_sms look up a recipient by name/company/ID.",
+        "",
         "     💡 Set a default path once in Settings → Small Business → Default",
         "        Spreadsheet Path so you never need to specify it in conversation.",
         "",
@@ -3420,42 +3609,45 @@ def check_tools_status(ctx: "Context | None" = None) -> str:
         "Spreadsheet tools use the default path from Settings if filepath is omitted.",
     ]
 
-    # ── SMS — Twilio only ──────────────────────────────────────────────────────
-    cfg_path = Path.home() / '.ai-prowler' / 'config.json'
-    twilio_configured = False
+    # ── SMS — provider-agnostic (Twilio / SignalWire / Vonage) ──────────────────
     try:
-        if cfg_path.exists():
-            import json as _jck
-            _ck = _jck.loads(cfg_path.read_text(encoding='utf-8'))
-            twilio_configured = bool(
-                _ck.get('twilio_sms_enabled') and
-                _ck.get('twilio_account_sid') and
-                _ck.get('twilio_auth_token')  and
-                _ck.get('twilio_from_number')
-            )
+        from sms_backends import get_sms_backend, load_sms_config as _load_sms_cfg_chk
+        _sms_cfg_chk = _load_sms_cfg_chk()
+        _sms_backend_chk = get_sms_backend(_sms_cfg_chk)
+        _sms_ok_chk, _ = _sms_backend_chk.validate_config()
+        sms_provider_name = _sms_backend_chk.provider_name.title()
     except Exception:
-        pass
+        _sms_ok_chk = False
+        sms_provider_name = "Twilio"
+
     saved_contacts = len(_contacts_cache_load(_current_user(ctx)).get('contacts', {}))
 
     lines += [
         "─" * 50,
         "",
-        "SMS (Twilio — paid):",
+        f"SMS  (provider: {sms_provider_name} — Twilio, SignalWire, or Vonage,",
+        f"      set via sms_provider in Settings → SMS / Text Messaging):",
         "",
-        f"  {'✅' if twilio_configured else '⚠️ '} send_sms(to, message)",
-        f"     {'✅ Twilio configured' if twilio_configured else '⚠️  Not configured — see Settings → SMS (Twilio — Paid)'}",
-        f"     The free email-to-SMS carrier-gateway approach was removed —",
-        f"     carriers are shutting those gateways down industry-wide.",
-        f"     Server mode: field_crew only. They share one company number,",
-        f"     so check_sms_replies shows everyone's replies, not just yours.",
+        f"  {'✅' if _sms_ok_chk else '⚠️ '} send_sms(to, message)",
+        f"     {'✅ Configured' if _sms_ok_chk else '⚠️  Not configured — see Settings → SMS / Text Messaging'}",
+        f"     Works in personal mode unrestricted; in server mode, available",
+        f"     to every role (owner, manager, staff, field_crew) via the",
+        f"     company's shared provider account.",
         "",
-        f"  {'✅' if twilio_configured else '⚠️ '} check_sms_replies(since_hours?, from_number?)",
-        f"     Check for inbound SMS replies on your Twilio number.",
+        f"  ✅ check_sms_replies(since_hours?, from_number?)",
+        f"     Instant — reads the local sms_inbox.json (no API polling).",
+        f"     Server mode: replies are filtered to threads YOU personally",
+        f"     sent — Mike sees Karen's reply, not Jake's reply to Bob.",
+        "",
+        f"  ✅ get_sms_thread(contact) / list_sms_contacts_with_replies()",
+        f"     Full conversation history with a contact, or a list of all",
+        f"     recent contacts with their unread-reply counts.",
         "",
         f"  ✅ save_contact(name, phone?, email?)",
         f"     Save a person by name so 'text David' / 'email Vicki' works",
-        f"     without repeating their number/address every time.",
-        f"     {saved_contacts} contact(s) currently saved in contacts_cache.json",
+        f"     without repeating their number/address every time. Each",
+        f"     server-mode role has their own private contacts file.",
+        f"     {saved_contacts} contact(s) currently saved for you.",
         "",
         "─" * 50,
         "",
@@ -3474,9 +3666,80 @@ def check_tools_status(ctx: "Context | None" = None) -> str:
         f"  {'✅' if opx_ok else '❌'} get_ar_aging_report(filepath?, as_of_date?)",
         f"     AR aging buckets: Current / 1-30 / 31-60 / 61-90 / 90+ days",
         "",
+    ]
+
+    # ── Email (configure_email / send_email / send_alert / send_file) ────────────
+    email_configured = bool(_email_config_load())
+
+    lines += [
         "─" * 50,
         "",
-        "SMS (Twilio paid): configure in Settings → SMS / Text Messaging (Twilio — Paid).",
+        "EMAIL:",
+        "",
+        f"  {'✅' if email_configured else '⚠️ '} send_email(to, subject, body) / send_alert(to, body) / send_file(...)",
+        f"     {'✅ SMTP configured' if email_configured else '⚠️  Not configured — call configure_email() or use Settings → Email Configuration'}",
+        f"     Personal mode: any SMTP provider (Gmail, Outlook, etc.) with an app password.",
+        f"     Server mode: available to every role via the company's shared SMTP.",
+        "",
+    ]
+
+    # ── WhatsApp (always via Twilio, even if SMS provider is SignalWire/Vonage) ──
+    try:
+        from sms_backends import get_whatsapp_backend, load_sms_config as _load_wa_cfg_chk
+        _wa_cfg_chk = _load_wa_cfg_chk()
+        _wa_backend_chk = get_whatsapp_backend(_wa_cfg_chk)
+        whatsapp_configured, _ = _wa_backend_chk.validate_config()
+    except Exception:
+        whatsapp_configured = False
+
+    lines += [
+        "─" * 50,
+        "",
+        "WHATSAPP (always via Twilio — even if your SMS provider above is",
+        "          SignalWire or Vonage; WhatsApp has no separate provider):",
+        "",
+        f"  {'✅' if whatsapp_configured else '⚠️ '} send_whatsapp(to, message)",
+        f"     {'✅ Configured' if whatsapp_configured else '⚠️  Not configured — add Twilio credentials in Settings → SMS / Text Messaging'}",
+        f"     Reuses your Twilio Account SID / Auth Token / From Number.",
+        "",
+        f"  ✅ check_whatsapp_replies(since_hours?, from_number?)",
+        f"     Reads from the local inbox (instant, no API call).",
+        "",
+        f"  ✅ check_sms_inbox / get_sms_thread / list_sms_contacts_with_replies",
+        f"     Browse SMS + WhatsApp conversation history stored locally.",
+        "",
+    ]
+
+    lines += [
+        "─" * 50,
+        "",
+        "DEV TOOLS & FILE EDITING  (always available — no setup required):",
+        "",
+        "  ✅ syntax_check / compile_check / check_python_import / lint_check",
+        "     Verify code without leaving the conversation.",
+        "",
+        "  ✅ run_script / run_script_start / run_script_status / run_script_kill",
+        "     Execute scripts synchronously or as a tracked background job.",
+        "",
+        "  ✅ create_file / write_file / str_replace_in_file / fuzzy_replace_in_file /",
+        "     line_replace_in_file / create_directory / list_directory",
+        "     Edit files on disk under a tracked, writable directory.",
+        "",
+        "  ✅ copy_to_backup / list_backups / restore_backup / cleanup_backups",
+        "     Every write auto-backs up first — these tools manage that history.",
+        "",
+        "  ✅ diff_files / reset_write_counter",
+        "     Compare two files; reset the per-session write circuit breaker.",
+        "",
+        "  💡 Write tools do NOT auto-index — call reindex_file(path) once you're",
+        "     done editing a file so ChromaDB reflects the new content.",
+        "",
+    ]
+
+    lines += [
+        "─" * 50,
+        "",
+        "SMS / WhatsApp: configure in Settings → SMS / Text Messaging.",
     ]
 
     return "\n".join(lines)
@@ -3792,7 +4055,7 @@ def save_contact(
     rec = _contact_save(name, phone=phone, email=email, user=_sc_user)
 
     cache_file = (f"contacts_cache_{(_sc_user.get('username') or _sc_user.get('name') or 'me').lower()}.json"
-                  if _sc_user is not None and _sc_user.get('role') == 'field_crew'
+                  if _sc_user is not None
                   else 'contacts_cache.json')
 
     lines = [f"✅ Contact saved: {name.strip()}"]
@@ -3813,24 +4076,23 @@ def send_sms(
     """
     Send an SMS text message to a crew member, customer, or saved contact.
 
-    Requires Twilio (paid) to be configured in Settings → SMS / Text
-    Messaging (Twilio — Paid). The free email-to-SMS carrier-gateway
-    approach (vtext.com, txt.att.net, etc.) was removed — those gateways
-    are being shut down industry-wide (AT&T's is already gone, Verizon's
-    is mid-shutdown through 2027) and were unreliable even while active
-    (spam filtering, no delivery confirmation, no two-way replies).
+    Requires an SMS provider to be configured in Settings → SMS / Text
+    Messaging — Twilio, SignalWire, or Vonage (set via sms_provider). The
+    free email-to-SMS carrier-gateway approach (vtext.com, txt.att.net,
+    etc.) was removed — those gateways are being shut down industry-wide
+    (AT&T's is already gone, Verizon's is mid-shutdown through 2027) and
+    were unreliable even while active (spam filtering, no delivery
+    confirmation, no two-way replies).
 
     'to' accepts a phone number OR a saved contact name (e.g. "David") —
     if it doesn't look like a number, contacts_cache.json is checked first,
     along with the Customers sheet and users.json by name.
 
-    Server mode: only field_crew may send SMS here, since they have no
-    personal AI-Prowler install — owner/manager/staff use their own personal
-    installs for SMS instead. All field_crew share the one company Twilio
-    number, so if a customer replies, check_sms_replies() will show that
-    reply to any field_crew member who checks — it cannot yet be routed to
-    only the crew member who sent the original text. Keep that in mind for
-    anything where mixing up whose conversation a reply belongs to matters.
+    Server mode: any role (owner, manager, staff, field_crew) may send SMS
+    here, via the company's shared SMS-provider account. Inbound replies
+    ARE correctly attributed per user — check_sms_replies() filters to only
+    the threads YOU personally sent, so Mike won't see Karen's reply to
+    Jake's text.
 
     Args:
         to:      Recipient's phone number (10-digit US) or a saved contact
@@ -3849,7 +4111,7 @@ def send_sms(
     """
     _telemetry_increment_tool_count("send_sms")
 
-    # Server-mode gate — field_crew only (see _send_sms_cap docstring).
+    # Server-mode gate — all roles permitted (see _send_sms_cap docstring).
     _sms_user = _current_user(ctx)
     _sms_allowed, _sms_why = _send_sms_cap(_sms_user)
     if not _sms_allowed:
@@ -3952,60 +4214,48 @@ def send_sms(
     except Exception:
         pass
 
-    # ── Twilio (paid) is required — the free email-to-SMS path was removed ───
+    # ── Send via backend abstraction (Twilio / SignalWire / Vonage) ───────────
     try:
-        _cfg_path2 = Path.home() / '.ai-prowler' / 'config.json'
-        _cfg2: dict = {}
-        if _cfg_path2.exists():
-            import json as _jcfg2
-            _cfg2 = _jcfg2.loads(_cfg_path2.read_text(encoding='utf-8'))
-        _tw_sid  = _cfg2.get('twilio_account_sid',  '').strip()
-        _tw_tok  = _cfg2.get('twilio_auth_token',   '').strip()
-        _tw_from = _cfg2.get('twilio_from_number',  '').strip()
-        _use_twilio = bool(_cfg2.get('twilio_sms_enabled') and
-                           _tw_sid and _tw_tok and _tw_from)
-    except Exception:
-        _use_twilio = False
-        _tw_sid = _tw_tok = _tw_from = ''
+        from sms_backends import get_sms_backend, load_sms_config
+        from sms_inbox import sms_thread_log
+    except ImportError as _ie:
+        return f"❌ SMS modules not found: {_ie}\nEnsure sms_backends.py and sms_inbox.py are in the AI-Prowler directory."
 
-    if not _use_twilio:
-        return (
-            "❌ Twilio is not configured.\n\n"
-            "SMS sending requires Twilio (paid) — the free email-to-SMS\n"
-            "carrier gateway approach was removed since carriers are shutting\n"
-            "those gateways down industry-wide.\n\n"
-            "Go to Settings → SMS / Text Messaging (Twilio — Paid), enable it,\n"
-            "and enter your Account SID, Auth Token, and From Number."
-        )
+    _sms_cfg     = load_sms_config()
+    _sms_backend = get_sms_backend(_sms_cfg)
+    _sms_ok, _sms_msg = _sms_backend.validate_config()
+    if not _sms_ok:
+        return _sms_msg
 
     to_e164 = f"+1{digits}"
-    try:
-        import requests as _req
-    except ImportError:
-        return "❌ requests not installed. Run: pip install requests"
-    try:
-        resp = _req.post(
-            f"https://api.twilio.com/2010-04-01/Accounts/{_tw_sid}/Messages.json",
-            auth=(_tw_sid, _tw_tok),
-            data={"From": _tw_from, "To": to_e164, "Body": message},
-            timeout=15,
-        )
-    except Exception as exc:
-        return f"❌ Twilio request failed: {exc}"
-    if resp.status_code in (200, 201):
-        data = resp.json()
+    _send_ok, _send_result = _sms_backend.send(to_e164, message)
+
+    if _send_ok:
+        # Log the outbound message so check_sms_inbox can route replies
+        _user_id_for_log = (_sms_user or {}).get('id', 'personal') if _sms_user else 'personal'
+        _provider_name   = _sms_cfg.get('sms_provider', 'twilio')
+        try:
+            _contact_for_log = _contact_lookup(digits, _sms_user)
+            _cname_for_log   = (_contact_for_log or {}).get('name', '')
+        except Exception:
+            _cname_for_log = ''
+        try:
+            sms_thread_log(
+                sent_by      = _user_id_for_log,
+                to_number    = digits,
+                body         = message,
+                provider     = _provider_name,
+                contact_name = _cname_for_log,
+            )
+        except Exception:
+            pass
         return (
-            f"✅ SMS sent via Twilio\n"
+            f"✅ SMS sent via {_sms_backend.provider_name.title()}\n"
             f"   To:      {to_e164}\n"
             f"   Message: {message[:80]}{'...' if len(message) > 80 else ''}\n"
-            f"   SID:     {data.get('sid', 'unknown')}"
+            f"   {_send_result}"
         )
-    try:
-        err = resp.json()
-        return (f"❌ Twilio error {resp.status_code}: "
-                f"{err.get('message', resp.text[:200])}")
-    except Exception:
-        return f"❌ Twilio HTTP {resp.status_code}: {resp.text[:200]}"
+    return _send_result
 
 
 @mcp.tool()
@@ -4016,42 +4266,23 @@ def check_sms_replies(
     ctx:         "Context | None" = None,
 ) -> str:
     """
-    Check for inbound SMS replies received on your Twilio number.
+    Check for inbound SMS replies received on your SMS number.
 
-    Twilio (paid) is the only SMS path that supports two-way replies reliably.
-    The free email-to-SMS carrier gateways (vtext.com, txt.att.net, etc.) do
-    NOT support this — those gateways are being phased out industry-wide
-    (AT&T's already shut down, Verizon's is mid-shutdown through 2027) and
-    replies sent that way land in your personal email inbox, disconnected
-    from any conversation with Claude. If two-way replies matter — e.g.
-    confirming a reschedule before driving to a job — use Twilio for that
-    contact, not the free path.
+    V8.0.0: Reads from the local sms_inbox.json (populated by the
+    /sms-webhook endpoint) instead of polling the Twilio API. Instant,
+    works offline, supports all providers.
 
-    This tool queries Twilio's message log directly (no webhook server
-    required) for inbound messages to your Twilio number, optionally
-    filtered to one sender. Call it whenever you want to check for replies:
-    after sending a time-sensitive SMS, at the start of your day, or anytime
-    you ask "did anyone reply?"
-
-    Server mode: all field_crew share one company Twilio number, so this
-    shows every inbound reply to that number — not just replies to texts
-    you personally sent. Use from_number to narrow to a specific customer
-    if you need to check on a particular conversation.
+    Server mode: replies are filtered to threads you personally sent —
+    Mike sees Karen's reply, Jake sees Bob's reply.
 
     Args:
         since_hours: How far back to look, in hours (default 24).
-        from_number: Optional — filter to replies from one phone number only
-                     (any format, digits are normalised). Leave blank to see
-                     all inbound replies.
-        mark_read:   If True (default), remembers the latest message SID seen
-                     so a future enhancement could skip already-seen replies.
-                     Currently informational only — every call within the
-                     since_hours window still shows all matching messages.
+        from_number: Optional — filter to one sender only.
+        mark_read:   If True, marks returned messages as read by you.
         ctx:         MCP context (injected automatically).
 
     Returns:
-        A list of inbound messages (sender, time, body), or a note that
-        there are none, or setup instructions if Twilio isn't configured.
+        A list of inbound messages, or a note that there are none.
 
     Voice examples:
         "Did Vicki reply to that text?"
@@ -4061,116 +4292,340 @@ def check_sms_replies(
     _telemetry_increment_tool_count("check_sms_replies")
 
     try:
-        _cfg_path = Path.home() / '.ai-prowler' / 'config.json'
-        _cfg: dict = {}
-        if _cfg_path.exists():
-            import json as _jcfg
-            _cfg = _jcfg.loads(_cfg_path.read_text(encoding='utf-8'))
-        _tw_sid  = _cfg.get('twilio_account_sid',  '').strip()
-        _tw_tok  = _cfg.get('twilio_auth_token',   '').strip()
-        _tw_from = _cfg.get('twilio_from_number',  '').strip()
-        _enabled = bool(_cfg.get('twilio_sms_enabled'))
-    except Exception:
-        _tw_sid = _tw_tok = _tw_from = ''
-        _enabled = False
+        from sms_inbox import (sms_inbox_read_for_user, sms_inbox_read,
+                               sms_inbox_mark_read)
+    except ImportError as _ie:
+        return f"❌ SMS inbox module not found: {_ie}"
 
-    if not (_enabled and _tw_sid and _tw_tok and _tw_from):
-        return (
-            "❌ Twilio isn't configured, so there's no inbound number to check.\n\n"
-            "The free email-to-SMS path can't receive replies through Claude —\n"
-            "any reply lands in your personal email inbox instead.\n\n"
-            "To enable two-way SMS: Settings → SMS / Text Messaging "
-            "(Twilio — Paid) → Enable, then fill in your Twilio credentials."
-        )
+    _user    = _current_user(ctx)
+    _user_id = (_user or {}).get('id', 'personal') if _user else 'personal'
 
-    import re as _re5
-    digits_filter = ''
+    if _user:
+        msgs = sms_inbox_read_for_user(_user_id, since_hours=since_hours)
+    else:
+        msgs = sms_inbox_read(since_hours=since_hours, from_number=from_number)
+
     if from_number.strip():
-        digits_filter = _re5.sub(r'\D', '', from_number)
-        if len(digits_filter) == 11 and digits_filter[0] == '1':
-            digits_filter = digits_filter[1:]
+        import re as _re5
+        _digits_f = _re5.sub(r'\D', '', from_number)
+        if len(_digits_f) == 11 and _digits_f[0] == '1':
+            _digits_f = _digits_f[1:]
+        msgs = [m for m in msgs if _re5.sub(r'\D', '', m.get('from',''))[-10:] == _digits_f]
 
-    try:
-        import requests as _req2
-        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
-    except ImportError:
-        return "❌ requests not installed. Run: pip install requests"
+    # Exclude WhatsApp — use check_whatsapp_replies() for those
+    msgs = [m for m in msgs if m.get('provider', '') != 'whatsapp']
 
-    since_dt = _dt.now(_tz.utc) - _td(hours=max(1, since_hours))
-
-    try:
-        resp = _req2.get(
-            f"https://api.twilio.com/2010-04-01/Accounts/{_tw_sid}/Messages.json",
-            auth=(_tw_sid, _tw_tok),
-            params={
-                "To": _tw_from,          # inbound messages are TO your Twilio number
-                "DateSent>": since_dt.strftime("%Y-%m-%d"),
-                "PageSize": 50,
-            },
-            timeout=15,
-        )
-    except Exception as exc:
-        return f"❌ Twilio request failed: {exc}"
-
-    if resp.status_code != 200:
-        try:
-            err = resp.json()
-            return (f"❌ Twilio error {resp.status_code}: "
-                    f"{err.get('message', resp.text[:200])}")
-        except Exception:
-            return f"❌ Twilio HTTP {resp.status_code}: {resp.text[:200]}"
-
-    all_msgs = resp.json().get('messages', [])
-    # Inbound = direction starts with "inbound"; filter explicitly since the
-    # To=our-number query also returns outbound messages we sent ourselves.
-    inbound = [m for m in all_msgs if str(m.get('direction', '')).startswith('inbound')]
-
-    if digits_filter:
-        def _norm(p):
-            d = _re5.sub(r'\D', '', p or '')
-            if len(d) == 11 and d[0] == '1':
-                d = d[1:]
-            return d
-        inbound = [m for m in inbound if _norm(m.get('from', '')) == digits_filter]
-
-    if not inbound:
+    if not msgs:
         scope = f" from {from_number}" if from_number.strip() else ""
         return f"📭 No SMS replies{scope} in the last {since_hours} hour(s)."
 
-    # Sort oldest first so a conversation reads top-to-bottom naturally
-    inbound.sort(key=lambda m: m.get('date_sent', ''))
+    if mark_read:
+        for m in msgs:
+            try:
+                sms_inbox_mark_read(m['id'], _user_id)
+            except Exception:
+                pass
 
-    if mark_read and inbound:
-        try:
-            _user_crm = _current_user(ctx)
-            _cache = _contacts_cache_load(_user_crm)
-            _cache['_last_sms_reply_sid'] = inbound[-1].get('sid', '')
-            _contacts_cache_save(_cache, _user_crm)
-        except Exception:
-            pass
-
-    lines = [f"📬 {len(inbound)} SMS repl{'y' if len(inbound)==1 else 'ies'} "
+    lines = [f"📬 {len(msgs)} SMS repl{'y' if len(msgs)==1 else 'ies'} "
              f"in the last {since_hours} hour(s):", ""]
-    for m in inbound:
-        from_e164 = m.get('from', 'unknown')
-        from_digits = _re5.sub(r'\D', '', from_e164)
-        if len(from_digits) == 11 and from_digits[0] == '1':
-            from_digits = from_digits[1:]
-        display_name = from_digits
-        try:
-            _ctc = _contact_lookup(from_digits, _current_user(ctx))
-            if _ctc and _ctc.get('name'):
-                display_name = f"{_ctc['name']} ({from_digits})"
-        except Exception:
-            pass
-        sent_at = m.get('date_sent', 'unknown time')
-        body = (m.get('body') or '').strip()
-        lines.append(f"  From: {display_name}")
-        lines.append(f"  When: {sent_at}")
-        lines.append(f"  Msg:  {body}")
+    for m in msgs:
+        from_display = m.get('contact_name') or m.get('from', 'unknown')
+        lines.append(f"  From: {from_display}")
+        lines.append(f"  When: {m.get('timestamp', 'unknown')[:19]}")
+        lines.append(f"  Msg:  {(m.get('body') or '').strip()}")
         lines.append("")
 
     return '\n'.join(lines).rstrip()
+
+
+@mcp.tool()
+def check_sms_inbox(
+    since_hours: float = 24.0,
+    from_number: str   = "",
+    unread_only: bool  = False,
+    provider:    str   = "",
+    ctx:         "Context | None" = None,
+) -> str:
+    """
+    Check the local SMS / WhatsApp inbox for all inbound messages.
+
+    Reads from sms_inbox.json — instant, no API call. Supports all
+    providers in one place. Use provider='whatsapp' for WhatsApp only.
+
+    Args:
+        since_hours: How far back to look (default 24). Pass 0 for all.
+        from_number: Filter to one sender (any format).
+        unread_only: Only show messages not yet read by you.
+        provider:    Filter by 'twilio', 'signalwire', 'vonage',
+                     or 'whatsapp'. Empty = all.
+        ctx:         MCP context (injected automatically).
+
+    Returns:
+        Formatted list of messages, or 'No messages' if empty.
+
+    Voice examples:
+        "Any messages come in?"
+        "Check WhatsApp messages"
+        "Any unread texts?"
+    """
+    _telemetry_increment_tool_count("check_sms_inbox")
+
+    try:
+        from sms_inbox import sms_inbox_read, sms_inbox_mark_read
+    except ImportError as _ie:
+        return f"❌ SMS inbox module not found: {_ie}"
+
+    _user    = _current_user(ctx)
+    _user_id = (_user or {}).get('id', 'personal') if _user else 'personal'
+
+    msgs = sms_inbox_read(
+        since_hours = since_hours,
+        from_number = from_number,
+        unread_only = unread_only,
+        user_id     = _user_id,
+        provider    = provider,
+    )
+
+    if not msgs:
+        parts = []
+        if unread_only: parts.append("unread")
+        if provider:    parts.append(provider)
+        scope = " ".join(parts)
+        hours = f"in the last {since_hours}h" if since_hours > 0 else "ever"
+        return f"📭 No {scope + ' ' if scope else ''}messages {hours}."
+
+    lines = [f"📬 {len(msgs)} message(s):", ""]
+    for m in msgs:
+        prov         = m.get('provider', '')
+        icon         = "💬" if prov == 'whatsapp' else "📱"
+        from_display = m.get('contact_name') or m.get('from', 'unknown')
+        unread_flag  = " 🔵" if _user_id not in (m.get('read_by') or []) else ""
+        lines.append(f"  {icon} From: {from_display}{unread_flag}")
+        lines.append(f"     When: {m.get('timestamp','')[:19]}")
+        lines.append(f"     Msg:  {(m.get('body') or '').strip()}")
+        lines.append("")
+
+    return '\n'.join(lines).rstrip()
+
+
+@mcp.tool()
+def get_sms_thread(
+    contact: str,
+    since_hours: float = 168.0,
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Show the full two-way conversation thread with a contact.
+
+    Combines your sent messages with their inbound replies in
+    chronological order — like a phone's message history.
+    Works for both SMS and WhatsApp.
+
+    Args:
+        contact:     Contact name or phone number (any format).
+        since_hours: How far back to include replies (default 168 = 7 days).
+        ctx:         MCP context (injected automatically).
+
+    Returns:
+        Full conversation thread, or 'No thread found'.
+
+    Voice examples:
+        "Show my conversation with Karen"
+        "What did I text Torres?"
+    """
+    _telemetry_increment_tool_count("get_sms_thread")
+
+    try:
+        from sms_inbox import sms_thread_get_with_replies
+    except ImportError as _ie:
+        return f"❌ SMS inbox module not found: {_ie}"
+
+    conv = sms_thread_get_with_replies(contact, since_hours=since_hours)
+    if not conv:
+        return (
+            f"📭 No SMS thread found for '{contact}'.\n\n"
+            f"Start a conversation: \"Text {contact} that we're on our way\""
+        )
+
+    msgs  = conv.get('messages', [])
+    name  = conv.get('contact_name', contact)
+    prov  = conv.get('provider', '')
+    lines = [
+        f"💬 Conversation with {name}",
+        f"   Provider: {prov.title() if prov else 'unknown'}",
+        f"   {len(msgs)} message(s)  |  last 7 days",
+        "─" * 45, "",
+    ]
+    for m in msgs:
+        direction = m.get('direction', 'outbound')
+        icon      = "→" if direction == 'outbound' else "←"
+        who       = "You" if direction == 'outbound' else name
+        ts        = (m.get('timestamp', '') or '')[:19]
+        body      = (m.get('body', '') or '').strip()
+        lines.append(f"  {icon} {who}  [{ts}]")
+        lines.append(f"    {body}")
+        lines.append("")
+
+    return '\n'.join(lines).rstrip()
+
+
+@mcp.tool()
+def list_sms_contacts_with_replies(
+    since_hours: float = 168.0,
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    List all contacts you've texted recently, with unread reply counts.
+
+    Shows who you've been in contact with, reply counts, and how many
+    are unread — like a conversations list on your phone.
+
+    Args:
+        since_hours: How far back to include (default 168 = 7 days).
+        ctx:         MCP context (injected automatically).
+
+    Returns:
+        Formatted list of active threads with reply counts.
+
+    Voice examples:
+        "Who has replied to my texts?"
+        "Any unread messages from customers?"
+        "Show my recent SMS conversations"
+    """
+    _telemetry_increment_tool_count("list_sms_contacts_with_replies")
+
+    try:
+        from sms_inbox import sms_active_threads
+    except ImportError as _ie:
+        return f"❌ SMS inbox module not found: {_ie}"
+
+    threads = sms_active_threads(since_hours=since_hours)
+    if not threads:
+        return f"📭 No SMS activity in the last {since_hours:.0f} hours."
+
+    lines = [f"📱 {len(threads)} active SMS thread(s):", ""]
+    for t in threads:
+        name   = t.get('contact_name') or t.get('thread_id', 'unknown')
+        prov   = t.get('provider', '')
+        unread = t.get('unread_replies', 0)
+        total  = t.get('total_replies', 0)
+        unread_str = f"  🔵 {unread} unread" if unread else ""
+        lines.append(f"  • {name}{unread_str}")
+        if total:
+            lines.append(f"    {total} repl{'y' if total==1 else 'ies'} received")
+        if prov:
+            lines.append(f"    via {prov.title()}")
+        lines.append("")
+
+    return '\n'.join(lines).rstrip()
+
+
+@mcp.tool()
+def send_whatsapp(
+    to:      str,
+    message: str,
+    ctx:     "Context | None" = None,
+) -> str:
+    """
+    Send a WhatsApp message via Twilio's WhatsApp API.
+
+    Uses the same Twilio credentials as send_sms — no separate
+    account needed. Works worldwide without carrier restrictions.
+
+    Args:
+        to:      Recipient's phone number or contact name.
+        message: Message text (up to 4096 chars for WhatsApp).
+        ctx:     MCP context (injected automatically).
+
+    Returns:
+        Confirmation, or setup instructions if not configured.
+
+    Voice examples:
+        "WhatsApp Karen that the crew is 10 minutes out"
+        "Send Torres a WhatsApp with the job details"
+    """
+    _telemetry_increment_tool_count("send_whatsapp")
+
+    _wa_user = _current_user(ctx)
+    _wa_allowed, _wa_why = _send_sms_cap(_wa_user)
+    if not _wa_allowed:
+        return f"❌ {_wa_why}"
+
+    try:
+        from sms_backends import get_whatsapp_backend, load_sms_config
+        from sms_inbox import sms_thread_log
+    except ImportError as _ie:
+        return f"❌ SMS modules not found: {_ie}"
+
+    _wa_cfg     = load_sms_config()
+    _wa_backend = get_whatsapp_backend(_wa_cfg)
+    _wa_ok, _wa_hint = _wa_backend.validate_config()
+    if not _wa_ok:
+        return _wa_hint
+
+    import re as _re_wa
+    _wa_digits = _re_wa.sub(r'\D', '', to)
+    if len(_wa_digits) < 10:
+        _wa_contact = _contact_lookup(to, _wa_user)
+        if _wa_contact and _wa_contact.get('phone'):
+            to = _wa_contact['phone']
+
+    _wa_send_ok, _wa_result = _wa_backend.send(to, message)
+
+    if _wa_send_ok:
+        _wa_user_id = (_wa_user or {}).get('id', 'personal') if _wa_user else 'personal'
+        try:
+            sms_thread_log(
+                sent_by      = _wa_user_id,
+                to_number    = to,
+                body         = message,
+                provider     = 'whatsapp',
+                contact_name = '',
+            )
+        except Exception:
+            pass
+        return (
+            f"✅ WhatsApp message sent\n"
+            f"   To:      {to}\n"
+            f"   Message: {message[:80]}{'...' if len(message) > 80 else ''}\n"
+            f"   {_wa_result}"
+        )
+    return _wa_result
+
+
+@mcp.tool()
+def check_whatsapp_replies(
+    since_hours: float = 24.0,
+    from_number: str   = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Check for inbound WhatsApp messages.
+
+    Reads from the local inbox (populated by /whatsapp-webhook) —
+    instant, no API call. Shows only WhatsApp messages, not SMS.
+
+    Args:
+        since_hours: How far back to look (default 24).
+        from_number: Filter to one contact (number or name).
+        ctx:         MCP context (injected automatically).
+
+    Returns:
+        List of inbound WhatsApp messages, or 'No messages'.
+
+    Voice examples:
+        "Any WhatsApp replies?"
+        "Did Karen reply on WhatsApp?"
+    """
+    _telemetry_increment_tool_count("check_whatsapp_replies")
+
+    return check_sms_inbox(
+        since_hours = since_hours,
+        from_number = from_number,
+        unread_only = False,
+        provider    = 'whatsapp',
+        ctx         = ctx,
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -7359,8 +7814,369 @@ def str_replace_in_file(filepath: str,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TOOL 4 — create_directory
+# TOOL 3b — fuzzy_replace_in_file
 # ══════════════════════════════════════════════════════════════════════════════
+@mcp.tool()
+def fuzzy_replace_in_file(filepath: str,
+                          old_str: str,
+                          new_str: str,
+                          dry_run: bool = False) -> str:
+    """
+    CODE TOOLS — Whitespace-tolerant surgical edit. Same as str_replace_in_file
+    but normalises whitespace differences before matching so it succeeds where
+    str_replace_in_file fails due to:
+      • Tab vs spaces differences
+      • Trailing whitespace on lines
+      • CRLF vs LF line endings
+      • Unicode normalisation (em-dash variants, BOM)
+      • Leading/trailing blank lines in old_str
+
+    Use this as the FALLBACK when str_replace_in_file reports "not found" but
+    you can see the text is clearly in the file. Always try str_replace_in_file
+    first — this tool normalises for matching only; the actual replacement is
+    written exactly as new_str (your new content is not whitespace-mangled).
+
+    The tool shows you WHICH normalisation fixed the match so you know what
+    the file's actual whitespace looks like for future edits.
+
+    Args:
+        filepath: Absolute path to edit. Must be writable-allowlisted.
+        old_str:  Text to find (whitespace-tolerant match).
+        new_str:  Replacement text (written exactly as given).
+        dry_run:  If True, shows the diff without writing.
+
+    Returns:
+        Success: same confirmation as str_replace_in_file plus a note on
+                 which normalisation was used.
+        Failure: detailed diagnostic including what was tried.
+    """
+    if not _prewarm_event.wait(timeout=60):
+        return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
+
+    if not old_str:
+        return "⚠️  old_str cannot be empty."
+    if new_str is None:
+        return "⚠️  new_str cannot be None."
+
+    resolved, deny = _resolve_writable_path(filepath, queue_approval=not dry_run)
+    if not resolved:
+        return deny
+    if not Path(resolved).exists():
+        return f"⚠️  File does not exist: {resolved}"
+
+    try:
+        size = Path(resolved).stat().st_size
+    except Exception as exc:
+        return f"⚠️  Cannot stat file: {exc}"
+    if size > _READ_FILE_MAX_BYTES:
+        return f"⚠️  File too large ({size:,} bytes, cap {_READ_FILE_MAX_BYTES:,})."
+
+    try:
+        text, line_ending, file_encoding = _read_text_preserving_endings(resolved)
+    except Exception as exc:
+        return f"⚠️  Read failed: {exc}"
+
+    # ── Normalisation strategies tried in order ────────────────────────────────
+    def _norm_ws(s: str) -> str:
+        """Strip trailing whitespace from every line, normalise tabs to spaces."""
+        return "\n".join(line.rstrip().expandtabs(4) for line in s.split("\n"))
+
+    def _norm_strip(s: str) -> str:
+        """Also strip leading/trailing blank lines."""
+        return _norm_ws(s).strip()
+
+    def _norm_collapse(s: str) -> str:
+        """Collapse all internal whitespace runs to single space per line."""
+        import re as _re
+        lines = s.split("\n")
+        return "\n".join(_re.sub(r'[ \t]+', ' ', line.rstrip()) for line in lines)
+
+    strategies = [
+        ("CRLF normalisation",          lambda s: s.replace("\r\n", "\n").replace("\r", "\n")),
+        ("trailing whitespace strip",   _norm_ws),
+        ("leading/trailing strip",      _norm_strip),
+        ("whitespace collapse",         _norm_collapse),
+    ]
+
+    # Normalise old_str with CRLF first always
+    old_norm_base = old_str.replace("\r\n", "\n").replace("\r", "\n")
+
+    matched_strategy = None
+    matched_old = None
+    matched_text = None   # normalised file text that matched
+
+    # Try each strategy: normalise BOTH file text and old_str the same way
+    for strategy_name, norm_fn in strategies:
+        t_norm = norm_fn(text)
+        o_norm = norm_fn(old_norm_base)
+        if not o_norm:
+            continue
+        count = t_norm.count(o_norm)
+        if count == 1:
+            matched_strategy = strategy_name
+            matched_old = o_norm
+            matched_text = t_norm
+            break
+        if count > 1:
+            return (f"⚠️  fuzzy_replace_in_file: old_str matched {count} times "
+                    f"after '{strategy_name}' normalisation.\n"
+                    f"Add more surrounding context to make it unique.")
+
+    if matched_text is None:
+        return (
+            f"⚠️  fuzzy_replace_in_file: old_str not found in {resolved} "
+            f"even after trying all whitespace normalisations:\n"
+            f"  • CRLF normalisation\n"
+            f"  • trailing whitespace strip\n"
+            f"  • leading/trailing strip\n"
+            f"  • whitespace collapse\n\n"
+            f"Tip: use read_file_lines() to see the exact bytes, then use "
+            f"line_replace_in_file() with the line numbers instead."
+        )
+
+    # Build new text: replace in the ORIGINAL file text using the matched
+    # normalised position to find the replacement point, then splice in new_str.
+    # We find the match position in the normalised text and map it back to
+    # character offsets in the original.
+    idx_norm = matched_text.find(matched_old)
+    # Count newlines before match to get line number
+    line_of_change = matched_text.count("\n", 0, idx_norm) + 1
+
+    # For the actual write, do the replacement in the normalised text
+    # then re-apply the original whitespace for the unchanged parts.
+    # Simplest safe approach: replace in normalised, write normalised.
+    # This means the file's whitespace in the changed region becomes normalised —
+    # acceptable since we're fixing a whitespace-inconsistent file anyway.
+    new_text = matched_text.replace(matched_old, new_str.replace("\r\n", "\n"), 1)
+
+    new_bytes_on_disk = _apply_line_ending(new_text, line_ending).encode(
+        file_encoding, errors="replace"
+    )
+    new_byte_count = len(new_bytes_on_disk)
+
+    if dry_run:
+        out = [
+            f"🔎 DRY RUN (fuzzy) — no changes written to {resolved}",
+            f"   Match found at line {line_of_change} via '{matched_strategy}'",
+            f"   File size would change: {size:,} → {new_byte_count:,} bytes",
+            "",
+            "─── Unified diff (a=before, b=after) ───",
+        ]
+        try:
+            import difflib as _dl
+            diff = list(_dl.unified_diff(
+                matched_text.splitlines(keepends=False),
+                new_text.splitlines(keepends=False),
+                fromfile=f"a/{Path(resolved).name}",
+                tofile=f"b/{Path(resolved).name}",
+                lineterm="", n=3,
+            ))
+            out.extend(diff[:200])
+        except Exception as exc:
+            out.append(f"(diff failed: {exc})")
+        out.append("")
+        out.append("To apply: call again with dry_run=False.")
+        return "\n".join(out)
+
+    ok, msg = _check_and_increment_write_counter()
+    if not ok:
+        return msg
+
+    if new_byte_count > _WRITE_MAX_BYTES:
+        return f"⚠️  Result too large ({new_byte_count:,} bytes, cap {_WRITE_MAX_BYTES:,})."
+
+    backup_path, backup_err = _make_backup(resolved)
+    if backup_err:
+        return f"⚠️  Could not create backup: {backup_err}"
+
+    try:
+        with open(resolved, "wb") as f:
+            f.write(new_bytes_on_disk)
+    except Exception as exc:
+        return f"⚠️  Write failed (backup at {backup_path}): {exc}"
+
+    _log.info("fuzzy_replace_in_file: %s line=%d via '%s' (%d -> %d bytes)",
+              resolved, line_of_change, matched_strategy, size, new_byte_count)
+
+    # Verify block
+    out = [
+        f"✅ Edited {resolved}",
+        f"   Change at line {line_of_change}",
+        f"   {size:,} bytes  →  {new_byte_count:,} bytes",
+        f"   Encoding: {file_encoding}",
+        f"   Backup: {backup_path}",
+        f"   Normalisation used: '{matched_strategy}'",
+        f"   NOT yet indexed — call reindex_file() when done editing.",
+        "",
+        "─── Verify (5 lines before, change region, 5 lines after) ───",
+    ]
+    try:
+        new_lines_list = new_text.splitlines()
+        new_total = len(new_lines_list)
+        new_str_lc = new_str.count("\n") + 1
+        change_start = max(1, line_of_change - 5)
+        change_end   = min(new_total, line_of_change + new_str_lc + 4)
+        for i in range(change_start, change_end + 1):
+            marker = "▶" if line_of_change <= i < line_of_change + new_str_lc else " "
+            if i <= new_total:
+                out.append(f"  {marker}{i:>5}  {new_lines_list[i - 1]}")
+    except Exception as exc:
+        out.append(f"  (verify read failed: {exc})")
+    return "\n".join(out)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOL 3c — line_replace_in_file
+# ══════════════════════════════════════════════════════════════════════════════
+@mcp.tool()
+def line_replace_in_file(filepath: str,
+                         start_line: int,
+                         end_line: int,
+                         new_content: str,
+                         dry_run: bool = False) -> str:
+    """
+    CODE TOOLS — Replace a range of lines by line number. Zero text-matching
+    ambiguity — works on any file regardless of encoding, tabs, or Unicode.
+
+    This is the LAST RESORT when both str_replace_in_file and
+    fuzzy_replace_in_file fail. The workflow is:
+        1. read_file_lines(filepath, start, end)   ← confirm exact lines
+        2. line_replace_in_file(filepath, start, end, new_content)
+
+    The lines from start_line to end_line (inclusive, 1-based) are replaced
+    with new_content. new_content may contain any number of lines — the
+    replacement does not have to be the same number of lines as removed.
+
+    Args:
+        filepath:    Absolute path to edit. Must be writable-allowlisted.
+        start_line:  First line to replace (1-based, inclusive).
+        end_line:    Last line to replace (1-based, inclusive).
+                     Use start_line == end_line to replace a single line.
+        new_content: Text that replaces lines start_line..end_line.
+                     Do NOT include a trailing newline — the tool handles it.
+        dry_run:     If True, shows the diff without writing.
+
+    Returns:
+        Success: confirmation with line range, backup path, and verify block.
+        Failure: clear error (out-of-range, file not found, etc.)
+    """
+    if not _prewarm_event.wait(timeout=60):
+        return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
+
+    if start_line < 1:
+        return "⚠️  start_line must be >= 1."
+    if end_line < start_line:
+        return f"⚠️  end_line ({end_line}) must be >= start_line ({start_line})."
+    if new_content is None:
+        return "⚠️  new_content cannot be None (pass empty string to delete lines)."
+
+    resolved, deny = _resolve_writable_path(filepath, queue_approval=not dry_run)
+    if not resolved:
+        return deny
+    if not Path(resolved).exists():
+        return f"⚠️  File does not exist: {resolved}"
+
+    try:
+        size = Path(resolved).stat().st_size
+    except Exception as exc:
+        return f"⚠️  Cannot stat file: {exc}"
+    if size > _READ_FILE_MAX_BYTES:
+        return f"⚠️  File too large ({size:,} bytes, cap {_READ_FILE_MAX_BYTES:,})."
+
+    try:
+        text, line_ending, file_encoding = _read_text_preserving_endings(resolved)
+    except Exception as exc:
+        return f"⚠️  Read failed: {exc}"
+
+    file_lines = text.split("\n")
+    total_lines = len(file_lines)
+
+    if start_line > total_lines:
+        return (f"⚠️  start_line {start_line} is beyond end of file "
+                f"({total_lines} lines).")
+    if end_line > total_lines:
+        return (f"⚠️  end_line {end_line} is beyond end of file "
+                f"({total_lines} lines). Use {total_lines} to reach the last line.")
+
+    # Build the new file lines
+    new_content_norm = new_content.replace("\r\n", "\n").replace("\r", "\n")
+    replacement_lines = new_content_norm.split("\n")
+
+    # Splice: lines before + new content + lines after
+    before  = file_lines[:start_line - 1]           # 0-based before start
+    after   = file_lines[end_line:]                  # 0-based after end
+    new_file_lines = before + replacement_lines + after
+    new_text = "\n".join(new_file_lines)
+
+    new_bytes_on_disk = _apply_line_ending(new_text, line_ending).encode(
+        file_encoding, errors="replace"
+    )
+    new_byte_count = len(new_bytes_on_disk)
+
+    if dry_run:
+        out = [
+            f"🔎 DRY RUN (line replace) — no changes written to {resolved}",
+            f"   Replacing lines {start_line}–{end_line} "
+            f"({end_line - start_line + 1} line(s) → {len(replacement_lines)} line(s))",
+            f"   File size would change: {size:,} → {new_byte_count:,} bytes",
+            "",
+            "─── Lines being REMOVED ───",
+        ]
+        for i in range(start_line - 1, min(end_line, total_lines)):
+            out.append(f"  - {i+1:>5}  {file_lines[i]}")
+        out.append("")
+        out.append("─── Lines being ADDED ───")
+        for i, l in enumerate(replacement_lines):
+            out.append(f"  + {start_line + i:>5}  {l}")
+        out.append("")
+        out.append("To apply: call again with dry_run=False.")
+        return "\n".join(out)
+
+    ok, msg = _check_and_increment_write_counter()
+    if not ok:
+        return msg
+
+    if new_byte_count > _WRITE_MAX_BYTES:
+        return f"⚠️  Result too large ({new_byte_count:,} bytes, cap {_WRITE_MAX_BYTES:,})."
+
+    backup_path, backup_err = _make_backup(resolved)
+    if backup_err:
+        return f"⚠️  Could not create backup: {backup_err}"
+
+    try:
+        with open(resolved, "wb") as f:
+            f.write(new_bytes_on_disk)
+    except Exception as exc:
+        return f"⚠️  Write failed (backup at {backup_path}): {exc}"
+
+    new_total = len(new_file_lines)
+    _log.info("line_replace_in_file: %s lines %d-%d -> %d lines (%d -> %d bytes)",
+              resolved, start_line, end_line, len(replacement_lines), size, new_byte_count)
+
+    out = [
+        f"✅ Edited {resolved}",
+        f"   Replaced lines {start_line}–{end_line} "
+        f"({end_line - start_line + 1} line(s) → {len(replacement_lines)} line(s))",
+        f"   {size:,} bytes  →  {new_byte_count:,} bytes",
+        f"   Encoding: {file_encoding}",
+        f"   Backup: {backup_path}",
+        f"   NOT yet indexed — call reindex_file() when done editing.",
+        "",
+        "─── Verify (5 lines before, change region, 5 lines after) ───",
+    ]
+    try:
+        verify_start = max(1, start_line - 5)
+        verify_end   = min(new_total, start_line + len(replacement_lines) + 4)
+        for i in range(verify_start, verify_end + 1):
+            marker = "▶" if start_line <= i < start_line + len(replacement_lines) else " "
+            if i <= new_total:
+                out.append(f"  {marker}{i:>5}  {new_file_lines[i - 1]}")
+    except Exception as exc:
+        out.append(f"  (verify read failed: {exc})")
+    return "\n".join(out)
+
+
+
 @mcp.tool()
 def create_directory(dirpath: str, parents: bool = True) -> str:
     """
@@ -8237,15 +9053,24 @@ _LANG_CONFIG = {
     # Verilog / SystemVerilog — Icarus Verilog (iverilog)
     #   iverilog -t null -o /dev/null {file}  → syntax-only, no binary output
     #   On Windows iverilog writes to NUL instead of /dev/null.
-    #   Lint: verilator --lint-only (deeper static analysis, optional install)
+    #   Lint: verilator --lint-only {file}  → deeper static analysis than
+    #   iverilog's syntax-only pass (unused signals, width mismatches,
+    #   latch inference, multi-driven nets, etc.). Optional separate install:
+    #   https://verilator.org or `winget install Verilator.Verilator` —
+    #   the lint check reports a clean "install verilator" message if it's
+    #   not on PATH, same pattern as every other missing-binary case here.
     ".v":    ("Verilog",         "iverilog",
-              ["iverilog", "-t", "null", "-o", "{verilog_null}", "{file}"], None),
+              ["iverilog", "-t", "null", "-o", "{verilog_null}", "{file}"],
+              ["verilator", "--lint-only", "-Wall", "{file}"]),
     ".vh":   ("Verilog Header",  "iverilog",
-              ["iverilog", "-t", "null", "-o", "{verilog_null}", "{file}"], None),
+              ["iverilog", "-t", "null", "-o", "{verilog_null}", "{file}"],
+              ["verilator", "--lint-only", "-Wall", "{file}"]),
     ".sv":   ("SystemVerilog",   "iverilog",
-              ["iverilog", "-g2012", "-t", "null", "-o", "{verilog_null}", "{file}"], None),
+              ["iverilog", "-g2012", "-t", "null", "-o", "{verilog_null}", "{file}"],
+              ["verilator", "--lint-only", "-Wall", "--sv", "{file}"]),
     ".svh":  ("SystemVerilog Header", "iverilog",
-              ["iverilog", "-g2012", "-t", "null", "-o", "{verilog_null}", "{file}"], None),
+              ["iverilog", "-g2012", "-t", "null", "-o", "{verilog_null}", "{file}"],
+              ["verilator", "--lint-only", "-Wall", "--sv", "{file}"]),
     # VHDL — GHDL
     #   ghdl -s {file}  → syntax-only analysis, no elaborate/run step
     #   Lint: ghdl -a {file}  → full semantic analysis (catches more than -s)
@@ -8413,12 +9238,15 @@ def lint_check(filepath: str, timeout_sec: int = _DEV_CHECK_TIMEOUT_SEC) -> str:
       Python      : pyflakes  (bundled — catches NameError-ish issues at lint time)
       TypeScript  : tsc --noEmit  (same as syntax_check; tsc IS the linter for TS)
       Go          : go vet  (built into Go toolchain)
+      Verilog     : verilator --lint-only -Wall  (unused signals, width
+                    mismatches, latch inference, multi-driven nets — separate
+                    optional install from iverilog, which syntax_check uses)
+      SystemVerilog: verilator --lint-only -Wall --sv  (same tool, SV mode)
       VHDL        : ghdl -a  (full semantic analysis, catches more than ghdl -s)
       Others      : no standard lint tool — use syntax_check instead.
 
-    If a language has no lint tool available (Perl, Ruby, PHP, C/C++,
-    Verilog/SystemVerilog, etc.), returns a clear "ℹ️ No lint tool for <lang>;
-    use syntax_check" message.
+    If a language has no lint tool available (Perl, Ruby, PHP, C/C++, etc.),
+    returns a clear "ℹ️ No lint tool for <lang>; use syntax_check" message.
 
     Available in all editions/modes; the file must be under a tracked
     read-allowlisted root regardless of edition.
@@ -9167,10 +9995,10 @@ def run_script_kill(job_id: str) -> str:
 # All subsequent email tools (send_email, send_alert, send_learnings_report,
 # send_file) pick up the stored config automatically.
 #
-# Server-mode safety: in server mode only field_crew may use send_email /
-# send_alert / send_sms — they have no personal AI-Prowler install to use instead.
-# Owner/manager/staff use their own personal installs for email and SMS.
-# configure_email, send_file, send_learnings_report remain personal-only.
+# Server-mode safety (v8.0.0): ALL roles may use send_email / send_alert /
+# send_learnings_report — owner, manager, staff, and field_crew all have
+# can_send_email=True. configure_email and send_file remain personal-only
+# (configure_email reconfigures SMTP; send_file attaches arbitrary files).
 #
 # RECIPIENT SOURCES for field_crew in server mode:
 #   Email (send_email / send_alert):
@@ -9211,14 +10039,14 @@ def _CONTACTS_CACHE_PATH(user: "dict | None" = None) -> Path:
     Personal mode (user=None): single shared contacts_cache.json — there's
     only one person using this install, so there's nothing to separate.
 
-    Server mode (user is not None): only field_crew get a private, per-user
-    file (contacts_cache_<username>.json). Owner/manager/staff each have
-    their own personal AI-Prowler install with its own contacts_cache.json,
-    so the server doesn't need to maintain contacts for them — calling this
-    for a non-field_crew server user falls back to the shared file, which
-    in practice should stay empty for those roles.
+    Server mode (user is not None): EVERY role gets its own private,
+    per-user file (contacts_cache_<username>.json) — owner, manager, staff,
+    and field_crew all save and look up contacts independently of each
+    other. This matters because v8.0.0 opened email/SMS/WhatsApp to every
+    server-mode role, not just field_crew, so any role might say "text
+    David" and expect their own saved contact, not someone else's.
     """
-    if user is not None and user.get('role') == 'field_crew':
+    if user is not None:
         uname = (user.get('username') or user.get('id') or
                  user.get('name') or 'unknown').strip().lower()
         # Sanitise to a safe filename component
@@ -9337,8 +10165,9 @@ def _lookup_customer_email(name_or_id: str) -> "str | None":
 
     Matches CustomerID (CUST-####), Company Name, First+Last Name, or any
     partial name match (case-insensitive). Returns the email string or None.
-    Used by send_email / send_alert in server mode so field crew can address
-    customers by name without knowing their email.
+    Used by send_email / send_alert so any role can address customers by
+    name without knowing their email — works the same in personal mode and
+    for every server-mode role (owner, manager, staff, field_crew).
 
     v8.0.0 — enables customer email from the job spreadsheet.
     """
@@ -9513,9 +10342,8 @@ def _send_email_cap(user: "dict | None") -> tuple:
     """Capability gate for send_email and send_alert in server mode. PURE.
 
     Personal mode (user=None): always allowed (personal SMTP, single user).
-    Server mode: only field_crew may send email — they have no personal
-    AI-Prowler install to use instead. Owner/manager/staff use their own
-    personal installs.
+    Server mode (v8.0.0): ALL roles may send email — owner, manager, staff,
+    and field_crew all have can_send_email=True in _ROLE_CAPS.
 
     Recipients in server mode: customers in the job spreadsheet (Customers
     sheet, Email column — matched by name/company/ID) OR registered server
@@ -9541,14 +10369,14 @@ def _send_sms_cap(user: "dict | None") -> tuple:
     """Capability gate for send_sms in server mode. PURE.
 
     Personal mode (user=None): always allowed (single-user desktop install).
-    Server mode: only field_crew may call send_sms — they have no personal
-    AI-Prowler install to use instead. Owner/manager/staff use their own
-    personal installs for SMS (Twilio).
+    Server mode: True for ALL roles — owner, manager, staff, and field_crew
+    can all send SMS via the company's configured SMS provider (Twilio,
+    SignalWire, or Vonage).
 
-    KNOWN LIMITATION: field_crew all share the one company Twilio number,
-    so check_sms_replies() can't yet attribute an inbound reply to whichever
-    crew member sent the original outbound text — every reply to that number
-    is visible to all field_crew. Accepted as a temporary gap.
+    Inbound replies ARE correctly attributed per user: check_sms_replies()
+    reads from a local webhook-backed inbox (sms_inbox.json/sms_threads.json)
+    and filters to only the threads the calling user personally sent — Mike
+    will not see Karen's reply to Jake's text. See sms_inbox.py for details.
 
     Returns (allowed: bool, reason: str).
     """
@@ -9571,8 +10399,11 @@ def configure_email(smtp_host: str, smtp_port: int, username: str,
     Configure SMTP email settings for AI-Prowler. One-time setup — all other
     email tools use the saved config automatically after this.
 
-    Email tools are available in personal mode only. They are not available
-    on shared company servers (server mode).
+    configure_email is personal-mode only — it sets YOUR SMTP account, and
+    a shared company server's SMTP is configured once by an admin instead.
+    Once that's done, send_email / send_alert work for every server role
+    (owner, manager, staff, field_crew); only configure_email itself,
+    send_file, and send_learnings_report remain personal-install-only.
 
     Supports any SMTP provider:
       • Gmail   : smtp.gmail.com  port 587  (requires a 16-digit App Password,
@@ -9653,7 +10484,7 @@ def send_email(to: str, subject: str, body: str,
     """
     Send an email via the configured SMTP account.
 
-    In server mode, field crew may email:
+    In server mode, any role (owner, manager, staff, field_crew) may email:
       • Other registered users of this server (by email address or name).
       • Customers listed in the job spreadsheet (by name, company, or CustomerID).
         The Customers sheet Email column is used — no need to know the address.
@@ -9736,7 +10567,7 @@ def send_email(to: str, subject: str, body: str,
     if not body.strip():
         return "❌ body is required."
 
-    # v7.0.1 Q5: field_crew may send email in server mode; others use personal install.
+    # v8.0.0: all server-mode roles may send email via the company SMTP.
     allowed, why = _send_email_cap(user)
     if not allowed:
         return f"❌ {why}"
@@ -9837,7 +10668,7 @@ def send_alert(message: str, to: str = "",
     if not message:
         return "❌ message is required."
 
-    # v7.0.1 Q5: field_crew may send alerts in server mode; others use personal install.
+    # v8.0.0: all server-mode roles may send alerts via the company SMTP.
     user = _current_user(ctx)
     allowed, why = _send_email_cap(user)
     if not allowed:
@@ -10145,27 +10976,42 @@ def export_learnings_file(filepath: str,
 @mcp.tool()
 def send_learnings_report(to: str = "",
                           category: str = "",
+                          source: str = "",
+                          recorded_by: str = "",
+                          tags: str = "",
+                          min_confidence: float = 0.0,
+                          outcome: str = "",
+                          since_date: str = "",
                           subject: str = "",
                           include_inactive: bool = False,
                           ctx: Context = None) -> str:
     """
-    Export learnings as a formatted HTML email report and send it. Combines
-    get_learnings_report with send_email in one voice command.
+    Export learnings as a formatted HTML email report and send it.
+    Supports multiple filters so you can send targeted reports.
 
     Args:
         to:               Recipient email. Leave blank for configured default_to.
-        category:         Filter to a single category. Leave blank for all.
+        category:         Filter to a single category (e.g. 'client', 'safety').
+        source:           Filter by source (e.g. 'operator', 'claude', 'field_crew').
+        recorded_by:      Filter by who recorded it (server mode employee name).
+        tags:             Comma-separated tags to filter by (any match).
+        min_confidence:   Minimum confidence score 0.0–1.0 (default 0.0 = all).
+        outcome:          Filter by outcome (e.g. 'success', 'failure', 'unknown').
+        since_date:       Only include learnings recorded on or after this date
+                          (YYYY-MM-DD format).
         subject:          Email subject. Auto-generated if blank.
         include_inactive: Include archived/deprecated learnings (default False).
-        ctx:              MCP context (injected automatically)
+        ctx:              MCP context (injected automatically).
 
     Returns:
         "✅ Learnings report sent to <address>" or error string.
 
     Voice examples:
         "Email all my learnings to david@company.com"
-        "Send my business lessons to the team"
-        "Email a summary of my client learnings to myself"
+        "Send learnings recorded by Mike to the team"
+        "Email safety category learnings from this month"
+        "Send all learnings with source field_crew to david@company.com"
+        "Email learnings tagged urgent to myself"
     """
     _telemetry_increment_tool_count("send_learnings_report")
 
@@ -10179,7 +11025,7 @@ def send_learnings_report(to: str = "",
         return "❌ No recipient address."
 
     user = _current_user(ctx)
-    allowed, why = _email_allowed_for_user(user)
+    allowed, why = _send_email_cap(user)
     if not allowed:
         return f"❌ {why}"
 
@@ -10192,42 +11038,92 @@ def send_learnings_report(to: str = "",
     except Exception as _e:
         return f"❌ Could not load learnings: {_e}"
 
-    cat = (category or "").strip().lower()
-    if cat:
-        learnings = [l for l in learnings if l.get("category", "").lower() == cat]
+    # ── Apply filters ─────────────────────────────────────────────────────────
     if not include_inactive:
         learnings = [l for l in learnings
                      if l.get("status", "active") == "active"]
+
+    if (category or "").strip():
+        _cat = category.strip().lower()
+        learnings = [l for l in learnings
+                     if l.get("category", "").lower() == _cat]
+
+    if (source or "").strip():
+        _src = source.strip().lower()
+        learnings = [l for l in learnings
+                     if l.get("source", "").lower() == _src]
+
+    if (recorded_by or "").strip():
+        _rb = recorded_by.strip().lower()
+        learnings = [l for l in learnings
+                     if l.get("recorded_by", "").lower() == _rb]
+
+    if (outcome or "").strip():
+        _out = outcome.strip().lower()
+        learnings = [l for l in learnings
+                     if l.get("outcome", "").lower() == _out]
+
+    if min_confidence > 0.0:
+        learnings = [l for l in learnings
+                     if float(l.get("confidence", 0.0)) >= min_confidence]
+
+    if (tags or "").strip():
+        _tag_list = [t.strip().lower() for t in tags.split(",") if t.strip()]
+        learnings = [l for l in learnings
+                     if any(t in [x.lower() for x in l.get("tags", [])]
+                            for t in _tag_list)]
+
+    if (since_date or "").strip():
+        _since = since_date.strip()
+        learnings = [l for l in learnings
+                     if (l.get("created_at") or "")[:10] >= _since]
 
     if not learnings:
         return "ℹ️  No learnings matched the filter — nothing to send."
 
     import datetime as _dt5
 
-    # Build HTML report
-    cat_label = category if category else "All Categories"
+    # ── Build filter summary for report header ────────────────────────────────
+    active_filters = []
+    if category:     active_filters.append(f"Category: {category}")
+    if source:       active_filters.append(f"Source: {source}")
+    if recorded_by:  active_filters.append(f"Recorded by: {recorded_by}")
+    if tags:         active_filters.append(f"Tags: {tags}")
+    if outcome:      active_filters.append(f"Outcome: {outcome}")
+    if min_confidence > 0.0: active_filters.append(f"Min confidence: {min_confidence:.0%}")
+    if since_date:   active_filters.append(f"Since: {since_date}")
+    filter_label = " | ".join(active_filters) if active_filters else "All (no filter)"
+
+    # ── Build HTML report ─────────────────────────────────────────────────────
     html_rows = ""
     for l in learnings:
-        tags = ", ".join(l.get("tags", []))
+        tag_str = ", ".join(l.get("tags", []))
+        rb      = l.get("recorded_by", "") or "—"
+        src     = l.get("source", "") or "—"
+        conf    = f"{float(l.get('confidence', 0)):.0%}"
         html_rows += (
             f"<tr>"
             f"<td style='padding:6px;border-bottom:1px solid #eee'><b>{l.get('title','')}</b></td>"
             f"<td style='padding:6px;border-bottom:1px solid #eee'>{l.get('category','')}</td>"
-            f"<td style='padding:6px;border-bottom:1px solid #eee'>{l.get('confidence','')}</td>"
+            f"<td style='padding:6px;border-bottom:1px solid #eee'>{src}</td>"
+            f"<td style='padding:6px;border-bottom:1px solid #eee'>{rb}</td>"
+            f"<td style='padding:6px;border-bottom:1px solid #eee'>{conf}</td>"
             f"<td style='padding:6px;border-bottom:1px solid #eee'>{l.get('content','')[:200]}</td>"
-            f"<td style='padding:6px;border-bottom:1px solid #eee'>{tags}</td>"
-            f"<td style='padding:6px;border-bottom:1px solid #eee'>{l.get('recorded_at','')[:10]}</td>"
+            f"<td style='padding:6px;border-bottom:1px solid #eee'>{tag_str}</td>"
+            f"<td style='padding:6px;border-bottom:1px solid #eee'>{l.get('created_at','')[:10]}</td>"
             f"</tr>"
         )
 
     html_body = f"""<html><body style='font-family:Segoe UI,Arial,sans-serif;color:#222'>
 <h2 style='color:#005a9e'>AI-Prowler Learnings Report</h2>
-<p><b>Category:</b> {cat_label} &nbsp;|&nbsp; <b>Count:</b> {len(learnings)}
+<p><b>Filters:</b> {filter_label} &nbsp;|&nbsp; <b>Count:</b> {len(learnings)}
    &nbsp;|&nbsp; <b>Generated:</b> {_dt5.datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
 <table style='border-collapse:collapse;width:100%;font-size:13px'>
 <tr style='background:#005a9e;color:white'>
   <th style='padding:8px;text-align:left'>Title</th>
   <th style='padding:8px;text-align:left'>Category</th>
+  <th style='padding:8px;text-align:left'>Source</th>
+  <th style='padding:8px;text-align:left'>Recorded By</th>
   <th style='padding:8px;text-align:left'>Confidence</th>
   <th style='padding:8px;text-align:left'>Content</th>
   <th style='padding:8px;text-align:left'>Tags</th>
@@ -10240,15 +11136,20 @@ Sent by AI-Prowler — Agentic RAG Knowledge Base</p>
 </body></html>"""
 
     # Plain-text fallback
-    plain = f"AI-Prowler Learnings Report — {cat_label} — {len(learnings)} entries\n\n"
+    plain = (f"AI-Prowler Learnings Report\n"
+             f"Filters: {filter_label}\n"
+             f"Count: {len(learnings)}\n\n")
     for l in learnings:
-        plain += f"• {l.get('title','')} [{l.get('category','')}]\n"
-        plain += f"  {l.get('content','')[:120]}\n\n"
+        plain += f"• {l.get('title','')} [{l.get('category','')}]"
+        if l.get('recorded_by'): plain += f" — {l.get('recorded_by')}"
+        plain += f"\n  {l.get('content','')[:120]}\n\n"
 
     if not subject.strip():
-        subject = (f"AI-Prowler Learnings Report"
-                   + (f" — {category}" if category else "")
-                   + f" ({len(learnings)} entries)")
+        parts = ["AI-Prowler Learnings Report"]
+        if active_filters:
+            parts.append(" — " + ", ".join(active_filters[:2]))
+        parts.append(f" ({len(learnings)} entries)")
+        subject = "".join(parts)
 
     ok, msg = _send_smtp(to, subject, plain, body_html=html_body)
     if ok:
@@ -11421,7 +12322,7 @@ _USER_ROLES = ("owner", "manager", "staff", "field_crew")
 
 # Per-role capabilities that are NOT per-collection (those come from scopes).
 # v7.0.1 additions: manage_db, can_write_shared, can_send_email.
-# v8.0.0 addition:  can_send_sms — mirrors can_send_email; field_crew only.
+# v8.0.0 additions: can_send_sms (all roles); can_send_email extended to ALL roles.
 #
 #   read_all_role_scopes : owner sees every scope:* collection (any assigned scope)
 #   read_others_private  : owner may read any user:* collection
@@ -11433,34 +12334,23 @@ _USER_ROLES = ("owner", "manager", "staff", "field_crew")
 #                          "limited" — index_path into own scopes/private only (staff)
 #                          "none"    — no DB management tools at all (field_crew)
 #   can_send_email       : may call send_email / send_alert in server mode.
-#                          False for owner/manager/staff (they have personal installs).
-#                          True for field_crew (no personal install available).
-#                          Restricted to registered server users as recipients —
-#                          only users.json email addresses are available.
-#   can_send_sms         : may call send_sms in server mode.
-#                          True for field_crew — they have no personal install
-#                          and are the primary users of action tools in the
-#                          field. False for owner/manager/staff (use their own
-#                          personal installs for SMS instead).
-#                          KNOWN LIMITATION: all field_crew share one Twilio
-#                          number, so inbound replies (check_sms_replies) can't
-#                          yet be attributed to which crew member sent the
-#                          original text — everyone sees all replies to that
-#                          number. Accepted as a temporary gap; revisit if a
-#                          per-crew-member reply-routing design is built.
+#                          v8.0.0: True for ALL roles — owner, manager, staff,
+#                          and field_crew can all send email via the company SMTP.
+#   can_send_sms         : may call send_sms / send_whatsapp in server mode.
+#                          v8.0.0: True for ALL roles.
 _ROLE_CAPS = {
     # owner — unrestricted: full DB management, reads all scopes, admin rights
     "owner":      {"read_all_role_scopes": True,  "read_others_private": True,
                    "can_write": True,  "can_write_shared": True,  "is_admin": True,
-                   "manage_db": "full",    "can_send_email": False, "can_send_sms": False},
+                   "manage_db": "full",    "can_send_email": True,  "can_send_sms": True},
     # manager — full DB management within their assigned scopes + shared
     "manager":    {"read_all_role_scopes": False, "read_others_private": False,
                    "can_write": True,  "can_write_shared": True,  "is_admin": False,
-                   "manage_db": "full",    "can_send_email": False, "can_send_sms": False},
+                   "manage_db": "full",    "can_send_email": True,  "can_send_sms": True},
     # staff — limited DB: may index own private + assigned scopes; NOT shared or destructive ops
     "staff":      {"read_all_role_scopes": False, "read_others_private": False,
                    "can_write": True,  "can_write_shared": False, "is_admin": False,
-                   "manage_db": "limited", "can_send_email": False, "can_send_sms": False},
+                   "manage_db": "limited", "can_send_email": True,  "can_send_sms": True},
     # field_crew — no DB management; may send email and SMS (no personal AI-Prowler install)
     "field_crew": {"read_all_role_scopes": False, "read_others_private": False,
                    "can_write": False, "can_write_shared": False, "is_admin": False,
@@ -12312,6 +13202,62 @@ def _run_server_mode(port: int, token: str,
             # ── OAuth / health endpoints (no bearer auth required) ────────────
             if path == "/health":
                 await _send_text(send, 200, "OK")
+                return
+
+            # ── SMS / WhatsApp webhooks (no bearer — signed by Twilio) ────────
+            if path in ("/sms-webhook", "/whatsapp-webhook") and method == "POST":
+                body_bytes = await _read_body(receive)
+                import urllib.parse as _whup
+                params = dict(_whup.parse_qsl(body_bytes.decode("utf-8", errors="replace")))
+                if not params:
+                    await _send_text(send, 400, "Bad Request")
+                    return
+                try:
+                    from sms_inbox import (sms_inbox_append,
+                                          validate_twilio_signature,
+                                          validate_signalwire_signature)
+                    from sms_backends import load_sms_config
+                    cfg        = load_sms_config()
+                    provider   = str(cfg.get("sms_provider", "twilio")).lower()
+                    auth_token = (cfg.get("twilio_auth_token")
+                                  or cfg.get("signalwire_auth_token", ""))
+                    headers_d  = {k.lower().decode(): v.decode("utf-8","ignore")
+                                  for k, v in scope.get("headers", [])}
+                    signature  = headers_d.get("x-twilio-signature", "")
+                    scheme     = "https"
+                    host       = headers_d.get("host", "localhost")
+                    req_url    = f"{scheme}://{host}{path}"
+
+                    if auth_token and signature:
+                        if provider == "signalwire":
+                            valid = validate_signalwire_signature(auth_token, signature, req_url, params)
+                        else:
+                            valid = validate_twilio_signature(auth_token, signature, req_url, params)
+                        if not valid:
+                            _log.warning("Webhook: invalid signature on %s", path)
+                            await _send_text(send, 403, "Forbidden")
+                            return
+
+                    is_wa    = path == "/whatsapp-webhook"
+                    prov_tag = "whatsapp" if is_wa else provider
+                    sms_inbox_append(
+                        message_id   = params.get("MessageSid","") or params.get("SmsSid",""),
+                        from_number  = params.get("From",""),
+                        to_number    = params.get("To",""),
+                        body         = params.get("Body",""),
+                        provider     = prov_tag,
+                        contact_name = "",
+                        timestamp    = "",
+                    )
+                    _log.info("Webhook %s: stored inbound from=%s", path, params.get("From",""))
+                except Exception as _whe:
+                    _log.error("Webhook %s error: %s", path, _whe)
+
+                twiml = b"<?xml version='1.0' encoding='UTF-8'?><Response/>"
+                await send({"type": "http.response.start", "status": 200,
+                            "headers": [[b"content-type", b"text/xml"],
+                                        [b"content-length", str(len(twiml)).encode()]]})
+                await send({"type": "http.response.body", "body": twiml})
                 return
 
             if path == "/.well-known/oauth-protected-resource":
@@ -13400,7 +14346,8 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
     # This pure ASGI class passes bytes through directly without any buffering.
     _PUBLIC_PATHS = {"/health", "/authorize", "/token", "/register",
                      "/.well-known/oauth-authorization-server",
-                     "/.well-known/oauth-protected-resource"}
+                     "/.well-known/oauth-protected-resource",
+                     "/sms-webhook", "/whatsapp-webhook"}
 
     class _AuthASGI:
         """Zero-buffering ASGI auth wrapper — safe for SSE/streaming responses."""
@@ -13445,13 +14392,162 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
             await self._app(scope, receive, send)
 
     # ── Build OAuth-only routes app ──────────────────────────────────────────
+
+    # ── SMS / WhatsApp webhook handlers ──────────────────────────────────────
+    async def sms_webhook(request: Request):
+        """
+        POST /sms-webhook — receives inbound SMS from Twilio / SignalWire.
+
+        Twilio and SignalWire POST form-encoded data here when a message is
+        received on your SMS number.  The request is signed with HMAC-SHA1
+        using your Auth Token — we validate the signature before storing.
+
+        Responds with empty TwiML so Twilio doesn't auto-reply.
+        No Bearer token required (Twilio calls this, not Claude).
+        """
+        try:
+            from sms_inbox import sms_inbox_append, validate_twilio_signature, validate_signalwire_signature
+            from sms_backends import load_sms_config
+        except ImportError as _e:
+            _log.error("sms_webhook: import error — %s", _e)
+            return PlainTextResponse("<?xml version='1.0'?><Response/>",
+                                     media_type="text/xml", status_code=200)
+
+        try:
+            body_bytes = await request.body()
+            import urllib.parse as _up
+            params = dict(_up.parse_qsl(body_bytes.decode("utf-8", errors="replace")))
+        except Exception as _e:
+            _log.error("sms_webhook: body parse error — %s", _e)
+            return PlainTextResponse("Bad Request", status_code=400)
+
+        if not params:
+            return PlainTextResponse("Bad Request", status_code=400)
+
+        # Signature validation
+        cfg        = load_sms_config()
+        provider   = str(cfg.get("sms_provider", "twilio")).lower()
+        auth_token = cfg.get("twilio_auth_token") or cfg.get("signalwire_auth_token", "")
+        signature  = request.headers.get("X-Twilio-Signature", "")
+        url        = str(request.url)
+
+        if auth_token and signature:
+            if provider == "signalwire":
+                valid = validate_signalwire_signature(auth_token, signature, url, params)
+            else:
+                valid = validate_twilio_signature(auth_token, signature, url, params)
+            if not valid:
+                _log.warning("sms_webhook: invalid signature — rejecting inbound message")
+                return PlainTextResponse("Forbidden", status_code=403)
+        else:
+            _log.warning("sms_webhook: no auth_token or signature — accepting (dev mode)")
+
+        # Store the inbound message
+        msg_id    = params.get("MessageSid", "") or params.get("SmsSid", "")
+        from_num  = params.get("From", "")
+        to_num    = params.get("To", "")
+        body_text = params.get("Body", "")
+
+        # Resolve contact name from contacts cache
+        contact_name = ""
+        try:
+            from_digits = "".join(c for c in from_num if c.isdigit())
+            if len(from_digits) == 11 and from_digits[0] == '1':
+                from_digits = from_digits[1:]
+            cache = _contacts_cache_load(None)
+            for entry in (cache.get("contacts") or []):
+                ph = "".join(c for c in (entry.get("phone","") or "") if c.isdigit())
+                if len(ph) == 11 and ph[0] == '1': ph = ph[1:]
+                if ph == from_digits:
+                    contact_name = entry.get("name","")
+                    break
+        except Exception:
+            pass
+
+        appended = sms_inbox_append(
+            message_id   = msg_id,
+            from_number  = from_num,
+            to_number    = to_num,
+            body         = body_text,
+            provider     = provider,
+            contact_name = contact_name,
+            timestamp    = "",
+        )
+        _log.info("sms_webhook: inbound from=%s to=%s appended=%s", from_num, to_num, appended)
+
+        # Return empty TwiML — Twilio expects this, otherwise it will
+        # try to play a default response message to the caller.
+        return PlainTextResponse(
+            "<?xml version='1.0' encoding='UTF-8'?><Response/>",
+            media_type="text/xml", status_code=200)
+
+    async def whatsapp_webhook(request: Request):
+        """
+        POST /whatsapp-webhook — receives inbound WhatsApp messages via Twilio.
+
+        Identical to sms_webhook but stores messages with provider='whatsapp'.
+        Register this URL in the Twilio Console under WhatsApp → Sandbox →
+        'When a message comes in'.
+        """
+        try:
+            from sms_inbox import sms_inbox_append, validate_twilio_signature
+            from sms_backends import load_sms_config
+        except ImportError as _e:
+            _log.error("whatsapp_webhook: import error — %s", _e)
+            return PlainTextResponse("<?xml version='1.0'?><Response/>",
+                                     media_type="text/xml", status_code=200)
+
+        try:
+            body_bytes = await request.body()
+            import urllib.parse as _up2
+            params = dict(_up2.parse_qsl(body_bytes.decode("utf-8", errors="replace")))
+        except Exception as _e:
+            _log.error("whatsapp_webhook: body parse error — %s", _e)
+            return PlainTextResponse("Bad Request", status_code=400)
+
+        if not params:
+            return PlainTextResponse("Bad Request", status_code=400)
+
+        # Signature validation (same as SMS — Twilio signs WhatsApp webhooks too)
+        cfg        = load_sms_config()
+        auth_token = cfg.get("twilio_auth_token", "")
+        signature  = request.headers.get("X-Twilio-Signature", "")
+        url        = str(request.url)
+
+        if auth_token and signature:
+            if not validate_twilio_signature(auth_token, signature, url, params):
+                _log.warning("whatsapp_webhook: invalid signature — rejecting")
+                return PlainTextResponse("Forbidden", status_code=403)
+
+        msg_id    = params.get("MessageSid", "")
+        from_num  = params.get("From", "")   # e.g. 'whatsapp:+13865550101'
+        to_num    = params.get("To",   "")
+        body_text = params.get("Body", "")
+
+        sms_inbox_append(
+            message_id   = msg_id,
+            from_number  = from_num,
+            to_number    = to_num,
+            body         = body_text,
+            provider     = "whatsapp",
+            contact_name = "",
+            timestamp    = "",
+        )
+        _log.info("whatsapp_webhook: inbound from=%s appended", from_num)
+
+        return PlainTextResponse(
+            "<?xml version='1.0' encoding='UTF-8'?><Response/>",
+            media_type="text/xml", status_code=200)
+
     oauth_only_app = Starlette(routes=[
         Route("/health",  PlainTextResponse("OK")),
         Route("/.well-known/oauth-protected-resource",   oauth_protected_resource),
         Route("/.well-known/oauth-authorization-server", oauth_metadata),
         Route("/register",  register_client, methods=["POST"]),
         Route("/authorize", authorize, methods=["GET", "POST"]),
-        Route("/token",   token_endpoint, methods=["POST"]),
+        Route("/token",     token_endpoint, methods=["POST"]),
+        Route("/sms-webhook",       sms_webhook,       methods=["POST"]),
+        Route("/whatsapp-webhook",  whatsapp_webhook,  methods=["POST"]),
     ])
 
     # ── Get FastMCP ASGI app ──────────────────────────────────────────────────

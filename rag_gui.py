@@ -1157,7 +1157,7 @@ then ask Claude questions from your desktop or phone.
 ─────────────────────────────────────────────────
  KNOWLEDGE BASE (RAG)
 ─────────────────────────────────────────────────
-• 60 MCP tools for Claude Desktop & Claude.ai mobile
+• 77 MCP tools for Claude Desktop & Claude.ai mobile
 • 65+ file types: PDF, Word, Excel, PowerPoint, HTML,
   CSV, email (.eml/.msg/.mbox), images & more
 • Automatic OCR for scanned PDFs and images
@@ -1176,8 +1176,8 @@ then ask Claude questions from your desktop or phone.
  CODE TOOLS
 ─────────────────────────────────────────────────
 • Create, edit, and manage files in tracked directories
-• str_replace, backup/restore, directory management
-• Lint, syntax check, and pytest runner
+• str_replace, fuzzy_replace, line_replace, backup/restore
+• Lint, syntax check, compile check, and script runner
 
 ─────────────────────────────────────────────────
  SELF-LEARNING (🧠 tab)
@@ -1191,12 +1191,15 @@ then ask Claude questions from your desktop or phone.
 ─────────────────────────────────────────────────
 • Route optimization, weather, geocoding (free, no API key)
 • Job tracker spreadsheet — read and update from Claude
+• Invoicing, recurring jobs, time tracking, AR aging
 
 ─────────────────────────────────────────────────
- EMAIL ALERTS
+ EMAIL, SMS & WHATSAPP
 ─────────────────────────────────────────────────
 • Send emails, alerts, file attachments, learnings reports
 • Gmail, iCloud, Outlook, or any SMTP provider
+• Text or WhatsApp anyone via Twilio, SignalWire, or Vonage
+• Reply checking with per-user attribution in server mode
 
 ⚠  .doc and legacy .xls not supported — convert to .docx / .xlsx
 
@@ -2262,7 +2265,7 @@ Version {APP_VERSION}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 AI-Prowler is an Agentic RAG platform — it gives Claude
-60 MCP tools to search, cross-reference, and synthesize
+77 MCP tools to search, cross-reference, and synthesize
 answers from your own documents. You ask a question;
 Claude researches your knowledge base and answers it.
 
@@ -2375,16 +2378,20 @@ filter, archive, or delete. See Help → User Guide → Section 20.
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  📧  EMAIL ALERTS
+  📧  EMAIL, SMS & WHATSAPP
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Configure once in Settings → Email (Gmail, iCloud, or
-any SMTP provider), then ask Claude to send you alerts,
-file attachments, or a full learnings report by email.
+Configure once in Settings → Email Configuration (Gmail,
+iCloud, or any SMTP provider) and Settings → SMS / Text
+Messaging (Twilio, SignalWire, or Vonage), then ask Claude
+to text, WhatsApp, or email anyone — by name if they're in
+your job spreadsheet or saved as a contact.
 
+  "Text Karen that we're 20 minutes away"
   "Send me an alert — the Johnson job is running late"
   "Email the job tracker spreadsheet to myself"
-  "Send my learnings report to david@example.com"
+  "WhatsApp Torres a reminder about tomorrow's appointment"
+  "Did anyone reply to my texts today?"
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -6246,262 +6253,348 @@ or from the Help menu."""
                    command=_test_smtp_cfg).pack(side='left')
 
 
-        # ── SMS / Text Messaging (Twilio) ─────────────────────────────────────
-        # Available in both personal and server mode.
-        # Credentials stored in ~/.ai-prowler/config.json alongside other keys.
+        # ── SMS / Text Messaging (V8 — Multi-Provider) ───────────────────────
+        # Supports Twilio, SignalWire, Vonage + WhatsApp (Twilio).
+        # Credentials stored in ~/.ai-prowler/config.json.
+        _sms_providers = [
+            ("Twilio  (most popular — trial credit available)",  "twilio"),
+            ("SignalWire  (Twilio-compatible, lower cost)",       "signalwire"),
+            ("Vonage / Nexmo  (good for international SMS)",      "vonage"),
+        ]
+        _sms_provider_var = tk.StringVar(value='twilio')
+        _sp = {'padx': 6, 'pady': 3}
+
         sms_frame = ttk.LabelFrame(
             scrollable_frame,
-            text='\U0001f4f1 SMS / Text Messaging  (Twilio \u2014 Paid)',
+            text='📱 SMS / Text Messaging',
             padding=10)
         sms_frame.pack(fill='x', padx=20, pady=(0, 10))
 
-        # ── Enable toggle ────────────────────────────────────────────────────
-        # Defaults to OFF — Twilio costs money and requires buying a phone
-        # number plus per-message usage fees, on top of the free email-to-SMS
-        # option above. The whole credential block stays collapsed (not just
-        # greyed out) until the user explicitly opts in, so it doesn't clutter
-        # the Settings tab for the large majority who'll just use the free path.
-        _sms_enabled_var = tk.BooleanVar(value=False)
-        _sp = {'padx': 6, 'pady': 3}
+        # Provider selector
+        _prov_row = ttk.Frame(sms_frame)
+        _prov_row.grid(row=0, column=0, columnspan=3, sticky='w', **_sp)
+        ttk.Label(_prov_row, text='Provider:').pack(side='left')
+        _prov_combo = ttk.Combobox(
+            _prov_row, textvariable=_sms_provider_var,
+            values=[p[0] for p in _sms_providers],
+            state='readonly', width=46)
+        _prov_combo.pack(side='left', padx=6)
 
-        _sms_enable_row = ttk.Frame(sms_frame)
-        _sms_enable_row.grid(row=0, column=0, columnspan=3, sticky='w', **_sp)
+        # Enable toggle
+        _sms_enabled_var = tk.BooleanVar(value=False)
+        _enable_row = ttk.Frame(sms_frame)
+        _enable_row.grid(row=1, column=0, columnspan=3, sticky='w', **_sp)
         ttk.Checkbutton(
-            _sms_enable_row,
-            text='Enable Paid Twilio Messaging  (requires purchasing a phone\n'
-                 'number and usage fees from Twilio)',
+            _enable_row, text='Enable SMS Messaging',
             variable=_sms_enabled_var,
             command=lambda: _toggle_sms_fields(),
         ).pack(side='left')
 
-        # ── Collapsible credential block ──────────────────────────────────────
-        # A single sub-frame holds every Twilio field; the whole thing is
-        # grid-removed (not just disabled) when the checkbox is off.
+        # Collapsible credential block
         _sms_fields_frame = ttk.Frame(sms_frame)
-        _sms_fields_frame.grid(row=1, column=0, columnspan=3, sticky='w')
+        _sms_fields_frame.grid(row=2, column=0, columnspan=3, sticky='w')
 
+        # Sign-up link row
         _sms_signup_row = ttk.Frame(_sms_fields_frame)
-        _sms_signup_row.grid(row=0, column=0, columnspan=3, sticky='w', pady=(4, 6))
-        ttk.Button(
-            _sms_signup_row,
-            text='\U0001f517 Sign Up at Twilio.com',
-            command=lambda: __import__('webbrowser').open('https://console.twilio.com/'),
-        ).pack(side='left')
-        ttk.Label(
-            _sms_signup_row,
-            text='Trial credit available — a phone number and usage fees still apply',
-            font=('Segoe UI', 8),
-            foreground='gray',
-        ).pack(side='left', padx=6)
+        _sms_signup_row.grid(row=0, column=0, columnspan=3, sticky='w', pady=(4,6))
+        _sms_signup_btn = ttk.Button(
+            _sms_signup_row, text='🔗 Sign Up / Console',
+            command=lambda: __import__('webbrowser').open(_prov_signup_url()))
+        _sms_signup_btn.pack(side='left')
+        _sms_signup_lbl = ttk.Label(_sms_signup_row, text='',
+            font=('Segoe UI', 8), foreground='gray')
+        _sms_signup_lbl.pack(side='left', padx=6)
 
-        # ── Credential fields ─────────────────────────────────────────────────
-        ttk.Label(_sms_fields_frame, text='Account SID:').grid(
-            row=1, column=0, sticky='e', **_sp)
+        def _prov_id():
+            sel = _sms_provider_var.get()
+            for label, pid in _sms_providers:
+                if sel == label: return pid
+            return 'twilio'
+
+        def _prov_signup_url():
+            return {'twilio': 'https://console.twilio.com/',
+                    'signalwire': 'https://signalwire.com/',
+                    'vonage': 'https://dashboard.nexmo.com/sign-up',
+                    }.get(_prov_id(), 'https://console.twilio.com/')
+
+        def _prov_hint():
+            return {'twilio': 'Trial credit available — phone number + usage fees apply',
+                    'signalwire': 'Twilio-compatible API — typically 30–50% cheaper',
+                    'vonage': 'Good for international SMS — different auth model',
+                    }.get(_prov_id(), '')
+
+        # ── Twilio fields ──────────────────────────────────────────────────
+        _tw_frame = ttk.Frame(_sms_fields_frame)
+        _tw_frame.grid(row=1, column=0, columnspan=3, sticky='w')
+
+        ttk.Label(_tw_frame, text='Account SID:').grid(row=0, column=0, sticky='e', **_sp)
         _sms_sid_var = tk.StringVar()
-        _sms_sid_entry = ttk.Entry(_sms_fields_frame, textvariable=_sms_sid_var, width=40)
-        _sms_sid_entry.grid(row=1, column=1, **_sp)
-        ttk.Label(_sms_fields_frame, text='Starts with AC…  (from Twilio console home)',
-                  font=('Segoe UI', 8)).grid(row=1, column=2, sticky='w')
+        ttk.Entry(_tw_frame, textvariable=_sms_sid_var, width=40).grid(row=0, column=1, **_sp)
+        ttk.Label(_tw_frame, text='Starts with AC…  (from Twilio console)',
+                  font=('Segoe UI', 8)).grid(row=0, column=2, sticky='w')
 
-        ttk.Label(_sms_fields_frame, text='Auth Token:').grid(
-            row=2, column=0, sticky='e', **_sp)
+        ttk.Label(_tw_frame, text='Auth Token:').grid(row=1, column=0, sticky='e', **_sp)
         _sms_token_var = tk.StringVar()
-        _sms_token_entry = ttk.Entry(_sms_fields_frame, textvariable=_sms_token_var,
-                                     show='●', width=40)
-        _sms_token_entry.grid(row=2, column=1, **_sp)
+        _sms_token_entry = ttk.Entry(_tw_frame, textvariable=_sms_token_var, show='●', width=40)
+        _sms_token_entry.grid(row=1, column=1, **_sp)
         _sms_show_token_var = tk.BooleanVar(value=False)
         def _toggle_sms_token():
-            _sms_token_entry.configure(
-                show='' if _sms_show_token_var.get() else '●')
-        ttk.Checkbutton(_sms_fields_frame, text='Show',
-                        variable=_sms_show_token_var,
-                        command=_toggle_sms_token).grid(row=2, column=2, sticky='w')
+            _sms_token_entry.configure(show='' if _sms_show_token_var.get() else '●')
+        ttk.Checkbutton(_tw_frame, text='Show', variable=_sms_show_token_var,
+                        command=_toggle_sms_token).grid(row=1, column=2, sticky='w')
 
-        ttk.Label(_sms_fields_frame, text='From Number:').grid(
-            row=3, column=0, sticky='e', **_sp)
+        ttk.Label(_tw_frame, text='From Number:').grid(row=2, column=0, sticky='e', **_sp)
         _sms_from_var = tk.StringVar()
-        _sms_from_entry = ttk.Entry(_sms_fields_frame, textvariable=_sms_from_var, width=20)
-        _sms_from_entry.grid(row=3, column=1, sticky='w', **_sp)
-        ttk.Label(_sms_fields_frame, text='Your Twilio phone number  e.g. +13865550100',
-                  font=('Segoe UI', 8)).grid(row=3, column=2, sticky='w')
+        ttk.Entry(_tw_frame, textvariable=_sms_from_var, width=20).grid(row=2, column=1, sticky='w', **_sp)
+        ttk.Label(_tw_frame, text='Your Twilio phone number  e.g. +13865550100',
+                  font=('Segoe UI', 8)).grid(row=2, column=2, sticky='w')
 
-        ttk.Label(_sms_fields_frame, text='Test recipient:').grid(
-            row=4, column=0, sticky='e', **_sp)
+        _wa_enabled_var = tk.BooleanVar(value=False)
+        _wa_row = ttk.Frame(_tw_frame)
+        _wa_row.grid(row=3, column=0, columnspan=3, sticky='w', pady=(4,0))
+        ttk.Checkbutton(_wa_row,
+            text='Enable WhatsApp  (same Twilio credentials — requires WhatsApp sandbox approval)',
+            variable=_wa_enabled_var,
+            command=lambda: _update_webhook_url()).pack(side='left')
+
+        # ── SignalWire fields ──────────────────────────────────────────────
+        _sw_frame = ttk.Frame(_sms_fields_frame)
+        _sw_frame.grid(row=1, column=0, columnspan=3, sticky='w')
+        _sw_frame.grid_remove()
+
+        _sw_fields = []
+        for _r, (_lbl, _hint) in enumerate([
+            ('Project ID:', 'From SignalWire dashboard → API credentials'),
+            ('Auth Token:', ''),
+            ('Space URL:', 'e.g.  yourspace.signalwire.com'),
+            ('From Number:', 'Your SignalWire phone number  e.g. +13865550100'),
+        ]):
+            ttk.Label(_sw_frame, text=_lbl).grid(row=_r, column=0, sticky='e', **_sp)
+            _v = tk.StringVar()
+            _e = ttk.Entry(_sw_frame, textvariable=_v,
+                           show=('●' if 'Token' in _lbl else ''), width=40)
+            _e.grid(row=_r, column=1, sticky='w', **_sp)
+            ttk.Label(_sw_frame, text=_hint, font=('Segoe UI', 8)).grid(row=_r, column=2, sticky='w')
+            _sw_fields.append(_v)
+        _sw_project_var, _sw_token_var, _sw_space_var, _sw_from_var = _sw_fields
+
+        # ── Vonage fields ──────────────────────────────────────────────────
+        _vn_frame = ttk.Frame(_sms_fields_frame)
+        _vn_frame.grid(row=1, column=0, columnspan=3, sticky='w')
+        _vn_frame.grid_remove()
+
+        _vn_fields = []
+        for _r, (_lbl, _hint) in enumerate([
+            ('API Key:', '8-digit key from Vonage dashboard'),
+            ('API Secret:', ''),
+            ('From:', 'Phone number or alphanumeric ID  e.g. AIProwler'),
+        ]):
+            ttk.Label(_vn_frame, text=_lbl).grid(row=_r, column=0, sticky='e', **_sp)
+            _v = tk.StringVar()
+            _e = ttk.Entry(_vn_frame, textvariable=_v,
+                           show=('●' if 'Secret' in _lbl else ''), width=36)
+            _e.grid(row=_r, column=1, sticky='w', **_sp)
+            ttk.Label(_vn_frame, text=_hint, font=('Segoe UI', 8)).grid(row=_r, column=2, sticky='w')
+            _vn_fields.append(_v)
+        _vn_key_var, _vn_secret_var, _vn_from_var = _vn_fields
+
+        # ── Shared fields ──────────────────────────────────────────────────
+        _shared_frame = ttk.Frame(_sms_fields_frame)
+        _shared_frame.grid(row=2, column=0, columnspan=3, sticky='w', pady=(8,0))
+
+        ttk.Label(_shared_frame, text='Test recipient:').grid(row=0, column=0, sticky='e', **_sp)
         _sms_test_to_var = tk.StringVar()
-        _sms_test_to_entry = ttk.Entry(_sms_fields_frame, textvariable=_sms_test_to_var, width=20)
-        _sms_test_to_entry.grid(row=4, column=1, sticky='w', **_sp)
-        ttk.Label(_sms_fields_frame, text='Your phone number to receive the test message',
-                  font=('Segoe UI', 8)).grid(row=4, column=2, sticky='w')
+        ttk.Entry(_shared_frame, textvariable=_sms_test_to_var, width=20).grid(row=0, column=1, sticky='w', **_sp)
+        ttk.Label(_shared_frame, text='Your phone number to receive the test message',
+                  font=('Segoe UI', 8)).grid(row=0, column=2, sticky='w')
 
-        ttk.Label(_sms_fields_frame, text='Callback signature:').grid(
-            row=5, column=0, sticky='e', **_sp)
+        ttk.Label(_shared_frame, text='Callback signature:').grid(row=1, column=0, sticky='e', **_sp)
         _sms_sig_var = tk.StringVar()
-        _sms_sig_entry = ttk.Entry(_sms_fields_frame, textvariable=_sms_sig_var, width=40)
-        _sms_sig_entry.grid(row=5, column=1, sticky='w', **_sp)
-        ttk.Label(_sms_fields_frame,
-                  text='Appended to every SMS so customers know your real number',
-                  font=('Segoe UI', 8)).grid(row=5, column=2, sticky='w')
-        ttk.Label(_sms_fields_frame,
-                  text='e.g.  — Call/text Dave back: 386-555-0100',
-                  font=('Segoe UI', 7), foreground='gray').grid(
-            row=6, column=1, sticky='w', padx=6)
+        ttk.Entry(_shared_frame, textvariable=_sms_sig_var, width=40).grid(row=1, column=1, **_sp)
+        ttk.Label(_shared_frame, text='Appended to every SMS so customers know your real number',
+                  font=('Segoe UI', 8)).grid(row=1, column=2, sticky='w')
+        ttk.Label(_shared_frame, text='e.g.  — Call/text Dave back: 386-555-0100',
+                  font=('Segoe UI', 7), foreground='gray').grid(row=2, column=1, sticky='w', padx=6)
+
+        # ── Webhook URL display ────────────────────────────────────────────
+        _wh_lf = ttk.LabelFrame(_sms_fields_frame, text=' Inbound Webhook URL ', padding=(6,4))
+        _wh_lf.grid(row=3, column=0, columnspan=3, sticky='w', pady=(10,0), padx=6)
+        ttk.Label(_wh_lf, justify='left', font=('Segoe UI', 8), foreground='gray',
+                  text=(
+                      'Paste this URL into your SMS provider console so inbound\n'
+                      'messages are delivered to AI-Prowler instantly (no API polling).\n'
+                      'Twilio/SignalWire: Phone Numbers → Configure → \'A message comes in\'\n'
+                      'WhatsApp: Twilio Console → Messaging → Try WhatsApp → Sandbox Settings'
+                  )).pack(anchor='w')
+        _wh_url_row = ttk.Frame(_wh_lf)
+        _wh_url_row.pack(fill='x', pady=(4,0))
+        _wh_url_var = tk.StringVar(value='Start the remote server to see your webhook URL')
+        ttk.Entry(_wh_url_row, textvariable=_wh_url_var, state='readonly', width=56).pack(side='left')
+
+        def _copy_webhook_url():
+            sms_frame.clipboard_clear()
+            sms_frame.clipboard_append(_wh_url_var.get())
+            _sms_status_var.set('Webhook URL copied to clipboard.')
+        ttk.Button(_wh_url_row, text='Copy', command=_copy_webhook_url).pack(side='left', padx=(6,0))
+
+        def _update_webhook_url(*_):
+            try:
+                import json as _j
+                p = Path.home() / '.ai-prowler' / 'config.json'
+                cfg = _j.loads(p.read_text(encoding='utf-8')) if p.exists() else {}
+                base = cfg.get('public_base', '').rstrip('/')
+                if base:
+                    path = '/whatsapp-webhook' if (_prov_id() == 'twilio' and _wa_enabled_var.get()) else '/sms-webhook'
+                    _wh_url_var.set(f'{base}{path}')
+                else:
+                    _wh_url_var.set('Start the remote server to see your webhook URL')
+            except Exception:
+                _wh_url_var.set('Start the remote server to see your webhook URL')
 
         _sms_status_var = tk.StringVar(value='')
         ttk.Label(_sms_fields_frame, textvariable=_sms_status_var,
-                  font=('Segoe UI', 9)).grid(
-            row=7, column=0, columnspan=3, sticky='w', padx=6, pady=(4, 0))
+                  font=('Segoe UI', 9)).grid(row=4, column=0, columnspan=3, sticky='w', padx=6, pady=(4,0))
 
-        # ── Helper: collapse/expand the whole credential block ───────────────
-        # Hides the entire frame (not just disabling inputs) so the Settings
-        # tab stays compact for users who don't want paid Twilio messaging.
+        def _on_provider_change(*_):
+            pid = _prov_id()
+            for f in (_tw_frame, _sw_frame, _vn_frame): f.grid_remove()
+            {'twilio': _tw_frame, 'signalwire': _sw_frame, 'vonage': _vn_frame}.get(pid, _tw_frame).grid()
+            _sms_signup_lbl.config(text=_prov_hint())
+            _update_webhook_url()
+
+        _prov_combo.bind('<<ComboboxSelected>>', _on_provider_change)
+
         def _toggle_sms_fields():
             if _sms_enabled_var.get():
                 _sms_fields_frame.grid()
+                _on_provider_change()
             else:
                 _sms_fields_frame.grid_remove()
 
-        # ── Load / Save helpers ───────────────────────────────────────────────
         def _load_sms_cfg():
             import json as _j
             p = Path.home() / '.ai-prowler' / 'config.json'
-            if not p.exists():
-                return
+            if not p.exists(): _toggle_sms_fields(); return
             try:
                 d = _j.loads(p.read_text(encoding='utf-8')) or {}
-                sid   = d.get('twilio_account_sid', '')
-                token = d.get('twilio_auth_token', '')
-                frm   = d.get('twilio_from_number', '')
-                sig   = d.get('sms_callback_signature', '')
-                if sid or token or frm:
-                    _sms_enabled_var.set(True)
+                pid = d.get('sms_provider', 'twilio').lower()
+                for label, _pid in _sms_providers:
+                    if _pid == pid: _sms_provider_var.set(label); break
+                if pid in ('twilio', ''):
+                    sid = d.get('twilio_account_sid', '')
+                    if sid: _sms_enabled_var.set(True)
                     _sms_sid_var.set(sid)
-                    _sms_token_var.set(token)
-                    _sms_from_var.set(frm)
-                    _sms_sig_var.set(sig)
-                    _sms_status_var.set('Loaded existing Twilio config.')
+                    _sms_token_var.set(d.get('twilio_auth_token', ''))
+                    _sms_from_var.set(d.get('twilio_from_number', ''))
+                    _wa_enabled_var.set(bool(d.get('whatsapp_enabled', False)))
+                elif pid == 'signalwire':
+                    proj = d.get('signalwire_project_id', '')
+                    if proj: _sms_enabled_var.set(True)
+                    _sw_project_var.set(proj)
+                    _sw_token_var.set(d.get('signalwire_auth_token', ''))
+                    _sw_space_var.set(d.get('signalwire_space_url', ''))
+                    _sw_from_var.set(d.get('signalwire_from_number', ''))
+                elif pid == 'vonage':
+                    key = d.get('vonage_api_key', '')
+                    if key: _sms_enabled_var.set(True)
+                    _vn_key_var.set(key)
+                    _vn_secret_var.set(d.get('vonage_api_secret', ''))
+                    _vn_from_var.set(d.get('vonage_from_number', ''))
+                _sms_sig_var.set(d.get('sms_callback_signature', ''))
+                if _sms_enabled_var.get(): _sms_status_var.set(f'Loaded {pid.title()} config.')
             except Exception as _e:
                 _sms_status_var.set(f'Could not load config: {_e}')
             _toggle_sms_fields()
 
         def _save_sms_cfg():
             import json as _j
-            sid   = _sms_sid_var.get().strip()
-            token = _sms_token_var.get().strip()
-            frm   = _sms_from_var.get().strip()
-            if _sms_enabled_var.get():
-                if not sid or not token or not frm:
-                    _sms_status_var.set('All three fields are required to enable SMS.')
-                    return
-                if not sid.startswith('AC'):
-                    _sms_status_var.set('Account SID must start with "AC".')
-                    return
-                if not frm.startswith('+'):
-                    frm = '+1' + frm.replace('-', '').replace(' ', '')
-                    _sms_from_var.set(frm)
-
+            pid = _prov_id()
             p = Path.home() / '.ai-prowler' / 'config.json'
             p.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                existing = _j.loads(p.read_text(encoding='utf-8')) if p.exists() else {}
-            except Exception:
-                existing = {}
-
+            try: existing = _j.loads(p.read_text(encoding='utf-8')) if p.exists() else {}
+            except Exception: existing = {}
+            for k in ('twilio_account_sid','twilio_auth_token','twilio_from_number',
+                      'twilio_sms_enabled','whatsapp_enabled',
+                      'signalwire_project_id','signalwire_auth_token',
+                      'signalwire_space_url','signalwire_from_number',
+                      'vonage_api_key','vonage_api_secret','vonage_from_number',
+                      'sms_provider','sms_callback_signature'):
+                existing.pop(k, None)
             if _sms_enabled_var.get():
-                existing['twilio_account_sid']       = sid
-                existing['twilio_auth_token']        = token
-                existing['twilio_from_number']       = frm
-                existing['twilio_sms_enabled']       = True
-                existing['sms_callback_signature']   = _sms_sig_var.get().strip()
-            else:
-                for k in ('twilio_account_sid', 'twilio_auth_token',
-                          'twilio_from_number', 'twilio_sms_enabled',
-                          'sms_callback_signature'):
-                    existing.pop(k, None)
-
+                existing['sms_provider'] = pid
+                existing['sms_callback_signature'] = _sms_sig_var.get().strip()
+                if pid == 'twilio':
+                    sid=_sms_sid_var.get().strip(); tok=_sms_token_var.get().strip(); frm=_sms_from_var.get().strip()
+                    if not (sid and tok and frm): _sms_status_var.set('Account SID, Auth Token, and From Number are required.'); return
+                    if not sid.startswith('AC'): _sms_status_var.set('Account SID must start with "AC".'); return
+                    if not frm.startswith('+'): frm='+1'+frm.replace('-','').replace(' ',''); _sms_from_var.set(frm)
+                    existing.update({'twilio_account_sid':sid,'twilio_auth_token':tok,'twilio_from_number':frm,
+                                     'twilio_sms_enabled':True,'whatsapp_enabled':_wa_enabled_var.get()})
+                elif pid == 'signalwire':
+                    proj=_sw_project_var.get().strip(); tok=_sw_token_var.get().strip()
+                    sp=_sw_space_var.get().strip(); frm=_sw_from_var.get().strip()
+                    if not (proj and tok and sp and frm): _sms_status_var.set('All SignalWire fields are required.'); return
+                    existing.update({'signalwire_project_id':proj,'signalwire_auth_token':tok,
+                                     'signalwire_space_url':sp,'signalwire_from_number':frm})
+                elif pid == 'vonage':
+                    key=_vn_key_var.get().strip(); sec=_vn_secret_var.get().strip(); frm=_vn_from_var.get().strip()
+                    if not (key and sec and frm): _sms_status_var.set('API Key, Secret, and From are required.'); return
+                    existing.update({'vonage_api_key':key,'vonage_api_secret':sec,'vonage_from_number':frm})
             p.write_text(_j.dumps(existing, indent=2), encoding='utf-8')
-            _sms_status_var.set(
-                'SMS config saved.' if _sms_enabled_var.get() else 'SMS config cleared.')
+            _sms_status_var.set(f'SMS config saved ({pid.title()}).' if _sms_enabled_var.get() else 'SMS config cleared.')
+            _update_webhook_url()
 
         def _test_sms_cfg():
-            import requests as _req
-            sid   = _sms_sid_var.get().strip()
-            token = _sms_token_var.get().strip()
-            frm   = _sms_from_var.get().strip()
-            to    = _sms_test_to_var.get().strip()
-            if not (sid and token and frm and to):
-                _sms_status_var.set('Fill in all fields + test recipient before testing.')
-                return
-            if not to.startswith('+'):
-                to = '+1' + to.replace('-', '').replace(' ', '')
-            _sms_status_var.set('Sending test SMS…')
-            sms_frame.update_idletasks()
+            to = _sms_test_to_var.get().strip()
+            if not to: _sms_status_var.set('Enter a test recipient number first.'); return
+            _sms_status_var.set('Sending test SMS…'); sms_frame.update_idletasks()
             try:
-                resp = _req.post(
-                    f'https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json',
-                    auth=(sid, token),
-                    data={'From': frm, 'To': to,
-                          'Body': 'AI-Prowler SMS test — if you got this, Twilio is configured correctly!'},
-                    timeout=15,
-                )
-                if resp.status_code in (200, 201):
-                    _sms_status_var.set(
-                        f'✅ Test message sent!  SID: {resp.json().get("sid", "")}')
-                else:
-                    _sms_status_var.set(
-                        f'❌ Twilio error {resp.status_code}: '
-                        f'{resp.json().get("message", resp.text[:120])}')
+                import sys as _sys
+                _sys.path.insert(0, str(Path(__file__).parent))
+                from sms_backends import get_sms_backend, load_sms_config
+                ok, msg = get_sms_backend(load_sms_config()).send(
+                    to, 'AI-Prowler SMS test — if you got this, your SMS provider is configured correctly!')
+                _sms_status_var.set('✅ ' + msg if ok else msg)
             except Exception as _e:
-                _sms_status_var.set(f'❌ Request failed: {_e}')
-
-        _load_sms_cfg()
+                _sms_status_var.set(f'❌ Test failed: {_e}')
 
         def _clear_sms_cfg():
-            """Explicitly wipe all Twilio keys from config.json, regardless of
-            the checkbox state. This is the reliable way to remove saved
-            credentials — unlike unchecking the box, which only clears them
-            if 'Save Config' is clicked afterward."""
-            if not messagebox.askyesno(
-                    "Clear Twilio Settings",
-                    "Remove all saved Twilio credentials from config.json?\n\n"
-                    "This cannot be undone — you'll need to re-enter them\n"
-                    "if you want to use paid Twilio messaging again."):
-                return
+            if not messagebox.askyesno('Clear SMS Settings',
+                    'Remove all saved SMS credentials from config.json?\n\nThis cannot be undone.'): return
             p = Path.home() / '.ai-prowler' / 'config.json'
             try:
                 import json as _j
-                existing = {}
-                if p.exists():
-                    existing = _j.loads(p.read_text(encoding='utf-8'))
-                for k in ('twilio_account_sid', 'twilio_auth_token',
-                          'twilio_from_number', 'twilio_sms_enabled',
-                          'sms_callback_signature'):
-                    existing.pop(k, None)
-                p.write_text(_j.dumps(existing, indent=2), encoding='utf-8')
-            except Exception as _e:
-                _sms_status_var.set(f'❌ Could not clear: {_e}')
-                return
-            _sms_sid_var.set('')
-            _sms_token_var.set('')
-            _sms_from_var.set('')
-            _sms_test_to_var.set('')
-            _sms_sig_var.set('')
-            _sms_enabled_var.set(False)
+                ex = _j.loads(p.read_text(encoding='utf-8')) if p.exists() else {}
+                for k in ('twilio_account_sid','twilio_auth_token','twilio_from_number',
+                          'twilio_sms_enabled','whatsapp_enabled',
+                          'signalwire_project_id','signalwire_auth_token',
+                          'signalwire_space_url','signalwire_from_number',
+                          'vonage_api_key','vonage_api_secret','vonage_from_number',
+                          'sms_provider','sms_callback_signature'): ex.pop(k, None)
+                p.write_text(_j.dumps(ex, indent=2), encoding='utf-8')
+            except Exception as _e: _sms_status_var.set(f'❌ Could not clear: {_e}'); return
+            for v in (_sms_sid_var,_sms_token_var,_sms_from_var,
+                      _sw_project_var,_sw_token_var,_sw_space_var,_sw_from_var,
+                      _vn_key_var,_vn_secret_var,_vn_from_var,
+                      _sms_test_to_var,_sms_sig_var): v.set('')
+            _sms_enabled_var.set(False); _wa_enabled_var.set(False)
             _toggle_sms_fields()
-            _sms_status_var.set('✅ Twilio settings cleared from config.json.')
+            _sms_status_var.set('✅ SMS settings cleared.')
 
-        # ── Button row ────────────────────────────────────────────────────────
-        # Lives inside _sms_fields_frame so it collapses along with the rest
-        # of the Twilio block when the feature is disabled.
+        _load_sms_cfg()
+
+        # Button row
         _sms_btn_row = ttk.Frame(_sms_fields_frame)
-        _sms_btn_row.grid(row=7, column=0, columnspan=3,
-                          pady=(8, 0), sticky='w', padx=6)
-        ttk.Button(_sms_btn_row, text='\U0001f4be Save Config',
-                   command=_save_sms_cfg).pack(side='left', padx=(0, 6))
-        ttk.Button(_sms_btn_row, text='\U0001f4f1 Send Test SMS',
-                   command=_test_sms_cfg).pack(side='left', padx=(0, 6))
-        ttk.Button(_sms_btn_row, text='\U0001f5d1\ufe0f Clear Twilio Settings',
+        _sms_btn_row.grid(row=5, column=0, columnspan=3, pady=(8,0), sticky='w', padx=6)
+        ttk.Button(_sms_btn_row, text='💾 Save Config',
+                   command=_save_sms_cfg).pack(side='left', padx=(0,6))
+        ttk.Button(_sms_btn_row, text='📱 Send Test SMS',
+                   command=_test_sms_cfg).pack(side='left', padx=(0,6))
+        ttk.Button(_sms_btn_row, text='🗑️ Clear SMS Settings',
                    command=_clear_sms_cfg).pack(side='left')
 
+        _on_provider_change()
+        _update_webhook_url()
 
         # ── Query Output ──────────────────────────────────────────────────────
         output_frame = ttk.LabelFrame(_debug_settings_parent, text="Query Output", padding=(10, 6))
@@ -11942,14 +12035,16 @@ or from the Help menu."""
 
     def _admin_send_token_via_sms(self):
         """Send the selected employee's bearer token to their cell phone via SMS.
-        Requires cell_phone to be set on the user record, and Twilio (paid)
-        configured in Settings → SMS / Text Messaging (Twilio — Paid).
-        Admin action — requires unlock.
+        Requires cell_phone to be set on the user record, and an SMS provider
+        (Twilio, SignalWire, or Vonage) configured in Settings → SMS / Text
+        Messaging. Admin action — requires unlock.
 
         NOTE: the free email-to-SMS gateway approach was removed — carriers
         are shutting those gateways down industry-wide (AT&T's is already
-        gone, Verizon's is mid-shutdown through 2027). Twilio is now the
-        only SMS path."""
+        gone, Verizon's is mid-shutdown through 2027). A real SMS provider
+        is now required. Uses the same provider-agnostic sms_backends module
+        as the Settings tab's own Test SMS button, so this works correctly
+        regardless of which provider is configured."""
         from tkinter import messagebox
         if not self._admin_gate():
             return
@@ -11972,27 +12067,6 @@ or from the Help menu."""
                 "Edit the user record to add one, then try again.")
             return
 
-        import json as _jtw
-        cfg_path = Path.home() / '.ai-prowler' / 'config.json'
-        cfg = {}
-        if cfg_path.exists():
-            try:
-                cfg = _jtw.loads(cfg_path.read_text(encoding='utf-8'))
-            except Exception:
-                cfg = {}
-        tw_sid  = cfg.get('twilio_account_sid',  '').strip()
-        tw_tok  = cfg.get('twilio_auth_token',   '').strip()
-        tw_from = cfg.get('twilio_from_number',  '').strip()
-        tw_on   = bool(cfg.get('twilio_sms_enabled'))
-        if not (tw_on and tw_sid and tw_tok and tw_from):
-            messagebox.showwarning(
-                "Twilio Not Configured",
-                "SMS delivery requires Twilio (paid).\n\n"
-                "Go to Settings → SMS / Text Messaging (Twilio — Paid), "
-                "enable it, and enter your Account SID, Auth Token, and "
-                "From Number, then try again.")
-            return
-
         import re as _re
         digits = _re.sub(r'\D', '', phone)
         if len(digits) == 11 and digits[0] == '1':
@@ -12004,10 +12078,30 @@ or from the Help menu."""
                 "a valid 10-digit US number.  Edit the user record to correct it.")
             return
 
+        try:
+            import sys as _sys
+            _sys.path.insert(0, str(Path(__file__).parent))
+            from sms_backends import get_sms_backend, load_sms_config
+            _sms_backend = get_sms_backend(load_sms_config())
+        except Exception as _imp_exc:
+            messagebox.showerror("SMS Module Error", str(_imp_exc))
+            return
+
+        _sms_ok, _sms_hint = _sms_backend.validate_config()
+        if not _sms_ok:
+            messagebox.showwarning(
+                "SMS Provider Not Configured",
+                "SMS delivery requires a provider — Twilio, SignalWire, "
+                "or Vonage.\n\n"
+                "Go to Settings → SMS / Text Messaging, choose a provider, "
+                "and enter your credentials, then try again.")
+            return
+
         ph_display = f"{'*' * 6}{digits[-4:]}"
         if not messagebox.askyesno(
                 "Send Token SMS",
-                f"Send {name}'s bearer token to {ph_display} via SMS (Twilio)?\n\n"
+                f"Send {name}'s bearer token to {ph_display} via SMS "
+                f"({_sms_backend.provider_name.title()})?\n\n"
                 "The message will contain their full bearer token "
                 "(their Claude.ai connector password). "
                 "Send only to a trusted number."):
@@ -12018,16 +12112,7 @@ or from the Help menu."""
             f"Paste into Claude.ai Settings > Connectors. Keep private."
         )
         try:
-            import requests as _treq
-            resp = _treq.post(
-                f"https://api.twilio.com/2010-04-01/Accounts/{tw_sid}/Messages.json",
-                auth=(tw_sid, tw_tok),
-                data={"From": tw_from, "To": f"+1{digits}", "Body": body},
-                timeout=15,
-            )
-            ok = resp.status_code in (200, 201)
-            msg = '' if ok else (resp.json().get('message', resp.text[:200])
-                                  if resp.text else f"HTTP {resp.status_code}")
+            ok, msg = _sms_backend.send(f"+1{digits}", body)
         except Exception as _exc:
             ok, msg = False, str(_exc)
 
@@ -12040,7 +12125,7 @@ or from the Help menu."""
             messagebox.showerror(
                 "Send Failed",
                 f"Could not send SMS to {ph_display}:\n\n{msg}\n\n"
-                "Check Twilio settings in Settings → SMS (Twilio — Paid).")
+                "Check SMS provider settings in Settings → SMS / Text Messaging.")
 
     def _admin_update_lock_ui(self):
         """Refresh the lock-status label and button states in the Admin tab."""
@@ -12113,7 +12198,7 @@ or from the Help menu."""
         table_frame = ttk.Frame(f)
         table_frame.pack(fill='both', expand=True, pady=(0, 6))
 
-        columns = ('name', 'email', 'phone', 'carrier', 'role', 'scopes', 'admin', 'private', 'seat', 'status', 'token')
+        columns = ('name', 'email', 'phone', 'role', 'scopes', 'admin', 'private', 'seat', 'status', 'token')
         tree_scroll = ttk.Scrollbar(table_frame, orient='vertical')
         self._admin_tree = ttk.Treeview(table_frame, columns=columns,
                                         show='headings', height=12,
@@ -12125,7 +12210,6 @@ or from the Help menu."""
             ('name',    'Name',          130, 'w'),
             ('email',   'Email',         160, 'w'),
             ('phone',   'Cell Phone',     95, 'center'),
-            ('carrier', 'Carrier',        70, 'center'),
             ('role',    'Role',           80, 'center'),
             ('scopes',  'Scopes',        130, 'w'),
             ('admin',   'Manages Users',  90, 'center'),
@@ -12181,14 +12265,13 @@ or from the Help menu."""
             seat = self._admin_mask_key(u.get("child_license_key", ""))
             status = u.get("status", "active")
             phone   = u.get("cell_phone", "")
-            carrier = u.get("cell_carrier", "")
             # v7.0.1 security: never expose any part of the bearer token on screen.
             # The token IS the authentication credential — even a prefix leaks info.
             # Name + email + role already uniquely identify each row.
             tok_display = "●" * 8
             self._admin_tree.insert(
                 '', 'end', iid=token,
-                values=(u.get("name", "(unnamed)"), u.get("email", ""), phone, carrier,
+                values=(u.get("name", "(unnamed)"), u.get("email", ""), phone,
                         role, scopes, admin_flag, private, seat, status, tok_display))
         # Seat summary strip
         if hasattr(self, "_admin_seat_label"):
@@ -12313,69 +12396,42 @@ or from the Help menu."""
         ttk.Label(frm, text='10 digits, no dashes  e.g. 3215550199',
                   font=('Segoe UI', 8)).grid(row=4, column=2, sticky='w')
 
-        # ── Row 5: Carrier ─────────────────────────────────────────────────
-        ttk.Label(frm, text='Carrier:').grid(row=5, column=0, sticky='e', **pad)
-        carrier_var = tk.StringVar(value=ex.get('cell_carrier', ''))
-        _CARRIER_CHOICES = (
-            '',
-            'verizon',           # vtext.com
-            'att',               # txt.att.net
-            't-mobile',          # tmomail.net
-            'sprint',            # messaging.sprintpcs.com
-            'boost',             # sms.myboostmobile.com
-            'cricket',           # sms.cricketwireless.net
-            'metro pcs',         # mymetropcs.com
-            'us cellular',       # email.uscc.net
-            'google fi',         # msg.fi.google.com
-            'mint mobile',       # tmomail.net  (T-Mobile network)
-            'visible',           # vtext.com    (Verizon network)
-            'spectrum mobile',   # vtext.com    (Verizon network)
-            'xfinity mobile',    # vtext.com    (Verizon network)
-            'republic wireless', # text.republicwireless.com
-            'consumer cellular', # mailmymobile.net
-            'straight talk',     # vtext.com    (varies by SIM)
-            'tracfone',          # mmst5.tracfone.com
-        )
-        carrier_cb = ttk.Combobox(
-            frm, textvariable=carrier_var, width=22,
-            values=_CARRIER_CHOICES)
-        carrier_cb.grid(row=5, column=1, sticky='w', **pad)
-        ttk.Label(frm, text='Required for SMS delivery — gateway auto-resolved',
-                  font=('Segoe UI', 8)).grid(row=5, column=2, sticky='w')
-
-        # ── Row 6: Role ────────────────────────────────────────────────────
-        ttk.Label(frm, text="Role:").grid(row=6, column=0, sticky='e', **pad)
+        # ── Row 5: Role ────────────────────────────────────────────────────
+        # (Carrier field removed — SMS no longer routes through carrier-specific
+        # email gateways. Twilio/SignalWire/Vonage deliver directly to the
+        # phone number, so no carrier lookup is needed.)
+        ttk.Label(frm, text="Role:").grid(row=5, column=0, sticky='e', **pad)
         role_var = tk.StringVar(value=ex.get("role", "field_crew"))
         role_cb = ttk.Combobox(frm, textvariable=role_var, state='readonly',
                                width=31, values=("owner", "manager",
                                                  "staff", "field_crew"))
-        role_cb.grid(row=6, column=1, columnspan=2, **pad)
+        role_cb.grid(row=5, column=1, columnspan=2, **pad)
 
-        # ── Row 7: Scopes ──────────────────────────────────────────────────
-        ttk.Label(frm, text="Scopes:").grid(row=7, column=0, sticky='ne', **pad)
+        # ── Row 6: Scopes ──────────────────────────────────────────────────
+        ttk.Label(frm, text="Scopes:").grid(row=6, column=0, sticky='ne', **pad)
         scopes_var = tk.StringVar(value=", ".join(ex.get("scopes") or []))
         scopes_entry = ttk.Entry(frm, textvariable=scopes_var, width=34)
-        scopes_entry.grid(row=7, column=1, columnspan=2, **pad)
+        scopes_entry.grid(row=6, column=1, columnspan=2, **pad)
         ttk.Label(frm, text="(the data groups this user may access — you define "
                             "these, e.g. scope:sales, scope:office, scope:ops)",
-                  font=('Segoe UI', 8)).grid(row=8, column=1, columnspan=2,
+                  font=('Segoe UI', 8)).grid(row=7, column=1, columnspan=2,
                                              sticky='w', padx=8)
 
-        # ── Row 9: Manage users checkbox ───────────────────────────────────
+        # ── Row 8: Manage users checkbox ───────────────────────────────────
         manage_var = tk.BooleanVar(value=bool(ex.get("can_manage_users")))
         manage_cb = ttk.Checkbutton(
             frm, text="Can manage users (delegated admin)", variable=manage_var)
-        manage_cb.grid(row=9, column=1, columnspan=2, sticky='w', **pad)
+        manage_cb.grid(row=8, column=1, columnspan=2, sticky='w', **pad)
 
-        # ── Row 10: Private collection ─────────────────────────────────────
+        # ── Row 9: Private collection ─────────────────────────────────────
         private_var = tk.BooleanVar(
             value=bool(ex.get("private_collection_enabled", True)))
         ttk.Checkbutton(frm, text="Private collection enabled",
-                        variable=private_var).grid(row=10, column=1, columnspan=2,
+                        variable=private_var).grid(row=9, column=1, columnspan=2,
                                                    sticky='w', **pad)
 
-        # ── Row 11: License seat dropdown ──────────────────────────────────
-        ttk.Label(frm, text="License seat:").grid(row=11, column=0, sticky='e', **pad)
+        # ── Row 10: License seat dropdown ──────────────────────────────────
+        ttk.Label(frm, text="License seat:").grid(row=10, column=0, sticky='e', **pad)
         cur_key = ex.get("child_license_key", "")
         avail = list(self._admin_unassigned_keys())
         if cur_key and cur_key not in avail:
@@ -12391,23 +12447,23 @@ or from the Help menu."""
         seat_var = tk.StringVar(value=init_label)
         seat_cb = ttk.Combobox(frm, textvariable=seat_var, state='readonly',
                                width=31, values=list(key_labels.keys()))
-        seat_cb.grid(row=11, column=1, columnspan=2, **pad)
+        seat_cb.grid(row=10, column=1, columnspan=2, **pad)
         if len(key_labels) == 1:
             ttk.Label(frm, text="(no unassigned seats in the pool)",
-                      font=('Segoe UI', 8)).grid(row=12, column=1, columnspan=2,
+                      font=('Segoe UI', 8)).grid(row=11, column=1, columnspan=2,
                                                  sticky='w', padx=8)
 
-        # ── Row 13: Bearer token (Add only) ────────────────────────────────
+        # ── Row 12: Bearer token (Add only) ────────────────────────────────
         is_edit = bool(existing)
         token_var = tk.StringVar(value="")
         if not is_edit:
-            ttk.Label(frm, text="Bearer token:").grid(row=13, column=0, sticky='e', **pad)
+            ttk.Label(frm, text="Bearer token:").grid(row=12, column=0, sticky='e', **pad)
             ttk.Entry(frm, textvariable=token_var, width=34,
-                      font=('Consolas', 10), show='●').grid(row=13, column=1,
+                      font=('Consolas', 10), show='●').grid(row=12, column=1,
                                                             columnspan=2, **pad)
             ttk.Label(frm, text="(optional — leave blank to auto-generate a "
                                 "strong token; typing a weak one is insecure)",
-                      font=('Segoe UI', 8)).grid(row=14, column=1, columnspan=2,
+                      font=('Segoe UI', 8)).grid(row=13, column=1, columnspan=2,
                                                  sticky='w', padx=8)
 
         # can_manage_users rules (spec §6.3)
@@ -12446,7 +12502,6 @@ or from the Help menu."""
                 "slug":  _to_slug(first, last),
                 "email": email_var.get().strip(),
                 "cell_phone":   phone_var.get().strip(),
-                "cell_carrier": carrier_var.get().strip(),
                 "role": _role,
                 "scopes": scopes,
                 "can_manage_users": _can_manage,
@@ -12631,7 +12686,6 @@ or from the Help menu."""
             "name": fields["name"],
             "email": fields["email"],
             "cell_phone": fields.get("cell_phone", ""),
-            "cell_carrier": fields.get("cell_carrier", ""),
             "role": fields["role"],
             "scopes": fields["scopes"],
             "can_manage_users": fields["can_manage_users"],
@@ -12892,11 +12946,9 @@ or from the Help menu."""
             "private_collection_enabled": fields["private_collection_enabled"],
             "child_license_key": new_key,
         })
-        # Persist optional recovery contact fields if provided.
+        # Persist optional recovery contact field if provided.
         if fields.get("cell_phone"):
             u["cell_phone"] = fields["cell_phone"]
-        if fields.get("cell_carrier"):
-            u["cell_carrier"] = fields["cell_carrier"]
         if self._admin_save_users(data):
             self._admin_refresh_table()
             self._admin_update_lock_ui()

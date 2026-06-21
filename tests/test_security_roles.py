@@ -783,9 +783,9 @@ class TestRoleCapabilities:
         """Field crew uses server-side email (no personal install)."""
         assert _role_caps("field_crew")["can_send_email"]
 
-    def test_owner_cannot_send_email_via_server(self):
-        """Owner/manager/staff have personal installs — use those for email."""
-        assert not _role_caps("owner")["can_send_email"]
+    def test_owner_can_send_email_via_server(self):
+        """V8.0.0: owner/manager/staff can all send email via the server."""
+        assert _role_caps("owner")["can_send_email"]
 
 
 # ════════════════════════════════════════════════════════════════════════════

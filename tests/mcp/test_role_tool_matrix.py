@@ -214,8 +214,7 @@ class TestCanIndexV71:
 
 class TestSendEmailCap:
     """send_email and send_alert use _send_email_cap.
-    field_crew: allowed (no personal install available).
-    owner/manager/staff: denied (use personal install for email).
+    V8.0.0: ALL server roles can send email (owner/manager/staff/field_crew).
     Personal mode (user=None): always allowed.
     """
 
@@ -227,20 +226,21 @@ class TestSendEmailCap:
     def test_C_EMAIL_02_field_crew_allowed(self, mcp_module):
         ok, reason = mcp_module._send_email_cap(FIELD)
         assert ok is True
-        assert "field_crew" in reason.lower()
 
-    def test_C_EMAIL_03_owner_denied(self, mcp_module):
+    def test_C_EMAIL_03_owner_allowed(self, mcp_module):
+        """V8.0.0: owner can now send email via server (was denied in V7)."""
         ok, reason = mcp_module._send_email_cap(OWNER)
-        assert ok is False
-        assert "personal" in reason.lower() or "owner" in reason.lower()
+        assert ok is True
 
-    def test_C_EMAIL_04_manager_denied(self, mcp_module):
+    def test_C_EMAIL_04_manager_allowed(self, mcp_module):
+        """V8.0.0: manager can now send email via server (was denied in V7)."""
         ok, _ = mcp_module._send_email_cap(MANAGER)
-        assert ok is False
+        assert ok is True
 
-    def test_C_EMAIL_05_staff_denied(self, mcp_module):
+    def test_C_EMAIL_05_staff_allowed(self, mcp_module):
+        """V8.0.0: staff can now send email via server (was denied in V7)."""
         ok, _ = mcp_module._send_email_cap(STAFF)
-        assert ok is False
+        assert ok is True
 
 
 # =============================================================================
@@ -272,9 +272,9 @@ class TestRoleCapsMatrix:
     """Spot-check every role's new capability fields are wired correctly."""
 
     @pytest.mark.parametrize("role,expected", [
-        ("owner",      {"manage_db": "full",    "can_send_email": False, "can_write_shared": True}),
-        ("manager",    {"manage_db": "full",    "can_send_email": False, "can_write_shared": True}),
-        ("staff",      {"manage_db": "limited", "can_send_email": False, "can_write_shared": False}),
+        ("owner",      {"manage_db": "full",    "can_send_email": True,  "can_write_shared": True}),
+        ("manager",    {"manage_db": "full",    "can_send_email": True,  "can_write_shared": True}),
+        ("staff",      {"manage_db": "limited", "can_send_email": True,  "can_write_shared": False}),
         ("field_crew", {"manage_db": "none",    "can_send_email": True,  "can_write_shared": False}),
     ])
     def test_E_CAP_matrix(self, mcp_module, role, expected):

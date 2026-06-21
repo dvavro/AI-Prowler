@@ -932,14 +932,65 @@ class TestStage5PrivateIsolation:
         await _index(user_a_dir)
         await _index(user_b_dir)
         await _index(owner_priv_dir)
-        # Increased from 1s → 3s: ChromaDB's Rust HNSW compactor needs more
-        # time to flush when the server has been handling prior Stage tests
-        # (Stages 1-4) and the collection write queue is backlogged. With 1s
-        # the scope-user-* collections are not yet committed when ST5_01/ST5_03
-        # search — client.get_collection() returns nothing and the test fails
-        # as an order-dependent race. 3s is safe; the E2E suite is not
-        # time-critical and eliminates the flakiness reliably.
-        await asyncio.sleep(3)
+        # Wait for ChromaDB's HNSW compactor to flush all three private
+        # collections. The compactor runs asynchronously and can lag behind
+        # when prior Stage tests have left the write queue backlogged —
+        # this fixture runs LATE in the full suite (Stage 5 of many), after
+        # several earlier stages have already pushed substantial indexing
+        # load through the same shared server/ChromaDB instance.
+        #
+        # Rather than a fixed sleep (which is fragile), we poll until all
+        # three sentinels are visible to the owner. Timeout was 15s — this
+        # was observed to be insufficient under full-suite load (a ~8 minute,
+        # 1600+ test run), producing a flaky-looking "private isolation
+        # broken" failure that was actually just "indexing hadn't finished
+        # yet". Running Stage 5 alone (no prior-stage backlog) passes
+        # consistently in ~10s total, confirming the underlying access-control
+        # logic is correct and this is purely a load-dependent timing margin.
+        # Bumped to 45s, with a faster 0.5s poll interval so we notice
+        # readiness sooner on a fast run instead of always waiting a full
+        # second per attempt.
+        import time as _time
+        mcp_url_poll = f"{server.base_url}/mcp"
+        deadline = _time.time() + 45
+        all_ready = False
+        last_seen = {"a": False, "b": False, "owner": False}
+        while _time.time() < deadline:
+            await asyncio.sleep(0.5)
+            hdrs = {"Authorization": f"Bearer {TOK_OWNER}"}
+            try:
+                async with streamablehttp_client(mcp_url_poll, headers=hdrs) as (r, w, _):
+                    async with ClientSession(r, w) as s:
+                        await s.initialize()
+                        res = await s.call_tool("search_documents",
+                                               {"query": "private notes confidential eyes only",
+                                                "n_results": 20})
+                        txt = _tool_result_text(res).lower()
+                        last_seen["a"] = SENTINEL_PRIVATE_A.lower() in txt
+                        last_seen["b"] = SENTINEL_PRIVATE_B.lower() in txt
+                        last_seen["owner"] = SENTINEL_PRIVATE_OWNER.lower() in txt
+                        if all(last_seen.values()):
+                            all_ready = True
+                            break
+            except Exception:
+                pass  # server busy — keep polling
+        # Fail FAST and CLEARLY here if indexing never settled, rather than
+        # falling through to let the real test assertions fail with a
+        # misleading "private isolation broken" message when the actual
+        # cause is "the seed data was never fully indexed in time".
+        if not all_ready:
+            missing = [k for k, v in last_seen.items() if not v]
+            raise RuntimeError(
+                f"private_seeded_server: indexing did not complete within "
+                f"45s — sentinels still missing from search: {missing}. "
+                f"This is a TEST INFRASTRUCTURE timeout (ChromaDB compactor "
+                f"lag under load), not a private-isolation bug — see the "
+                f"comment above this poll loop. If this recurs even when "
+                f"running Stage 5 alone, investigate further; if it only "
+                f"happens during the full suite run, the server/ChromaDB "
+                f"instance is simply still catching up on backlogged writes "
+                f"from earlier stages and the timeout may need raising again."
+            )
 
     @staticmethod
     async def _search(server, token, query, n=10):
