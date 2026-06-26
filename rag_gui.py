@@ -92,7 +92,7 @@ if sys.stderr is None:
 # Single source of truth for the app version. Bump this one line when releasing
 # a new version; all UI labels, About dialogs, help text, and update checks
 # read from here.
-APP_VERSION = "7.0.0"
+APP_VERSION = "8.0.0"
 
 # ── UI feature flags ─────────────────────────────────────────────────────────
 # Toggle visibility of advanced/legacy GUI sections without removing any
@@ -1157,7 +1157,7 @@ then ask Claude questions from your desktop or phone.
 ─────────────────────────────────────────────────
  KNOWLEDGE BASE (RAG)
 ─────────────────────────────────────────────────
-• 77 MCP tools for Claude Desktop & Claude.ai mobile
+• 83 MCP tools across 12 categories
 • 65+ file types: PDF, Word, Excel, PowerPoint, HTML,
   CSV, email (.eml/.msg/.mbox), images & more
 • Automatic OCR for scanned PDFs and images
@@ -1192,6 +1192,32 @@ then ask Claude questions from your desktop or phone.
 • Route optimization, weather, geocoding (free, no API key)
 • Job tracker spreadsheet — read and update from Claude
 • Invoicing, recurring jobs, time tracking, AR aging
+• QuickBooks-aware analysis — detects QB MCP automatically
+• Square payment integration via Claude MCP connector
+
+─────────────────────────────────────────────────
+ COMMON BUSINESS AI ANALYSIS
+─────────────────────────────────────────────────
+• 5 one-click analysis buttons (Quick Links tab)
+• Schedule recurring analyses — weekly, monthly, quarterly
+• QuickBooks-aware: uses QB if connected, Job Tracker if not
+• Queue multiple analyses, run all with one Ctrl+V paste
+
+─────────────────────────────────────────────────
+ PROACTIVE ALERTS SCHEDULER
+─────────────────────────────────────────────────
+• Background email alerts — no Claude session needed
+• Zero API cost — calls AI-Prowler tools directly
+• 6 configurable jobs: briefing, invoices, weather & more
+• Personal mode only — hidden in server mode
+
+─────────────────────────────────────────────────
+ JOB IMAGE STORAGE
+─────────────────────────────────────────────────
+• Save job photos from Claude chat to local storage
+• 15 formats: JPEG, HEIC, PNG, WebP, DNG, RAW & more
+• iPhone (HEIC) and Android (WebP/DNG) fully supported
+• Metadata index per job — searchable without pixel data
 
 ─────────────────────────────────────────────────
  EMAIL, SMS & WHATSAPP
@@ -2732,20 +2758,23 @@ or from the Help menu."""
 
         # ── Default ad content ────────────────────────────────────────────────
         self._ad_defaults = {
-            'headline':  'Welcome to AI-Prowler',
+            'headline':  'Welcome to AI-Prowler v8.0.0',
             'body': (
                 'Your Professional Agentic RAG Knowledge Base for Claude.\n\n'
                 'AI-Prowler indexes your local documents and makes them '
                 'searchable through Claude — on desktop, web, and mobile.\n\n'
+                '• 83 MCP tools across 12 categories\n'
                 '• Index documents from any folder on your PC\n'
-                '• Search with full provenance tracking\n'
                 '• Connect via Claude Desktop (local) or Claude.ai (remote)\n'
-                '• Smart scan skips binaries and system files automatically\n\n'
+                '• Common Business AI Analysis — 5 one-click analysis buttons\n'
+                '• Proactive Alerts — email briefings pushed to you automatically\n'
+                '• Job Image Storage — save field photos from Claude chat\n'
+                '• QuickBooks & Square integration via Claude MCP connectors\n\n'
                 'Get started: click the Index Docs tab to add your first folder.'
             ),
             'link_text': 'Visit AI-Prowler on GitHub',
             'link_url':  'https://github.com/dvavro/AI-Prowler',
-            'footer':    'AI-Prowler — Free for personal use',
+            'footer':    'AI-Prowler v8.0.0 — Free for personal use',
         }
 
         # Paths
@@ -3961,7 +3990,7 @@ or from the Help menu."""
         """Create query tab — fully scrollable pane."""
         # ── Outer tab frame holds the canvas + scrollbar ──────────────────────
         outer = ttk.Frame(self.notebook)
-        self.notebook.add(outer, text="🔗 Quick Links")
+        self.notebook.add(outer, text="🔗 Links & Analysis")
 
         vscroll = ttk.Scrollbar(outer, orient='vertical')
         vscroll.pack(side='right', fill='y')
@@ -4236,7 +4265,1615 @@ or from the Help menu."""
         ttk.Separator(query_frame, orient='horizontal').pack(
             fill='x', padx=20, pady=(0, 6))
 
-        # ── Local-LLM input controls ─────────────────────────────────────────
+        # ── Server-mode detection for Quick Links tab ────────────────────────
+        # AI Analysis and Custom Analyses are personal-mode-only features.
+        # They require local file access (pending_tasks.json, reports folder)
+        # and the MCP tools that are suppressed in server mode. In server mode
+        # these sections are skipped entirely — no widgets are created.
+        def _is_server_mode_gui() -> bool:
+            """Return True if config.json has mode=server. Never raises."""
+            try:
+                from pathlib import Path as _P
+                import json as _jcfg
+                _cp = _P.home() / ".ai-prowler" / "config.json"
+                if not _cp.exists():
+                    return False
+                _cfg = _jcfg.loads(_cp.read_text(encoding="utf-8-sig")) or {}
+                return (str(_cfg.get("edition", "")).strip().lower() == "business"
+                        and str(_cfg.get("mode", "")).strip().lower() == "server")
+            except Exception:
+                return False
+
+        _in_server_mode = _is_server_mode_gui()
+
+        # ── AI Analysis section ──────────────────────────────────────────────
+        # Five one-click analysis commands. Each button:
+        #   1. Opens a scope-directory picker (optional)
+        #   2. Writes a task record to ~/.ai-prowler/pending_tasks.json
+        #      with any selected scope_dirs included in the task record
+        #   3. Copies the run-queue command to the clipboard
+        #   4. User pastes into Claude → Claude calls get_pending_analysis_tasks()
+        #      → executes the analysis → records findings as learnings
+        #      → calls complete_analysis_task() to mark done.
+        # Not available in server mode (GUI-suppressed).
+        # No API key required. Works entirely within the MCP architecture.
+        if _in_server_mode:
+            tk.Label(query_frame,
+                     text="🔒  AI Analysis & Custom Analyses are not available in Server mode.",
+                     bg='#1a1a1a', fg='#6a6a6a',
+                     font=('Arial', 8, 'italic')).pack(anchor='w', padx=24, pady=4)
+            # Nothing else to build — skip the rest of Quick Links UI
+            query_frame.update_idletasks()
+            return
+
+        _analysis_banner = tk.Frame(query_frame, bg='#1a2530',
+                                    highlightthickness=1,
+                                    highlightbackground='#2e4a62')
+        _analysis_banner.pack(fill='x', padx=20, pady=(0, 8))
+
+        _an_inner = tk.Frame(_analysis_banner, bg='#1a2530')
+        _an_inner.pack(fill='x', padx=14, pady=10)
+
+        # Header row
+        _an_hdr = tk.Frame(_an_inner, bg='#1a2530')
+        _an_hdr.pack(fill='x', pady=(0, 4))
+
+        tk.Label(_an_hdr,
+                 text="🧠  Common Business AI Analysis",
+                 bg='#1a2530', fg='#ffffff',
+                 font=('Arial', 11, 'bold'),
+                 anchor='w').pack(side='left')
+
+        tk.Label(_an_hdr,
+                 text="Click a button → queues task & copies command  ·  Paste into Claude to run ALL queued tasks",
+                 bg='#1a2530', fg='#6a8fa8',
+                 font=('Arial', 8),
+                 wraplength=340, justify='right',
+                 anchor='e').pack(side='right')
+
+        # Analysis task definitions
+        # Each entry includes a "description" shown in the popup so the user
+        # knows exactly what will happen before they click Queue Analysis.
+        # Analysis task definitions
+        # Each entry includes a "description" shown in the popup so the user
+        # knows exactly what will happen before they click Queue Analysis.
+        # Prompts are QuickBooks-aware: if the QB MCP connector is active,
+        # Claude uses it as the primary financial data source; otherwise falls
+        # back to read_job_spreadsheet() and get_ar_aging_report().
+        _ANALYSIS_TASKS = [
+            {
+                "type":    "run_pending",
+                "label":   "🧠 Run Pending Analysis",
+                "color":   "#8e44ad",
+                "hover":   "#9b59b6",
+                "description": (
+                    "Runs every task currently sitting in the queue — in one shot.\n"
+                    "Each queued task has its own prompt, scope, and output settings.\n"
+                    "Use this after queueing one or more analyses below, or after\n"
+                    "clicking Save & Queue in My Custom Analyses."
+                ),
+                "prompt":  (
+                    "Call get_pending_analysis_tasks() and for each pending task: "
+                    "execute the full analysis described in the task's prompt field "
+                    "using all available AI-Prowler tools, record any significant "
+                    "findings as learnings via record_learning(), then call "
+                    "complete_analysis_task(task_id) with a one-sentence summary "
+                    "of what was found."
+                ),
+            },
+            {
+                "type":    "analyze_business",
+                "label":   "📊 Analyze My Business",
+                "color":   "#1a5276",
+                "hover":   "#21618c",
+                "description": (
+                    "Full business health check. Reads your Job Tracker spreadsheet\n"
+                    "(or QuickBooks if connected) for jobs, invoices, AR aging, and\n"
+                    "customers. Searches indexed documents and reviews learnings.\n"
+                    "Records 3–5 actionable 'business_insight' learnings."
+                ),
+                "prompt":  (
+                    "QUICKBOOKS INTEGRATION: First, check whether QuickBooks tools are available by looking for tools whose names contain 'quickbooks' or 'qbo' in your tool list. If QuickBooks is connected, prefer its data (invoices, payments, customers, P&L, balance sheet, cash flow) over the AI-Prowler Job Tracker spreadsheet wherever the data overlaps — QuickBooks is the authoritative financial source. If QuickBooks is NOT connected, fall back to read_job_spreadsheet() and get_ar_aging_report() as described below.\n\n"
+                    "Analyze my business data comprehensively using all available tools:\n"
+                    "IF QuickBooks is connected:\n"
+                    "  1. Query QuickBooks for: open invoices, payments received this month,\n"
+                    "     customer list with balances, Profit & Loss summary (current quarter\n"
+                    "     vs prior quarter), top 10 customers by revenue, and AR aging report.\n"
+                    "  2. Note which services or items drive the most revenue in QuickBooks.\n"
+                    "IF QuickBooks is NOT connected:\n"
+                    "  1. Call read_job_spreadsheet() for Jobs_Schedule, Invoices, Customers.\n"
+                    "  2. Call get_ar_aging_report() for invoice aging buckets.\n"
+                    "BOTH PATHS:\n"
+                    "  3. Call search_documents() for indexed contracts, proposals, agreements.\n"
+                    "  4. Call search_learnings() for recent business insights or known issues.\n"
+                    "  5. Identify: top 3 customers by revenue, most profitable services,\n"
+                    "     any invoices overdue 30+ days, jobs over estimate, recurring patterns.\n"
+                    "  6. Record 3-5 actionable findings as learnings with category 'business_insight'.\n"
+                    "  7. Call complete_analysis_task(task_id) with a one-sentence summary."
+                ),
+            },
+            {
+                "type":    "weekly_advisor",
+                "label":   "💡 Weekly Business Advisor",
+                "color":   "#1a6b3a",
+                "hover":   "#1e8449",
+                "description": (
+                    "Your end-of-week debrief. Reviews this week's completed jobs,\n"
+                    "time entries (actual vs estimated hours), outstanding invoices\n"
+                    "(from QuickBooks if connected, otherwise Job Tracker), new customer\n"
+                    "activity, weather patterns for scheduling, and any learnings added\n"
+                    "this week. Gives a performance summary and 2–3 priorities for next week."
+                ),
+                "prompt":  (
+                    "QUICKBOOKS INTEGRATION: First, check whether QuickBooks tools are available by looking for tools whose names contain 'quickbooks' or 'qbo' in your tool list. If QuickBooks is connected, prefer its data (invoices, payments, customers, P&L, balance sheet, cash flow) over the AI-Prowler Job Tracker spreadsheet wherever the data overlaps — QuickBooks is the authoritative financial source. If QuickBooks is NOT connected, fall back to read_job_spreadsheet() and get_ar_aging_report() as described below.\n\n"
+                    "Act as my weekly business advisor using all available tools:\n"
+                    "IF QuickBooks is connected:\n"
+                    "  1. Query QuickBooks for: invoices created this week, payments received\n"
+                    "     this week, any invoices that became overdue this week, and expenses\n"
+                    "     posted this week. Compare cash in vs cash out for the week.\n"
+                    "  2. Pull QuickBooks P&L for the current week vs last week if available.\n"
+                    "IF QuickBooks is NOT connected:\n"
+                    "  1. Call read_job_spreadsheet() for Jobs_Schedule and Invoices —\n"
+                    "     focus on jobs updated or invoices created in the last 7 days.\n"
+                    "  2. Call get_ar_aging_report() to flag any invoices that became overdue.\n"
+                    "BOTH PATHS:\n"
+                    "  3. Call search_learnings() for learnings added this week.\n"
+                    "  4. Call search_documents() for new contracts or correspondence this week.\n"
+                    "  5. Call get_weather() for my area for next week's scheduling outlook.\n"
+                    "  6. Summarize: jobs completed vs scheduled, actual vs estimated hours,\n"
+                    "     invoices sent and paid, any new problems or wins this week.\n"
+                    "  7. Suggest 2-3 specific priorities for next week.\n"
+                    "  8. Record key findings as learnings with category 'weekly_review'.\n"
+                    "  9. Call complete_analysis_task(task_id) with a one-sentence summary."
+                ),
+            },
+            {
+                "type":    "find_problems",
+                "label":   "⚠️ Find Problems",
+                "color":   "#7d3c00",
+                "hover":   "#a04000",
+                "description": (
+                    "Scans all your data for things needing attention: overdue invoices\n"
+                    "(by aging bucket, from QuickBooks if connected), jobs over budget,\n"
+                    "unanswered SMS from customers, unresolved expense anomalies, and\n"
+                    "recurring patterns that signal risk. Each finding recorded as a\n"
+                    "'problem_flag' learning."
+                ),
+                "prompt":  (
+                    "QUICKBOOKS INTEGRATION: First, check whether QuickBooks tools are available by looking for tools whose names contain 'quickbooks' or 'qbo' in your tool list. If QuickBooks is connected, prefer its data (invoices, payments, customers, P&L, balance sheet, cash flow) over the AI-Prowler Job Tracker spreadsheet wherever the data overlaps — QuickBooks is the authoritative financial source. If QuickBooks is NOT connected, fall back to read_job_spreadsheet() and get_ar_aging_report() as described below.\n\n"
+                    "Scan all my data for problems that need attention:\n"
+                    "IF QuickBooks is connected:\n"
+                    "  1. Query QuickBooks AR aging — flag every invoice 31-60, 61-90,\n"
+                    "     and 90+ days overdue as a separate problem.\n"
+                    "  2. Query QuickBooks for unpaid vendor bills overdue (AP aging).\n"
+                    "  3. Query QuickBooks expenses for any unusual or duplicate charges.\n"
+                    "  4. Check QuickBooks for customers with credit limits exceeded.\n"
+                    "IF QuickBooks is NOT connected:\n"
+                    "  1. Call get_ar_aging_report() — flag every invoice in 31-60,\n"
+                    "     61-90, and 90+ day buckets as a separate problem.\n"
+                    "  2. Call read_job_spreadsheet() for Jobs_Schedule — identify jobs\n"
+                    "     where actual hours or cost exceeded estimate by more than 20%%.\n"
+                    "BOTH PATHS:\n"
+                    "  3. Call check_sms_replies() or list_sms_contacts_with_replies()\n"
+                    "     for unanswered customer messages older than 24 hours.\n"
+                    "  4. Call search_learnings(category='problem_flag') to review\n"
+                    "     previously flagged issues — check if any are still unresolved.\n"
+                    "  5. Call search_documents() for complaints, disputes, or unresolved\n"
+                    "     issues mentioned in indexed documents.\n"
+                    "  6. Look for recurring patterns: same customer or job type appearing\n"
+                    "     in multiple problem categories.\n"
+                    "  7. Record each distinct problem as a learning with category\n"
+                    "     'problem_flag' and outcome 'negative'.\n"
+                    "  8. Call complete_analysis_task(task_id) with a count of problems found."
+                ),
+            },
+            {
+                "type":    "growth_opportunities",
+                "label":   "📈 Growth Opportunities",
+                "color":   "#1a4a6b",
+                "hover":   "#1f5c85",
+                "description": (
+                    "Mines your job history and financial data (QuickBooks if connected)\n"
+                    "for growth signals: most profitable services, best-paying customers,\n"
+                    "geographic clustering, seasonal patterns, and upsell opportunities.\n"
+                    "QuickBooks adds P&L by service type, expense ratios, and true net\n"
+                    "margin per job type. Records 3–5 'growth_opportunity' learnings."
+                ),
+                "prompt":  (
+                    "QUICKBOOKS INTEGRATION: First, check whether QuickBooks tools are available by looking for tools whose names contain 'quickbooks' or 'qbo' in your tool list. If QuickBooks is connected, prefer its data (invoices, payments, customers, P&L, balance sheet, cash flow) over the AI-Prowler Job Tracker spreadsheet wherever the data overlaps — QuickBooks is the authoritative financial source. If QuickBooks is NOT connected, fall back to read_job_spreadsheet() and get_ar_aging_report() as described below.\n\n"
+                    "Analyze my business data to identify growth opportunities:\n"
+                    "IF QuickBooks is connected:\n"
+                    "  1. Query QuickBooks P&L by service/product line — identify which\n"
+                    "     services have highest revenue AND best net margin (revenue minus\n"
+                    "     associated expenses/COGS). High margin = priority growth target.\n"
+                    "  2. Query QuickBooks customer list sorted by total revenue —\n"
+                    "     identify top 10 customers and their payment speed.\n"
+                    "  3. Query QuickBooks for seasonal revenue pattern — compare monthly\n"
+                    "     revenue for the past 12 months to identify peaks and troughs.\n"
+                    "  4. Check QuickBooks for services with growing vs declining revenue\n"
+                    "     trend over the last 3 quarters.\n"
+                    "IF QuickBooks is NOT connected:\n"
+                    "  1. Call read_job_spreadsheet() for Jobs_Schedule, Invoices, Customers.\n"
+                    "  2. Call get_ar_aging_report() — fast payers are best clients.\n"
+                    "  3. Call geocode_address() on top customer addresses to identify\n"
+                    "     geographic clusters for route efficiency.\n"
+                    "BOTH PATHS:\n"
+                    "  4. Call search_documents() for proposals, pricing sheets, market data.\n"
+                    "  5. Call search_learnings(category='growth_opportunity') for prior leads.\n"
+                    "  6. Identify: (a) most profitable services, (b) highest-value customers,\n"
+                    "     (c) geographic revenue clusters, (d) seasonal patterns,\n"
+                    "     (e) service upsell pairs, (f) re-engagement targets (60+ day lapse).\n"
+                    "  7. Record 3-5 specific actionable insights as learnings with category\n"
+                    "     'growth_opportunity'.\n"
+                    "  8. Call complete_analysis_task(task_id) with a one-sentence summary."
+                ),
+            },
+        ]
+
+        # Helper — load tracked dirs from ~/.rag_auto_update_dirs.json
+        # The file format is {"directories": [...], "last_updated": "..."}
+        # Fall back gracefully if the format is a flat dict or plain list.
+        def _load_tracked_dirs_for_scope():
+            try:
+                from pathlib import Path as _P2
+                import json as _j2, os as _o2
+                _df = _P2.home() / ".rag_auto_update_dirs.json"
+                if not _df.exists():
+                    return []
+                _raw = _j2.loads(_df.read_text(encoding="utf-8"))
+                # Primary format: {"directories": [...], "last_updated": "..."}
+                if isinstance(_raw, dict):
+                    _dirs = _raw.get("directories", [])
+                    if isinstance(_dirs, list):
+                        return [k for k in _dirs if isinstance(k, str) and
+                                (_o2.path.isabs(k) or k.startswith("\\\\") or k.startswith("//"))]
+                    # Legacy flat-dict format: keys are paths
+                    return [k for k in _raw.keys()
+                            if _o2.path.isabs(k) or k.startswith("\\\\") or k.startswith("//")]
+                elif isinstance(_raw, list):
+                    return [k for k in _raw if isinstance(k, str) and
+                            (_o2.path.isabs(k) or k.startswith("\\\\") or k.startswith("//"))]
+                return []
+            except Exception:
+                return []
+
+        # Helper — show full analysis options popup for ALL built-in analysis buttons
+        # EXCEPT run_pending, which just copies the queue command immediately.
+        # Name and Prompt are auto-filled (read-only); user configures scope,
+        # output format, and report folder before queuing.
+        def _queue_and_copy(task_def, btn_widget):
+            import json as _json
+            import datetime as _dt
+            from pathlib import Path as _Path
+            import custom_tasks_manager as _ctm_q
+
+            # ── Run Pending: no popup — just copy the command ─────────────────
+            # Each queued task already has its own scope baked in when it was
+            # created. Run Pending simply executes the queue as-is.
+            if task_def.get("type") == "run_pending":
+                _cmd = (
+                    "Call get_pending_analysis_tasks() and for each pending task: "
+                    "execute the full analysis described in the task's prompt field "
+                    "using all available AI-Prowler tools, record any significant "
+                    "findings as learnings via record_learning(), then call "
+                    "complete_analysis_task(task_id) with a one-sentence summary "
+                    "of what was found."
+                )
+                try:
+                    self.root.clipboard_clear()
+                    self.root.clipboard_append(_cmd)
+                    self.root.update()
+                except Exception:
+                    pass
+
+                # Show a brief info popup explaining what to do next
+                from tkinter import messagebox as _mb_rp
+                _mb_rp.showinfo(
+                    "Queue Command Copied",
+                    "✅  The Run Pending Analysis command has been copied to your clipboard.\n\n"
+                    "Each queued task already has its own scope and output settings\n"
+                    "from when it was originally created — no additional configuration needed.\n\n"
+                    "👉  Open a new Claude chat and press  Ctrl+V  (or paste)\n"
+                    "    to run all pending tasks in sequence."
+                )
+                orig_text  = btn_widget.cget("text")
+                orig_color = btn_widget.cget("bg")
+                btn_widget.configure(text="✓ Copied! Paste into Claude", bg='#1a7a4a')
+                self.status_var.set(
+                    "✅ Run Pending command copied — open Claude and press Ctrl+V to run all queued tasks")
+                self.root.after(3000, lambda: btn_widget.configure(
+                    text=orig_text, bg=orig_color))
+                self.root.after(5000, lambda: self.status_var.set("Ready"))
+                return
+
+            tracked_dirs = _load_tracked_dirs_for_scope()
+
+            # ── Full options popup (806×754 = 620×580 +30%) ───────────────────
+            _win = tk.Toplevel(self.root)
+            _win.title(f"Configure: {task_def['label']}")
+            _win.geometry("806x980")
+            _win.resizable(True, True)
+            _win.grab_set()
+            _win.focus_set()
+
+            # Scrollable wrapper so all fields are always reachable
+            _win_canvas = tk.Canvas(_win, highlightthickness=0)
+            _win_vsb    = ttk.Scrollbar(_win, orient='vertical', command=_win_canvas.yview)
+            _win_vsb.pack(side='right', fill='y')
+            _win_canvas.pack(side='left', fill='both', expand=True)
+            _win_canvas.configure(yscrollcommand=_win_vsb.set)
+            _pad = tk.Frame(_win_canvas, padx=16, pady=12)
+            _pad_id = _win_canvas.create_window((0, 0), window=_pad, anchor='nw')
+            def _win_cfg(e):
+                _win_canvas.configure(scrollregion=_win_canvas.bbox('all'))
+                _win_canvas.itemconfig(_pad_id, width=_win_canvas.winfo_width())
+            _pad.bind('<Configure>', _win_cfg)
+            def _win_mw(e):
+                _win_canvas.yview_scroll(int(-1*(e.delta/120)), 'units')
+            _win_canvas.bind('<MouseWheel>', _win_mw)
+            _pad.bind('<MouseWheel>', _win_mw)
+
+            # ── Read-only Name ────────────────────────────────────────────────
+            tk.Label(_pad, text="Analysis:", font=('Arial', 9, 'bold'),
+                     anchor='w').pack(anchor='w')
+            tk.Label(_pad, text=task_def['label'],
+                     font=('Arial', 10), anchor='w').pack(anchor='w', pady=(0, 4))
+
+            # ── What this does (description) ──────────────────────────────────
+            _desc_frame = tk.Frame(_pad, bg='#e8f4e8', bd=1, relief='solid')
+            _desc_frame.pack(fill='x', pady=(0, 8))
+            tk.Label(_desc_frame,
+                     text="What this does:",
+                     font=('Arial', 8, 'bold'), bg='#e8f4e8', fg='#1a4a1a',
+                     anchor='w').pack(anchor='w', padx=8, pady=(6, 2))
+            tk.Label(_desc_frame,
+                     text=task_def.get('description', ''),
+                     font=('Arial', 8), bg='#e8f4e8', fg='#1a3a1a',
+                     anchor='w', justify='left',
+                     wraplength=728).pack(anchor='w', padx=8, pady=(0, 6))
+
+            # ── Collapsible read-only Prompt ──────────────────────────────────
+            _prompt_hdr = tk.Frame(_pad)
+            _prompt_hdr.pack(fill='x')
+            tk.Label(_prompt_hdr, text="Prompt (auto):",
+                     font=('Arial', 9, 'bold'), anchor='w').pack(side='left')
+            _prompt_toggle_lbl = tk.StringVar(value="▶ Show prompt")
+            _prompt_box = tk.Text(_pad, height=5, width=60, wrap='word',
+                                  font=('Arial', 8), fg='gray',
+                                  state='disabled', bg='#f0f0f0')
+            _prompt_box.configure(state='normal')
+            _prompt_box.insert('1.0', task_def['prompt'])
+            _prompt_box.configure(state='disabled')
+
+            def _toggle_prompt():
+                if _prompt_box.winfo_ismapped():
+                    _prompt_box.pack_forget()
+                    _prompt_toggle_lbl.set("▶ Show prompt")
+                else:
+                    _prompt_box.pack(fill='x', pady=(2, 6))
+                    _prompt_toggle_lbl.set("▼ Hide prompt")
+
+            ttk.Button(_prompt_hdr, textvariable=_prompt_toggle_lbl,
+                       command=_toggle_prompt,
+                       width=14).pack(side='left', padx=(8, 0))
+
+            # ── Scope directories (scrollable) ────────────────────────────────────
+            tk.Label(_pad, text="Scope directories (optional):",
+                     font=('Arial', 9, 'bold'), anchor='w').pack(anchor='w', pady=(8, 0))
+            tk.Label(_pad,
+                     text="Check directories to focus this analysis on.  "
+                          "Leave all unchecked to search everything.",
+                     font=('Arial', 8), fg='gray',
+                     wraplength=728, justify='left').pack(anchor='w')
+
+            # Scrollable canvas — capped at 150px, auto-sizes for short lists
+            _scope_outer = tk.Frame(_pad, bd=1, relief='sunken')
+            _scope_outer.pack(fill='x', pady=(2, 8))
+            _scope_canvas = tk.Canvas(_scope_outer, highlightthickness=0, bg='white')
+            _scope_vsb    = ttk.Scrollbar(_scope_outer, orient='vertical',
+                                          command=_scope_canvas.yview)
+            _scope_inner  = tk.Frame(_scope_canvas, bg='white')
+            _scope_inner_id = _scope_canvas.create_window(
+                (0, 0), window=_scope_inner, anchor='nw')
+
+            def _scope_on_configure(e):
+                _scope_canvas.configure(scrollregion=_scope_canvas.bbox('all'))
+                _scope_canvas.itemconfig(_scope_inner_id,
+                                         width=_scope_canvas.winfo_width())
+            _scope_inner.bind('<Configure>', _scope_on_configure)
+
+            _scope_canvas.configure(yscrollcommand=_scope_vsb.set)
+            _scope_vsb.pack(side='right', fill='y')
+            _scope_canvas.pack(side='left', fill='both', expand=True)
+
+            def _scope_mousewheel(e):
+                _scope_canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units')
+            _scope_canvas.bind('<MouseWheel>', _scope_mousewheel)
+            _scope_inner.bind('<MouseWheel>', _scope_mousewheel)
+
+            _scope_vars = {}
+            if tracked_dirs:
+                for _d in tracked_dirs:
+                    _sv = tk.BooleanVar(value=False)
+                    _scope_vars[_d] = _sv
+                    _cb = ttk.Checkbutton(_scope_inner, text=_d, variable=_sv)
+                    _cb.pack(anchor='w', padx=4, pady=1)
+                    _cb.bind('<MouseWheel>', _scope_mousewheel)
+                # Height: fit content up to 150px max
+                _scope_canvas.update_idletasks()
+                _content_h = _scope_inner.winfo_reqheight()
+                _scope_canvas.configure(height=min(_content_h + 4, 150))
+            else:
+                tk.Label(_scope_inner,
+                         text="No indexed directories found. Index some documents first.",
+                         font=('Arial', 8), fg='gray', bg='white').pack(padx=4, pady=4)
+                _scope_canvas.configure(height=30)
+
+            # ── Output options ────────────────────────────────────────────────
+            tk.Label(_pad, text="Output:", font=('Arial', 9, 'bold'),
+                     anchor='w').pack(anchor='w')
+            _out_row = tk.Frame(_pad)
+            _out_row.pack(anchor='w', pady=(2, 4))
+
+            _learn_var  = tk.BooleanVar(value=True)
+            _report_var = tk.BooleanVar(value=False)
+
+            ttk.Checkbutton(_out_row,
+                            text="💡 Save key insights to Learnings",
+                            variable=_learn_var).pack(anchor='w')
+            ttk.Checkbutton(_out_row,
+                            text="📄 Save full analysis as Word document (.docx)",
+                            variable=_report_var).pack(anchor='w')
+
+            # ── Schedule / Recurrence ─────────────────────────────────
+            tk.Label(_pad, text='Schedule:', font=('Arial', 9, 'bold'),
+                     anchor='w').pack(anchor='w', pady=(8, 0))
+            tk.Label(_pad,
+                     text='One shot = run once now.  '
+                          'Choose a schedule to repeat automatically — '
+                          'AI-Prowler detects when it is due and surfaces it.',
+                     font=('Arial', 8), fg='gray',
+                     wraplength=728, justify='left').pack(anchor='w')
+
+            _sched_row = tk.Frame(_pad)
+            _sched_row.pack(fill='x', pady=(4, 2))
+
+            _sched_lbl_to_key = {v: k for k, v in _ctm_q.SCHEDULE_LABELS.items()}
+            _sched_var = tk.StringVar(value='Manual only')
+            _sched_combo = ttk.Combobox(
+                _sched_row, textvariable=_sched_var,
+                values=list(_ctm_q.SCHEDULE_LABELS.values()),
+                state='readonly', width=16)
+            _sched_combo.set('Manual only')
+            _sched_combo.pack(side='left')
+
+            tk.Label(_sched_row, text='  First due date:',
+                     font=('Arial', 9, 'bold')).pack(side='left')
+            _due_var   = tk.StringVar(value='')
+            _due_entry = ttk.Entry(_sched_row, textvariable=_due_var, width=12)
+            _due_entry.pack(side='left', padx=(4, 0))
+            tk.Label(_sched_row, text='YYYY-MM-DD  (blank = today)',
+                     font=('Arial', 7), fg='gray').pack(side='left', padx=(6, 0))
+
+            def _on_sched_change(e=None):
+                  _k = _sched_lbl_to_key.get(_sched_var.get(), 'none')
+                  if _k == 'none':
+                        _due_entry.configure(state='disabled')
+                        _due_var.set('')
+                  else:
+                        _due_entry.configure(state='normal')
+                        if not _due_var.get():
+                              import datetime as _dt2
+                              _due_var.set(_dt2.date.today().isoformat())
+            _sched_combo.bind('<<ComboboxSelected>>', _on_sched_change)
+            _due_entry.configure(state='disabled')  # starts disabled
+
+            # ── Report folder ─────────────────────────────────────────────────
+            _folder_frame = tk.Frame(_pad)
+            _folder_frame.pack(fill='x', pady=(0, 8))
+            tk.Label(_folder_frame, text="Report folder:",
+                     font=('Arial', 9, 'bold')).pack(side='left')
+            _folder_var = tk.StringVar(value=_ctm_q.DEFAULT_REPORT_FOLDER)
+            ttk.Entry(_folder_frame, textvariable=_folder_var,
+                      width=52).pack(side='left', padx=(6, 4))
+
+            def _browse_report_folder():
+                import tkinter.filedialog as _fd
+                d = _fd.askdirectory(
+                    initialdir=_folder_var.get() or str(_Path.home()))
+                if d:
+                    _folder_var.set(d)
+
+            ttk.Button(_folder_frame, text="Browse…",
+                       command=_browse_report_folder).pack(side='left')
+
+            # ── Paste reminder ────────────────────────────────────────────────
+            tk.Label(_pad,
+                     text="After clicking Queue Analysis →  open a new Claude chat and press  Ctrl+V  to run all queued tasks.",
+                     font=('Arial', 8, 'italic'), fg='#4a6a82',
+                     wraplength=728, justify='left').pack(anchor='w', pady=(0, 4))
+
+            # ── Action buttons ────────────────────────────────────────────────
+            _confirmed = tk.BooleanVar(value=False)
+
+            def _confirm():
+                _confirmed.set(True)
+                _win.destroy()
+
+            _btn_row = tk.Frame(_pad)
+            _btn_row.pack(fill='x', pady=(8, 0))
+            ttk.Button(_btn_row, text="Cancel",
+                       command=_win.destroy).pack(side='left', padx=(0, 8))
+            ttk.Button(_btn_row, text="Queue Analysis →",
+                       command=_confirm).pack(side='left')
+
+            self.root.wait_window(_win)
+
+            if not _confirmed.get():
+                return  # user cancelled
+
+            # ── Collect choices ───────────────────────────────────────────────
+            # ── Collect choices ──────────────────────────────────────────
+            scope_dirs    = [d for d, v in _scope_vars.items() if v.get()]
+            out_learnings = _learn_var.get()
+            out_report    = _report_var.get()
+            report_folder = _folder_var.get().strip() or _ctm_q.DEFAULT_REPORT_FOLDER
+            schedule_key  = _sched_lbl_to_key.get(_sched_var.get(), 'none')
+            first_due_val = _due_var.get().strip() or None
+            import datetime as _dt3
+            next_due_val  = (first_due_val or _dt3.date.today().isoformat()) \
+                            if schedule_key != 'none' else None
+
+            # ── Write task to pending_tasks.json ──────────────────────────────
+            tasks_path = _Path.home() / ".ai-prowler" / "pending_tasks.json"
+            try:
+                existing = []
+                if tasks_path.exists():
+                    try:
+                        existing = _json.loads(
+                            tasks_path.read_text(encoding="utf-8")) or []
+                        if not isinstance(existing, list):
+                            existing = []
+                    except Exception:
+                        existing = []
+
+                ts = _dt.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+
+                # Build prompt: scope + output instructions appended
+                prompt = task_def["prompt"].rstrip()
+
+                if scope_dirs:
+                    prompt += (
+                        f"\n\nScope restriction: focus your analysis only on "
+                        f"these indexed directories: {', '.join(scope_dirs)}. "
+                        f"Use search_within_directory() for each scope directory "
+                        f"rather than search_documents() across the full index."
+                    )
+
+                if out_learnings and out_report:
+                    prompt += (
+                        f"\n\nOutput: (1) Record key insights as learnings via "
+                        f"record_learning() with category 'business_insight'. "
+                        f"(2) Save the full analysis as a Word document via "
+                        f"save_analysis_report() to folder '{report_folder}'."
+                    )
+                elif out_report:
+                    prompt += (
+                        f"\n\nOutput: Save the full analysis as a Word document "
+                        f"via save_analysis_report() to folder '{report_folder}'."
+                    )
+                elif out_learnings:
+                    prompt += (
+                        "\n\nOutput: Record key insights as learnings via "
+                        "record_learning() with category 'business_insight'."
+                    )
+
+                task = {
+                    "task_id":          f"{task_def['type']}_{ts}",
+                    "type":             task_def["type"],
+                    "label":            task_def["label"],
+                    "prompt":           prompt,
+                    "scope_dirs":       scope_dirs,
+                    "output_learnings": out_learnings,
+                    "output_report":    out_report,
+                    "report_folder":    report_folder,
+                    "schedule":         schedule_key,
+                    "first_due":        first_due_val,
+                    "next_due":         next_due_val,
+                    "created_at":       _dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "status":           "pending",
+                }
+                existing.append(task)
+                tasks_path.parent.mkdir(parents=True, exist_ok=True)
+                tasks_path.write_text(
+                    _json.dumps(existing, indent=2, ensure_ascii=False),
+                    encoding="utf-8")
+
+            except Exception as _e:
+                self.status_var.set(f"Task queue error: {_e}")
+                return
+
+            # ── Copy run-all-pending command to clipboard ─────────────────────
+            _cmd = (
+                "Call get_pending_analysis_tasks() and for each pending task: "
+                "execute the full analysis described in the task's prompt field "
+                "using all available AI-Prowler tools, record any significant "
+                "findings as learnings via record_learning(), then call "
+                "complete_analysis_task(task_id) with a one-sentence summary "
+                "of what was found."
+            )
+            try:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(_cmd)
+                self.root.update()
+            except Exception:
+                pass
+
+            # Visual feedback
+            orig_text  = btn_widget.cget("text")
+            orig_color = btn_widget.cget("bg")
+            scope_note = (f" ({len(scope_dirs)} dir{'s' if len(scope_dirs) != 1 else ''})"
+                          if scope_dirs else "")
+            out_note   = " 💡" if out_learnings else ""
+            out_note  += " 📄" if out_report else ""
+            btn_widget.configure(text="✓ Queued & Copied!", bg='#1a7a4a')
+            self.status_var.set(
+                f"✅ {task_def['label']}{scope_note}{out_note} queued "
+                f"— paste into Claude to run ALL tasks")
+            self.root.after(2000, lambda: btn_widget.configure(
+                text=orig_text, bg=orig_color))
+            self.root.after(4000, lambda: self.status_var.set("Ready"))
+
+        # Button grid — 2 columns
+        _btn_grid = tk.Frame(_an_inner, bg='#1a2530')
+        _btn_grid.pack(fill='x', pady=(4, 0))
+
+        for _idx, _task in enumerate(_ANALYSIS_TASKS):
+            _col = _idx % 2
+            _row = _idx // 2
+            _f   = tk.Frame(_btn_grid, bg='#1a2530')
+            _f.grid(row=_row, column=_col, sticky='ew', padx=(0, 6 if _col == 0 else 0),
+                    pady=3)
+            _btn_grid.columnconfigure(_col, weight=1)
+
+            _b = tk.Button(_f,
+                           text=_task["label"],
+                           bg=_task["color"],
+                           fg='white',
+                           activebackground=_task["hover"],
+                           activeforeground='white',
+                           font=('Arial', 9, 'bold'),
+                           relief='flat',
+                           padx=10, pady=6,
+                           cursor='hand2')
+            # Capture loop variable correctly
+            _b.configure(command=lambda _t=_task, _bw=_b: _queue_and_copy(_t, _bw))
+            _b.pack(fill='x')
+            # Hover tooltip — show first line of description in status bar
+            _tip = _task.get("description", "").split("\n")[0]
+            _b.bind("<Enter>", lambda e, _s=_tip: self.status_var.set(_s))
+            _b.bind("<Leave>", lambda e: self.status_var.set("Ready"))
+
+        # Hint label
+        tk.Label(_an_inner,
+                 text="Each button queues one task. The copied command runs ALL pending tasks when pasted into Claude.",
+                 bg='#1a2530', fg='#4a6a82',
+                 font=('Arial', 7),
+                 anchor='w').pack(anchor='w', pady=(6, 0))
+
+        # Divider after analysis section
+        ttk.Separator(query_frame, orient='horizontal').pack(
+            fill='x', padx=20, pady=(4, 6))
+
+        # ── Queue Panel ───────────────────────────────────────────────────────
+        # Collapsible panel showing all items currently in pending_tasks.json.
+        # User can see what's waiting and clear individual items.
+
+        _queue_outer = tk.Frame(query_frame, bg='#12181f',
+                                highlightthickness=1,
+                                highlightbackground='#2a3a4a')
+        _queue_outer.pack(fill='x', padx=20, pady=(0, 6))
+
+        _queue_hdr = tk.Frame(_queue_outer, bg='#12181f')
+        _queue_hdr.pack(fill='x', padx=10, pady=6)
+
+        _queue_count_var = tk.StringVar(value="▶ Show Queue (0)")
+        _queue_expanded  = tk.BooleanVar(value=False)
+        _queue_list_frame = tk.Frame(_queue_outer, bg='#12181f')
+
+        def _refresh_queue_count():
+            import json as _json
+            from pathlib import Path as _Path
+            p = _Path.home() / ".ai-prowler" / "pending_tasks.json"
+            try:
+                tasks = _json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
+                pending = [t for t in tasks if t.get("status") == "pending"]
+                n = len(pending)
+            except Exception:
+                n = 0
+            _queue_count_var.set(
+                f"{'▼' if _queue_expanded.get() else '▶'} Show Queue ({n})"
+            )
+            return n
+
+        def _refresh_queue_list():
+            import json as _json
+            import datetime as _dt
+            from pathlib import Path as _Path
+            # Clear existing widgets
+            for w in _queue_list_frame.winfo_children():
+                w.destroy()
+            p = _Path.home() / ".ai-prowler" / "pending_tasks.json"
+            try:
+                tasks = _json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
+                pending = [t for t in tasks if t.get("status") == "pending"]
+            except Exception:
+                pending = []
+
+            if not pending:
+                tk.Label(_queue_list_frame,
+                         text="Queue is empty.",
+                         bg='#12181f', fg='#4a6a82',
+                         font=('Arial', 8)).pack(anchor='w', padx=10, pady=4)
+                return
+
+            now = _dt.datetime.utcnow()
+            for t in pending:
+                try:
+                    created = _dt.datetime.strptime(
+                        t.get("created_at", ""), "%Y-%m-%dT%H:%M:%SZ")
+                    age_mins = int((now - created).total_seconds() / 60)
+                    if age_mins < 60:
+                        age = f"{age_mins}m ago"
+                    elif age_mins < 1440:
+                        age = f"{age_mins // 60}h ago"
+                    else:
+                        age = f"{age_mins // 1440}d ago"
+                except Exception:
+                    age = ""
+
+                row = tk.Frame(_queue_list_frame, bg='#12181f')
+                row.pack(fill='x', padx=8, pady=1)
+
+                tk.Label(row,
+                         text=f"• {t.get('label', t.get('task_id','?'))}",
+                         bg='#12181f', fg='#c0d0e0',
+                         font=('Arial', 8),
+                         anchor='w').pack(side='left')
+                tk.Label(row,
+                         text=age,
+                         bg='#12181f', fg='#4a6a82',
+                         font=('Arial', 7)).pack(side='left', padx=(6, 0))
+
+                def _remove(tid=t.get("task_id")):
+                    try:
+                        import json as _j
+                        from pathlib import Path as _P
+                        _p = _P.home() / ".ai-prowler" / "pending_tasks.json"
+                        _tasks = _j.loads(_p.read_text(encoding="utf-8")) if _p.exists() else []
+                        _tasks = [x for x in _tasks if x.get("task_id") != tid]
+                        _p.write_text(_j.dumps(_tasks, indent=2), encoding="utf-8")
+                    except Exception:
+                        pass
+                    _refresh_queue_list()
+                    _refresh_queue_count()
+
+                tk.Button(row, text="✕", bg='#12181f', fg='#cc4444',
+                          font=('Arial', 7), relief='flat', cursor='hand2',
+                          command=_remove).pack(side='right')
+
+            # Clear all button
+            sep = ttk.Separator(_queue_list_frame, orient='horizontal')
+            sep.pack(fill='x', padx=8, pady=(4, 2))
+            btn_row = tk.Frame(_queue_list_frame, bg='#12181f')
+            btn_row.pack(fill='x', padx=8, pady=(2, 6))
+
+            def _clear_all():
+                try:
+                    import json as _j
+                    from pathlib import Path as _P
+                    _p = _P.home() / ".ai-prowler" / "pending_tasks.json"
+                    _tasks = _j.loads(_p.read_text(encoding="utf-8")) if _p.exists() else []
+                    _tasks = [x for x in _tasks if x.get("status") != "pending"]
+                    _p.write_text(_j.dumps(_tasks, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
+                _refresh_queue_list()
+                _refresh_queue_count()
+
+            tk.Button(btn_row, text="🗑 Clear Queue",
+                      bg='#2a1a1a', fg='#cc4444',
+                      font=('Arial', 8), relief='flat', cursor='hand2',
+                      command=_clear_all).pack(side='right')
+
+        def _toggle_queue():
+            _queue_expanded.set(not _queue_expanded.get())
+            if _queue_expanded.get():
+                _refresh_queue_list()
+                _queue_list_frame.pack(fill='x', pady=(0, 6))
+            else:
+                _queue_list_frame.pack_forget()
+            _refresh_queue_count()
+
+        _queue_toggle_btn = tk.Button(
+            _queue_hdr,
+            textvariable=_queue_count_var,
+            bg='#12181f', fg='#6a9fbf',
+            font=('Arial', 8, 'bold'),
+            relief='flat', cursor='hand2',
+            command=_toggle_queue)
+        _queue_toggle_btn.pack(side='left')
+
+        tk.Button(_queue_hdr, text="↻",
+                  bg='#12181f', fg='#4a6a82',
+                  font=('Arial', 9), relief='flat', cursor='hand2',
+                  command=lambda: (_refresh_queue_count(),
+                                   _refresh_queue_list() if _queue_expanded.get() else None)
+                  ).pack(side='right')
+
+        # Initial count
+        _refresh_queue_count()
+
+        # ── My Custom Analyses ────────────────────────────────────────────────
+        # User-defined analysis tasks with schedule, scope, and output config.
+
+        _custom_outer = tk.Frame(query_frame, bg='#0d1a26',
+                                 highlightthickness=1,
+                                 highlightbackground='#1e3a52')
+        _custom_outer.pack(fill='x', padx=20, pady=(0, 8))
+
+        _custom_hdr_row = tk.Frame(_custom_outer, bg='#0d1a26')
+        _custom_hdr_row.pack(fill='x', padx=12, pady=(8, 4))
+
+        tk.Label(_custom_hdr_row,
+                 text="📋  My Custom Analyses",
+                 bg='#0d1a26', fg='#ffffff',
+                 font=('Arial', 10, 'bold')).pack(side='left')
+
+        _custom_count_var = tk.StringVar(value="0 / 10")
+        tk.Label(_custom_hdr_row,
+                 textvariable=_custom_count_var,
+                 bg='#0d1a26', fg='#4a6a82',
+                 font=('Arial', 8)).pack(side='right')
+
+        # Task list container
+        _custom_list_frame = tk.Frame(_custom_outer, bg='#0d1a26')
+        _custom_list_frame.pack(fill='x', padx=10, pady=(0, 4))
+
+        def _refresh_custom_list():
+            """Rebuild the custom task list UI."""
+            for w in _custom_list_frame.winfo_children():
+                w.destroy()
+
+            try:
+                import sys as _sys, os as _os
+                _app_dir = _os.path.dirname(_os.path.abspath(__file__))
+                if _app_dir not in _sys.path:
+                    _sys.path.insert(0, _app_dir)
+                import custom_tasks_manager as _ctm
+                tasks = _ctm.load_custom_tasks()
+            except Exception as _e:
+                tk.Label(_custom_list_frame,
+                         text=f"Error loading tasks: {_e}",
+                         bg='#0d1a26', fg='#cc4444',
+                         font=('Arial', 8)).pack(anchor='w', padx=4)
+                return
+
+            _custom_count_var.set(f"{len(tasks)} / 10")
+
+            if not tasks:
+                tk.Label(_custom_list_frame,
+                         text="No custom tasks yet. Click '+ New' to create one.",
+                         bg='#0d1a26', fg='#4a6a82',
+                         font=('Arial', 8)).pack(anchor='w', padx=4, pady=4)
+                return
+
+            for t in tasks:
+                _draw_task_row(t, tasks, _ctm)
+
+        def _draw_task_row(task, all_tasks, _ctm):
+            """Draw one task row with Queue / Edit / Delete buttons."""
+            row = tk.Frame(_custom_list_frame,
+                           bg='#0d1a26',
+                           highlightthickness=1,
+                           highlightbackground='#1e3a52')
+            row.pack(fill='x', pady=2)
+
+            info = tk.Frame(row, bg='#0d1a26')
+            info.pack(side='left', fill='both', expand=True, padx=6, pady=4)
+
+            # Label + schedule badge
+            lbl_row = tk.Frame(info, bg='#0d1a26')
+            lbl_row.pack(anchor='w')
+            tk.Label(lbl_row,
+                     text=task.get("label", "Unnamed"),
+                     bg='#0d1a26', fg='#d0e8ff',
+                     font=('Arial', 9, 'bold')).pack(side='left')
+
+            sched = task.get("schedule", "none")
+            if sched != "none":
+                import custom_tasks_manager as _ctm2
+                badge = _ctm2.SCHEDULE_LABELS.get(sched, sched)
+                tk.Label(lbl_row,
+                         text=f"  {badge}",
+                         bg='#0d1a26', fg='#4a8fa8',
+                         font=('Arial', 7)).pack(side='left')
+
+            # Due status
+            try:
+                import custom_tasks_manager as _ctm3
+                status_txt = _ctm3.due_status_label(task)
+            except Exception:
+                status_txt = ""
+            if status_txt and status_txt != "Manual only":
+                color = '#cc4444' if '⚠' in status_txt else \
+                        '#22c55e' if 'today' in status_txt.lower() else '#6a9fbf'
+                tk.Label(info,
+                         text=status_txt,
+                         bg='#0d1a26', fg=color,
+                         font=('Arial', 7)).pack(anchor='w')
+
+            # Output badges
+            out_txt = []
+            if task.get("output_learnings", True):
+                out_txt.append("💡 Learnings")
+            if task.get("output_report", False):
+                out_txt.append("📄 Report")
+            if out_txt:
+                tk.Label(info,
+                         text="  ".join(out_txt),
+                         bg='#0d1a26', fg='#4a6a5a',
+                         font=('Arial', 7)).pack(anchor='w')
+
+            # Action buttons
+            btn_col = tk.Frame(row, bg='#0d1a26')
+            btn_col.pack(side='right', padx=4, pady=4)
+
+            def _queue_task(t=task):
+                try:
+                    import custom_tasks_manager as _ctmq
+                    entries = _ctmq.tasks_to_queue_entries([t])
+                    import json as _j
+                    from pathlib import Path as _P
+                    p = _P.home() / ".ai-prowler" / "pending_tasks.json"
+                    existing = []
+                    if p.exists():
+                        try:
+                            existing = _j.loads(p.read_text(encoding="utf-8"))
+                            if not isinstance(existing, list):
+                                existing = []
+                        except Exception:
+                            existing = []
+                    existing.extend(entries)
+                    p.write_text(_j.dumps(existing, indent=2), encoding="utf-8")
+
+                    # Copy run command to clipboard
+                    _cmd = (
+                        "Call get_pending_analysis_tasks() and for each pending "
+                        "task: execute the full analysis described in the prompt, "
+                        "save reports and record learnings as configured, then "
+                        "call complete_analysis_task(task_id, summary)."
+                    )
+                    self.root.clipboard_clear()
+                    self.root.clipboard_append(_cmd)
+                    self.root.update()
+                    self.status_var.set(f"\u2705 '{t['label']}' queued \u2014 paste into Claude to run ALL tasks")
+                    self.root.after(3000, lambda: self.status_var.set("Ready"))
+                    _refresh_queue_count()
+                    if _queue_expanded.get():
+                        _refresh_queue_list()
+                except Exception as _e:
+                    self.status_var.set(f"Queue error: {_e}")
+
+            tk.Button(btn_col, text="▶ Queue",
+                      bg='#1a3a5a', fg='white',
+                      font=('Arial', 7, 'bold'),
+                      relief='flat', cursor='hand2',
+                      command=_queue_task).pack(fill='x', pady=1)
+
+            def _edit_task(t=task):
+                _open_task_editor(t)
+
+            tk.Button(btn_col, text="✎ Edit",
+                      bg='#1a2a1a', fg='#88cc88',
+                      font=('Arial', 7),
+                      relief='flat', cursor='hand2',
+                      command=_edit_task).pack(fill='x', pady=1)
+
+            def _delete_task(t=task):
+                from tkinter import messagebox as _mb
+                if _mb.askyesno("Delete Task",
+                                f"Delete '{t['label']}'?\nThis cannot be undone."):
+                    try:
+                        import custom_tasks_manager as _ctmd
+                        tasks = _ctmd.load_custom_tasks()
+                        _ctmd.delete_task(tasks, t["task_id"])
+                        _ctmd.save_custom_tasks(tasks)
+                        _refresh_custom_list()
+                    except Exception as _e:
+                        self.status_var.set(f"Delete error: {_e}")
+
+            tk.Button(btn_col, text="🗑",
+                      bg='#2a1a1a', fg='#cc4444',
+                      font=('Arial', 7),
+                      relief='flat', cursor='hand2',
+                      command=_delete_task).pack(fill='x', pady=1)
+
+        def _open_task_editor(existing_task=None):
+            """Open the custom task editor dialog."""
+            import custom_tasks_manager as _ctm
+            import tkinter.simpledialog as _sd
+            from tkinter import messagebox as _mb
+
+            win = tk.Toplevel(self.root)
+            win.title("Edit Custom Analysis" if existing_task else "New Custom Analysis")
+            win.geometry("806x884")
+            win.resizable(True, True)
+            win.grab_set()
+
+            # Scrollable window — all content in a canvas so nothing gets hidden
+            _win_canvas = tk.Canvas(win, highlightthickness=0)
+            _win_vsb    = ttk.Scrollbar(win, orient='vertical', command=_win_canvas.yview)
+            _win_vsb.pack(side='right', fill='y')
+            _win_canvas.pack(side='left', fill='both', expand=True)
+            _win_canvas.configure(yscrollcommand=_win_vsb.set)
+            pad = tk.Frame(_win_canvas, padx=16, pady=12)
+            _pad_id = _win_canvas.create_window((0, 0), window=pad, anchor='nw')
+            def _win_configure(e):
+                _win_canvas.configure(scrollregion=_win_canvas.bbox('all'))
+                _win_canvas.itemconfig(_pad_id, width=_win_canvas.winfo_width())
+            pad.bind('<Configure>', _win_configure)
+            def _win_mousewheel(e):
+                _win_canvas.yview_scroll(int(-1*(e.delta/120)), 'units')
+            _win_canvas.bind('<MouseWheel>', _win_mousewheel)
+            pad.bind('<MouseWheel>', _win_mousewheel)
+
+            # Name
+            tk.Label(pad, text="Name:", font=('Arial', 9, 'bold'),
+                     anchor='w').pack(anchor='w')
+            name_var = tk.StringVar(value=existing_task.get("label", "") if existing_task else "")
+            ttk.Entry(pad, textvariable=name_var, width=60).pack(
+                fill='x', pady=(2, 8))
+
+            # Prompt
+            tk.Label(pad, text="Prompt:", font=('Arial', 9, 'bold'),
+                     anchor='w').pack(anchor='w')
+            tk.Label(pad, text="Describe what Claude should analyze and report on.",
+                     font=('Arial', 8), fg='gray', anchor='w').pack(anchor='w')
+            prompt_box = tk.Text(pad, height=6, width=60, wrap='word',
+                                 font=('Arial', 9))
+            prompt_box.pack(fill='x', pady=(2, 8))
+            if existing_task:
+                prompt_box.insert('1.0', existing_task.get("prompt", ""))
+
+            # Scope directories
+            tk.Label(pad, text="Scope directories (optional):",
+                     font=('Arial', 9, 'bold'), anchor='w').pack(anchor='w')
+            tk.Label(pad,
+                     text="Check directories to focus analysis on. Leave all unchecked to search everything.",
+                     font=('Arial', 8), fg='gray', anchor='w',
+                     wraplength=728, justify='left').pack(anchor='w')
+
+            # Scrollable scope directories — capped at 150px
+            scope_outer = tk.Frame(pad, bd=1, relief='sunken')
+            scope_outer.pack(fill='x', pady=(2, 8))
+            scope_canvas = tk.Canvas(scope_outer, highlightthickness=0, bg='white')
+            scope_vsb    = ttk.Scrollbar(scope_outer, orient='vertical',
+                                         command=scope_canvas.yview)
+            scope_inner  = tk.Frame(scope_canvas, bg='white')
+            scope_inner_id = scope_canvas.create_window((0, 0), window=scope_inner, anchor='nw')
+
+            def _edit_scope_configure(e):
+                scope_canvas.configure(scrollregion=scope_canvas.bbox('all'))
+                scope_canvas.itemconfig(scope_inner_id, width=scope_canvas.winfo_width())
+            scope_inner.bind('<Configure>', _edit_scope_configure)
+
+            scope_canvas.configure(yscrollcommand=scope_vsb.set)
+            scope_vsb.pack(side='right', fill='y')
+            scope_canvas.pack(side='left', fill='both', expand=False)
+
+            def _edit_scope_mousewheel(e):
+                scope_canvas.yview_scroll(int(-1 * (e.delta / 120)), 'units')
+            scope_canvas.bind('<MouseWheel>', _edit_scope_mousewheel)
+            scope_inner.bind('<MouseWheel>', _edit_scope_mousewheel)
+
+            existing_scope = (existing_task.get('scope_dirs') or []) if existing_task else []
+            scope_vars = {}
+            # Load tracked dirs fresh (don't rely on outer-scope 'tracked' variable)
+            try:
+                from pathlib import Path as _Pt
+                import json as _jt, os as _ot
+                _df_t = _Pt.home() / '.rag_auto_update_dirs.json'
+                if _df_t.exists():
+                    _raw_t = _jt.loads(_df_t.read_text(encoding='utf-8'))
+                    if isinstance(_raw_t, dict):
+                        _dl_t = _raw_t.get('directories', [])
+                        tracked = [k for k in _dl_t if isinstance(k, str) and
+                                   (_ot.path.isabs(k) or k.startswith('\\\\') or k.startswith('//'))] \
+                                  if isinstance(_dl_t, list) else []
+                    elif isinstance(_raw_t, list):
+                        tracked = [k for k in _raw_t if isinstance(k, str) and
+                                   (_ot.path.isabs(k) or k.startswith('\\\\') or k.startswith('//'))] 
+                    else:
+                        tracked = []
+                else:
+                    tracked = []
+            except Exception:
+                tracked = []
+            if tracked:
+                for d in tracked:
+                    var = tk.BooleanVar(value=d in existing_scope)
+                    scope_vars[d] = var
+                    cb = ttk.Checkbutton(scope_inner, text=d, variable=var)
+                    cb.pack(anchor='w', padx=4, pady=1)
+                    cb.bind('<MouseWheel>', _edit_scope_mousewheel)
+                scope_canvas.update_idletasks()
+                scope_canvas.configure(height=min(scope_inner.winfo_reqheight() + 4, 150))
+            else:
+                tk.Label(scope_inner,
+                         text='No indexed directories found. Index some documents first.',
+                         font=('Arial', 8), fg='gray', bg='white').pack(padx=4, pady=4)
+                scope_canvas.configure(height=30)
+
+            # Schedule
+            sched_row = tk.Frame(pad)
+            sched_row.pack(fill='x', pady=(0, 8))
+            tk.Label(sched_row, text="Schedule:",
+                     font=('Arial', 9, 'bold')).pack(side='left')
+            sched_var = tk.StringVar(
+                value=existing_task.get("schedule", "none") if existing_task else "none")
+            sched_combo = ttk.Combobox(
+                sched_row,
+                textvariable=sched_var,
+                values=list(_ctm.SCHEDULE_LABELS.values()),
+                state='readonly', width=16)
+            # Map display labels to keys
+            _sched_label_to_key = {v: k for k, v in _ctm.SCHEDULE_LABELS.items()}
+            if existing_task:
+                sched_combo.set(
+                    _ctm.SCHEDULE_LABELS.get(existing_task.get("schedule", "none"),
+                                              "Manual only"))
+            else:
+                sched_combo.set("Manual only")
+            sched_combo.pack(side='left', padx=(8, 16))
+
+            tk.Label(sched_row, text="First due date:",
+                     font=('Arial', 9, 'bold')).pack(side='left')
+            due_var = tk.StringVar(
+                value=existing_task.get("first_due", "") if existing_task else "")
+            ttk.Entry(sched_row, textvariable=due_var, width=12).pack(
+                side='left', padx=(4, 0))
+            tk.Label(sched_row, text="YYYY-MM-DD",
+                     font=('Arial', 7), fg='gray').pack(side='left', padx=(4, 0))
+
+            # Output options
+            tk.Label(pad, text="Output:", font=('Arial', 9, 'bold'),
+                     anchor='w').pack(anchor='w')
+            out_row = tk.Frame(pad)
+            out_row.pack(anchor='w', pady=(2, 4))
+
+            learn_var = tk.BooleanVar(
+                value=existing_task.get("output_learnings", True) if existing_task else True)
+            report_var = tk.BooleanVar(
+                value=existing_task.get("output_report", False) if existing_task else False)
+
+            ttk.Checkbutton(out_row, text="💡 Save key insights to Learnings",
+                            variable=learn_var).pack(anchor='w')
+            ttk.Checkbutton(out_row, text="📄 Save full analysis as Word document (.docx)",
+                            variable=report_var).pack(anchor='w')
+
+            # Report folder
+            folder_frame = tk.Frame(pad)
+            folder_frame.pack(fill='x', pady=(0, 8))
+            tk.Label(folder_frame, text="Report folder:",
+                     font=('Arial', 9, 'bold')).pack(side='left')
+            folder_var = tk.StringVar(
+                value=existing_task.get("report_folder",
+                                        _ctm.DEFAULT_REPORT_FOLDER) if existing_task
+                else _ctm.DEFAULT_REPORT_FOLDER)
+            ttk.Entry(folder_frame, textvariable=folder_var, width=42).pack(
+                side='left', padx=(6, 4))
+
+            def _browse_folder():
+                import tkinter.filedialog as _fd
+                d = _fd.askdirectory(initialdir=folder_var.get() or str(
+                    __import__('pathlib').Path.home()))
+                if d:
+                    folder_var.set(d)
+
+            ttk.Button(folder_frame, text="Browse…",
+                       command=_browse_folder).pack(side='left')
+
+            # Buttons
+            btn_row = tk.Frame(pad)
+            btn_row.pack(fill='x', pady=(8, 0))
+
+            def _save(queue_after=False):
+                label   = name_var.get().strip()
+                prompt  = prompt_box.get('1.0', 'end-1c').strip()
+                scope   = [d for d, v in scope_vars.items() if v.get()]
+                sched_key = _sched_label_to_key.get(sched_combo.get(), "none")
+                first_due = due_var.get().strip() or None
+
+                try:
+                    import custom_tasks_manager as _ctm2
+                    tasks = _ctm2.load_custom_tasks()
+
+                    if existing_task:
+                        _ctm2.update_task(
+                            tasks, existing_task["task_id"],
+                            label=label, prompt=prompt,
+                            scope_dirs=scope,
+                            schedule=sched_key,
+                            first_due=first_due,
+                            output_learnings=learn_var.get(),
+                            output_report=report_var.get(),
+                            report_folder=folder_var.get().strip()
+                        )
+                    else:
+                        if len(tasks) >= _ctm2.MAX_CUSTOM_TASKS:
+                            from tkinter import messagebox as _mb2
+                            _mb2.showwarning(
+                                "Limit Reached",
+                                f"Maximum {_ctm2.MAX_CUSTOM_TASKS} custom tasks allowed.\n"
+                                "Delete an existing task to add a new one.")
+                            return
+                        new_task = _ctm2.create_task(
+                            label=label, prompt=prompt,
+                            scope_dirs=scope,
+                            schedule=sched_key,
+                            first_due=first_due,
+                            output_learnings=learn_var.get(),
+                            output_report=report_var.get(),
+                            report_folder=folder_var.get().strip()
+                        )
+                        tasks.append(new_task)
+
+                    _ctm2.save_custom_tasks(tasks)
+                    _refresh_custom_list()
+
+                    if queue_after:
+                        # Find the task we just saved and queue it
+                        tasks_updated = _ctm2.load_custom_tasks()
+                        target = tasks_updated[-1] if not existing_task else \
+                            next((t for t in tasks_updated
+                                  if t["task_id"] == existing_task["task_id"]), None)
+                        if target:
+                            entries = _ctm2.tasks_to_queue_entries([target])
+                            import json as _j
+                            from pathlib import Path as _P
+                            p = _P.home() / ".ai-prowler" / "pending_tasks.json"
+                            existing_q = []
+                            if p.exists():
+                                try:
+                                    existing_q = _j.loads(
+                                        p.read_text(encoding="utf-8"))
+                                except Exception:
+                                    existing_q = []
+                            existing_q.extend(entries)
+                            p.write_text(_j.dumps(existing_q, indent=2),
+                                         encoding="utf-8")
+                            _cmd = (
+                                "Call get_pending_analysis_tasks() and for each "
+                                "pending task: execute the full analysis, save "
+                                "reports and record learnings as configured, then "
+                                "call complete_analysis_task(task_id, summary)."
+                            )
+                            self.root.clipboard_clear()
+                            self.root.clipboard_append(_cmd)
+                            self.root.update()
+                            self.status_var.set(
+                                  f"✅ '{label}' saved & queued — paste into Claude to run ALL tasks")
+                            self.root.after(3000,
+                                lambda: self.status_var.set("Ready"))
+                            _refresh_queue_count()
+
+                    win.destroy()
+                    self.status_var.set(f"✅ Task '{label}' saved")
+                    self.root.after(2500, lambda: self.status_var.set("Ready"))
+
+                except ValueError as _ve:
+                    from tkinter import messagebox as _mb3
+                    _mb3.showwarning("Validation Error", str(_ve))
+
+            ttk.Button(btn_row, text="Cancel",
+                       command=win.destroy).pack(side='left', padx=(0, 8))
+            ttk.Button(btn_row, text="Save",
+                       command=lambda: _save(False)).pack(side='left', padx=(0, 8))
+            ttk.Button(btn_row, text="Save & Queue",
+                       command=lambda: _save(True)).pack(side='left')
+
+        # + New Custom Analysis button
+        _new_btn_row = tk.Frame(_custom_outer, bg='#0d1a26')
+        _new_btn_row.pack(fill='x', padx=10, pady=(0, 8))
+
+        tk.Button(_new_btn_row,
+                  text="+ New Custom Analysis",
+                  bg='#1a3a2a', fg='#88cc88',
+                  font=('Arial', 9, 'bold'),
+                  relief='flat', cursor='hand2',
+                  command=lambda: _open_task_editor(None)).pack(side='left')
+
+        # Run Due Tasks button — auto-queues all overdue custom tasks
+        def _run_due_tasks():
+            try:
+                import custom_tasks_manager as _ctm
+                import json as _j
+                from pathlib import Path as _P
+                tasks = _ctm.load_custom_tasks()
+                due   = _ctm.get_due_tasks(tasks)
+                if not due:
+                    self.status_var.set("No tasks due — nothing to queue")
+                    self.root.after(2500, lambda: self.status_var.set("Ready"))
+                    return
+                entries = _ctm.tasks_to_queue_entries(due)
+                p = _P.home() / ".ai-prowler" / "pending_tasks.json"
+                existing = []
+                if p.exists():
+                    try:
+                        existing = _j.loads(p.read_text(encoding="utf-8"))
+                        if not isinstance(existing, list):
+                            existing = []
+                    except Exception:
+                        existing = []
+                existing.extend(entries)
+                p.write_text(_j.dumps(existing, indent=2), encoding="utf-8")
+                _cmd = (
+                    "Call get_pending_analysis_tasks() and for each pending "
+                    "task: execute the full analysis, save reports and record "
+                    "learnings as configured, then call "
+                    "complete_analysis_task(task_id, summary)."
+                )
+                self.root.clipboard_clear()
+                self.root.clipboard_append(_cmd)
+                self.root.update()
+                self.status_var.set(
+                  f"✅ {len(due)} due task{'s' if len(due) != 1 else ''} queued — paste into Claude to run ALL tasks")
+                self.root.after(3000, lambda: self.status_var.set("Ready"))
+                _refresh_queue_count()
+                if _queue_expanded.get():
+                    _refresh_queue_list()
+            except Exception as _e:
+                self.status_var.set(f"Error: {_e}")
+
+        tk.Button(_new_btn_row,
+                  text="🧠 Run Due Tasks",
+                  bg='#2a1a4a', fg='#9b88ee',
+                  font=('Arial', 9, 'bold'),
+                  relief='flat', cursor='hand2',
+                  command=_run_due_tasks).pack(side='right')
+
+        # Initial render
+        _refresh_custom_list()
+
+        ttk.Separator(query_frame, orient='horizontal').pack(
+            fill='x', padx=20, pady=(4, 6))
+
+        # ── ⏰ Proactive Alerts section ───────────────────────────────────────
+        # Background scheduler: email briefings and alerts with zero API cost.
+        # Not available in server mode — suppressed by the _in_server_mode
+        # guard + return at the top of create_query_tab().
+        # Config lives in ~/.ai-prowler/scheduler_config.json
+        # Engine runs as a daemon thread started when AI-Prowler opens.
+        try:
+            import scheduler_engine as _sched_eng
+            import scheduler_jobs   as _sched_jobs
+            _sched_available = True
+        except ImportError:
+            _sched_available = False
+
+        _alerts_banner = tk.Frame(query_frame, bg='#1a2e1a',
+                                  highlightthickness=1,
+                                  highlightbackground='#2e5a2e')
+        _alerts_banner.pack(fill='x', padx=20, pady=(0, 8))
+
+        _al_inner = tk.Frame(_alerts_banner, bg='#1a2e1a')
+        _al_inner.pack(fill='x', padx=14, pady=10)
+
+        # ── Header row ────────────────────────────────────────────────────────
+        _al_hdr = tk.Frame(_al_inner, bg='#1a2e1a')
+        _al_hdr.pack(fill='x', pady=(0, 6))
+
+        tk.Label(_al_hdr,
+                 text="⏰  Proactive Alerts",
+                 bg='#1a2e1a', fg='#ffffff',
+                 font=('Arial', 11, 'bold'),
+                 anchor='w').pack(side='left')
+
+        _al_status_var = tk.StringVar(value="")
+        _al_status_lbl = tk.Label(_al_hdr, textvariable=_al_status_var,
+                                   bg='#1a2e1a', fg='#6ab86a',
+                                   font=('Arial', 8), anchor='e')
+        _al_status_lbl.pack(side='right')
+
+        tk.Label(_al_inner,
+                 text="Email alerts pushed to you automatically — no Claude session needed. "
+                      "Zero API cost. Sends via your configured email.",
+                 bg='#1a2e1a', fg='#8ab88a',
+                 font=('Arial', 8),
+                 wraplength=680, justify='left').pack(anchor='w', pady=(0, 8))
+
+        if not _sched_available:
+            tk.Label(_al_inner,
+                     text="⚠️  scheduler_jobs.py / scheduler_engine.py not found — "
+                          "copy them to the AI-Prowler install directory.",
+                     bg='#1a2e1a', fg='#cc8800',
+                     font=('Arial', 8)).pack(anchor='w')
+        else:
+            # ── Master enable + email ─────────────────────────────────────────
+            _cfg_now = _sched_eng.load_config()
+
+            _al_top = tk.Frame(_al_inner, bg='#1a2e1a')
+            _al_top.pack(fill='x', pady=(0, 6))
+
+            _sched_enabled_var = tk.BooleanVar(
+                value=_cfg_now.get("enabled", False))
+            ttk.Checkbutton(_al_top,
+                            text="Enable proactive alerts",
+                            variable=_sched_enabled_var).pack(side='left')
+
+            tk.Label(_al_top, text="  Email:", bg='#1a2e1a',
+                     fg='#cccccc', font=('Arial', 8)).pack(side='left')
+            _email_var = tk.StringVar(value=_cfg_now.get("email_to", ""))
+            ttk.Entry(_al_top, textvariable=_email_var,
+                      width=30).pack(side='left', padx=(4, 0))
+
+            # ── Job list ──────────────────────────────────────────────────────
+            _jobs_frame = tk.Frame(_al_inner, bg='#0e1e0e',
+                                   bd=1, relief='sunken')
+            _jobs_frame.pack(fill='x', pady=(4, 6))
+
+            _job_enabled_vars: dict[str, tk.BooleanVar]  = {}
+            _job_time_vars:    dict[str, tk.StringVar]   = {}
+            _job_days_vars:    dict[str, tk.StringVar]   = {}
+
+            DAYS_OPTIONS = ["daily", "weekdays", "weekends",
+                            "monday", "tuesday", "wednesday",
+                            "thursday", "friday", "saturday", "sunday"]
+
+            _jobs_cfg = _cfg_now.get("jobs", {})
+
+            for _jid, _jmeta in _sched_jobs.JOB_REGISTRY.items():
+                _jcfg = _jobs_cfg.get(
+                    _jid, _sched_eng.default_job_config(_jid))
+
+                # Two-line card: top row = label + controls, bottom = description
+                _card = tk.Frame(_jobs_frame, bg='#0e1e0e',
+                                 bd=0, relief='flat')
+                _card.pack(fill='x', padx=6, pady=(4, 0))
+
+                _row_top = tk.Frame(_card, bg='#0e1e0e')
+                _row_top.pack(fill='x')
+
+                _ev = tk.BooleanVar(value=_jcfg.get("enabled", False))
+                _job_enabled_vars[_jid] = _ev
+                ttk.Checkbutton(_row_top, text=_jmeta["label"],
+                                variable=_ev,
+                                width=24).pack(side='left')
+
+                tk.Label(_row_top, text="Time:", bg='#0e1e0e',
+                         fg='#aaaaaa', font=('Arial', 7)).pack(side='left', padx=(4, 2))
+                _tv = tk.StringVar(value=_jcfg.get("time",
+                                   _jmeta.get("default_time", "08:00")))
+                _job_time_vars[_jid] = _tv
+                ttk.Entry(_row_top, textvariable=_tv, width=9).pack(side='left')
+
+                tk.Label(_row_top, text="  Days:", bg='#0e1e0e',
+                         fg='#aaaaaa', font=('Arial', 7)).pack(side='left', padx=(4, 2))
+                _dv = tk.StringVar(value=_jcfg.get("days",
+                                   _jmeta.get("default_days", "daily")))
+                _job_days_vars[_jid] = _dv
+                ttk.Combobox(_row_top, textvariable=_dv,
+                             values=DAYS_OPTIONS,
+                             state='readonly', width=10).pack(side='left')
+
+                # Last run
+                _last = _sched_eng.get_last_run(_jid)
+                tk.Label(_row_top, text=f"  Last: {_last}",
+                         bg='#0e1e0e', fg='#6a8a6a',
+                         font=('Arial', 7)).pack(side='left', padx=(6, 0))
+
+                # ▶ Now button
+                def _make_run_now(jid=_jid):
+                    def _run():
+                        _al_status_var.set(f"Running {jid}…")
+                        self.root.update()
+                        res = _sched_eng.run_job_now(jid)
+                        _al_status_var.set(res[:60])
+                        self.root.after(5000, lambda: _al_status_var.set(
+                            "● Running" if _sched_eng.is_running() else "● Stopped"))
+                    return _run
+                ttk.Button(_row_top, text="▶ Now",
+                           command=_make_run_now(_jid),
+                           width=6).pack(side='right', padx=(0, 4))
+
+                # Description line — explains what the job sends and when
+                _desc_text = _jmeta.get("description", "")
+                # Append time-format hint for interval jobs
+                _t_val = _jcfg.get("time", _jmeta.get("default_time", ""))
+                if _t_val.lower().startswith("every_"):
+                    _desc_text += f"  ·  Time field: use every_Nh or every_Nm (e.g. every_2h, every_30m)"
+                else:
+                    _desc_text += f"  ·  Time field: HH:MM (24-hour)"
+                tk.Label(_card,
+                         text=_desc_text,
+                         bg='#0e1e0e', fg='#c8d8c8',
+                         font=('Arial', 9),
+                         anchor='w', justify='left',
+                         wraplength=900).pack(anchor='w', padx=(28, 4), pady=(0, 3))
+
+                # Thin separator between jobs
+                tk.Frame(_jobs_frame, bg='#1a2e1a', height=1).pack(
+                    fill='x', padx=6)
+
+            # ── Save + Start/Stop controls ────────────────────────────────────
+            _al_btn_row = tk.Frame(_al_inner, bg='#1a2e1a')
+            _al_btn_row.pack(fill='x', pady=(4, 0))
+
+            def _save_scheduler_config():
+                cfg = _sched_eng.load_config()
+                cfg["enabled"]  = _sched_enabled_var.get()
+                cfg["email_to"] = _email_var.get().strip()
+                jobs_out = {}
+                for jid in _sched_jobs.JOB_REGISTRY:
+                    jobs_out[jid] = {
+                        "enabled": _job_enabled_vars[jid].get(),
+                        "time":    _job_time_vars[jid].get().strip(),
+                        "days":    _job_days_vars[jid].get().strip(),
+                    }
+                cfg["jobs"] = jobs_out
+                _sched_eng.save_config(cfg)
+                _al_status_var.set("✅ Config saved")
+                self.root.after(3000, lambda: _al_status_var.set(
+                    "● Running" if _sched_eng.is_running() else "● Stopped"))
+                # Start/stop engine based on enabled flag
+                if cfg["enabled"] and not _sched_eng.is_running():
+                    _sched_eng.start()
+                elif not cfg["enabled"] and _sched_eng.is_running():
+                    _sched_eng.stop()
+                _refresh_engine_status()
+
+            def _refresh_engine_status():
+                if _sched_eng.is_running():
+                    _al_status_var.set("● Running")
+                    _al_status_lbl.config(fg='#6ab86a')
+                else:
+                    _al_status_var.set("● Stopped")
+                    _al_status_lbl.config(fg='#aa4444')
+
+            def _toggle_engine():
+                if _sched_eng.is_running():
+                    _sched_eng.stop()
+                    _al_status_var.set("● Stopped")
+                    _al_status_lbl.config(fg='#aa4444')
+                else:
+                    _save_scheduler_config()
+                    _sched_eng.start()
+                    _al_status_var.set("● Running")
+                    _al_status_lbl.config(fg='#6ab86a')
+
+            def _view_log():
+                _log_win = tk.Toplevel(self.root)
+                _log_win.title("Scheduler Log")
+                _log_win.geometry("700x450")
+                import tkinter.scrolledtext as _st
+                _lt = _st.ScrolledText(_log_win, font=('Courier', 8),
+                                       wrap='word', bg='#0e0e0e', fg='#cccccc')
+                _lt.pack(fill='both', expand=True, padx=8, pady=8)
+                _lt.insert('1.0', _sched_eng.get_log_tail(200))
+                _lt.configure(state='disabled')
+
+            ttk.Button(_al_btn_row, text="💾 Save Config",
+                       command=_save_scheduler_config).pack(side='left', padx=(0, 6))
+            ttk.Button(_al_btn_row, text="▶/■ Start/Stop",
+                       command=_toggle_engine).pack(side='left', padx=(0, 6))
+            ttk.Button(_al_btn_row, text="📋 View Log",
+                       command=_view_log).pack(side='left')
+
+            # Auto-start if config says enabled
+            if _cfg_now.get("enabled") and not _sched_eng.is_running():
+                _sched_eng.start()
+            _refresh_engine_status()
         # When SUPPORT_LOCAL_HW_LLM is False, all of the input/attachment/
         # provider/answer widgets below are constructed but never packed —
         # they live in an off-screen "hidden_root" Frame. Back-end code can
@@ -7451,6 +9088,320 @@ or from the Help menu."""
 
         ttk.Separator(remote_frame, orient='horizontal').pack(fill='x', pady=(4, 8))
 
+        # ── One-Button Subscribe & Activate (v8.0.0) ─────────────────────────
+        # Personal/home mode only. Hidden in Business server mode.
+        # Subscribe button  → opens Stripe Payment Link in the browser.
+        # Activation code   → user pastes code from email, clicks Configure.
+        # _activate_mobile() fetches payload from subscription worker,
+        #   writes config files, and installs/restarts cloudflared service.
+        if not _settings_is_server_mode:
+            sub_outer = ttk.LabelFrame(remote_frame,
+                                       text="Mobile Access Subscription",
+                                       padding=(10, 6))
+            sub_outer.pack(fill='x', pady=(0, 8))
+
+            # ── Subscribe row ─────────────────────────────────────────────────
+            sub_top_row = ttk.Frame(sub_outer)
+            sub_top_row.pack(fill='x', pady=(0, 6))
+
+            ttk.Label(sub_top_row,
+                      text="New subscriber? Get your activation code:",
+                      font=('Arial', 9)).pack(side='left')
+
+            def _open_subscribe_personal():
+                import webbrowser
+                webbrowser.open(
+                    "https://buy.stripe.com/5kQ4gs3sN53j8ZM81u4c801")
+
+            def _open_subscribe_business():
+                import webbrowser
+                webbrowser.open(
+                    "https://buy.stripe.com/9B63co0gB1R7cbYftW4c800")
+
+            ttk.Button(sub_top_row,
+                       text="🛒 Subscribe — Personal",
+                       command=_open_subscribe_personal).pack(
+                           side='left', padx=(12, 4))
+            ttk.Button(sub_top_row,
+                       text="🛒 Subscribe — Business",
+                       command=_open_subscribe_business).pack(
+                           side='left', padx=(0, 0))
+
+            ttk.Separator(sub_outer, orient='horizontal').pack(
+                fill='x', pady=(4, 8))
+
+            # ── Activation code row ───────────────────────────────────────────
+            ttk.Label(sub_outer,
+                      text="Already subscribed? Enter your activation code:",
+                      font=('Arial', 9, 'bold')).pack(anchor='w')
+            ttk.Label(sub_outer, font=('Arial', 8), foreground='gray',
+                      text="Check your email for a code in the format "
+                           "APRO-XXXXXX-XXXXXX-XXXXXX  "
+                           "then click Configure Mobile Access."
+                      ).pack(anchor='w', pady=(0, 6))
+
+            act_code_row = ttk.Frame(sub_outer)
+            act_code_row.pack(fill='x', pady=(0, 4))
+
+            _act_code_var = tk.StringVar()
+            _act_code_entry = ttk.Entry(act_code_row,
+                                        textvariable=_act_code_var,
+                                        width=36,
+                                        font=('Courier New', 10))
+            _act_code_entry.pack(side='left', padx=(0, 8))
+            _act_code_entry.insert(0, "APRO-")
+
+            # Status LED (red = unconfigured, green = active)
+            _sub_act_canvas = tk.Canvas(act_code_row, width=14, height=14,
+                                        bg=self.root.cget('bg'),
+                                        highlightthickness=0)
+            _sub_act_canvas.pack(side='left', padx=(0, 4))
+
+            # Load existing activation state to set initial LED colour
+            _initial_led = 'gray'
+            _initial_domain = ""
+            try:
+                import json as _jact
+                _ra_path = Path.home() / '.ai-prowler' / 'remote_access.json'
+                if _ra_path.exists():
+                    _ra = _jact.loads(_ra_path.read_text(encoding='utf-8'))
+                    if _ra.get('domain'):
+                        _initial_led = '#22C55E'
+                        _initial_domain = _ra.get('domain', '')
+            except Exception:
+                pass
+
+            _sub_act_dot = _sub_act_canvas.create_oval(
+                2, 2, 12, 12, fill=_initial_led, outline='')
+
+            # Domain label (shown after successful activation)
+            _act_domain_var = tk.StringVar(value=_initial_domain)
+            _act_domain_lbl = ttk.Label(act_code_row,
+                                        textvariable=_act_domain_var,
+                                        font=('Arial', 8),
+                                        foreground='#2E75B6')
+            _act_domain_lbl.pack(side='left', padx=(4, 4))
+
+            def _copy_domain():
+                dom = _act_domain_var.get().strip()
+                if dom:
+                    self.root.clipboard_clear()
+                    self.root.clipboard_append(dom)
+                    self.status_var.set("📋 Domain URL copied")
+                    self.root.after(2500, lambda: self.status_var.set("Ready"))
+
+            _copy_domain_btn = ttk.Button(act_code_row,
+                                          text="📋",
+                                          width=3,
+                                          command=_copy_domain)
+            _copy_domain_btn.pack(side='left', padx=(0, 0))
+            if not _initial_domain:
+                _copy_domain_btn.pack_forget()
+
+            # ── Configure button ──────────────────────────────────────────────
+            act_btn_row = ttk.Frame(sub_outer)
+            act_btn_row.pack(fill='x', pady=(4, 2))
+
+            _configure_btn = ttk.Button(act_btn_row,
+                                        text="⚡ Configure Mobile Access",
+                                        command=lambda: _activate_mobile())
+            _configure_btn.pack(side='left', padx=(0, 10))
+
+            _act_status_var = tk.StringVar(value="")
+            ttk.Label(act_btn_row,
+                      textvariable=_act_status_var,
+                      font=('Arial', 8),
+                      foreground='gray').pack(side='left')
+
+            # Manage Subscription link — opens the Stripe Customer Portal.
+            # The SAME portal page handles cancellation, payment-method
+            # updates, AND seat-quantity changes for Business plans (Stripe
+            # calls this "Update quantities" in the portal config — must be
+            # toggled on in the Stripe Dashboard: Settings > Billing >
+            # Customer portal > Update quantities). One link covers:
+            #   - Cancel subscription (no refund; access lapses over the
+            #     existing 30-day grace ladder — see suspendLicense() in the
+            #     Worker and _evaluate_license_grace() client-side)
+            #   - Add/reduce Business seats (fires customer.subscription.
+            #     updated -> updateSeatCount() in the Worker, which mints
+            #     real child license keys for new seats automatically)
+            #   - Update payment method, view invoice history
+            #
+            # Stripe's customer portal requires the CUSTOMER'S email/Stripe
+            # Customer ID to open directly into THEIR subscription — there is
+            # no one static URL that works for every customer. The login-link
+            # flow (where the customer enters their own billing email and
+            # gets a one-time passcode) is the simplest no-backend option and
+            # is what's wired here. Create this link once in the Stripe
+            # Dashboard (Settings > Billing > Customer portal > "Activate
+            # link") and paste it below.
+            # Read the Stripe Customer Portal URL from ~/.ai-prowler/config.json
+            # (key: "stripe_portal_url"). Set it once via:
+            #   python -c "import json,pathlib; p=pathlib.Path.home()/'.ai-prowler'/'config.json'; d=json.loads(p.read_text()); d['stripe_portal_url']='https://billing.stripe.com/p/login/YOUR_REAL_ID'; p.write_text(json.dumps(d,indent=2))"
+            # or just open the file and add the key manually.
+            def _load_stripe_portal_url():
+                try:
+                    import json as _j
+                    _cfg = Path.home() / '.ai-prowler' / 'config.json'
+                    if _cfg.exists():
+                        return _j.loads(_cfg.read_text(encoding='utf-8')).get(
+                            'stripe_portal_url', '')
+                except Exception:
+                    pass
+                return ''
+            _STRIPE_PORTAL_LOGIN_URL = _load_stripe_portal_url()
+
+            def _open_stripe_portal():
+                import webbrowser
+                url = _load_stripe_portal_url()  # re-read each click so edits take effect
+                if not url:
+                    messagebox.showinfo(
+                        "Stripe Portal Not Configured",
+                        "The Stripe Customer Portal URL hasn't been saved yet.\n\n"
+                        "Steps:\n"
+                        "1. Stripe Dashboard → Settings → Billing → Customer portal\n"
+                        "2. Click 'Activate link' and copy the URL\n"
+                        "3. Add it to  ~/.ai-prowler/config.json  as:\n"
+                        '   "stripe_portal_url": "https://billing.stripe.com/p/login/..."'
+                        "\n\n"
+                        "Also enable 'Update quantities' under Subscription management "
+                        "so Business customers can add/reduce seats from this same page.")
+                    return
+                webbrowser.open(url)
+
+            ttk.Button(sub_outer,
+                       text="Manage Subscription →",
+                       command=_open_stripe_portal).pack(
+                           anchor='e', pady=(6, 0))
+            ttk.Label(sub_outer, font=('Arial', 8), foreground='gray',
+                      text="Cancel, update payment method, or change Business "
+                           "seat count — all from one Stripe-hosted page."
+                      ).pack(anchor='e')
+
+            # ── _activate_mobile() ────────────────────────────────────────────
+            def _activate_mobile():
+                """
+                Fetch activation payload from subscription worker,
+                write config files, install cloudflared service.
+                Runs the network + disk work on a background thread;
+                updates the GUI via root.after() on the main thread.
+                """
+                code = _act_code_var.get().strip()
+                if not code or code == "APRO-":
+                    messagebox.showwarning(
+                        "No Activation Code",
+                        "Paste your activation code from the email "
+                        "you received after subscribing.\n\n"
+                        "Format: APRO-XXXXXX-XXXXXX-XXXXXX")
+                    return
+
+                # Quick format check before hitting the network
+                try:
+                    import sys as _sys
+                    import os as _os
+                    _app_dir = _os.path.dirname(_os.path.abspath(__file__))
+                    if _app_dir not in _sys.path:
+                        _sys.path.insert(0, _app_dir)
+                    import subscription_client as _sc
+                except ImportError as _ie:
+                    messagebox.showerror(
+                        "Module Error",
+                        f"subscription_client.py not found.\n{_ie}\n\n"
+                        "Please reinstall AI-Prowler.")
+                    return
+
+                valid, cleaned = _sc.validate_activation_code_format(code)
+                if not valid:
+                    messagebox.showwarning("Invalid Code Format", cleaned)
+                    # Highlight entry in red briefly
+                    _act_code_entry.configure(foreground='red')
+                    self.root.after(2000,
+                        lambda: _act_code_entry.configure(foreground=''))
+                    return
+
+                # Disable button and show progress
+                _configure_btn.configure(
+                    text="⏳ Configuring…", state='disabled')
+                _act_status_var.set("Contacting activation server…")
+                _sub_act_canvas.itemconfig(_sub_act_dot, fill='#E67E00')
+
+                def _progress(msg):
+                    """Called from background thread — schedule on main thread."""
+                    self.root.after(0, lambda: _act_status_var.set(msg))
+
+                def _worker():
+                    try:
+                        import mobile_activator as _ma
+                        result = _ma.activate_from_code(
+                            cleaned, progress_cb=_progress)
+
+                        def _on_success():
+                            _sub_act_canvas.itemconfig(
+                                _sub_act_dot, fill='#22C55E')
+                            _act_domain_var.set(result['domain'])
+                            _copy_domain_btn.pack(side='left', padx=(0, 0))
+                            _act_status_var.set("✅ Activated")
+                            _configure_btn.configure(
+                                text="⚡ Configure Mobile Access",
+                                state='normal')
+                            # ── v8.0.0: auto-refresh all config fields ───────────────
+                            _license_key_var.set(result.get('license_key', ''))
+                            _tun_domain_var.set(result.get('domain', ''))
+                            try:
+                                import json as _jcfg_r
+                                _cfgr = Path.home() / '.ai-prowler' / 'config.json'
+                                if _cfgr.exists():
+                                    _tok = _jcfg_r.loads(_cfgr.read_text(encoding='utf-8')).get('tunnel_token', '')
+                                    if _tok:
+                                        _tun_token_var.set(_tok)
+                            except Exception:
+                                pass
+                            self.root.after(500, _run_status_check)
+                            self.status_var.set(
+                                f"✅ Mobile access activated — {result['domain']}")
+                            self.root.after(
+                                5000, lambda: self.status_var.set("Ready"))
+                            messagebox.showinfo(
+                                "Activation Successful",
+                                f"Mobile access is now live!\n\n"
+                                f"Domain:  {result['domain']}\n"
+                                f"Plan:    {result['plan'].title()}\n"
+                                f"License: {result['license_key']}\n\n"
+                                "Tunnel service is being reinstalled with "
+                                "the new token — approve the UAC prompt.")
+                            _activate_tunnel()
+                        self.root.after(0, _on_success)
+
+                    except ValueError as _ve:
+                        def _on_val_err():
+                            _sub_act_canvas.itemconfig(
+                                _sub_act_dot, fill='#CC0000')
+                            _act_status_var.set("❌ Activation failed")
+                            _configure_btn.configure(
+                                text="⚡ Configure Mobile Access",
+                                state='normal')
+                            messagebox.showerror(
+                                "Activation Failed", str(_ve))
+                        self.root.after(0, _on_val_err)
+
+                    except Exception as _ex:
+                        def _on_err():
+                            _sub_act_canvas.itemconfig(
+                                _sub_act_dot, fill='#CC0000')
+                            _act_status_var.set("❌ Error — check connection")
+                            _configure_btn.configure(
+                                text="⚡ Configure Mobile Access",
+                                state='normal')
+                            messagebox.showerror(
+                                "Activation Error",
+                                f"An unexpected error occurred:\n{_ex}\n\n"
+                                "Check your internet connection and try again. "
+                                "If the problem persists contact support.")
+                        self.root.after(0, _on_err)
+
+                import threading as _th
+                _th.Thread(target=_worker, daemon=True).start()
+
         # ── Mobile Activation (v7.0.1) ───────────────────────────────────────
         # Personal/home installs: 1 machine activation per license.
         # Hidden in server mode — server installs are not machine-limited.
@@ -7998,6 +9949,108 @@ or from the Help menu."""
         _current_sub_result = [{'status': 'unmanaged', 'name': None,
                                   'days_left': None, 'message': 'Not yet checked'}]
 
+        def _validate_license_worker(lk: str) -> dict:
+            """
+            Call the Subscription Worker's public /license/{key}/validate endpoint
+            and translate the response into the sub_result dict shape that
+            _update_sub_light() and _show_subscription_popup() expect.
+
+            v8.0.0: replaces the old _fetch_subs_gui() / _check_subscription_gui()
+            path that read from the retired GitHub subs.json registry. New Stripe
+            licenses (AP-PERS-... / AP-BIZ-...) are never in subs.json, so the old
+            path always returned 'unmanaged' for every new customer.
+
+            Falls back to {'status': 'unmanaged'} on network error so the UI
+            degrades gracefully (green self-hosted dot) rather than blocking.
+            """
+            import datetime as _dt
+            try:
+                import sys as _sys, os as _os
+                _app_dir = _os.path.dirname(_os.path.abspath(__file__))
+                if _app_dir not in _sys.path:
+                    _sys.path.insert(0, _app_dir)
+                import subscription_client as _sc
+            except ImportError:
+                return {'status': 'unmanaged', 'name': None, 'days_left': None,
+                        'message': 'subscription_client.py not found — running unmanaged',
+                        'plan': 'individual', 'seats': 1,
+                        'license_group': None, 'features': {}}
+
+            try:
+                resp = _sc.validate_license(lk)
+            except Exception as _e:
+                # Worker unreachable (offline, DNS failure, etc.) — fail open
+                return {'status': 'unmanaged', 'name': None, 'days_left': None,
+                        'message': f'Worker unreachable — running offline ({_e})',
+                        'plan': 'individual', 'seats': 1,
+                        'license_group': None, 'features': {}}
+
+            valid      = resp.get('valid', False)
+            reason     = resp.get('reason', '')
+            expires_at = resp.get('expires_at', '')
+            edition    = resp.get('edition', 'mobile')
+            plan       = 'business' if edition == 'business' else 'individual'
+
+            # Parse days_left from the ISO expires_at the Worker returns
+            days_left = None
+            if expires_at:
+                try:
+                    expiry    = _dt.datetime.fromisoformat(
+                                    expires_at.replace('Z', '+00:00'))
+                    now_utc   = _dt.datetime.now(_dt.timezone.utc)
+                    days_left = (expiry.date() - now_utc.date()).days
+                except Exception:
+                    pass
+
+            _WARN_DAYS  = 30
+            _GRACE_DAYS = 30
+
+            if valid:
+                if days_left is not None and days_left <= _WARN_DAYS:
+                    status  = 'warning'
+                    message = (f'Subscription expires in {days_left} day(s) '
+                               f'— renewal recommended')
+                else:
+                    status  = 'ok'
+                    d_str   = f'{days_left}d remaining' if days_left is not None else 'active'
+                    message = f'Active — {d_str}'
+
+            elif reason == 'not_found':
+                status  = 'unmanaged'
+                message = 'License key not found in registry — running unmanaged'
+
+            elif reason == 'revoked':
+                status  = 'blocked'
+                message = 'License revoked — contact support'
+
+            else:
+                # suspended / subscription_canceled — soft fail, grace ladder applies
+                if days_left is not None and days_left < 0:
+                    days_over = -days_left
+                    remaining = _GRACE_DAYS - days_over
+                    if remaining > 0:
+                        status  = 'warning'
+                        message = (f'Subscription cancelled — '
+                                   f'{remaining}d grace period remaining')
+                    else:
+                        status  = 'blocked'
+                        message = 'Subscription cancelled — grace period elapsed'
+                else:
+                    status  = 'warning'
+                    message = (f'Subscription inactive '
+                               f'({reason or "suspended"}) — check billing')
+
+            return {
+                'status':        status,
+                'name':          None,   # /validate doesn't expose customer name
+                'days_left':     days_left,
+                'message':       message,
+                'plan':          plan,
+                'seats':         1,
+                'license_group': None,
+                'features':      {},
+            }
+
         def _run_status_check():
             """Background thread: check internet + subscription, update lights."""
             def _worker():
@@ -8005,8 +10058,10 @@ or from the Help menu."""
                 self.root.after(0, lambda: _update_internet_light(online))
                 lk = _license_key_var.get().strip()
                 if lk:
-                    subs_data  = _fetch_subs_gui()
-                    sub_result = _check_subscription_gui(lk, subs_data)
+                    # v8.0.0: validate against the Subscription Worker instead of
+                    # the retired GitHub subs.json registry. New AP-PERS-/AP-BIZ-
+                    # keys are only in the Worker's KV store, never in subs.json.
+                    sub_result = _validate_license_worker(lk)
                     _current_sub_result[0] = sub_result
                     self.root.after(0, lambda: _update_sub_light(sub_result))
                 else:
@@ -11396,16 +13451,37 @@ or from the Help menu."""
     #  users.json is the single source of truth for allocation (no dual-write).
     def _admin_seats_path(self):
         from pathlib import Path as _Path
+        # v8.0.0: prefer license_seats.json (subscription worker format)
+        # Fall back to legacy seats.json if not present
+        new_path = _Path.home() / ".ai-prowler" / "license_seats.json"
+        if new_path.exists():
+            return new_path
         return _Path.home() / ".ai-prowler" / "seats.json"
 
     def _admin_load_seats(self):
-        """Load the delivered child-key pool. Returns {parent_license_key,
-        seats_total, child_keys:[...]} or a safe empty default if absent."""
+        """Load the seat pool. Supports both formats:
+        v8.0.0 license_seats.json: {license_key, seats_total, seats:[{seat_id,status,assigned_to}]}
+        legacy seats.json:         {parent_license_key, seats_total, child_keys:[...]}
+        Always returns a normalised dict with both child_keys and seats arrays."""
         import json as _json
+        from pathlib import Path as _Path
         p = self._admin_seats_path()
         try:
             if p.exists():
                 data = _json.loads(p.read_text(encoding="utf-8-sig")) or {}
+                # Detect v8 format: has 'seats' list of dicts
+                if isinstance(data.get("seats"), list) and data["seats"] and isinstance(data["seats"][0], dict):
+                    # Normalise to legacy format for backward compat with existing callers
+                    data.setdefault("parent_license_key", data.get("license_key", ""))
+                    data.setdefault("seats_total", data.get("seats_total", len(data["seats"])))
+                    # Build child_keys list from unassigned seat_ids for dropdown compat
+                    data["child_keys"] = [
+                        s["seat_id"] for s in data["seats"]
+                        if s.get("status") == "unassigned"
+                    ]
+                    data["_v8_seats"] = data["seats"]  # keep full records
+                    return data
+                # Legacy format
                 if not isinstance(data.get("child_keys"), list):
                     data["child_keys"] = []
                 return data
@@ -11413,12 +13489,12 @@ or from the Help menu."""
             try:
                 from tkinter import messagebox
                 messagebox.showwarning(
-                    "seats.json",
-                    f"Could not read seats.json:\n{e}\n\nNo seat pool available; "
+                    "Seats file",
+                    f"Could not read seat pool:\n{e}\n\nNo seat pool available; "
                     "license-key assignment will be disabled until it's fixed.")
             except Exception:
                 pass
-        return {"parent_license_key": "", "seats_total": 0, "child_keys": []}
+        return {"parent_license_key": "", "seats_total": 0, "child_keys": [], "_v8_seats": []}
 
     def _admin_warnings_path(self):
         from pathlib import Path as _Path
@@ -12243,6 +14319,8 @@ or from the Help menu."""
                    command=self._admin_send_token_via_sms).pack(side='left', padx=4)
         ttk.Button(btn_row, text="↻ Refresh",
                    command=self._admin_refresh_table).pack(side='right')
+        ttk.Button(btn_row, text="☁ Sync Seats",
+                   command=self._admin_sync_seats_from_worker).pack(side='right', padx=(0, 4))
 
         self._admin_refresh_table()
 
@@ -12273,18 +14351,33 @@ or from the Help menu."""
                 '', 'end', iid=token,
                 values=(u.get("name", "(unnamed)"), u.get("email", ""), phone,
                         role, scopes, admin_flag, private, seat, status, tok_display))
-        # Seat summary strip
+        # Seat summary strip — v8.0.0 aware
         if hasattr(self, "_admin_seat_label"):
-            total = seats.get("seats_total") or len(seats.get("child_keys") or [])
-            used = len(self._admin_assigned_keys(data))
-            free = max(0, total - used)
-            parent = self._admin_mask_key(seats.get("parent_license_key", ""))
-            if total == 0 and not seats.get("child_keys"):
-                txt = ("⚠ No seat pool found (~/.ai-prowler/seats.json). "
-                       "License-key assignment is unavailable.")
+            v8_seats = seats.get("_v8_seats") or []
+            if v8_seats:
+                # v8 license_seats.json format — full seat records
+                total    = seats.get("seats_total") or len(v8_seats)
+                assigned = sum(1 for s in v8_seats if s.get("status") == "assigned")
+                pending  = sum(1 for s in v8_seats if s.get("status") == "pending_removal")
+                free     = sum(1 for s in v8_seats if s.get("status") == "unassigned")
+                parent   = self._admin_mask_key(seats.get("parent_license_key", "") or seats.get("license_key", ""))
+                txt = f"Seats: {assigned}/{total} assigned · {free} available"
+                if pending:
+                    txt += f" · ⚠ {pending} pending removal"
+                if parent:
+                    txt += f"   ·   License: {parent}"
             else:
-                txt = (f"Seats: {used}/{total} used · {free} available"
-                       + (f"   ·   Company key: {parent}" if parent else ""))
+                # Legacy seats.json format
+                total = seats.get("seats_total") or len(seats.get("child_keys") or [])
+                used  = len(self._admin_assigned_keys(data))
+                free  = max(0, total - used)
+                parent = self._admin_mask_key(seats.get("parent_license_key", ""))
+                if total == 0 and not seats.get("child_keys"):
+                    txt = ("⚠ No seat pool found. Run '☁ Sync Seats' to fetch "
+                           "from the subscription worker, or check ~/.ai-prowler/license_seats.json.")
+                else:
+                    txt = (f"Seats: {used}/{total} used · {free} available"
+                           + (f"   ·   License: {parent}" if parent else ""))
             self._admin_seat_label.config(text=txt)
 
         # Child-license warning strip — read engine-written file. Only the most
@@ -12309,6 +14402,65 @@ or from the Help menu."""
                 self._admin_warning_label.config(
                     text=f"⚠ License issue(s) on {len(warnings)} child seat(s): "
                          f"{summary}.  Contact your provider.")
+
+    def _admin_sync_seats_from_worker(self):
+        """Sync seat list from the subscription worker into license_seats.json.
+        Uses subscription_client.sync_seats() with the license key from config.
+        Runs on a background thread so the GUI stays responsive."""
+        import threading as _th
+        from tkinter import messagebox
+
+        if not self._admin_gate():
+            return
+
+        # Get license key from config
+        try:
+            cfg = load_config() if RAG_AVAILABLE else {}
+            license_key = cfg.get("license_key", "").strip()
+        except Exception:
+            license_key = ""
+
+        if not license_key or not license_key.startswith("AP-BIZ-"):
+            messagebox.showwarning(
+                "Sync Seats",
+                "No Business license key found in config.\n\n"
+                "Seat sync is only available for Business plan subscribers.\n"
+                "Check Settings -> Remote Access -> License Key.")
+            return
+
+        if hasattr(self, "_admin_seat_label"):
+            self._admin_seat_label.config(text="Syncing seats from worker...")
+
+        def _worker():
+            try:
+                import sys as _sys, os as _os
+                _app = _os.path.dirname(_os.path.abspath(__file__))
+                if _app not in _sys.path:
+                    _sys.path.insert(0, _app)
+                import subscription_client as _sc
+                result = _sc.sync_seats(license_key)
+                def _on_done():
+                    self._admin_refresh_table()
+                    total    = result.get("seats_total", 0)
+                    assigned = result.get("seats_assigned", 0)
+                    free     = result.get("seats_unassigned", 0)
+                    pending  = result.get("seats_pending_removal", 0)
+                    msg = f"Seats synced: {assigned}/{total} assigned, {free} available"
+                    if pending:
+                        msg += f", {pending} pending removal"
+                    self.status_var.set(f"✅ {msg}")
+                    self.root.after(4000, lambda: self.status_var.set("Ready"))
+                self.root.after(0, _on_done)
+            except Exception as _ex:
+                def _on_err():
+                    if hasattr(self, "_admin_seat_label"):
+                        self._admin_seat_label.config(
+                            text="Sync failed — using cached seat data")
+                    self.status_var.set(f"Seat sync failed: {_ex}")
+                    self.root.after(4000, lambda: self.status_var.set("Ready"))
+                self.root.after(0, _on_err)
+
+        _th.Thread(target=_worker, daemon=True).start()
 
     def _admin_selected_token(self):
         """Return the token (iid) of the selected row, or None."""
@@ -12701,6 +14853,11 @@ or from the Help menu."""
         if fields.get("private_collection_enabled"):
             self._admin_setup_private_folder(fields["name"], fields.get("slug", ""))
 
+        # Phase 7 — notify subscription worker of seat assignment (non-blocking)
+        # Fires for v8 business plans where seat_id comes from license_seats.json
+        if child_key and child_key.startswith("AP-BIZ-"):
+            self._admin_worker_assign_seat(child_key, fields["email"] or fields["name"])
+
     def _admin_show_token(self, name, token):
         """Show the freshly generated bearer token with a Copy button. This is
         the ONLY time it's displayed in full — it's stored as the users.json key."""
@@ -13048,10 +15205,100 @@ or from the Help menu."""
                 f"Permanently remove {u.get('name','')}?\n\nTheir token will stop "
                 "working. This cannot be undone."):
             return
+        child_key = u.get("child_license_key", "")
+        seat_id   = u.get("seat_id", "") or u.get("license_seat_id", "")
         del data["users"][token]
         if self._admin_save_users(data):
             self._admin_refresh_table()
             self._admin_update_lock_ui()
+            # v8.0.0 — owner's explicit choice of which seat to remove. This
+            # actually SUSPENDS the seat's own child license key (not just
+            # returns it to the unassigned pool) since the owner specifically
+            # picked this person to remove — see revoke_seats() / the Worker's
+            # POST /seats/{key}/revoke. The departing employee's machine picks
+            # this up on its next license check and starts the normal 30-day
+            # grace countdown, same soft-cancellation behavior as elsewhere.
+            if seat_id:
+                self._admin_worker_revoke_seat(seat_id)
+            elif child_key and child_key.startswith("AP-CHLD-"):
+                # Fallback for older user records that only stored the child
+                # key, not the seat_id — fire-and-forget unassign so the seat
+                # at least frees up; it won't be suspended until the owner
+                # also runs a Worker-side cleanup, but this avoids erroring.
+                self._admin_worker_unassign_seat(child_key)
+
+    def _admin_worker_assign_seat(self, seat_id, email):
+        """Fire-and-forget: tell the subscription worker a seat was assigned.
+        Runs on a daemon thread — never blocks the GUI or fails the local save."""
+        import threading as _th
+
+        def _call():
+            try:
+                import sys as _sys, os as _os
+                _app = _os.path.dirname(_os.path.abspath(__file__))
+                if _app not in _sys.path:
+                    _sys.path.insert(0, _app)
+                import subscription_client as _sc
+                cfg = load_config() if RAG_AVAILABLE else {}
+                license_key = cfg.get("license_key", "")
+                if not license_key:
+                    return
+                _sc.assign_seat(license_key, seat_id, email)
+                print(f"[admin] worker: seat {seat_id} assigned to {email}")
+            except Exception as _ex:
+                # Non-fatal — local save already succeeded. Worker will re-sync
+                # on next ☁ Sync Seats press.
+                print(f"[admin] worker seat assign failed (non-fatal): {_ex}")
+
+        _th.Thread(target=_call, daemon=True).start()
+
+    def _admin_worker_unassign_seat(self, seat_id):
+        """Fire-and-forget: tell the subscription worker a seat was released.
+        Runs on a daemon thread — never blocks the GUI or fails the local delete."""
+        import threading as _th
+
+        def _call():
+            try:
+                import sys as _sys, os as _os
+                _app = _os.path.dirname(_os.path.abspath(__file__))
+                if _app not in _sys.path:
+                    _sys.path.insert(0, _app)
+                import subscription_client as _sc
+                cfg = load_config() if RAG_AVAILABLE else {}
+                license_key = cfg.get("license_key", "")
+                if not license_key:
+                    return
+                _sc.unassign_seat(license_key, seat_id)
+                print(f"[admin] worker: seat {seat_id} released")
+            except Exception as _ex:
+                print(f"[admin] worker seat unassign failed (non-fatal): {_ex}")
+
+        _th.Thread(target=_call, daemon=True).start()
+
+    def _admin_worker_revoke_seat(self, seat_id):
+        """Fire-and-forget: tell the subscription worker the owner has
+        EXPLICITLY chosen to revoke this specific seat — immediately
+        suspends that seat's own child license key (v8.0.0). Runs on a
+        daemon thread — never blocks the GUI or fails the local removal."""
+        import threading as _th
+
+        def _call():
+            try:
+                import sys as _sys, os as _os
+                _app = _os.path.dirname(_os.path.abspath(__file__))
+                if _app not in _sys.path:
+                    _sys.path.insert(0, _app)
+                import subscription_client as _sc
+                cfg = load_config() if RAG_AVAILABLE else {}
+                license_key = cfg.get("license_key", "")
+                if not license_key:
+                    return
+                result = _sc.revoke_seats(license_key, [seat_id])
+                print(f"[admin] worker: seat {seat_id} revoked — {result}")
+            except Exception as _ex:
+                print(f"[admin] worker seat revoke failed (non-fatal): {_ex}")
+
+        _th.Thread(target=_call, daemon=True).start()
 
     def _on_tab_changed(self, event=None):
         """Handle tab switches."""

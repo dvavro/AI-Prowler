@@ -743,11 +743,12 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "AI-Prowler — Agentic RAG Knowledge Base\n"
         + "=" * 50 + "\n\n"
 
-        "TOOL CATEGORIES (77 tools total)\n"
+        "TOOL CATEGORIES (85 tools total)\n"
         + "-" * 30 + "\n"
-        "AI-Prowler exposes nine tool families. Most question-answering\n"
+        "AI-Prowler exposes twelve tool families. Most question-answering\n"
         "tasks use the first two; the others cover indexing, code editing,\n"
-        "dev tooling, communications, and contractor/field-service workflows.\n\n"
+        "dev tooling, communications, contractor/field-service workflows,\n"
+        "agentic analysis, and job image storage.\n\n"
 
         "  • Knowledge retrieval (RAG over indexed documents):\n"
         "      get_knowledge_base_overview, list_indexed_documents,\n"
@@ -770,13 +771,13 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
 
         "  • Contractor / business workflow:\n"
         "      email_invoice, schedule_next_recurring_job, log_time_entry,\n"
-        "      get_ar_aging_report\n\n"
+        "      get_ar_aging_report, save_contact, get_sms_thread,\n"
+        "      list_sms_contacts_with_replies\n\n"
 
         "  • Communications (email + SMS + WhatsApp — every role in both\n"
         "    personal and server mode):\n"
         "      configure_email, send_email, send_alert, send_file,\n"
-        "      save_contact, send_sms, check_sms_replies, check_sms_inbox,\n"
-        "      get_sms_thread, list_sms_contacts_with_replies,\n"
+        "      send_sms, check_sms_replies, check_sms_inbox,\n"
         "      send_whatsapp, check_whatsapp_replies\n\n"
 
         "  • File editing (write tools — see EDITING FILES section below):\n"
@@ -794,6 +795,35 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "      untrack_directory, get_database_stats, check_ai_prowler_status,\n"
         "      reindex_file, reindex_directory, reindex_all,\n"
         "      list_writable_directories, grant_write_access, revoke_write_access\n\n"
+
+        "  • Agentic analysis tasks (personal mode only):\n"
+        "      get_pending_analysis_tasks — returns all pending tasks from\n"
+        "        pending_tasks.json; call when the user pastes the run-queue\n"
+        "        command from the Quick Links tab.\n"
+        "      complete_analysis_task(task_id, summary) — marks a task done\n"
+        "        and auto-advances next_due for scheduled tasks (anchor-based,\n"
+        "        not completion-date-based). Call after finishing each analysis.\n"
+        "      save_analysis_report(content, title, task_id, report_folder) —\n"
+        "        saves the full analysis as a .docx Word document.\n\n"
+
+        "  • Job image storage (personal + server):\n"
+        "      get_job_images_path() — returns the current storage root path,\n"
+        "        source (default or custom), and total job/image counts. Call\n"
+        "        this first to confirm where photos will be saved.\n"
+        "      set_job_images_path(path) — change the storage root to any\n"
+        "        absolute path (e.g. D:\\JobPhotos). Saves to config.json and\n"
+        "        takes effect immediately. Pass '' to reset to default.\n"
+        "        Does NOT move existing images — ask Claude to help if needed.\n"
+        "      save_job_image(job_id, filename, image_base64, description,\n"
+        "        tags, media_type) — saves a photo to the configured root\n"
+        "        under <root>/<job_id>/. Accepts raw base64 or full data URI.\n"
+        "        Timestamp-prefix added automatically. Supports 15 formats:\n"
+        "        JPEG, HEIC, HEIF, PNG, WebP, GIF, AVIF, DNG, TIFF, BMP,\n"
+        "        RAW, CR2, CR3, NEF, ARW. Images are NOT indexed in ChromaDB.\n"
+        "      list_job_images(job_id, tag?) — returns metadata catalogue for\n"
+        "        a job. Optional tag filter (e.g. tag='before'). Returns file\n"
+        "        paths and a hint to ask the user to re-upload for visual review.\n"
+        "      delete_job_image(job_id, filename) — removes file + index entry.\n\n"
 
         "PREFERRED TOOL SEQUENCE — KNOWLEDGE RETRIEVAL\n"
         + "-" * 30 + "\n"
@@ -1013,6 +1043,76 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "     in different case folders), use parent_directory and\n"
         "     directory_chain to distinguish them for the user.\n\n"
 
+        "AGENTIC ANALYSIS WORKFLOW\n"
+        + "-" * 30 + "\n"
+        "The Quick Links tab in the AI-Prowler GUI queues analysis tasks and\n"
+        "copies a run command to the clipboard. When the user pastes that\n"
+        "command into Claude, follow this sequence:\n\n"
+
+        "  STEP A1  get_pending_analysis_tasks()\n"
+        "    Returns a JSON object with pending_count and a tasks array.\n"
+        "    Each task has: task_id, label, prompt, scope_dirs,\n"
+        "    schedule, next_due, output_learnings, output_report,\n"
+        "    report_folder, queued_ago.\n"
+        "    If pending_count is 0, tell the user the queue is empty.\n\n"
+
+        "  STEP A2  Execute each task's prompt\n"
+        "    The prompt field contains the COMPLETE instruction for that\n"
+        "    analysis — including which tools to call, what to look for,\n"
+        "    and what to output. Follow it exactly.\n"
+        "    If scope_dirs is non-empty, use search_within_directory()\n"
+        "    for those directories instead of search_documents().\n"
+        "    QuickBooks-aware tasks: if QB MCP tools are available, use them\n"
+        "    as the primary financial source; fall back to\n"
+        "    read_job_spreadsheet() and get_ar_aging_report() otherwise.\n\n"
+
+        "  STEP A3  complete_analysis_task(task_id, summary)\n"
+        "    Call after EVERY task — even if nothing was found. The summary\n"
+        "    is one sentence (e.g. 'Found 3 overdue invoices totalling $1,450').\n"
+        "    For scheduled tasks this auto-advances next_due anchored to the\n"
+        "    original due date (weekly task due Monday stays on Mondays).\n\n"
+
+        "  STEP A4  save_analysis_report() if output_report=true\n"
+        "    Save the full analysis as a Word document to report_folder.\n"
+        "    Call this BEFORE complete_analysis_task.\n\n"
+
+        "  QUICKBOOKS DETECTION (in analysis prompts):\n"
+        "    Check whether tools whose names contain 'quickbooks' or 'qbo'\n"
+        "    are in your available tool list. If yes, use QuickBooks as the\n"
+        "    primary financial source. If no, use AI-Prowler Job Tracker tools.\n\n"
+
+        "JOB IMAGE WORKFLOW\n"
+        + "-" * 30 + "\n"
+        "When a user uploads a photo and asks to save it to a job:\n\n"
+
+        "  1. User uploads image in the Claude chat\n"
+        "  2. Encode image as base64 (strip 'data:image/...;base64,' prefix if present)\n"
+        "  3. Call save_job_image(job_id, filename, image_base64, description, tags)\n"
+        "     job_id matches the JobID in the Job Tracker spreadsheet.\n"
+        "     tags is comma-separated (e.g. 'before,gutters,blocked').\n"
+        "     media_type defaults to 'image/jpeg' — set 'image/heic' for iPhone photos.\n"
+        "  4. The image is saved to ~/Documents/AI-Prowler_job_images/<job_id>/\n"
+        "     with a timestamp prefix. A sidecar index.json stores metadata.\n\n"
+
+        "  To retrieve images for a job: list_job_images(job_id)\n"
+        "    Returns metadata only — not pixel data. Images cannot be re-shown\n"
+        "    to Claude without the user re-uploading the file.\n"
+        "    Tell the user: 'To see this image, please re-upload the file at:\n"
+        "    [path shown in list_job_images result]'\n\n"
+
+        "PROACTIVE ALERTS (background scheduler — no Claude needed)\n"
+        + "-" * 30 + "\n"
+        "The Proactive Alerts scheduler in the GUI runs independently of Claude.\n"
+        "It calls AI-Prowler Python functions directly on a schedule and emails\n"
+        "results to the configured address — zero API cost, no Claude session.\n"
+        "Claude does not need to interact with the scheduler directly. However,\n"
+        "if the user asks about it:\n"
+        "  - Config: ~/.ai-prowler/scheduler_config.json\n"
+        "  - Log:    ~/.ai-prowler/scheduler_log.txt\n"
+        "  - Jobs:   morning_briefing, overdue_invoice_alert, due_analysis_tasks,\n"
+        "            sms_reply_monitor, weather_watch, end_of_day_summary\n"
+        "  - Personal mode only — hidden in server mode automatically.\n\n"
+
         "KEY FACTS\n"
         + "-" * 30 + "\n"
         "  - NO Ollama required — no local LLM involved at all.\n"
@@ -1095,7 +1195,89 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
             footer_lines.append("")
             footer_lines.append("Admin tab: ✅ you have admin rights (user management, recovery, etc.)")
 
-    return base_text + "\n".join(footer_lines)
+    # ── MORNING BRIEFING — pending queue + due tasks ────────────────────────
+    # Always ask the user before running — they may have something urgent first.
+    briefing_lines = []
+    try:
+        import datetime as _dt
+        import sys as _sys, os as _os
+        _app = _os.path.dirname(_os.path.abspath(__file__))
+        if _app not in _sys.path:
+            _sys.path.insert(0, _app)
+
+        # Check pending_tasks.json for queued items
+        pending_tasks = _load_pending_tasks()
+        pending = [t for t in pending_tasks if t.get("status") == "pending"]
+
+        # Check custom_analysis_tasks.json for due/overdue items
+        try:
+            import custom_tasks_manager as _ctm
+            custom_tasks = _ctm.load_custom_tasks()
+            due_tasks = _ctm.get_due_tasks(custom_tasks)
+        except Exception:
+            custom_tasks = []
+            due_tasks = []
+
+        has_pending = len(pending) > 0
+        has_due     = len(due_tasks) > 0
+
+        if has_pending or has_due:
+            briefing_lines.append("")
+            briefing_lines.append("─" * 50)
+            briefing_lines.append("")
+            briefing_lines.append("📋 ANALYSIS BRIEFING")
+            briefing_lines.append("─" * 30)
+
+            if has_pending:
+                briefing_lines.append(
+                    f"Queue: {len(pending)} pending task"
+                    f"{'s' if len(pending) != 1 else ''}:"
+                )
+                now = _dt.datetime.utcnow()
+                for t in pending:
+                    try:
+                        created = _dt.datetime.strptime(
+                            t.get("created_at", ""), "%Y-%m-%dT%H:%M:%SZ")
+                        age_mins = int((now - created).total_seconds() / 60)
+                        if age_mins < 60:
+                            age = f"{age_mins}m ago"
+                        elif age_mins < 1440:
+                            age = f"{age_mins // 60}h ago"
+                        else:
+                            age = f"{age_mins // 1440}d ago"
+                    except Exception:
+                        age = "unknown"
+                    briefing_lines.append(f"  • {t.get('label', t.get('task_id', '?'))} (queued {age})")
+
+            if has_due:
+                if has_pending:
+                    briefing_lines.append("")
+                briefing_lines.append(
+                    f"Scheduled: {len(due_tasks)} task"
+                    f"{'s' if len(due_tasks) != 1 else ''} due:"
+                )
+                for t in due_tasks:
+                    status = _ctm.due_status_label(t)
+                    briefing_lines.append(f"  • {t.get('label', '?')} — {status}")
+
+            briefing_lines.append("")
+            briefing_lines.append(
+                "ACTION REQUIRED: Before answering the user's first question,\n"
+                "ask them: 'I noticed you have "
+                + (f"{len(pending)} queued task{'s' if len(pending) != 1 else ''}" if has_pending else "")
+                + (" and " if has_pending and has_due else "")
+                + (f"{len(due_tasks)} scheduled task{'s' if len(due_tasks) != 1 else ''} due" if has_due else "")
+                + ". Would you like me to run those before we start, "
+                "or would you prefer to handle your current question first?'"
+            )
+            briefing_lines.append(
+                "Wait for the user's answer before taking any action."
+            )
+
+    except Exception as _be:
+        pass  # Briefing is non-fatal — never block the main guidance
+
+    return base_text + "\n".join(footer_lines) + "\n".join(briefing_lines)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -11194,6 +11376,1029 @@ def rebuild_learnings_index(ctx: Context = None) -> str:
         return f"❌ Rebuild failed: {_e}"
 
 
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# AI ANALYSIS QUEUE TOOLS  (v8.0.0)
+# ══════════════════════════════════════════════════════════════════════════════
+# These two tools power the Quick Links "AI Analysis" buttons.
+#
+# WORKFLOW:
+#   1. User clicks an analysis button in the Quick Links tab (e.g. "Analyze My
+#      Business"). AI-Prowler writes a task record to pending_tasks.json and
+#      copies a matching Claude command to the clipboard.
+#   2. User pastes the command into Claude. Claude calls
+#      get_pending_analysis_tasks() which returns all queued tasks.
+#   3. Claude executes the analysis — searching documents, reading job data,
+#      reviewing learnings — and records insights via record_learning().
+#   4. Claude calls complete_analysis_task(task_id) to mark each task done.
+#
+# pending_tasks.json schema (list of task objects):
+#   {
+#     "task_id":    "analyze_business_20260623_143022",
+#     "type":       "analyze_business",
+#     "label":      "Analyze My Business",
+#     "prompt":     "Analyze my job tracker, recent learnings, ...",
+#     "created_at": "2026-06-23T14:30:22Z",
+#     "status":     "pending"   # or "completed"
+#   }
+# ══════════════════════════════════════════════════════════════════════════════
+
+_PENDING_TASKS_FILE = Path.home() / ".ai-prowler" / "pending_tasks.json"
+
+
+def _load_pending_tasks() -> list:
+    """Load pending_tasks.json, returning an empty list if absent or corrupt."""
+    try:
+        if _PENDING_TASKS_FILE.exists():
+            data = json.loads(_PENDING_TASKS_FILE.read_text(encoding="utf-8"))
+            return data if isinstance(data, list) else []
+    except Exception:
+        pass
+    return []
+
+
+def _save_pending_tasks(tasks: list) -> None:
+    """Write the tasks list to pending_tasks.json atomically."""
+    _PENDING_TASKS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _PENDING_TASKS_FILE.write_text(
+        json.dumps(tasks, indent=2, ensure_ascii=False),
+        encoding="utf-8"
+    )
+
+
+@mcp.tool()
+def save_analysis_report(task_id: str,
+                         title: str,
+                         content: str,
+                         report_folder: str = "",
+                         ctx: Context = None) -> str:
+    """
+    AGENTIC ANALYSIS — Save a full analysis report as a Word (.docx) document.
+
+    Call this when a task has output_report=true. The report is saved to the
+    task's configured report_folder (or ~/.ai-prowler/reports/ by default).
+    After saving, record a completion learning via record_learning() with
+    category 'analysis_report' noting the file path and next scheduled run.
+
+    Args:
+        task_id:       The task_id from get_pending_analysis_tasks().
+        title:         Report title — used as the filename and document heading.
+                       Example: "Q2 Window Review — June 30 2026"
+        content:       Full report content in Markdown format.
+                       Use ## for sections, **bold** for emphasis, - for lists.
+                       Claude should write this as a comprehensive document.
+        report_folder: Override the output folder. Leave empty to use the
+                       task's configured folder or the default reports folder.
+
+    Returns:
+        Path to the saved .docx file, or error message.
+
+    Example:
+        save_analysis_report(
+            task_id="custom_001_20260630_143022",
+            title="Q2 Window Cleaning Review — June 30 2026",
+            content="## Executive Summary\\n\\nThis quarter showed...",
+        )
+    """
+    _telemetry_increment_tool_count("save_analysis_report")
+
+    if not task_id or not task_id.strip():
+        return "❌ task_id is required."
+    if not title or not title.strip():
+        return "❌ title is required."
+    if not content or not content.strip():
+        return "❌ content is required."
+
+    title   = title.strip()
+    content = content.strip()
+
+    # Determine output folder
+    import datetime as _dt
+    from pathlib import Path as _Path
+
+    # Check pending_tasks.json for the report_folder from the task definition
+    if not report_folder:
+        try:
+            tasks = _load_pending_tasks()
+            for t in tasks:
+                if t.get("task_id") == task_id.strip():
+                    report_folder = t.get("report_folder", "")
+                    break
+        except Exception:
+            pass
+
+    if not report_folder:
+        report_folder = str(_Path.home() / "Documents" / "AI-Prowler_tasks_reports")
+
+    try:
+        out_dir = _Path(report_folder)
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as _e:
+        return f"❌ Could not create report folder '{report_folder}': {_e}"
+
+    # Build safe filename from title + date
+    safe_title = "".join(
+        c if c.isalnum() or c in " -_" else "_"
+        for c in title
+    ).strip().replace(" ", "_")[:80]
+    date_str  = _dt.date.today().strftime("%Y-%m-%d")
+    filename  = f"{safe_title}_{date_str}.docx"
+    out_path  = out_dir / filename
+
+    # Write the docx using python-docx
+    try:
+        from docx import Document as _Document
+        from docx.shared import Pt as _Pt, RGBColor as _RGB
+        from docx.enum.text import WD_ALIGN_PARAGRAPH as _WD_ALIGN
+
+        doc = _Document()
+
+        # Title
+        title_para = doc.add_heading(title, level=0)
+        title_para.alignment = _WD_ALIGN.CENTER
+
+        # Date subtitle
+        sub = doc.add_paragraph(
+            f"Generated: {_dt.datetime.now().strftime('%B %d, %Y at %I:%M %p')}"
+        )
+        sub.alignment = _WD_ALIGN.CENTER
+        sub.runs[0].font.size = _Pt(10)
+        sub.runs[0].font.color.rgb = _RGB(0x66, 0x66, 0x66)
+
+        doc.add_paragraph()  # spacer
+
+        # Parse Markdown content into docx elements
+        for line in content.split("\n"):
+            stripped = line.rstrip()
+
+            if stripped.startswith("### "):
+                doc.add_heading(stripped[4:], level=3)
+            elif stripped.startswith("## "):
+                doc.add_heading(stripped[3:], level=2)
+            elif stripped.startswith("# "):
+                doc.add_heading(stripped[2:], level=1)
+            elif stripped.startswith("- ") or stripped.startswith("* "):
+                p = doc.add_paragraph(stripped[2:], style="List Bullet")
+            elif stripped.startswith("  - ") or stripped.startswith("  * "):
+                p = doc.add_paragraph(stripped[4:], style="List Bullet 2")
+            elif stripped == "" or stripped == "---":
+                doc.add_paragraph()
+            else:
+                # Handle **bold** inline
+                p = doc.add_paragraph()
+                remaining = stripped
+                while "**" in remaining:
+                    before, _, rest = remaining.partition("**")
+                    bold_text, _, remaining = rest.partition("**")
+                    if before:
+                        p.add_run(before)
+                    run = p.add_run(bold_text)
+                    run.bold = True
+                if remaining:
+                    p.add_run(remaining)
+
+        doc.save(str(out_path))
+
+    except ImportError:
+        # python-docx not available — save as plain text .txt instead
+        txt_path = out_dir / filename.replace(".docx", ".txt")
+        txt_path.write_text(
+            f"{title}\n{'=' * len(title)}\n\n{content}",
+            encoding="utf-8"
+        )
+        return (
+            f"⚠️ python-docx not installed — saved as plain text instead.\n"
+            f"File: {txt_path}\n\n"
+            f"To enable Word document output run:\n"
+            f"  pip install python-docx"
+        )
+
+    except Exception as _e:
+        return f"❌ Failed to save report: {_e}"
+
+    return (
+        f"✅ Report saved: {out_path}\n"
+        f"Title: {title}\n"
+        f"Size: {out_path.stat().st_size:,} bytes"
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# JOB IMAGE STORAGE TOOLS
+# ══════════════════════════════════════════════════════════════════════════════
+# Three tools for storing, listing, and deleting photos tied to job records.
+# Images are stored as binary files (not indexed in ChromaDB — binary files
+# are not searchable by content). A sidecar index.json per job directory
+# stores metadata (filename, job_id, description, tags, date, size) so
+# Claude can retrieve the image catalogue for any job without loading pixels.
+#
+# Default root:  ~/Documents/AI-Prowler_job_images/<job_id>/
+#
+# Typical workflow:
+#   User uploads photo to Claude → "Save this as the before photo for job 1042"
+#   Claude calls save_job_image(job_id="1042", filename="before.jpg",
+#                               image_base64="...", description="Before cleaning",
+#                               tags=["before", "gutters"])
+#   → Saved to ~/Documents/AI-Prowler_job_images/1042/20260624_143022_before.jpg
+#   → Metadata appended to ~/Documents/AI-Prowler_job_images/1042/index.json
+# ══════════════════════════════════════════════════════════════════════════════
+
+_JOB_IMAGES_ROOT = None   # resolved lazily — reads config.json each call
+
+def _job_images_root():
+    """Return the root Path for job images, creating it if needed.
+
+    Reads 'job_images_root_path' from ~/.ai-prowler/config.json.
+    Falls back to ~/Documents/AI-Prowler_job_images if not set.
+    Claude can change the path with set_job_images_path().
+    """
+    from pathlib import Path
+    import json as _jimg
+    try:
+        _cfg = Path.home() / ".ai-prowler" / "config.json"
+        if _cfg.exists():
+            _saved = _jimg.loads(_cfg.read_text(encoding="utf-8"))
+            _custom = _saved.get("job_images_root_path", "").strip()
+            if _custom:
+                root = Path(_custom)
+                root.mkdir(parents=True, exist_ok=True)
+                return root
+    except Exception:
+        pass
+    # Default
+    root = Path.home() / "Documents" / "AI-Prowler_job_images"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+# MIME type → canonical file extension mapping
+# Used to infer a sensible extension when the filename has none.
+_MIME_TO_EXT = {
+    "image/jpeg":          ".jpg",
+    "image/jpg":           ".jpg",
+    "image/jfif":          ".jpg",
+    "image/pjpeg":         ".jpg",
+    "image/png":           ".png",
+    "image/gif":           ".gif",
+    "image/webp":          ".webp",
+    "image/heic":          ".heic",
+    "image/heif":          ".heif",
+    "image/avif":          ".avif",
+    "image/tiff":          ".tiff",
+    "image/bmp":           ".bmp",
+    "image/x-bmp":         ".bmp",
+    "image/x-ms-bmp":      ".bmp",
+    "image/x-adobe-dng":   ".dng",
+    "image/x-raw":         ".raw",
+    "image/x-canon-cr2":   ".cr2",
+    "image/x-canon-cr3":   ".cr3",
+    "image/x-nikon-nef":   ".nef",
+    "image/x-sony-arw":    ".arw",
+    "image/jpeg2000":      ".jp2",
+    "image/jp2":           ".jp2",
+    "image/svg+xml":       ".svg",
+}
+
+def _job_user_slug(ctx) -> str:
+    """Return a filesystem-safe user slug for per-user image isolation.
+
+    In server mode: derived from the authenticated user's username or name
+    (e.g. 'vicki_vavro', 'jake_r'). Each user's images land under
+    <root>/<user_slug>/<job_id>/ so users cannot see each other's photos.
+
+    In personal mode (ctx=None or no user on request): returns "" — images
+    go directly under <root>/<job_id>/ as before (single-user install).
+    """
+    user = _current_user(ctx)
+    if user is None:
+        return ""
+    raw = (user.get("username") or user.get("name") or
+           str(user.get("id", ""))).strip()
+    if not raw:
+        return ""
+    # Sanitise to filesystem-safe characters
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in raw.lower())
+    return safe
+
+
+def _job_image_dir(job_id: str, ctx=None):
+    """Return the Path for a specific job's image directory.
+
+    Personal mode:  <root>/<safe_job_id>/
+    Server mode:    <root>/<user_slug>/<safe_job_id>/
+
+    This ensures each server user's photos are completely isolated —
+    a field crew member cannot see another crew member's job images.
+    """
+    safe_job = "".join(
+        c if c.isalnum() or c in "-_" else "_"
+        for c in str(job_id).strip()
+    )
+    user_slug = _job_user_slug(ctx)
+    if user_slug:
+        d = _job_images_root() / user_slug / safe_job
+    else:
+        d = _job_images_root() / safe_job
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+def _load_job_index(job_dir) -> list:
+    from pathlib import Path
+    import json
+    idx_path = Path(job_dir) / "index.json"
+    if not idx_path.exists():
+        return []
+    try:
+        return json.loads(idx_path.read_text(encoding="utf-8")) or []
+    except Exception:
+        return []
+
+def _save_job_index(job_dir, index: list):
+    import json
+    from pathlib import Path
+    idx_path = Path(job_dir) / "index.json"
+    idx_path.write_text(
+        json.dumps(index, indent=2, ensure_ascii=False),
+        encoding="utf-8"
+    )
+
+
+@mcp.tool()
+def get_job_images_path(ctx: Context = None) -> str:
+    """
+    Return the current root directory where job images are stored.
+
+    Shows the active path (either the custom path set via set_job_images_path()
+    or the default ~/Documents/AI-Prowler_job_images) and a breakdown of
+    how many jobs have images stored.
+
+    Use this to confirm where photos will be saved before calling save_job_image(),
+    or to show the user where their images are stored.
+
+    Returns:
+        The active root path, source (default or custom), and job count summary.
+    """
+    from pathlib import Path
+    import json as _jimg
+
+    # Check for custom path in config
+    custom = ""
+    try:
+        _cfg = Path.home() / ".ai-prowler" / "config.json"
+        if _cfg.exists():
+            _saved = _jimg.loads(_cfg.read_text(encoding="utf-8"))
+            custom = _saved.get("job_images_root_path", "").strip()
+    except Exception:
+        pass
+
+    root   = _job_images_root()
+    source = "custom (set via set_job_images_path)" if custom else "default"
+
+    # In server mode show the user's personal scoped sub-directory
+    user_slug = _job_user_slug(ctx)
+    if user_slug:
+        active_root = root / user_slug
+        scope_note  = f"\n   Your personal scope: {active_root}"
+    else:
+        active_root = root
+        scope_note  = ""
+
+    # Count jobs and images within the user's own scope
+    try:
+        job_dirs     = [d for d in active_root.iterdir() if d.is_dir()] if active_root.exists() else []
+        total_jobs   = len(job_dirs)
+        total_images = sum(
+            len(list(d.glob("*.*"))) - (1 if (d / "index.json").exists() else 0)
+            for d in job_dirs
+        )
+    except Exception:
+        total_jobs = total_images = 0
+
+    return (
+        f"📁 Job image storage root ({source}):\n"
+        f"   {root}{scope_note}\n\n"
+        f"   Jobs with images: {total_jobs}\n"
+        f"   Total images:     {total_images}\n\n"
+        f"To change: call set_job_images_path(path='C:\\\\Your\\\\Custom\\\\Path')\n"
+        f"To reset to default: call set_job_images_path(path='')"
+    )
+
+
+@mcp.tool()
+def set_job_images_path(
+    path:      str,
+    ctx: Context = None,
+) -> str:
+    """
+    Set the root directory where job images are stored.
+
+    The new path is saved to ~/.ai-prowler/config.json and takes effect
+    immediately — no restart needed. All subsequent save_job_image() and
+    list_job_images() calls will use the new location.
+
+    Existing images at the old location are NOT moved automatically.
+    If you want to move them, ask Claude to help you do so after setting
+    the new path.
+
+    Pass an empty string to reset to the default location:
+        ~/Documents/AI-Prowler_job_images
+
+    Args:
+        path: Absolute path to the desired root directory.
+              Examples:
+                "C:\\Users\\david\\Pictures\\JobPhotos"
+                "D:\\AI-Prowler\\JobImages"
+                "C:\\Users\\david\\OneDrive\\Pictures\\Jobs"
+              Pass "" (empty string) to restore the default.
+
+    Returns:
+        Confirmation with the new active path, or an error message.
+    """
+    from pathlib import Path
+    import json as _jimg
+
+    cfg_path = Path.home() / ".ai-prowler" / "config.json"
+
+    # Load existing config
+    try:
+        cfg: dict = {}
+        if cfg_path.exists():
+            cfg = _jimg.loads(cfg_path.read_text(encoding="utf-8")) or {}
+    except Exception as _e:
+        return f"❌ Could not read config.json: {_e}"
+
+    clean = path.strip()
+
+    if clean:
+        # Validate the path
+        try:
+            target = Path(clean)
+            if not target.is_absolute():
+                return (
+                    f"❌ Path must be absolute (e.g. C:\\Users\\david\\Pictures\\Jobs).\n"
+                    f"   You passed: '{clean}'"
+                )
+            # Create it now to confirm it's writable
+            target.mkdir(parents=True, exist_ok=True)
+            # Quick write test
+            _test = target / ".ai_prowler_write_test"
+            _test.write_text("ok")
+            _test.unlink()
+        except Exception as _e:
+            return f"❌ Cannot use '{clean}': {_e}"
+
+        cfg["job_images_root_path"] = clean
+        action = f"set to:\n   {clean}"
+    else:
+        # Reset to default
+        cfg.pop("job_images_root_path", None)
+        default = Path.home() / "Documents" / "AI-Prowler_job_images"
+        action = f"reset to default:\n   {default}"
+
+    # Save config
+    try:
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg_path.write_text(
+            _jimg.dumps(cfg, indent=2, ensure_ascii=False),
+            encoding="utf-8"
+        )
+    except Exception as _e:
+        return f"❌ Could not save config.json: {_e}"
+
+    # Confirm active path
+    active = _job_images_root()
+    return (
+        f"✅ Job image storage path {action}\n\n"
+        f"   Active path: {active}\n"
+        f"   Takes effect immediately — no restart needed.\n\n"
+        f"   Note: existing images at the old location are NOT moved.\n"
+        f"   Ask me to help move them if needed."
+    )
+
+
+@mcp.tool()
+def save_job_image(
+    job_id:      str,
+    filename:    str,
+    image_base64: str,
+    description: str = "",
+    tags:        str = "",
+    media_type:  str = "image/jpeg",
+    ctx: Context = None,
+) -> str:
+    """
+    Save a photo or image to the job image store for a specific job record.
+
+    Images are stored as binary files in ~/Documents/AI-Prowler_job_images/<job_id>/.
+    A sidecar index.json records metadata for each image so Claude can list
+    them in future sessions without re-uploading the pixel data.
+
+    WHEN TO USE:
+    Call this whenever the user uploads a photo and asks to save it to a job.
+    The user must have uploaded the image to Claude first — Claude then passes
+    the base64-encoded content to this tool.
+
+    GETTING THE BASE64 FROM AN UPLOADED IMAGE:
+    When a user uploads an image in the Claude chat, read its content and
+    encode it as base64. Pass the encoded string (no data: URI prefix needed)
+    as image_base64.
+
+    Args:
+        job_id:       Job identifier — matches the job_id in the Job Tracker
+                      spreadsheet (e.g. "1042", "JOB-2026-001").
+        filename:     Desired filename (e.g. "before_gutters.jpg"). A timestamp
+                      prefix is added automatically to prevent collisions.
+        image_base64: Base64-encoded image bytes. Do NOT include the
+                      "data:image/jpeg;base64," prefix — raw base64 only.
+        description:  Human-readable description of what the photo shows
+                      (e.g. "Gutters blocked with debris, before cleaning").
+        tags:         Comma-separated tags for categorisation
+                      (e.g. "before,gutters,blockage"). Optional.
+        media_type:   MIME type of the image. Common values:
+
+                      iPhone (iOS 11+, default format):
+                        "image/heic"   — .heic  (most iPhone photos since 2017)
+                        "image/heif"   — .heif  (same codec, alternate extension)
+                        "image/jpeg"   — .jpg   (older iPhone or "Most Compatible" mode)
+                        "image/png"    — .png   (iPhone screenshots)
+
+                      Android:
+                        "image/jpeg"   — .jpg   (default on most Android phones)
+                        "image/webp"   — .webp  (Google Pixel and others)
+                        "image/png"    — .png   (Android screenshots)
+                        "image/x-adobe-dng" — .dng (Pixel/Samsung Pro/RAW mode)
+
+                      Other common formats:
+                        "image/png"    — .png   (lossless)
+                        "image/gif"    — .gif   (animated)
+                        "image/webp"   — .webp  (modern web format)
+                        "image/avif"   — .avif  (AV1, newest Android/Chrome)
+                        "image/tiff"   — .tiff  (uncompressed, high-end cameras)
+                        "image/bmp"    — .bmp   (Windows screenshots)
+                        "image/x-raw"  — .raw   (generic camera RAW)
+                        "image/x-canon-cr2"  — .cr2 (Canon RAW)
+                        "image/x-canon-cr3"  — .cr3 (Canon RAW v2)
+                        "image/x-nikon-nef"  — .nef (Nikon RAW)
+                        "image/x-sony-arw"   — .arw (Sony RAW)
+
+                      If unsure, pass the MIME type that matches the file
+                      extension. The value is stored as metadata only — it
+                      does not affect how the binary is saved to disk.
+                      Defaults to "image/jpeg".
+
+    Returns:
+        Confirmation string with the saved file path and index entry.
+    """
+    import base64
+    import datetime as _dt
+    from pathlib import Path
+
+    # ── Validate inputs ───────────────────────────────────────────────────────
+    if not job_id or not job_id.strip():
+        return "❌ job_id is required."
+    if not filename or not filename.strip():
+        return "❌ filename is required."
+    if not image_base64 or not image_base64.strip():
+        return "❌ image_base64 is required — pass the base64-encoded image bytes."
+
+    # Strip data URI prefix if present (Claude sometimes includes it)
+    b64 = image_base64.strip()
+    if "," in b64 and b64.startswith("data:"):
+        b64 = b64.split(",", 1)[1]
+
+    # Decode
+    try:
+        image_bytes = base64.b64decode(b64)
+    except Exception as _e:
+        return f"❌ Could not decode image_base64: {_e}"
+
+    if len(image_bytes) == 0:
+        return "❌ Decoded image is empty — check the base64 data."
+
+    # ── Build timestamped filename ────────────────────────────────────────────
+    ts      = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    raw_fn  = filename.strip()
+
+    # If filename has no extension, infer one from media_type
+    from pathlib import Path as _PPath
+    if not _PPath(raw_fn).suffix:
+        inferred_ext = _MIME_TO_EXT.get(media_type.strip().lower(), ".jpg")
+        raw_fn = raw_fn + inferred_ext
+
+    safe_fn = "".join(
+        c if c.isalnum() or c in ".-_" else "_"
+        for c in raw_fn
+    )
+    final_filename = f"{ts}_{safe_fn}"
+
+    # ── Save binary file ──────────────────────────────────────────────────────
+    job_dir  = _job_image_dir(job_id.strip(), ctx=ctx)
+    out_path = job_dir / final_filename
+
+    try:
+        out_path.write_bytes(image_bytes)
+    except Exception as _e:
+        return f"❌ Could not write image file: {_e}"
+
+    file_size = out_path.stat().st_size
+
+    # ── Update index.json ─────────────────────────────────────────────────────
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+
+    entry = {
+        "filename":    final_filename,
+        "original":    filename.strip(),
+        "job_id":      job_id.strip(),
+        "description": description.strip(),
+        "tags":        tag_list,
+        "media_type":  media_type.strip(),
+        "saved_at":    _dt.datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "size_bytes":  file_size,
+    }
+
+    index = _load_job_index(job_dir)
+    # Remove any existing entry with the same final_filename (idempotent)
+    index = [e for e in index if e.get("filename") != final_filename]
+    index.append(entry)
+    try:
+        _save_job_index(job_dir, index)
+    except Exception as _e:
+        return (
+            f"✅ Image saved: {out_path}\n"
+            f"⚠️  Warning: could not update index.json: {_e}"
+        )
+
+    tag_str = ", ".join(tag_list) if tag_list else "(none)"
+    return (
+        f"✅ Image saved for job {job_id.strip()}\n"
+        f"   File:        {out_path}\n"
+        f"   Size:        {file_size:,} bytes\n"
+        f"   Description: {description.strip() or '(none)'}\n"
+        f"   Tags:        {tag_str}\n"
+        f"   Index:       {job_dir / 'index.json'} ({len(index)} image(s) total)"
+    )
+
+
+@mcp.tool()
+def list_job_images(
+    job_id:    str,
+    tag:       str = "",
+    ctx: Context = None,
+) -> str:
+    """
+    List all images stored for a specific job, with their metadata.
+
+    Returns metadata only (filename, description, tags, date, size) — not
+    the pixel data itself. Images must be re-uploaded by the user for Claude
+    to see their visual content again.
+
+    Args:
+        job_id: Job identifier to look up.
+        tag:    Optional tag filter — if supplied, only images with this tag
+                are returned (e.g. tag="before" or tag="damage").
+
+    Returns:
+        Formatted list of image records for the job, or a message if none found.
+    """
+    import json
+    from pathlib import Path
+
+    if not job_id or not job_id.strip():
+        return "❌ job_id is required."
+
+    # Use _job_image_dir so server-mode users only see their own images
+    safe_job = "".join(
+        c if c.isalnum() or c in "-_" else "_"
+        for c in job_id.strip()
+    )
+    user_slug = _job_user_slug(ctx)
+    if user_slug:
+        job_dir = _job_images_root() / user_slug / safe_job
+    else:
+        job_dir = _job_images_root() / safe_job
+
+    if not job_dir.exists():
+        return f"📂 No images found for job {job_id.strip()} — directory does not exist yet."
+
+    index = _load_job_index(job_dir)
+    if not index:
+        return f"📂 No images indexed for job {job_id.strip()}."
+
+    # Apply tag filter
+    tag_filter = tag.strip().lower()
+    if tag_filter:
+        index = [e for e in index
+                 if tag_filter in [t.lower() for t in e.get("tags", [])]]
+        if not index:
+            return f"📂 No images with tag '{tag_filter}' found for job {job_id.strip()}."
+
+    lines = [f"📸 Images for job {job_id.strip()} ({len(index)} found):\n"]
+    for i, e in enumerate(index, 1):
+        size_kb = e.get("size_bytes", 0) / 1024
+        tags_str = ", ".join(e.get("tags", [])) or "(no tags)"
+        lines.append(
+            f"  {i}. {e.get('filename', '?')}\n"
+            f"     Description: {e.get('description', '(none)')}\n"
+            f"     Tags:        {tags_str}\n"
+            f"     Saved:       {e.get('saved_at', '?')}\n"
+            f"     Size:        {size_kb:.1f} KB\n"
+            f"     Path:        {job_dir / e.get('filename', '')}\n"
+        )
+
+    lines.append(
+        f"\nTo view an image, ask the user to re-upload the file from:\n"
+        f"  {job_dir}"
+    )
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def delete_job_image(
+    job_id:   str,
+    filename: str,
+    ctx: Context = None,
+) -> str:
+    """
+    Delete a specific image from a job's image store.
+
+    Removes the file from disk and removes its entry from index.json.
+    The job directory itself is kept even if empty, so the index remains
+    as an audit trail.
+
+    Args:
+        job_id:   Job identifier the image belongs to.
+        filename: The stored filename to delete — use list_job_images() first
+                  to find the exact filename (includes the timestamp prefix,
+                  e.g. "20260624_143022_before_gutters.jpg").
+
+    Returns:
+        Confirmation of deletion, or an error message.
+    """
+    from pathlib import Path
+
+    if not job_id or not job_id.strip():
+        return "❌ job_id is required."
+    if not filename or not filename.strip():
+        return "❌ filename is required. Use list_job_images() to find the exact filename."
+
+    # Use user-scoped path so users can only delete their own images
+    safe_id = "".join(
+        c if c.isalnum() or c in "-_" else "_"
+        for c in job_id.strip()
+    )
+    user_slug = _job_user_slug(ctx)
+    if user_slug:
+        job_dir = _job_images_root() / user_slug / safe_id
+    else:
+        job_dir = _job_images_root() / safe_id
+    file_path = job_dir / filename.strip()
+
+    if not job_dir.exists():
+        return f"❌ No image directory found for job {job_id.strip()}."
+
+    if not file_path.exists():
+        return (
+            f"❌ File '{filename.strip()}' not found in job {job_id.strip()}.\n"
+            f"   Use list_job_images(job_id='{job_id.strip()}') to see available files."
+        )
+
+    # Remove file
+    try:
+        file_path.unlink()
+    except Exception as _e:
+        return f"❌ Could not delete file: {_e}"
+
+    # Update index — remove matching entry
+    index = _load_job_index(job_dir)
+    original_count = len(index)
+    index = [e for e in index if e.get("filename") != filename.strip()]
+    try:
+        _save_job_index(job_dir, index)
+    except Exception as _e:
+        return (
+            f"✅ File deleted: {file_path}\n"
+            f"⚠️  Warning: could not update index.json: {_e}"
+        )
+
+    removed = original_count - len(index)
+    return (
+        f"✅ Deleted: {file_path}\n"
+        f"   Index updated: {removed} entr{'y' if removed == 1 else 'ies'} removed "
+        f"({len(index)} image(s) remaining for job {job_id.strip()})"
+    )
+
+
+@mcp.tool()
+def get_pending_analysis_tasks(ctx: Context = None) -> str:
+    """
+    AGENTIC ANALYSIS — Return all pending analysis tasks queued by the user
+    from the AI-Prowler Quick Links tab.
+
+    Call this tool at the start of any session where the user says they have
+    analysis to run, or whenever instructed to check for pending tasks.
+
+    For each pending task returned, Claude should:
+      1. Execute the analysis described in the task's 'prompt' field using
+         all available AI-Prowler tools (search_documents, search_learnings,
+         read_job_spreadsheet, get_weather, etc.)
+      2. Record any significant findings as learnings via record_learning()
+      3. Call complete_analysis_task(task_id) to mark the task done
+
+    Returns:
+        JSON list of pending task objects, each with:
+          task_id    — unique identifier (pass to complete_analysis_task)
+          type       — task type (analyze_business, weekly_advisor, etc.)
+          label      — human-readable name
+          prompt     — the full analysis prompt Claude should execute
+          created_at — when the user queued this task (ISO 8601)
+
+    Returns a plain message if no tasks are pending.
+
+    Examples:
+        "Check for pending analysis tasks"
+        "Run any pending analysis from AI-Prowler"
+        "What analysis do I have queued?"
+    """
+    _telemetry_increment_tool_count("get_pending_analysis_tasks")
+
+    try:
+        tasks = _load_pending_tasks()
+        pending = [t for t in tasks if t.get("status") == "pending"]
+
+        if not pending:
+            return (
+                "✅ No pending analysis tasks. "
+                "Use the AI Analysis buttons in the Links & Analysis tab to queue analysis."
+            )
+
+        # Enrich each task with age info and output instructions
+        import datetime as _dt
+        now = _dt.datetime.utcnow()
+        for t in pending:
+            try:
+                created = _dt.datetime.strptime(
+                    t.get("created_at", ""), "%Y-%m-%dT%H:%M:%SZ")
+                age_mins = int((now - created).total_seconds() / 60)
+                if age_mins < 60:
+                    t["queued_ago"] = f"{age_mins} minute{'s' if age_mins != 1 else ''} ago"
+                elif age_mins < 1440:
+                    hrs = age_mins // 60
+                    t["queued_ago"] = f"{hrs} hour{'s' if hrs != 1 else ''} ago"
+                else:
+                    days = age_mins // 1440
+                    t["queued_ago"] = f"{days} day{'s' if days != 1 else ''} ago"
+            except Exception:
+                t["queued_ago"] = "unknown"
+
+        result = {
+            "pending_count": len(pending),
+            "tasks": pending,
+            "instruction": (
+                "For each task: execute the full analysis described in the 'prompt' "
+                "field using all available AI-Prowler tools. "
+                "If output_report=true: call save_analysis_report() with the full "
+                "analysis as Markdown content. "
+                "If output_learnings=true: call record_learning() with key insights. "
+                "Always record a completion learning with category 'analysis_report' "
+                "noting what was done and the next_due date. "
+                "Finally call complete_analysis_task(task_id, summary) to mark done "
+                "and auto-advance the next scheduled run date."
+            )
+        }
+        return json.dumps(result, indent=2, ensure_ascii=False)
+
+    except Exception as _e:
+        return f"❌ Could not load pending tasks: {_e}"
+
+
+@mcp.tool()
+def complete_analysis_task(task_id: str,
+                           summary: str = "",
+                           ctx: Context = None) -> str:
+    """
+    AGENTIC ANALYSIS — Mark a pending analysis task as completed.
+
+    Call this after finishing each analysis task returned by
+    get_pending_analysis_tasks(). This prevents the same task from
+    running again in future sessions.
+
+    Args:
+        task_id: The task_id from get_pending_analysis_tasks() output.
+                 Example: "analyze_business_20260623_143022"
+        summary: Optional one-sentence summary of what was found/recorded.
+                 Stored with the task for the user's reference in the GUI.
+
+    Returns:
+        Confirmation message with the task label and summary.
+
+    Example:
+        complete_analysis_task(
+            task_id="analyze_business_20260623_143022",
+            summary="Found 3 overdue invoices and recorded 4 business insights."
+        )
+    """
+    _telemetry_increment_tool_count("complete_analysis_task")
+
+    if not task_id or not task_id.strip():
+        return "❌ task_id is required."
+
+    task_id = task_id.strip()
+
+    try:
+        tasks = _load_pending_tasks()
+        matched = False
+        label = task_id
+
+        for t in tasks:
+            if t.get("task_id") == task_id:
+                t["status"] = "completed"
+                # Use inline datetime to avoid dependency on _utc_now_iso
+                # which is only defined inside the server startup closure.
+                try:
+                    import datetime as _dt
+                    t["completed_at"] = _dt.datetime.utcnow().strftime(
+                        "%Y-%m-%dT%H:%M:%SZ")
+                except Exception:
+                    t["completed_at"] = ""
+                if summary:
+                    t["completion_summary"] = summary.strip()
+                label = t.get("label", task_id)
+                matched = True
+                break
+
+        if not matched:
+            return (
+                f"⚠️ Task '{task_id}' not found in pending_tasks.json. "
+                "It may have already been completed or was never queued."
+            )
+
+        _save_pending_tasks(tasks)
+
+        # ── Schedule advancement ──────────────────────────────────────────────
+        # For custom tasks (source_id present): advance next_due in
+        # custom_analysis_tasks.json.
+        # For built-in tasks with a schedule (schedule != "none"): advance
+        # next_due directly in the completed task record so the Queue Panel
+        # and get_pending_analysis_tasks() can surface when it's next due.
+
+        source_id    = None
+        task_schedule = None
+        task_next_due = None
+
+        for t in tasks:
+            if t.get("task_id") == task_id:
+                source_id     = t.get("source_id")
+                task_schedule = t.get("schedule", "none")
+                task_next_due = t.get("next_due")
+                break
+
+        next_due_msg = ""
+
+        if source_id:
+            # Custom task — advance next_due in custom_analysis_tasks.json
+            try:
+                import datetime as _dt
+                import custom_tasks_manager as _ctm
+                custom_tasks = _ctm.load_custom_tasks()
+                new_next_due = _ctm.advance_next_due(
+                    custom_tasks, source_id,
+                    completed_date=_dt.date.today().isoformat()
+                )
+                _ctm.save_custom_tasks(custom_tasks)
+                if new_next_due:
+                    next_due_msg = f"\nNext scheduled run: {new_next_due}"
+            except Exception as _cte:
+                print(f"[complete_analysis_task] custom next_due advance failed: {_cte}")
+
+        elif task_schedule and task_schedule != "none":
+            # Built-in scheduled task — advance next_due in pending_tasks.json
+            try:
+                import datetime as _dt
+                import custom_tasks_manager as _ctm
+                anchor = task_next_due or _dt.date.today().isoformat()
+                new_next_due = _ctm._advance_date(anchor, task_schedule)
+                if new_next_due:
+                    # Stamp the new next_due on the completed task record
+                    for t in tasks:
+                        if t.get("task_id") == task_id:
+                            t["next_due"] = new_next_due
+                            break
+                    _save_pending_tasks(tasks)
+                    next_due_msg = f"\nNext scheduled run: {new_next_due}"
+            except Exception as _cte:
+                print(f"[complete_analysis_task] builtin next_due advance failed: {_cte}")
+
+        msg = f"✅ Analysis task completed: {label}"
+        if summary:
+            msg += f"\nSummary: {summary}"
+        msg += next_due_msg
+        return msg
+
+    except Exception as _e:
+        return f"❌ Could not complete task: {_e}"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # WRITE ZONE MANAGEMENT TOOLS  (v7.1.0)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -11957,19 +13162,27 @@ _LICENSE_HARD_FAIL_REASONS = ("revoked", "suspended", "parent_revoked",
 
 def _evaluate_license_grace(cache: dict, validate_result: "dict | None",
                             now=None) -> dict:
-    """Decide the effective Business-license standing. PURE.
+    """Decide the effective license standing (mobile OR business). PURE.
+
+    v8.0.0: generalized from a Business-only evaluator to cover every
+    license type the ai-prowler-subscription Worker issues (personal/mobile,
+    business, and free beta — beta uses the exact same grace rules, just a
+    cosmetic 'tier' tag). The Worker's /license/validate response now carries
+    its own 'edition' field ('mobile' | 'business'), so the fallback/"home"
+    edition is the only one this function still hard-codes — the GRANTED
+    edition always comes from whichever the license itself claims.
 
     Args:
         cache:           parsed license_cache.json (may be {} if none yet).
                          Recognized keys: last_validated_at (ISO), status,
-                         cached_expires_at (ISO).
+                         cached_expires_at (ISO), edition (str).
         validate_result: the Worker's /license/validate JSON this launch, or
                          None if the network call wasn't made/failed. Shape:
                          {valid: bool, reason?, edition?, expires_at?, status?}.
         now:             injectable clock (datetime); defaults to UTC now.
 
     Returns dict:
-        effective_edition : 'business' | 'home'
+        effective_edition : 'mobile' | 'business' | 'home'
         action            : 'validated' | 'cached_fresh' | 'grace_silent'
                             | 'grace_warning' | 'reverted_expired'
                             | 'reverted_revoked'
@@ -11993,16 +13206,28 @@ def _evaluate_license_grace(cache: dict, validate_result: "dict | None",
         except Exception:
             return None
 
+    # The edition a license is granting, from whichever source is freshest:
+    # a live validate_result takes priority; otherwise fall back to whatever
+    # edition was cached from the last successful check. Default 'mobile'
+    # is a safe floor (matches the old _plan_to_edition fail-open default —
+    # never silently strip entitlement from a paying customer due to a
+    # missing/old field on an otherwise-valid cache entry).
+    granted_edition = (
+        (validate_result or {}).get("edition")
+        or cache.get("edition")
+        or "mobile"
+    )
+
     # 1) Fresh successful validation this launch → trust it.
     if validate_result is not None:
         if validate_result.get("valid") is True:
-            return {"effective_edition": "business", "action": "validated",
+            return {"effective_edition": granted_edition, "action": "validated",
                     "banner": "", "used_network": True}
         # Explicit negative from the Worker — hard fail, no grace.
         reason = validate_result.get("reason", "invalid")
         if reason in _LICENSE_HARD_FAIL_REASONS:
             return {"effective_edition": "home", "action": "reverted_revoked",
-                    "banner": (f"Business license is no longer valid ({reason}). "
+                    "banner": (f"Your AI-Prowler license is no longer valid ({reason}). "
                                f"Reverted to Home features. Contact "
                                f"david.vavro1@gmail.com to restore service."),
                     "used_network": True}
@@ -12012,39 +13237,43 @@ def _evaluate_license_grace(cache: dict, validate_result: "dict | None",
     # 2) No fresh success (network failure, or unknown negative). Lean on cache.
     last_ok = _parse(cache.get("last_validated_at"))
     if last_ok is None:
-        # Never successfully validated and can't now → can't grant business.
+        # Never successfully validated and can't now → can't grant entitlement.
+        # had_prior_cache=False: no subscription was ever registered on this
+        # install; _run_http() uses this to fail-open rather than block.
         return {"effective_edition": "home", "action": "reverted_expired",
-                "banner": ("Could not validate your Business license and no "
+                "banner": ("Could not validate your AI-Prowler license and no "
                            "prior validation is cached. Running Home features. "
                            "Check your connection and license key."),
-                "used_network": False}
+                "used_network": False, "had_prior_cache": False}
 
     age = now - last_ok
     age_days = age.total_seconds() / 86400.0
 
     # 2a) Within 24h of a prior success and we didn't need the network → cached.
     if validate_result is None and age.total_seconds() <= _LICENSE_FRESH_HOURS * 3600:
-        return {"effective_edition": "business", "action": "cached_fresh",
+        return {"effective_edition": granted_edition, "action": "cached_fresh",
                 "banner": "", "used_network": False}
 
     # 2b) Grace ladder by days since last success.
     if age_days < _LICENSE_WARN_DAYS:
-        return {"effective_edition": "business", "action": "grace_silent",
+        return {"effective_edition": granted_edition, "action": "grace_silent",
                 "banner": "", "used_network": False}
 
     if age_days < _LICENSE_GRACE_DAYS:
         revert_on = (last_ok + _dt.timedelta(days=_LICENSE_GRACE_DAYS)).date().isoformat()
-        return {"effective_edition": "business", "action": "grace_warning",
+        return {"effective_edition": granted_edition, "action": "grace_warning",
                 "banner": (f"License validation has failed for several days. "
-                           f"Renew/reconnect before {revert_on} or Business "
+                           f"Renew/reconnect before {revert_on} or your AI-Prowler "
                            f"features will be disabled."),
                 "used_network": False}
 
+    # had_prior_cache=True: the subscription was once valid but grace has expired.
+    # _run_http() uses this to block mobile access (unlike a fresh install).
     return {"effective_edition": "home", "action": "reverted_expired",
-            "banner": ("Business license could not be validated for "
+            "banner": ("Your license could not be validated for "
                        f"{_LICENSE_GRACE_DAYS}+ days. Reverted to Home features. "
-                       "Your data is intact; reconnect to restore Business."),
-            "used_network": False}
+                       "Your data is intact; reconnect to restore service."),
+            "used_network": False, "had_prior_cache": True}
 
 
 def _load_license_cache_for(license_key: str) -> dict:
@@ -12109,19 +13338,26 @@ def _save_license_cache_for(license_key: str, entry: dict) -> None:
         _log.warning("Could not write license_cache.json (%s)", _e)
 
 
-def _validate_business_license(license_key: str, install_id: str,
-                               endpoint: str, now=None) -> dict:
+def _validate_license(license_key: str, install_id: str,
+                      endpoint: str, now=None) -> dict:
     """I/O wrapper around _evaluate_license_grace: read PER-KEY cache, decide
-    whether to call the Worker, POST /license/validate, persist a fresh success,
-    and return the grace evaluation. Never raises.
+    whether to call the Worker, GET /license/{key}/validate, persist a fresh
+    success, and return the grace evaluation. Never raises.
 
     Returns the _evaluate_license_grace dict, plus 'license_key_present': bool.
 
-    v7.0.0 changes: per-key cache (so the server can validate parent + N child
-    keys without overwriting each other), and a 30-day fresh-cache window
-    (_LICENSE_FRESH_HOURS = 720) so a long-running server hits the network on
-    a ~30d cadence and a daily-launched personal install skips the network on
-    each launch within those 30 days.
+    v8.0.0: renamed from _validate_business_license — this is now THE single
+    validation path for every license type (personal/mobile, business, and
+    free beta), all issued by the one ai-prowler-subscription Worker. The old
+    GitHub subs.json registry (_check_subscription) and the separate
+    D1-backed telemetry-Worker Business path are both retired; 'endpoint'
+    here is always the subscription Worker's base URL.
+
+    v7.0.0 changes carried forward: per-key cache (so the server can validate
+    parent + N child keys without overwriting each other), and a 30-day
+    fresh-cache window (_LICENSE_FRESH_HOURS = 720) so a long-running server
+    hits the network on a ~30d cadence and a daily-launched personal install
+    skips the network on each launch within those 30 days.
     """
     import datetime as _dt
     if now is None:
@@ -12150,15 +13386,15 @@ def _validate_business_license(license_key: str, install_id: str,
         result["license_key_present"] = True
         return result
 
-    # Otherwise POST to the Worker.
+    # Otherwise GET the Worker's validate endpoint (license key is the
+    # credential — same trust model as the activation code; no bearer auth).
     validate_result = None
     try:
         import requests as _req
-        resp = _req.post(
-            f"{endpoint.rstrip('/')}/license/validate",
-            json={"license_key": license_key, "install_id": install_id or ""},
-            headers={"Content-Type": "application/json",
-                     "User-Agent": "AI-Prowler-MCP/1.0"},
+        resp = _req.get(
+            f"{endpoint.rstrip('/')}/license/{license_key}/validate",
+            params={"install_id": install_id or ""},
+            headers={"User-Agent": "AI-Prowler-MCP/1.0"},
             timeout=10, proxies={"http": None, "https": None})
         if resp.status_code == 200:
             validate_result = resp.json()
@@ -12175,11 +13411,19 @@ def _validate_business_license(license_key: str, install_id: str,
             "last_validated_at": now.isoformat(),
             "status": validate_result.get("status", "active"),
             "cached_expires_at": validate_result.get("expires_at", ""),
-            "edition": validate_result.get("edition", "business"),
+            "edition": validate_result.get("edition", "mobile"),
+            "tier": validate_result.get("tier", "standard"),
         })
 
     result["license_key_present"] = True
     return result
+
+
+# Backward-compat alias — a handful of call sites/tests may still reference
+# the old name during the v8.0.0 transition. New code should call
+# _validate_license() directly; this alias can be removed once nothing
+# references the old name.
+_validate_business_license = _validate_license
 
 
 def _sweep_child_licenses(users_doc, validate_fn):
@@ -13568,62 +14812,46 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
         sys.exit(1)
 
     # ══════════════════════════════════════════════════════════════════════════
-    # SUBSCRIPTION REGISTRY
+    # LICENSE VALIDATION (v8.0.0)
     # ══════════════════════════════════════════════════════════════════════════
-    # The user's Bearer token NEVER changes between billing periods.
-    # Subscription validity is managed server-side in a subs.json file that
-    # only David controls, hosted on a private GitHub repo.
+    # Every AI-Prowler license (personal/mobile, business, and free beta) is
+    # issued and validated by the ai-prowler-subscription Cloudflare Worker —
+    # see _validate_license() / _evaluate_license_grace() above, and
+    # GET /license/{key}/validate in the Worker. The bearer token (set by the
+    # user in Settings → Remote Access) is unrelated to licensing — it is
+    # purely a local secret for the Claude.ai MCP connector handshake and is
+    # never sent to, or known by, any subscription system.
     #
     # Check schedule:
-    #   • On startup — fetch and cache the registry
-    #   • Every 30 days — re-fetch silently in a background thread
-    #   • If fetch fails — use cached copy; allow up to 30 days on stale cache
+    #   • On startup — validate the configured license_key
+    #   • Every 30 days — re-validate silently in a background thread
+    #   • If validation fails — local cache + grace ladder allow continued use
+    #     for up to _LICENSE_WARN_DAYS (silent) then _LICENSE_GRACE_DAYS (warning)
+    #     since the last successful check, per _evaluate_license_grace().
     #
-    # Grace / warning periods:
-    #   • Subscription expires → 30-day WARNING period begins
-    #     - Server stays running
-    #     - Login page shows a friendly renewal banner
-    #     - Log shows daily warnings
-    #   • 30 days after expiry (GRACE_DAYS) → access BLOCKED
-    #     - Server refuses to start (if caught at startup)
-    #     - /authorize page shows expiry notice instead of login form
-    #
-    # subs.json format (hosted on GitHub):
-    # {
-    #   "subscribers": {
-    #     "<sha256_first_16_of_token>": {
-    #       "name":    "Acme Corp",
-    #       "expires": "2026-04-16",
-    #       "plan":    "individual"
-    #     }
-    #   }
-    # }
-    # The token itself is never stored — only a short hash is used as the
-    # lookup key, so the file leaks no credentials even if publicly visible.
+    # The pre-v8.0.0 design (a GitHub-hosted subs.json registry, keyed by a
+    # hash of the bearer token, fetched read-only by every client) has been
+    # retired entirely — there are no remaining references to subs.json,
+    # _check_subscription, or _fetch_subs_registry anywhere in this file.
     # ══════════════════════════════════════════════════════════════════════════
 
     import hashlib    as _hashlib
     import datetime   as _dt
     import threading  as _threading
 
-    _SUBS_CACHE        = Path.home() / "AppData" / "Local" / "AI-Prowler" / "subs_cache.json"
-    _CHECK_INTERVAL_DAYS = 30   # re-fetch registry every 30 days
-    _WARN_DAYS           = 30   # show renewal warning this many days before / after expiry
-    _GRACE_DAYS          = 30   # block access this many days AFTER expiry
-
-    _SUBS_RAW_URL = (
-        "https://raw.githubusercontent.com/dvavro/ai-prowler-subs/main/subs.json"
-    )
+    _CHECK_INTERVAL_DAYS = 30   # re-validate the license every 30 days (background thread)
 
     # ── EDITION / MODE helpers (v7.0.0) ───────────────────────────────────────
-    # _plan_to_edition, _load_runtime_config, _enforce_edition_mode and the
-    # edition/mode constants were HOISTED to module level (just before
-    # _run_http) so the test suite can call them directly. The bare-name calls
-    # below resolve to those module-level definitions. See the module-level
-    # block and PHASE_A_PRIME_TEST_PLAN.md §4.0.
+    # _load_runtime_config, _enforce_edition_mode and the edition/mode
+    # constants were HOISTED to module level (just before _run_http) so the
+    # test suite can call them directly. The bare-name calls below resolve to
+    # those module-level definitions. See the module-level block and
+    # PHASE_A_PRIME_TEST_PLAN.md §4.0.
 
     def _token_key(tok: str) -> str:
-        """Short hash of token used as lookup key in subs.json."""
+        """Short hash of a string, used as an opaque per-license fingerprint
+        for the 2-active-install activation check (NOT a subs.json lookup —
+        that registry is retired; see _post_activation below)."""
         return _hashlib.sha256(tok.encode()).hexdigest()[:16]
 
     # ── install_id (v7.0.0 — Phase A' install-id binding) ─────────────────────
@@ -13659,139 +14887,6 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
     _INSTALL_ID = _read_or_create_install_id()
 
 
-    def _fetch_subs_registry() -> dict | None:
-        """
-        Fetch subs.json from the public GitHub registry.
-        No authentication needed — the repo is public (read-only for everyone;
-        only the repo owner can write via their GitHub credentials).
-        Falls back to the local cache if the network is unavailable.
-        """
-        try:
-            import requests as _req
-            resp = _req.get(
-                _SUBS_RAW_URL,
-                headers={"User-Agent": "AI-Prowler-MCP/1.0",
-                         "Cache-Control": "no-cache"},
-                timeout=10,
-                proxies={"http": None, "https": None})
-            if resp.status_code == 200:
-                _log.info("Subscription registry fetched from GitHub OK")
-                return resp.json()
-            _log.warning("Subscription registry fetch returned HTTP %s",
-                         resp.status_code)
-        except Exception as _e:
-            _log.warning("Subscription registry fetch failed: %s", _e)
-        return None
-    def _load_cached_subs() -> tuple:
-        """Returns (data_dict, cache_age_days). data_dict is None if no cache."""
-        try:
-            if _SUBS_CACHE.exists():
-                import json as _json
-                raw      = _json.loads(_SUBS_CACHE.read_text(encoding="utf-8"))
-                cached_at = _dt.date.fromisoformat(raw.get("cached_at", "2000-01-01"))
-                age      = (_dt.date.today() - cached_at).days
-                return raw.get("data"), age
-        except Exception as _e:
-            _log.warning("Could not read subscription cache: %s", _e)
-        return None, 999
-
-    def _save_subs_cache(data: dict):
-        try:
-            import json as _json
-            _SUBS_CACHE.parent.mkdir(parents=True, exist_ok=True)
-            payload = {"cached_at": _dt.date.today().isoformat(), "data": data}
-            _SUBS_CACHE.write_text(_json.dumps(payload, indent=2), encoding="utf-8")
-        except Exception as _e:
-            _log.warning("Could not save subscription cache: %s", _e)
-
-    def _check_subscription(tok: str, subs_data: dict | None) -> dict:
-        """
-        Returns a status dict:
-          status:    "ok" | "warning" | "blocked" | "unmanaged"
-          name:      subscriber name (or None)
-          days_left: days until expiry (negative = days past expiry)
-          message:   human-readable explanation
-          banner:    HTML snippet for the login page (empty string if none needed)
-          edition:   "home" | "mobile" | "business" — entitlement derived from
-                     the subscriber's plan via _plan_to_edition(). Unmanaged /
-                     not-found tokens get "home" (no remote-access entitlement).
-        """
-        if subs_data is None:
-            return {"status": "unmanaged", "name": None, "days_left": None,
-                    "message": "No registry — unmanaged/local mode",
-                    "banner": "", "edition": "home"}
-
-        key         = _token_key(tok)
-        subscribers = subs_data.get("subscribers", {})
-
-        if key not in subscribers:
-            # Token not in registry — treat as local/unmanaged, not an error
-            return {"status": "unmanaged", "name": None, "days_left": None,
-                    "message": "Token not in managed registry — local mode",
-                    "banner": "", "edition": "home"}
-
-        entry    = subscribers[key]
-        name     = entry.get("name", "Subscriber")
-        _edition = _plan_to_edition(entry.get("plan", ""))
-        exp_str  = entry.get("expires", "")
-        try:
-            expiry = _dt.date.fromisoformat(exp_str)
-        except ValueError:
-            return {"status": "unmanaged", "name": name, "days_left": None,
-                    "message": f"Invalid expiry date for {name}",
-                    "banner": "", "edition": "home"}
-
-        today     = _dt.date.today()
-        days_left = (expiry - today).days   # negative = past expiry
-
-        if days_left >= 0:
-            # Active subscription
-            if days_left <= _WARN_DAYS:
-                banner = (
-                    f"<div style='background:#7c4a00;border-radius:6px;padding:10px 14px;"
-                    f"margin-top:12px;font-size:13px;color:#ffe082;'>"
-                    f"⚠️  Your remote access subscription expires in <strong>{days_left} day(s)</strong>"
-                    f" ({expiry}).  "
-                    f"<a href='mailto:david.vavro1@gmail.com' style='color:#ffd54f;'>Renew now →</a>"
-                    f"</div>"
-                )
-                return {"status": "warning", "name": name, "days_left": days_left,
-                        "message": f"Subscription for '{name}' expires in {days_left} day(s) ({expiry}) — renewal recommended",
-                        "banner": banner, "edition": _edition}
-            return {"status": "ok", "name": name, "days_left": days_left,
-                    "message": f"Subscription OK — '{name}', {days_left} day(s) remaining",
-                    "banner": "", "edition": _edition}
-
-        # Past expiry
-        days_over = -days_left
-
-        if days_over <= _GRACE_DAYS:
-            # WARNING period — still allowed, but banner shown
-            banner = (
-                f"<div style='background:#7c0000;border-radius:6px;padding:10px 14px;"
-                f"margin-top:12px;font-size:13px;color:#ffcdd2;'>"
-                f"🔴  Your remote access subscription <strong>expired {days_over} day(s) ago</strong>"
-                f" ({expiry}).  "
-                f"You have <strong>{_GRACE_DAYS - days_over} day(s)</strong> remaining before access is blocked.  "
-                f"<a href='mailto:david.vavro1@gmail.com' style='color:#ff8a80;'>Renew at david.vavro1@gmail.com →</a>"
-                f"</div>"
-            )
-            return {"status": "warning", "name": name, "days_left": days_left,
-                    "message": (
-                        f"SUBSCRIPTION EXPIRED {days_over} day(s) ago for '{name}' ({expiry}).  "
-                        f"Grace period: {_GRACE_DAYS - days_over} day(s) remaining.  "
-                        f"Renew at david.vavro1@gmail.com"
-                    ),
-                    "banner": banner, "edition": _edition}
-
-        # Past grace period — BLOCKED
-        return {"status": "blocked", "name": name, "days_left": days_left,
-                "message": (
-                    f"Remote access BLOCKED — subscription for '{name}' expired "
-                    f"{days_over} day(s) ago ({expiry}) and the {_GRACE_DAYS}-day grace period has elapsed.  "
-                    f"Renew at david.vavro1@gmail.com"
-                ),
-                "banner": "", "edition": _edition}
 
     # ── 2-active-install rule (v7.0.0) ────────────────────────────────────────
     # _evaluate_activation and the constants _ACTIVE_WINDOW_DAYS /
@@ -13800,27 +14895,28 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
     # references below resolve to those module-level definitions. See the
     # module-level block and PHASE_A_PRIME_TEST_PLAN.md §4.
 
-    # ── D1-backed activation (v7.0.0 — Phase A' Option X, D1 variant) ─────────
-    # Activations are authoritatively stored in the telemetry Worker's D1
-    # database (table license_activations), NOT in subs.json. The client POSTs
-    # its install_id + token HASH (never the raw token) to /license/activate and
-    # the Worker returns the binding decision. If the Worker is unreachable we
-    # FAIL OPEN — fall back to the local _evaluate_activation() over whatever
-    # activations subs.json may carry, and ultimately allow access. This mirrors
-    # the 14-day cached-validation grace philosophy: a network blip must never
-    # lock out a paying customer.
-    _TELEMETRY_DEFAULT_ENDPOINT = "https://ai-prowler-telemetry.david-vavro1.workers.dev"
+    # ── Subscription-Worker-backed activation (v8.0.0) ────────────────────────
+    # Activations are authoritatively stored in the ai-prowler-subscription
+    # Worker (the same one /license/validate hits). The client POSTs its
+    # install_id + license-key HASH (never the raw key, never the bearer
+    # token) to /license/activate and the Worker returns the binding decision.
+    # If the Worker is unreachable we FAIL OPEN — there is no local fallback
+    # registry anymore (v8.0.0 retired subs.json entirely) — and ultimately
+    # allow access. This mirrors the grace-ladder philosophy: a network blip
+    # must never lock out a paying customer.
+    _SUBSCRIPTION_WORKER_URL = "https://ai-prowler-subscription.david-vavro1.workers.dev"
 
     def _activation_endpoint() -> str:
         """Resolve the Worker base URL (config override or default), no trailing slash."""
-        base = _TELEMETRY_DEFAULT_ENDPOINT
+        base = _SUBSCRIPTION_WORKER_URL
         try:
-            ep = (_runtime_cfg_for_endpoint or {}).get("telemetry_endpoint", "")
+            ep = (_runtime_cfg_for_endpoint or {}).get("subscription_endpoint", "")
             if ep:
                 base = str(ep)
         except Exception:
             pass
         return base.rstrip("/")
+
 
     def _post_activation(license_hash: str, install_id: str,
                          os_str: str, version: str) -> dict | None:
@@ -13858,43 +14954,99 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
     # forward reference; populated just before the activation call below.
     _runtime_cfg_for_endpoint = None
 
-    # ── Perform initial subscription check on startup ─────────────────────────
+    # ── Perform initial license check on startup (v8.0.0) ─────────────────────
+    # Single source of truth: the ai-prowler-subscription Worker's
+    # /license/{key}/validate, via _validate_license(). The old GitHub
+    # subs.json registry (_check_subscription/_fetch_subs_registry) is
+    # retired entirely — every license (personal/mobile, business, and free
+    # beta) is now issued and validated by this one Worker, keyed by
+    # license_key from config.json. No bearer-token lookup is involved here
+    # at all (the bearer token is purely a local Claude.ai connector secret
+    # the user chooses themselves — see Settings → Remote Access — and was
+    # never assigned or known by any subscription system, old or new).
     if _test_entitlement_active():
         # TEST ENTITLEMENT SHORT-CIRCUIT (pre-release validation only). Both the
         # env var AND config.json "test_mode": true are set (dev/test launch).
-        # Skip the network subscription/license/activation calls and substitute
-        # a known-good verdict so the suite can exercise the REAL auth + scoping
-        # + ownership code against the sandboxed users.json. Enforcement is NOT
-        # disabled — only the entitlement verdict and state-file paths are
-        # sandboxed. Loud on purpose.
+        # Skip the network license-validation call and substitute a known-good
+        # verdict so the suite can exercise the REAL auth + scoping + ownership
+        # code against the sandboxed users.json. Enforcement is NOT disabled —
+        # only the entitlement verdict and state-file paths are sandboxed.
+        # Loud on purpose.
         _log.warning(
-            "⚠️  TEST ENTITLEMENT ACTIVE — network license/subscription checks "
+            "⚠️  TEST ENTITLEMENT ACTIVE — network license checks "
             "SKIPPED, entitlement sandboxed (edition=business,status=ok). "
             "State dir=%s. NOT FOR PRODUCTION.", _state_dir())
-        _subs_data = None
+        _runtime_cfg_for_endpoint = None
         _sub_result = {"status": "ok", "name": "TEST", "days_left": None,
                        "edition": "business",
                        "message": "test entitlement (sandboxed; network skipped)"}
     else:
-        _subs_data = _fetch_subs_registry()
-        if _subs_data is not None:
-            _save_subs_cache(_subs_data)
-            _log.info("Subscription registry fetched from GitHub OK")
+        _runtime_cfg_for_endpoint = _load_runtime_config()
+        _lic_key_startup = str(_runtime_cfg_for_endpoint.get("license_key", "")).strip()
+        if not _lic_key_startup:
+            # No license key configured at all — this is the normal, expected
+            # state for a brand-new Home install. Not an error.
+            _sub_result = {"status": "unmanaged", "name": None, "days_left": None,
+                           "edition": "home",
+                           "message": "No license key configured — Home/local mode"}
         else:
-            _subs_data, _cache_age = _load_cached_subs()
-            if _subs_data is not None:
-                _log.warning(
-                    "Using cached subscription registry (%d days old, max cache age: %d days)",
-                    _cache_age, _CHECK_INTERVAL_DAYS + _GRACE_DAYS
-                )
+            _startup_grace = _validate_license(
+                _lic_key_startup, _INSTALL_ID, _activation_endpoint())
+            _granted = _startup_grace.get("effective_edition", "home")
+            _action  = _startup_grace.get("action", "")
+            if _granted == "home" and _action in ("reverted_revoked",):
+                # Hard fail (revoked/suspended-with-no-grace-left/not_found) —
+                # this is the v8.0.0 equivalent of the old "blocked" status.
+                # NOTE: ordinary Stripe cancellation does NOT land here — it's
+                # a SOFT reason (see suspendLicense() in the Worker), so a
+                # cancelling customer keeps working through the grace ladder
+                # below instead of being hard-blocked immediately.
+                _sub_result = {"status": "blocked", "name": None, "days_left": None,
+                               "edition": "home",
+                               "message": _startup_grace.get("banner") or
+                                          "License is no longer valid."}
+            elif _granted == "home" and _action in ("reverted_revoked",):
+                # Hard revocation — Worker explicitly said the key is revoked/
+                # suspended. Block mobile access immediately.
+                _sub_result = {"status": "blocked", "name": None, "days_left": None,
+                               "edition": "home",
+                               "message": _startup_grace.get("banner") or
+                                          "License could not be validated."}
+            elif _granted == "home" and _startup_grace.get("had_prior_cache"):
+                # Grace ladder expired for a previously-valid subscription.
+                # The user had a paid subscription that is now expired/unreachable
+                # beyond the grace window → block mobile access.
+                _sub_result = {"status": "blocked", "name": None, "days_left": None,
+                               "edition": "home",
+                               "message": _startup_grace.get("banner") or
+                                          "Subscription expired — mobile access disabled."}
+            elif _granted == "home":
+                # reverted_expired with had_prior_cache=False: no subscription has
+                # ever been validated on this install (new user, self-hosted, or
+                # Worker returned 404 before first successful activation).
+                # Fail-open — never block a user who hasn't subscribed yet.
+                _sub_result = {"status": "unmanaged", "name": None, "days_left": None,
+                               "edition": "home",
+                               "message": _startup_grace.get("banner") or
+                                          "No subscription found — mobile access requires a subscription."}
+            elif _startup_grace.get("banner"):
+                # Still entitled, but the grace ladder has a warning to show
+                # (grace_warning action — failing validation for several days,
+                # or a cancelled-but-still-in-grace subscription counting down).
+                _sub_result = {"status": "warning", "name": None, "days_left": None,
+                               "edition": _granted,
+                               "message": _startup_grace["banner"],
+                               "banner": (
+                                   f"<div style='background:#7c4a00;border-radius:6px;padding:10px 14px;"
+                                   f"margin-top:12px;font-size:13px;color:#ffe082;'>"
+                                   f"⚠️  {_startup_grace['banner']}</div>")}
             else:
-                _log.warning(
-                    "No subscription registry available (no internet + no cache).  "
-                    "Starting in unmanaged mode — all tokens accepted."
-                )
-
-        _sub_result = _check_subscription(token, _subs_data)
-    _log.info("Startup subscription check: %s", _sub_result["message"])
+                # validated / cached_fresh / grace_silent — fully healthy.
+                _sub_result = {"status": "ok", "name": None, "days_left": None,
+                               "edition": _granted,
+                               "message": f"License OK — edition={_granted} (action={_action})"}
+    _sub_result.setdefault("banner", "")
+    _log.info("Startup license check: %s", _sub_result["message"])
 
     if _sub_result["status"] == "blocked":
         _log.critical("ACCESS BLOCKED: %s", _sub_result["message"])
@@ -13904,73 +15056,39 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
         _log.warning("SUBSCRIPTION NOTICE: %s", _sub_result["message"])
 
     # ── Resolve effective edition / mode (v7.0.0 — Phase A') ──────────────────
-    # config.json declares the *requested* edition/mode; the subscription check
-    # decides whether the token is actually entitled to it. _enforce_edition_mode
+    # config.json declares the *requested* edition/mode; the license check
+    # decides whether the key is actually entitled to it. _enforce_edition_mode
     # reconciles the two, downgrading to home/personal where the request can't be
-    # honored. The subscriber's plan (via _sub_result["edition"]) is the upper
+    # honored. The license's plan (via _sub_result["edition"]) is the upper
     # bound on entitlement; config.json can request equal-or-lower, never higher.
-    _runtime_cfg       = _load_runtime_config()
+    _runtime_cfg       = _runtime_cfg_for_endpoint or _load_runtime_config()
     _requested_edition = _runtime_cfg["edition"]
     _requested_mode    = _runtime_cfg["mode"]
     _entitled_edition  = _sub_result.get("edition", "home")
 
-    # The requested edition may not exceed what the subscription entitles.
+    # The requested edition may not exceed what the license entitles.
     # Ranking: home(0) < mobile(1) < business(2). Clamp request to entitlement.
     _EDITION_RANK = {"home": 0, "mobile": 1, "business": 2}
     if _EDITION_RANK.get(_requested_edition, 0) > _EDITION_RANK.get(_entitled_edition, 0):
         _log.warning(
-            "config.json requests edition=%s but subscription only entitles %s. "
+            "config.json requests edition=%s but license only entitles %s. "
             "Clamping to %s.", _requested_edition, _entitled_edition, _entitled_edition)
         _requested_edition = _entitled_edition
 
     _EFFECTIVE_EDITION, _EFFECTIVE_MODE = _enforce_edition_mode(
         _requested_edition, _requested_mode, _sub_result["status"])
 
-    # ── Business license validation + grace ladder (v7.0.0 Phase B Block 2) ───
-    # If we've landed on the Business edition, validate the company license key
-    # against the D1 Worker (/license/validate) through the cache + grace ladder.
-    # The ladder can soft-revert Business → Home on a hard fail (revoked) or
-    # after the 14-day grace window of failed validations. This runs BEFORE the
-    # activation rule so the activation check sees the edition that actually
-    # survived license validation. The license key comes from config.json
-    # ('license_key'); if absent, Business can't be validated → revert to home.
-    _runtime_cfg_for_endpoint = _runtime_cfg   # let _activation_endpoint() see config (used here + by the activation rule below)
-    _license_grace = {"effective_edition": _EFFECTIVE_EDITION, "action": "n/a",
-                      "banner": "", "license_key_present": False}
-    if _EFFECTIVE_EDITION == "business" and _test_entitlement_active():
-        _log.warning("⚠️  TEST ENTITLEMENT — skipping D1 Business license "
-                     "validation (network); keeping Business edition.")
-    elif _EFFECTIVE_EDITION == "business":
-        _lic_key = str(_runtime_cfg.get("license_key", "")).strip()
-        _license_grace = _validate_business_license(
-            _lic_key, _INSTALL_ID, _activation_endpoint())
-        if _license_grace["effective_edition"] != "business":
-            _log.warning(
-                "Business license check → %s (action=%s). Reverting to Home.",
-                _license_grace["effective_edition"], _license_grace["action"])
-            _EFFECTIVE_EDITION = "home"
-            _EFFECTIVE_MODE    = "personal"
-            _sub_result = dict(_sub_result)
-            _sub_result["license_reverted"] = True
-            _sub_result["license_message"]  = _license_grace.get("banner", "")
-        elif _license_grace.get("banner"):
-            # Still Business, but a grace-period warning to surface in the GUI.
-            _log.warning("Business license grace warning: %s",
-                         _license_grace["banner"])
-            _sub_result = dict(_sub_result)
-            _sub_result["license_warning"] = _license_grace["banner"]
-
     # ── Per-user child-license validation (server mode only, v7.0.0) ──────────
     # When running as a company server, each active employee in users.json may
     # carry a child_license_key (their paid seat). On startup AND on the
-    # natural 30-day fresh-cache rhythm of _validate_business_license, validate
-    # every active user's child key against the Worker. Soft policy per David
+    # natural 30-day fresh-cache rhythm of _validate_license, validate every
+    # active user's child key against the Worker. Soft policy per David
     # 2026-05-28: REJECTIONS LOG + SHOW A BANNER, they DO NOT mutate users.json
     # and do NOT block the bearer-token auth at request time. The owner sees
     # the banner and acts via the Admin tab. The hard enforcement that matters
-    # is the future-dated expires_at on the child key in D1; when it eventually
-    # comes back expired, validate just keeps reporting that — the seat is
-    # logically dead but service continues (white-glove model).
+    # is the future-dated expires_at on the child key in the Worker; when it
+    # eventually comes back expired, validate just keeps reporting that — the
+    # seat is logically dead but service continues (white-glove model).
     #
     # The actual sweep logic lives in _sweep_child_licenses(users_doc, validate_fn)
     # so it's testable in isolation (tests pass synthetic users_doc + stubbed
@@ -13981,7 +15099,7 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
         try:
             _users_doc = _load_users() or {}
             _endpoint  = _activation_endpoint()
-            _validate  = lambda k: _validate_business_license(k, _INSTALL_ID, _endpoint)
+            _validate  = lambda k: _validate_license(k, _INSTALL_ID, _endpoint)
             _child_warnings = _sweep_child_licenses(_users_doc, _validate)
         except Exception as _cwerr:
             # Never let a child-key sweep block startup. Log and continue.
@@ -13996,7 +15114,7 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
 
     _log.info(
         "Effective runtime: edition=%s mode=%s install_id=%s (requested edition=%s mode=%s; "
-        "subscription status=%s, entitles=%s)",
+        "license status=%s, entitles=%s)",
         _EFFECTIVE_EDITION, _EFFECTIVE_MODE, _INSTALL_ID or "<none>",
         _runtime_cfg["edition"], _runtime_cfg["mode"],
         _sub_result["status"], _entitled_edition)
@@ -14005,10 +15123,9 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
     # Only relevant once we've cleared edition entitlement: a Home install has
     # no remote-access seat to bind, so there's nothing to enforce. For a
     # mobile/business effective edition, determine THIS machine's activation
-    # standing. Authoritative source is the D1-backed Worker (/license/activate);
-    # if it's unreachable we FAIL OPEN by falling back to the local evaluator
-    # over subs.json activations (which may be empty), and ultimately allowing
-    # access — a network blip must never lock out a paying customer.
+    # standing. Authoritative source is the same subscription Worker
+    # (/license/activate); if it's unreachable we FAIL OPEN by treating this
+    # install as active — a network blip must never lock out a paying customer.
     # A "rejected" decision → soft-revert to Home (spec §4.4 Mobile flow),
     # leaving everything else functional, and annotate _sub_result so the
     # License panel and /authorize page can surface the "release a machine" CTA.
@@ -14016,7 +15133,7 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
     _activation = {"decision": "unbound", "active_install_ids": [],
                    "active_count": 0, "this_active": False, "message": ""}
     if _test_entitlement_active():
-        _log.warning("⚠️  TEST ENTITLEMENT — skipping D1 activation (2-install) "
+        _log.warning("⚠️  TEST ENTITLEMENT — skipping activation (2-install) "
                      "check (network); treating this install as active.")
         _activation["this_active"] = True
     elif _EFFECTIVE_EDITION in ("mobile", "business"):
@@ -14026,7 +15143,8 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
             _os_str = f"{_platform.system()}-{_platform.release()}"[:50]
         except Exception:
             _os_str = "unknown"
-        _license_hash = _token_key(token)
+        _license_hash = _token_key(
+            str((_runtime_cfg or {}).get("license_key", "")).strip() or token)
 
         # Resolve the app version for the activation record. APP_VERSION lives
         # in rag_gui.py, not here, so read the bundled VERSION file directly
@@ -14039,7 +15157,6 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
         except Exception:
             _app_version = ""
 
-        # Try the authoritative D1 endpoint first.
         _d1 = _post_activation(_license_hash, _INSTALL_ID, _os_str, _app_version)
         if _d1 is not None and _d1.get("decision"):
             _activation = {
@@ -14049,18 +15166,17 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                 "this_active":        _d1.get("decision") == "active",
                 "message":            _d1.get("message", ""),
             }
-            _log.info("Activation (D1): decision=%s (%d of %d active)",
+            _log.info("Activation: decision=%s (%d of %d active)",
                       _activation["decision"], _activation["active_count"],
                       _MAX_ACTIVE_INSTALLS)
         else:
-            # FAIL OPEN — local evaluation over subs.json activations.
-            _sub_key   = _token_key(token)
-            _sub_entry = (_subs_data or {}).get("subscribers", {}).get(_sub_key, {}) \
-                         if _subs_data else {}
-            _activation = _evaluate_activation(_sub_entry, _INSTALL_ID)
-            _log.warning("Activation (local fallback): decision=%s (%d of %d active) — %s",
-                         _activation["decision"], _activation["active_count"],
-                         _MAX_ACTIVE_INSTALLS, _activation["message"])
+            # FAIL OPEN — Worker unreachable; allow this install unconditionally
+            # rather than lock out a paying customer over a network blip. There
+            # is no local subs.json fallback anymore (v8.0.0 retired it) — the
+            # Worker is the only source of activation truth now.
+            _activation["this_active"] = True
+            _log.warning("Activation endpoint unreachable — failing open "
+                         "(treating this install as active).")
 
         if _activation["decision"] == "rejected":
             _log.warning(
@@ -14077,35 +15193,42 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
     _current_sub_result = [_sub_result]
     _subs_lock          = _threading.Lock()
 
-    # ── Background 30-day registry refresh ───────────────────────────────────
+    # ── Background 30-day license re-validation ───────────────────────────────
     def _periodic_sub_refresh():
         import time as _time
         while True:
             _time.sleep(_CHECK_INTERVAL_DAYS * 86400)   # 30 days in seconds
-            _log.info("30-day subscription registry refresh starting…")
-            fresh = _fetch_subs_registry()
-            if fresh is not None:
-                _save_subs_cache(fresh)
-                result = _check_subscription(token, fresh)
-                with _subs_lock:
-                    _current_sub_result[0] = result
-                _log.info("Subscription re-check: %s", result["message"])
-                if result["status"] == "blocked":
-                    _log.critical(
-                        "ACCESS NOW BLOCKED on re-check — new /authorize attempts "
-                        "will show expiry page: %s", result["message"]
-                    )
-                elif result["status"] == "warning":
-                    _log.warning("SUBSCRIPTION NOTICE: %s", result["message"])
+            _log.info("30-day license re-validation starting…")
+            _lic_key_bg = str((_runtime_cfg or {}).get("license_key", "")).strip()
+            if not _lic_key_bg:
+                _log.info("No license key configured — nothing to re-validate.")
+                continue
+            _grace_bg = _validate_license(_lic_key_bg, _INSTALL_ID, _activation_endpoint())
+            _granted_bg = _grace_bg.get("effective_edition", "home")
+            if _granted_bg == "home":
+                result = {"status": "blocked", "name": None, "days_left": None,
+                          "edition": "home",
+                          "message": _grace_bg.get("banner") or "License is no longer valid."}
+            elif _grace_bg.get("banner"):
+                result = {"status": "warning", "name": None, "days_left": None,
+                          "edition": _granted_bg, "message": _grace_bg["banner"]}
             else:
-                _log.warning(
-                    "30-day registry re-fetch failed — keeping current status: %s",
-                    _current_sub_result[0]["status"]
+                result = {"status": "ok", "name": None, "days_left": None,
+                          "edition": _granted_bg, "message": "License OK"}
+            with _subs_lock:
+                _current_sub_result[0] = result
+            _log.info("License re-check: %s", result["message"])
+            if result["status"] == "blocked":
+                _log.critical(
+                    "ACCESS NOW BLOCKED on re-check — new /authorize attempts "
+                    "will show expiry page: %s", result["message"]
                 )
+            elif result["status"] == "warning":
+                _log.warning("SUBSCRIPTION NOTICE: %s", result["message"])
 
     if _test_entitlement_active():
         _log.warning("⚠️  TEST ENTITLEMENT — not starting the 30-day "
-                     "subscription refresh thread (would hit the network).")
+                     "license refresh thread (would hit the network).")
     else:
         _threading.Thread(target=_periodic_sub_refresh, daemon=True).start()
 

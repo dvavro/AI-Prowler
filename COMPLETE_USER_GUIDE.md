@@ -20,6 +20,7 @@
 13. Settings & Configuration
 14. Supported File Types
 15. OCR — Scanned Documents & Images
+15a. Bilingual Language Support (English + Spanish)
 16. Email Indexing
 17. Scheduling & Automation
 18. GPU Support
@@ -63,7 +64,11 @@ This produces dramatically better results — equivalent to having a skilled res
 - **Token recovery simplified** — token recovery is now email-only (SMS removed). The "Forgot your token?" flow sends a recovery code to the admin's configured email address.
 - **`send_sms` and `send_email` enabled for all roles** — `can_send_sms` and `can_send_email` are now `True` for owner, manager, staff, and field_crew roles in server mode.
 - **`send_learnings_report` available in server mode** — with expanded filters (category, date range, tag).
-- **Total tools: 77** — up from 63 in v7.0.0.
+- **Total tools: 85** — up from 77 in v7.0.0. New in v8.0.0: 3 agentic analysis tools (`get_pending_analysis_tasks`, `complete_analysis_task`, `save_analysis_report`), 5 job image storage tools (`get_job_images_path`, `set_job_images_path`, `save_job_image`, `list_job_images`, `delete_job_image`), plus expanded contractor/business workflow tools.
+- **Common Business AI Analysis renamed** — the "AI Analysis" section in the Quick Links tab is now named "Common Business AI Analysis" for clarity.
+- **Scope Directory Picker** — AI Analysis buttons and Custom Analyses tasks now support optional scope restriction to specific indexed directories before queuing.
+- **Server mode GUI suppression** — Common Business AI Analysis and My Custom Analyses sections are now fully hidden in server mode.
+- **`last_updated` scope bug fixed** — metadata keys no longer appear as fake directory checkboxes in the scope picker.
 
 ---
 
@@ -204,14 +209,14 @@ When you ask Claude a question with AI-Prowler connected, Claude follows this pa
 
 ## 6. MCP Tools Reference
 
-AI-Prowler exposes **77 tools** to Claude across ten categories in v8.0.0.
+AI-Prowler exposes **85 tools** to Claude across twelve categories in v8.0.0.
 
 ### 6.1 Tool Counts by Mode
 
 | Install type | Mode | Tools visible | Notes |
 |---|---|---|---|
-| Personal / Home | personal | 77 | All tools available |
-| Business — employee personal install | personal | 77 | Full individual tool set |
+| Personal / Home | personal | 85 | All tools available |
+| Business — employee personal install | personal | 85 | Full individual tool set |
 | Business — company server | server | 35+ | Tier A tools suppressed; remaining gated by role |
 
 ### 6.2 Tier A Tool Suppression (Server Mode Only)
@@ -427,6 +432,101 @@ Two different status tools — know which to call:
 
 ---
 
+#### Contractor & Job Tracker Tools (7 tools — Personal + Server)
+
+| Tool | What It Does | Mode |
+|---|---|---|
+| `log_time_entry` | Clocks in or out for a job. Records start/stop times and computes duration in the TimeLog sheet of the Job Tracker spreadsheet. | Personal + Server |
+| `email_invoice` | Reads the Invoices sheet and emails a branded HTML invoice directly to the customer. | Personal + Server |
+| `schedule_next_recurring_job` | Auto-creates the next recurring job entry (weekly, bi-weekly, monthly, quarterly) after a job is marked complete. | Personal + Server |
+| `get_ar_aging_report` | Generates an Accounts Receivable aging report from the Invoices sheet, broken into Current / 1–30 / 31–60 / 61–90 / 90+ day buckets. | Personal + Server |
+| `save_contact` | Saves or updates a personal contact (phone and/or email) so future `send_sms` / `send_email` calls can resolve them by name. | Personal + Server |
+| `get_sms_thread` | Returns the full two-way conversation thread with a contact — both outbound and inbound messages in chronological order. | Personal + Server |
+| `list_sms_contacts_with_replies` | Lists all contacts you've texted recently, with unread inbound reply counts highlighted. | Personal + Server |
+
+---
+
+#### Agentic Analysis Tools (3 tools — Personal Only)
+
+These tools power the **Common Business AI Analysis** and **My Custom Analyses** sections in the Quick Links tab. Not available in server mode.
+
+| Tool | What It Does | Mode |
+|---|---|---|
+| `get_pending_analysis_tasks` | Returns all pending tasks from `~/.ai-prowler/pending_tasks.json`. Claude calls this when you paste the run-queue command. Returns a JSON object with `pending_count`, `tasks` array (including `task_id`, `label`, `prompt`, `scope_dirs`, `schedule`, `next_due`, `queued_ago`), and execution instructions. Returns a plain informational message when the queue is empty. | Personal |
+| `complete_analysis_task` | Marks a pending task as completed after Claude finishes the analysis. Stamps `completed_at` and stores the optional `summary`. For scheduled tasks (both built-in and custom), auto-advances `next_due` anchored to the original due date — not the completion date. | Personal |
+| `save_analysis_report` | Saves a full analysis as a Word document (`.docx`) to the configured report folder. Default: `~/Documents/AI-Prowler_tasks_reports`. | Personal |
+
+---
+
+#### Job Image Storage Tools (5 tools — Personal + Server)
+
+Store, catalogue, and delete photos tied to job records. Images are saved as binary files — they are **not indexed in ChromaDB** and cannot be searched by content. A sidecar `index.json` per job directory records metadata (filename, description, tags, date, size) so Claude can list a job's image catalogue in any future session without the user re-uploading pixel data.
+
+**Default storage location:** `~/Documents/AI-Prowler_job_images/<job_id>/`
+**Configurable:** Use `set_job_images_path()` from Claude chat to change the root to any local or network path — no restart needed.
+
+| Tool | What It Does | Mode |
+|---|---|---|
+| `get_job_images_path` | Returns the current storage root path (default or custom), whether a custom path is configured, and a count of jobs and total images stored. Call this to confirm where photos will be saved before uploading. | Personal + Server |
+| `set_job_images_path(path)` | Sets the root directory for all job image storage. Saves to `~/.ai-prowler/config.json`, takes effect immediately — no restart needed. Pass `""` to reset to default. Validates the path is absolute and writable before saving. Does NOT move existing images — ask Claude to help if needed. | Personal + Server |
+| `save_job_image` | Saves a photo to the configured root under `<root>/<job_id>/`. Accepts raw base64 or full data URI — both work. Timestamp-prefix added automatically. Updates `index.json` with full metadata. | Personal + Server |
+| `list_job_images` | Lists all images stored for a job with metadata (filename, description, tags, date, size, file path). Accepts an optional `tag` filter (e.g. `tag="before"`). Returns metadata only — not pixel data. Includes a reminder to ask the user to re-upload for visual inspection. | Personal + Server |
+| `delete_job_image` | Deletes a specific image file from disk and removes its entry from `index.json`. Use `list_job_images()` first to get the exact stored filename (which includes the timestamp prefix). The job directory is kept even if empty. | Personal + Server |
+
+**Changing the storage path from Claude chat:**
+
+```
+"Where are my job photos stored?"
+→ Claude calls get_job_images_path() — shows current path and image count
+
+"Store job photos on my D: drive at D:\JobPhotos"
+→ Claude calls set_job_images_path(path="D:\\JobPhotos")
+→ ✅ Takes effect immediately, no restart needed
+
+"Reset job photo storage back to the default"
+→ Claude calls set_job_images_path(path="")
+→ ✅ Resets to ~/Documents/AI-Prowler_job_images
+```
+
+**Supported image formats (15 types):**
+
+| Format | Extension | Source | Claude can see pixels? |
+|---|---|---|---|
+| JPEG | `.jpg` `.jpeg` `.jfif` | All phones (Android default, iPhone "Most Compatible") | ✅ Yes |
+| HEIC | `.heic` | **iPhone default since iOS 11** | ⚠️ Stored, not visible |
+| HEIF | `.heif` | Same codec as HEIC, alternate extension | ⚠️ Stored, not visible |
+| PNG | `.png` | All phones (screenshots) | ✅ Yes |
+| WebP | `.webp` | Google Pixel, Android | ✅ Yes |
+| GIF | `.gif` | All (animated) | ✅ Yes |
+| AVIF | `.avif` | Newest Android / Chrome | ⚠️ Stored, not visible |
+| DNG | `.dng` | Android Pro/RAW mode | ⚠️ Stored, not visible |
+| TIFF | `.tiff` | High-end cameras, scanners | ⚠️ Stored, not visible |
+| BMP | `.bmp` | Windows screenshots | ⚠️ Stored, not visible |
+| RAW | `.raw` | Generic camera RAW | ⚠️ Stored, not visible |
+| Canon RAW | `.cr2` `.cr3` | Canon cameras | ⚠️ Stored, not visible |
+| Nikon RAW | `.nef` | Nikon cameras | ⚠️ Stored, not visible |
+| Sony RAW | `.arw` | Sony cameras | ⚠️ Stored, not visible |
+| JPEG 2000 | `.jp2` | Rare | ⚠️ Stored, not visible |
+
+> **"Stored, not visible"** means AI-Prowler saves the file correctly and the metadata is indexed, but Claude cannot visually analyze the pixel content. For HEIC photos from iPhones, the user can share them directly — Claude stores them as-is. To have Claude visually describe a stored image, ask the user to re-upload the file.
+
+> **Extension inference:** If no file extension is provided in the filename, AI-Prowler automatically infers the correct extension from the `media_type` parameter (e.g. `media_type="image/heic"` → `.heic` appended).
+
+**Index schema** (`<root>/<job_id>/index.json`):
+```json
+[
+  {
+    "filename":    "20260624_143022_before_gutters.jpg",
+    "original":    "before_gutters.jpg",
+    "job_id":      "1042",
+    "description": "Gutters clogged before cleaning",
+    "tags":        ["before", "gutters"],
+    "media_type":  "image/jpeg",
+    "saved_at":    "2026-06-24T14:30:22Z",
+    "size_bytes":  284571
+  }
+]
+```
 ### 6.5 Email Tool Setup
 
 #### How to Configure Email (Personal Installs)
@@ -724,19 +824,184 @@ Four tools require no setup and work immediately:
 
 ### Job Tracker Spreadsheet
 
-The installer deploys a pre-built `AI-Prowler_Job_Tracker.xlsx` to your Documents folder.
+The installer deploys a pre-built `AI-Prowler_Job_Tracker.xlsx` to `Documents\AI-Prowler\`.
 
-| Tab | Purpose |
+> **Column headers are what `update_job_spreadsheet()` and `read_job_spreadsheet()` match on — do not rename headers or the tools will fail to find the right columns.**
+
+#### Sheets
+
+| Sheet name | Purpose |
 |---|---|
-| Customers | Customer master list with addresses, service type, frequency, email, phone, cell carrier, SMS gateway |
-| Jobs_Schedule | All service appointments with route and weather columns |
-| Route_Planner | Daily route optimization — AI fills lat/lon and map URLs |
-| Quotes | Estimates sent to customers |
-| Invoices | Billing and payment tracking |
-| QB_Daily_Export | Daily export rows for accounting software import |
-| Services_Pricing | Service catalog with pricing |
-| AI-Prowler_Commands | Quick reference for Claude prompts |
+| `Customers` | Customer master list — addresses, service type, frequency, email, phone, carrier, access notes |
+| `Jobs_Schedule` | All service appointments with route, weather, billing, and status columns |
+| `Route_Planner` | Daily route optimization — AI fills lat/lon and map URLs |
+| `Quotes` | Estimates sent to customers before booking |
+| `Invoices` | Billing, payment tracking, AR aging |
+| `TimeLog` | Clock-in/clock-out per job via `log_time_entry()` |
+| `QB_Daily_Export` | Daily export rows for QuickBooks / accounting software import |
+| `Services_Pricing` | Service catalog with base prices, multipliers, and tax categories |
+| `AI-Prowler_Commands` | Quick-reference Claude prompt cheat sheet |
 
+---
+
+#### Customers sheet columns
+
+| Column | Description | Example |
+|---|---|---|
+| `CustomerID (CUST-####)` | Unique customer ID — referenced by Jobs_Schedule and Invoices | `CUST-0001` |
+| `Customer Type Comm/Res` | Commercial or Residential | `Commercial` |
+| `Company Name` | Company name (commercial customers) | `Sunshine Realty LLC` |
+| `First Name` | Contact first name | `Karen` |
+| `Last Name` | Contact last name | `Walsh` |
+| `Phone` | Primary phone number | `386-555-0101` |
+| `Email` | Customer email — used by `send_email()` for lookup by name | `karen@sunshine.com` |
+| `Street Address ★ AI Route` | Street — used by `geocode_address()` and `optimize_route()` | `125 Harbor Blvd` |
+| `City ★ AI Route` | City — used for geocoding | `New Smyrna Beach` |
+| `State` | State | `FL` |
+| `ZIP ★ AI Route` | ZIP — used for geocoding | `32168` |
+| `Service Type(s) Win/Press/Both` | Services this customer receives | `Both` |
+| `Frequency W/BW/M/Q/OT` | Weekly / Biweekly / Monthly / Quarterly / One-Time | `Monthly` |
+| `Preferred Day(s)` | Preferred service days | `Mon,Wed` |
+| `Pref. Time Window` | Preferred time range | `8am-5pm` |
+| `Avg Job Duration (min)` | Typical job length for scheduling | `90` |
+| `Standard Quote ($)` | Default quote amount | `350` |
+| `Discount (%)` | Default discount percentage (decimal) | `0.1` (= 10%) |
+| `Gate Code / Access Notes` | Entry instructions for field crew | `Gate code 4421` |
+| `On-Site Contact` | Who to ask for on arrival | `On-site mgr: Tom` |
+| `Cell Carrier` | Carrier for `send_sms()` email-to-SMS gateway | `Spectrum Mobile` |
+| `SMS Gateway` | Gateway address auto-filled from carrier | `@mypixmessages.com` |
+| `Status Active/Inactive` | Whether customer is currently active | `Active` |
+
+---
+
+#### Jobs_Schedule sheet columns
+
+| Column | Description | Example |
+|---|---|---|
+| `JobID (JOB-####)` | Unique job ID — linked to Invoices and TimeLog | `JOB-0001` |
+| `CustomerID (Customers!A)` | Foreign key to Customers sheet | `CUST-0001` |
+| `Customer Name / Company` | Display name | `Sunshine Realty LLC` |
+| `Customer Type` | Commercial or Residential | `Commercial` |
+| `Street Address ★ AI Route` | Address for geocoding and routing | `125 Harbor Blvd` |
+| `City ★ AI Route` | City | `New Smyrna Beach` |
+| `State` | State | `FL` |
+| `ZIP ★ AI Route` | ZIP | `32168` |
+| `Latitude (AI Geocode)` | Auto-filled by `geocode_address()` | `28.9831` |
+| `Longitude (AI Geocode)` | Auto-filled by `geocode_address()` | `-80.8512` |
+| `Service Date` | Scheduled date (YYYY-MM-DD) | `2026-03-30` |
+| `Day of Week` | Auto-filled day name | `Monday` |
+| `Start Time` | Scheduled start (HH:MM) | `08:00` |
+| `End Time` | Scheduled end (HH:MM) | `09:30` |
+| `Service Type` | Window / Pressure / Both | `Window` |
+| `Service Details / Notes` | Job-specific instructions or scope | `Full exterior — 12 windows` |
+| `Crew / Technician` | Assigned crew member | `Mike C.` |
+| `Est. Duration (min)` | Estimated job time | `90` |
+| `Actual Duration (min)` | Filled by `log_time_entry()` after completion | `86` |
+| `Route Stop # ★ AI Route` | Stop order in optimized route — filled by `optimize_route()` | `1` |
+| `Route Map URL ★ AI Prowler` | Google Maps link — filled by `build_maps_url()` | `https://maps.google.com/...` |
+| `Weather Check ★ AI Prowler` | Weather note — filled by `get_weather()` | `Partly cloudy 81°F` |
+| `Job Status` | Scheduled / In Progress / Complete / Cancelled | `Scheduled` |
+| `Quote Amount ($)` | Original quoted price | `350` |
+| `Actual Amount ($)` | Final charged amount (Quote − Discount) | `350` |
+| `Discount Applied ($)` | Dollar discount applied | `0` |
+| `Tax (7%)` | Tax amount | `24.50` |
+| `Invoice Total ($)` | Quote − Discount + Tax | `374.50` |
+| `Recurrence (W/BW/M/Q/OT)` | Weekly / Biweekly / Monthly / Quarterly / One-Time | `Monthly` |
+| `InvoiceID (INV-####)` | Linked invoice | `INV-0001` |
+| `Invoice Sent Date` | Date invoice was emailed to customer | `2026-03-30` |
+| `Payment Status` | Unpaid / Paid / Overdue | `Unpaid` |
+
+---
+
+#### Invoices sheet columns
+
+| Column | Description | Example |
+|---|---|---|
+| `InvoiceID (INV-####)` | Unique invoice ID | `INV-0001` |
+| `JobID (JOB-####)` | Linked job | `JOB-0001` |
+| `CustomerID` | Linked customer | `CUST-0001` |
+| `Customer Name / Company` | Display name | `Sunshine Realty LLC` |
+| `Customer Type` | Commercial or Residential | `Commercial` |
+| `Invoice Date` | Date invoice was created | `2026-03-30` |
+| `Due Date (Net 30)` | Payment due date (Invoice Date + 30 days) | `2026-04-29` |
+| `Service Date` | Date service was performed | `2026-03-30` |
+| `Service Type` | Window / Pressure / Both | `Window` |
+| `Description` | Invoice line description | `Exterior window cleaning — 12 windows` |
+| `Subtotal ($)` | Pre-discount amount | `350` |
+| `Discount ($)` | Dollar discount applied | `35` |
+| `Taxable Amt ($)` | Subtotal − Discount | `315` |
+| `Tax 7% ($)` | Tax on taxable amount | `22.05` |
+| `TOTAL DUE ($)` | Taxable Amt + Tax | `337.05` |
+| `Amount Paid ($)` | Payment received to date | `0` |
+| `Balance Due ($)` | Total Due − Amount Paid | `337.05` |
+| `Payment Status` | Unpaid / Paid / Partial | `Unpaid` |
+| `Payment Date` | Date payment was received | *(blank until paid)* |
+| `Payment Method` | Cash / Check / Card / Square / Zelle | *(blank until paid)* |
+| `Days Overdue (AI-AR)` | Auto-calculated by `get_ar_aging_report()` | `0` |
+
+---
+
+#### Quotes sheet columns
+
+| Column | Description | Example |
+|---|---|---|
+| `QuoteID (QTE-####)` | Unique quote ID | `QTE-0001` |
+| `CustomerID` | Linked customer | `CUST-0001` |
+| `Customer Name / Company` | Display name | `Sunshine Realty LLC` |
+| `Customer Type` | Commercial or Residential | `Commercial` |
+| `Address` | Service address | `125 Harbor Blvd` |
+| `City` | City | `New Smyrna Beach` |
+| `Quote Date` | Date quote was created | `2026-03-25` |
+| `Valid Until` | Quote expiry date | `2026-04-25` |
+| `Service Type` | Window / Pressure / Both | `Window` |
+| `Service Description` | Scope of work | `Full exterior — 12 windows` |
+| `Sq Ft / Units` | Area or unit count for pricing basis | `12` |
+| `Unit Price ($)` | Per-unit price | `25` |
+| `Labor Cost ($)` | Labor cost component | `200` |
+| `Materials ($)` | Materials cost | `0` |
+| `Discount (%)` | Discount percentage (decimal) | `0.1` |
+| `QUOTE TOTAL ($)` | Calculated total | `300` |
+| `Status (Open/Approved/Declined)` | Quote outcome | `Open` |
+
+---
+
+#### TimeLog sheet columns
+
+| Column | Description | Example |
+|---|---|---|
+| `EntryID` | Unique time entry ID | `TE-0001` |
+| `JobID` | Linked job | `JOB-0001` |
+| `Customer Name / Company` | Display name | `Sunshine Realty LLC` |
+| `Date` | Date of work | `2026-03-30` |
+| `Clock In (HH:MM:SS)` | Start time — written by `log_time_entry()` | `08:02:15` |
+| `Clock Out (HH:MM:SS)` | End time — written by `log_time_entry()` | `09:28:44` |
+| `Elapsed (min)` | Auto-calculated: (Out − In) × 1440 | `86` |
+| `Crew / Technician` | Who performed the work | `Mike C.` |
+| `Notes` | Entry source / notes | `Clocked via AI-Prowler log_time_entry` |
+
+To log time: *"Clock me in on job JOB-0003"* → Claude calls `log_time_entry()` and writes a new row. *"Clock out"* → Claude fills the Clock Out time and calculates Elapsed automatically.
+
+---
+
+#### update_job_spreadsheet() — Column name reference
+
+When Claude writes back to the spreadsheet, it matches on the **exact column header text**. Multi-line headers in Excel use `\n`. Most commonly updated columns:
+
+```python
+{
+    "Job\nStatus":               "Complete",
+    "Actual\nDuration (min)":    86,
+    "Actual\nAmount ($)":        185.00,
+    "Discount\nApplied ($)":     0,
+    "Payment\nStatus":           "Paid",
+    "Invoice\nSent Date":        "2026-06-25",
+    "Route Stop # ★ AI Route":   1,
+    "Latitude\n(AI Geocode)":    28.9831,
+    "Longitude\n(AI Geocode)":   -80.8512,
+    "Route Map URL\n★ AI Prowler": "https://maps.google.com/...",
+    "Weather Check\n★ AI Prowler": "Partly cloudy 81°F",
+}
+```
 ### Typical Small Business Contractor Workflow
 
 The following is a recommended day-to-day workflow for a small contracting business using AI-Prowler and the Job Tracker spreadsheet. Claude handles the data work; you focus on the jobs.
@@ -886,7 +1151,249 @@ The Quick Links tab is a one-click launcher for the recommended Claude Desktop /
 - ⬇ **Download Claude Desktop** — opens claude.ai/download in your browser
 - 🌐 **Open Claude.ai** — opens claude.ai in your browser for mobile/web access
 
+### Initial Connection Test
+
+The **Initial Connection Test** banner provides a copy-to-clipboard command recommended at the start of every new Claude chat:
+
+> *Check the status of AI-Prowler and list all the tools.*
+
+Click **📋 Copy Command**, paste into Claude, and press Enter. This verifies the MCP link is live and shows all 83+ available AI-Prowler tools.
+
+### 🧠 Common Business AI Analysis (v8.0.0)
+
+The **Common Business AI Analysis** section provides five one-click analysis commands that use Claude's full reasoning capability over your local data — no API key required, no cloud uploads.
+
+> **Not available in server mode.** This section and My Custom Analyses are hidden automatically when AI-Prowler detects `mode=server` in config.json.
+
+An explanatory **💡 How AI Analysis Tasks Work** info card is displayed directly below the section header. It explains the queue-and-paste workflow and directs users to My Custom Analyses for scheduling.
+
+Hovering any button shows a one-line tooltip in the status bar describing what that analysis does.
+
+#### How it works
+
+1. Click an analysis button (e.g. **📊 Analyze My Business**)
+2. A **Configure** popup opens — set scope, output, schedule, and report folder (see popup fields below). For **🧠 Run Pending Analysis**, no popup appears — the command is copied immediately.
+3. Click **Queue Analysis →** — AI-Prowler writes the task to `~/.ai-prowler/pending_tasks.json` and copies the run command to your clipboard
+4. Open a new Claude chat and press **Ctrl+V** — **the command runs ALL tasks currently in the queue**
+5. Claude calls `get_pending_analysis_tasks()`, reads every queued task, and executes each full analysis using all available AI-Prowler tools
+6. Claude records findings as learnings via `record_learning()`
+7. Claude calls `complete_analysis_task(task_id, summary)` to mark each task done and auto-advance the next due date if a schedule was set
+
+This approach works entirely within the MCP architecture — Claude is the reasoning engine, AI-Prowler is the data server. No Anthropic API key is needed in AI-Prowler itself.
+
+#### Analysis buttons
+
+| Button | What it does |
+|---|---|
+| 🧠 **Run Pending Analysis** | Copies the run-queue command to clipboard immediately — no popup. Opens a small info box reminding you to press Ctrl+V in Claude. Each queued task already has its own scope, output, and schedule from when it was created. |
+| 📊 **Analyze My Business** | Full business health check. Uses QuickBooks (invoices, payments, customers, P&L, AR aging) if connected; otherwise reads Job Tracker spreadsheet. Searches indexed documents and learnings. Records 3–5 `business_insight` learnings. |
+| 💡 **Weekly Business Advisor** | End-of-week debrief. Uses QuickBooks (invoices/payments this week, cash in vs out, overdue this week) if connected; otherwise reads Job Tracker. Also checks weather for next week's scheduling. Records `weekly_review` learnings. |
+| ⚠️ **Find Problems** | Scans for overdue invoices by aging bucket (using QuickBooks AR/AP aging if connected, otherwise AI-Prowler AR report), jobs over estimate by >20%, unanswered customer SMS, unresolved problem flags. Records each as a `problem_flag` learning. |
+| 📈 **Growth Opportunities** | Mines financial data for growth signals. With QuickBooks: P&L by service type, net margin per service, seasonal revenue trends, customer value rankings. Without QuickBooks: job history, fast-paying customers, geographic clusters, upsell pairs. Records 3–5 `growth_opportunity` learnings. |
+
+> **🔌 QuickBooks Integration:** If you connect the QuickBooks Online MCP connector in Claude.ai (Settings → Connectors), Claude will automatically detect it when executing any of these analyses and use QuickBooks as the primary financial data source — giving you real P&L, true net margins, expense ratios, AP aging, and cash flow data that goes beyond what the Job Tracker spreadsheet can provide. No configuration change needed in AI-Prowler; the prompts detect and use QuickBooks automatically at runtime.
+
+#### Configure Popup
+
+When you click any button except 🧠 Run Pending Analysis, a scrollable **Configure** popup opens (806×980). All fields are always reachable by scrolling with the mouse wheel.
+
+| Field | Description |
+|---|---|
+| **Analysis** | Read-only — shows the button name |
+| **What this does** | Green info box explaining what data will be read and what output will be produced |
+| **Prompt (auto)** | Collapsed by default. Click **▶ Show prompt** to expand and read the full Claude instruction (read-only). |
+| **Scope directories** | Scrollable checklist of all indexed directories. Check one or more to restrict the analysis. Leave all unchecked to search everything. |
+| **Output — 💡 Save key insights to Learnings** | Default ✅. Appends `record_learning()` instruction to the prompt. |
+| **Output — 📄 Save full analysis as Word document (.docx)** | Default ☐. Appends `save_analysis_report()` instruction with the report folder path. |
+| **Schedule** | **Manual only** (default) = one-shot, runs once. Choose Daily / Weekly / Every 2 weeks / Monthly / Quarterly / Yearly to make this a recurring task. AI-Prowler tracks when it's next due and surfaces it automatically. |
+| **First due date** | YYYY-MM-DD. Enabled when a schedule is selected. Defaults to today if left blank. The anchor date for schedule advancement — e.g. a "Weekly" task due June 24 will next be due July 1, then July 8, etc. |
+| **Report folder** | Where `.docx` reports are saved. Defaults to `~/Documents/AI-Prowler_tasks_reports`. Click **Browse…** to change. |
+| **Ctrl+V reminder** | Italic reminder: *"After clicking Queue Analysis → open a new Claude chat and press Ctrl+V to run all queued tasks."* |
+
+> **Scheduling built-in tasks:** When you set a schedule on a Common Business button, `complete_analysis_task()` automatically advances `next_due` after Claude finishes — anchored to the original due date (not the completion date). The next due date is stamped on the completed task record and reported back to Claude as `Next scheduled run: YYYY-MM-DD`.
+
+#### Task queue JSON schema
+
+Tasks are stored in `~/.ai-prowler/pending_tasks.json`. The full schema (v8.0.0):
+
+```json
+{
+  "task_id":          "analyze_business_20260624_143022",
+  "type":             "analyze_business",
+  "label":            "📊 Analyze My Business",
+  "prompt":           "Analyze my business data...",
+  "scope_dirs":       ["C:\\Users\\david\\OneDrive\\Documents\\Invoices"],
+  "output_learnings": true,
+  "output_report":    false,
+  "report_folder":    "C:\\Users\\david\\Documents\\AI-Prowler_tasks_reports",
+  "schedule":         "weekly",
+  "first_due":        "2026-06-24",
+  "next_due":         "2026-06-24",
+  "created_at":       "2026-06-24T14:30:22Z",
+  "status":           "pending"
+}
+```
+
+When Claude completes the task, `status` changes to `"completed"`, `completed_at` and `completion_summary` are added, and `next_due` is advanced if a schedule was set. Completed tasks remain for audit — they are not deleted.
+
+The collapsible **▶ Show Queue** panel (below the analysis buttons) lets you see what's waiting, remove individual items (✕), or clear everything (🗑 Clear Queue).
+
+#### Tips
+
+- Queue multiple analyses before opening Claude — click several buttons in sequence, paste the command once. Claude runs all pending tasks in sequence.
+- Findings are stored as learnings and immediately searchable in future Claude conversations via `search_learnings()`.
+- Use **🧠 Run Pending Analysis** as a batch shortcut — just click it, press Ctrl+V in Claude, and everything in the queue runs.
+- For recurring analyses (weekly review, monthly AR check), set a **Schedule** in the popup instead of clicking the button manually each time.
+- **Connect QuickBooks Online** in Claude.ai for richer financial analysis — Claude automatically detects it and uses QuickBooks P&L, true margins, AP/AR aging, and cash flow data without any extra setup.
+
 ---
+
+### 📋 My Custom Analyses (v8.0.0)
+
+**My Custom Analyses** lets you define your own analysis tasks — with a custom name, prompt, optional directory scope, schedule, and output format. Up to 10 custom tasks are supported.
+
+> **Not available in server mode.** Hidden automatically when `mode=server` is detected.
+
+#### Creating a Custom Task
+
+Click **+ New Custom Analysis** to open the task editor (scrollable, 806×884). All fields are always reachable by scrolling with the mouse wheel.
+
+| Field | Description |
+|---|---|
+| **Name** | Short label shown on the task card (e.g. "Monthly Customer Review") |
+| **Prompt** | Full instruction for Claude — describe what to analyze and what to produce. Be specific: mention which tools to use, which learning categories to record under, and any report preferences. |
+| **Scope directories** | Scrollable checklist. Only absolute directory paths shown — metadata fields filtered out automatically. Leave all unchecked to search everything. |
+| **Schedule** | Manual only / Daily / Weekly / Every 2 weeks / Monthly / Quarterly / Yearly |
+| **First due date** | YYYY-MM-DD. When the first scheduled run should occur. Leave blank for manual-only tasks. Auto-populates with today when you select a schedule. |
+| **Output — 💡 Save key insights to Learnings** | Claude's prompt instructs it to call `record_learning()` with key findings |
+| **Output — 📄 Save full analysis as Word document (.docx)** | Claude's prompt instructs it to call `save_analysis_report()` and save a `.docx` report |
+| **Report folder** | Defaults to `~/Documents/AI-Prowler_tasks_reports`. Click **Browse…** to change. |
+
+#### Save / Save & Queue
+
+- **Save** — saves the task definition. It appears in the My Custom Analyses list for future use.
+- **Save & Queue** — saves the task AND immediately queues it in `pending_tasks.json` and copies the run-all command to clipboard. Paste into Claude to run it right away.
+
+#### Task Cards
+
+Each saved task appears as a card in the list showing:
+
+- Task name and schedule badge (e.g. `Monthly`)
+- Due status — e.g. `⚠ Overdue`, `Due today`, `Due in 3 days`, or `Manual only`
+- Output badges — `💡 Learnings` and/or `📄 Report`
+- **▶ Queue** — adds the task to the pending queue and copies the run-all command to clipboard
+- **✎ Edit** — opens the task editor pre-filled with the current settings
+- **🗑** — deletes the task (with confirmation dialog)
+
+#### 🧠 Run Due Tasks
+
+The **🧠 Run Due Tasks** button (top-right of the My Custom Analyses panel) is a batch shortcut: it finds all tasks that are overdue or due today, queues them all at once, and copies the run-all command to clipboard. Paste into Claude once to execute all due tasks in sequence.
+
+#### Custom Task Prompt Example
+
+Here is a well-formed custom prompt for a monthly customer review:
+
+> Review all customers in my Job Tracker spreadsheet. Identify: (1) customers with no jobs in the last 60 days, (2) customers with 3 or more completed jobs this quarter, (3) any unpaid invoices over 30 days old. Call `read_job_spreadsheet()` for the Jobs_Schedule and Invoices sheets. Record each finding as a learning with category `client_preference` or `problem_flag` as appropriate. Save the full analysis as a Word document via `save_analysis_report()`. Then call `complete_analysis_task(task_id, summary)` with a one-sentence summary of what was found.
+
+#### Custom Task Lifecycle
+
+1. Task created → saved in `~/.ai-prowler/custom_analysis_tasks.json`
+2. Task queued via **▶ Queue** or **🧠 Run Due Tasks** → written to `pending_tasks.json` with `status: pending`
+3. Claude picks it up via `get_pending_analysis_tasks()` and executes the prompt
+4. Claude calls `complete_analysis_task(task_id, summary)` → status becomes `completed`
+5. Next scheduled run date is auto-advanced from the original anchor date (e.g. Monthly June 24 → July 24, not "30 days from completion")
+
+#### Shared Scheduling Behaviour (Common Business + Custom)
+
+Both Common Business buttons and Custom Analyses share the same scheduling engine:
+
+- **Anchor-based advancement** — `next_due` advances from the previous `next_due`, not from the completion date. A weekly task due Monday stays on Mondays even if Claude runs it on Wednesday.
+- **`complete_analysis_task()`** handles both: custom tasks update `custom_analysis_tasks.json`; built-in tasks update `next_due` directly on the completed task record in `pending_tasks.json`.
+- **Schedules available:** Manual only, Daily, Weekly, Every 2 weeks, Monthly, Quarterly, Yearly.
+- **Default report folder** for all outputs: `~/Documents/AI-Prowler_tasks_reports` (created automatically if it doesn't exist)
+
+---
+
+### ⏰ Proactive Alerts (v8.0.0)
+
+**Proactive Alerts** is a background scheduler built into AI-Prowler that pushes email alerts to you automatically — no Claude session needed, zero API cost. It runs as a daemon thread inside the AI-Prowler process and checks every 60 seconds whether any job is due.
+
+> **Personal mode only.** The Proactive Alerts section is automatically hidden in server mode — same suppression as Common Business AI Analysis.
+
+#### How it works
+
+1. Enable Proactive Alerts in the Quick Links tab — check the **Enable proactive alerts** checkbox and enter your email address
+2. Configure which jobs run and when — each job has a checkbox (enable/disable), time field, and days dropdown
+3. Click **💾 Save Config** — settings saved to `~/.ai-prowler/scheduler_config.json`
+4. Click **▶/■ Start/Stop** to start the scheduler engine
+5. At the configured time, AI-Prowler runs the job directly (calling its own Python functions — no API, no MCP hop), formats the results as HTML email, and sends it via your configured email
+
+The status indicator top-right shows **● Running** (green) or **● Stopped** (red).
+
+#### Available Jobs
+
+| Job | Default Time | Default Days | Sends | Silent if? |
+|---|---|---|---|---|
+| ☀️ **Morning Briefing** | 07:00 | Weekdays | Today's jobs, weather, overdue invoices, unanswered SMS, due analysis tasks | Never (always sends) |
+| ⚠️ **Overdue Invoice Alert** | 08:00 | Daily | AR aging buckets 31–60, 61–90, 90+ days | Nothing overdue |
+| 🧠 **Due Analysis Tasks** | 08:05 | Daily | Pending scheduled tasks with Ctrl+V run command | No tasks due |
+| 💬 **SMS Reply Monitor** | every_2h | Daily | Unanswered customer messages | Inbox clean |
+| 🌤️ **Weekly Weather Watch** | 19:00 | Sunday | 5-day forecast — flags rain days with outdoor jobs | Error only |
+| 🌙 **End of Day Summary** | 18:00 | Daily | Jobs completed vs open today, missing time entries | Never |
+
+#### Time Field Format
+
+- **Fixed time:** `HH:MM` in 24-hour format — e.g. `07:00`, `18:30`
+- **Interval:** `every_Nh` or `every_Nm` — e.g. `every_2h` (every 2 hours), `every_30m` (every 30 minutes)
+
+The SMS Reply Monitor defaults to `every_2h` — it checks repeatedly throughout the day rather than at one fixed time.
+
+#### Days Options
+
+`daily` · `weekdays` · `weekends` · `monday` · `tuesday` · `wednesday` · `thursday` · `friday` · `saturday` · `sunday`
+
+#### Controls
+
+| Button | What it does |
+|---|---|
+| **▶ Now** | Triggers that specific job immediately — useful for testing. Sends the email if there is something to report; shows a status message if the job has nothing to report (e.g. Overdue Invoice Alert when nothing is overdue). |
+| **💾 Save Config** | Saves all settings to `~/.ai-prowler/scheduler_config.json` and starts/stops the engine based on the Enable checkbox |
+| **▶/■ Start/Stop** | Toggles the background scheduler thread on or off without changing config |
+| **📋 View Log** | Opens a scrollable log window showing the last 200 lines of scheduler activity — what ran, what was sent, any errors |
+
+#### Configuration file
+
+`~/.ai-prowler/scheduler_config.json` — edit directly or use the GUI:
+
+```json
+{
+  "enabled":  true,
+  "email_to": "david.vavro1@gmail.com",
+  "location": "New Smyrna Beach, Florida",
+  "name":     "David",
+  "jobs": {
+    "morning_briefing":      {"enabled": true,  "time": "07:00",    "days": "weekdays"},
+    "overdue_invoice_alert": {"enabled": true,  "time": "08:00",    "days": "daily"},
+    "due_analysis_tasks":    {"enabled": true,  "time": "08:05",    "days": "daily"},
+    "sms_reply_monitor":     {"enabled": false, "time": "every_2h", "days": "daily"},
+    "weather_watch":         {"enabled": true,  "time": "19:00",    "days": "sunday"},
+    "end_of_day_summary":    {"enabled": false, "time": "18:00",    "days": "daily"}
+  }
+}
+```
+
+#### Log file
+
+`~/.ai-prowler/scheduler_log.txt` — capped at 500 lines, auto-rotating. Each entry shows timestamp, job name, and result (sent / nothing to report / error). Viewable from the **📋 View Log** button.
+
+#### Required files
+
+`scheduler_jobs.py` and `scheduler_engine.py` must be in the AI-Prowler install directory. If they are missing, the Proactive Alerts section shows a warning label instead of the job list.
+
+---.
+
+---
+
 
 ## 13. Settings & Configuration
 
@@ -975,18 +1482,109 @@ AI-Prowler indexes 65+ file formats by default.
 
 ## 15. OCR — Scanned Documents & Images
 
-AI-Prowler automatically applies OCR to scanned PDFs and standalone image files (`.jpg`, `.jpeg`, `.png`, `.tif`, `.tiff`, `.bmp`, `.webp`).
+AI-Prowler automatically applies OCR to scanned PDFs and standalone image files (`.jpg`, `.jpeg`, `.png`, `.tif`, `.tiff`, `.bmp`, `.webp`, `.heic`, `.heif`).
 
 ### How It Works
 
 1. `pdfplumber` attempts to extract the text layer from PDFs
-2. If no text found, renders each page to a 300 DPI image
-3. `pytesseract` (Tesseract 5.4) extracts text from the image
-4. The extracted text is chunked and indexed normally
+2. If fewer than 150 characters are found (image-only / scanned document), each page is rendered to a 300 DPI image via `pypdfium2` — no Poppler install needed
+3. `pytesseract` (Tesseract 5.4) extracts text from each page image using `lang='eng+spa'`
+4. The extracted text is chunked and indexed into ChromaDB normally
+5. Standalone image files (`.jpg`, `.png`, `.heic`, etc.) go directly to step 3
 
 ### OCR Debug Tools
 
 In Settings, use the **OCR Debug** button to test OCR on a specific file and see the extracted text before indexing.
+
+---
+
+## 15a. Bilingual Language Support (English + Spanish)
+
+AI-Prowler has built-in bilingual support for English and Spanish documents throughout the entire indexing and search pipeline — from OCR character recognition through to semantic search. No configuration is required.
+
+### OCR Language: `eng+spa`
+
+Both OCR functions in AI-Prowler use Tesseract's combined English + Spanish language pack:
+
+```python
+pytesseract.image_to_string(image, lang='eng+spa')
+```
+
+This means Tesseract simultaneously uses:
+- The full **Spanish character set** — `ñ Ñ á é í ó ú ü Á É Í Ó Ú ¿ ¡` — recognized correctly
+- **Both English and Spanish dictionaries** for spell-correction during recognition
+- Bilingual layout analysis so mixed-language documents (e.g. English headers, Spanish body) are processed in a single pass
+
+A document scanned or photographed in Spanish will have all its characters correctly recognized without any configuration change.
+
+### Embedding Model: Multilingual Semantic Search
+
+After OCR, text is embedded into ChromaDB using `all-MiniLM-L6-v2` (sentence-transformers). This model was trained on multilingual parallel corpora — pairs of sentences with the same meaning in different languages were mapped to nearby points in the same vector space.
+
+**The practical result:** you can search in English and find Spanish documents about the same topic, and vice versa.
+
+| You ask (English) | Finds (Spanish document) | Why it works |
+|---|---|---|
+| *"overdue invoices"* | *"facturas vencidas"* | Same semantic meaning → similar vectors |
+| *"window cleaning job"* | *"trabajo de limpieza de ventanas"* | Multilingual embedding space |
+| *"customer address"* | *"dirección del cliente"* | Concepts are language-agnostic in the vector |
+
+### Full End-to-End Flow: English Query → Spanish Documents
+
+```
+You ask Claude (in English):
+  "Find all overdue invoices from last month"
+          ↓
+Claude calls search_documents()
+          ↓
+all-MiniLM-L6-v2 encodes your query as a 384-dim semantic vector
+          ↓
+ChromaDB computes cosine similarity against ALL indexed chunks
+  — English chunks
+  — Spanish chunks            ← same similarity calculation
+  — Mixed-language chunks
+          ↓
+Top results returned (may include Spanish text)
+          ↓
+Claude reads Spanish text natively, synthesizes into English answer:
+  "I found 3 overdue invoices. Torres owes $450 (45 days overdue),
+   Ramirez owes $280 (32 days overdue)..."
+```
+
+### What Is and Isn't Translated
+
+**Nothing is translated.** Spanish text is stored in ChromaDB exactly as extracted from the document. Claude reads it directly — Claude is natively multilingual and reads Spanish fluently. AI-Prowler never calls a translation API.
+
+| Stage | What happens to Spanish text |
+|---|---|
+| OCR (scanned PDF or image) | Tesseract recognizes Spanish characters with `eng+spa` |
+| Text PDF (has text layer) | pdfplumber extracts UTF-8 text — Spanish preserved exactly |
+| Word / Excel / etc. | python-docx / openpyxl extract Unicode — Spanish preserved |
+| ChromaDB storage | Raw Spanish text stored as-is |
+| Embedding | Encoded into multilingual semantic vector — no translation |
+| Claude response | Claude reads Spanish natively, responds in the language you asked in |
+
+### Best Practices for Bilingual Document Collections
+
+- **Mixed collections work automatically** — a folder with English invoices and Spanish contracts can be indexed together and searched in either language
+- **For exact Spanish term lookup** — use `grep_documents()` with the exact Spanish term rather than semantic search (e.g. searching for a specific clause *"número de identificación fiscal"*)
+- **For conceptual cross-language search** — `search_documents()` works well (English query finds Spanish documents about the same topic)
+- **Customer names and proper nouns** — indexed and searchable regardless of language
+- **Tesseract language pack requirement** — `spa.traineddata` must be installed alongside `eng.traineddata`. The AI-Prowler installer uses the UB-Mannheim Tesseract build which includes both by default. If you installed Tesseract manually and Spanish OCR isn't working, download `spa.traineddata` from the Tesseract GitHub and place it in your `tessdata/` folder
+
+### Adding More Languages (Advanced)
+
+The Tesseract `lang=` parameter accepts any combination of installed language packs separated by `+`. If you need to index documents in French, German, Portuguese, or other languages, update the two OCR calls in `rag_preprocessor.py`:
+
+```python
+# Current (English + Spanish)
+pytesseract.image_to_string(image, lang='eng+spa')
+
+# Example: add French and Portuguese
+pytesseract.image_to_string(image, lang='eng+spa+fra+por')
+```
+
+Download the corresponding `.traineddata` files from the [Tesseract GitHub tessdata repository](https://github.com/tesseract-ocr/tessdata) and place them in your Tesseract `tessdata/` folder. The embedding model `all-MiniLM-L6-v2` supports 100+ languages for semantic search — no embedding model change is needed.
 
 ---
 
@@ -1025,6 +1623,8 @@ For always-on remote access, activate the Named Tunnel as a Windows service via 
 ## 18. GPU Support
 
 AI-Prowler detects NVIDIA GPUs automatically. The installer installs the correct PyTorch build (CUDA 12.8 for RTX 50xx/Blackwell, or CPU-only). The sentence-transformer embedding model (`all-MiniLM-L6-v2`) uses CUDA automatically when available, significantly speeding up indexing. This is the only place a GPU helps — all language reasoning happens in Claude (cloud).
+
+The `all-MiniLM-L6-v2` model is multilingual — it supports English, Spanish, and 100+ other languages in the same semantic vector space. See **Section 15a** for full bilingual language support documentation.
 
 ### Blackwell (RTX 50xx) Note
 
@@ -1293,4 +1893,4 @@ To upgrade: `pip install --upgrade mcp`
 
 *AI-Prowler — Your Personal Agentic RAG Knowledge Base*
 *Copyright © 2026 David Kevin Vavro · david.vavro1@gmail.com*
-*Version 8.0.0*
+*Version 8.0.0 — Updated June 25, 2026 (85 tools · 234 analysis tests)*

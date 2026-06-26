@@ -17,6 +17,8 @@ REM    run_tests.bat tests\unit\test_image_formats.py       — HEIC/WebP image 
 REM    run_tests.bat tests\unit\test_contractor_tools.py    — email/SMS/scheduling/time/AR tests
 REM    run_tests.bat tests\mcp\test_fuzzy_and_line_replace.py  — fuzzy_replace / line_replace tests
 REM    run_tests.bat tests\unit\messaging\                  — two-way SMS / WhatsApp tests
+REM    run_tests.bat tests\subscription\                    — Stripe, activation, seats, worker API
+REM    run_tests.bat tests\analysis\                        — AI analysis queue and custom tasks
 REM    run_tests.bat tests\gui\test_config_encoding.py      — single file
 REM    run_tests.bat tests\ -k encoding                     — run tests matching a keyword
 REM    run_tests.bat tests\ -k PDF                          — run all PDF-* tests

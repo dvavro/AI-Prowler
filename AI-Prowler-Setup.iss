@@ -1,5 +1,6 @@
 ; ============================================================
 ; AI-Prowler Installer (Admin Mode, 64-bit Compatible)
+; Version 8.0.0
 ;
 ; PURPOSE:
 ;   - Installs the AI-Prowler application into Program Files
@@ -35,6 +36,55 @@
 ;   - MCP tools (record_learning, search_learnings, etc.) are built into
 ;     ai_prowler_mcp.py; desktop GUI tab (🧠 Learnings) is built into rag_gui.py
 ;   - Learnings folder is included in the uninstall data-deletion prompt
+;
+; ANALYSIS TASKS & SCHEDULING (v8.0.0):
+;   - Installs custom_tasks_manager.py — CRUD, scheduling, and due-date
+;     advancement for My Custom Analyses tasks. Required by ai_prowler_mcp.py
+;     (get_pending_analysis_tasks, complete_analysis_task, save_analysis_report)
+;     and by rag_gui.py (Custom Analyses tab, DEFAULT_REPORT_FOLDER constant).
+;   - Tasks stored at: %USERPROFILE%\.ai-prowler\custom_analysis_tasks.json
+;   - Pending queue at: %USERPROFILE%\.ai-prowler\pending_tasks.json
+;   - Reports saved to: %USERPROFILE%\Documents\AI-Prowler_tasks_reports\
+;
+; PROACTIVE ALERTS SCHEDULER (v8.0.0):
+;   - Installs scheduler_jobs.py — six proactive alert job functions:
+;       * Morning Briefing (jobs, weather, overdue invoices, SMS, due tasks)
+;       * Overdue Invoice Alert (silent unless AR aging 31+ days)
+;       * Due Analysis Tasks (alerts when scheduled analyses are due)
+;       * SMS Reply Monitor (interval-based, checks every N hours)
+;       * Weekly Weather Watch (Sunday evening 5-day forecast)
+;       * End of Day Summary (completed vs open jobs today)
+;     Calls AI-Prowler Python functions directly — zero API cost.
+;   - Installs scheduler_engine.py — background daemon thread that wakes
+;     every 60 seconds, checks which jobs are due, runs them, and sends
+;     HTML email via send_alert(). Personal mode only — server mode GUI
+;     guard automatically suppresses the Proactive Alerts panel.
+;   - Config stored at: %USERPROFILE%\.ai-prowler\scheduler_config.json
+;   - Log stored at:    %USERPROFILE%\.ai-prowler\scheduler_log.txt
+;   - Last-run at:      %USERPROFILE%\.ai-prowler\scheduler_last_run.json
+;
+; JOB IMAGE STORAGE (v8.0.0):
+;   - Three new MCP tools built into ai_prowler_mcp.py (no separate file):
+;       * save_job_image   — saves photo/image binary to job image store
+;       * list_job_images  — returns metadata index for a job
+;       * delete_job_image — removes file and index entry
+;   - Supports 15 image formats including HEIC (iPhone default), DNG (Android
+;     RAW), WebP, PNG, JPEG, AVIF, TIFF, BMP, CR2, CR3, NEF, ARW
+;   - Images stored at: %USERPROFILE%\Documents\AI-Prowler_job_images\<job_id>\
+;   - Index per job at: %USERPROFILE%\Documents\AI-Prowler_job_images\<job_id>\index.json
+;   - Images NOT indexed in ChromaDB (binary files) — metadata only
+;
+; COMMON BUSINESS AI ANALYSIS (v8.0.0):
+;   - Five analysis buttons in Quick Links tab (personal mode only):
+;       * Run Pending Analysis, Analyze My Business, Weekly Business Advisor,
+;         Find Problems, Growth Opportunities
+;   - Each button opens a Configure popup (806x980, scrollable) with:
+;       scope directories, output options, schedule/recurrence, report folder
+;   - Prompts are QuickBooks-aware: auto-detect QB MCP connector and use
+;     QuickBooks as primary financial source if connected; fall back to
+;     read_job_spreadsheet() and get_ar_aging_report() if not
+;   - Scheduled tasks advance next_due anchor-based after completion
+;   - Server mode: entire section suppressed automatically
 ;
 ; OLLAMA INTEGRATION:
 ;   - Ollama is OPTIONAL — NOT installed or downloaded automatically.
@@ -97,6 +147,11 @@
 ;   - claude_desktop_config_example.json is kept in {app} as a
 ;     reference / fallback for manual repair if ever needed.
 ;
+; NEW FILES IN v8.0.0:
+;   custom_tasks_manager.py — Analysis task CRUD and scheduling engine
+;   scheduler_jobs.py       — Proactive alert job functions (6 jobs)
+;   scheduler_engine.py     — Background scheduler daemon thread
+;
 ; FILE ORGANIZATION:
 ;   - All source files (RAG_RUN.bat, requirements.txt, python installer,
 ;     ai_prowler_mcp.py) must reside in the same directory as this .iss
@@ -114,7 +169,7 @@
 
 [Setup]
 AppName=AI-Prowler
-AppVersion=7.0.0
+AppVersion=8.0.0
 ; AppId pins the upgrade identity so Inno reliably detects prior installations
 ; of any version and runs only OUR uninstaller — never a mismatched one.
 ; Must remain constant across all future releases (do NOT change this GUID).
@@ -131,25 +186,20 @@ PrivilegesRequired=admin
 UninstallDisplayIcon={app}\rag_icon.ico
 LicenseFile=AI-Prowler Setup License.txt
 
-; UsedUserAreasWarning=no — INTENTIONAL, not a suppression of a real bug.
+; UsedUserAreasWarning=no — INTENTIONAL, kept for Inno Setup compatibility.
 ;
-; Inno Setup warns that {userdocs} is a per-user area used inside an
-; admin-mode installer. This warning exists for IT/enterprise scenarios
-; where an admin installs FOR a different user — in that case {userdocs}
-; would resolve to the admin's Documents folder, not the target user's.
+; NOTE (v8.0.0 OneDrive fix): All file destinations previously using {userdocs}
+; have been replaced with {%USERPROFILE}\Documents to prevent files landing in
+; OneDrive\Documents on machines where Windows has redirected the Documents
+; known folder to OneDrive sync (common when OneDrive is installed and enabled).
 ;
-; AI-Prowler is a self-installed SMB desktop application. The user always
-; installs it for THEMSELVES via UAC elevation of their own session. In
-; this pattern {userdocs} correctly resolves to their own Documents folder,
-; which is exactly the intended destination for the Job Tracker spreadsheet.
+; {%USERPROFILE}\Documents always resolves to the LOCAL profile Documents folder
+; (e.g. C:\Users\david\Documents\AI-Prowler) regardless of OneDrive configuration.
+; {userdocs} would resolve to C:\Users\david\OneDrive\Documents on those machines,
+; which is NOT where AI-Prowler data should live.
 ;
-; Admin mode is required solely so the Python MSI and Program Files
-; deployment succeed — not for any multi-user deployment scenario.
-;
-; If AI-Prowler ever supports enterprise/IT deployment (admin installs for
-; another user), the spreadsheet copy should move to a PowerShell script
-; that resolves the target user's %USERPROFILE% at runtime instead of
-; relying on {userdocs} at install time. For now, this suppression is correct.
+; Admin mode is required solely so the Python MSI and Program Files deployment
+; succeed — not for any multi-user deployment scenario.
 UsedUserAreasWarning=no
 
 [Languages]
@@ -172,6 +222,28 @@ Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "subscription_instructions.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "mcp_diagnostics.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "self_learning.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: "subscription_client.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: "mobile_activator.py"; DestDir: "{app}"; Flags: ignoreversion
+
+; --- v8.0.0 Analysis Tasks & Scheduling ---
+; custom_tasks_manager.py  : My Custom Analyses CRUD, scheduling, due-date logic,
+;                            and schedule advancement. Required by ai_prowler_mcp.py
+;                            (get_pending_analysis_tasks, complete_analysis_task)
+;                            and by rag_gui.py (Custom Analyses tab, DEFAULT_REPORT_FOLDER).
+Source: "custom_tasks_manager.py"; DestDir: "{app}"; Flags: ignoreversion
+
+; --- v8.0.0 Proactive Alerts Scheduler ---
+; scheduler_jobs.py   : Six proactive alert job functions (morning briefing,
+;                       overdue invoice alert, due analysis tasks, SMS reply
+;                       monitor, weather watch, end-of-day summary).
+;                       Calls AI-Prowler tool functions directly — no API cost.
+; scheduler_engine.py : Background daemon thread, config load/save, scheduling
+;                       logic, last-run tracking, email delivery via send_alert().
+;                       Config stored at: %USERPROFILE%\.ai-prowler\scheduler_config.json
+;                       Log stored at:    %USERPROFILE%\.ai-prowler\scheduler_log.txt
+;                       Personal mode only — server mode GUI guard prevents loading.
+Source: "scheduler_jobs.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: "scheduler_engine.py"; DestDir: "{app}"; Flags: ignoreversion
 ; --- Full Python installer bundled into {app} so Exec() can find it ---
 Source: "python-3.11.8-amd64.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; NOTE: Ollama is downloaded from the internet at install time, not bundled here
@@ -185,7 +257,7 @@ Source: "python-3.11.8-amd64.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; The source filename is the generic product name; the original
 ;   Cronin_cleaning_tracking.xlsx is renamed at compile time by placing a
 ;   copy named AI-Prowler_Job_Tracker.xlsx alongside this .iss file.
-Source: "AI-Prowler_Job_Tracker.xlsx"; DestDir: "{userdocs}\AI-Prowler"; \
+Source: "AI-Prowler_Job_Tracker.xlsx"; DestDir: "{%USERPROFILE}\Documents\AI-Prowler"; \
   Flags: onlyifdoesntexist uninsneveruninstall
 
 ; --- User Guide — copied to Documents\AI-Prowler so it can be indexed ---
@@ -193,7 +265,7 @@ Source: "AI-Prowler_Job_Tracker.xlsx"; DestDir: "{userdocs}\AI-Prowler"; \
 ; uninsneveruninstall: keep it after uninstall — the user may have bookmarked it.
 ; The installer also seeds ~/.rag_auto_update_dirs.json to track this file
 ; automatically, so Claude can answer questions about AI-Prowler out of the box.
-Source: "COMPLETE_USER_GUIDE.md"; DestDir: "{userdocs}\AI-Prowler"; \
+Source: "COMPLETE_USER_GUIDE.md"; DestDir: "{%USERPROFILE}\Documents\AI-Prowler"; \
   Flags: ignoreversion uninsneveruninstall
 
 [Icons]
@@ -285,8 +357,8 @@ const
   // default_spreadsheet_path so the Small Business tab shows it pre-filled.
   // The installer-side filename is generic (AI-Prowler_Job_Tracker.xlsx) so
   // it makes sense for any small business, not just a specific customer.
-  SPREADSHEET_DEST_FOLDER = '{userdocs}\AI-Prowler';
-  SPREADSHEET_DEST_FILE   = '{userdocs}\AI-Prowler\AI-Prowler_Job_Tracker.xlsx';
+  SPREADSHEET_DEST_FOLDER = '{%USERPROFILE}\Documents\AI-Prowler';
+  SPREADSHEET_DEST_FILE   = '{%USERPROFILE}\Documents\AI-Prowler\AI-Prowler_Job_Tracker.xlsx';
   AI_PROWLER_CFG_FILE     = '{%USERPROFILE}\.ai-prowler\config.json';
   LEARNINGS_FOLDER        = '{%USERPROFILE}\.ai-prowler\learnings';
 
@@ -942,7 +1014,7 @@ var
 begin
   AppendInstallLog('[UserGuide] === Seeding user guide tracking ===');
 
-  GuideDest := ExpandConstant('{userdocs}\AI-Prowler\COMPLETE_USER_GUIDE.md');
+  GuideDest := ExpandConstant('{%USERPROFILE}\Documents\AI-Prowler\COMPLETE_USER_GUIDE.md');
   TrackFile  := ExpandConstant('{%USERPROFILE}\.rag_auto_update_dirs.json');
 
   AppendInstallLog('[UserGuide] Guide path : ' + GuideDest);

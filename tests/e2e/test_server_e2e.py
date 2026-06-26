@@ -513,10 +513,41 @@ class TestStage2Isolation:
         await _index_dir(TOK_OWNER, server.sales_dir)
         await _index_dir(TOK_OWNER, server.field_dir)
 
-        # Give ChromaDB time to flush all three indexed directories before
-        # tests run searches. 1s proved too short under load; 3s matches the
-        # Stage 5 fix for the same class of timing issue.
-        await asyncio.sleep(3)
+        # Poll until all three sentinels are actually findable in ChromaDB.
+        # A fixed sleep proved flaky under full-suite load (ChromaDB compactor
+        # lag). Mirror the Stage 5 approach: poll with a 30s timeout.
+        import time as _time
+        deadline = _time.monotonic() + 30
+        sentinels_needed = {
+            SENTINEL_SHARED: False,
+            SENTINEL_SALES:  False,
+            SENTINEL_FIELD:  False,
+        }
+        from mcp.client.streamable_http import streamablehttp_client as _shc
+        from mcp import ClientSession as _CS
+        while _time.monotonic() < deadline:
+            for sent, found in list(sentinels_needed.items()):
+                if found:
+                    continue
+                hdrs = {"Authorization": f"Bearer {TOK_OWNER}"}
+                async with _shc(mcp_url, headers=hdrs) as (r, w, _):
+                    async with _CS(r, w) as s:
+                        await s.initialize()
+                        res = await s.call_tool(
+                            "search_documents",
+                            {"query": sent, "n_results": 3})
+                        if sent.lower() in _tool_result_text(res):
+                            sentinels_needed[sent] = True
+            if all(sentinels_needed.values()):
+                break
+            await asyncio.sleep(1)
+        missing = [k for k, v in sentinels_needed.items() if not v]
+        if missing:
+            raise RuntimeError(
+                f"Stage 2 seeder: sentinels not searchable after 30s: {missing}. "
+                f"ChromaDB compactor lag under load — if this recurs when running "
+                f"Stage 2 in isolation, investigate indexing."
+            )
 
     @staticmethod
     async def _search_as(server: _ServerHandle, token: str, query: str,

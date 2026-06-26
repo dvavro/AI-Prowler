@@ -248,10 +248,19 @@ class TestLicenseGrace:
     NOW = _utc(2026, 5, 20)
 
     def _cache(self, days_since_ok, status="active"):
-        """A cache whose last successful validation was N days ago."""
+        """A cache whose last successful validation was N days ago.
+        v8.0.0: explicit edition='business' — _evaluate_license_grace() was
+        generalized to support mobile/business/beta licenses and now falls
+        back to its 'mobile' floor when a cache has no edition field at all
+        (the realistic case is a STALE pre-v8.0.0 cache; a current client
+        always writes edition via _save_license_cache_for()). This test
+        class is specifically about BUSINESS license grace behavior, so its
+        fixtures need edition='business' explicitly, matching what a real
+        v8.0.0 cache write for a business key would contain."""
         when = self.NOW - dt.timedelta(days=days_since_ok)
         return {"last_validated_at": _iso(when), "status": status,
-                "cached_expires_at": _iso(self.NOW + dt.timedelta(days=300))}
+                "cached_expires_at": _iso(self.NOW + dt.timedelta(days=300)),
+                "edition": "business"}
 
     # ── Fresh validation this launch ────────────────────────────────────────
     def test_C_MCP_LICENSE_01_fresh_valid_is_business(self, grace_api):
@@ -280,7 +289,7 @@ class TestLicenseGrace:
     def test_C_MCP_LICENSE_05_cache_within_24h_is_business(self, grace_api):
         # validate_result None = no network call; cache 2h old → trust it.
         cache = {"last_validated_at": _iso(self.NOW - dt.timedelta(hours=2)),
-                 "status": "active"}
+                 "status": "active", "edition": "business"}
         r = grace_api(cache, None, now=self.NOW)
         assert r["effective_edition"] == "business"
         assert r["action"] == "cached_fresh"
@@ -325,7 +334,8 @@ class TestLicenseGrace:
 
     def test_C_MCP_LICENSE_11_boundary_just_under_44_days(self, grace_api):
         # 43d 20h → still warning (revert starts AT 44).
-        cache = {"last_validated_at": _iso(self.NOW - dt.timedelta(days=43, hours=20))}
+        cache = {"last_validated_at": _iso(self.NOW - dt.timedelta(days=43, hours=20)),
+                 "edition": "business"}
         r = grace_api(cache, None, now=self.NOW)
         assert r["action"] == "grace_warning"
         assert r["effective_edition"] == "business"
