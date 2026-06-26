@@ -151,6 +151,8 @@
 ;   custom_tasks_manager.py — Analysis task CRUD and scheduling engine
 ;   scheduler_jobs.py       — Proactive alert job functions (6 jobs)
 ;   scheduler_engine.py     — Background scheduler daemon thread
+;   sms_backends.py         — SMS provider abstraction (Twilio/SignalWire/Vonage/free gateway)
+;   sms_inbox.py            — Local inbound SMS/WhatsApp inbox store
 ;
 ; FILE ORGANIZATION:
 ;   - All source files (RAG_RUN.bat, requirements.txt, python installer,
@@ -224,6 +226,16 @@ Source: "mcp_diagnostics.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "self_learning.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "subscription_client.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "mobile_activator.py"; DestDir: "{app}"; Flags: ignoreversion
+
+; --- v8.0.0 SMS backends ---
+; sms_backends.py : Provider abstraction layer — Twilio, SignalWire, Vonage, and
+;                   free email-to-SMS carrier gateway. Imported by ai_prowler_mcp.py
+;                   for all send_sms / send_whatsapp tool calls.
+; sms_inbox.py    : Local inbox store for inbound SMS and WhatsApp messages received
+;                   via webhook. Imported by ai_prowler_mcp.py for check_sms_replies,
+;                   get_sms_thread, list_sms_contacts_with_replies, check_whatsapp_replies.
+Source: "sms_backends.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: "sms_inbox.py"; DestDir: "{app}"; Flags: ignoreversion
 
 ; --- v8.0.0 Analysis Tasks & Scheduling ---
 ; custom_tasks_manager.py  : My Custom Analyses CRUD, scheduling, due-date logic,

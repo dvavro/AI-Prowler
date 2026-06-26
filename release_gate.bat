@@ -7,9 +7,9 @@ REM Runs every automated test in BOTH repos and reports a single verdict.
 REM Use this BEFORE building or releasing a new version of AI-Prowler.
 REM
 REM What's covered:
-REM   1. AI-Prowler main suite      (tests/ directory)      ~637 tests
+REM   1. AI-Prowler main suite      (tests/ directory)      ~1980 tests
 REM      Includes: unit, mcp-tool, GUI, learning, reindex,
-REM      v7.0.1 capability-matrix tests (test_role_tool_matrix.py), and
+REM      v8.0.0 capability-matrix tests (test_role_tool_matrix.py), and
 REM      installer script tests (tests/installer/test_installer_scripts.py)
 REM   2. ai-prowler-subs CLI suite  (test_business_cli.py)  ~34 tests
 REM
@@ -37,8 +37,8 @@ setlocal
 
 REM ── Path configuration ───────────────────────────────────────────────────
 REM Edit these two lines if you move either repo.
-set "AIPROWLER_ROOT=C:\Users\david\AI-Prowler_V700_to_V701_work\AI-Prowler"
-set "SUBS_ROOT=C:\Users\david\AI-Prowler-ADMIN-V7\ai-prowler-subs"
+set "AIPROWLER_ROOT=C:\Users\david\AI-Prowler_V700_to_V800_work\AI-Prowler"
+set "SUBS_ROOT=C:\Users\david\AI-Prowler-ADMIN-V8\ai-prowler-subs"
 
 REM ── Environment sanity checks (fail fast with clear messages) ────────────
 if not exist "%AIPROWLER_ROOT%\rag_preprocessor.py" (
@@ -70,7 +70,7 @@ echo.
 
 REM ── Suite 1: AI-Prowler main test suite ──────────────────────────────────
 echo [1/3] Running AI-Prowler main test suite ...
-echo       Expected: ~1300 tests (unit, mcp, gui, learning, reindex, installer)
+echo       Expected: ~1980 tests (unit, mcp, gui, learning, reindex, installer)
 echo.
 cd /d "%AIPROWLER_ROOT%"
 py -m pytest tests -m "not e2e" -v -p no:logging --tb=short --junit-xml="%TEMP%\suite1_results.xml"
