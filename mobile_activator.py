@@ -27,7 +27,7 @@ v8.0.0 fixes:
   - tunnel_name now stored in remote_access.json from payload
   - Service uninstall waits for complete removal before reinstalling
 
-v8.0.2 fixes:
+v8.0.0 fixes (tunnel ingress + service install):
   - CRITICAL: Removed stale config.yml write that was overriding the tunnel
     token during service install. cloudflared service install uses the token
     passed as a CLI argument (stored in Windows registry). If config.yml
@@ -128,7 +128,7 @@ def activate_from_code(code, progress_cb=None):
     # The Worker already creates the CNAME during provisioning, but if that
     # failed (proxied flag issue, zone mismatch, etc.) this ensures the route
     # exists before we return success to the GUI.
-    # FIX v8.0.2: pass tunnel_id (UUID), not tunnel_name — cloudflared CLI
+    # FIX v8.0.0: pass tunnel_id (UUID), not tunnel_name — cloudflared CLI
     # requires the UUID for `tunnel route dns` when not using `cloudflared login`.
     if tunnel_id and domain:
         _cb(f"Verifying DNS route for {domain}...")
@@ -180,7 +180,7 @@ def activate_from_payload(payload):
     tunnel_name  = payload.get("tunnel_name", "") or domain.split(".")[0] if domain else ""
 
     # -- 1. Tunnel credentials file (~/.cloudflared/{tunnel_id}.json) ----------
-    # FIX v8.0.2: Do NOT write TunnelSecret as empty string. The token-based
+    # FIX v8.0.0: Do NOT write TunnelSecret as empty string. The token-based
     # service install (cloudflared service install <token>) stores auth in the
     # Windows registry — it does not use this credentials file at all.
     # Writing an empty TunnelSecret caused cloudflared to attempt cred-file
@@ -195,7 +195,7 @@ def activate_from_payload(payload):
     _write_json(cred_file, cred_data)
 
     # -- 1b. config.yml — DELETE if present before service install -------------
-    # FIX v8.0.2 CRITICAL: If config.yml exists with `tunnel: <name>` but no
+    # FIX v8.0.0 CRITICAL: If config.yml exists with `tunnel: <name>` but no
     # credentials-file or token reference, cloudflared reads it on service
     # startup, looks for the credentials file, finds no TunnelSecret, and
     # fails to authenticate. The token-based service install stores the token
@@ -285,7 +285,7 @@ def _install_cloudflared_service(tunnel_token, progress_cb=None):
     cloudflared stores it in the Windows registry/credential store —
     avoiding the SCM command line truncation bug entirely.
 
-    FIX v8.0.2: No config.yml is written before this call (deleted in
+    FIX v8.0.0: No config.yml is written before this call (deleted in
     activate_from_payload). This ensures cloudflared's service install
     uses the token from the registry exclusively on startup.
 
@@ -390,7 +390,7 @@ def _create_dns_route(tunnel_id, domain):
 
     Runs: cloudflared tunnel route dns <tunnel_id> <domain>
 
-    FIX v8.0.2: Uses tunnel_id (UUID) not tunnel_name. The cloudflared CLI
+    FIX v8.0.0: Uses tunnel_id (UUID) not tunnel_name. The cloudflared CLI
     requires the tunnel UUID for `tunnel route dns` when not authenticated
     via `cloudflared login` (i.e. token-based installs like ours).
 

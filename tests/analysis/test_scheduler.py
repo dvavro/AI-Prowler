@@ -618,12 +618,22 @@ class TestSchedulerLifecycle:
 
     def test_TC_SCHED_008_get_log_tail_returns_string(self, tmp_path):
         import scheduler_engine as se
-        log_path = tmp_path / "scheduler_log.txt"
-        log_path.write_text("line1\nline2\nline3", encoding="utf-8")
-        # Use patch() not monkeypatch.setattr() — get_log_tail reads LOG_PATH
-        # as a module-level name lookup each call, so patch correctly intercepts it.
-        with patch("scheduler_engine.LOG_PATH", log_path):
+        # get_log_tail reads LOG_PATH as a closure variable captured at import
+        # time — patching the module attribute doesn't reach it. Instead write
+        # to the real LOG_PATH, call get_log_tail, then restore/delete.
+        real_log = se.LOG_PATH
+        backup = None
+        try:
+            if real_log.exists():
+                backup = real_log.read_bytes()
+            real_log.parent.mkdir(parents=True, exist_ok=True)
+            real_log.write_text("line1\nline2\nline3", encoding="utf-8")
             result = se.get_log_tail(10)
+        finally:
+            if backup is not None:
+                real_log.write_bytes(backup)
+            elif real_log.exists():
+                real_log.unlink()
         assert isinstance(result, str)
         assert len(result) > 0
 

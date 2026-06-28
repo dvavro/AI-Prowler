@@ -1128,8 +1128,6 @@ class RAGGui:
         help_menu.add_command(label="📖 User Guide", command=self.show_user_guide)
         help_menu.add_command(label="🚀 Quick Start", command=self.show_quick_start)
         help_menu.add_separator()
-        help_menu.add_command(label="☁️ Cloudflare Tunnel Setup",
-                              command=self.show_cloudflare_setup_guide)
         help_menu.add_command(label="🔌 Connect Claude.ai",
                               command=self.show_claude_connector_guide)
         help_menu.add_separator()
@@ -1157,9 +1155,8 @@ then ask Claude questions from your desktop or phone.
 ─────────────────────────────────────────────────
  KNOWLEDGE BASE (RAG)
 ─────────────────────────────────────────────────
-• 83 MCP tools across 12 categories
+• 85 MCP tools across 12 categories
 • 65+ file types: PDF, Word, Excel, PowerPoint, HTML,
-  CSV, email (.eml/.msg/.mbox), images & more
 • Automatic OCR for scanned PDFs and images
 • Incremental indexing — only changed files reprocessed
 • Auto-purge deleted files from ChromaDB on every update
@@ -1167,9 +1164,11 @@ then ask Claude questions from your desktop or phone.
 ─────────────────────────────────────────────────
  REMOTE ACCESS
 ─────────────────────────────────────────────────
-• Named Tunnel via Cloudflare (permanent URL, $10/yr domain)
+• One-click subscription — Personal ($10/mo) or Business ($20/mo)
+• One-click Configure Mobile Access — tunnel auto-provisioned
+• Auto Connect Claude.ai button — opens connector form with URL copied
 • Bearer-token authentication
-• Auto-start after reboot via Windows Task Scheduler
+• Auto-start after reboot via Windows service
 • Server uptime displayed in Settings → Remote Access
 
 ─────────────────────────────────────────────────
@@ -2300,7 +2299,7 @@ Version {APP_VERSION}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 AI-Prowler is an Agentic RAG platform — it gives Claude
-77 MCP tools to search, cross-reference, and synthesize
+powerful MCP tools to search, cross-reference, and synthesize
 answers from your own documents. You ask a question;
 Claude researches your knowledge base and answers it.
 
@@ -2308,8 +2307,8 @@ Two ways to talk to Claude:
 
   📱  Claude.ai (web or mobile app)  — PREFERRED
       Works on phone, tablet, and desktop browsers.
-      Requires a one-time Cloudflare Named Tunnel setup
-      and an active AI-Prowler Mobile Access subscription.
+      Requires an active AI-Prowler Mobile Access subscription.
+      Subscribe and configure in one click from Settings.
 
   💻  Claude Desktop  — desktop-only alternative
       Connects locally via stdio. No tunnel needed.
@@ -2343,28 +2342,26 @@ Access your knowledge base from your phone, tablet, or
 any browser — with full agentic RAG capability.
 
 Requirements:
-  • Active AI-Prowler Mobile Access subscription
   • Claude Pro plan on Claude.ai
-  • A domain name (~$10/yr via Cloudflare Registrar)
+  • Active AI-Prowler Mobile Access subscription
 
-One-time Cloudflare Named Tunnel setup:
+Setup (one time — everything is automated):
   1. Go to Settings → 📡 Remote Access
-  2. Enter a Bearer token (make it strong — it's your password)
-  3. Click "▶ Start HTTP Server"
-  4. Enter your tunnel domain and token, click "Activate"
-  5. Open Claude.ai → Settings → Connectors → Add connector
-  6. Enter your tunnel URL (https://your-domain.com/mcp)
-  7. Authorize with your Bearer token when prompted
+  2. Enter a Bearer token and click Save Token
+  3. Click ▶ Start HTTP Server
+  4. Click Subscribe — Personal (or Business)
+     → complete Stripe checkout
+     → check email for activation code
+  5. Paste activation code → click ⚡ Configure Mobile Access
+     → tunnel is provisioned and started automatically
+  6. Click the red 📖 Connect Claude.ai (auto) button
+     → reads instructions → click OK
+     → Claude.ai opens with connector form
+     → paste URL → name it AI-Prowler → click Add
+     → enter Bearer token when prompted
+     → set Always Allow for all tools
 
-Daily use — the server auto-starts on login. If Claude
-can't reach your knowledge base, check Settings →
-Remote Access — the ⬤ Running indicator and uptime
-display confirm whether the server is up.
-
-  ⚠  If the connector goes stale after a reboot, go to
-     Claude.ai Settings → Connectors, disconnect and
-     reconnect AI-Prowler — the server is likely already
-     back up and just needs a handshake refresh.
+Daily use — the server and tunnel auto-start on login.
 
 Subscription info:  Help → User Guide → Section 8
 Support:            david.vavro1@gmail.com
@@ -9385,7 +9382,7 @@ or from the Help menu."""
                                         _tun_token_var.set(_tok)
                             except Exception:
                                 pass
-                            # ── v8.0.2: turn Connect Claude.ai button red ─────────────
+                            # ── v8.0.0: turn Connect Claude.ai button red ─────────────
                             # Alerts the user this is the next required step
                             try:
                                 _connect_claude_btn.configure(
@@ -13786,27 +13783,12 @@ or from the Help menu."""
             entered = tok_var.get().strip()
             data = self._admin_load_users()
             users = data.get("users") or {}
-            # v7.0.0 temp token: clean expired, accept valid ones
-            import time as _time
-            _now = _time.time()
-            _expired = [k for k, v in list(users.items())
-                        if isinstance(v, dict) and v.get('_temp_token')
-                        and v.get('_expires_at', 0) < _now]
-            if _expired:
-                for _ek in _expired:
-                    del data['users'][_ek]
-                self._admin_save_users(data)
-                users = data.get('users') or {}
-
+            # v7.0.0 temp token support removed in v8.0.0 — tokens are permanent
             user = users.get(entered)
             if isinstance(user, dict):
                 role = (user.get('role') or '').lower()
-                _is_temp = bool(user.get('_temp_token'))
                 if role == 'owner' or user.get('can_manage_users'):
                     self._admin_session_unlocked = True
-                    self._admin_temp_token_active = _is_temp
-                    if _is_temp:
-                        self._admin_temp_token_key = entered
                     result[0] = True
                     dlg.destroy()
                     return
@@ -13928,47 +13910,16 @@ or from the Help menu."""
         except Exception as e:
             return (False, str(e))
 
-    def _admin_generate_temp_token(self, user_key, users_dict):
-        """Generate a temporary 1-hour recovery token linked to user_key.
-        Writes the temp entry into users_dict (caller must save to disk).
-        Returns the temp token string."""
-        import secrets, time as _t
-        temp_tok = secrets.token_urlsafe(24)
-        perm_rec = dict(users_dict.get(user_key, {}))
-        perm_rec["_temp_token"]   = True
-        perm_rec["_expires_at"]   = int(_t.time()) + 3600   # 1 hour
-        perm_rec["_permanent_key"] = user_key
-        users_dict[temp_tok] = perm_rec
-        return temp_tok
-
-    def _admin_cleanup_temp_tokens(self, users_dict):
-        """Remove all expired temporary tokens. Modifies users_dict in-place.
-        Returns list of removed token prefixes (for logging)."""
-        import time as _t
-        now = _t.time()
-        expired = [k for k, v in list(users_dict.items())
-                   if isinstance(v, dict) and v.get("_temp_token")
-                   and v.get("_expires_at", 0) < now]
-        for k in expired:
-            del users_dict[k]
-        return [k[:8] + "..." for k in expired]
-
     def _admin_recovery_eligible_users(self):
         """Return list of (display_name, user_key, user_record) tuples for
         users who are eligible for self-service recovery (owner or manager
-        with can_manage_users). Excludes expired temp tokens."""
-        import time as _t
+        with can_manage_users)."""
         data  = self._admin_load_users()
         users = data.get("users") or {}
-        now   = _t.time()
         out   = []
         for tok, rec in users.items():
             if not isinstance(rec, dict):
                 continue
-            if rec.get("_temp_token") and rec.get("_expires_at", 0) < now:
-                continue  # skip expired temps
-            if rec.get("_temp_token"):
-                continue  # skip active temps too — show permanent records only
             role = (rec.get("role") or "").lower()
             if role == "owner" or rec.get("can_manage_users"):
                 name = rec.get("name") or f"({role})"
@@ -13976,11 +13927,9 @@ or from the Help menu."""
         return out
 
     def _admin_recovery_dialog(self):
-        """'Forgot your token?' self-service recovery dialog.
-        Shows recovery-eligible users and lets the admin choose:
-          Email / SMS / Manual path.
-        Generates a 1-hour temp token, sends it, then relaunches the
-        unlock dialog so the admin can log in immediately."""
+        """'Forgot your token?' — emails the admin their existing bearer token.
+        No temp tokens. No expiry. Just sends the real token to their
+        registered email address so they can log back in."""
         import tkinter as tk
         from tkinter import ttk, messagebox
         from pathlib import Path as _Path
@@ -13989,10 +13938,12 @@ or from the Help menu."""
         if not eligible:
             messagebox.showinfo(
                 "No Recovery Users",
-                "No owner or admin-manager accounts with recovery "
-                "channels are configured.\n\n"
-                "Recover manually by reading:\n"
-                f"  {_Path.home() / '.ai-prowler' / 'users.json'}")
+                "No owner or admin-manager accounts with an email address "
+                "are configured.\n\n"
+                "Recover manually by opening:\n"
+                f"  {_Path.home() / '.ai-prowler' / 'users.json'}\n\n"
+                "The bearer tokens are the top-level keys in the JSON.\n"
+                "Your record will have your name in the 'name' field.")
             return
 
         dlg = tk.Toplevel(self.root)
@@ -14006,11 +13957,9 @@ or from the Help menu."""
         ttk.Label(frm, text="Token Recovery",
                   font=("Segoe UI", 11, "bold")).pack(anchor="w")
         ttk.Label(frm, wraplength=400, justify="left", foreground="gray",
-                  text="Select your name and a delivery channel. "
-                       "A temporary token (valid 1 hour) will be sent to "
-                       "your registered contact. Use it to log in, "
-                       "then set a permanent token.").pack(
-            anchor="w", pady=(4, 10))
+                  text="Select your name. Your existing bearer token will be "
+                       "emailed to your registered address so you can log back in."
+                  ).pack(anchor="w", pady=(4, 10))
 
         # User selector
         user_row = ttk.Frame(frm)
@@ -14028,30 +13977,10 @@ or from the Help menu."""
                     return k, r
             return None, None
 
-        # Channel radio buttons
-        channel_var = tk.StringVar(value="")
-
-        _em_row = ttk.Frame(frm)
-        _em_row.pack(fill="x", pady=2)
-        email_rb = ttk.Radiobutton(_em_row, variable=channel_var, value="email")
-        email_rb.pack(side="left")
-        self._rcv_email_lbl = ttk.Label(_em_row, text="")
-        self._rcv_email_lbl.pack(side="left", padx=4)
-
-        _man_row = ttk.Frame(frm)
-        _man_row.pack(fill="x", pady=2)
-        manual_rb = ttk.Radiobutton(_man_row, variable=channel_var,
-                                    value="manual")
-        manual_rb.pack(side="left")
-        _users_json_path = str(Path.home() / ".ai-prowler" / "users.json")
-        ttk.Label(_man_row,
-                  text=f"Manual -- read from: {_users_json_path}",
-                  foreground="gray").pack(side="left", padx=4)
-
-        status_var = tk.StringVar(value="")
-        ttk.Label(frm, textvariable=status_var,
-                  foreground="#1a6e1a", font=("Segoe UI", 9),
-                  wraplength=400).pack(anchor="w", pady=(8, 0))
+        # Email label
+        _email_lbl = ttk.Label(frm, text="", foreground="gray",
+                               font=("Segoe UI", 9))
+        _email_lbl.pack(anchor="w", pady=(4, 0))
 
         def _mask_email(e):
             if not e or "@" not in e:
@@ -14059,100 +13988,90 @@ or from the Help menu."""
             local, domain = e.split("@", 1)
             return local[:2] + "***@" + domain
 
-        def _update_labels(*_):
+        def _update_label(*_):
             _k, rec = _selected_record()
             if not rec:
                 return
             em = rec.get("email", "")
-
-            # Email option
             if em and self._admin_email_configured():
-                email_rb.state(["!disabled"])
-                self._rcv_email_lbl.config(
-                    text=f"Send email to:  {_mask_email(em)}",
+                _email_lbl.config(
+                    text=f"Will send to:  {_mask_email(em)}",
                     foreground="black")
+            elif not em:
+                _email_lbl.config(
+                    text="No email address on record — use manual recovery below.",
+                    foreground="red")
             else:
-                email_rb.state(["disabled"])
-                reason = ("(no email address)" if not em
-                          else "(SMTP not configured in Settings)")
-                self._rcv_email_lbl.config(
-                    text=f"Send email  {reason}", foreground="gray")
+                _email_lbl.config(
+                    text="SMTP not configured — use manual recovery below.",
+                    foreground="red")
 
-            # Default channel selection
-            if channel_var.get() == "":
-                if em and self._admin_email_configured():
-                    channel_var.set("email")
-                else:
-                    channel_var.set("manual")
+        user_var.trace_add("write", _update_label)
+        _update_label()
 
-        user_var.trace_add("write", _update_labels)
-        _update_labels()
+        status_var = tk.StringVar(value="")
+        ttk.Label(frm, textvariable=status_var,
+                  foreground="#1a6e1a", font=("Segoe UI", 9),
+                  wraplength=400).pack(anchor="w", pady=(8, 0))
 
         def _send():
             ukey, rec = _selected_record()
             if not rec:
                 status_var.set("Select a user first.")
                 return
-            channel = channel_var.get()
-            if not channel:
-                status_var.set("Choose a delivery channel.")
-                return
-            if channel == "manual":
-                dlg.destroy()
-                messagebox.showinfo(
-                    "Manual Recovery",
-                    f"Open the following file in a text editor to "
-                    f"find your bearer token:\n\n{_users_json_path}\n\n"
-                    "The bearer tokens are the top-level keys in the JSON. "
-                    "Your record will have your name in the 'name' field.")
-                return
-
-            # Generate temp token
-            data  = self._admin_load_users()
-            users = data.get("users") or {}
-            temp  = self._admin_generate_temp_token(ukey, users)
-            data["users"] = users
-            if not self._admin_save_users(data):
-                status_var.set("Could not save temp token.")
-                return
-
+            em   = rec.get("email", "").strip()
             name = rec.get("name", "Admin")
-            em   = rec.get("email", "")
+            if not em:
+                messagebox.showwarning(
+                    "No Email",
+                    f"{name} has no email address on record.\n\n"
+                    "Recover manually by opening:\n"
+                    f"  {str(_Path.home() / '.ai-prowler' / 'users.json')}")
+                return
+            if not self._admin_email_configured():
+                messagebox.showwarning(
+                    "Email Not Configured",
+                    "SMTP is not configured.\n\n"
+                    "Configure email in Settings → Email Configuration,\n"
+                    "or recover manually by opening:\n"
+                    f"  {str(_Path.home() / '.ai-prowler' / 'users.json')}")
+                return
 
-            subject = "AI-Prowler Admin Access Recovery"
+            subject = "AI-Prowler Admin Access — Your Bearer Token"
             body = (
                 f"Hi {name},\n\n"
-                f"A temporary admin token has been generated for your "
-                f"AI-Prowler server.\n\n"
-                f"Temporary token:  {temp}\n"
-                f"Expires:          1 hour from now\n\n"
-                f"Use this token to log in to the Admin tab.\n"
-                f"You will be prompted to set a permanent token after login.\n\n"
-                f"If you did not request this recovery, someone has physical "
-                f"access to your server machine. Change your token immediately."
+                f"Your AI-Prowler admin bearer token is:\n\n"
+                f"  {ukey}\n\n"
+                f"Use this token to log in to the Admin tab on the server.\n\n"
+                f"Keep this token private — it is your admin credential.\n\n"
+                f"If you did not request this, someone has access to the server "
+                f"machine. Change your token immediately via Admin → Reset Token.\n\n"
+                f"-- AI-Prowler Server"
             )
-
-            status_var.set(f"Sending to {em}...")
+            status_var.set(f"Sending to {_mask_email(em)}...")
             dlg.update_idletasks()
             ok, msg = self._admin_send_email_direct(em, subject, body)
-
             if ok:
-                status_var.set(
-                    f"Sent! Check your email. Token expires in 1 hour.")
-                dlg.after(2000, lambda: [dlg.destroy(),
-                                         self._admin_do_unlock()])
+                status_var.set("Sent! Check your email.")
+                dlg.after(2000, dlg.destroy)
             else:
                 status_var.set(f"Send failed: {msg}")
-                # Cleanup the temp token we just wrote since delivery failed
-                data2 = self._admin_load_users()
-                if temp in (data2.get("users") or {}):
-                    del data2["users"][temp]
-                    self._admin_save_users(data2)
+
+        def _manual():
+            dlg.destroy()
+            messagebox.showinfo(
+                "Manual Recovery",
+                f"Open the following file in a text editor:\n\n"
+                f"  {str(_Path.home() / '.ai-prowler' / 'users.json')}\n\n"
+                "The bearer tokens are the top-level keys in the JSON.\n"
+                "Your record will have your name in the 'name' field.")
 
         btn_row2 = ttk.Frame(frm)
         btn_row2.pack(fill="x", pady=(12, 0))
-        ttk.Button(btn_row2, text="Send Recovery",
+        ttk.Button(btn_row2, text="Send My Token by Email",
                    command=_send).pack(side="left", padx=(0, 8))
+        ttk.Button(btn_row2, text="Manual Recovery",
+                   command=_manual).pack(side="left", padx=(0, 8))
         ttk.Button(btn_row2, text="Cancel",
                    command=dlg.destroy).pack(side="left")
 

@@ -597,52 +597,44 @@ When the customer clicks Reply, the reply goes directly to the employee's person
 
 The Remote Access feature lets you use AI-Prowler with Claude.ai from any device — your phone, tablet, or any web browser — using the same agentic RAG capability as Claude Desktop.
 
-### Setup Steps
+### Setup Steps (v8.0.0 — Fully Automated)
 
-1. **Set a Bearer Token** — In Settings → Remote Access, enter a Bearer token (minimum 10 characters, mixed case and numbers). Click **Save Token**.
+1. **Set a Bearer Token** — In Settings → Remote Access, enter any string as your Bearer token — this is the password Claude uses to connect to your knowledge base. Make it something strong (e.g. `MySecret123!`). Click **Save Token**.
 2. **Start the HTTP Server** — Click **▶ Start HTTP Server**. The status light turns green.
-3. **Set up a Named Tunnel** — For permanent daily use, set up a Named Tunnel with your own domain (see below).
-4. **Connect Claude.ai** — Add your tunnel URL as a custom connector in Claude.ai Settings → Connectors.
+3. **Subscribe** — Click **Subscribe — Personal** or **Subscribe — Business**. Complete Stripe checkout. Check your email for an activation code (format: `APRO-XXXXXX-XXXXXX-XXXXXX`).
+4. **Configure** — Paste the activation code into the Settings → Remote Access subscription section. Click **⚡ Configure Mobile Access**. AI-Prowler automatically:
+   - Creates a Cloudflare tunnel with a permanent public URL
+   - Pushes the ingress routing rule
+   - Installs `cloudflared` as a Windows service
+   - Starts the tunnel (shown as **Tunnel active (Windows service)**)
+5. **Connect Claude.ai** — Click the red **📖 Connect Claude.ai (auto)** button. A popup explains the steps and copies your MCP URL to the clipboard. Click OK — Claude.ai opens to the Add Custom Connector dialog. Paste the URL, name it AI-Prowler, leave OAuth fields blank, click Add. Enter your Bearer token when prompted. Set **Always Allow** for all tools.
+
+> **No Cloudflare account needed.** The subscription automatically provisions and manages your Cloudflare tunnel. No manual DNS, no dashboard setup, no domain purchase required.
 
 ### Status Lights
 
-- **Internet ●** — green when your PC can reach GitHub
-- **Mobile Subscription ●** — green = active; yellow = expiring/grace; red = blocked/unregistered
+- **Internet ●** — green when your PC can reach the internet
+- **Subscription ●** — green = active; yellow = expiring/grace; red = blocked
 
-### Keep It Running Panel (New in v8.0.0)
+### Keep It Running Panel
 
-The **Keep It Running** panel in the Remote Access tab ensures Windows doesn't interrupt your MCP server with sleep, hibernate, or automatic restarts.
+The **Keep It Running** panel ensures Windows doesn't interrupt your MCP server.
 
-- **LED power status indicators** — shows current sleep setting status at a glance (green = correctly configured, red = needs attention)
-- **⚡ Apply Power Settings Now** — one-click button that automatically sets:
-  - Screen and sleep to Never (plugged in only; battery settings unchanged)
-  - Lid close action to Do Nothing (plugged in only)
-  - Hibernate disabled (`powercfg /h off`)
-  - Windows Update Active Hours to 6 AM – 11 PM (prevents auto-restarts during the day)
-- **📋 Power Settings Guide** — opens a scrollable popup with full step-by-step manual instructions for all three power settings, for users who want more insight and control.
-
-> **Safe to apply:** All changes are plugged-in only and reversible. Battery behavior is unchanged. Hibernate can be re-enabled anytime with `powercfg /h on`.
-
-### Named Tunnel Setup (Permanent)
-
-A Named Tunnel gives you a permanent, branded URL (e.g. `https://mycompany.ai-prowler.com`).
-
-Prerequisites: AI-Prowler subscription provides a free Cloudflare account and domain name.
-
-One-time setup:
-1. In Settings → Remote Access → Named Tunnel, enter your **Public hostname** and **Tunnel token** (from Cloudflare Zero Trust dashboard → Networks → Tunnels → your tunnel → Token).
-2. Click **Activate Tunnel Service** — this installs `cloudflared` as a Windows background service.
-3. Status shows **Tunnel active (Windows service)** with a green dot.
-
-After this one-time setup, the tunnel starts automatically at boot. Use **Start Tunnel / Stop Tunnel** for manual control.
+- **LED power status indicators** — green = correctly configured, red = needs attention
+- **⚡ Apply Power Settings Now** — sets sleep to Never, disables hibernate, sets Windows Update Active Hours
+- **📋 Power Settings Guide** — full manual instructions
 
 ### Connecting Claude.ai — Step by Step
 
-1. Open claude.ai and sign in (Claude Pro or Team required)
-2. Click your profile icon → Settings → Connectors → **Add custom connector**
-3. Enter your tunnel URL followed by `/mcp` (e.g. `https://mycompany.ai-prowler.com/mcp`)
-4. Claude.ai redirects you to your AI-Prowler authorization page
-5. Enter your Bearer token and click **Connect**
+1. Click the **📖 Connect Claude.ai (auto)** button in Settings → Remote Access
+2. Read the popup instructions — your MCP URL is already copied to clipboard
+3. Click OK — Claude.ai opens to the Add Custom Connector form
+4. Paste URL into **Remote MCP server URL** field
+5. Name it **AI-Prowler**
+6. Leave **OAuth Client ID** and **OAuth Client Secret** blank
+7. Click **Add** — Claude.ai connects to your tunnel and prompts for auth
+8. Enter your Bearer token
+9. Set **Always Allow** for all tools in the connector panel
 
 ---
 
@@ -652,13 +644,16 @@ After this one-time setup, the tunnel starts automatically at boot. Use **Start 
 
 | Plan | Price | Users | Use Case |
 |---|---|---|---|
-| Individual | $10/month | 1 | Personal use |
-| Small Business | $20/month | Up to 50 | Team deployment |
-| Enterprise | Contact us | 6+ | Custom deployment |
+| Personal | $10/month | 1 | Personal use |
+| Business | $20/month | Up to 50 | Team deployment |
 
 ### How to Subscribe
 
-Email david.vavro1@gmail.com with your name or company name and which plan you want.
+Click **Subscribe — Personal** or **Subscribe — Business** directly in Settings → Remote Access. Complete the Stripe checkout. You will receive an activation email with your code within minutes.
+
+### Activation
+
+Paste your activation code (format: `APRO-XXXXXX-XXXXXX-XXXXXX`) into the Settings → Remote Access subscription field and click **⚡ Configure Mobile Access**. The entire tunnel setup is automated — no Cloudflare account or dashboard access needed.
 
 ### Grace Period
 
@@ -681,15 +676,21 @@ Your personal AI-Prowler subscription activates on 1 machine at a time. The Mobi
 
 > **Note:** The Mobile Activation panel does not appear in Business server mode. Server installs are not machine-limited.
 
-### Token Recovery (v8.0.0)
+### Token Recovery (Business Server Mode Only)
 
-Token recovery is **email-only**. If you forget your Bearer token:
+Token recovery is available in Business server mode for admins who forget their bearer token. It is **not available in personal mode** — in personal mode you simply type a new token in Settings → Remote Access → Bearer Token and click Save Token.
 
-1. Click **"Forgot your token?"** in the Settings → Remote Access panel
-2. AI-Prowler sends a recovery code to the admin's configured email address
-3. Enter the recovery code to reveal or reset your token
+In server mode, if you forget your token:
 
-SMS-based token recovery has been removed in v8.0.0.
+1. Click **Admin** tab — the login dialog appears
+2. Click **"Forgot your token? Send recovery email"**
+3. Select your name from the dropdown
+4. Click **Send My Token by Email** — your existing bearer token is emailed to your registered address
+5. Check your email and use the token to log in
+
+If email is not configured or you have no email on record, click **Manual Recovery** — this shows the path to `users.json` where bearer tokens are stored as the top-level keys alongside your name.
+
+> **Note:** There are no temporary tokens or expiry timers. Your actual permanent token is emailed to you directly.
 
 ---
 
@@ -1399,16 +1400,23 @@ The SMS Reply Monitor defaults to `every_2h` — it checks repeatedly throughout
 
 ### Remote Access Tab
 
-- **Bearer Token** — the password used to authenticate MCP connections from Claude.ai. Enter at least 10 characters of mixed case and numbers, then click **Save Token**.
+- **Bearer Token** — the password used to authenticate MCP connections from Claude.ai. Enter any string — make it strong (e.g. `MySecret123!`). Click **Save Token**.
 - **Port** — HTTP server port (default 8000).
 - **HTTP Server controls** — ▶ Start HTTP Server / ■ Stop HTTP Server.
-- **Status lights** — Internet ● and Mobile Subscription ●
-- **License Key / Parent License Key** — enter your subscription key to activate remote access. In server mode shows as "Parent License Key".
+- **Status lights** — Internet ● and Subscription ●
+- **Mobile Access Subscription** — subscribe and activate from here:
+  - **Subscribe — Personal / Business** — opens Stripe checkout in browser; activation code arrives by email
+  - **Activation code field** — paste `APRO-XXXXXX-XXXXXX-XXXXXX` from email
+  - **⚡ Configure Mobile Access** — one click provisions tunnel, installs cloudflared service, starts tunnel automatically
+  - **Manage Subscription →** — opens Stripe customer portal to cancel, change payment, or adjust seats
+- **📖 Connect Claude.ai (auto)** — copies MCP URL to clipboard and opens Claude.ai Add Custom Connector dialog directly; turns red after activation to prompt user
+- **📋 Manual Instructions** — fallback step-by-step guide if the auto button URL changes
 - **Mobile Activation** — shown in personal/home mode only (hidden in server mode):
   - **Check Activation** — checks if this machine is the active install
   - **Transfer to This Machine** — use when replacing your computer
-  - **"Forgot your token?"** — sends recovery code to admin email (v8.0.0: email-only)
-- **Named Tunnel** — enter Public hostname and Tunnel token, then click **Activate Tunnel Service**.
+  - *(Forgot token? In personal mode just retype it in the Bearer Token field above and click Save Token)*
+- **One-Time Activation panel** — shows Public hostname and Claude.ai MCP URL (read-only, assembled automatically from tunnel domain)
+- **Tunnel controls** — **Activate Tunnel Service** / **Uninstall Service** / **Start Tunnel** / **Stop Tunnel**
 - **Keep It Running panel** — LED status indicators + **⚡ Apply Power Settings Now** + **📋 Power Settings Guide**
 
 ### Database Section (Settings Tab)
