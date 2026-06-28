@@ -2766,21 +2766,36 @@ or from the Help menu."""
         self._ad_defaults = {
             'headline':  'Welcome to AI-Prowler v8.0.0',
             'body': (
-                'Your Professional Agentic RAG Knowledge Base for Claude.\n\n'
-                'AI-Prowler indexes your local documents and makes them '
-                'searchable through Claude — on desktop, web, and mobile.\n\n'
-                '• 83 MCP tools across 12 categories\n'
-                '• Index documents from any folder on your PC\n'
-                '• Connect via Claude Desktop (local) or Claude.ai (remote)\n'
-                '• Common Business AI Analysis — 5 one-click analysis buttons\n'
-                '• Proactive Alerts — email briefings pushed to you automatically\n'
-                '• Job Image Storage — save field photos from Claude chat\n'
-                '• QuickBooks & Square integration via Claude MCP connectors\n\n'
+                'Your Personal Agentic AI Knowledge Base for Claude.\n\n'
+                'AI-Prowler™ Home v8.0.0 for Windows 11 — index your local documents '
+                'and put 85 AI-powered tools at Claude\'s fingertips, on desktop, web, and mobile.\n\n'
+                '★ Index local and OneDrive documents from any folder — 65+ file formats '
+                'supported including scanned PDFs and images with full OCR text extraction.\n\n'
+                '★ ChromaDB vector database with semantic search — Claude queries '
+                'intelligently across 10,000+ files with provenance-aware results.\n\n'
+                '★ 85 MCP tools across 12 categories: Agentic RAG, Code Tools, '
+                'Self-Learning, Action Tools, Email, SMS, Scheduling, Dev Tools, '
+                'Indexing, Job Tracking, Analysis, and Health checks.\n\n'
+                '★ Code Tools — Claude can create, edit, back up, and restore files '
+                'in pre-authorized directories with a double-lock security model and '
+                'per-session circuit breaker.\n\n'
+                '★ Self-Learning system — Claude records business lessons, corrections, '
+                'and insights into a persistent knowledge base and applies them '
+                'automatically in future sessions.\n\n'
+                '★ Connect via Claude Desktop (local/stdio) or Claude.ai and the '
+                'Claude mobile app — one-click subscription, one-click tunnel setup, '
+                'auto Connect Claude.ai button.\n\n'
+                '★ AI-Prowler™ Home is free for desktop use with Claude Desktop.\n\n'
+                '★ AI-Prowler™ Mobile Access — subscribe from the Settings tab for '
+                '$10/month (Personal) or $20/month (Business). Tunnel provisioned '
+                'automatically — no Cloudflare account needed.\n\n'
+                '★ AI-Prowler™ Business — multi-user server mode with role-based '
+                'access, per-user document isolation, and admin panel.\n\n'
                 'Get started: click the Index Docs tab to add your first folder.'
             ),
-            'link_text': 'Visit AI-Prowler on GitHub',
-            'link_url':  'https://github.com/dvavro/AI-Prowler',
-            'footer':    'AI-Prowler v8.0.0 — Free for personal use',
+            'link_text': 'Visit AI-Prowler.com',
+            'link_url':  'https://ai-prowler.com',
+            'footer':    'AI-Prowler v8.0.0 — Free for personal desktop use',
         }
 
         # Paths

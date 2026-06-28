@@ -1,4 +1,4 @@
-# AI Prowler - Python Dependencies
+# AI-Prowler v8.0.0 - Python Dependencies
 # Install with: pip install -r requirements.txt
 
 # ── Core RAG / indexing ────────────────────────────────────────────────────────

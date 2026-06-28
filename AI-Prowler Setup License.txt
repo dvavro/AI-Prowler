@@ -1,6 +1,6 @@
 AI-Prowler Software License & Terms of Service
 ================================================
-Version 7.0 — Effective June 2026
+Version 8.0 — Effective June 2026
 
 Copyright (C) 2026 David Kevin Vavro. All rights reserved.
 Contact: david.vavro1@gmail.com
