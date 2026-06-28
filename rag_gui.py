@@ -1715,6 +1715,8 @@ Built with Python, ChromaDB, FastMCP, and Claude"""
                 "1. Click 'Open Claude.ai' below — it takes you to the right page.",
                 "2. Sign in with your Claude Pro account.",
                 "3. Look for 'Connectors' in the left sidebar of Settings.",
+                "   OR: click your Name Initials at the bottom-left of Claude.ai",
+                "   → Settings → Connectors → Customize → + (Add custom connector)",
                 "",
                 "NOTE: Claude Pro ($20/month) is required for MCP connectors.",
                 "      Free Claude accounts cannot use custom connectors.",
@@ -1732,21 +1734,28 @@ Built with Python, ChromaDB, FastMCP, and Claude"""
                 "Description:    My personal knowledge base",
                 "MCP Server URL: (click 'Copy URL' below, then paste)",
                 "",
-                "When prompted for authentication:",
-                "  Authentication type:  Bearer Token  (or 'API Key')",
-                "  Token:                (click 'Copy Bearer Token' below,",
-                "                         then paste)",
+                "Advanced settings — OAuth fields:",
+                "  OAuth Client ID:     (leave blank — not required)",
+                "  OAuth Client Secret: (leave blank — not required)",
                 "",
-                "WARN: The token is sent to Claude's servers. This is normal",
-                "      and required for Claude to authenticate with your tunnel.",
+                "AI-Prowler uses Bearer Token auth, not OAuth.",
+                "Leaving the OAuth fields empty is correct.",
+                "",
+                "When prompted for authentication after clicking Connect:",
+                "  Enter your Bearer Token (click 'Copy Bearer Token' below)",
+                "  in the login page that opens in your browser.",
             ]),
 
             ("Step 4 — Save and verify", [
                 "1. Click 'Save' or 'Connect'.",
                 "2. Claude will attempt to connect to your tunnel.",
                 "3. If successful, you'll see 'Connected' or a green indicator.",
-                "4. The 60 AI-Prowler tools will be listed (search_documents,",
-                "   index_path, optimize_route, etc.).",
+                "4. AI-Prowler tools will be listed in the connector.",
+                "",
+                "IMPORTANT — Enable tools after connecting:",
+                "  In the connector panel, click 'Always allow' on the",
+                "  tool permissions section to enable all AI-Prowler tools.",
+                "  Without this, Claude will ask permission for every tool call.",
             ]),
 
             ("Step 5 — Test it", [
@@ -9376,6 +9385,15 @@ or from the Help menu."""
                                         _tun_token_var.set(_tok)
                             except Exception:
                                 pass
+                            # ── v8.0.2: turn Connect Claude.ai button red ─────────────
+                            # Alerts the user this is the next required step
+                            try:
+                                _connect_claude_btn.configure(
+                                    background='#CC0000',
+                                    foreground='white',
+                                    text="📖 Connect Claude.ai  (auto) ← Click now to finish setup!")
+                            except Exception:
+                                pass
                             self.root.after(500, _run_status_check)
                             self.status_var.set(
                                 f"✅ Mobile access activated — {result['domain']}")
@@ -9387,8 +9405,10 @@ or from the Help menu."""
                                 f"Domain:  {result['domain']}\n"
                                 f"Plan:    {result['plan'].title()}\n"
                                 f"License: {result['license_key']}\n\n"
-                                "Tunnel service is being reinstalled with "
-                                "the new token — approve the UAC prompt.")
+                                "✅ Tunnel is active.\n\n"
+                                "👉 Next step: click the red\n"
+                                "   'Connect Claude.ai' button\n"
+                                "   to add AI-Prowler to Claude.ai.")
                             _activate_tunnel()
                         self.root.after(0, _on_success)
 
@@ -10493,36 +10513,72 @@ or from the Help menu."""
         def _cf_exe():
             return str(Path(__file__).parent / 'cloudflared.exe')
 
-        # ── Named Tunnel separator (Quick Tunnel removed in v7.0.0) ──────────
-        # Quick Tunnel is not supported — the URL changes on every restart,
-        # which causes the Claude.ai connector to go stale and requires
-        # manual re-configuration each time. Users are directed to set up
-        # a Named Tunnel with a permanent subdomain ($10/yr via Cloudflare
-        # Registrar) instead.
-        # ══════════════════════════════════════════════════════════════════════
-        # Named Tunnel  (Persistent URL, Requires Cloudflare Account)
-        # ══════════════════════════════════════════════════════════════════════
-        ttk.Label(remote_frame,
-                  text="Named Tunnel  (persistent URL, requires Cloudflare account):",
-                  font=('Arial', 9, 'bold')).pack(anchor='w')
-        ttk.Label(remote_frame, font=('Arial', 8), foreground='gray',
-                  text=("Create a free Cloudflare Zero Trust tunnel at "
-                        "dash.cloudflare.com → Networks → Tunnels.\n"
-                        "Enter your tunnel's public hostname and token below, "
-                        "then click Activate.")
-                  ).pack(anchor='w', pady=(0, 4))
+        # ── Named Tunnel section ──────────────────────────────────────────────
+        # Setup Cloudflare Tunnel guide hidden in v8.0.0 — tunnel is now
+        # provisioned automatically via the subscription flow above.
+        # Only the Connect Claude.ai step remains for the user to complete.
 
-        # ── Visual setup guides — text walkthroughs with deep links ──────────
+        # ── Connect Claude.ai button (turns red after activation to prompt user) ──
+        # Opens Claude.ai with the Add Custom Connector modal pre-filled with
+        # the AI-Prowler MCP URL — no manual copy/paste needed.
         guide_row = ttk.Frame(remote_frame)
         guide_row.pack(fill='x', pady=(0, 6))
+
+        def _open_claude_connector():
+            import webbrowser
+            domain = _tun_domain_var.get().strip().replace(
+                'https://', '').replace('http://', '').rstrip('/')
+            if not domain:
+                messagebox.showwarning(
+                    "No Domain",
+                    "Activate your subscription first so the tunnel domain is set,\n"
+                    "then click this button to connect Claude.ai.")
+                return
+            mcp_url = f"https://{domain}/mcp"
+            # Copy MCP URL to clipboard so user can paste directly into the form
+            try:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(mcp_url)
+                self.root.update()
+            except Exception:
+                pass
+            # Show instructions FIRST — user reads steps, then clicks OK
+            # which opens the browser so they can immediately paste
+            messagebox.showinfo(
+                "MCP URL Copied — Paste into Claude.ai",
+                f"Your MCP URL has been copied to the clipboard:\n\n"
+                f"  {mcp_url}\n\n"
+                f"Click OK and the Claude.ai connector form will open.\n\n"
+                f"1. Paste the URL into the 'Remote MCP server URL' field\n"
+                f"2. Name it 'AI-Prowler'\n"
+                f"3. Leave OAuth fields blank\n"
+                f"4. Click Add → enter your Bearer Token when prompted\n"
+                f"5. Set 'Always allow' for all tools")
+            # Open Claude.ai AFTER user has read the instructions
+            claude_url = "https://claude.ai/customize/connectors?modal=add-custom-connector"
+            webbrowser.open(claude_url)
+            # Reset button back to normal after clicking
+            try:
+                _connect_claude_btn.configure(
+                    background='SystemButtonFace',
+                    foreground='SystemButtonText',
+                    text="📖 Connect Claude.ai  (open connector setup)")
+            except Exception:
+                pass
+
+        _connect_claude_btn = tk.Button(guide_row,
+                   text="📖 Connect Claude.ai  (auto)",
+                   command=_open_claude_connector,
+                   relief='raised', bd=1,
+                   font=('Arial', 9))
+        _connect_claude_btn.pack(side='left', padx=(0, 4))
         ttk.Button(guide_row,
-                   text="📖 Setup Cloudflare Tunnel  (step-by-step)",
-                   command=self.show_cloudflare_setup_guide
-                   ).pack(side='left', padx=(0, 6))
-        ttk.Button(guide_row,
-                   text="📖 Connect Claude.ai  (after tunnel is active)",
+                   text="📋 Manual Instructions",
                    command=self.show_claude_connector_guide
-                   ).pack(side='left')
+                   ).pack(side='left', padx=(0, 8))
+        ttk.Label(guide_row,
+                  text="← auto opens Claude.ai with URL copied to clipboard",
+                  font=('Arial', 8), foreground='gray').pack(side='left')
 
         # ── Load saved tunnel settings ─────────────────────────────────────────
         _tun_name_var   = tk.StringVar(value='')
@@ -10549,6 +10605,44 @@ or from the Help menu."""
         ttk.Label(host_row, text="Public hostname:", width=18, anchor='w').pack(side='left')
         ttk.Entry(host_row, textvariable=_tun_domain_var, width=36).pack(side='left', padx=(4, 6))
         ttk.Label(host_row, text="(e.g. myname.mydomain.com)",
+                  font=('Arial', 8), foreground='gray').pack(side='left')
+
+        # MCP URL copy row — assembled from domain + /mcp, ready to paste into Claude.ai
+        mcp_url_row = ttk.Frame(act_frame)
+        mcp_url_row.pack(fill='x', pady=(0, 6))
+        ttk.Label(mcp_url_row, text="Claude.ai MCP URL:", width=18, anchor='w').pack(side='left')
+        _mcp_url_var = tk.StringVar()
+
+        def _update_mcp_url(*_):
+            d = _tun_domain_var.get().strip().replace('https://', '').replace('http://', '').rstrip('/')
+            _mcp_url_var.set(f"https://{d}/mcp" if d else "")
+
+        _tun_domain_var.trace_add('write', _update_mcp_url)
+        _update_mcp_url()
+
+        _mcp_url_entry = ttk.Entry(mcp_url_row, textvariable=_mcp_url_var,
+                                   width=40, state='readonly')
+        _mcp_url_entry.pack(side='left', padx=(4, 4))
+
+        def _copy_mcp_url():
+            url = _mcp_url_var.get()
+            if not url or url == "https:///mcp":
+                messagebox.showwarning("No hostname",
+                    "Enter your Public hostname above first.")
+                return
+            try:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(url)
+                self.root.update()
+                self.status_var.set(f"Copied: {url}")
+                self.root.after(3000, lambda: self.status_var.set("Ready"))
+            except Exception as e:
+                messagebox.showerror("Copy failed", str(e))
+
+        ttk.Button(mcp_url_row, text="📋 Copy",
+                   command=_copy_mcp_url).pack(side='left', padx=(0, 8))
+        ttk.Label(mcp_url_row,
+                  text="← paste this into Claude.ai → Settings → Connectors → Add custom connector",
                   font=('Arial', 8), foreground='gray').pack(side='left')
 
         # Tunnel token row
