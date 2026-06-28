@@ -4,7 +4,7 @@ subscription_client.py
 Python client for the AI-Prowler Subscription Worker API.
 Used by mobile_activator.py, rag_gui.py, and the CLI.
 
-Worker base URL: https://ai-prowler-subscription.david-vavro1.workers.dev
+Worker base URL: https://api.ai-prowler.com
 
 Public endpoints (no auth):
     GET /health
@@ -32,7 +32,7 @@ from pathlib import Path
 # Configuration
 # ---------------------------------------------------------------------------
 
-WORKER_URL = "https://ai-prowler-subscription.david-vavro1.workers.dev"
+WORKER_URL = "https://api.ai-prowler.com"
 REQUEST_TIMEOUT = 15  # seconds
 
 # The admin token is stored in config.json as "subscription_admin_token".

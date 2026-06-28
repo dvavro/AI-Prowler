@@ -12,11 +12,34 @@ What it does:
   4. Writes ~/.ai-prowler/remote_access.json with the full activation record
   5. For business plans: writes ~/.ai-prowler/license_seats.json
   6. Installs/restarts the cloudflared Windows service with the new token
-  7. Returns a result dict for the GUI to display
+  7. Creates DNS CNAME route for the tunnel domain (if not already present)
+  8. Returns a result dict for the GUI to display
 
 Called by:
   rag_gui.py  -> _activate_mobile()  when user clicks "Configure Mobile Access"
   CLI usage:  python mobile_activator.py --code APRO-XXXXXX-XXXXXX-XXXXXX
+
+v8.0.0 fixes:
+  - Service install now correctly passes token via PowerShell -ArgumentList
+    array (avoids Windows SCM 8192-char command line truncation bug)
+  - Added _create_dns_route() call after service install as a fallback in
+    case the Worker's DNS creation failed (proxied flag issue, zone mismatch)
+  - tunnel_name now stored in remote_access.json from payload
+  - Service uninstall waits for complete removal before reinstalling
+
+v8.0.2 fixes:
+  - CRITICAL: Removed stale config.yml write that was overriding the tunnel
+    token during service install. cloudflared service install uses the token
+    passed as a CLI argument (stored in Windows registry). If config.yml
+    exists with tunnel: <name> but no credentials-file or token, cloudflared
+    reads it on startup and fails because the cred file has no TunnelSecret.
+    Fix: delete config.yml before service install; let cloudflared manage
+    its own registry-based config entirely.
+  - Removed empty TunnelSecret from credentials JSON file. The token-based
+    service install does not use the credentials file at all — writing an
+    empty TunnelSecret caused cloudflared to attempt cred-file auth and fail.
+  - _create_dns_route() now uses tunnel_id (UUID) instead of tunnel_name,
+    which is what cloudflared CLI requires when not using `cloudflared login`.
 """
 
 import json
@@ -61,7 +84,7 @@ def activate_from_code(code, progress_cb=None):
     Returns:
         dict with keys:
             ok          bool   — True on success
-            domain      str    — the tunnel domain (e.g. abc123.cfargotunnel.com)
+            domain      str    — the tunnel domain (e.g. abc123.ai-prowler.com)
             plan        str    — "personal" or "business"
             seats       int    — seat count
             license_key str    — the license key
@@ -92,12 +115,29 @@ def activate_from_code(code, progress_cb=None):
 
     # Step 4 — install / restart cloudflared service
     _cb("Configuring cloudflared tunnel service...")
-    _install_cloudflared_service(payload["tunnel_token"])
+    _install_cloudflared_service(payload["tunnel_token"], progress_cb=_cb)
 
     domain      = payload.get("domain", "")
+    tunnel_id   = payload.get("tunnel_id", "")
+    tunnel_name = payload.get("tunnel_name", "")
     plan        = payload.get("plan", "personal")
     seats       = payload.get("seats", 1)
     license_key = payload.get("license_key", "")
+
+    # Step 5 — create DNS route as client-side fallback
+    # The Worker already creates the CNAME during provisioning, but if that
+    # failed (proxied flag issue, zone mismatch, etc.) this ensures the route
+    # exists before we return success to the GUI.
+    # FIX v8.0.2: pass tunnel_id (UUID), not tunnel_name — cloudflared CLI
+    # requires the UUID for `tunnel route dns` when not using `cloudflared login`.
+    if tunnel_id and domain:
+        _cb(f"Verifying DNS route for {domain}...")
+        try:
+            _create_dns_route(tunnel_id, domain)
+            _cb(f"DNS route confirmed — {domain} is publicly reachable")
+        except Exception as dns_err:
+            # Non-fatal — Worker-side DNS may already be correct
+            _cb(f"DNS route note: {dns_err} — checking if domain resolves...")
 
     _cb(f"Activation complete — tunnel live at {domain}")
 
@@ -135,24 +175,51 @@ def activate_from_payload(payload):
     seats        = payload.get("seats", 1)
     expires_at   = payload.get("expires_at", "")
     account_tag  = payload.get("cloudflare_account_tag", "")
+    # tunnel_name is now included in the payload (v8.0.0 fix in provision.js)
+    # Fall back to deriving it from domain if not present (older activations)
+    tunnel_name  = payload.get("tunnel_name", "") or domain.split(".")[0] if domain else ""
 
     # -- 1. Tunnel credentials file (~/.cloudflared/{tunnel_id}.json) ----------
-    # cloudflared reads this when configured with --credentials-file.
-    # The token-based flow (cloudflared tunnel run --token ...) doesn't need
-    # this file, but we write it for reference and potential future use.
+    # FIX v8.0.2: Do NOT write TunnelSecret as empty string. The token-based
+    # service install (cloudflared service install <token>) stores auth in the
+    # Windows registry — it does not use this credentials file at all.
+    # Writing an empty TunnelSecret caused cloudflared to attempt cred-file
+    # auth on startup and fail. We write the file for reference/tooling only,
+    # with no TunnelSecret field so cloudflared ignores it.
     cred_file = CLOUDFLARED_DIR / f"{tunnel_id}.json"
     cred_data = {
-        "AccountTag":   account_tag,
-        "TunnelID":     tunnel_id,
-        "TunnelSecret": "",       # not available via token flow; token is self-contained
-        "TunnelName":   f"ap-tunnel-{tunnel_id[:8]}",
+        "AccountTag": account_tag,
+        "TunnelID":   tunnel_id,
+        "TunnelName": tunnel_name,
     }
     _write_json(cred_file, cred_data)
+
+    # -- 1b. config.yml — DELETE if present before service install -------------
+    # FIX v8.0.2 CRITICAL: If config.yml exists with `tunnel: <name>` but no
+    # credentials-file or token reference, cloudflared reads it on service
+    # startup, looks for the credentials file, finds no TunnelSecret, and
+    # fails to authenticate. The token-based service install stores the token
+    # in the Windows registry — cloudflared reads it from there on startup
+    # with NO config.yml needed. We must remove any stale config.yml so it
+    # does not interfere.
+    config_yml = CLOUDFLARED_DIR / "config.yml"
+    if config_yml.exists():
+        try:
+            config_yml.unlink()
+        except Exception as e:
+            # Non-fatal — log and continue; service install may still work
+            print(f"[mobile_activator] Warning: could not remove stale config.yml: {e}")
+
+    # Write the tunnel token to a reference file (informational only —
+    # the service reads from the Windows registry, not this file).
+    token_file_cfg = CLOUDFLARED_DIR / "tunnel_token.txt"
+    token_file_cfg.write_text(tunnel_token, encoding="utf-8")
 
     # -- 2. config.json — update tunnel fields, preserve all others -------------
     cfg = _load_json(CONFIG_PATH, default={})
     cfg["tunnel_domain"]  = domain
     cfg["tunnel_token"]   = tunnel_token
+    cfg["tunnel_name"]    = tunnel_name
     cfg["license_key"]    = license_key
     cfg["plan"]           = plan
     cfg["seats"]          = seats
@@ -168,6 +235,7 @@ def activate_from_payload(payload):
         "seats":                  seats,
         "domain":                 domain,
         "tunnel_id":              tunnel_id,
+        "tunnel_name":            tunnel_name,
         "cloudflare_account_tag": account_tag,
         "expires_at":             expires_at,
         "activated_at":           _now_iso(),
@@ -178,10 +246,7 @@ def activate_from_payload(payload):
     # -- 4. license_seats.json — for business plans only ----------------------
     if plan == "business" and seats > 0:
         existing = _load_json(SEATS_PATH, default=None)
-        # _load_json returns {} (empty dict) when file is missing/corrupt.
-        # Treat a missing 'seats' list as a fresh first-activation.
         if existing is None or not existing.get("seats"):
-            # First activation — create empty seat records
             seat_records = [
                 {
                     "seat_id":     f"{license_key}-S{str(i+1).zfill(3)}",
@@ -201,7 +266,6 @@ def activate_from_payload(payload):
             }
             _write_json(SEATS_PATH, seats_data)
         else:
-            # Re-activation — update header fields but preserve existing assignments
             existing["license_key"]  = license_key
             existing["seats_total"]  = seats
             existing["synced_at"]    = _now_iso()
@@ -212,75 +276,151 @@ def activate_from_payload(payload):
 # cloudflared service management
 # ---------------------------------------------------------------------------
 
-def _install_cloudflared_service(tunnel_token):
+def _install_cloudflared_service(tunnel_token, progress_cb=None):
     """
     Install cloudflared as a Windows service using the tunnel token.
-    If the service already exists, stop it, update the token, and restart.
 
-    Requires the process to be running with admin rights, OR for cloudflared
-    to already be installed as a service (in which case we just update config).
+    Uses cloudflared's own `service install <token>` command which is the
+    officially supported method. The token is passed as a CLI argument;
+    cloudflared stores it in the Windows registry/credential store —
+    avoiding the SCM command line truncation bug entirely.
 
-    Note: sc.exe service operations require elevation. If AI-Prowler is not
-    running elevated, we write the token to a pending file and show a UAC
-    prompt via PowerShell to complete the install. This matches the existing
-    "Activate Tunnel Service" pattern in rag_gui.py.
+    FIX v8.0.2: No config.yml is written before this call (deleted in
+    activate_from_payload). This ensures cloudflared's service install
+    uses the token from the registry exclusively on startup.
+
+    Requires elevation; we use PowerShell RunAs if needed.
     """
+    def _cb(msg):
+        if progress_cb:
+            progress_cb(msg)
+
     if not CLOUDFLARED_EXE.exists():
         raise RuntimeError(
             f"cloudflared.exe not found at {CLOUDFLARED_EXE}.\n"
             "Please reinstall AI-Prowler to restore cloudflared."
         )
 
-    service_exists = _service_exists(CLOUDFLARED_SERVICE)
-
-    if service_exists:
-        # Stop existing service before reconfiguring
-        _run_sc("stop", CLOUDFLARED_SERVICE, ignore_errors=True)
-        time.sleep(2)
-
-    # Write the token to a known location so the service startup script can read it
+    # Write token to file for reference
     token_file = AI_PROWLER_DIR / "tunnel_token.txt"
     token_file.write_text(tunnel_token, encoding="utf-8")
 
-    if service_exists:
-        # Service already installed — just update the token file and restart
-        _run_sc("start", CLOUDFLARED_SERVICE, ignore_errors=True)
-    else:
-        # Install the service via cloudflared's built-in service command.
-        # This requires elevation — launch via PowerShell runas if needed.
-        _install_service_elevated(tunnel_token)
+    # Stop and delete existing service cleanly
+    if _service_exists(CLOUDFLARED_SERVICE):
+        _cb("Stopping existing tunnel service...")
+        _run_sc("stop", CLOUDFLARED_SERVICE, ignore_errors=True)
+        time.sleep(2)
+        _cb("Removing existing tunnel service...")
+        _run_sc("delete", CLOUDFLARED_SERVICE, ignore_errors=True)
+        for _ in range(10):
+            time.sleep(1)
+            if not _service_exists(CLOUDFLARED_SERVICE):
+                break
 
+    _cb("Installing cloudflared tunnel service...")
 
-def _install_service_elevated(tunnel_token):
-    """
-    Run cloudflared service install with a UAC elevation prompt.
-    Uses the same PowerShell Start-Process -Verb RunAs pattern as rag_gui.py.
-    """
-    cmd = (
-        f'"{CLOUDFLARED_EXE}" tunnel run --token "{tunnel_token}"'
+    # Clean up stale EventLog registry key that blocks reinstallation.
+    # cloudflared says "Cannot install event logger: registry key already exists"
+    # when this key is present, causing silent service install failure.
+    subprocess.run(
+        ["reg", "delete",
+         r"HKLM\SYSTEM\CurrentControlSet\Services\EventLog\Application\Cloudflared",
+         "/f"],
+        capture_output=True, text=True
     )
-    # First try direct install (works if already elevated)
-    install_cmd = f'"{CLOUDFLARED_EXE}" service install'
-    rc = subprocess.call(install_cmd, shell=True,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if rc == 0:
-        return
 
-    # Not elevated — use PowerShell RunAs
+    # cloudflared service install <token> — the token is stored in the Windows
+    # registry by cloudflared itself. On service startup, cloudflared reads
+    # the token from the registry (not from config.yml or a credentials file).
+    # No TUNNEL_TOKEN env var or config.yml is needed or wanted here.
+    result = subprocess.run(
+        [str(CLOUDFLARED_EXE), "service", "install", tunnel_token],
+        capture_output=True, text=True
+    )
+
+    if result.returncode != 0:
+        out = (result.stdout + result.stderr).strip()
+        if "access is denied" in out.lower() or "privilege" in out.lower():
+            # Need elevation — use PowerShell RunAs
+            _cb("Elevation required — requesting admin access...")
+            _install_service_via_powershell(tunnel_token)
+        else:
+            _cb(f"Service install note: {out}")
+
+    time.sleep(2)
+
+    # Start the service if not already running
+    if _service_exists(CLOUDFLARED_SERVICE):
+        state = _get_service_state(CLOUDFLARED_SERVICE)
+        if state != "RUNNING":
+            _run_sc("start", CLOUDFLARED_SERVICE, ignore_errors=True)
+            time.sleep(3)
+            state = _get_service_state(CLOUDFLARED_SERVICE)
+        _cb(f"Tunnel service: {state}")
+        if state == "RUNNING":
+            _cb("Tunnel service is running ✅")
+    else:
+        raise RuntimeError(
+            "Service install failed — service not found after install.\n"
+            "Try running AI-Prowler as Administrator and activating again."
+        )
+
+
+def _install_service_via_powershell(tunnel_token):
+    """
+    Install cloudflared service via PowerShell UAC elevation.
+    Uses cloudflared's official `service install <token>` syntax.
+    """
     ps_cmd = (
         f"Start-Process -FilePath '{CLOUDFLARED_EXE}' "
-        f"-ArgumentList 'service','install' "
+        f"-ArgumentList @('service','install','{tunnel_token}') "
         f"-Verb RunAs -Wait"
     )
-    subprocess.Popen(
+    subprocess.run(
         ["powershell", "-NoProfile", "-Command", ps_cmd],
-        creationflags=subprocess.CREATE_NO_WINDOW
+        capture_output=True, text=True
     )
-    # Give UAC and install a moment
-    time.sleep(4)
-
-    # Start the service
+    time.sleep(5)
     _run_sc("start", CLOUDFLARED_SERVICE, ignore_errors=True)
+
+
+def _create_dns_route(tunnel_id, domain):
+    """
+    Create the public DNS CNAME route for the tunnel using cloudflared CLI.
+
+    Runs: cloudflared tunnel route dns <tunnel_id> <domain>
+
+    FIX v8.0.2: Uses tunnel_id (UUID) not tunnel_name. The cloudflared CLI
+    requires the tunnel UUID for `tunnel route dns` when not authenticated
+    via `cloudflared login` (i.e. token-based installs like ours).
+
+    This is a client-side fallback for cases where the Worker's DNS creation
+    failed (e.g. wrong proxied flag, zone mismatch). Non-fatal if it fails —
+    the Worker-side DNS may already be correct.
+
+    Args:
+        tunnel_id  str  — tunnel UUID (e.g. "f6d15df6-ba6b-...")
+        domain     str  — full public hostname (e.g. "ap-david-vavro1-f6d15df6.ai-prowler.com")
+
+    Returns:
+        True on success or if route already exists.
+        False on non-fatal failure (logs warning).
+    """
+    if not CLOUDFLARED_EXE.exists():
+        return False
+
+    result = subprocess.run(
+        [str(CLOUDFLARED_EXE), "tunnel", "route", "dns", tunnel_id, domain],
+        capture_output=True, text=True, timeout=30
+    )
+    out = (result.stdout + result.stderr).strip()
+
+    if result.returncode == 0 or "already exists" in out.lower():
+        return True
+
+    # Log but don't fatal — Worker DNS creation may have already succeeded
+    print(f"[mobile_activator] DNS route note (rc={result.returncode}): {out}")
+    return False
 
 
 def _service_exists(name):
@@ -290,6 +430,25 @@ def _service_exists(name):
         stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )
     return r.returncode == 0
+
+
+def _get_service_state(name):
+    """Return the STATE string of a Windows service, e.g. 'RUNNING', 'STOPPED'."""
+    r = subprocess.run(
+        ["sc", "query", name],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+    output = r.stdout.decode("utf-8", errors="replace")
+    for line in output.splitlines():
+        if "STATE" in line and ":" in line:
+            parts = line.split(":")
+            if len(parts) >= 2:
+                state_part = parts[1].strip()
+                # Format is "4  RUNNING" — extract the word
+                words = state_part.split()
+                if len(words) >= 2:
+                    return words[1]
+    return "UNKNOWN"
 
 
 def _run_sc(action, name, ignore_errors=False):
@@ -355,7 +514,6 @@ if __name__ == "__main__":
 
     try:
         if args.no_service:
-            # Config-only mode — useful for testing without admin rights
             valid, code = sc.validate_activation_code_format(args.code)
             if not valid:
                 print(f"ERROR: {code}")

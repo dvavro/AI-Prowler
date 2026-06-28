@@ -616,12 +616,14 @@ class TestSchedulerLifecycle:
             result = se.run_job_now("morning_briefing")
         assert "⚠️" in result or "No email" in result
 
-    def test_TC_SCHED_008_get_log_tail_returns_string(self, tmp_path, monkeypatch):
+    def test_TC_SCHED_008_get_log_tail_returns_string(self, tmp_path):
         import scheduler_engine as se
         log_path = tmp_path / "scheduler_log.txt"
         log_path.write_text("line1\nline2\nline3", encoding="utf-8")
-        monkeypatch.setattr(se, "LOG_PATH", log_path)
-        result = se.get_log_tail(10)
+        # Use patch() not monkeypatch.setattr() — get_log_tail reads LOG_PATH
+        # as a module-level name lookup each call, so patch correctly intercepts it.
+        with patch("scheduler_engine.LOG_PATH", log_path):
+            result = se.get_log_tail(10)
         assert isinstance(result, str)
         assert len(result) > 0
 

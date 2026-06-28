@@ -9108,15 +9108,35 @@ or from the Help menu."""
                       text="New subscriber? Get your activation code:",
                       font=('Arial', 9)).pack(side='left')
 
+            def _open_subscribe(plan):
+                """Fetch a dynamic Stripe Checkout Session URL from the Worker
+                and open it in the browser. Ensures allow_promotion_codes is
+                always active — static Payment Links lose that setting."""
+                import webbrowser, urllib.request, json as _json
+                try:
+                    req = urllib.request.Request(
+                        f"https://api.ai-prowler.com/checkout/{plan}",
+                        headers={"Accept": "application/json",
+                                 "User-Agent": "AI-Prowler/8.0.0"},
+                        method="GET")
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        data = _json.loads(resp.read().decode())
+                    url = data.get("url", "")
+                    if url:
+                        webbrowser.open(url)
+                    else:
+                        messagebox.showerror("Subscribe",
+                            "Could not get checkout URL. Please try again.")
+                except Exception as ex:
+                    messagebox.showerror("Subscribe",
+                        f"Could not reach subscription server:\n{ex}\n\n"
+                        "Check your internet connection and try again.")
+
             def _open_subscribe_personal():
-                import webbrowser
-                webbrowser.open(
-                    "https://buy.stripe.com/5kQ4gs3sN53j8ZM81u4c801")
+                _open_subscribe("personal")
 
             def _open_subscribe_business():
-                import webbrowser
-                webbrowser.open(
-                    "https://buy.stripe.com/9B63co0gB1R7cbYftW4c800")
+                _open_subscribe("business")
 
             ttk.Button(sub_top_row,
                        text="🛒 Subscribe — Personal",
