@@ -345,31 +345,83 @@ def _install_cloudflared_service(tunnel_token, progress_cb=None):
 
     # Clean up stale EventLog registry key that blocks reinstallation.
     # cloudflared says "Cannot install event logger: registry key already exists"
-    # when this key is present, causing silent service install failure.
-    subprocess.run(
-        ["reg", "delete",
-         r"HKLM\SYSTEM\CurrentControlSet\Services\EventLog\Application\Cloudflared",
-         "/f"],
-        capture_output=True, text=True
-    )
+    # when this key is present, causing the SCM service registration to fail
+    # (cloudflared logs "installed successfully" misleadingly even when this
+    # happens on some versions, but `sc query` afterward shows no service at
+    # all — confirmed 2026-06-30: a fresh install attempt failed this way
+    # with NO prior service present, so this is not just a leftover-from-
+    # previous-install issue, it can occur on first install too).
+    def _clear_eventlog_key():
+        subprocess.run(
+            ["reg", "delete",
+             r"HKLM\SYSTEM\CurrentControlSet\Services\EventLog\Application\Cloudflared",
+             "/f"],
+            capture_output=True, text=True
+        )
+    _clear_eventlog_key()
 
     # cloudflared service install <token> — the token is stored in the Windows
     # registry by cloudflared itself. On service startup, cloudflared reads
     # the token from the registry (not from config.yml or a credentials file).
     # No TUNNEL_TOKEN env var or config.yml is needed or wanted here.
-    result = subprocess.run(
-        [str(CLOUDFLARED_EXE), "service", "install", tunnel_token],
-        capture_output=True, text=True
-    )
-
-    if result.returncode != 0:
+    #
+    # FIX 2026-06-30: previously a failed install (e.g. the EventLog key
+    # error, or cloudflared's own "service is already installed" message)
+    # was just logged as a progress note and silently ignored — the code
+    # fell through to the RUNNING check below without ever confirming the
+    # NEW token was actually what got installed. This let a stale service
+    # (wrong tunnel token from a previous activation) keep running while
+    # the GUI reported "Server Configured ✅", causing HTTP 530 errors
+    # that looked like a DNS problem but were actually a wrong-tunnel
+    # service silently surviving a failed reinstall.
+    #
+    # Now: up to 2 attempts. On any failure, explicitly uninstall via
+    # `cloudflared service uninstall` (not just `sc delete`, which does
+    # not clear cloudflared's own internal already-installed marker —
+    # this is the exact distinction that caused today's bug), clear the
+    # EventLog key again, then retry once before giving up.
+    install_ok = False
+    last_output = ""
+    for attempt in range(2):
+        result = subprocess.run(
+            [str(CLOUDFLARED_EXE), "service", "install", tunnel_token],
+            capture_output=True, text=True
+        )
         out = (result.stdout + result.stderr).strip()
+        last_output = out
+
+        if result.returncode == 0 and "already installed" not in out.lower():
+            install_ok = True
+            break
+
         if "access is denied" in out.lower() or "privilege" in out.lower():
-            # Need elevation — use PowerShell RunAs
             _cb("Elevation required — requesting admin access...")
             _install_service_via_powershell(tunnel_token)
-        else:
-            _cb(f"Service install note: {out}")
+            install_ok = True  # PowerShell path doesn't return output to check here
+            break
+
+        # "already installed" (cloudflared's own marker, separate from SCM)
+        # or the EventLog registry error — clean up properly and retry once.
+        if attempt == 0:
+            _cb(f"Install attempt {attempt + 1} failed, cleaning up and retrying...")
+            subprocess.run(
+                [str(CLOUDFLARED_EXE), "service", "uninstall"],
+                capture_output=True, text=True
+            )
+            _run_sc("stop", CLOUDFLARED_SERVICE, ignore_errors=True)
+            _run_sc("delete", CLOUDFLARED_SERVICE, ignore_errors=True)
+            time.sleep(2)
+            _clear_eventlog_key()
+            time.sleep(1)
+
+    if not install_ok:
+        raise RuntimeError(
+            f"cloudflared service install failed after 2 attempts:\n{last_output}\n\n"
+            "Try running AI-Prowler as Administrator, or manually run:\n"
+            f'  "{CLOUDFLARED_EXE}" service uninstall\n'
+            f'  reg delete "HKLM\\SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application\\Cloudflared" /f\n'
+            "then activate again."
+        )
 
     time.sleep(2)
 
@@ -383,6 +435,11 @@ def _install_cloudflared_service(tunnel_token, progress_cb=None):
         _cb(f"Tunnel service: {state}")
         if state == "RUNNING":
             _cb("Tunnel service is running ✅")
+        else:
+            raise RuntimeError(
+                f"cloudflared service installed but is not running (state: {state}).\n"
+                "Check Windows Event Viewer for cloudflared service errors."
+            )
     else:
         raise RuntimeError(
             "Service install failed — service not found after install.\n"
