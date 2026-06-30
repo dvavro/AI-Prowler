@@ -597,19 +597,33 @@ When the customer clicks Reply, the reply goes directly to the employee's person
 
 The Remote Access feature lets you use AI-Prowler with Claude.ai from any device — your phone, tablet, or any web browser — using the same agentic RAG capability as Claude Desktop.
 
-### Setup Steps (v8.0.0 — Fully Automated)
+### Personal Mode Setup (v8.0.0 — Fully Automated)
 
 1. **Set a Bearer Token** — In Settings → Remote Access, enter any string as your Bearer token — this is the password Claude uses to connect to your knowledge base. Make it something strong (e.g. `MySecret123!`). Click **Save Token**.
 2. **Start the HTTP Server** — Click **▶ Start HTTP Server**. The status light turns green.
-3. **Subscribe** — Click **Subscribe — Personal** or **Subscribe — Business**. Complete Stripe checkout. Check your email for an activation code (format: `APRO-XXXXXX-XXXXXX-XXXXXX`).
-4. **Configure** — Paste the activation code into the Settings → Remote Access subscription section. Click **⚡ Configure Mobile Access**. AI-Prowler automatically:
+3. **Subscribe** — Click **🛒 Subscribe — Personal**. Complete Stripe checkout. Check your email for an activation code (format: `APRO-XXXXXX-XXXXXX-XXXXXX`).
+4. **Configure** — Paste the activation code into the **Activation Code** field in Settings → Remote Access. Click **⚡ Configure Mobile Access**. AI-Prowler automatically:
+   - Fetches your tunnel credentials from the activation server
    - Creates a Cloudflare tunnel with a permanent public URL
-   - Pushes the ingress routing rule
    - Installs `cloudflared` as a Windows service
    - Starts the tunnel (shown as **Tunnel active (Windows service)**)
+   - Auto-fills your license key, domain, and tunnel token fields
 5. **Connect Claude.ai** — Click the red **📖 Connect Claude.ai (auto)** button. A popup explains the steps and copies your MCP URL to the clipboard. Click OK — Claude.ai opens to the Add Custom Connector dialog. Paste the URL, name it AI-Prowler, leave OAuth fields blank, click Add. Enter your Bearer token when prompted. Set **Always Allow** for all tools.
 
 > **No Cloudflare account needed.** The subscription automatically provisions and manages your Cloudflare tunnel. No manual DNS, no dashboard setup, no domain purchase required.
+
+### Business Server Mode Setup (v8.0.0 — Fully Automated)
+
+See **Section 9** for the full server deployment guide. In brief:
+
+1. **Start the HTTP Server** in Settings → Remote Access
+2. **Subscribe** — Click **🛒 Subscribe — Business** in the Business Subscription & Server Setup panel. Complete Stripe checkout.
+3. You will receive **N+1 emails**:
+   - One **server activation email** (subject: *AI-Prowler Business Server — Your Activation Code*) — for configuring the server machine
+   - One **personal seat email per employee** (subject: *AI-Prowler Personal — Seat N of M — Forward to your employee*) — forward each to the right team member
+4. **Auto-Configure** — Paste your server activation code and click **⚡ Auto-Configure Server**. The tunnel is provisioned and the server is live.
+5. **Test** — Click **🌐 Test Server Connection** — the LED turns green when the server is publicly reachable.
+6. **Share the Connector URL** — Copy the URL from the Server Connection Test panel and add it as a custom connector in Claude.ai (Team plan: once via Org Settings; Pro plan: each employee individually).
 
 ### Status Lights
 
@@ -624,7 +638,7 @@ The **Keep It Running** panel ensures Windows doesn't interrupt your MCP server.
 - **⚡ Apply Power Settings Now** — sets sleep to Never, disables hibernate, sets Windows Update Active Hours
 - **📋 Power Settings Guide** — full manual instructions
 
-### Connecting Claude.ai — Step by Step
+### Connecting Claude.ai — Personal Mode Step by Step
 
 1. Click the **📖 Connect Claude.ai (auto)** button in Settings → Remote Access
 2. Read the popup instructions — your MCP URL is already copied to clipboard
@@ -644,22 +658,51 @@ The **Keep It Running** panel ensures Windows doesn't interrupt your MCP server.
 
 | Plan | Price | Users | Use Case |
 |---|---|---|---|
-| Personal | $10/month | 1 | Personal use |
-| Business | $20/month | Up to 50 | Team deployment |
+| Personal | $10/month | 1 | Single user, one Windows PC + Claude.ai mobile |
+| Business | $20/month | Up to 50 seats | Team deployment — server + personal PC per employee |
 
-### How to Subscribe
+### Personal Plan — How to Subscribe
 
-Click **Subscribe — Personal** or **Subscribe — Business** directly in Settings → Remote Access. Complete the Stripe checkout. You will receive an activation email with your code within minutes.
+Click **🛒 Subscribe — Personal** in Settings → Remote Access → Mobile Access Subscription. Complete Stripe checkout. You will receive one activation email with your code within minutes. Paste the code and click **⚡ Configure Mobile Access**.
+
+### Business Plan — How to Subscribe and What You Receive
+
+Click **🛒 Subscribe — Business** in Settings → Remote Access → Business Subscription & Server Setup. Complete Stripe checkout.
+
+You will receive **N+1 emails** (where N = your seat count):
+
+| Email | Subject | For whom | What to do |
+|---|---|---|---|
+| 1 (server) | *AI-Prowler Business Server — Your Activation Code* | You (the owner) | Paste code into server machine, click Auto-Configure Server |
+| 2…N+1 (per seat) | *AI-Prowler Personal — Seat N of M — Forward to your employee* | Each employee | Forward as-is — employees use these to set up their own PC |
+
+**What each employee receives** (their personal seat email):
+- Their own `APRO-XXXXXX-XXXXXX-XXXXXX` personal activation code
+- Their own Cloudflare tunnel (unique public URL for their PC)
+- Instructions to install AI-Prowler Personal and click **⚡ Configure Mobile Access**
+- The company server connector URL so they can also connect to the shared company knowledge base
+
+**What Claude plan employees need:**
+Each employee needs a **Claude Pro** (individual) or the company needs a **Claude Team** plan to use custom MCP connectors.
+
+| Option | Connector setup |
+|---|---|
+| **Claude Pro** (per person) | Each employee adds the connector individually: Settings → Connectors → + → Add custom connector |
+| **Claude Team** (org plan) | Owner adds once via Organization Settings → Connectors; employees just click Connect |
+
+👉 Upgrade at: https://claude.ai/upgrade
 
 ### Activation
 
-Paste your activation code (format: `APRO-XXXXXX-XXXXXX-XXXXXX`) into the Settings → Remote Access subscription field and click **⚡ Configure Mobile Access**. The entire tunnel setup is automated — no Cloudflare account or dashboard access needed.
+**Personal:** Paste your `APRO-XXXXXX-XXXXXX-XXXXXX` code into the Activation Code field in Settings → Remote Access and click **⚡ Configure Mobile Access**. The entire tunnel setup is automated.
+
+**Business server:** Paste your server code into the Activation Code field in Settings → Remote Access → Business Subscription & Server Setup and click **⚡ Auto-Configure Server**. Then click **🌐 Test Server Connection** to confirm the server is publicly reachable.
 
 ### Grace Period
 
 If your subscription lapses, a 30-day grace period begins. After 30 days, access is suspended until renewal.
 
-### Mobile Activation — Machine Management
+### Mobile Activation — Machine Management (Personal Mode Only)
 
 Your personal AI-Prowler subscription activates on 1 machine at a time. The Mobile Activation section in Settings shows your current activation status and provides tools for machine management.
 
@@ -700,11 +743,46 @@ Business edition lets you run AI-Prowler in server mode on a company machine so 
 
 ### The Big Picture
 
-A Business license is a parent key plus a pool of child seat keys (one per employee). The same child key works in two independent places:
+A Business subscription provisions three things automatically when you subscribe:
 
-1. **The company server** — the owner runs one AI-Prowler in server mode. Each employee is added as a user, assigned a child seat, and given a personal bearer token. They reach the shared company knowledge base via Claude.ai on their phone or laptop using the company's Cloudflare Tunnel URL.
+1. **One server tunnel** — a dedicated Cloudflare Tunnel for the company server machine. The owner activates it with the server activation code and clicks **⚡ Auto-Configure Server**.
 
-2. **A personal install (optional)** — the same employee can install AI-Prowler on their own laptop, activate it with the same child key in personal mode, and index their own private documents. They get their own Cloudflare Tunnel and their own Claude.ai connector pointing to their personal install — completely separate from the company server.
+2. **N child seat keys** (`AP-CHLD-...`) — one per seat, for authenticating each employee's mobile access to the company server. Assigned in the Admin tab.
+
+3. **N personal licenses** (`AP-PERS-...`) — one per seat, each with its own Cloudflare Tunnel and activation code. These are emailed to the owner (one email per seat) to forward to each employee. Employees install AI-Prowler Personal on their own Windows PC and use these exactly like a standalone personal subscriber — completely separate from the company server.
+
+**In summary: every business seat includes both mobile server access AND a personal PC license.**
+
+### Server Deployment — Step by Step
+
+1. Install AI-Prowler Server on the company Windows PC
+2. Go to **Settings → Remote Access**
+3. Start the HTTP Server (**▶ Start HTTP Server**)
+4. Click **🛒 Subscribe — Business** — complete Stripe checkout
+5. Check your email for the server activation code (subject: *AI-Prowler Business Server — Your Activation Code*)
+6. Paste the code into the **Activation Code** field and click **⚡ Auto-Configure Server**
+   - Tunnel is provisioned, cloudflared service installed, license key auto-filled
+7. Click **🌐 Test Server Connection** — LED turns green when publicly reachable
+8. Go to the **Admin** tab and add your employees as users
+9. Forward each per-seat personal email to the right employee
+
+> **Employees need a Claude Pro or Claude Team plan** to use custom MCP connectors. See Section 8 for plan comparison and connector setup instructions.
+
+### Employee Setup — What Each Employee Does
+
+Each employee receives a forwarded email containing:
+- Their personal `APRO-XXXXXX-XXXXXX-XXXXXX` activation code
+- Step-by-step instructions to install AI-Prowler Personal
+- The company server connector URL
+
+Employee steps:
+1. Download and install **AI-Prowler Personal** from the website
+2. Go to Settings → Remote Access → paste their personal activation code
+3. Click **⚡ Configure Mobile Access** — their own tunnel goes live
+4. Click the red **📖 Connect Claude.ai (auto)** button — adds their personal AI-Prowler connector
+5. Add the company server connector URL separately in Claude.ai → Settings → Connectors → + → Add custom connector
+
+They now have **two connectors** in Claude.ai: their personal AI-Prowler (private documents) and the company AI-Prowler Server (shared company knowledge base).
 
 ### Edition and Mode
 
@@ -793,20 +871,20 @@ The Admin tab appears only when `edition = business` AND `mode = server`. Authen
 
 **Giving Each Employee Access**
 Once added, hand them:
-1. Their bearer token — send securely
-2. The company's Claude.ai connector URL — your server's Cloudflare Tunnel address (e.g. `https://mycompany.ai-prowler.com/mcp`)
+1. Their bearer token — send securely (or use Regenerate Token in the Admin tab)
+2. The company's Claude.ai connector URL — shown in Settings → Remote Access → **Server Connection Test** panel. Copy it with the **📋 Copy** button.
 
-The employee adds that connector in Claude.ai settings, authenticates with their bearer token, and starts a new conversation. No software install required on their side.
+The employee adds that connector in Claude.ai settings, authenticates with their bearer token, and starts a new conversation. Their personal AI-Prowler (from their seat email) connects them to their private documents. The server connector connects them to the shared company knowledge base. Both connectors can be active simultaneously in Claude.ai.
 
 ### Replacing the Server Machine
 
-1. Install AI-Prowler on the new machine
-2. Enter the same Parent License Key in Settings → Remote Access → Parent License Key
-3. Copy `users.json`, `license_seats.json`, and `rag_database/` from the old machine (if recoverable) — or re-enter users manually via the Admin tab
-4. Reconfigure the Cloudflare Tunnel on the new machine with the same tunnel token
+1. Install AI-Prowler Server on the new machine
+2. Go to Settings → Remote Access → Business Subscription & Server Setup
+3. Paste your original server activation code and click **⚡ Auto-Configure Server** — the same tunnel token is returned (re-claims are allowed from a new machine)
+4. Copy `users.json`, `license_seats.json`, and `rag_database/` from the old machine (if recoverable) — or re-enter users manually via the Admin tab
 5. All employees' Claude.ai connectors continue to work — the URL doesn't change
 
-> **Why no transfer step is needed:** The parent license key has no machine lock. It is validated against your subscription record for validity and seat count only. You can run it on any machine.
+> **Why no transfer step is needed:** The server license key has no machine lock. It is validated against your subscription record for validity and seat count only. You can run it on any machine.
 
 ---
 
@@ -1402,15 +1480,28 @@ The SMS Reply Monitor defaults to `every_2h` — it checks repeatedly throughout
 
 - **Bearer Token** — the password used to authenticate MCP connections from Claude.ai. Enter any string — make it strong (e.g. `MySecret123!`). Click **Save Token**.
 - **Port** — HTTP server port (default 8000).
-- **HTTP Server controls** — ▶ Start HTTP Server / ■ Stop HTTP Server.
+- **HTTP Server controls** — ▶ Start HTTP Server / ■ Stop HTTP Server / 🔨 Force Kill Port.
 - **Status lights** — Internet ● and Subscription ●
-- **Mobile Access Subscription** — subscribe and activate from here:
-  - **Subscribe — Personal / Business** — opens Stripe checkout in browser; activation code arrives by email
-  - **Activation code field** — paste `APRO-XXXXXX-XXXXXX-XXXXXX` from email
-  - **⚡ Configure Mobile Access** — one click provisions tunnel, installs cloudflared service, starts tunnel automatically
-  - **Manage Subscription →** — opens Stripe customer portal to cancel, change payment, or adjust seats
+
+**Personal mode — Mobile Access Subscription panel:**
+- **🛒 Subscribe — Personal / Business** — opens Stripe checkout in browser; activation code arrives by email
+- **Activation code field** — paste `APRO-XXXXXX-XXXXXX-XXXXXX` from your email
+- **⚡ Configure Mobile Access** — one click fetches tunnel credentials, installs cloudflared service, starts tunnel, auto-fills all fields
+- **Manage Subscription →** — opens Stripe customer portal to cancel, change payment, or adjust seats
 - **📖 Connect Claude.ai (auto)** — copies MCP URL to clipboard and opens Claude.ai Add Custom Connector dialog directly; turns red after activation to prompt user
-- **📋 Manual Instructions** — fallback step-by-step guide if the auto button URL changes
+- **📋 Manual Instructions** — fallback step-by-step guide
+
+**Server mode — Business Subscription & Server Setup panel:**
+- **🛒 Subscribe — Business** — opens Stripe Business checkout; you receive N+1 emails (server code + N per-seat personal codes to forward)
+- **Activation code field** — paste the server `APRO-XXXXXX-XXXXXX-XXXXXX` from your server activation email
+- **⚡ Auto-Configure Server** — fetches tunnel credentials, installs cloudflared, auto-fills Parent License Key, domain, and tunnel token
+- **Manage Subscription →** — opens Stripe customer portal
+
+**Server mode — Server Connection Test panel:**
+- **Connector URL** — the public MCP URL employees paste into Claude.ai (e.g. `https://mycompany.ai-prowler.com/mcp`); auto-updates from tunnel domain; **📋 Copy** button
+- **🌐 Test Server Connection** — hits the public URL over the internet and turns the LED green when reachable; success dialog shows the URL with Claude Team and Claude Pro connector instructions
+
+**Shared (both modes):**
 - **Mobile Activation** — shown in personal/home mode only (hidden in server mode):
   - **Check Activation** — checks if this machine is the active install
   - **Transfer to This Machine** — use when replacing your computer

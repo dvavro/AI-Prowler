@@ -7,21 +7,30 @@ REM  common Windows PATH issue where pytest.exe is not found even after
 REM  install (Scripts folder not on PATH, Windows Store Python alias
 REM  conflicts, etc.).
 REM
-REM  Usage:
-REM    run_tests.bat                                        — run all tests
+REM  DEFAULT RUN (safe — no real Cloudflare tunnels or live Worker):
+REM    run_tests.bat                                        — run all safe tests
 REM    run_tests.bat tests\gui\                             — run GUI tests only
 REM    run_tests.bat tests\mcp\                             — run MCP tests only
 REM    run_tests.bat tests\unit\                            — run unit tests only
-REM    run_tests.bat tests\unit\test_pdf_extraction.py      — PDF table extraction tests
-REM    run_tests.bat tests\unit\test_image_formats.py       — HEIC/WebP image OCR tests
-REM    run_tests.bat tests\unit\test_contractor_tools.py    — email/SMS/scheduling/time/AR tests
-REM    run_tests.bat tests\mcp\test_fuzzy_and_line_replace.py  — fuzzy_replace / line_replace tests
-REM    run_tests.bat tests\unit\messaging\                  — two-way SMS / WhatsApp tests
-REM    run_tests.bat tests\subscription\                    — Stripe, activation, seats, worker API
-REM    run_tests.bat tests\analysis\                        — AI analysis queue and custom tasks
-REM    run_tests.bat tests\gui\test_config_encoding.py      — single file
-REM    run_tests.bat tests\ -k encoding                     — run tests matching a keyword
-REM    run_tests.bat tests\ -k PDF                          — run all PDF-* tests
+REM    run_tests.bat tests\subscription\                    — subscription mocks only
+REM    run_tests.bat tests\analysis\                        — AI analysis tests
+REM    run_tests.bat tests\unit\messaging\                  — SMS/WhatsApp tests
+REM    run_tests.bat tests\ -k encoding                     — keyword filter
+REM    run_tests.bat tests\ -m "not slow"                   — skip slow tests
+REM
+REM  *** EXCLUDED FROM DEFAULT RUN (pytest.ini: -m "not e2e and not live_worker") ***
+REM
+REM    e2e — MINTS REAL LICENSES + CREATES REAL CLOUDFLARE TUNNELS.
+REM    Only run when explicitly testing the provisioning flow.
+REM    NEVER run by accident — pollutes Cloudflare tunnel list and KV store.
+REM
+REM      run_tests.bat tests\test_tunnel_ingress_e2e.py -m e2e -v
+REM      run_tests.bat tests\e2e\ -m e2e -v
+REM
+REM    live_worker — hits the LIVE production Worker at api.ai-prowler.com.
+REM    Only run when explicitly validating the Worker API contract.
+REM
+REM      run_tests.bat tests\subscription\test_worker_api.py -v -m live_worker
 REM =====================================================================
 setlocal
 

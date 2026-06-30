@@ -9454,7 +9454,275 @@ or from the Help menu."""
                 import threading as _th
                 _th.Thread(target=_worker, daemon=True).start()
 
-        # ── Mobile Activation (v7.0.1) ───────────────────────────────────────
+        # ── Server Mode: Subscribe + Auto-Configure (v8.1.0) ─────────────────
+        # Mirrors the personal subscribe+activate flow but for business/server.
+        # Shows ONLY in server mode. Hidden in personal/home mode.
+        # Subscribe button  → opens Stripe Business checkout in the browser.
+        # Activation code   → user pastes server code from email, clicks button.
+        # _activate_server() fetches payload from subscription worker,
+        #   writes config files, fills license key, installs cloudflared service.
+        else:
+            srv_sub_outer = ttk.LabelFrame(remote_frame,
+                                           text="Business Subscription & Server Setup",
+                                           padding=(10, 6))
+            srv_sub_outer.pack(fill='x', pady=(0, 8))
+
+            # ── Subscribe row ─────────────────────────────────────────────────
+            srv_sub_top_row = ttk.Frame(srv_sub_outer)
+            srv_sub_top_row.pack(fill='x', pady=(0, 6))
+
+            ttk.Label(srv_sub_top_row,
+                      text="New subscriber? Get your server activation code:",
+                      font=('Arial', 9)).pack(side='left')
+
+            def _open_subscribe_business_srv():
+                import webbrowser, urllib.request, json as _json
+                try:
+                    req = urllib.request.Request(
+                        "https://api.ai-prowler.com/checkout/business",
+                        headers={"Accept": "application/json",
+                                 "User-Agent": "AI-Prowler/8.1.0"},
+                        method="GET")
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        data = _json.loads(resp.read().decode())
+                    url = data.get("url", "")
+                    if url:
+                        webbrowser.open(url)
+                    else:
+                        messagebox.showerror("Subscribe",
+                            "Could not get checkout URL. Please try again.")
+                except Exception as ex:
+                    messagebox.showerror("Subscribe",
+                        f"Could not reach subscription server:\n{ex}\n\n"
+                        "Check your internet connection and try again.")
+
+            ttk.Button(srv_sub_top_row,
+                       text="🛒 Subscribe — Business",
+                       command=_open_subscribe_business_srv).pack(
+                           side='left', padx=(12, 0))
+
+            ttk.Separator(srv_sub_outer, orient='horizontal').pack(
+                fill='x', pady=(4, 8))
+
+            # ── Server Activation code row ────────────────────────────────────
+            ttk.Label(srv_sub_outer,
+                      text="Already subscribed? Enter your SERVER activation code:",
+                      font=('Arial', 9, 'bold')).pack(anchor='w')
+            ttk.Label(srv_sub_outer, font=('Arial', 8), foreground='gray',
+                      text="Check your email for the subject "
+                           "'AI-Prowler Business Server — Your Activation Code'.\n"
+                           "Format: APRO-XXXXXX-XXXXXX-XXXXXX  "
+                           "then click Auto-Configure Server."
+                      ).pack(anchor='w', pady=(0, 6))
+
+            srv_act_code_row = ttk.Frame(srv_sub_outer)
+            srv_act_code_row.pack(fill='x', pady=(0, 4))
+
+            _srv_act_code_var = tk.StringVar()
+            _srv_act_code_entry = ttk.Entry(srv_act_code_row,
+                                            textvariable=_srv_act_code_var,
+                                            width=36,
+                                            font=('Courier New', 10))
+            _srv_act_code_entry.pack(side='left', padx=(0, 8))
+            _srv_act_code_entry.insert(0, "APRO-")
+
+            # Status LED
+            _srv_act_canvas = tk.Canvas(srv_act_code_row, width=14, height=14,
+                                        bg=self.root.cget('bg'),
+                                        highlightthickness=0)
+            _srv_act_canvas.pack(side='left', padx=(0, 4))
+
+            # Initialise LED from saved state
+            _srv_initial_led = 'gray'
+            _srv_initial_domain = ""
+            try:
+                import json as _jsrv
+                _srv_ra_path = Path.home() / '.ai-prowler' / 'remote_access.json'
+                if _srv_ra_path.exists():
+                    _srv_ra = _jsrv.loads(_srv_ra_path.read_text(encoding='utf-8'))
+                    if _srv_ra.get('domain'):
+                        _srv_initial_led = '#22C55E'
+                        _srv_initial_domain = _srv_ra.get('domain', '')
+            except Exception:
+                pass
+
+            _srv_act_dot = _srv_act_canvas.create_oval(
+                2, 2, 12, 12, fill=_srv_initial_led, outline='')
+
+            _srv_act_domain_var = tk.StringVar(value=_srv_initial_domain)
+            _srv_act_domain_lbl = ttk.Label(srv_act_code_row,
+                                            textvariable=_srv_act_domain_var,
+                                            font=('Arial', 8),
+                                            foreground='#2E75B6')
+            _srv_act_domain_lbl.pack(side='left', padx=(4, 0))
+
+            # ── Auto-Configure Server button ──────────────────────────────────
+            srv_act_btn_row = ttk.Frame(srv_sub_outer)
+            srv_act_btn_row.pack(fill='x', pady=(4, 2))
+
+            _srv_configure_btn = ttk.Button(srv_act_btn_row,
+                                            text="⚡ Auto-Configure Server",
+                                            command=lambda: _activate_server())
+            _srv_configure_btn.pack(side='left', padx=(0, 10))
+
+            _srv_act_status_var = tk.StringVar(value="")
+            ttk.Label(srv_act_btn_row,
+                      textvariable=_srv_act_status_var,
+                      font=('Arial', 8),
+                      foreground='gray').pack(side='left')
+
+            ttk.Button(srv_sub_outer,
+                       text="Manage Subscription →",
+                       command=lambda: _open_stripe_portal_srv()).pack(
+                           anchor='e', pady=(6, 0))
+            ttk.Label(srv_sub_outer, font=('Arial', 8), foreground='gray',
+                      text="Cancel, update payment method, or change seat count — "
+                           "all from one Stripe-hosted page."
+                      ).pack(anchor='e')
+
+            def _open_stripe_portal_srv():
+                import webbrowser
+                try:
+                    import json as _j
+                    _cfg = Path.home() / '.ai-prowler' / 'config.json'
+                    url = _j.loads(_cfg.read_text(encoding='utf-8')).get(
+                        'stripe_portal_url', '') if _cfg.exists() else ''
+                except Exception:
+                    url = ''
+                if not url:
+                    messagebox.showinfo("Stripe Portal Not Configured",
+                        "The Stripe Customer Portal URL hasn't been saved yet.\n\n"
+                        "Add it to ~/.ai-prowler/config.json as:\n"
+                        '"stripe_portal_url": "https://billing.stripe.com/p/login/..."')
+                    return
+                webbrowser.open(url)
+
+            # ── _activate_server() ────────────────────────────────────────────
+            def _activate_server():
+                """
+                Same flow as _activate_mobile() (personal) but in server mode:
+                  1. Validate APRO-... format
+                  2. Call mobile_activator.activate_from_code() — identical worker
+                  3. Auto-fill Parent License Key, domain, tunnel token fields
+                  4. Install cloudflared service
+                  5. Turn Connect Claude.ai button red
+                """
+                code = _srv_act_code_var.get().strip()
+                if not code or code == "APRO-":
+                    messagebox.showwarning(
+                        "No Activation Code",
+                        "Paste your SERVER activation code from the email "
+                        "you received after subscribing.\n\n"
+                        "Subject: 'AI-Prowler Business Server — Your Activation Code'\n"
+                        "Format:  APRO-XXXXXX-XXXXXX-XXXXXX")
+                    return
+
+                try:
+                    import sys as _sys, os as _os
+                    _app_dir = _os.path.dirname(_os.path.abspath(__file__))
+                    if _app_dir not in _sys.path:
+                        _sys.path.insert(0, _app_dir)
+                    import subscription_client as _sc
+                except ImportError as _ie:
+                    messagebox.showerror("Module Error",
+                        f"subscription_client.py not found.\n{_ie}\n\n"
+                        "Please reinstall AI-Prowler Server.")
+                    return
+
+                valid, cleaned = _sc.validate_activation_code_format(code)
+                if not valid:
+                    messagebox.showwarning("Invalid Code Format", cleaned)
+                    _srv_act_code_entry.configure(foreground='red')
+                    self.root.after(2000,
+                        lambda: _srv_act_code_entry.configure(foreground=''))
+                    return
+
+                _srv_configure_btn.configure(
+                    text="⏳ Configuring…", state='disabled')
+                _srv_act_status_var.set("Contacting activation server…")
+                _srv_act_canvas.itemconfig(_srv_act_dot, fill='#E67E00')
+
+                def _progress(msg):
+                    self.root.after(0, lambda: _srv_act_status_var.set(msg))
+
+                def _worker():
+                    try:
+                        import mobile_activator as _ma
+                        result = _ma.activate_from_code(
+                            cleaned, progress_cb=_progress)
+
+                        def _on_success():
+                            _srv_act_canvas.itemconfig(
+                                _srv_act_dot, fill='#22C55E')
+                            _srv_act_domain_var.set(result.get('domain', ''))
+                            _srv_act_status_var.set("✅ Server configured")
+                            _srv_configure_btn.configure(
+                                text="⚡ Auto-Configure Server",
+                                state='normal')
+                            # Auto-fill Parent License Key, domain, tunnel token
+                            _license_key_var.set(result.get('license_key', ''))
+                            _tun_domain_var.set(result.get('domain', ''))
+                            try:
+                                import json as _jcfg
+                                _cfgp = Path.home() / '.ai-prowler' / 'config.json'
+                                if _cfgp.exists():
+                                    _tok = _jcfg.loads(
+                                        _cfgp.read_text(encoding='utf-8')
+                                    ).get('tunnel_token', '')
+                                    if _tok:
+                                        _tun_token_var.set(_tok)
+                            except Exception:
+                                pass
+                            # Turn Connect Claude.ai button red — next step
+                            try:
+                                _connect_claude_btn.configure(
+                                    background='#CC0000',
+                                    foreground='white',
+                                    text="📖 Connect Claude.ai  (auto) ← Click now to finish setup!")
+                            except Exception:
+                                pass
+                            self.root.after(500, _run_status_check)
+                            messagebox.showinfo(
+                                "Server Configured ✅",
+                                f"AI-Prowler Server is ready.\n\n"
+                                f"Server URL: {result.get('domain', '')}\n"
+                                f"License: {result.get('license_key', '')}\n\n"
+                                "✅ Tunnel is active.\n\n"
+                                "👉 Next step: click the red\n"
+                                "   'Connect Claude.ai' button\n"
+                                "   to add AI-Prowler Server to Claude.ai.\n\n"
+                                "Your employees will each receive a separate email\n"
+                                "with their personal AI-Prowler activation code\n"
+                                "— forward those emails so they can set up their PCs.")
+                        self.root.after(0, _on_success)
+
+                    except ValueError as _ve:
+                        def _on_val_err():
+                            _srv_act_canvas.itemconfig(
+                                _srv_act_dot, fill='red')
+                            _srv_act_status_var.set(f"❌ {_ve}")
+                            _srv_configure_btn.configure(
+                                text="⚡ Auto-Configure Server",
+                                state='normal')
+                            messagebox.showerror("Activation Failed", str(_ve))
+                        self.root.after(0, _on_val_err)
+                    except Exception as _ex:
+                        def _on_err():
+                            _srv_act_canvas.itemconfig(
+                                _srv_act_dot, fill='red')
+                            _srv_act_status_var.set("❌ Configuration failed")
+                            _srv_configure_btn.configure(
+                                text="⚡ Auto-Configure Server",
+                                state='normal')
+                            messagebox.showerror(
+                                "Configuration Error",
+                                f"Server configuration failed:\n{_ex}\n\n"
+                                "Check your internet connection and try again.\n"
+                                "If the problem persists contact support.")
+                        self.root.after(0, _on_err)
+
+                import threading as _th2
+                _th2.Thread(target=_worker, daemon=True).start()
         # Personal/home installs: 1 machine activation per license.
         # Hidden in server mode — server installs are not machine-limited.
         _act_outer = ttk.Frame(remote_frame)
@@ -10525,74 +10793,8 @@ or from the Help menu."""
         def _cf_exe():
             return str(Path(__file__).parent / 'cloudflared.exe')
 
-        # ── Named Tunnel section ──────────────────────────────────────────────
-        # Setup Cloudflare Tunnel guide hidden in v8.0.0 — tunnel is now
-        # provisioned automatically via the subscription flow above.
-        # Only the Connect Claude.ai step remains for the user to complete.
-
-        # ── Connect Claude.ai button (turns red after activation to prompt user) ──
-        # Opens Claude.ai with the Add Custom Connector modal pre-filled with
-        # the AI-Prowler MCP URL — no manual copy/paste needed.
-        guide_row = ttk.Frame(remote_frame)
-        guide_row.pack(fill='x', pady=(0, 6))
-
-        def _open_claude_connector():
-            import webbrowser
-            domain = _tun_domain_var.get().strip().replace(
-                'https://', '').replace('http://', '').rstrip('/')
-            if not domain:
-                messagebox.showwarning(
-                    "No Domain",
-                    "Activate your subscription first so the tunnel domain is set,\n"
-                    "then click this button to connect Claude.ai.")
-                return
-            mcp_url = f"https://{domain}/mcp"
-            # Copy MCP URL to clipboard so user can paste directly into the form
-            try:
-                self.root.clipboard_clear()
-                self.root.clipboard_append(mcp_url)
-                self.root.update()
-            except Exception:
-                pass
-            # Show instructions FIRST — user reads steps, then clicks OK
-            # which opens the browser so they can immediately paste
-            messagebox.showinfo(
-                "MCP URL Copied — Paste into Claude.ai",
-                f"Your MCP URL has been copied to the clipboard:\n\n"
-                f"  {mcp_url}\n\n"
-                f"Click OK and the Claude.ai connector form will open.\n\n"
-                f"1. Paste the URL into the 'Remote MCP server URL' field\n"
-                f"2. Name it 'AI-Prowler'\n"
-                f"3. Leave OAuth fields blank\n"
-                f"4. Click Add → enter your Bearer Token when prompted\n"
-                f"5. Set 'Always allow' for all tools")
-            # Open Claude.ai AFTER user has read the instructions
-            claude_url = "https://claude.ai/customize/connectors?modal=add-custom-connector"
-            webbrowser.open(claude_url)
-            # Reset button back to normal after clicking
-            try:
-                _connect_claude_btn.configure(
-                    background='SystemButtonFace',
-                    foreground='SystemButtonText',
-                    text="📖 Connect Claude.ai  (open connector setup)")
-            except Exception:
-                pass
-
-        _connect_claude_btn = tk.Button(guide_row,
-                   text="📖 Connect Claude.ai  (auto)",
-                   command=_open_claude_connector,
-                   relief='raised', bd=1,
-                   font=('Arial', 9))
-        _connect_claude_btn.pack(side='left', padx=(0, 4))
-        ttk.Button(guide_row,
-                   text="📋 Manual Instructions",
-                   command=self.show_claude_connector_guide
-                   ).pack(side='left', padx=(0, 8))
-        ttk.Label(guide_row,
-                  text="← auto opens Claude.ai with URL copied to clipboard",
-                  font=('Arial', 8), foreground='gray').pack(side='left')
-
-        # ── Load saved tunnel settings ─────────────────────────────────────────
+        # ── Tunnel domain var — defined here so both personal and server
+        #    mode branches below can reference it safely ──────────────────
         _tun_name_var   = tk.StringVar(value='')
         _tun_domain_var = tk.StringVar(value='')
         try:
@@ -10604,6 +10806,243 @@ or from the Help menu."""
                 _tun_domain_var.set(_rc_data.get('tunnel_domain', ''))
         except Exception:
             pass
+
+        # ── Named Tunnel section ──────────────────────────────────────────────
+        # Setup Cloudflare Tunnel guide hidden in v8.0.0 — tunnel is now
+        # provisioned automatically via the subscription flow above.
+
+        if not _settings_is_server_mode:
+            # ── Personal mode: Connect Claude.ai button ───────────────────────
+            # Opens Claude.ai with the Add Custom Connector modal pre-filled
+            # with the MCP URL.  Turns red after activation to prompt the user.
+            guide_row = ttk.Frame(remote_frame)
+            guide_row.pack(fill='x', pady=(0, 6))
+
+            def _open_claude_connector():
+                import webbrowser
+                domain = _tun_domain_var.get().strip().replace(
+                    'https://', '').replace('http://', '').rstrip('/')
+                if not domain:
+                    messagebox.showwarning(
+                        "No Domain",
+                        "Activate your subscription first so the tunnel domain is set,\n"
+                        "then click this button to connect Claude.ai.")
+                    return
+                mcp_url = f"https://{domain}/mcp"
+                try:
+                    self.root.clipboard_clear()
+                    self.root.clipboard_append(mcp_url)
+                    self.root.update()
+                except Exception:
+                    pass
+                messagebox.showinfo(
+                    "MCP URL Copied — Paste into Claude.ai",
+                    f"Your MCP URL has been copied to the clipboard:\n\n"
+                    f"  {mcp_url}\n\n"
+                    f"Click OK and the Claude.ai connector form will open.\n\n"
+                    f"1. Paste the URL into the 'Remote MCP server URL' field\n"
+                    f"2. Name it 'AI-Prowler'\n"
+                    f"3. Leave OAuth fields blank\n"
+                    f"4. Click Add → enter your Bearer Token when prompted\n"
+                    f"5. Set 'Always allow' for all tools")
+                claude_url = "https://claude.ai/customize/connectors?modal=add-custom-connector"
+                webbrowser.open(claude_url)
+                try:
+                    _connect_claude_btn.configure(
+                        background='SystemButtonFace',
+                        foreground='SystemButtonText',
+                        text="📖 Connect Claude.ai  (open connector setup)")
+                except Exception:
+                    pass
+
+            _connect_claude_btn = tk.Button(guide_row,
+                       text="📖 Connect Claude.ai  (auto)",
+                       command=_open_claude_connector,
+                       relief='raised', bd=1,
+                       font=('Arial', 9))
+            _connect_claude_btn.pack(side='left', padx=(0, 4))
+            ttk.Button(guide_row,
+                       text="📋 Manual Instructions",
+                       command=self.show_claude_connector_guide
+                       ).pack(side='left', padx=(0, 8))
+            ttk.Label(guide_row,
+                      text="← auto opens Claude.ai with URL copied to clipboard",
+                      font=('Arial', 8), foreground='gray').pack(side='left')
+
+        else:
+            # ── Server mode: Connection Test panel (v8.1.0) ───────────────────
+            # Shows the public MCP URL employees need, tests reachability from
+            # the internet, and turns green when confirmed accessible.
+            # No "Connect Claude.ai" here — employees do that from their own
+            # devices using the URL displayed below.
+
+            srv_test_frame = ttk.LabelFrame(remote_frame,
+                                            text="Server Connection Test",
+                                            padding=(10, 6))
+            srv_test_frame.pack(fill='x', pady=(0, 8))
+
+            # ── Connector URL display + copy ──────────────────────────────────
+            ttk.Label(srv_test_frame,
+                      text="Connector URL — employees paste this into Claude.ai:",
+                      font=('Arial', 9, 'bold')).pack(anchor='w')
+            ttk.Label(srv_test_frame, font=('Arial', 8), foreground='gray',
+                      text="Claude Team: Owner adds once in Organization Settings → Connectors.\n"
+                           "Claude Pro:  Each employee adds individually in Settings → Connectors → +."
+                      ).pack(anchor='w', pady=(0, 6))
+
+            url_row = ttk.Frame(srv_test_frame)
+            url_row.pack(fill='x', pady=(0, 8))
+
+            _srv_mcp_url_var = tk.StringVar()
+
+            def _refresh_srv_mcp_url(*_):
+                d = _tun_domain_var.get().strip().replace(
+                    'https://', '').replace('http://', '').rstrip('/')
+                _srv_mcp_url_var.set(f"https://{d}/mcp" if d else "")
+
+            _tun_domain_var.trace_add('write', _refresh_srv_mcp_url)
+            _refresh_srv_mcp_url()
+
+            _srv_url_entry = ttk.Entry(url_row, textvariable=_srv_mcp_url_var,
+                                       width=44, state='readonly',
+                                       font=('Courier New', 9))
+            _srv_url_entry.pack(side='left', padx=(0, 6))
+
+            def _copy_srv_url():
+                url = _srv_mcp_url_var.get()
+                if not url or url == "https:///mcp":
+                    messagebox.showwarning("No URL",
+                        "Activate the server first so the domain is set.")
+                    return
+                try:
+                    self.root.clipboard_clear()
+                    self.root.clipboard_append(url)
+                    self.root.update()
+                    self.status_var.set(f"📋 Copied: {url}")
+                    self.root.after(3000, lambda: self.status_var.set("Ready"))
+                except Exception as _ce:
+                    messagebox.showerror("Copy Failed", str(_ce))
+
+            ttk.Button(url_row, text="📋 Copy",
+                       command=_copy_srv_url).pack(side='left')
+
+            ttk.Separator(srv_test_frame, orient='horizontal').pack(
+                fill='x', pady=(2, 8))
+
+            # ── Test button + LED + status label ─────────────────────────────
+            test_row = ttk.Frame(srv_test_frame)
+            test_row.pack(fill='x')
+
+            # LED canvas — gray=untested, orange=testing, green=ok, red=fail
+            _srv_test_canvas = tk.Canvas(test_row, width=14, height=14,
+                                         bg=self.root.cget('bg'),
+                                         highlightthickness=0)
+            _srv_test_canvas.pack(side='left', padx=(0, 6))
+            _srv_test_dot = _srv_test_canvas.create_oval(
+                2, 2, 12, 12, fill='gray', outline='')
+
+            _srv_test_btn = ttk.Button(test_row, text="🌐 Test Server Connection")
+            _srv_test_btn.pack(side='left', padx=(0, 10))
+
+            _srv_test_status_var = tk.StringVar(value="Not tested yet")
+            _srv_test_status_lbl = ttk.Label(test_row,
+                                             textvariable=_srv_test_status_var,
+                                             font=('Arial', 8))
+            _srv_test_status_lbl.pack(side='left')
+
+            def _test_server_connection():
+                """
+                Hit the public /mcp URL from this machine — confirms tunnel is
+                routing traffic end-to-end from the internet to the local HTTP
+                server.  A 200 or 405 response both mean the server is reachable
+                (405 = MCP endpoint exists but GET not allowed, which is normal).
+                """
+                url = _srv_mcp_url_var.get().strip()
+                if not url or url == "https:///mcp":
+                    messagebox.showwarning(
+                        "No URL",
+                        "Activate the server first (paste your activation code\n"
+                        "and click Auto-Configure Server) so the domain is set.")
+                    return
+
+                _srv_test_btn.configure(state='disabled')
+                _srv_test_canvas.itemconfig(_srv_test_dot, fill='#E67E00')
+                _srv_test_status_var.set(f"Testing {url} …")
+                _srv_test_status_lbl.configure(foreground='#888')
+
+                def _worker():
+                    ok      = False
+                    status  = ""
+                    detail  = ""
+                    try:
+                        import urllib.request as _ur
+                        import urllib.error   as _ue
+                        req = _ur.Request(url,
+                                          headers={"User-Agent": "AI-Prowler-ServerTest/8.1"},
+                                          method="GET")
+                        try:
+                            with _ur.urlopen(req, timeout=12) as resp:
+                                code = resp.getcode()
+                                ok   = True
+                                status  = f"✅ Reachable  (HTTP {code})"
+                                detail  = "green"
+                        except _ue.HTTPError as he:
+                            # 4xx from the MCP endpoint = server is up and answering
+                            if he.code in (400, 401, 403, 405):
+                                ok      = True
+                                status  = f"✅ Reachable  (HTTP {he.code} — server is live)"
+                                detail  = "green"
+                            else:
+                                status  = f"⚠️ HTTP {he.code} — check server config"
+                                detail  = "orange"
+                    except OSError as oe:
+                        status = f"❌ Not reachable — {oe}"
+                        detail = "red"
+                    except Exception as ex:
+                        status = f"❌ Error — {ex}"
+                        detail = "red"
+
+                    colour_map = {
+                        "green":  "#22C55E",
+                        "orange": "#E67E00",
+                        "red":    "#CC0000",
+                    }
+                    colour = colour_map.get(detail, 'gray')
+
+                    def _apply():
+                        _srv_test_canvas.itemconfig(_srv_test_dot, fill=colour)
+                        _srv_test_status_var.set(status)
+                        _srv_test_status_lbl.configure(
+                            foreground='#1a7a1a' if ok else '#cc0000')
+                        _srv_test_btn.configure(state='normal')
+                        if ok:
+                            # Show the URL prominently so admin can share it
+                            messagebox.showinfo(
+                                "Server is Live ✅",
+                                f"AI-Prowler Server is publicly reachable.\n\n"
+                                f"Connector URL for employees:\n"
+                                f"  {url}\n\n"
+                                f"Claude Team plan:\n"
+                                f"  Organization Settings → Connectors → Add custom connector\n"
+                                f"  Paste the URL above → click Add\n\n"
+                                f"Claude Pro (each employee individually):\n"
+                                f"  Settings → Connectors → + → Add custom connector\n"
+                                f"  Paste the URL above → click Add\n\n"
+                                f"The URL is also included in each employee's\n"
+                                f"personal activation email — already sent.")
+                    self.root.after(0, _apply)
+
+                import threading as _th3
+                _th3.Thread(target=_worker, daemon=True).start()
+
+            _srv_test_btn.configure(command=_test_server_connection)
+
+            # Expose _connect_claude_btn as a no-op stub so any code that
+            # references it after activation (e.g. _activate_server) doesn't
+            # crash — server mode uses the test panel instead.
+            class _NoOpBtn:
+                def configure(self, **_): pass
+            _connect_claude_btn = _NoOpBtn()
 
         # ── Activation frame ──────────────────────────────────────────────────
         act_frame = ttk.LabelFrame(remote_frame,

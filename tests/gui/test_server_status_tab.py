@@ -50,10 +50,47 @@ if str(SRC_ROOT) not in sys.path:
 # ─────────────────────────────────────────────────────────────────────────────
 
 @pytest.fixture
-def home_gui(gui):
-    """Standard GUI fixture — personal/home mode (default isolated_env).
-    _is_business_server_mode() returns False because no config.json exists."""
-    return gui
+def home_gui(gui, monkeypatch, tmp_path):
+    """GUI fixture forced into personal/home mode regardless of the real
+    config.json on disk.  Writes edition=personal + mode=personal into the
+    real config location, rebuilds the GUI, then restores on teardown."""
+    import rag_gui as gui_mod
+
+    cfg_dir  = Path.home() / ".ai-prowler"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    cfg_path = cfg_dir / "config.json"
+
+    original_content = cfg_path.read_text(encoding="utf-8-sig") if cfg_path.exists() else None
+
+    # Force personal/home mode
+    existing = {}
+    try:
+        existing = json.loads(original_content) if original_content else {}
+    except Exception:
+        pass
+    existing.update({"edition": "personal", "mode": "personal"})
+    cfg_path.write_text(json.dumps(existing), encoding="utf-8")
+
+    root = gui.root
+    for child in list(root.winfo_children()):
+        try:
+            child.destroy()
+        except Exception:
+            pass
+
+    app = gui_mod.RAGGui(root)
+    gui.app = app
+    gui.pump()
+
+    yield gui
+
+    if original_content is not None:
+        cfg_path.write_text(original_content, encoding="utf-8")
+    else:
+        try:
+            cfg_path.unlink()
+        except Exception:
+            pass
 
 
 @pytest.fixture
