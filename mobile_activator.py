@@ -258,6 +258,20 @@ def activate_from_payload(payload):
     cfg["plan"]           = plan
     cfg["seats"]          = seats
     cfg["expires_at"]     = expires_at
+    # Always set edition/mode to match what was actually activated — never
+    # inherit stale values from a previous install of a different type.
+    # Without this, re-activating a personal code on a machine that previously
+    # ran server mode (or vice versa) would keep the old edition/mode because
+    # _load_json above reads the existing config and we only patch other keys.
+    # This was the root cause of "every install shows server mode" — the server
+    # miniPC's config.json had edition=business/mode=server from its server
+    # activation, and a subsequent personal activation preserved those values.
+    if plan == "business":
+        cfg["edition"] = "business"
+        cfg["mode"]    = "server"
+    else:
+        cfg["edition"] = "home"
+        cfg["mode"]    = "personal"
     # Keep remote_token (bearer) untouched — user sets that independently
     _write_json(CONFIG_PATH, cfg)
 
