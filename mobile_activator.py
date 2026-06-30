@@ -244,9 +244,30 @@ def activate_from_payload(payload):
     _write_json(REMOTE_PATH, remote)
 
     # -- 4. license_seats.json — for business plans only ----------------------
+    # FIX: a fresh activation (new code, possibly a different license_key
+    # than whatever was here before from a prior install/subscription) must
+    # NOT silently merge into stale local seat data. Only preserve the
+    # existing seats array if it actually belongs to THIS license_key —
+    # otherwise rebuild from scratch. Without this check, re-activating
+    # with a brand new server activation code kept the old install's
+    # stale seat/child-key list, which is what caused the Admin tab's
+    # License seat dropdown to show nothing (or wrong data) after a clean
+    # re-activation.
     if plan == "business" and seats > 0:
         existing = _load_json(SEATS_PATH, default=None)
-        if existing is None or not existing.get("seats"):
+        same_license = bool(existing) and existing.get("license_key") == license_key
+        if same_license and existing.get("seats"):
+            # Re-sync of the SAME license — preserve assignments, just
+            # refresh the counters/timestamp.
+            existing["license_key"]  = license_key
+            existing["seats_total"]  = seats
+            existing["synced_at"]    = _now_iso()
+            _write_json(SEATS_PATH, existing)
+        else:
+            # New license (different key, or no prior data) — rebuild fresh.
+            # Real seat IDs / child keys come from the Worker via the
+            # Admin tab's "Sync Seats" button; this is just a placeholder
+            # shape until that sync runs.
             seat_records = [
                 {
                     "seat_id":     f"{license_key}-S{str(i+1).zfill(3)}",
@@ -265,11 +286,14 @@ def activate_from_payload(payload):
                 "synced_at":        _now_iso(),
             }
             _write_json(SEATS_PATH, seats_data)
-        else:
-            existing["license_key"]  = license_key
-            existing["seats_total"]  = seats
-            existing["synced_at"]    = _now_iso()
-            _write_json(SEATS_PATH, existing)
+    elif plan != "business" and SEATS_PATH.exists():
+        # Activating a personal license on a machine that previously had
+        # business seat data — remove the stale file entirely so nothing
+        # in the Admin tab or elsewhere can read orphaned seat data.
+        try:
+            SEATS_PATH.unlink()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------

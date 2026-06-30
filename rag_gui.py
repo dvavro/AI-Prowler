@@ -9651,6 +9651,33 @@ or from the Help menu."""
                         result = _ma.activate_from_code(
                             cleaned, progress_cb=_progress)
 
+                        # Guard: reject a personal (AP-PERS-...) code pasted
+                        # into the SERVER activation field. mobile_activator
+                        # doesn't distinguish code types itself, so this is
+                        # the safety net that stops a server install from
+                        # silently becoming licensed as a personal seat.
+                        _result_key = result.get('license_key', '')
+                        if _result_key.startswith('AP-PERS-'):
+                            def _on_wrong_code():
+                                _srv_act_canvas.itemconfig(_srv_act_dot, fill='red')
+                                _srv_act_status_var.set(
+                                    "❌ That's a Personal code, not a Server code")
+                                _srv_configure_btn.configure(
+                                    text="⚡ Auto-Configure Server",
+                                    state='normal')
+                                messagebox.showerror(
+                                    "Wrong Activation Code",
+                                    f"The code you entered ({cleaned}) activated a "
+                                    f"PERSONAL license ({_result_key}), not a Business "
+                                    f"Server license.\n\n"
+                                    "Check your email for the subject:\n"
+                                    "  'AI-Prowler Business Server — Your Activation Code'\n\n"
+                                    "That email contains the correct SERVER code — it's "
+                                    "different from any 'AI-Prowler Personal' email you "
+                                    "may have also received.")
+                            self.root.after(0, _on_wrong_code)
+                            return
+
                         def _on_success():
                             _srv_act_canvas.itemconfig(
                                 _srv_act_dot, fill='#22C55E')
@@ -9665,20 +9692,20 @@ or from the Help menu."""
                             try:
                                 import json as _jcfg
                                 _cfgp = Path.home() / '.ai-prowler' / 'config.json'
+                                _cfg_data = {}
                                 if _cfgp.exists():
-                                    _tok = _jcfg.loads(
-                                        _cfgp.read_text(encoding='utf-8')
-                                    ).get('tunnel_token', '')
-                                    if _tok:
-                                        _tun_token_var.set(_tok)
-                            except Exception:
-                                pass
-                            # Turn Connect Claude.ai button red — next step
-                            try:
-                                _connect_claude_btn.configure(
-                                    background='#CC0000',
-                                    foreground='white',
-                                    text="📖 Connect Claude.ai  (auto) ← Click now to finish setup!")
+                                    _cfg_data = _jcfg.loads(
+                                        _cfgp.read_text(encoding='utf-8'))
+                                _tok = _cfg_data.get('tunnel_token', '')
+                                if _tok:
+                                    _tun_token_var.set(_tok)
+                                # Persist license_key + tunnel_domain so the
+                                # Admin tab and seat-lookup tools can find
+                                # this server's parent license on next launch.
+                                _cfg_data['license_key']   = result.get('license_key', '')
+                                _cfg_data['tunnel_domain'] = result.get('domain', '')
+                                _cfgp.write_text(
+                                    _jcfg.dumps(_cfg_data), encoding='utf-8')
                             except Exception:
                                 pass
                             self.root.after(500, _run_status_check)
@@ -9688,9 +9715,10 @@ or from the Help menu."""
                                 f"Server URL: {result.get('domain', '')}\n"
                                 f"License: {result.get('license_key', '')}\n\n"
                                 "✅ Tunnel is active.\n\n"
-                                "👉 Next step: click the red\n"
-                                "   'Connect Claude.ai' button\n"
-                                "   to add AI-Prowler Server to Claude.ai.\n\n"
+                                "👉 Next step: click '🌐 Test Server Connection'\n"
+                                "   below to confirm employees can reach your\n"
+                                "   server, then share the connector URL shown\n"
+                                "   there with your team.\n\n"
                                 "Your employees will each receive a separate email\n"
                                 "with their personal AI-Prowler activation code\n"
                                 "— forward those emails so they can set up their PCs.")
