@@ -137,27 +137,42 @@ def health_check():
     raise RuntimeError(f"Worker health check failed (HTTP {status}): {body}")
 
 
-def fetch_activation(code):
+def fetch_activation(code, install_id=None):
     """
     Fetch the activation payload for an activation code.
     Called during the "Configure Mobile Access" flow — no auth required.
 
-    Returns the activation payload dict on success.
+    v8.2.0: codes never expire. install_id (the machine's own per-install
+    UUID, from ~/.ai-prowler/install_id) is sent so the Worker can enforce
+    one-machine-at-a-time binding (license.active_install_id). Re-entering
+    the same code on a different machine automatically transfers the
+    binding — that machine becomes "Transfer to This Machine" equivalent,
+    no separate buttons/endpoints needed anymore.
+
+    Returns the activation payload dict on success. If the response
+    includes displaced_previous_install: true, this activation just moved
+    the license off of a different, previously-bound machine.
+
     Raises:
-        ValueError  — code not found (404) or already used from different machine (409)
+        ValueError  — code not found (404), or the subscription is not
+                       active (403, e.g. cancelled/suspended)
         RuntimeError — network error or unexpected response
     """
     code = code.strip().upper()
-    status, body = _get(f"/activate/{code}")
+    path = f"/activate/{code}"
+    if install_id:
+        path += f"?install_id={install_id}"
+    status, body = _get(path)
 
     if status == 200 and isinstance(body, dict):
         return body
     if status == 404:
-        raise ValueError("Activation code not found or expired. "
+        raise ValueError("Activation code not found. "
                          "Check the code and try again, or contact support.")
-    if status == 409:
-        raise ValueError("This activation code has already been used on a different machine. "
-                         "Contact support if you need to transfer your license.")
+    if status == 403:
+        reason = body.get("status", "inactive") if isinstance(body, dict) else "inactive"
+        raise ValueError(f"This subscription is not active (status: {reason}). "
+                         "Check your subscription status or contact support.")
     raise RuntimeError(f"Activation request failed (HTTP {status}): {body}")
 
 

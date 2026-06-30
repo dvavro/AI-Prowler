@@ -105,9 +105,16 @@ def activate_from_code(code, progress_cb=None):
         raise ValueError(result)
     code = result  # cleaned uppercase version
 
+    # Step 1b — read/generate this machine's install_id. Same file rag_gui.py
+    # uses for telemetry (~/.ai-prowler/install_id) — one stable ID per
+    # machine, reused here so the Worker can enforce one-machine-at-a-time
+    # binding (license.active_install_id) instead of the old IP-based check.
+    install_id = _get_or_create_install_id()
+
     # Step 2 — fetch payload from worker
     _cb("Contacting AI-Prowler activation server...")
-    payload = sc.fetch_activation(code)
+    payload = sc.fetch_activation(code, install_id=install_id)
+    displaced_other_machine = bool(payload.get("displaced_previous_install"))
 
     # Step 3 — write all local files
     _cb("Writing tunnel configuration...")
@@ -139,21 +146,48 @@ def activate_from_code(code, progress_cb=None):
             # Non-fatal — Worker-side DNS may already be correct
             _cb(f"DNS route note: {dns_err} — checking if domain resolves...")
 
+    if displaced_other_machine:
+        _cb("This machine is now the active install — any previous machine "
+            "using this license has been automatically deactivated.")
+
     _cb(f"Activation complete — tunnel live at {domain}")
 
     return {
-        "ok":          True,
-        "domain":      domain,
-        "plan":        plan,
-        "seats":       seats,
-        "license_key": license_key,
+        "ok":                       True,
+        "domain":                   domain,
+        "plan":                     plan,
+        "seats":                    seats,
+        "license_key":              license_key,
+        "displaced_other_machine":  displaced_other_machine,
         "message":     (
             f"Mobile access activated successfully!\n"
             f"Plan: {plan.title()}  |  Seats: {seats}\n"
             f"Domain: {domain}\n"
             f"License: {license_key}"
+            + ("\n\nNote: this license was previously active on a different "
+               "machine — that machine has been automatically deactivated."
+               if displaced_other_machine else "")
         ),
     }
+
+
+def _get_or_create_install_id():
+    """Read this machine's stable install_id, generating one if it doesn't
+    exist yet (mirrors the logic in rag_gui.py's RAGGui.__init__ so both
+    paths always produce/read the exact same file and ID)."""
+    install_id_path = AI_PROWLER_DIR / "install_id"
+    try:
+        if install_id_path.exists():
+            existing = install_id_path.read_text(encoding="utf-8").strip()
+            if existing:
+                return existing
+        import uuid, hashlib
+        new_id = hashlib.sha256(str(uuid.uuid4()).encode()).hexdigest()[:16]
+        install_id_path.parent.mkdir(parents=True, exist_ok=True)
+        install_id_path.write_text(new_id, encoding="utf-8")
+        return new_id
+    except Exception:
+        return ""
 
 
 def activate_from_payload(payload):

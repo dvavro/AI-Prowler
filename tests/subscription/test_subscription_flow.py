@@ -32,10 +32,9 @@ def _personal_payload(code="APRO-Z363JU-7YK2VR-YNE9XJ"):
         "tunnel_token":           "eyJmYWtlIjoidG9rZW4ifQ==",
         "cloudflare_account_tag": "239c05b7c75886aec28d04d0efe6ae3f",
         "expires_at":             "2027-06-23T00:00:00Z",
-        "code_expires_at":        "2026-06-26T00:00:00Z",
+        "code_expires_at":        None,   # v8.2.0: codes no longer expire
         "claimed":                False,
         "claimed_at":             None,
-        "claimed_by_ip":          None,
     }
 
 def _business_payload(code="APRO-BIZZZZ-BBBBBB-CCCCCC", seats=5):
@@ -49,10 +48,9 @@ def _business_payload(code="APRO-BIZZZZ-BBBBBB-CCCCCC", seats=5):
         "tunnel_token":           "eyJmYWtlIjoiYml6dG9rZW4ifQ==",
         "cloudflare_account_tag": "239c05b7c75886aec28d04d0efe6ae3f",
         "expires_at":             "2027-06-23T00:00:00Z",
-        "code_expires_at":        "2026-06-26T00:00:00Z",
+        "code_expires_at":        None,   # v8.2.0: codes no longer expire
         "claimed":                False,
         "claimed_at":             None,
-        "claimed_by_ip":          None,
     }
 
 
@@ -201,25 +199,32 @@ class TestBusinessSubscribeActivate:
 
 
 # ---------------------------------------------------------------------------
-# TC-SUB-003  Idempotency — re-claim from same IP
+# TC-SUB-003  Idempotency — re-claim on the same machine
 # ---------------------------------------------------------------------------
+# v8.2.0: re-claim idempotency is no longer IP-based — it's based on
+# install_id matching license.active_install_id on the Worker side. From
+# the client's perspective the contract is identical: a 200 with
+# claimed=True comes back whether this is a first activation or a repeat
+# activation on the same already-bound machine.
 
 class TestActivationIdempotency:
 
-    def test_TC_SUB_003_reclaim_same_ip_returns_payload(self):
-        """Re-activating from same machine (200 with claimed=True) succeeds."""
+    def test_TC_SUB_003_reclaim_same_machine_returns_payload(self):
+        """Re-activating from the same already-bound machine (200,
+        claimed=True, no displacement) succeeds."""
         import subscription_client as sc
 
         already_claimed = _personal_payload()
         already_claimed["claimed"] = True
         already_claimed["claimed_at"] = "2026-06-23T10:00:00Z"
-        already_claimed["claimed_by_ip"] = "1.2.3.4"
 
         with patch.object(sc, "_get", return_value=(200, already_claimed)):
-            result = sc.fetch_activation("APRO-Z363JU-7YK2VR-YNE9XJ")
+            result = sc.fetch_activation(
+                "APRO-Z363JU-7YK2VR-YNE9XJ", install_id="samemachine123456")
 
         assert result["claimed"] is True
         assert result["license_key"].startswith("AP-PERS-")
+        assert not result.get("displaced_previous_install")
 
 
 # ---------------------------------------------------------------------------
@@ -257,20 +262,55 @@ class TestInvalidActivationCode:
 
 
 # ---------------------------------------------------------------------------
-# TC-SUB-005  Already claimed from different IP — 409
+# TC-SUB-005  Subscription not active — 403
 # ---------------------------------------------------------------------------
+# v8.2.0: activation codes no longer expire and the old same-IP 409 check
+# was replaced with install_id-based one-machine-at-a-time binding on the
+# Worker (see provision.js handleActivate). Re-activating on a different
+# machine now succeeds and automatically transfers the binding rather than
+# being rejected — there is no more "already used, different machine" 409
+# case. The only rejection case left is the underlying subscription not
+# being active (cancelled/suspended), which the Worker reports as 403.
 
-class TestAlreadyClaimedDifferentIP:
+class TestSubscriptionNotActive:
 
-    def test_TC_SUB_005_claimed_different_ip_raises_value_error(self):
-        """A 409 from the worker raises ValueError with 'already' in the message."""
+    def test_TC_SUB_005_inactive_subscription_raises_value_error(self):
+        """A 403 from the worker (subscription not active) raises ValueError
+        with a clear message naming the subscription status."""
         import subscription_client as sc
 
-        with patch.object(sc, "_get", return_value=(409, {"error": "already used"})):
+        with patch.object(sc, "_get",
+                          return_value=(403, {"error": "not active", "status": "suspended"})):
             with pytest.raises(ValueError) as exc_info:
                 sc.fetch_activation("APRO-Z363JU-7YK2VR-YNE9XJ")
 
-        assert "already" in str(exc_info.value).lower()
+        assert "not active" in str(exc_info.value).lower()
+        assert "suspended" in str(exc_info.value).lower()
+
+    def test_TC_SUB_005b_different_machine_reactivation_succeeds(self):
+        """v8.2.0: re-activating the SAME code on a different machine (a new
+        install_id) is no longer rejected — the Worker transfers the binding
+        and returns 200 with displaced_previous_install: true."""
+        import subscription_client as sc
+
+        payload = {
+            "activation_code":  "APRO-Z363JU-7YK2VR-YNE9XJ",
+            "license_key":      "AP-PERS-AAAAAAAA-BBBBBBBB",
+            "plan":             "personal",
+            "seats":            1,
+            "domain":           "test.ai-prowler.com",
+            "tunnel_id":        "tunnel-123",
+            "tunnel_name":      "test-tunnel",
+            "tunnel_token":     "tok123",
+            "expires_at":       "2027-01-01T00:00:00Z",
+            "displaced_previous_install": True,
+        }
+        with patch.object(sc, "_get", return_value=(200, payload)):
+            result = sc.fetch_activation(
+                "APRO-Z363JU-7YK2VR-YNE9XJ", install_id="newmachine123456")
+
+        assert result["displaced_previous_install"] is True
+        assert result["license_key"] == "AP-PERS-AAAAAAAA-BBBBBBBB"
 
 
 # ---------------------------------------------------------------------------

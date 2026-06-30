@@ -9751,205 +9751,22 @@ or from the Help menu."""
 
                 import threading as _th2
                 _th2.Thread(target=_worker, daemon=True).start()
-        # Personal/home installs: 1 machine activation per license.
-        # Hidden in server mode — server installs are not machine-limited.
-        _act_outer = ttk.Frame(remote_frame)
-        ttk.Label(_act_outer, text="Mobile Activation:",
-                  font=('Arial', 9, 'bold')).pack(anchor='w')
-        ttk.Label(_act_outer, font=('Arial', 8), foreground='gray',
-                  text="Your subscription is active on 1 machine at a time. "
-                       "If replacing your computer: click 'Check Activation' first, "
-                       "then 'Transfer to This Machine' to move your license. "
-                       "The previous machine will be deactivated.").pack(
-                           anchor='w', pady=(0, 4))
-
-        _activations_frame = ttk.Frame(_act_outer)
-        _activations_frame.pack(fill='x', pady=(0, 8))
-
-        # This machine's install_id (generated at GUI launch; see __init__).
-        _this_install_id = ""
-        try:
-            _this_install_id = self._install_id_path.read_text(
-                encoding='utf-8').strip()
-        except Exception:
-            _this_install_id = ""
-
-        _activations_status_var = tk.StringVar(
-            value="Click “Check Activations” to see active machines.")
-        ttk.Label(_activations_frame, textvariable=_activations_status_var,
-                  font=('Arial', 8), foreground='gray', justify='left',
-                  wraplength=620).pack(anchor='w', pady=(0, 4))
-
-        ttk.Label(_activations_frame, font=('Arial', 8), foreground='gray',
-                  text=(f"This machine: {_this_install_id or '(install_id unavailable)'}")
-                  ).pack(anchor='w', pady=(0, 4))
-
-        # Holds active install_ids fetched from the endpoint, for the transfer flow.
-        _active_ids_box = {"ids": []}
-
-        def _activation_base_url():
-            """Telemetry/activation Worker base URL (config override or default)."""
-            base = _TELEMETRY_DEFAULT_ENDPOINT
-            try:
-                _cfg_p = Path.home() / '.ai-prowler' / 'config.json'
-                if _cfg_p.exists():
-                    import json as _jm
-                    _d = _jm.loads(_cfg_p.read_text(encoding='utf-8'))
-                    if _d.get('telemetry_endpoint'):
-                        base = str(_d['telemetry_endpoint'])
-            except Exception:
-                pass
-            return base.rstrip('/')
-
-        def _token_hash_for_activation():
-            """SHA-256[:16] of the saved bearer token — the activation key.
-            Matches _token_key() in ai_prowler_mcp.py and the subs.json key."""
-            tok = _remote_token_var.get().strip()
-            if not tok:
-                return ""
-            import hashlib as _hl
-            return _hl.sha256(tok.encode()).hexdigest()[:16]
-
-        def _check_activations():
-            """Background-fetch the current active set from the Worker by POSTing
-            an activation probe for THIS machine, then update the UI. We use the
-            activate endpoint (idempotent for an already-active install) so the
-            response carries the authoritative active_install_ids list."""
-            lh = _token_hash_for_activation()
-            if not lh:
-                _activations_status_var.set(
-                    "Save a Bearer Token first — it identifies your license.")
-                return
-            _activations_status_var.set("Checking activations…")
-
-            def _worker():
-                result_text = ""
-                ids = []
-                try:
-                    import requests as _rq
-                    url = f"{_activation_base_url()}/license/activate"
-                    payload = {"license_key_hash": lh,
-                               "install_id": _this_install_id or "0" * 16,
-                               "os": "Windows-11", "version": APP_VERSION}
-                    resp = _rq.post(url, json=payload, timeout=10,
-                                    headers={"Content-Type": "application/json",
-                                             "User-Agent": "AI-Prowler-GUI/1.0"},
-                                    proxies={"http": None, "https": None})
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        ids = data.get("active_install_ids", []) or []
-                        cnt = data.get("active_count", len(ids))
-                        mx  = data.get("max_active", 2)
-                        decision = data.get("decision", "?")
-                        result_text = (f"Active on {cnt} of {mx} machines "
-                                       f"(this machine: {decision}).")
-                    else:
-                        result_text = f"Activation server returned HTTP {resp.status_code}."
-                except Exception as _e:
-                    result_text = f"Could not reach activation server: {_e}"
-
-                def _apply():
-                    _active_ids_box["ids"] = ids
-                    _activations_status_var.set(result_text)
-                self.root.after(0, _apply)
-
-            import threading as _th
-            _th.Thread(target=_worker, daemon=True).start()
-
-        def _transfer_to_this_machine():
-            """Transfer the mobile activation to THIS machine — use when replacing
-            your computer. Click 'Check Activation' first, then this button."""
-            lh = _token_hash_for_activation()
-            if not lh:
-                messagebox.showwarning("No Token", "Save a Bearer Token first.")
-                return
-            ids = _active_ids_box.get("ids", [])
-            if not ids:
-                messagebox.showinfo(
-                    "Check First",
-                    "Click 'Check Activation' first so the app can see "
-                    "which machine is currently active.")
-                return
-            if _this_install_id and _this_install_id in ids:
-                messagebox.showinfo(
-                    "Already Active",
-                    "This machine is already the active install -- no transfer needed.")
-                return
-            others = [i for i in ids if i and i != _this_install_id]
-            if not others:
-                messagebox.showinfo(
-                    "Nothing to Transfer",
-                    "No other active machine was found.\n\n"
-                    "Click 'Check Activation' first to refresh the list.")
-                return
-            target = others[0]
-            if not messagebox.askyesno(
-                    "Transfer Activation",
-                    f"Transfer your subscription to this machine?\n\n"
-                    f"Previous: {target[:12]}...\n"
-                    f"This PC:  {(_this_install_id or 'unknown')[:12]}...\n\n"
-                    "The previous machine will be deactivated immediately.\n"
-                    "Use this when replacing your computer."):
-                return
-            _activations_status_var.set("Transferring activation to this machine...")
-
-            def _worker():
-                msg = ""
-                ok  = False
-                try:
-                    import requests as _rq
-                    base = _activation_base_url()
-                    r1 = _rq.post(
-                        f"{base}/license/release_install",
-                        json={"license_key_hash": lh, "install_id": target},
-                        timeout=10,
-                        headers={"Content-Type": "application/json",
-                                 "User-Agent": "AI-Prowler-GUI/1.0"},
-                        proxies={"http": None, "https": None})
-                    if r1.status_code != 200:
-                        msg = f"Could not deactivate previous machine (HTTP {r1.status_code})."
-                    else:
-                        r2 = _rq.post(
-                            f"{base}/license/activate",
-                            json={"license_key_hash": lh,
-                                  "install_id": _this_install_id or "0" * 16,
-                                  "os": "Windows-11", "version": APP_VERSION},
-                            timeout=10,
-                            headers={"Content-Type": "application/json",
-                                     "User-Agent": "AI-Prowler-GUI/1.0"},
-                            proxies={"http": None, "https": None})
-                        if r2.status_code == 200:
-                            decision = r2.json().get("decision", "")
-                            if decision == "allowed":
-                                ok  = True
-                                msg = "Transfer complete. This machine is now active."
-                            else:
-                                msg = f"Released old machine but activation returned: {decision}."
-                        else:
-                            msg = f"Released old machine but activation failed (HTTP {r2.status_code})."
-                except Exception as _e:
-                    msg = f"Could not reach activation server: {_e}"
-
-                def _apply():
-                    _activations_status_var.set(msg)
-                    if ok:
-                        _active_ids_box["ids"] = [_this_install_id]
-                self.root.after(0, _apply)
-
-            import threading as _th
-            _th.Thread(target=_worker, daemon=True).start()
-
-        _act_btn_row = ttk.Frame(_activations_frame)
-        _act_btn_row.pack(fill='x', pady=(2, 0))
-        ttk.Button(_act_btn_row, text="Check Activation",
-                   command=_check_activations).pack(side='left', padx=(0, 8))
-        ttk.Button(_act_btn_row, text="Transfer to This Machine",
-                   command=_transfer_to_this_machine).pack(side='left')
-
-        # Gate: shown only in personal/home mode.
-        # Server installs are not machine-limited.
-        if not _settings_is_server_mode:
-            _act_outer.pack(fill='x', pady=(0, 4))
+        # ── Mobile Activation panel — REMOVED (v8.2.0) ─────────────────────────
+        # The old "Check Activation" / "Transfer to This Machine" buttons
+        # called the deprecated ai-prowler-telemetry Worker's
+        # /license/activate + /license/release_install endpoints, which were
+        # never wired to actual tunnel provisioning — a successful "transfer"
+        # never gave the new machine a working tunnel_token/domain.
+        #
+        # One-machine-at-a-time enforcement now lives entirely in the
+        # ai-prowler-subscription Worker (provision.js handleActivate +
+        # handleLicenseValidate, license.active_install_id). Re-entering the
+        # SAME activation code on a new machine via Configure Mobile Access
+        # / Auto-Configure Server automatically transfers the binding and
+        # provisions the new machine's tunnel in one step — no separate UI
+        # needed. The old machine finds out it's been displaced on its next
+        # periodic license validation check (displaced_to_another_device
+        # flag) and the GUI surfaces that via the status banner.
 
         ttk.Separator(remote_frame, orient='horizontal').pack(fill='x', pady=(4, 8))
 
