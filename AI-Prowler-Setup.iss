@@ -226,6 +226,12 @@ Source: "mcp_diagnostics.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "self_learning.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "subscription_client.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "mobile_activator.py"; DestDir: "{app}"; Flags: ignoreversion
+; cloudflared_service_helper.py — standalone elevated helper launched by
+; mobile_activator._install_cloudflared_service() via ShellExecute/runas.
+; Runs as Administrator to stop/delete/reinstall the cloudflared Windows
+; service with the correct tunnel token. Kept separate so UAC elevation
+; can be requested from within the non-elevated AI-Prowler GUI process.
+Source: "cloudflared_service_helper.py"; DestDir: "{app}"; Flags: ignoreversion
 
 ; --- v8.0.0 SMS backends ---
 ; sms_backends.py : Provider abstraction layer — Twilio, SignalWire, Vonage, and
@@ -670,6 +676,96 @@ begin
   Result := S;
 end;
 
+// ============================================================
+// HELPER: JsonRemoveKey
+// Removes a top-level "key": "value" (or "key": value) pair from a
+// flat JSON object string, regardless of whitespace between the
+// colon and the value (single space, double space, tabs, etc).
+// This is needed because literal StringChange substitutions like
+// '"edition": "business"' silently no-op when the source file was
+// written with different spacing (e.g. '"edition":  "business"'
+// with two spaces), which was the root cause of edition/mode never
+// actually updating on reinstall. Scanning for the key name and
+// then walking past whatever whitespace/value follows is robust to
+// any formatting. Leaves surrounding commas/braces untouched aside
+// from removing one trailing or leading comma so the JSON stays valid.
+// ============================================================
+function JsonRemoveKey(const Json, KeyName: String): String;
+var
+  S, KeyToken, Before, After: String;
+  KeyPos, ColonPos, ValStart, ValEnd, i: Integer;
+  InString: Boolean;
+begin
+  S := Json;
+  KeyToken := '"' + KeyName + '"';
+  KeyPos := Pos(KeyToken, S);
+  if KeyPos = 0 then
+  begin
+    Result := Json;
+    Exit;
+  end;
+
+  // Find the colon after the key name (skip any whitespace).
+  ColonPos := KeyPos + Length(KeyToken);
+  while (ColonPos <= Length(S)) and (S[ColonPos] <> ':') do
+    ColonPos := ColonPos + 1;
+
+  // Find the start of the value (skip whitespace after colon).
+  ValStart := ColonPos + 1;
+  while (ValStart <= Length(S)) and
+        ((S[ValStart] = ' ') or (S[ValStart] = #9) or
+         (S[ValStart] = #13) or (S[ValStart] = #10)) do
+    ValStart := ValStart + 1;
+
+  // Walk the value to find its end: handles quoted strings (with
+  // escaped quotes), or bare tokens (true/false/numbers) terminated
+  // by a comma, closing brace, or closing bracket.
+  ValEnd := ValStart;
+  if (ValStart <= Length(S)) and (S[ValStart] = '"') then
+  begin
+    i := ValStart + 1;
+    InString := True;
+    while (i <= Length(S)) and InString do
+    begin
+      if (S[i] = '\') then
+        i := i + 1  // skip escaped char
+      else if (S[i] = '"') then
+        InString := False;
+      i := i + 1;
+    end;
+    ValEnd := i - 1;
+  end
+  else
+  begin
+    i := ValStart;
+    while (i <= Length(S)) and (S[i] <> ',') and (S[i] <> '}') and (S[i] <> #13) and (S[i] <> #10) do
+      i := i + 1;
+    ValEnd := i - 1;
+  end;
+
+  Before := Copy(S, 1, KeyPos - 1);
+  After  := Copy(S, ValEnd + 1, Length(S) - ValEnd);
+
+  // If there's a leading comma (from the previous key) right before
+  // this key, consume it so we don't leave ",," or a dangling comma.
+  i := Length(Before);
+  while (i >= 1) and ((Before[i] = ' ') or (Before[i] = #9) or (Before[i] = #13) or (Before[i] = #10)) do
+    i := i - 1;
+  if (i >= 1) and (Before[i] = ',') then
+    Before := Copy(Before, 1, i - 1)
+  else
+  begin
+    // No leading comma — consume a leading comma in After instead.
+    i := 1;
+    while (i <= Length(After)) and ((After[i] = ' ') or (After[i] = #9) or (After[i] = #13) or (After[i] = #10)) do
+      i := i + 1;
+    if (i <= Length(After)) and (After[i] = ',') then
+      After := Copy(After, 1, i - 1) + Copy(After, i + 1, Length(After) - i);
+  end;
+
+  Result := Before + After;
+end;
+
 procedure CurPageChanged(CurPageID: Integer);
 begin
   // Bring every page to the front using the flash-topmost technique.
@@ -964,15 +1060,52 @@ begin
     if (Length(NewJson) > 0) and (NewJson[Length(NewJson)] = '}') then
       NewJson := Copy(NewJson, 1, Length(NewJson) - 1);
 
-    // Add edition if missing
-    if Pos('"edition"', ExistingJson) = 0 then
+    // Always overwrite edition and mode from the installer's GInstallMode
+    // selection — never preserve stale values from a previous install of a
+    // different type. A personal reinstall on a machine that previously ran
+    // server mode must get edition=home/mode=personal, not keep the old
+    // edition=business/mode=server. All other keys (license_key,
+    // remote_token, tunnel_domain, tunnel_token, etc.) are preserved.
+    // NOTE: previously this used literal StringChange substitutions like
+    // '"edition": "business"' (single space). That silently no-ops whenever
+    // the on-disk JSON uses different spacing around the colon (e.g. the
+    // double-space '"edition":  "business"' that some writers produce),
+    // leaving the stale value in place — which was the actual root cause
+    // of every install ending up as "server" regardless of the wizard
+    // selection, once a machine's config.json had ever been written with
+    // non-matching whitespace. JsonRemoveKey + re-append is whitespace
+    // agnostic, so this now reliably overwrites edition/mode every time.
+    if Pos('"edition"', ExistingJson) > 0 then
+    begin
+      NewJson := JsonRemoveKey(NewJson, 'edition');
+      NewJson := TrimRight(NewJson);
+      if (Length(NewJson) > 0) and (NewJson[Length(NewJson)] = '}') then
+        NewJson := Copy(NewJson, 1, Length(NewJson) - 1);
+      NewJson := TrimRight(NewJson);
+      if (Length(NewJson) > 0) and (NewJson[Length(NewJson)] <> '{') and (NewJson[Length(NewJson)] <> ',') then
+        NewJson := NewJson + ',';
+      NewJson := NewJson + #13#10 + '  "edition": "' + EditionStr + '"';
+      AppendInstallLog('[Config] Overwrote existing edition=' + EditionStr);
+    end
+    else
     begin
       NewJson := NewJson + ',' + #13#10 + '  "edition": "' + EditionStr + '"';
       AppendInstallLog('[Config] Added missing edition=' + EditionStr);
     end;
 
-    // Add mode if missing
-    if Pos('"mode"', ExistingJson) = 0 then
+    if Pos('"mode"', ExistingJson) > 0 then
+    begin
+      NewJson := JsonRemoveKey(NewJson, 'mode');
+      NewJson := TrimRight(NewJson);
+      if (Length(NewJson) > 0) and (NewJson[Length(NewJson)] = '}') then
+        NewJson := Copy(NewJson, 1, Length(NewJson) - 1);
+      NewJson := TrimRight(NewJson);
+      if (Length(NewJson) > 0) and (NewJson[Length(NewJson)] <> '{') and (NewJson[Length(NewJson)] <> ',') then
+        NewJson := NewJson + ',';
+      NewJson := NewJson + #13#10 + '  "mode": "' + ModeStr + '"';
+      AppendInstallLog('[Config] Overwrote existing mode=' + ModeStr);
+    end
+    else
     begin
       NewJson := NewJson + ',' + #13#10 + '  "mode": "' + ModeStr + '"';
       AppendInstallLog('[Config] Added missing mode=' + ModeStr);

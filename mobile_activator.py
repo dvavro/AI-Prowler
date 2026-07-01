@@ -352,16 +352,20 @@ def _install_cloudflared_service(tunnel_token, progress_cb=None):
     """
     Install cloudflared as a Windows service using the tunnel token.
 
-    Uses cloudflared's own `service install <token>` command which is the
-    officially supported method. The token is passed as a CLI argument;
-    cloudflared stores it in the Windows registry/credential store —
-    avoiding the SCM command line truncation bug entirely.
+    Uses a standalone helper script (cloudflared_service_helper.py) launched
+    elevated via ShellExecute/runas. This is the only reliable way to trigger
+    UAC elevation from a non-elevated GUI application — Start-Process -Verb
+    RunAs from a background thread inside Tkinter is silently blocked or
+    auto-dismissed on most Windows configurations.
 
-    FIX v8.0.0: No config.yml is written before this call (deleted in
-    activate_from_payload). This ensures cloudflared's service install
-    uses the token from the registry exclusively on startup.
-
-    Requires elevation; we use PowerShell RunAs if needed.
+    Flow:
+      1. Write token + log path to cloudflared_service_helper.py args
+      2. ShellExecute runas python cloudflared_service_helper.py
+         → UAC prompt appears (properly, in the foreground)
+         → helper runs as Admin: stop/uninstall/delete/clear-registry/install/start
+         → helper writes timestamped log to ~/.ai-prowler/svc_install_debug.log
+      3. Poll log for completion marker (up to 90 seconds)
+      4. Verify service is RUNNING in SCM
     """
     def _cb(msg):
         if progress_cb:
@@ -373,144 +377,108 @@ def _install_cloudflared_service(tunnel_token, progress_cb=None):
             "Please reinstall AI-Prowler to restore cloudflared."
         )
 
-    # Write token to file for reference
-    token_file = AI_PROWLER_DIR / "tunnel_token.txt"
-    token_file.write_text(tunnel_token, encoding="utf-8")
-
-    # Stop and delete existing service cleanly
-    if _service_exists(CLOUDFLARED_SERVICE):
-        _cb("Stopping existing tunnel service...")
-        _run_sc("stop", CLOUDFLARED_SERVICE, ignore_errors=True)
-        time.sleep(2)
-        _cb("Removing existing tunnel service...")
-        _run_sc("delete", CLOUDFLARED_SERVICE, ignore_errors=True)
-        for _ in range(10):
-            time.sleep(1)
-            if not _service_exists(CLOUDFLARED_SERVICE):
-                break
-
-    _cb("Installing cloudflared tunnel service...")
-
-    # Clean up stale EventLog registry key that blocks reinstallation.
-    # cloudflared says "Cannot install event logger: registry key already exists"
-    # when this key is present, causing the SCM service registration to fail
-    # (cloudflared logs "installed successfully" misleadingly even when this
-    # happens on some versions, but `sc query` afterward shows no service at
-    # all — confirmed 2026-06-30: a fresh install attempt failed this way
-    # with NO prior service present, so this is not just a leftover-from-
-    # previous-install issue, it can occur on first install too).
-    def _clear_eventlog_key():
-        subprocess.run(
-            ["reg", "delete",
-             r"HKLM\SYSTEM\CurrentControlSet\Services\EventLog\Application\Cloudflared",
-             "/f"],
-            capture_output=True, text=True
-        )
-    _clear_eventlog_key()
-
-    # cloudflared service install <token> — the token is stored in the Windows
-    # registry by cloudflared itself. On service startup, cloudflared reads
-    # the token from the registry (not from config.yml or a credentials file).
-    # No TUNNEL_TOKEN env var or config.yml is needed or wanted here.
-    #
-    # FIX 2026-06-30: previously a failed install (e.g. the EventLog key
-    # error, or cloudflared's own "service is already installed" message)
-    # was just logged as a progress note and silently ignored — the code
-    # fell through to the RUNNING check below without ever confirming the
-    # NEW token was actually what got installed. This let a stale service
-    # (wrong tunnel token from a previous activation) keep running while
-    # the GUI reported "Server Configured ✅", causing HTTP 530 errors
-    # that looked like a DNS problem but were actually a wrong-tunnel
-    # service silently surviving a failed reinstall.
-    #
-    # Now: up to 2 attempts. On any failure, explicitly uninstall via
-    # `cloudflared service uninstall` (not just `sc delete`, which does
-    # not clear cloudflared's own internal already-installed marker —
-    # this is the exact distinction that caused today's bug), clear the
-    # EventLog key again, then retry once before giving up.
-    install_ok = False
-    last_output = ""
-    for attempt in range(2):
-        result = subprocess.run(
-            [str(CLOUDFLARED_EXE), "service", "install", tunnel_token],
-            capture_output=True, text=True
-        )
-        out = (result.stdout + result.stderr).strip()
-        last_output = out
-
-        if result.returncode == 0 and "already installed" not in out.lower():
-            install_ok = True
-            break
-
-        if "access is denied" in out.lower() or "privilege" in out.lower():
-            _cb("Elevation required — requesting admin access...")
-            _install_service_via_powershell(tunnel_token)
-            install_ok = True  # PowerShell path doesn't return output to check here
-            break
-
-        # "already installed" (cloudflared's own marker, separate from SCM)
-        # or the EventLog registry error — clean up properly and retry once.
-        if attempt == 0:
-            _cb(f"Install attempt {attempt + 1} failed, cleaning up and retrying...")
-            subprocess.run(
-                [str(CLOUDFLARED_EXE), "service", "uninstall"],
-                capture_output=True, text=True
-            )
-            _run_sc("stop", CLOUDFLARED_SERVICE, ignore_errors=True)
-            _run_sc("delete", CLOUDFLARED_SERVICE, ignore_errors=True)
-            time.sleep(2)
-            _clear_eventlog_key()
-            time.sleep(1)
-
-    if not install_ok:
+    # Locate the helper script — same directory as this file
+    helper = Path(__file__).parent / "cloudflared_service_helper.py"
+    if not helper.exists():
         raise RuntimeError(
-            f"cloudflared service install failed after 2 attempts:\n{last_output}\n\n"
-            "Try running AI-Prowler as Administrator, or manually run:\n"
-            f'  "{CLOUDFLARED_EXE}" service uninstall\n'
-            f'  reg delete "HKLM\\SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application\\Cloudflared" /f\n'
-            "then activate again."
+            f"cloudflared_service_helper.py not found at {helper}.\n"
+            "Please reinstall AI-Prowler."
         )
 
-    time.sleep(2)
+    python_exe = Path(sys.executable)
+    log_file = AI_PROWLER_DIR / "svc_install_debug.log"
+    AI_PROWLER_DIR.mkdir(parents=True, exist_ok=True)
+    log_file.write_text("", encoding="utf-8")  # clear previous log
 
-    # Start the service if not already running
-    if _service_exists(CLOUDFLARED_SERVICE):
+    # Write tunnel token to a temp file to avoid command-line length issues
+    # (tokens are ~200 chars; ShellExecute has a 2048-char limit on args)
+    token_arg_file = AI_PROWLER_DIR / "svc_install_token.tmp"
+    token_arg_file.write_text(tunnel_token, encoding="utf-8")
+
+    _cb("Requesting elevation for service install (UAC prompt will appear)...")
+    _cb(f"Debug log: {log_file}")
+
+    # ShellExecute with runas — the only reliable way to trigger UAC from
+    # a non-elevated process. Unlike Start-Process -Verb RunAs called from
+    # a Tkinter background thread, ShellExecute properly surfaces the UAC
+    # dialog in the foreground.
+    import ctypes
+    params = f'"{helper}" "{token_arg_file}" "{log_file}"'
+    ret = ctypes.windll.shell32.ShellExecuteW(
+        None,           # hwnd
+        "runas",        # verb — triggers UAC
+        str(python_exe),# file
+        params,         # parameters
+        None,           # directory
+        1               # SW_SHOWNORMAL
+    )
+    if ret <= 32:
+        raise RuntimeError(
+            f"ShellExecute runas failed (code {ret}).\n"
+            "Try running AI-Prowler as Administrator."
+        )
+
+    # Poll log file for completion marker (up to 90 seconds)
+    _cb("Waiting for elevated service installer to complete...")
+    deadline = time.time() + 90
+    done = False
+    while time.time() < deadline:
+        time.sleep(2)
+        try:
+            content = log_file.read_text(encoding="utf-8", errors="replace")
+            if "=== cloudflared_service_helper end ===" in content:
+                done = True
+                break
+        except Exception:
+            pass
+
+    # Clean up token temp file
+    try:
+        token_arg_file.unlink()
+    except Exception:
+        pass
+
+    if not done:
+        log_content = ""
+        try:
+            log_content = log_file.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+        raise RuntimeError(
+            "Timed out waiting for elevated service installer (90s).\n"
+            "Did you click Yes on the UAC prompt?\n"
+            f"Log so far:\n{log_content[-800:]}"
+        )
+
+    # Check log for SUCCESS/FAIL
+    log_content = log_file.read_text(encoding="utf-8", errors="replace")
+    if "FAIL" in log_content and "SUCCESS" not in log_content:
+        raise RuntimeError(
+            f"cloudflared service install failed.\n"
+            f"Debug log:\n{log_content[-1200:]}"
+        )
+
+    # Final SCM verification
+    time.sleep(1)
+    if not _service_exists(CLOUDFLARED_SERVICE):
+        raise RuntimeError(
+            "Service not found in SCM after install.\n"
+            f"Debug log:\n{log_content[-1200:]}"
+        )
+
+    state = _get_service_state(CLOUDFLARED_SERVICE)
+    if state != "RUNNING":
+        _run_sc("start", CLOUDFLARED_SERVICE, ignore_errors=True)
+        time.sleep(3)
         state = _get_service_state(CLOUDFLARED_SERVICE)
-        if state != "RUNNING":
-            _run_sc("start", CLOUDFLARED_SERVICE, ignore_errors=True)
-            time.sleep(3)
-            state = _get_service_state(CLOUDFLARED_SERVICE)
-        _cb(f"Tunnel service: {state}")
-        if state == "RUNNING":
-            _cb("Tunnel service is running ✅")
-        else:
-            raise RuntimeError(
-                f"cloudflared service installed but is not running (state: {state}).\n"
-                "Check Windows Event Viewer for cloudflared service errors."
-            )
+
+    if state == "RUNNING":
+        _cb("Tunnel service is running ✅")
     else:
         raise RuntimeError(
-            "Service install failed — service not found after install.\n"
-            "Try running AI-Prowler as Administrator and activating again."
+            f"Service installed but not running (state={state}).\n"
+            "Check Windows Event Viewer for cloudflared errors."
         )
-
-
-def _install_service_via_powershell(tunnel_token):
-    """
-    Install cloudflared service via PowerShell UAC elevation.
-    Uses cloudflared's official `service install <token>` syntax.
-    """
-    ps_cmd = (
-        f"Start-Process -FilePath '{CLOUDFLARED_EXE}' "
-        f"-ArgumentList @('service','install','{tunnel_token}') "
-        f"-Verb RunAs -Wait"
-    )
-    subprocess.run(
-        ["powershell", "-NoProfile", "-Command", ps_cmd],
-        capture_output=True, text=True
-    )
-    time.sleep(5)
-    _run_sc("start", CLOUDFLARED_SERVICE, ignore_errors=True)
 
 
 def _create_dns_route(tunnel_id, domain):
