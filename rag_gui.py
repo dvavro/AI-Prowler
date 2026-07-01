@@ -13979,12 +13979,28 @@ or from the Help menu."""
         return f"{key[:4]}…{key[-4:]}"
 
     def _admin_validate_child_key(self, child_key):
-        """Validate a child key against the PUBLIC /license/validate endpoint
-        (no auth token — same public check the mobile sub uses). Returns
-        (ok: bool, message: str). Network failure is reported but NON-fatal —
-        the caller decides whether to allow assignment anyway."""
+        """Validate a child key against the subscription Worker's
+        /license/validate endpoint. Returns (ok: bool|None, message: str).
+        Network failure returns (None, ...) — non-fatal, caller decides.
+
+        Placeholder seat IDs (format: {license_key}-S###, generated locally
+        before the Admin tab's 'Sync Seats' runs) are not real Worker keys
+        and are skipped — treated as unvalidatable but allowed to proceed.
+        Real child keys start with AP-CHLD- or AP-PERS-."""
         import json as _json, urllib.request, urllib.error
-        endpoint = "https://ai-prowler-telemetry.david-vavro1.workers.dev"
+
+        # Detect placeholder IDs written by activate_from_payload() before
+        # Sync Seats fetches real AP-CHLD- keys from the Worker.
+        # Format: {parent_license_key}-S### e.g. AP-BIZ-XXXXXXXX-XXXXXXXX-S001
+        import re as _re
+        if _re.match(r'^AP-BIZ-[0-9A-F]+-[0-9A-F]+-S\d+$', child_key, _re.IGNORECASE):
+            return (None,
+                    "This is a placeholder seat ID (not yet synced from the server).\n"
+                    "Click 'Sync Seats' to fetch real child keys from the license server.\n"
+                    "You can assign this placeholder seat now — the key will be "
+                    "updated automatically after syncing.")
+
+        endpoint = "https://api.ai-prowler.com"
         # Honor a config override if present (mirrors _activation_endpoint).
         try:
             cfg = load_config() if RAG_AVAILABLE else {}
