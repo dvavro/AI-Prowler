@@ -403,7 +403,7 @@ def _install_cloudflared_service(tunnel_token, progress_cb=None):
     # a Tkinter background thread, ShellExecute properly surfaces the UAC
     # dialog in the foreground.
     import ctypes
-    params = f'"{helper}" "{token_arg_file}" "{log_file}"'
+    params = f'"{helper}" "{token_arg_file}" "{log_file}" "{CLOUDFLARED_EXE}"'
     ret = ctypes.windll.shell32.ShellExecuteW(
         None,           # hwnd
         "runas",        # verb — triggers UAC

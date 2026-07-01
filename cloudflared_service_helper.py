@@ -10,6 +10,7 @@ Usage (internal — do not call directly):
     python cloudflared_service_helper.py <token> <log_file>
 """
 import sys
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -48,12 +49,25 @@ def get_service_state(name):
 
 def main():
     if len(sys.argv) < 3:
-        print("Usage: cloudflared_service_helper.py <token> <log_file>")
+        print("Usage: cloudflared_service_helper.py <token_file> <log_file> [cf_exe]")
         sys.exit(1)
 
-    tunnel_token = sys.argv[1]
+    token_file_path = sys.argv[1]
     log_file = sys.argv[2]
-    cf_exe = Path(sys.executable).parent / 'cloudflared.exe'
+
+    # Read token from file (avoids command-line length limits)
+    try:
+        tunnel_token = Path(token_file_path).read_text(encoding='utf-8').strip()
+    except Exception as e:
+        print(f"Cannot read token file {token_file_path}: {e}")
+        sys.exit(1)
+
+    # cloudflared.exe path — passed explicitly by mobile_activator so we
+    # don't have to guess. Falls back to the standard install location.
+    if len(sys.argv) >= 4:
+        cf_exe = Path(sys.argv[3])
+    else:
+        cf_exe = Path(os.environ.get('PROGRAMFILES', r'C:\Program Files')) / 'AI-Prowler' / 'cloudflared.exe'
     svc = 'cloudflared'
     eventlog_key = (
         r'HKLM\SYSTEM\CurrentControlSet\Services\EventLog\Application\Cloudflared'
