@@ -9249,10 +9249,18 @@ or from the Help menu."""
             _configure_btn.pack(side='left', padx=(0, 10))
 
             _act_status_var = tk.StringVar(value="")
-            ttk.Label(act_btn_row,
-                      textvariable=_act_status_var,
-                      font=('Arial', 8),
-                      foreground='gray').pack(side='left')
+            _act_status_lbl = tk.Label(act_btn_row,
+                                       textvariable=_act_status_var,
+                                       font=('Arial', 9, 'bold'),
+                                       foreground='gray',
+                                       bg=self.root.cget('bg'))
+            _act_status_lbl.pack(side='left')
+
+            def _set_act_status(msg, color='gray'):
+                _act_status_var.set(msg)
+                _act_status_lbl.configure(foreground=color)
+
+
 
             # Manage Subscription link — opens the Stripe Customer Portal.
             # The SAME portal page handles cancellation, payment-method
@@ -9381,7 +9389,9 @@ or from the Help menu."""
                                 _sub_act_dot, fill='#22C55E')
                             _act_domain_var.set(result['domain'])
                             _copy_domain_btn.pack(side='left', padx=(0, 0))
-                            _act_status_var.set("✅ Activated")
+                            _set_act_status("✅ Mobile access configured", '#22C55E')
+
+
                             _configure_btn.configure(
                                 text="⚡ Configure Mobile Access",
                                 state='normal')
@@ -9425,22 +9435,23 @@ or from the Help menu."""
                         self.root.after(0, _on_success)
 
                     except ValueError as _ve:
-                        def _on_val_err():
+                        def _on_val_err(_ve=_ve):
                             _sub_act_canvas.itemconfig(
                                 _sub_act_dot, fill='#CC0000')
-                            _act_status_var.set("❌ Activation failed")
+                            _set_act_status("❌ Activation failed — see error", '#CC0000')
                             _configure_btn.configure(
                                 text="⚡ Configure Mobile Access",
                                 state='normal')
                             messagebox.showerror(
-                                "Activation Failed", str(_ve))
+                                "Activation Failed", str(_ve),
+                                parent=self.root)
                         self.root.after(0, _on_val_err)
 
                     except Exception as _ex:
-                        def _on_err():
+                        def _on_err(_ex=_ex):
                             _sub_act_canvas.itemconfig(
                                 _sub_act_dot, fill='#CC0000')
-                            _act_status_var.set("❌ Error — check connection")
+                            _set_act_status("❌ Error — check connection", '#CC0000')
                             _configure_btn.configure(
                                 text="⚡ Configure Mobile Access",
                                 state='normal')
@@ -9448,11 +9459,13 @@ or from the Help menu."""
                                 "Activation Error",
                                 f"An unexpected error occurred:\n{_ex}\n\n"
                                 "Check your internet connection and try again. "
-                                "If the problem persists contact support.")
+                                "If the problem persists contact support.",
+                                parent=self.root)
                         self.root.after(0, _on_err)
 
                 import threading as _th
                 _th.Thread(target=_worker, daemon=True).start()
+
 
         # ── Server Mode: Subscribe + Auto-Configure (v8.1.0) ─────────────────
         # Mirrors the personal subscribe+activate flow but for business/server.
@@ -9725,17 +9738,19 @@ or from the Help menu."""
                         self.root.after(0, _on_success)
 
                     except ValueError as _ve:
-                        def _on_val_err():
+                        def _on_val_err(_ve=_ve):
                             _srv_act_canvas.itemconfig(
                                 _srv_act_dot, fill='red')
                             _srv_act_status_var.set(f"❌ {_ve}")
                             _srv_configure_btn.configure(
                                 text="⚡ Auto-Configure Server",
                                 state='normal')
-                            messagebox.showerror("Activation Failed", str(_ve))
+                            messagebox.showerror(
+                                "Activation Failed", str(_ve),
+                                parent=self.root)
                         self.root.after(0, _on_val_err)
                     except Exception as _ex:
-                        def _on_err():
+                        def _on_err(_ex=_ex):
                             _srv_act_canvas.itemconfig(
                                 _srv_act_dot, fill='red')
                             _srv_act_status_var.set("❌ Configuration failed")
@@ -9746,8 +9761,10 @@ or from the Help menu."""
                                 "Configuration Error",
                                 f"Server configuration failed:\n{_ex}\n\n"
                                 "Check your internet connection and try again.\n"
-                                "If the problem persists contact support.")
+                                "If the problem persists contact support.",
+                                parent=self.root)
                         self.root.after(0, _on_err)
+
 
                 import threading as _th2
                 _th2.Thread(target=_worker, daemon=True).start()

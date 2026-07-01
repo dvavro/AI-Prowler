@@ -61,11 +61,35 @@ CONFIG_PATH     = AI_PROWLER_DIR / "config.json"
 REMOTE_PATH     = AI_PROWLER_DIR / "remote_access.json"
 SEATS_PATH      = AI_PROWLER_DIR / "license_seats.json"
 
+# Activation log — written from the moment Configure Mobile Access / Auto-Configure
+# Server is clicked, capturing every step including failures before the service
+# install phase. Persists across activations (appended with timestamps) so
+# support can diagnose silent failures.
+ACTIVATION_LOG  = AI_PROWLER_DIR / "activation_debug.log"
+
 # cloudflared.exe — bundled in the AI-Prowler install directory
 CLOUDFLARED_EXE = Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "AI-Prowler" / "cloudflared.exe"
 
 # Windows service name — must match what rag_gui.py uses for Start/Stop Tunnel
 CLOUDFLARED_SERVICE = "cloudflared"
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _log(msg):
+    """Write a timestamped line to the activation debug log.
+    Always appends — never truncates — so history is preserved across attempts.
+    Called by _cb_and_log() which wraps the progress callback."""
+    import datetime
+    try:
+        AI_PROWLER_DIR.mkdir(parents=True, exist_ok=True)
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(str(ACTIVATION_LOG), "a", encoding="utf-8") as f:
+            f.write(f"{ts}  {msg}\n")
+    except Exception:
+        pass  # never let logging break activation
 
 
 # ---------------------------------------------------------------------------
@@ -95,15 +119,23 @@ def activate_from_code(code, progress_cb=None):
         RuntimeError — network failure, cloudflared install failure
     """
     def _cb(msg):
+        _log(msg)
         if progress_cb:
             progress_cb(msg)
+
+    _log("=" * 60)
+    _log(f"activate_from_code() called  code={code[:12]}...")
+    _log(f"CLOUDFLARED_EXE={CLOUDFLARED_EXE}  exists={CLOUDFLARED_EXE.exists()}")
+
 
     # Step 1 — validate format locally before hitting the network
     _cb("Validating activation code format...")
     valid, result = sc.validate_activation_code_format(code)
     if not valid:
+        _cb(f"❌ Invalid code format: {result}")
         raise ValueError(result)
     code = result  # cleaned uppercase version
+    _cb(f"✅ Code format valid: {code}")
 
     # Step 1b — read/generate this machine's install_id. Same file rag_gui.py
     # uses for telemetry (~/.ai-prowler/install_id) — one stable ID per
@@ -113,7 +145,15 @@ def activate_from_code(code, progress_cb=None):
 
     # Step 2 — fetch payload from worker
     _cb("Contacting AI-Prowler activation server...")
-    payload = sc.fetch_activation(code, install_id=install_id)
+    try:
+        payload = sc.fetch_activation(code, install_id=install_id)
+    except ValueError as e:
+        _cb(f"❌ Activation failed: {e}")
+        raise
+    except Exception as e:
+        _cb(f"❌ Network error: {e}")
+        raise
+    _cb(f"✅ Activation code valid — license: {payload.get('license_key', '')}")
     displaced_other_machine = bool(payload.get("displaced_previous_install"))
 
     # Step 3 — write all local files
