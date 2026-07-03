@@ -26,10 +26,35 @@ import json
 import pytest
 import urllib.request
 import urllib.error
+from pathlib import Path
 
 
 WORKER_BASE = "https://api.ai-prowler.com"
-ADMIN_TOKEN = "Synopsys1*"
+
+# Admin token is stored in the subscription manager's subs.json.
+# This keeps the token out of the test file and in sync with the
+# deployed Worker secret automatically.
+def _load_admin_token() -> str:
+    for candidate in [
+        Path(__file__).parent.parent.parent.parent /
+            "AI-Prowler-ADMIN-V8" / "ai-prowler-subs" / "subs.json",
+        Path.home() / ".ai-prowler" / "subs.json",
+    ]:
+        if candidate.exists():
+            try:
+                return json.loads(candidate.read_text(encoding="utf-8")).get(
+                    "admin_token", "")
+            except Exception:
+                pass
+    return ""
+
+ADMIN_TOKEN = _load_admin_token()
+
+# Fixtures that require admin access are skipped if no token is configured
+_SKIP_NO_TOKEN = pytest.mark.skipif(
+    not ADMIN_TOKEN,
+    reason="No admin_token found in subs.json — skipping admin-auth tests"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +213,7 @@ class TestSeatAuth:
         status, body = _get("/seats/AP-BIZ-TESTKEY-12345678", token="wrong-token")
         assert status == 401, f"Expected 401, got {status}: {body}"
 
+    @_SKIP_NO_TOKEN
     def test_TC_WKR_003_seats_with_valid_token_but_unknown_key_returns_404(
             self, require_worker):
         """GET /seats/nonexistent with valid token returns 404 License not found."""
@@ -201,6 +227,7 @@ class TestSeatAuth:
         status, body = _get("/license/AP-PERS-TESTKEY-12345678/status")
         assert status == 401, f"Expected 401, got {status}: {body}"
 
+    @_SKIP_NO_TOKEN
     def test_TC_WKR_003_license_status_with_valid_token_unknown_key_returns_404(
             self, require_worker):
         """GET /license/nonexistent/status with valid token returns 404."""
@@ -218,16 +245,18 @@ class TestSeatAuth:
 @pytest.mark.live_worker
 class TestLicenseStatus:
 
+    @_SKIP_NO_TOKEN
     def test_TC_WKR_004_real_license_key_returns_active_status(self, require_worker):
-        """The license key from the E2E test can be retrieved via /license/{key}/status."""
-        real_license_key = "AP-PERS-D8E2B196-93951F11"  # David's active personal license
+        """A real active personal license can be retrieved via /license/{key}/status."""
+        # AP-PERS-16C50BFD-4FB265F4 is David's active personal license (laptop)
+        real_license_key = "AP-PERS-16C50BFD-4FB265F4"
         status, body = _get(
             f"/license/{real_license_key}/status",
             token=ADMIN_TOKEN
         )
 
         if status == 404:
-            pytest.skip("Real license key not found in worker KV — E2E test may not have run yet")
+            pytest.skip("Real license key not found in worker KV — may have been cleaned up")
 
         assert status == 200, f"Expected 200, got {status}: {body}"
         assert isinstance(body, dict)
@@ -240,6 +269,7 @@ class TestLicenseStatus:
         assert body["plan"] == "personal"
         assert body["status"] in ("active", "suspended", "grace")
 
+    @_SKIP_NO_TOKEN
     def test_TC_WKR_004_404_error_has_error_field(self, require_worker):
         """All 404 responses from the worker have an 'error' field in JSON."""
         status, body = _get(
