@@ -9262,70 +9262,59 @@ or from the Help menu."""
 
 
 
-            # Manage Subscription link — opens the Stripe Customer Portal.
-            # The SAME portal page handles cancellation, payment-method
-            # updates, AND seat-quantity changes for Business plans (Stripe
-            # calls this "Update quantities" in the portal config — must be
-            # toggled on in the Stripe Dashboard: Settings > Billing >
-            # Customer portal > Update quantities). One link covers:
-            #   - Cancel subscription (no refund; access lapses over the
-            #     existing 30-day grace ladder — see suspendLicense() in the
-            #     Worker and _evaluate_license_grace() client-side)
-            #   - Add/reduce Business seats (fires customer.subscription.
-            #     updated -> updateSeatCount() in the Worker, which mints
-            #     real child license keys for new seats automatically)
-            #   - Update payment method, view invoice history
-            #
-            # Stripe's customer portal requires the CUSTOMER'S email/Stripe
-            # Customer ID to open directly into THEIR subscription — there is
-            # no one static URL that works for every customer. The login-link
-            # flow (where the customer enters their own billing email and
-            # gets a one-time passcode) is the simplest no-backend option and
-            # is what's wired here. Create this link once in the Stripe
-            # Dashboard (Settings > Billing > Customer portal > "Activate
-            # link") and paste it below.
-            # Read the Stripe Customer Portal URL from ~/.ai-prowler/config.json
-            # (key: "stripe_portal_url"). Set it once via:
-            #   python -c "import json,pathlib; p=pathlib.Path.home()/'.ai-prowler'/'config.json'; d=json.loads(p.read_text()); d['stripe_portal_url']='https://billing.stripe.com/p/login/YOUR_REAL_ID'; p.write_text(json.dumps(d,indent=2))"
-            # or just open the file and add the key manually.
-            def _load_stripe_portal_url():
-                try:
-                    import json as _j
-                    _cfg = Path.home() / '.ai-prowler' / 'config.json'
-                    if _cfg.exists():
-                        return _j.loads(_cfg.read_text(encoding='utf-8')).get(
-                            'stripe_portal_url', '')
-                except Exception:
-                    pass
-                return ''
-            _STRIPE_PORTAL_LOGIN_URL = _load_stripe_portal_url()
-
+            # ── Manage Subscription ───────────────────────────────────────────
+            # Calls Worker /portal-session?license=<key> which looks up the
+            # Stripe customer_id from KV and returns a fresh pre-authenticated
+            # short-lived portal URL. No config.json key needed — zero setup.
             def _open_stripe_portal():
-                import webbrowser
-                url = _load_stripe_portal_url()  # re-read each click so edits take effect
-                if not url:
-                    messagebox.showinfo(
-                        "Stripe Portal Not Configured",
-                        "The Stripe Customer Portal URL hasn't been saved yet.\n\n"
-                        "Steps:\n"
-                        "1. Stripe Dashboard → Settings → Billing → Customer portal\n"
-                        "2. Click 'Activate link' and copy the URL\n"
-                        "3. Add it to  ~/.ai-prowler/config.json  as:\n"
-                        '   "stripe_portal_url": "https://billing.stripe.com/p/login/..."'
-                        "\n\n"
-                        "Also enable 'Update quantities' under Subscription management "
-                        "so Business customers can add/reduce seats from this same page.")
+                import webbrowser, urllib.request, urllib.error, json as _j
+                try:
+                    _ai_cfg = Path.home() / '.ai-prowler' / 'config.json'
+                    _cfg_d  = _j.loads(_ai_cfg.read_text(encoding='utf-8')) if _ai_cfg.exists() else {}
+                    _lic    = _cfg_d.get('license_key', '').strip()
+                except Exception:
+                    _lic = ''
+                if not _lic:
+                    messagebox.showwarning(
+                        "Not Subscribed",
+                        "No license key found.\n\nSubscribe first using the button above.")
                     return
-                webbrowser.open(url)
+                try:
+                    _req = urllib.request.Request(
+                        f"https://api.ai-prowler.com/portal-session?license={_lic}",
+                        headers={"User-Agent": "AI-Prowler/8"},
+                    )
+                    with urllib.request.urlopen(_req, timeout=10) as _resp:
+                        _data = _j.loads(_resp.read().decode())
+                    _url = _data.get('url', '')
+                    if _url:
+                        webbrowser.open(_url)
+                    else:
+                        messagebox.showerror(
+                            "Portal Error",
+                            f"Worker returned no URL.\n\nDetail: {_data.get('error','unknown')}")
+                except urllib.error.HTTPError as _he:
+                    try:
+                        _body = _j.loads(_he.read().decode())
+                        _msg  = _body.get('detail') or _body.get('error') or str(_he)
+                    except Exception:
+                        _msg = str(_he)
+                    messagebox.showerror("Portal Error",
+                        f"Could not open Stripe portal ({_he.code}):\n{_msg}")
+                except Exception as _ex:
+                    messagebox.showerror("Portal Error",
+                        f"Could not reach the subscription server:\n{_ex}\n\n"
+                        "Check your internet connection.")
 
             ttk.Button(sub_outer,
                        text="Manage Subscription →",
-                       command=_open_stripe_portal).pack(
-                           anchor='e', pady=(6, 0))
+                       command=_open_stripe_portal).pack(anchor='e', pady=(6, 0))
             ttk.Label(sub_outer, font=('Arial', 8), foreground='gray',
                       text="Cancel, update payment method, or change Business "
                            "seat count — all from one Stripe-hosted page."
                       ).pack(anchor='e')
+
+
 
             # ── _activate_mobile() ────────────────────────────────────────────
             def _activate_mobile():
