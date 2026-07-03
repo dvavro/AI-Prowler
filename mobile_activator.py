@@ -352,28 +352,35 @@ def activate_from_payload(payload):
             existing["synced_at"]    = _now_iso()
             _write_json(SEATS_PATH, existing)
         else:
-            # New license (different key, or no prior data) — rebuild fresh.
-            # Real seat IDs / child keys come from the Worker via the
-            # Admin tab's "Sync Seats" button; this is just a placeholder
-            # shape until that sync runs.
-            seat_records = [
-                {
-                    "seat_id":     f"{license_key}-S{str(i+1).zfill(3)}",
-                    "status":      "unassigned",
-                    "assigned_to": None,
-                    "assigned_at": None,
-                }
-                for i in range(seats)
-            ]
-            seats_data = {
-                "license_key":      license_key,
-                "seats_total":      seats,
-                "seats_assigned":   0,
-                "seats_unassigned": seats,
-                "seats":            seat_records,
-                "synced_at":        _now_iso(),
-            }
-            _write_json(SEATS_PATH, seats_data)
+              # New license — use real seat records from payload if present (v8.2.1+).
+              # These contain real AP-CHLD- child_license_key values so the Admin tab
+              # has real keys immediately with no Sync Seats step needed.
+              # Fall back to placeholders only for older Worker versions.
+              payload_seats = payload.get("seat_records", [])
+              if payload_seats:
+                  seat_records = payload_seats
+              else:
+                  # Legacy fallback: placeholder IDs until Sync Seats runs
+                  seat_records = [
+                      {
+                          "seat_id":     f"{license_key}-S{str(i+1).zfill(3)}",
+                          "status":      "unassigned",
+                          "assigned_to": None,
+                          "assigned_at": None,
+                      }
+                      for i in range(seats)
+                  ]
+              seats_data = {
+                  "license_key":      license_key,
+                  "seats_total":      seats,
+                  "seats_assigned":   0,
+                  "seats_unassigned": seats,
+                  "seats":            seat_records,
+                  "synced_at":        _now_iso(),
+              }
+              _write_json(SEATS_PATH, seats_data)
+
+
     elif plan != "business" and SEATS_PATH.exists():
         # Activating a personal license on a machine that previously had
         # business seat data — remove the stale file entirely so nothing

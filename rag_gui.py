@@ -13901,13 +13901,19 @@ or from the Help menu."""
                     # Normalise to legacy format for backward compat with existing callers
                     data.setdefault("parent_license_key", data.get("license_key", ""))
                     data.setdefault("seats_total", data.get("seats_total", len(data["seats"])))
-                    # Build child_keys list from unassigned seat_ids for dropdown compat
+                    # Build child_keys: prefer child_license_key (real AP-CHLD- key,
+                    # available from v8.2.1 when payload includes seat_records) over
+                    # seat_id (placeholder AP-BIZ-...-S### from older activations).
                     data["child_keys"] = [
-                        s["seat_id"] for s in data["seats"]
+                        s.get("child_license_key") or s.get("seat_id")
+                        for s in data["seats"]
                         if s.get("status") == "unassigned"
+                        and (s.get("child_license_key") or s.get("seat_id"))
                     ]
                     data["_v8_seats"] = data["seats"]  # keep full records
                     return data
+
+
                 # Legacy format
                 if not isinstance(data.get("child_keys"), list):
                     data["child_keys"] = []
@@ -14684,8 +14690,9 @@ or from the Help menu."""
                    command=self._admin_send_token_via_sms).pack(side='left', padx=4)
         ttk.Button(btn_row, text="↻ Refresh",
                    command=self._admin_refresh_table).pack(side='right')
-        ttk.Button(btn_row, text="☁ Sync Seats",
+        ttk.Button(btn_row, text="☁ Refresh Seats",
                    command=self._admin_sync_seats_from_worker).pack(side='right', padx=(0, 4))
+
 
         self._admin_refresh_table()
 
@@ -14723,27 +14730,47 @@ or from the Help menu."""
                 # v8 license_seats.json format — full seat records
                 total    = seats.get("seats_total") or len(v8_seats)
                 assigned = sum(1 for s in v8_seats if s.get("status") == "assigned")
-                pending  = sum(1 for s in v8_seats if s.get("status") == "pending_removal")
                 free     = sum(1 for s in v8_seats if s.get("status") == "unassigned")
                 parent   = self._admin_mask_key(seats.get("parent_license_key", "") or seats.get("license_key", ""))
                 txt = f"Seats: {assigned}/{total} assigned · {free} available"
-                if pending:
-                    txt += f" · ⚠ {pending} pending removal"
+                # Check for over-quota warning from license_seats.json
+                try:
+                    import json as _json2
+                    from pathlib import Path as _Path2
+                    import datetime as _dt
+                    _seats_file = _Path2.home() / ".ai-prowler" / "license_seats.json"
+                    if _seats_file.exists():
+                        _sd = _json2.loads(_seats_file.read_text(encoding="utf-8"))
+                        _over_quota_since = _sd.get("over_quota_since", "")
+                        _over_quota_count = int(_sd.get("over_quota_count", 0))
+                        if _over_quota_since and _over_quota_count > 0:
+                            _since = _dt.datetime.fromisoformat(
+                                _over_quota_since.replace("Z", "+00:00"))
+                            _deadline = _since + _dt.timedelta(days=30)
+                            _days_left = max(0, (_deadline - _dt.datetime.now(
+                                _dt.timezone.utc)).days)
+                            txt += (f" · \u26a0 OVER QUOTA by {_over_quota_count}"
+                                    f" seat(s) \u2014 remove via Admin tab within"
+                                    f" {_days_left} day(s)")
+                except Exception:
+                    pass
                 if parent:
-                    txt += f"   ·   License: {parent}"
+                    txt += f"   \u00b7   License: {parent}"
             else:
                 # Legacy seats.json format
-                total = seats.get("seats_total") or len(seats.get("child_keys") or [])
-                used  = len(self._admin_assigned_keys(data))
-                free  = max(0, total - used)
+                total  = seats.get("seats_total") or len(seats.get("child_keys") or [])
+                used   = len(self._admin_assigned_keys(data))
+                free   = max(0, total - used)
                 parent = self._admin_mask_key(seats.get("parent_license_key", ""))
                 if total == 0 and not seats.get("child_keys"):
-                    txt = ("⚠ No seat pool found. Run '☁ Sync Seats' to fetch "
-                           "from the subscription worker, or check ~/.ai-prowler/license_seats.json.")
+                    txt = ("\u26a0 No seat pool. Re-run Auto-Configure Server to restore "
+                           "seat data, or check ~/.ai-prowler/license_seats.json.")
                 else:
                     txt = (f"Seats: {used}/{total} used · {free} available"
-                           + (f"   ·   License: {parent}" if parent else ""))
+                           + (f"   \u00b7   License: {parent}" if parent else ""))
             self._admin_seat_label.config(text=txt)
+
+
 
         # Child-license warning strip — read engine-written file. Only the most
         # recent sweep wins; the engine writes an empty warnings list when
@@ -14778,10 +14805,15 @@ or from the Help menu."""
         if not self._admin_gate():
             return
 
-        # Get license key from config
+        # Get license key from ~/.ai-prowler/config.json — NOT from load_config()
+        # which reads ~/.rag_config.json (engine settings only). The license_key
+        # is written to ~/.ai-prowler/config.json by activate_from_payload().
         try:
-            cfg = load_config() if RAG_AVAILABLE else {}
-            license_key = cfg.get("license_key", "").strip()
+            import json as _json
+            from pathlib import Path as _Path
+            _ai_cfg = _Path.home() / ".ai-prowler" / "config.json"
+            _ai_data = _json.loads(_ai_cfg.read_text(encoding="utf-8")) if _ai_cfg.exists() else {}
+            license_key = _ai_data.get("license_key", "").strip()
         except Exception:
             license_key = ""
 
@@ -15604,7 +15636,9 @@ or from the Help menu."""
                 if _app not in _sys.path:
                     _sys.path.insert(0, _app)
                 import subscription_client as _sc
-                cfg = load_config() if RAG_AVAILABLE else {}
+                import json as _json2; from pathlib import Path as _Path2
+                _ai_cfg2 = _Path2.home() / ".ai-prowler" / "config.json"
+                cfg = _json2.loads(_ai_cfg2.read_text(encoding="utf-8")) if _ai_cfg2.exists() else {}
                 license_key = cfg.get("license_key", "")
                 if not license_key:
                     return
@@ -15629,7 +15663,9 @@ or from the Help menu."""
                 if _app not in _sys.path:
                     _sys.path.insert(0, _app)
                 import subscription_client as _sc
-                cfg = load_config() if RAG_AVAILABLE else {}
+                import json as _json2; from pathlib import Path as _Path2
+                _ai_cfg2 = _Path2.home() / ".ai-prowler" / "config.json"
+                cfg = _json2.loads(_ai_cfg2.read_text(encoding="utf-8")) if _ai_cfg2.exists() else {}
                 license_key = cfg.get("license_key", "")
                 if not license_key:
                     return
@@ -15654,7 +15690,9 @@ or from the Help menu."""
                 if _app not in _sys.path:
                     _sys.path.insert(0, _app)
                 import subscription_client as _sc
-                cfg = load_config() if RAG_AVAILABLE else {}
+                import json as _json2; from pathlib import Path as _Path2
+                _ai_cfg2 = _Path2.home() / ".ai-prowler" / "config.json"
+                cfg = _json2.loads(_ai_cfg2.read_text(encoding="utf-8")) if _ai_cfg2.exists() else {}
                 license_key = cfg.get("license_key", "")
                 if not license_key:
                     return
