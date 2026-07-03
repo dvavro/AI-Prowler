@@ -36,14 +36,18 @@ WORKER_BASE = "https://api.ai-prowler.com"
 # deployed Worker secret automatically.
 def _load_admin_token() -> str:
     for candidate in [
-        Path(__file__).parent.parent.parent.parent /
+        # From test file: .../AI-Prowler_V700_to_V800_work/AI-Prowler/tests/subscription/
+        # Go up 5 levels to C:\Users\david\ then into AI-Prowler-ADMIN-V8
+        Path(__file__).parent.parent.parent.parent.parent /
             "AI-Prowler-ADMIN-V8" / "ai-prowler-subs" / "subs.json",
         Path.home() / ".ai-prowler" / "subs.json",
     ]:
         if candidate.exists():
             try:
-                return json.loads(candidate.read_text(encoding="utf-8")).get(
+                tok = json.loads(candidate.read_text(encoding="utf-8")).get(
                     "admin_token", "")
+                if tok:
+                    return tok
             except Exception:
                 pass
     return ""

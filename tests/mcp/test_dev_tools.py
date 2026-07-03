@@ -96,14 +96,29 @@ def _has(binary: str) -> bool:
 
 
 def _has_pyflakes() -> bool:
-    """True if pyflakes is importable in this Python."""
+    """True if pyflakes is importable. Auto-installs it if missing so the
+    lint_check tests never skip due to an AI-Prowler uninstall wiping it."""
     import subprocess as _sp
+    # Check first
     try:
         rc = _sp.run([sys.executable, "-c", "import pyflakes"],
                      capture_output=True, timeout=10).returncode
-        return rc == 0
+        if rc == 0:
+            return True
     except Exception:
-        return False
+        pass
+    # Not found — install it quietly and check again
+    try:
+        install = _sp.run(
+            [sys.executable, "-m", "pip", "install", "pyflakes", "--quiet"],
+            capture_output=True, timeout=60)
+        if install.returncode == 0:
+            rc2 = _sp.run([sys.executable, "-c", "import pyflakes"],
+                          capture_output=True, timeout=10).returncode
+            return rc2 == 0
+    except Exception:
+        pass
+    return False
 
 
 # ══════════════════════════════════════════════════════════════════════════════
