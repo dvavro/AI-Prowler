@@ -45,6 +45,9 @@ if not exist "%PYTHON%" (
     set PYTHON=python
 )
 
+REM Auto-install pytest and pyflakes if missing (gets uninstalled with AI-Prowler).
+"%PYTHON%" -c "import pytest" 2>nul || "%PYTHON%" -m pip install pytest pytest-mock pytest-asyncio pyflakes --quiet
+
 REM Default to tests\ with verbose output if no args given.
 if "%~1"=="" (
     "%PYTHON%" -m pytest tests\ -v

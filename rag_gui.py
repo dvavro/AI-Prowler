@@ -13878,14 +13878,72 @@ or from the Help menu."""
         """Load the seat pool. Supports both formats:
         v8.0.0 license_seats.json: {license_key, seats_total, seats:[{seat_id,status,assigned_to}]}
         legacy seats.json:         {parent_license_key, seats_total, child_keys:[...]}
-        Always returns a normalised dict with both child_keys and seats arrays."""
+        Always returns a normalised dict with both child_keys and seats arrays.
+
+        v8.2.1: Detects stale seat data from a previous subscription and clears
+        it. Users are preserved — only seat key assignments are wiped so the
+        admin must reassign from the new pool."""
         import json as _json
         from pathlib import Path as _Path
         p = self._admin_seats_path()
         try:
             if p.exists():
                 data = _json.loads(p.read_text(encoding="utf-8-sig")) or {}
+
+                # ── Stale subscription check (business server only) ──────────
+                # If license_seats.json has a different AP-BIZ- key than the
+                # current config.json the file is from a previous subscription.
+                # Delete the stale seats file and clear child_license_key from
+                # each user in users.json WITHOUT deleting the users themselves.
+                # Names, emails, roles, tokens are all preserved.
+                try:
+                    _cfg_path = _Path.home() / ".ai-prowler" / "config.json"
+                    if _cfg_path.exists():
+                        _cfg = _json.loads(_cfg_path.read_text(encoding="utf-8"))
+                        _current_key = _cfg.get("license_key", "")
+                        _seats_key   = (data.get("license_key")
+                                        or data.get("parent_license_key", ""))
+                        if (_current_key and _seats_key
+                                and _current_key != _seats_key
+                                and _current_key.startswith("AP-BIZ-")):
+                            import logging as _log
+                            _log.warning(
+                                f"[Admin] Stale seat data: seats key "
+                                f"{_seats_key!r} != current {_current_key!r}. "
+                                f"Deleting license_seats.json and clearing "
+                                f"seat assignments from users.json.")
+                            p.unlink(missing_ok=True)
+                            # Clear seat keys from users but keep all user records
+                            _users_p = _Path.home() / ".ai-prowler" / "users.json"
+                            if _users_p.exists():
+                                try:
+                                    _udata = _json.loads(
+                                        _users_p.read_text(encoding="utf-8"))
+                                    _changed = False
+                                    for _u in _udata.get("users", {}).values():
+                                        if (isinstance(_u, dict)
+                                                and _u.get("child_license_key")):
+                                            _u["child_license_key"] = ""
+                                            _u["seat_id"]           = ""
+                                            _changed = True
+                                    if _changed:
+                                        _users_p.write_text(
+                                            _json.dumps(_udata, indent=2),
+                                            encoding="utf-8")
+                                        _log.warning(
+                                            "[Admin] Cleared seat assignments "
+                                            "from users.json — admin must "
+                                            "reassign from the new seat pool.")
+                                except Exception:
+                                    pass
+                            return {"parent_license_key": "", "seats_total": 0,
+                                    "child_keys": [], "_v8_seats": [],
+                                    "_stale_cleared": True}
+                except Exception:
+                    pass  # stale check is best-effort
+
                 # Detect v8 format: has 'seats' list of dicts
+
                 if isinstance(data.get("seats"), list) and data["seats"] and isinstance(data["seats"][0], dict):
                     # Normalise to legacy format for backward compat with existing callers
                     data.setdefault("parent_license_key", data.get("license_key", ""))
@@ -14831,11 +14889,56 @@ or from the Help menu."""
                     assigned = result.get("seats_assigned", 0)
                     free     = result.get("seats_unassigned", 0)
                     pending  = result.get("seats_pending_removal", 0)
+                    seats    = result.get("seats", [])
                     msg = f"Seats synced: {assigned}/{total} assigned, {free} available"
                     if pending:
                         msg += f", {pending} pending removal"
+
+                    # Case 4b: Over-quota warning — license record has over_quota_since
+                    try:
+                        import json as _j2
+                        from pathlib import Path as _p2
+                        _lsf = _p2.home() / ".ai-prowler" / "license_seats.json"
+                        if _lsf.exists():
+                            _lsd = _j2.loads(_lsf.read_text(encoding="utf-8"))
+                            _oqs = _lsd.get("over_quota_since", "")
+                            _oqc = int(_lsd.get("over_quota_count", 0))
+                            if _oqs and _oqc > 0:
+                                import datetime as _dt2
+                                _deadline = (
+                                    _dt2.datetime.fromisoformat(
+                                        _oqs.replace("Z", "+00:00"))
+                                    + _dt2.timedelta(days=30))
+                                _days = max(0, (
+                                    _deadline - _dt2.datetime.now(
+                                        _dt2.timezone.utc)).days)
+                                msg += (f"\n\u26a0 OVER QUOTA by {_oqc} seat(s) "
+                                        f"\u2014 remove via Admin tab within "
+                                        f"{_days} day(s) or newest seats will "
+                                        f"be auto-suspended")
+                    except Exception:
+                        pass
+
+                    # Case 3: New seat added — check if synced count > local count
+                    try:
+                        _prev_total = len([
+                            s for s in seats
+                            if s.get("status") != "removed"
+                        ])
+                        _new_seats = [
+                            s for s in seats
+                            if s.get("status") == "unassigned"
+                            and not s.get("assigned_to")
+                        ]
+                        if _new_seats and free > 0:
+                            msg += (f"\n\U0001f4e7 {len(_new_seats)} new unassigned "
+                                    f"seat(s) — check your email to forward the "
+                                    f"activation code to new employees")
+                    except Exception:
+                        pass
+
                     self.status_var.set(f"✅ {msg}")
-                    self.root.after(4000, lambda: self.status_var.set("Ready"))
+                    self.root.after(6000, lambda: self.status_var.set("Ready"))
                 self.root.after(0, _on_done)
             except Exception as _ex:
                 def _on_err():
@@ -14880,8 +14983,10 @@ or from the Help menu."""
         dlg.title(title)
         dlg.transient(self.root)
         dlg.grab_set()
-        dlg.resizable(False, False)
+        dlg.resizable(True, True)       # resizable so seat key is fully visible
+        dlg.minsize(540, 420)
         pad = {'padx': 8, 'pady': 4}
+
 
         ex = existing or {}
 
@@ -14974,9 +15079,10 @@ or from the Help menu."""
         avail = list(self._admin_unassigned_keys())
         if cur_key and cur_key not in avail:
             avail = [cur_key] + avail
+        # Show the FULL key so the owner can match it to the activation email.
         key_labels = {"(no seat assigned)": ""}
         for k in avail:
-            key_labels[self._admin_mask_key(k) + f"   [{k[:8]}…]"] = k
+            key_labels[k] = k           # full key as both label and value
         init_label = "(no seat assigned)"
         for lbl, k in key_labels.items():
             if k == cur_key and cur_key:
@@ -14984,12 +15090,15 @@ or from the Help menu."""
                 break
         seat_var = tk.StringVar(value=init_label)
         seat_cb = ttk.Combobox(frm, textvariable=seat_var, state='readonly',
-                               width=31, values=list(key_labels.keys()))
-        seat_cb.grid(row=10, column=1, columnspan=2, **pad)
+                               values=list(key_labels.keys()))
+        seat_cb.grid(row=10, column=1, columnspan=2, sticky='ew', **pad)
+        frm.columnconfigure(1, weight=1)  # stretch with dialog width
         if len(key_labels) == 1:
-            ttk.Label(frm, text="(no unassigned seats in the pool)",
+            ttk.Label(frm, text="(no unassigned seats \u2014 run Refresh Seats first)",
                       font=('Segoe UI', 8)).grid(row=11, column=1, columnspan=2,
                                                  sticky='w', padx=8)
+
+
 
         # ── Row 12: Bearer token (Add only) ────────────────────────────────
         is_edit = bool(existing)
@@ -15149,16 +15258,26 @@ or from the Help menu."""
         if ok is True:
             return True
         if ok is None:
-            # Network/offline — offer to proceed.
+            # Network/offline OR placeholder/unregistered — offer to proceed.
             return messagebox.askyesno(
-                "License server unreachable",
+                "License seat not validated",
                 f"{msg}\n\nAssign this seat anyway? It will be validated "
                 "automatically the next time the server can reach the license "
-                "service.")
+                "service.\n\n(Run 'Refresh Seats' after a fresh subscription "
+                "to get properly registered seat keys.)")
         # ok is False — hard rejection.
+        # Treat 404 as non-fatal: seat may not be registered yet (manual provisioning).
+        if "404" in msg or "not found" in msg.lower():
+            return messagebox.askyesno(
+                "Seat key not registered",
+                f"The license server returned 404 for this seat key.\n"
+                f"It may not be registered yet (manually provisioned seat).\n\n"
+                f"Assign anyway? After a fresh subscription the seat keys\n"
+                f"will validate correctly.")
         messagebox.showerror("License key rejected",
                              f"{msg}\n\nThis seat was not assigned.")
         return False
+
 
     def _admin_add_user(self):
         """Add a new user: collect fields, generate a bearer token, write
@@ -15597,7 +15716,29 @@ or from the Help menu."""
         if self._admin_save_users(data):
             self._admin_refresh_table()
             self._admin_update_lock_ui()
+            # Case 4a: Mark seat removed in local license_seats.json immediately
+            # so it disappears from the dropdown without needing Refresh Seats.
+            if child_key or seat_id:
+                try:
+                    import json as _j3
+                    from pathlib import Path as _p3
+                    _lsf3 = _p3.home() / ".ai-prowler" / "license_seats.json"
+                    if _lsf3.exists():
+                        _lsd3 = _j3.loads(_lsf3.read_text(encoding="utf-8"))
+                        _chg3 = False
+                        for _s3 in _lsd3.get("seats", []):
+                            if ((child_key and _s3.get("child_license_key") == child_key)
+                                    or (seat_id and _s3.get("seat_id") == seat_id)):
+                                _s3["status"]      = "removed"
+                                _s3["assigned_to"] = None
+                                _chg3 = True
+                        if _chg3:
+                            _lsf3.write_text(
+                                _j3.dumps(_lsd3, indent=2), encoding="utf-8")
+                except Exception:
+                    pass  # non-fatal — Refresh Seats will sync on next open
             # v8.0.0 — owner's explicit choice of which seat to remove. This
+
             # actually SUSPENDS the seat's own child license key (not just
             # returns it to the unassigned pool) since the owner specifically
             # picked this person to remove — see revoke_seats() / the Worker's
