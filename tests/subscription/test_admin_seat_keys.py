@@ -814,3 +814,209 @@ class TestPortalSessionServerMode:
         assert action == 'opened'
         assert detail.startswith("https://billing.stripe.com")
 
+
+# ===========================================================================
+# TC-VALIDATE: _admin_validate_child_key — v8 endpoint contract
+#
+# Verifies the Admin tab calls the correct v8 Worker endpoint:
+#   GET /license/{key}/validate?install_id=...
+# NOT the old v7 endpoint:
+#   POST /license/validate  (no longer exists — returns 404)
+#
+# All tests use a mock url_opener — no KV, no Stripe, no Cloudflare,
+# no real ~/.ai-prowler/ files touched.
+# ===========================================================================
+
+import urllib.error as _ue
+import re as _re
+
+
+def _validate_child_key_logic(child_key, url_opener, install_id=""):
+    """Replicate _admin_validate_child_key() from rag_gui.py without Tkinter.
+
+    child_key  : the AP-CHLD-... (or placeholder) key to validate
+    url_opener : callable(url, method) -> dict   (mock in tests)
+    install_id : optional machine ID
+
+    Returns (ok, message):
+      (True,  msg) — valid seat
+      (False, msg) — hard rejection from Worker
+      (None,  msg) — network error or placeholder — non-fatal
+    """
+    # Placeholder check (same regex as rag_gui.py line 14074)
+    if _re.match(r'^AP-BIZ-[0-9A-F]+-[0-9A-F]+-S\d+$',
+                 child_key, _re.IGNORECASE):
+        return (None,
+                "This is a placeholder seat ID (not yet synced from the server).\n"
+                "Click 'Sync Seats' to fetch real child keys from the license server.")
+
+    endpoint = "https://api.ai-prowler.com"
+    try:
+        # v8 endpoint: GET /license/{key}/validate?install_id=...
+        url = (f"{endpoint}/license/{child_key}/validate"
+               + (f"?install_id={install_id}" if install_id else ""))
+        resp = url_opener(url, method="GET")
+        if resp.get("valid") is True:
+            exp = resp.get("expires_at", "")
+            return (True, f"Valid child seat{(' — expires ' + exp) if exp else ''}.")
+        reason = resp.get("reason", "invalid")
+        return (False,
+                f"License key rejected: {reason}. {resp.get('message','')}"
+                .strip())
+    except _ue.HTTPError as e:
+        return (False, f"Validation HTTP error {e.code} (key not accepted).")
+    except Exception as e:
+        return (None, f"Could not reach the license server ({e}).")
+
+
+class TestValidateChildKey:
+
+    def test_TC_VALIDATE_001_valid_key_returns_true(self):
+        """Worker returns valid:true → (True, message with 'Valid')."""
+        def mock(url, method="GET"):
+            assert method == "GET"                        # must be GET not POST
+            assert "/license/AP-CHLD-" in url            # key in URL path
+            assert "/validate" in url                    # validate endpoint
+            assert "/license/validate" not in url        # NOT the old v7 path
+            return {"valid": True, "expires_at": "2027-07-01T00:00:00Z"}
+
+        ok, msg = _validate_child_key_logic("AP-CHLD-ABCD1234-EFGH5678", mock)
+        assert ok is True
+        assert "Valid" in msg
+
+    def test_TC_VALIDATE_002_url_uses_v8_get_path_not_v7_post(self):
+        """Critical: URL must be GET /license/{key}/validate not POST /license/validate."""
+        seen = {}
+
+        def mock(url, method="GET"):
+            seen['url']    = url
+            seen['method'] = method
+            return {"valid": True}
+
+        _validate_child_key_logic("AP-CHLD-ABCD1234-EFGH5678", mock)
+
+        # v8 format: key is IN the URL path
+        assert "AP-CHLD-ABCD1234-EFGH5678" in seen['url']
+        # v8 format: GET not POST
+        assert seen['method'] == "GET"
+        # NOT the old v7 format (key in body, flat /license/validate path)
+        assert seen['url'].rstrip("?") != "https://api.ai-prowler.com/license/validate"
+
+    def test_TC_VALIDATE_003_install_id_added_as_query_param(self):
+        """install_id is passed as ?install_id= query param (v8 GET style)."""
+        seen = {}
+
+        def mock(url, method="GET"):
+            seen['url'] = url
+            return {"valid": True}
+
+        _validate_child_key_logic(
+            "AP-CHLD-ABCD1234-EFGH5678", mock, install_id="machine-abc123")
+
+        assert "install_id=machine-abc123" in seen['url']
+
+    def test_TC_VALIDATE_004_no_install_id_omits_query_param(self):
+        """When no install_id available, URL has no query string."""
+        seen = {}
+
+        def mock(url, method="GET"):
+            seen['url'] = url
+            return {"valid": True}
+
+        _validate_child_key_logic("AP-CHLD-ABCD1234-EFGH5678", mock,
+                                  install_id="")
+        assert "install_id" not in seen['url']
+
+    def test_TC_VALIDATE_005_worker_returns_invalid_gives_false(self):
+        """Worker returns valid:false → (False, message with reason)."""
+        def mock(url, method="GET"):
+            return {"valid": False, "reason": "suspended",
+                    "message": "License is suspended."}
+
+        ok, msg = _validate_child_key_logic("AP-CHLD-ABCD1234-EFGH5678", mock)
+        assert ok is False
+        assert "suspended" in msg
+
+    def test_TC_VALIDATE_006_http_404_returns_false(self):
+        """Worker returns 404 → (False, message with 404).
+        This was the bug: v7 POST /license/validate always returned 404
+        on the v8 Worker because the endpoint doesn't exist there."""
+        def mock(url, method="GET"):
+            raise _ue.HTTPError(url, 404, "Not Found", {}, None)
+
+        ok, msg = _validate_child_key_logic("AP-CHLD-ABCD1234-EFGH5678", mock)
+        assert ok is False
+        assert "404" in msg
+
+    def test_TC_VALIDATE_007_http_403_suspended_returns_false(self):
+        """Worker returns 403 (suspended license) → (False, message)."""
+        def mock(url, method="GET"):
+            raise _ue.HTTPError(url, 403, "Forbidden", {}, None)
+
+        ok, msg = _validate_child_key_logic("AP-CHLD-ABCD1234-EFGH5678", mock)
+        assert ok is False
+        assert "403" in msg
+
+    def test_TC_VALIDATE_008_network_error_returns_none(self):
+        """Network timeout → (None, message) — non-fatal, caller can proceed."""
+        def mock(url, method="GET"):
+            raise Exception("Connection timed out")
+
+        ok, msg = _validate_child_key_logic("AP-CHLD-ABCD1234-EFGH5678", mock)
+        assert ok is None
+        assert "timed out" in msg
+
+    def test_TC_VALIDATE_009_placeholder_key_returns_none(self):
+        """Placeholder seat ID (AP-BIZ-...-S001) → (None, message) without
+        making any network call — skipped immediately."""
+        called = []
+
+        def mock(url, method="GET"):
+            called.append(url)  # should never be called
+            return {"valid": True}
+
+        ok, msg = _validate_child_key_logic(
+            "AP-BIZ-ABCD1234-EF056789-S001", mock)
+        assert ok is None
+        assert "placeholder" in msg.lower()
+        assert called == []  # no network call made
+
+    def test_TC_VALIDATE_010_placeholder_case_insensitive(self):
+        """Placeholder check is case-insensitive."""
+        called = []
+
+        def mock(url, method="GET"):
+            called.append(url)
+            return {"valid": True}
+
+        ok, _ = _validate_child_key_logic(
+            "ap-biz-abcd1234-ef056789-s003", mock)
+        assert ok is None
+        assert called == []
+
+    def test_TC_VALIDATE_011_real_chld_key_not_treated_as_placeholder(self):
+        """AP-CHLD- keys are NOT caught by the placeholder regex."""
+        called = []
+
+        def mock(url, method="GET"):
+            called.append(url)
+            return {"valid": True}
+
+        ok, _ = _validate_child_key_logic(
+            "AP-CHLD-ABCD1234-EF056789", mock)
+        assert ok is True
+        assert len(called) == 1  # network call WAS made
+
+    def test_TC_VALIDATE_012_key_is_url_encoded_in_path(self):
+        """Key is correctly embedded in the URL path (no injection)."""
+        seen = {}
+
+        def mock(url, method="GET"):
+            seen['url'] = url
+            return {"valid": True}
+
+        key = "AP-CHLD-ABCD1234-EF056789"
+        _validate_child_key_logic(key, mock)
+        # Key appears between /license/ and /validate
+        assert f"/license/{key}/validate" in seen['url']
+

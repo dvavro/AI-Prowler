@@ -14096,12 +14096,14 @@ or from the Help menu."""
                     install_id = iid.read_text(encoding="utf-8").strip()
             except Exception:
                 pass
-            body = _json.dumps({"license_key": child_key,
-                                "install_id": install_id}).encode()
+            # v8 Worker: GET /license/{key}/validate?install_id=...
+            # (v7 used POST /license/validate with JSON body — no longer valid)
+            _url = (f"{endpoint}/license/{urllib.request.quote(child_key)}/validate"
+                    + (f"?install_id={install_id}" if install_id else ""))
             req = urllib.request.Request(
-                f"{endpoint}/license/validate", data=body,
+                _url,
                 headers={"Content-Type": "application/json",
-                         "User-Agent": "AI-Prowler-AdminTab/1.0"}, method="POST")
+                         "User-Agent": "AI-Prowler-AdminTab/1.0"}, method="GET")
             with urllib.request.urlopen(req, timeout=8) as r:
                 resp = _json.loads(r.read().decode("utf-8", "replace"))
             if resp.get("valid") is True:
