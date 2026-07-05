@@ -9583,21 +9583,46 @@ or from the Help menu."""
                       ).pack(anchor='e')
 
             def _open_stripe_portal_srv():
-                import webbrowser
+                import webbrowser, urllib.request, urllib.error, json as _j
                 try:
-                    import json as _j
                     _cfg = Path.home() / '.ai-prowler' / 'config.json'
-                    url = _j.loads(_cfg.read_text(encoding='utf-8')).get(
-                        'stripe_portal_url', '') if _cfg.exists() else ''
+                    _cfg_d = _j.loads(_cfg.read_text(encoding='utf-8')) if _cfg.exists() else {}
+                    _lic = _cfg_d.get('license_key', '').strip()
                 except Exception:
-                    url = ''
-                if not url:
-                    messagebox.showinfo("Stripe Portal Not Configured",
-                        "The Stripe Customer Portal URL hasn't been saved yet.\n\n"
-                        "Add it to ~/.ai-prowler/config.json as:\n"
-                        '"stripe_portal_url": "https://billing.stripe.com/p/login/..."')
+                    _lic = ''
+                if not _lic:
+                    messagebox.showwarning(
+                        "Not Subscribed",
+                        "No license key found in config.json.\n\n"
+                        "Activate your subscription first using the "
+                        "activation code above.")
                     return
-                webbrowser.open(url)
+                try:
+                    _req = urllib.request.Request(
+                        f"https://api.ai-prowler.com/portal-session?license={_lic}",
+                        headers={"User-Agent": "AI-Prowler/8"},
+                    )
+                    with urllib.request.urlopen(_req, timeout=10) as _resp:
+                        _data = _j.loads(_resp.read().decode())
+                    _url = _data.get('url', '')
+                    if _url:
+                        webbrowser.open(_url)
+                    else:
+                        messagebox.showerror(
+                            "Portal Error",
+                            f"Worker returned no URL.\n\nDetail: {_data.get('error','unknown')}")
+                except urllib.error.HTTPError as _he:
+                    try:
+                        _body = _j.loads(_he.read().decode())
+                        _msg  = _body.get('detail') or _body.get('error') or str(_he)
+                    except Exception:
+                        _msg = str(_he)
+                    messagebox.showerror("Portal Error",
+                        f"Could not open Stripe portal ({_he.code}):\n{_msg}")
+                except Exception as _ex:
+                    messagebox.showerror("Portal Error",
+                        f"Could not reach the subscription server:\n{_ex}\n\n"
+                        "Check your internet connection.")
 
             # ── _activate_server() ────────────────────────────────────────────
             def _activate_server():

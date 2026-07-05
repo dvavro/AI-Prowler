@@ -632,3 +632,185 @@ class TestLifecycleCase4bOverQuota:
         assert to_suspend[0]["seat_id"] == "AP-BIZ-X-S005"
         assert to_suspend[1]["seat_id"] == "AP-BIZ-X-S006"
 
+
+# ===========================================================================
+# TC-PORTAL: Manage Subscription button — server/business mode
+# Tests _open_stripe_portal_srv() logic in complete isolation.
+# No real config.json, no Worker, no KV, no Stripe, no Cloudflare touched.
+# Uses tmp_path for config and a mock url_opener to intercept Worker calls.
+# ===========================================================================
+
+import urllib.error as _urllib_error
+
+
+def _portal_srv_logic(config_path, url_opener):
+    """Replicate _open_stripe_portal_srv() from rag_gui.py without Tkinter.
+
+    config_path : Path to config.json (tmp_path — never real ~/.ai-prowler/)
+    url_opener  : callable(url) -> dict  (mock in tests, real urllib in prod)
+
+    Returns (action, detail):
+      'no_license'  — config missing or no license_key
+      'opened'      — Stripe URL received; detail = the URL
+      'no_url'      — Worker returned 200 but no url field
+      'http_error'  — Worker returned non-2xx; detail = str(code)
+      'network_err' — urllib raised generic exception
+    """
+    import json as _j
+
+    try:
+        cfg_d = _j.loads(config_path.read_text(encoding='utf-8')) \
+                if config_path.exists() else {}
+        lic = cfg_d.get('license_key', '').strip()
+    except Exception:
+        lic = ''
+
+    if not lic:
+        return 'no_license', ''
+
+    try:
+        data = url_opener(
+            f"https://api.ai-prowler.com/portal-session?license={lic}")
+        portal_url = data.get('url', '')
+        if portal_url:
+            return 'opened', portal_url
+        return 'no_url', data.get('error', 'unknown')
+    except _urllib_error.HTTPError as e:
+        return 'http_error', str(e.code)
+    except Exception as e:
+        return 'network_err', str(e)
+
+
+class TestPortalSessionServerMode:
+
+    def _cfg(self, tmp_path, license_key, extra=None):
+        """Write tmp_path config — never touches ~/.ai-prowler/."""
+        import json
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir(parents=True, exist_ok=True)
+        d = {"license_key": license_key,
+             "plan": "business", "edition": "business", "mode": "server"}
+        if extra:
+            d.update(extra)
+        p = ai_dir / "config.json"
+        p.write_text(json.dumps(d), encoding="utf-8")
+        return p
+
+    def test_TC_PORTAL_SRV_001_no_config_returns_no_license(self, tmp_path):
+        """Missing config.json → no_license (not a crash)."""
+        p = tmp_path / ".ai-prowler" / "config.json"
+        assert not p.exists()
+        action, _ = _portal_srv_logic(p, lambda url: {})
+        assert action == 'no_license'
+
+    def test_TC_PORTAL_SRV_002_config_with_no_license_key(self, tmp_path):
+        """config.json exists but has no license_key → no_license."""
+        import json
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        p = ai_dir / "config.json"
+        p.write_text(json.dumps({"edition": "business", "mode": "server"}))
+        action, _ = _portal_srv_logic(p, lambda url: {})
+        assert action == 'no_license'
+
+    def test_TC_PORTAL_SRV_003_worker_returns_stripe_url(self, tmp_path):
+        """Worker returns Stripe URL → action='opened' with the URL."""
+        p = self._cfg(tmp_path, "AP-BIZ-AC94AE8B-BA91CA47")
+
+        def mock_opener(url):
+            assert "AP-BIZ-AC94AE8B-BA91CA47" in url
+            return {"url": "https://billing.stripe.com/session/test_abc123"}
+
+        action, detail = _portal_srv_logic(p, mock_opener)
+        assert action == 'opened'
+        assert detail == "https://billing.stripe.com/session/test_abc123"
+
+    def test_TC_PORTAL_SRV_004_worker_returns_no_url_field(self, tmp_path):
+        """Worker returns 200 but no url field → no_url."""
+        p = self._cfg(tmp_path, "AP-BIZ-AC94AE8B-BA91CA47")
+        action, detail = _portal_srv_logic(
+            p, lambda url: {"error": "No customer_id on record"})
+        assert action == 'no_url'
+        assert 'customer_id' in detail
+
+    def test_TC_PORTAL_SRV_005_worker_returns_404(self, tmp_path):
+        """Worker returns 404 (license not in KV) → http_error."""
+        p = self._cfg(tmp_path, "AP-BIZ-AC94AE8B-BA91CA47")
+
+        def mock_opener(url):
+            raise _urllib_error.HTTPError(url, 404, "Not Found", {}, None)
+
+        action, detail = _portal_srv_logic(p, mock_opener)
+        assert action == 'http_error'
+        assert detail == '404'
+
+    def test_TC_PORTAL_SRV_006_worker_returns_403_suspended(self, tmp_path):
+        """Worker returns 403 (suspended subscription) → http_error."""
+        p = self._cfg(tmp_path, "AP-BIZ-AC94AE8B-BA91CA47")
+
+        def mock_opener(url):
+            raise _urllib_error.HTTPError(url, 403, "Forbidden", {}, None)
+
+        action, detail = _portal_srv_logic(p, mock_opener)
+        assert action == 'http_error'
+        assert detail == '403'
+
+    def test_TC_PORTAL_SRV_007_network_error(self, tmp_path):
+        """Network timeout → network_err (not a crash)."""
+        p = self._cfg(tmp_path, "AP-BIZ-AC94AE8B-BA91CA47")
+
+        def mock_opener(url):
+            raise Exception("Connection timed out")
+
+        action, detail = _portal_srv_logic(p, mock_opener)
+        assert action == 'network_err'
+        assert 'timed out' in detail
+
+    def test_TC_PORTAL_SRV_008_license_key_in_request_url(self, tmp_path):
+        """license_key from config.json is sent in the Worker URL."""
+        biz_key = "AP-BIZ-AC94AE8B-BA91CA47"
+        p = self._cfg(tmp_path, biz_key)
+        seen = []
+
+        def mock_opener(url):
+            seen.append(url)
+            return {"url": "https://billing.stripe.com/session/xyz"}
+
+        _portal_srv_logic(p, mock_opener)
+        assert len(seen) == 1
+        assert f"license={biz_key}" in seen[0]
+        assert "portal-session" in seen[0]
+
+    def test_TC_PORTAL_SRV_009_personal_and_server_same_logic(self, tmp_path):
+        """Personal (AP-PERS-) and server (AP-BIZ-) use identical call logic."""
+        for lic_key in [
+            "AP-PERS-16C50BFD-4FB265F4",
+            "AP-BIZ-AC94AE8B-BA91CA47",
+        ]:
+            p = self._cfg(tmp_path, lic_key)
+            seen = []
+
+            def mock_opener(url, _k=lic_key):
+                seen.append(url)
+                return {"url": "https://billing.stripe.com/session/test"}
+
+            action, detail = _portal_srv_logic(p, mock_opener)
+            assert action == 'opened', f"Failed for {lic_key}"
+            assert f"license={lic_key}" in seen[0]
+
+    def test_TC_PORTAL_SRV_010_reinstall_same_subscription_works(self, tmp_path):
+        """After uninstall+reinstall with same AP-BIZ- key portal still works.
+        config.json rewritten by activate_from_payload with same key —
+        Worker KV still has the license record with customer_id."""
+        biz_key = "AP-BIZ-AC94AE8B-BA91CA47"
+        p = self._cfg(tmp_path, biz_key)
+
+        def mock_opener(url):
+            # Worker finds license in KV, creates portal session
+            assert biz_key in url
+            return {"url": "https://billing.stripe.com/session/reinstall_ok"}
+
+        action, detail = _portal_srv_logic(p, mock_opener)
+        assert action == 'opened'
+        assert detail.startswith("https://billing.stripe.com")
+
