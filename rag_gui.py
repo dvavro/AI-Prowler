@@ -14869,6 +14869,34 @@ or from the Help menu."""
                     text=f"⚠ License issue(s) on {len(warnings)} child seat(s): "
                          f"{summary}.  Contact your provider.")
 
+    def _admin_mark_seat_in_local_file(self, child_key, status, assigned_to=None):
+        """Update a seat's status in license_seats.json by child_license_key.
+        Called after Add/Edit User so the seat count strip stays accurate without
+        needing a Refresh Seats round-trip to the Worker.
+
+        status values:
+          'assigned'   — seat is in use by assigned_to
+          'unassigned' — seat is available (user removed, not seat revoked)
+          'removed'    — seat revoked at Worker level (subscription reduced)
+        """
+        import json as _json
+        from pathlib import Path as _Path
+        lsf = _Path.home() / ".ai-prowler" / "license_seats.json"
+        if not lsf.exists() or not child_key:
+            return
+        try:
+            data    = _json.loads(lsf.read_text(encoding="utf-8"))
+            changed = False
+            for s in data.get("seats", []):
+                if s.get("child_license_key") == child_key or s.get("seat_id") == child_key:
+                    s["status"]      = status
+                    s["assigned_to"] = assigned_to if status == "assigned" else None
+                    changed = True
+            if changed:
+                lsf.write_text(_json.dumps(data, indent=2), encoding="utf-8")
+        except Exception:
+            pass  # non-fatal — Refresh Seats will sync correctly
+
     def _admin_sync_seats_from_worker(self):
         """Sync seat list from the subscription worker into license_seats.json.
         Uses subscription_client.sync_seats() with the license key from config.
@@ -15367,26 +15395,29 @@ or from the Help menu."""
 
         import datetime as _dt
         users[token] = {
-            "name": fields["name"],
+            "name":  fields["name"],
             "email": fields["email"],
             "cell_phone": fields.get("cell_phone", ""),
-            "role": fields["role"],
+            "role":   fields["role"],
             "scopes": fields["scopes"],
-            "can_manage_users": fields["can_manage_users"],
+            "can_manage_users":          fields["can_manage_users"],
             "private_collection_enabled": fields["private_collection_enabled"],
             "child_license_key": child_key,
             "status": "active",
-            "added": _dt.date.today().isoformat(),
+            "added":  _dt.date.today().isoformat(),
         }
         if not self._admin_save_users(data):
             return
+        # Update license_seats.json so the assigned/available count is correct.
+        if child_key:
+            self._admin_mark_seat_in_local_file(child_key, "assigned",
+                                                fields["email"] or fields["name"])
         self._admin_refresh_table()
         self._admin_show_token(fields["name"], token)
         if fields.get("private_collection_enabled"):
             self._admin_setup_private_folder(fields["name"], fields.get("slug", ""))
 
         # Phase 7 — notify subscription worker of seat assignment (non-blocking)
-        # Fires for v8 business plans where seat_id comes from license_seats.json
         if child_key and child_key.startswith("AP-BIZ-"):
             self._admin_worker_assign_seat(child_key, fields["email"] or fields["name"])
 
@@ -15659,37 +15690,141 @@ or from the Help menu."""
                     self._admin_setup_private_folder(fields["name"], slug)
 
     def _admin_regen_token(self):
-        """Regenerate the selected user's bearer token (revocation in 5s, spec
-        §5.3). The old token immediately stops authenticating once saved."""
-        from tkinter import messagebox
+        """Change the bearer token for the selected user.
+        Opens a dialog where the admin can type their own token (password)
+        or generate a strong random one. Token rules shown as a reminder."""
+        import tkinter as tk
+        from tkinter import ttk, messagebox
+
         if not self._admin_gate():
             return
         token = self._admin_selected_token()
         if not token:
-            messagebox.showinfo("Regenerate", "Select a user first.")
+            messagebox.showinfo("Change Token", "Select a user first.")
             return
-        data = self._admin_load_users()
+        data  = self._admin_load_users()
         users = data.get("users") or {}
-        u = users.get(token)
+        u     = users.get(token)
         if not isinstance(u, dict):
-            messagebox.showerror("Regenerate", "User not found (refresh the table).")
+            messagebox.showerror("Change Token", "User not found — refresh the table.")
             return
-        if not messagebox.askyesno(
-                "Regenerate token",
-                f"Regenerate the bearer token for {u.get('name','')}?\n\n"
-                "Their OLD token will stop working immediately. You'll need to "
-                "send them the new one."):
+
+        # ── Dialog ────────────────────────────────────────────────────────────
+        dlg = tk.Toplevel(self.root)
+        dlg.title(f"Change Token — {u.get('name','')}")
+        dlg.transient(self.root)
+        dlg.grab_set()
+        dlg.resizable(True, False)
+        dlg.minsize(460, 0)
+
+        pad = {'padx': 10, 'pady': 4}
+        frm = tk.Frame(dlg, padx=12, pady=10)
+        frm.pack(fill='both', expand=True)
+
+        # ── Instructions + rules ──────────────────────────────────────────────
+        tk.Label(frm,
+                 text=f"Set a new bearer token (password) for {u.get('name','')}.",
+                 font=('Segoe UI', 9, 'bold'),
+                 anchor='w').pack(fill='x', pady=(0, 2))
+
+        tk.Label(frm, justify='left', foreground='#555555', anchor='w',
+                 text=(
+                     "Token rules:\n"
+                     "  \u2022 Minimum 8 characters\n"
+                     "  \u2022 Must be unique \u2014 no two users can share the same token\n"
+                     "  \u2022 The token IS the employee\u2019s password for the MCP server\n"
+                     "  \u2022 The old token stops working immediately after saving\n"
+                     "  \u2022 Leave blank and click Generate for a strong random token"
+                 )).pack(fill='x', pady=(0, 8))
+
+        ttk.Separator(frm).pack(fill='x', pady=(0, 8))
+
+        # ── Token entry ───────────────────────────────────────────────────────
+        entry_row = tk.Frame(frm)
+        entry_row.pack(fill='x')
+        tk.Label(entry_row, text="New token:", width=10,
+                 anchor='e').pack(side='left')
+
+        tok_var  = tk.StringVar()
+        show_var = tk.BooleanVar(value=False)
+
+        tok_entry = tk.Entry(entry_row, textvariable=tok_var,
+                             font=('Consolas', 10), show='\u25cf', width=34)
+        tok_entry.pack(side='left', padx=(6, 4))
+
+        def _toggle_show():
+            tok_entry.configure(show='' if show_var.get() else '\u25cf')
+
+        tk.Checkbutton(entry_row, text="Show",
+                       variable=show_var,
+                       command=_toggle_show).pack(side='left')
+
+        # ── Generate button ───────────────────────────────────────────────────
+        def _generate():
+            new = self._admin_gen_token()
+            while new in users or new == token:
+                new = self._admin_gen_token()
+            tok_var.set(new)
+            show_var.set(True)   # auto-show so admin can copy it
+            tok_entry.configure(show='')
+
+        gen_row = tk.Frame(frm)
+        gen_row.pack(fill='x', pady=(6, 0))
+        ttk.Button(gen_row, text="\U0001f3b2 Generate random token",
+                   command=_generate).pack(side='left')
+        tk.Label(gen_row, font=('Segoe UI', 8), foreground='#777777',
+                 text="  \u2190 or type your own above").pack(side='left')
+
+        ttk.Separator(frm).pack(fill='x', pady=(10, 6))
+
+        # ── Save / Cancel ─────────────────────────────────────────────────────
+        result = {}
+
+        def _save():
+            new_tok = tok_var.get().strip()
+            if not new_tok:
+                messagebox.showwarning("Token required",
+                    "Enter a token or click Generate to create one.",
+                    parent=dlg)
+                return
+            if len(new_tok) < 8:
+                messagebox.showerror("Too short",
+                    "The token must be at least 8 characters.\n"
+                    "(It is the employee\u2019s password \u2014 short tokens are insecure.)",
+                    parent=dlg)
+                return
+            if new_tok in users and new_tok != token:
+                messagebox.showerror("Already in use",
+                    "That token is already assigned to another user.\n"
+                    "Choose a different value.",
+                    parent=dlg)
+                return
+            result['token'] = new_tok
+            dlg.destroy()
+
+        btn_row = tk.Frame(frm)
+        btn_row.pack(fill='x')
+        ttk.Button(btn_row, text="\U0001f4be Save Token",
+                   command=_save).pack(side='left')
+        ttk.Button(btn_row, text="Cancel",
+                   command=dlg.destroy).pack(side='left', padx=(8, 0))
+
+        dlg.bind('<Return>', lambda e: _save())
+        dlg.wait_window()
+
+        if not result.get('token'):
             return
-        new_token = self._admin_gen_token()
-        while new_token in users:
-            new_token = self._admin_gen_token()
-        # Move the record to the new key (the token IS the key).
+
+        new_token = result['token']
+        # Move the user record to the new key (token IS the dict key)
         users[new_token] = u
         del users[token]
         if self._admin_save_users(data):
             self._admin_refresh_table()
             self._admin_update_lock_ui()
             self._admin_show_token(u.get("name", ""), new_token)
+
+
 
     def _admin_toggle_status(self):
         """Toggle a user between active and suspended (soft revoke — keeps the
@@ -15756,8 +15891,13 @@ or from the Help menu."""
                         for _s3 in _lsd3.get("seats", []):
                             if ((child_key and _s3.get("child_license_key") == child_key)
                                     or (seat_id and _s3.get("seat_id") == seat_id)):
-                                _s3["status"]      = "removed"
+                                # Mark as 'unassigned' (not 'removed') so the seat
+                                # returns to the available pool and can be reassigned.
+                                # 'removed' is reserved for Worker-level seat revocation
+                                # (when the subscription quantity is reduced in Stripe).
+                                _s3["status"]      = "unassigned"
                                 _s3["assigned_to"] = None
+
                                 _chg3 = True
                         if _chg3:
                             _lsf3.write_text(

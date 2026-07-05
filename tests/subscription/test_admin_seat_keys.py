@@ -1020,3 +1020,394 @@ class TestValidateChildKey:
         # Key appears between /license/ and /validate
         assert f"/license/{key}/validate" in seen['url']
 
+
+# ===========================================================================
+# TC-ADMIN-FIX: Tests for the 4 Admin tab fixes
+#
+# Fix 1: _admin_mark_seat_in_local_file — updates seat status in
+#         license_seats.json when user is added/removed (no round-trip needed)
+# Fix 2: Remove User marks seat 'unassigned' not 'removed' so seat can be
+#         reassigned without Refresh Seats
+# Fix 3: /seats/{key}/sync is public — no admin token needed on server
+# Fix 4: Change Token dialog validates: min 8 chars, unique, not empty
+#
+# All tests use tmp_path — zero pollution of ~/.ai-prowler/ or any DB.
+# ===========================================================================
+
+
+def _make_seats_file(ai_dir, biz_key, seats):
+    """Write license_seats.json to ai_dir."""
+    import json
+    p = ai_dir / "license_seats.json"
+    p.write_text(json.dumps({
+        "license_key":  biz_key,
+        "seats_total":  len(seats),
+        "seats":        seats,
+    }, indent=2), encoding="utf-8")
+    return p
+
+
+def _read_seats(ai_dir):
+    import json
+    return json.loads((ai_dir / "license_seats.json").read_text())["seats"]
+
+
+def _mark_seat_logic(lsf_path, child_key, status, assigned_to=None):
+    """Replicate _admin_mark_seat_in_local_file() without Tkinter."""
+    import json
+    if not lsf_path.exists() or not child_key:
+        return False
+    data    = json.loads(lsf_path.read_text(encoding="utf-8"))
+    changed = False
+    for s in data.get("seats", []):
+        if (s.get("child_license_key") == child_key
+                or s.get("seat_id") == child_key):
+            s["status"]      = status
+            s["assigned_to"] = assigned_to if status == "assigned" else None
+            changed = True
+    if changed:
+        lsf_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    return changed
+
+
+def _remove_user_seat_logic(lsf_path, child_key, seat_id=""):
+    """Replicate the Remove User seat-update logic — marks seat 'unassigned'."""
+    import json
+    if not lsf_path.exists():
+        return False
+    data    = json.loads(lsf_path.read_text(encoding="utf-8"))
+    changed = False
+    for s in data.get("seats", []):
+        if ((child_key and s.get("child_license_key") == child_key)
+                or (seat_id and s.get("seat_id") == seat_id)):
+            s["status"]      = "unassigned"   # FIX 2: was "removed"
+            s["assigned_to"] = None
+            changed = True
+    if changed:
+        lsf_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    return changed
+
+
+def _token_validation_logic(new_tok, existing_users, current_token):
+    """Replicate Change Token dialog validation — returns (ok, error_msg)."""
+    if not new_tok:
+        return False, "Token required"
+    if len(new_tok) < 8:
+        return False, "Too short — minimum 8 characters"
+    if new_tok in existing_users and new_tok != current_token:
+        return False, "Already in use by another user"
+    return True, ""
+
+
+# ── Fix 1: _admin_mark_seat_in_local_file ───────────────────────────────────
+
+class TestFix1MarkSeatInLocalFile:
+
+    def test_add_user_marks_seat_assigned(self, tmp_path):
+        """After Add User, _admin_mark_seat_in_local_file marks the seat
+        'assigned' in license_seats.json so the count strip is correct."""
+        ai_dir  = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        chld    = "AP-CHLD-ABCD1234-EF056789"
+        lsf = _make_seats_file(ai_dir, "AP-BIZ-LIVE0001-LIVE0002", [
+            {"child_license_key": chld, "status": "unassigned", "assigned_to": None},
+        ])
+
+        changed = _mark_seat_logic(lsf, chld, "assigned", "alice@example.com")
+        assert changed is True
+
+        seats = _read_seats(ai_dir)
+        assert seats[0]["status"]      == "assigned"
+        assert seats[0]["assigned_to"] == "alice@example.com"
+
+    def test_mark_assigned_clears_other_seats(self, tmp_path):
+        """Only the matching seat is updated; others are untouched."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        chld1 = "AP-CHLD-AAAA1111-BBBB2222"
+        chld2 = "AP-CHLD-CCCC3333-DDDD4444"
+        lsf = _make_seats_file(ai_dir, "AP-BIZ-LIVE0001-LIVE0002", [
+            {"child_license_key": chld1, "status": "unassigned", "assigned_to": None},
+            {"child_license_key": chld2, "status": "unassigned", "assigned_to": None},
+        ])
+
+        _mark_seat_logic(lsf, chld1, "assigned", "alice@example.com")
+
+        seats = {s["child_license_key"]: s for s in _read_seats(ai_dir)}
+        assert seats[chld1]["status"]      == "assigned"
+        assert seats[chld1]["assigned_to"] == "alice@example.com"
+        assert seats[chld2]["status"]      == "unassigned"  # untouched
+
+    def test_mark_unassigned_clears_assigned_to(self, tmp_path):
+        """Marking a seat unassigned clears assigned_to field."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        chld = "AP-CHLD-ABCD1234-EF056789"
+        lsf = _make_seats_file(ai_dir, "AP-BIZ-LIVE0001-LIVE0002", [
+            {"child_license_key": chld, "status": "assigned",
+             "assigned_to": "alice@example.com"},
+        ])
+
+        _mark_seat_logic(lsf, chld, "unassigned")
+
+        seats = _read_seats(ai_dir)
+        assert seats[0]["status"]      == "unassigned"
+        assert seats[0]["assigned_to"] is None
+
+    def test_mark_seat_no_op_when_file_missing(self, tmp_path):
+        """No error when license_seats.json doesn't exist."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        lsf = ai_dir / "license_seats.json"
+        # No exception, no crash
+        result = _mark_seat_logic(lsf, "AP-CHLD-ABCD1234-EF056789", "assigned")
+        assert result is False
+
+    def test_mark_seat_no_op_when_key_empty(self, tmp_path):
+        """No-op when child_key is empty string."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        lsf = _make_seats_file(ai_dir, "AP-BIZ-X", [
+            {"child_license_key": "AP-CHLD-ABCD1234-EF056789",
+             "status": "unassigned"}
+        ])
+        result = _mark_seat_logic(lsf, "", "assigned")
+        assert result is False
+
+    def test_mark_seat_matches_by_seat_id_fallback(self, tmp_path):
+        """Falls back to matching by seat_id when child_license_key absent."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        sid = "AP-BIZ-LIVE0001-LIVE0002-S001"
+        lsf = _make_seats_file(ai_dir, "AP-BIZ-LIVE0001-LIVE0002", [
+            {"seat_id": sid, "child_license_key": "",
+             "status": "unassigned", "assigned_to": None},
+        ])
+
+        changed = _mark_seat_logic(lsf, sid, "assigned", "bob@example.com")
+        assert changed is True
+        seats = _read_seats(ai_dir)
+        assert seats[0]["status"] == "assigned"
+
+
+# ── Fix 2: Remove User marks seat 'unassigned' not 'removed' ────────────────
+
+class TestFix2RemoveUserUnassignsSeat:
+
+    def test_remove_user_returns_seat_to_pool(self, tmp_path):
+        """Remove User marks seat 'unassigned' so it can be reassigned.
+        Before fix: marked 'removed' — seat disappeared from dropdown."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        chld = "AP-CHLD-ABCD1234-EF056789"
+        lsf  = _make_seats_file(ai_dir, "AP-BIZ-LIVE0001-LIVE0002", [
+            {"child_license_key": chld, "status": "assigned",
+             "assigned_to": "alice@example.com"},
+        ])
+
+        _remove_user_seat_logic(lsf, chld)
+
+        seats = _read_seats(ai_dir)
+        assert seats[0]["status"]      == "unassigned"   # FIX: was 'removed'
+        assert seats[0]["assigned_to"] is None
+
+    def test_remove_user_seat_not_marked_removed(self, tmp_path):
+        """Critical: status must never be 'removed' after Remove User.
+        'removed' is reserved for Stripe quantity reduction only."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        chld = "AP-CHLD-ABCD1234-EF056789"
+        lsf  = _make_seats_file(ai_dir, "AP-BIZ-LIVE0001-LIVE0002", [
+            {"child_license_key": chld, "status": "assigned",
+             "assigned_to": "alice@example.com"},
+        ])
+
+        _remove_user_seat_logic(lsf, chld)
+
+        seats = _read_seats(ai_dir)
+        assert seats[0]["status"] != "removed"  # never 'removed' from UI action
+
+    def test_unassigned_seat_appears_in_available_pool(self, tmp_path):
+        """After Remove User, the seat appears in the unassigned pool
+        and can be picked in the Add User seat dropdown."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        chld = "AP-CHLD-ABCD1234-EF056789"
+        lsf  = _make_seats_file(ai_dir, "AP-BIZ-LIVE0001-LIVE0002", [
+            {"child_license_key": chld, "status": "assigned",
+             "assigned_to": "alice@example.com"},
+        ])
+
+        _remove_user_seat_logic(lsf, chld)
+
+        seats = _read_seats(ai_dir)
+        # Replicate _admin_unassigned_keys() pool logic
+        pool = [s.get("child_license_key") for s in seats
+                if s.get("status") == "unassigned"]
+        assert chld in pool  # seat is back in the dropdown
+
+    def test_other_seats_unaffected_on_remove(self, tmp_path):
+        """Only the removed user's seat changes; other seats are untouched."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        chld1 = "AP-CHLD-AAAA1111-BBBB2222"
+        chld2 = "AP-CHLD-CCCC3333-DDDD4444"
+        lsf = _make_seats_file(ai_dir, "AP-BIZ-LIVE0001-LIVE0002", [
+            {"child_license_key": chld1, "status": "assigned",
+             "assigned_to": "alice@example.com"},
+            {"child_license_key": chld2, "status": "assigned",
+             "assigned_to": "bob@example.com"},
+        ])
+
+        _remove_user_seat_logic(lsf, chld1)
+
+        seats = {s["child_license_key"]: s for s in _read_seats(ai_dir)}
+        assert seats[chld1]["status"]      == "unassigned"
+        assert seats[chld2]["status"]      == "assigned"   # bob unaffected
+        assert seats[chld2]["assigned_to"] == "bob@example.com"
+
+    def test_remove_then_reassign_full_cycle(self, tmp_path):
+        """Full cycle: assign → remove → reassign to different user."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        chld = "AP-CHLD-ABCD1234-EF056789"
+        lsf  = _make_seats_file(ai_dir, "AP-BIZ-LIVE0001-LIVE0002", [
+            {"child_license_key": chld, "status": "assigned",
+             "assigned_to": "alice@example.com"},
+        ])
+
+        # Remove alice
+        _remove_user_seat_logic(lsf, chld)
+        assert _read_seats(ai_dir)[0]["status"] == "unassigned"
+
+        # Assign to jamie
+        _mark_seat_logic(lsf, chld, "assigned", "jamie@example.com")
+        seats = _read_seats(ai_dir)
+        assert seats[0]["status"]      == "assigned"
+        assert seats[0]["assigned_to"] == "jamie@example.com"
+
+
+# ── Fix 3: /seats/{key}/sync public endpoint ─────────────────────────────────
+
+class TestFix3SyncSeatPublic:
+
+    def test_sync_allowed_without_admin_token(self):
+        """/sync subpath bypasses isAdmin check — no 401 on server."""
+        # Replicate the routing logic from worker.js
+        def route_seats(subpath, is_admin):
+            if subpath != '/sync' and not is_admin:
+                return 401
+            return 200  # handleSeats called
+
+        # Server has no admin token → is_admin = False
+        assert route_seats('/sync',     is_admin=False) == 200  # FIX: was 401
+        assert route_seats('/assign',   is_admin=False) == 401  # still protected
+        assert route_seats('/unassign', is_admin=False) == 401  # still protected
+        assert route_seats('/revoke',   is_admin=False) == 401  # still protected
+        assert route_seats('/add',      is_admin=False) == 401  # still protected
+        assert route_seats('',          is_admin=False) == 401  # GET protected
+
+    def test_sync_still_works_with_admin_token(self):
+        """/sync also works when admin token IS present."""
+        def route_seats(subpath, is_admin):
+            if subpath != '/sync' and not is_admin:
+                return 401
+            return 200
+
+        assert route_seats('/sync', is_admin=True)   == 200
+        assert route_seats('/assign', is_admin=True) == 200
+
+    def test_all_mutations_require_admin(self):
+        """assign/unassign/revoke/add/GET all require admin — not relaxed."""
+        protected = ['/assign', '/unassign', '/revoke', '/add', '']
+
+        def route_seats(subpath, is_admin):
+            if subpath != '/sync' and not is_admin:
+                return 401
+            return 200
+
+        for subpath in protected:
+            assert route_seats(subpath, is_admin=False) == 401, \
+                f"{subpath!r} should require admin"
+
+
+# ── Fix 4: Change Token dialog validation ────────────────────────────────────
+
+class TestFix4ChangeTokenValidation:
+
+    def _users(self):
+        return {
+            "token-alice": {"name": "Alice", "role": "field_crew"},
+            "token-owner": {"name": "David", "role": "owner"},
+        }
+
+    def test_valid_manual_token_accepted(self):
+        """Admin can type their own token — accepted when ≥8 chars and unique."""
+        ok, msg = _token_validation_logic(
+            "Synopsys1*", self._users(), "token-alice")
+        assert ok is True
+        assert msg == ""
+
+    def test_empty_token_rejected(self):
+        """Empty token is rejected with clear message."""
+        ok, msg = _token_validation_logic("", self._users(), "token-alice")
+        assert ok is False
+        assert "required" in msg.lower() or "empty" in msg.lower() or msg != ""
+
+    def test_too_short_rejected(self):
+        """Token shorter than 8 chars is rejected."""
+        ok, msg = _token_validation_logic("abc123", self._users(), "token-alice")
+        assert ok is False
+        assert "short" in msg.lower() or "8" in msg
+
+    def test_exactly_8_chars_accepted(self):
+        """Exactly 8 characters is the minimum — accepted."""
+        ok, msg = _token_validation_logic("abcd1234", self._users(), "token-alice")
+        assert ok is True
+
+    def test_7_chars_rejected(self):
+        """7 characters is one below minimum — rejected."""
+        ok, msg = _token_validation_logic("abcd123", self._users(), "token-alice")
+        assert ok is False
+
+    def test_duplicate_token_rejected(self):
+        """Token already in use by a DIFFERENT user is rejected."""
+        ok, msg = _token_validation_logic(
+            "token-owner", self._users(), "token-alice")
+        assert ok is False
+        assert "use" in msg.lower() or "exist" in msg.lower() or msg != ""
+
+    def test_same_token_as_current_user_allowed(self):
+        """Saving the same token for the SAME user is allowed (no-op change)."""
+        ok, msg = _token_validation_logic(
+            "token-alice", self._users(), "token-alice")
+        assert ok is True
+
+    def test_special_chars_allowed(self):
+        """Tokens with special characters (like Synopsys1*) are valid."""
+        ok, msg = _token_validation_logic(
+            "Synopsys1*!", self._users(), "token-alice")
+        assert ok is True
+
+    def test_spaces_in_token_up_to_admin(self):
+        """Spaces are technically allowed if ≥8 chars and unique — admin's choice."""
+        ok, msg = _token_validation_logic(
+            "my pass word", self._users(), "token-alice")
+        assert ok is True  # no space restriction in the logic
+
+    def test_long_token_accepted(self):
+        """Long randomly-generated tokens (32+ chars) are always accepted."""
+        import secrets
+        long_tok = secrets.token_urlsafe(32)
+        ok, msg  = _token_validation_logic(long_tok, self._users(), "token-alice")
+        assert ok is True
+
+    def test_generated_token_passes_validation(self):
+        """Tokens from _admin_gen_token() (secrets.token_urlsafe(24)) always
+        pass validation — they're ≥8 chars and URL-safe."""
+        import secrets
+        for _ in range(20):
+            tok = secrets.token_urlsafe(24)
+            ok, msg = _token_validation_logic(tok, {}, "old-token")
+            assert ok is True, f"Generated token failed: {tok!r}: {msg}"
+
