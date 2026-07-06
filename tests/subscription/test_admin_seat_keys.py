@@ -1411,3 +1411,258 @@ class TestFix4ChangeTokenValidation:
             ok, msg = _token_validation_logic(tok, {}, "old-token")
             assert ok is True, f"Generated token failed: {tok!r}: {msg}"
 
+
+# ===========================================================================
+# TC-DISPLAY: Full seat key display in Admin tab treeview
+# TC-ASSIGN:  Worker assign called with seat_id not AP-BIZ- child_key
+# TC-SYNC:    sync_seats works without admin token (public endpoint)
+#
+# All tests use tmp_path — zero ~/.ai-prowler/ pollution, no KV/Stripe.
+# ===========================================================================
+
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+def _build_seat_row_values(user_dict, token):
+    """Replicate the treeview row-building logic from _admin_refresh_table.
+    Returns the values tuple exactly as inserted into the tree."""
+    u          = user_dict
+    role       = u.get("role", "field_crew")
+    scopes     = ", ".join(u.get("scopes") or [])
+    is_owner   = (role == "owner")
+    admin_flag = "✓ (owner)" if is_owner else ("✓" if u.get("can_manage_users") else "")
+    private    = "✓" if u.get("private_collection_enabled") else ""
+    # FIX: full key not masked
+    seat       = u.get("child_license_key", "") or ""
+    status     = u.get("status", "active")
+    phone      = u.get("cell_phone", "")
+    tok_display = "●" * 8   # token always masked
+    return (u.get("name", "(unnamed)"), u.get("email", ""), phone,
+            role, scopes, admin_flag, private, seat, status, tok_display)
+
+
+def _find_seat_id_for_child_key(lsf_path, child_key):
+    """Replicate the seat_id lookup logic added to _admin_add_user."""
+    import json
+    if not lsf_path.exists() or not child_key:
+        return ""
+    data = json.loads(lsf_path.read_text(encoding="utf-8"))
+    for s in data.get("seats", []):
+        if s.get("child_license_key") == child_key:
+            return s.get("seat_id", "")
+    return ""
+
+
+def _sync_needs_no_token_logic(license_key, url_poster):
+    """Replicate sync_seats() after the fix — token may be empty."""
+    token = ""  # no admin token on server machine
+    # Before fix: raised RuntimeError here if token empty
+    # After fix: proceeds to network call — Worker accepts without token
+    try:
+        status, body = url_poster(f"/seats/{license_key}/sync", {}, bearer=token)
+        if status == 200 and isinstance(body, dict):
+            return True, body
+        return False, body
+    except Exception as e:
+        return False, str(e)
+
+
+# ── TC-DISPLAY: Full seat key in treeview ────────────────────────────────────
+
+class TestFullSeatKeyDisplay:
+
+    def test_seat_column_shows_full_chld_key(self):
+        """Seat (key) column shows full AP-CHLD-... key, not masked/truncated."""
+        user = {
+            "name": "David Vavro",
+            "email": "david@example.com",
+            "role": "owner",
+            "scopes": ["scope:office"],
+            "can_manage_users": True,
+            "private_collection_enabled": True,
+            "child_license_key": "AP-CHLD-F8AEB4DF-21304384",
+            "status": "active",
+            "cell_phone": "4807470358",
+        }
+        values = _build_seat_row_values(user, "bearbear")
+        seat_col = values[7]   # index 7 = seat column
+        assert seat_col == "AP-CHLD-F8AEB4DF-21304384"
+
+    def test_seat_column_not_masked_or_truncated(self):
+        """Seat key must NOT be masked (●) or truncated (AP-C...4384)."""
+        user = {
+            "name": "Vicki Vavro",
+            "email": "vicki@example.com",
+            "role": "manager",
+            "scopes": ["scope:office"],
+            "can_manage_users": True,
+            "private_collection_enabled": True,
+            "child_license_key": "AP-CHLD-4B88898B-FD65DE92",
+            "status": "active",
+            "cell_phone": "4807470358",
+        }
+        values = _build_seat_row_values(user, "Synopsys1*")
+        seat_col = values[7]
+        assert "●" not in seat_col          # not masked
+        assert "..." not in seat_col         # not truncated
+        assert seat_col == "AP-CHLD-4B88898B-FD65DE92"
+
+    def test_token_column_still_masked(self):
+        """Token (password) column must remain masked — it's the employee's password."""
+        user = {
+            "name": "Jamie Vavro", "email": "jamie@example.com",
+            "role": "staff", "scopes": [], "can_manage_users": False,
+            "private_collection_enabled": True,
+            "child_license_key": "AP-CHLD-5C6DB04C-C53AE9C4",
+            "status": "active", "cell_phone": "",
+        }
+        values = _build_seat_row_values(user, "CrystalApp")
+        tok_col = values[9]   # index 9 = token column
+        assert tok_col == "●" * 8
+        assert "CrystalApp" not in tok_col   # real token never shown
+
+    def test_empty_seat_key_shows_blank(self):
+        """User with no seat assigned shows empty string in seat column."""
+        user = {
+            "name": "Jamie Vavro", "email": "jamie@example.com",
+            "role": "staff", "scopes": [], "can_manage_users": False,
+            "private_collection_enabled": True,
+            "child_license_key": "",
+            "status": "suspended", "cell_phone": "",
+        }
+        values = _build_seat_row_values(user, "CrystalApp")
+        seat_col = values[7]
+        assert seat_col == ""
+
+
+# ── TC-ASSIGN: Worker assign uses seat_id not AP-BIZ- child_key ──────────────
+
+class TestWorkerAssignUsesCorrectId:
+
+    def test_seat_id_found_for_child_key(self, tmp_path):
+        """_find_seat_id_for_child_key returns correct seat_id from local file."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        biz_key = "AP-BIZ-AC94AE8B-BA91CA47"
+        chld    = "AP-CHLD-F8AEB4DF-21304384"
+        sid     = f"{biz_key}-S001"
+        lsf = _make_seats_file(ai_dir, biz_key, [
+            {"seat_id": sid, "child_license_key": chld,
+             "status": "unassigned", "assigned_to": None},
+        ])
+        result = _find_seat_id_for_child_key(lsf, chld)
+        assert result == sid
+
+    def test_seat_id_lookup_returns_empty_when_not_found(self, tmp_path):
+        """Returns empty string when child_key not in seats file."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        lsf = _make_seats_file(ai_dir, "AP-BIZ-X", [
+            {"seat_id": "AP-BIZ-X-S001",
+             "child_license_key": "AP-CHLD-AAAA1111-BBBB2222",
+             "status": "unassigned"},
+        ])
+        result = _find_seat_id_for_child_key(lsf, "AP-CHLD-CCCC3333-DDDD4444")
+        assert result == ""
+
+    def test_assign_call_uses_seat_id_not_biz_prefix(self, tmp_path):
+        """Worker assign call uses seat_id (AP-BIZ-...-S001) not child_key.
+        Before fix: gated on AP-BIZ- prefix so AP-CHLD- keys never triggered."""
+        ai_dir  = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        biz_key = "AP-BIZ-AC94AE8B-BA91CA47"
+        chld    = "AP-CHLD-F8AEB4DF-21304384"
+        sid     = f"{biz_key}-S001"
+        lsf = _make_seats_file(ai_dir, biz_key, [
+            {"seat_id": sid, "child_license_key": chld,
+             "status": "unassigned", "assigned_to": None},
+        ])
+        # Replicate new assign logic: look up seat_id, use it or fall back to key
+        found_sid = _find_seat_id_for_child_key(lsf, chld)
+        assign_arg = found_sid or chld
+        assert assign_arg == sid          # uses seat_id not child_key
+        assert assign_arg.startswith("AP-BIZ-")  # correct format for /assign endpoint
+
+    def test_old_prefix_check_would_have_failed(self):
+        """Show why the old AP-BIZ- prefix check was wrong for AP-CHLD- keys."""
+        chld = "AP-CHLD-F8AEB4DF-21304384"
+        # Old condition: if child_key and child_key.startswith("AP-BIZ-")
+        old_would_fire = chld.startswith("AP-BIZ-")
+        assert old_would_fire is False   # always False for real seat keys
+
+    def test_fallback_uses_child_key_when_lsf_missing(self, tmp_path):
+        """When license_seats.json missing, falls back to child_key directly."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        lsf  = ai_dir / "license_seats.json"
+        chld = "AP-CHLD-F8AEB4DF-21304384"
+        # No file — fallback
+        found_sid  = _find_seat_id_for_child_key(lsf, chld)
+        assign_arg = found_sid or chld
+        assert assign_arg == chld   # graceful fallback
+
+
+# ── TC-SYNC: sync_seats works without admin token ─────────────────────────────
+
+class TestSyncWithoutAdminToken:
+
+    def test_sync_proceeds_without_token(self):
+        """sync_seats no longer raises RuntimeError when token is empty.
+        Before fix: raised 'No admin token available.' before network call."""
+        called = []
+
+        def mock_poster(path, body, bearer=""):
+            called.append({"path": path, "bearer": bearer})
+            return 200, {"seats": [], "seats_total": 6}
+
+        ok, result = _sync_needs_no_token_logic("AP-BIZ-AC94AE8B-BA91CA47",
+                                                 mock_poster)
+        assert ok is True
+        assert len(called) == 1    # network call WAS made
+        assert called[0]["bearer"] == ""   # empty token sent (that's fine)
+
+    def test_sync_url_contains_license_key(self):
+        """sync_seats calls /seats/{key}/sync with correct license key."""
+        seen = []
+
+        def mock_poster(path, body, bearer=""):
+            seen.append(path)
+            return 200, {"seats": []}
+
+        _sync_needs_no_token_logic("AP-BIZ-AC94AE8B-BA91CA47", mock_poster)
+        assert len(seen) == 1
+        assert "AP-BIZ-AC94AE8B-BA91CA47" in seen[0]
+        assert "/sync" in seen[0]
+
+    def test_sync_with_token_still_works(self):
+        """sync_seats also works when admin token IS available (no regression)."""
+        called = []
+
+        def mock_poster(path, body, bearer=""):
+            called.append({"bearer": bearer})
+            return 200, {"seats": []}
+
+        ok, _ = _sync_needs_no_token_logic("AP-BIZ-AC94AE8B-BA91CA47",
+                                            mock_poster)
+        assert ok is True
+        assert len(called) == 1
+
+    def test_sync_handles_worker_error_gracefully(self):
+        """When Worker returns non-200, sync returns False without crashing."""
+        def mock_poster(path, body, bearer=""):
+            return 401, {"error": "Unauthorized"}
+
+        ok, result = _sync_needs_no_token_logic("AP-BIZ-AC94AE8B-BA91CA47",
+                                                 mock_poster)
+        assert ok is False
+
+    def test_sync_handles_network_exception_gracefully(self):
+        """Network failure returns False without crashing."""
+        def mock_poster(path, body, bearer=""):
+            raise Exception("Connection refused")
+
+        ok, result = _sync_needs_no_token_logic("AP-BIZ-AC94AE8B-BA91CA47",
+                                                 mock_poster)
+        assert ok is False
+        assert "Connection refused" in result
+

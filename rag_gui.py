@@ -14735,7 +14735,7 @@ or from the Help menu."""
             ('scopes',  'Scopes',        130, 'w'),
             ('admin',   'Manages Users',  90, 'center'),
             ('private', 'Private Coll.',  80, 'center'),
-            ('seat',    'Seat (key)',     110, 'w'),
+            ('seat',    'Seat (key)',     220, 'w'),
             ('status',  'Status',         70, 'center'),
             ('token',   'Token',         120, 'w'),   # always masked — use name/email to identify
         ]
@@ -14786,13 +14786,13 @@ or from the Help menu."""
             is_owner = (role == "owner")
             admin_flag = "✓ (owner)" if is_owner else ("✓" if u.get("can_manage_users") else "")
             private = "✓" if u.get("private_collection_enabled") else ""
-            seat = self._admin_mask_key(u.get("child_license_key", ""))
+            # Show full AP-CHLD- key so admin can match it to activation emails
+            seat = u.get("child_license_key", "") or ""
             status = u.get("status", "active")
-            phone   = u.get("cell_phone", "")
-            # v7.0.1 security: never expose any part of the bearer token on screen.
-            # The token IS the authentication credential — even a prefix leaks info.
-            # Name + email + role already uniquely identify each row.
+            phone  = u.get("cell_phone", "")
+            # Bearer token stays masked — it's the employee's password
             tok_display = "●" * 8
+
             self._admin_tree.insert(
                 '', 'end', iid=token,
                 values=(u.get("name", "(unnamed)"), u.get("email", ""), phone,
@@ -15417,9 +15417,25 @@ or from the Help menu."""
         if fields.get("private_collection_enabled"):
             self._admin_setup_private_folder(fields["name"], fields.get("slug", ""))
 
-        # Phase 7 — notify subscription worker of seat assignment (non-blocking)
-        if child_key and child_key.startswith("AP-BIZ-"):
-            self._admin_worker_assign_seat(child_key, fields["email"] or fields["name"])
+        # Notify Worker of seat assignment so KV stays in sync with local file.
+        # Finds seat_id from license_seats.json for the assigned child_key.
+        if child_key:
+            _seat_id_to_use = ""
+            try:
+                import json as _jx
+                from pathlib import Path as _px
+                _lsf = _px.home() / ".ai-prowler" / "license_seats.json"
+                if _lsf.exists():
+                    _lsd = _jx.loads(_lsf.read_text(encoding="utf-8"))
+                    for _s in _lsd.get("seats", []):
+                        if _s.get("child_license_key") == child_key:
+                            _seat_id_to_use = _s.get("seat_id", "")
+                            break
+            except Exception:
+                pass
+            self._admin_worker_assign_seat(
+                _seat_id_to_use or child_key,
+                fields["email"] or fields["name"])
 
     def _admin_show_token(self, name, token):
         """Show the freshly generated bearer token with a Copy button. This is

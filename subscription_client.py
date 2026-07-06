@@ -474,10 +474,15 @@ def sync_seats(license_key, admin_token=None):
     Pull the authoritative seat list from the worker and return it.
     Also writes license_seats.json to ~/.ai-prowler/ for local GUI use.
     Returns the full seat summary dict.
+
+    v8.2.1: POST /seats/{key}/sync is now public on the Worker — the
+    business license key is its own credential (same trust model as
+    /license/{key}/validate). No admin token is required, so the server
+    machine can sync its seat pool without needing the admin token stored
+    locally.
     """
     token = admin_token or _load_admin_token()
-    if not token:
-        raise RuntimeError("No admin token available.")
+    # token may be empty — that's OK because /seats/{key}/sync is public
     status, body = _post(f"/seats/{license_key}/sync", {}, bearer=token)
     if status == 200 and isinstance(body, dict):
         # Write local cache
