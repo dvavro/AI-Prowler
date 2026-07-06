@@ -259,7 +259,7 @@ class TestDeleteJobImage:
     def test_TC_JIMGS_003_other_images_kept(self, tmp_root):
         import ai_prowler_mcp as mcp
         save_one(tmp_root, "1042", "keep.jpg")
-        time.sleep(0.05)
+        time.sleep(1.1)   # ensure different second-level timestamp prefix
         to_del = save_one(tmp_root, "1042", "delete_me.jpg")
         mcp.delete_job_image(job_id="1042", filename=to_del)
         remaining = [f.name for f in (tmp_root / "1042").glob("*.jpg")]

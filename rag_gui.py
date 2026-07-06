@@ -14771,13 +14771,66 @@ or from the Help menu."""
         self._admin_refresh_table()
 
     def _admin_refresh_table(self):
-        """Reload users.json and repopulate the table; refresh seat summary."""
+        """Reload users.json and repopulate the table; refresh seat summary.
+        Also auto-syncs license_seats.json with users.json so the assigned/
+        available counts are always correct without manual JSON editing."""
         if not hasattr(self, "_admin_tree"):
             return
         for row in self._admin_tree.get_children():
             self._admin_tree.delete(row)
         data = self._admin_load_users()
         seats = self._admin_load_seats()
+
+        # ── Auto-sync seat status with users.json ────────────────────────────
+        # Build a map of child_license_key → email from users.json so we can
+        # update license_seats.json without any user action. This fixes the
+        # "0/6 assigned" display after a fresh install where activate_from_payload
+        # writes all seats as 'unassigned' in license_seats.json even though
+        # users.json already has child_license_key assigned to each user.
+        try:
+            import json as _jsync
+            from pathlib import Path as _psync
+            _lsf = _psync.home() / ".ai-prowler" / "license_seats.json"
+            if _lsf.exists() and data.get("users"):
+                _lsd = _jsync.loads(_lsf.read_text(encoding="utf-8"))
+                # Build assigned map from users.json
+                _assigned = {}
+                for _u in data["users"].values():
+                    if isinstance(_u, dict) and _u.get("child_license_key"):
+                        _assigned[_u["child_license_key"]] = (
+                            _u.get("email") or _u.get("name", ""))
+                _changed = False
+                for _s in _lsd.get("seats", []):
+                    _ck = _s.get("child_license_key", "")
+                    if _ck in _assigned:
+                        if _s.get("status") != "assigned":
+                            _s["status"]      = "assigned"
+                            _s["assigned_to"] = _assigned[_ck]
+                            _changed = True
+                    else:
+                        # Seat not in any user → mark unassigned (not removed)
+                        if _s.get("status") == "assigned":
+                            _s["status"]      = "unassigned"
+                            _s["assigned_to"] = None
+                            _changed = True
+                        # Fix stale 'removed' from old Remove User bug
+                        elif _s.get("status") == "removed" and _ck not in _assigned:
+                            # Only un-remove if no user currently holds this key
+                            # AND the seat was removed via UI (not Stripe reduction)
+                            # We can't distinguish here — leave 'removed' as-is
+                            # unless over_quota_since is absent (no reduction pending)
+                            _oqs = _lsd.get("over_quota_since", "")
+                            if not _oqs:
+                                _s["status"]      = "unassigned"
+                                _s["assigned_to"] = None
+                                _changed = True
+                if _changed:
+                    _lsf.write_text(_jsync.dumps(_lsd, indent=2), encoding="utf-8")
+                    # Reload seats after sync so summary strip is correct
+                    seats = self._admin_load_seats()
+        except Exception:
+            pass  # auto-sync is best-effort — never blocks the table load
+
         for token, u in (data.get("users") or {}).items():
             if not isinstance(u, dict):
                 continue

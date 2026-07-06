@@ -1666,3 +1666,366 @@ class TestSyncWithoutAdminToken:
         assert ok is False
         assert "Connection refused" in result
 
+
+# ===========================================================================
+# TC-AUTOSYNC: _admin_refresh_table auto-sync of license_seats.json
+#
+# Cases:
+#   1. Fresh install — no files, no crash
+#   2. Reinstall — users.json has assignments, license_seats all unassigned
+#   3a. Add user — seat already marked assigned, no double-write
+#   3b. Remove user — seat already unassigned, no change
+#   4. Change bearer password — child_license_key unchanged, seat stays assigned
+#   5. Stripe reduces seats — over_quota_since present, removed seats protected
+#
+# All tests use tmp_path — zero ~/.ai-prowler/, KV, Stripe, CF pollution.
+# ===========================================================================
+
+
+def _auto_sync_logic(ai_dir):
+    """Replicate the auto-sync block from _admin_refresh_table().
+    Returns (changed: bool, updated_seats: list)."""
+    import json
+
+    users_p = ai_dir / "users.json"
+    lsf_p   = ai_dir / "license_seats.json"
+
+    if not users_p.exists() or not lsf_p.exists():
+        return False, []
+
+    users_data = json.loads(users_p.read_text(encoding="utf-8"))
+    lsd        = json.loads(lsf_p.read_text(encoding="utf-8"))
+
+    _assigned = {}
+    for _u in users_data.get("users", {}).values():
+        if isinstance(_u, dict) and _u.get("child_license_key"):
+            _assigned[_u["child_license_key"]] = (
+                _u.get("email") or _u.get("name", ""))
+
+    _changed = False
+    for _s in lsd.get("seats", []):
+        _ck = _s.get("child_license_key", "")
+        if _ck in _assigned:
+            if _s.get("status") != "assigned":
+                _s["status"]      = "assigned"
+                _s["assigned_to"] = _assigned[_ck]
+                _changed = True
+        else:
+            if _s.get("status") == "assigned":
+                _s["status"]      = "unassigned"
+                _s["assigned_to"] = None
+                _changed = True
+            elif _s.get("status") == "removed":
+                _oqs = lsd.get("over_quota_since", "")
+                if not _oqs:
+                    _s["status"]      = "unassigned"
+                    _s["assigned_to"] = None
+                    _changed = True
+
+    if _changed:
+        lsf_p.write_text(json.dumps(lsd, indent=2), encoding="utf-8")
+
+    return _changed, lsd.get("seats", [])
+
+
+def _write_users_json(ai_dir, users_dict):
+    import json
+    (ai_dir / "users.json").write_text(
+        json.dumps({"users": users_dict}, indent=2), encoding="utf-8")
+
+
+def _write_license_seats(ai_dir, biz_key, seats, extra=None):
+    import json
+    data = {"license_key": biz_key, "seats_total": len(seats), "seats": seats}
+    if extra:
+        data.update(extra)
+    (ai_dir / "license_seats.json").write_text(
+        json.dumps(data, indent=2), encoding="utf-8")
+
+
+def _read_seats_by_key(ai_dir):
+    import json
+    data = json.loads((ai_dir / "license_seats.json").read_text())
+    return {s["child_license_key"]: s for s in data["seats"]}
+
+
+_BIZ = "AP-BIZ-AC94AE8B-BA91CA47"
+_S1  = "AP-CHLD-F8AEB4DF-21304384"
+_S2  = "AP-CHLD-4B88898B-FD65DE92"
+_S3  = "AP-CHLD-5C6DB04C-C53AE9C4"
+_S4  = "AP-CHLD-6530F921-5A259F36"
+
+
+class TestAutoSyncCase1FreshInstall:
+
+    def test_no_files_returns_no_change(self, tmp_path):
+        """Case 1: No files at all — no crash, returns no change."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        changed, seats = _auto_sync_logic(ai_dir)
+        assert changed is False
+        assert seats == []
+
+    def test_no_license_seats_returns_no_change(self, tmp_path):
+        """Case 1: license_seats.json absent — no crash."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        _write_users_json(ai_dir, {
+            "bearbear": {"name": "David", "role": "owner",
+                         "child_license_key": _S1}})
+        changed, seats = _auto_sync_logic(ai_dir)
+        assert changed is False
+
+    def test_empty_users_no_seat_changes(self, tmp_path):
+        """Case 1: No users yet — all seats stay unassigned."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        _write_users_json(ai_dir, {})
+        _write_license_seats(ai_dir, _BIZ, [
+            {"child_license_key": _S1, "status": "unassigned",
+             "assigned_to": None},
+        ])
+        changed, _ = _auto_sync_logic(ai_dir)
+        assert changed is False
+
+
+class TestAutoSyncCase2Reinstall:
+
+    def test_reinstall_marks_assigned_seats(self, tmp_path):
+        """Case 2: users.json has David+Vicki assigned, license_seats shows
+        all unassigned — auto-sync corrects to 2/6 assigned."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        _write_users_json(ai_dir, {
+            "bearbear":   {"name": "David", "email": "d@x.com",
+                           "role": "owner",   "child_license_key": _S1,
+                           "status": "active"},
+            "Synopsys1*": {"name": "Vicki", "email": "v@x.com",
+                           "role": "manager", "child_license_key": _S2,
+                           "status": "active"},
+        })
+        _write_license_seats(ai_dir, _BIZ, [
+            {"child_license_key": _S1, "status": "unassigned", "assigned_to": None},
+            {"child_license_key": _S2, "status": "unassigned", "assigned_to": None},
+            {"child_license_key": _S3, "status": "unassigned", "assigned_to": None},
+        ])
+
+        changed, _ = _auto_sync_logic(ai_dir)
+        assert changed is True
+
+        seats = _read_seats_by_key(ai_dir)
+        assert seats[_S1]["status"]      == "assigned"
+        assert seats[_S1]["assigned_to"] == "d@x.com"
+        assert seats[_S2]["status"]      == "assigned"
+        assert seats[_S2]["assigned_to"] == "v@x.com"
+        assert seats[_S3]["status"]      == "unassigned"
+
+    def test_reinstall_seat_count_correct(self, tmp_path):
+        """Case 2: After auto-sync, assigned+unassigned counts are correct."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        _write_users_json(ai_dir, {
+            "bearbear":   {"name": "David", "email": "d@x.com",
+                           "child_license_key": _S1, "status": "active",
+                           "role": "owner"},
+            "Synopsys1*": {"name": "Vicki", "email": "v@x.com",
+                           "child_license_key": _S2, "status": "active",
+                           "role": "manager"},
+        })
+        _write_license_seats(ai_dir, _BIZ, [
+            {"child_license_key": _S1, "status": "unassigned", "assigned_to": None},
+            {"child_license_key": _S2, "status": "unassigned", "assigned_to": None},
+            {"child_license_key": _S3, "status": "unassigned", "assigned_to": None},
+            {"child_license_key": _S4, "status": "unassigned", "assigned_to": None},
+        ])
+
+        _auto_sync_logic(ai_dir)
+
+        import json
+        seats = json.loads((ai_dir / "license_seats.json").read_text())["seats"]
+        assert sum(1 for s in seats if s["status"] == "assigned")   == 2
+        assert sum(1 for s in seats if s["status"] == "unassigned") == 2
+
+
+class TestAutoSyncCase3AddRemoveUser:
+
+    def test_add_user_already_assigned_no_double_write(self, tmp_path):
+        """Case 3a: _admin_mark_seat_in_local_file already ran on Save —
+        auto-sync sees correct state and does nothing."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        _write_users_json(ai_dir, {
+            "bearbear": {"name": "David", "email": "d@x.com",
+                         "child_license_key": _S1, "status": "active",
+                         "role": "owner"},
+        })
+        _write_license_seats(ai_dir, _BIZ, [
+            {"child_license_key": _S1, "status": "assigned",
+             "assigned_to": "d@x.com"},
+        ])
+        changed, _ = _auto_sync_logic(ai_dir)
+        assert changed is False
+
+    def test_remove_user_already_unassigned_no_change(self, tmp_path):
+        """Case 3b: Remove User already marked seat unassigned — no-op."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        _write_users_json(ai_dir, {
+            "bearbear": {"name": "David", "email": "d@x.com",
+                         "child_license_key": _S2, "status": "active",
+                         "role": "owner"},
+        })
+        _write_license_seats(ai_dir, _BIZ, [
+            {"child_license_key": _S1, "status": "unassigned", "assigned_to": None},
+            {"child_license_key": _S2, "status": "assigned",   "assigned_to": "d@x.com"},
+        ])
+        changed, _ = _auto_sync_logic(ai_dir)
+        assert changed is False
+
+    def test_orphaned_assigned_seat_corrected(self, tmp_path):
+        """Case 3b: Seat shows 'assigned' but no user has that key —
+        auto-sync corrects it to 'unassigned'."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        _write_users_json(ai_dir, {
+            "bearbear": {"name": "David", "email": "d@x.com",
+                         "child_license_key": _S2, "status": "active",
+                         "role": "owner"},
+        })
+        _write_license_seats(ai_dir, _BIZ, [
+            {"child_license_key": _S1, "status": "assigned",
+             "assigned_to": "old@x.com"},    # orphan — no user has S1
+            {"child_license_key": _S2, "status": "assigned",
+             "assigned_to": "d@x.com"},
+        ])
+        changed, _ = _auto_sync_logic(ai_dir)
+        assert changed is True
+
+        seats = _read_seats_by_key(ai_dir)
+        assert seats[_S1]["status"]      == "unassigned"
+        assert seats[_S1]["assigned_to"] is None
+        assert seats[_S2]["status"]      == "assigned"
+
+
+class TestAutoSyncCase4ChangePassword:
+
+    def test_new_token_preserves_seat_assignment(self, tmp_path):
+        """Case 4: Token (dict key) changes but child_license_key is the same —
+        auto-sync sees the child_license_key and leaves seat assigned."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        # User record moved from 'bearbear' key to 'NewPassword1!' key
+        _write_users_json(ai_dir, {
+            "NewPassword1!": {"name": "David", "email": "d@x.com",
+                              "child_license_key": _S1, "status": "active",
+                              "role": "owner"},
+        })
+        _write_license_seats(ai_dir, _BIZ, [
+            {"child_license_key": _S1, "status": "assigned",
+             "assigned_to": "d@x.com"},
+        ])
+        changed, _ = _auto_sync_logic(ai_dir)
+        assert changed is False   # child_license_key unchanged → no-op ✅
+
+        seats = _read_seats_by_key(ai_dir)
+        assert seats[_S1]["status"] == "assigned"
+
+    def test_token_change_does_not_unassign_seat(self, tmp_path):
+        """Case 4: Token change must NOT cause seat to appear unassigned."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        _write_users_json(ai_dir, {
+            "BrandNewToken99": {"name": "Vicki", "email": "v@x.com",
+                                "child_license_key": _S2, "status": "active",
+                                "role": "manager"},
+        })
+        _write_license_seats(ai_dir, _BIZ, [
+            {"child_license_key": _S1, "status": "unassigned", "assigned_to": None},
+            {"child_license_key": _S2, "status": "assigned",   "assigned_to": "v@x.com"},
+        ])
+        changed, _ = _auto_sync_logic(ai_dir)
+        assert changed is False
+        seats = _read_seats_by_key(ai_dir)
+        assert seats[_S2]["status"] == "assigned"
+
+
+class TestAutoSyncCase5StripeReducesSeats:
+
+    def test_removed_seat_protected_when_over_quota_set(self, tmp_path):
+        """Case 5: over_quota_since present — 'removed' seat NOT un-removed
+        (Stripe reduction grace period is active)."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        _write_users_json(ai_dir, {
+            "bearbear": {"name": "David", "email": "d@x.com",
+                         "child_license_key": _S1, "status": "active",
+                         "role": "owner"},
+        })
+        _write_license_seats(ai_dir, _BIZ, [
+            {"child_license_key": _S1, "status": "assigned",  "assigned_to": "d@x.com"},
+            {"child_license_key": _S3, "status": "removed",   "assigned_to": None},
+        ], extra={"over_quota_since": "2026-07-01T00:00:00Z",
+                  "over_quota_count": 1})
+
+        changed, _ = _auto_sync_logic(ai_dir)
+        assert changed is False   # S1 correct, S3 protected
+
+        seats = _read_seats_by_key(ai_dir)
+        assert seats[_S3]["status"] == "removed"   # protected ✅
+
+    def test_removed_seat_unremoved_when_no_over_quota(self, tmp_path):
+        """Case 5 inverse: 'removed' with no over_quota_since (old UI bug)
+        gets restored to 'unassigned' so seat is back in the pool."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        _write_users_json(ai_dir, {
+            "bearbear": {"name": "David", "email": "d@x.com",
+                         "child_license_key": _S1, "status": "active",
+                         "role": "owner"},
+        })
+        _write_license_seats(ai_dir, _BIZ, [
+            {"child_license_key": _S1, "status": "assigned",  "assigned_to": "d@x.com"},
+            {"child_license_key": _S3, "status": "removed",   "assigned_to": None},
+        ])  # no over_quota_since
+
+        changed, _ = _auto_sync_logic(ai_dir)
+        assert changed is True
+
+        seats = _read_seats_by_key(ai_dir)
+        assert seats[_S3]["status"] == "unassigned"   # back in pool ✅
+
+    def test_real_server_scenario(self, tmp_path):
+        """Exact scenario from uploaded server files:
+        David+Vicki in users.json with keys, license_seats all unassigned,
+        Jamie's S3 shows 'removed' from old bug, no over_quota_since."""
+        ai_dir = tmp_path / ".ai-prowler"
+        ai_dir.mkdir()
+        _write_users_json(ai_dir, {
+            "bearbear":    {"name": "David Vavro",  "email": "david@g.com",
+                            "child_license_key": _S1, "status": "active",
+                            "role": "owner"},
+            "Synopsys1*":  {"name": "Vicki Vavro",  "email": "vicki@y.com",
+                            "child_license_key": _S2, "status": "active",
+                            "role": "manager"},
+            "CyrestalApp": {"name": "Jamie Vavro",  "email": "jamie@g.com",
+                            "child_license_key": "",   # no seat
+                            "status": "suspended", "role": "staff"},
+        })
+        _write_license_seats(ai_dir, _BIZ, [
+            {"child_license_key": _S1, "status": "unassigned", "assigned_to": None},
+            {"child_license_key": _S2, "status": "unassigned", "assigned_to": None},
+            {"child_license_key": _S3, "status": "removed",    "assigned_to": None},
+            {"child_license_key": _S4, "status": "unassigned", "assigned_to": None},
+        ])
+
+        changed, _ = _auto_sync_logic(ai_dir)
+        assert changed is True
+
+        seats = _read_seats_by_key(ai_dir)
+        assert seats[_S1]["status"]      == "assigned"
+        assert seats[_S1]["assigned_to"] == "david@g.com"
+        assert seats[_S2]["status"]      == "assigned"
+        assert seats[_S2]["assigned_to"] == "vicki@y.com"
+        assert seats[_S3]["status"]      == "unassigned"   # old bug fixed ✅
+        assert seats[_S4]["status"]      == "unassigned"
+
