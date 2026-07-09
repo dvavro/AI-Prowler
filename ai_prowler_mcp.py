@@ -566,7 +566,7 @@ def _detect_server_mode() -> bool:
 
 _IS_SERVER_MODE: bool = _detect_server_mode()
 
-# The 26 Tier A tools: suppressed for ALL roles in server mode.
+# The 27 Tier A tools: suppressed for ALL roles in server mode.
 _TIER_A_SUPPRESSED: frozenset = frozenset({
     # Dev / code-execution — run arbitrary code on the host OS
     "compile_check", "syntax_check", "lint_check",
@@ -597,6 +597,7 @@ _TIER_A_SUPPRESSED: frozenset = frozenset({
     # Common Business AI Analysis / My Custom Analyses panels are hidden in
     # server mode's GUI, so the queue they drive has no server-mode caller).
     "get_pending_analysis_tasks", "complete_analysis_task", "save_analysis_report",
+    "create_analysis_task",
     # Raw/unscoped SMS inbox — personal-install-only. sms_inbox_read() has no
     # per-user filtering (unlike sms_inbox_read_for_user()), so in a
     # multi-user server it would let any employee read every inbound
@@ -804,7 +805,7 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "AI-Prowler — Agentic RAG Knowledge Base\n"
         + "=" * 50 + "\n\n"
 
-        "TOOL CATEGORIES (80 tools total — 79 visible in personal mode,\n"
+        "TOOL CATEGORIES (81 tools total — 80 visible in personal mode,\n"
         "54 visible in server mode; call check_tools_status() for a precise\n"
         "per-tool breakdown on this connection)\n"
         + "-" * 30 + "\n"
@@ -860,6 +861,10 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "      list_writable_directories, grant_write_access, revoke_write_access\n\n"
 
         "  • Agentic analysis tasks (personal mode only):\n"
+        "      create_analysis_task — defines a new recurring or one-off\n"
+        "        custom analysis task from a plain-language request. Day-\n"
+        "        granularity scheduling only; pull-based, not autonomous —\n"
+        "        see its own docstring for the full behavior explanation.\n"
         "      get_pending_analysis_tasks — returns all pending tasks from\n"
         "        pending_tasks.json; call when the user pastes the run-queue\n"
         "        command from the Quick Links tab.\n"
@@ -1139,9 +1144,9 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "    are in your available tool list. If yes, use QuickBooks as the\n"
         "    primary financial source. If no, use AI-Prowler Job Tracker tools.\n\n"
         "  Server mode: get_pending_analysis_tasks, complete_analysis_task,\n"
-        "  and save_analysis_report are NOT available to any role — the\n"
-        "  Quick Links tab that queues this workflow is a personal-install-\n"
-        "  only GUI feature.\n\n"
+        "  save_analysis_report, and create_analysis_task are NOT available\n"
+        "  to any role — the Quick Links tab that queues this workflow is a\n"
+        "  personal-install-only GUI feature.\n\n"
 
 
         "PROACTIVE ALERTS (background scheduler — no Claude needed)\n"
@@ -12117,6 +12122,116 @@ def _save_pending_tasks(tasks: list) -> None:
     _PENDING_TASKS_FILE.write_text(
         json.dumps(tasks, indent=2, ensure_ascii=False),
         encoding="utf-8"
+    )
+
+
+@mcp.tool()
+def create_analysis_task(
+    label: str,
+    prompt: str,
+    schedule: str = "none",
+    first_due: str = "",
+    scope_dirs: "list | None" = None,
+    output_learnings: bool = True,
+    output_report: bool = False,
+    report_folder: str = "",
+) -> str:
+    """
+    AGENTIC ANALYSIS — Define a new recurring (or one-off) custom analysis
+    task in the Quick Links / My Custom Analyses queue, from a plain-language
+    request — the same feature the "+ New Custom Analysis" GUI dialog builds,
+    now callable directly from a conversation.
+
+    IMPORTANT — how this actually behaves (set expectations honestly):
+      • Day-granularity only. There is no time-of-day in this system — a
+        request like "every Monday at 8am" can only be stored as "due every
+        Monday" (schedule="weekly", first_due=<that Monday's date>). The
+        "8am" part cannot be represented; do not imply it will be.
+      • Pull-based, not autonomous. Creating a task does NOT make AI-Prowler
+        wake up and run it unattended at the due time. A task becoming due
+        just means it's waiting — the NEXT time the user is in a Claude
+        conversation and either asks, or Claude calls
+        get_pending_analysis_tasks() at session start, the due task shows up
+        and can be run then. If the user's phrasing implies full automation
+        ("check my email every Monday morning without me doing anything"),
+        say so plainly rather than letting the wording stand uncorrected —
+        that requires a Claude session to actually happen after the due
+        date, not a background process.
+      • schedule must be one of: none, daily, weekly, biweekly, monthly,
+        quarterly, yearly. If schedule is anything but "none", first_due is
+        REQUIRED (YYYY-MM-DD) — compute the correct date yourself (e.g. the
+        next occurrence of the requested weekday) rather than asking the
+        user to do date math. Use user_time_v0 first if you need today's
+        date/timezone to compute it.
+      • Maximum 25 custom tasks at once (enforced inside create_task() —
+        the same limit the GUI dialog respects). If the user is at the cap,
+        tell them to delete an existing task first (Links & Analysis tab).
+
+    Args:
+        label:            Short name for the task, max 60 characters.
+        prompt:           The full analysis instructions Claude should run
+                          when this task comes due — be as specific as the
+                          user was, don't compress it.
+        schedule:         "none" (one-off), "daily", "weekly", "biweekly",
+                          "monthly", "quarterly", or "yearly".
+        first_due:        YYYY-MM-DD. Required if schedule != "none".
+        scope_dirs:       Optional list of directory paths to focus the
+                          analysis on. Omit for "search everything."
+        output_learnings: Record key findings as learnings when this task
+                          runs (default True).
+        output_report:    Save the full analysis as a .docx report when
+                          this task runs (default False).
+        report_folder:    Output folder for .docx reports, if output_report
+                          is True. Uses the default reports folder if omitted.
+
+    Returns:
+        Confirmation with the new task_id and its next due date, or a
+        clear validation error (including hitting the 25-task cap).
+
+    Voice examples:
+        "Set up a task to check for unread invoice emails every Monday"
+        "Remind me — er, set up a recurring task — to review the AR aging
+         report monthly"
+        "Create a one-off task to summarize last quarter's contracts"
+    """
+    _telemetry_increment_tool_count("create_analysis_task")
+
+    try:
+        import custom_tasks_manager as _ctm
+    except Exception as _ie:
+        return f"❌ custom_tasks_manager module not available: {_ie}"
+
+    try:
+        tasks = _ctm.load_custom_tasks()
+        new_task = _ctm.create_task(
+            label=label,
+            prompt=prompt,
+            scope_dirs=scope_dirs or [],
+            schedule=schedule,
+            first_due=(first_due.strip() or None),
+            output_learnings=output_learnings,
+            output_report=output_report,
+            report_folder=(report_folder.strip() or None),
+        )
+        tasks.append(new_task)
+        if not _ctm.save_custom_tasks(tasks):
+            return "❌ Could not save the new task to disk."
+    except ValueError as _ve:
+        return f"❌ {_ve}"
+    except Exception as _e:
+        return f"❌ Could not create task: {_e}"
+
+    due_note = (f"first due {new_task['next_due']}"
+               if new_task.get("next_due") else "no schedule (one-off, manual run only)")
+    return (
+        f"✅ Created custom analysis task '{label}'\n"
+        f"   task_id  : {new_task['task_id']}\n"
+        f"   schedule : {schedule} ({due_note})\n\n"
+        f"This task will show up in get_pending_analysis_tasks() once it's "
+        f"due AND queued — either the user clicks 'Queue' / 'Run Due Tasks' "
+        f"in the Links & Analysis tab, or asks you to check for due tasks "
+        f"in a future conversation. It will not run automatically without "
+        f"either of those."
     )
 
 

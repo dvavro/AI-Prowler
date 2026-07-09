@@ -44,7 +44,7 @@ from pathlib import Path
 
 CUSTOM_TASKS_PATH = Path.home() / ".ai-prowler" / "custom_analysis_tasks.json"
 DEFAULT_REPORT_FOLDER = str(Path.home() / "Documents" / "AI-Prowler_tasks_reports")
-MAX_CUSTOM_TASKS = 10
+MAX_CUSTOM_TASKS = 25
 
 # Module-level counter for guaranteed unique task IDs within the same process
 # (timestamps alone can collide at microsecond resolution on fast machines)
@@ -220,8 +220,18 @@ def create_task(label: str,
         Task dict ready to be appended to the task list.
 
     Raises:
-        ValueError: if validation fails.
+        ValueError: if validation fails, OR if MAX_CUSTOM_TASKS is already
+        reached. The cap is checked here (not by callers) so every caller —
+        the GUI's Add dialog and any MCP tool alike — enforces the exact
+        same limit with no way to accidentally bypass it.
     """
+    existing_count = len(load_custom_tasks())
+    if existing_count >= MAX_CUSTOM_TASKS:
+        raise ValueError(
+            f"Maximum {MAX_CUSTOM_TASKS} custom tasks allowed. "
+            f"Delete an existing task before adding a new one."
+        )
+
     label = (label or "").strip()
     if not label:
         raise ValueError("Task name is required.")

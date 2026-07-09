@@ -1155,7 +1155,7 @@ then ask Claude questions from your desktop or phone.
 ─────────────────────────────────────────────────
  KNOWLEDGE BASE (RAG)
 ─────────────────────────────────────────────────
-• 80 MCP tools across 13 categories
+• 81 MCP tools across 13 categories
 • 65+ file types: PDF, Word, Excel, PowerPoint, HTML,
 • Automatic OCR for scanned PDFs and images
 • Incremental indexing — only changed files reprocessed
@@ -2788,12 +2788,12 @@ or from the Help menu."""
             'body': (
                 'Your Personal Agentic AI Knowledge Base for Claude.\n\n'
                 'AI-Prowler™ Home v8.0.0 for Windows 11 — index your local documents '
-                'and put 80 AI-powered tools at Claude\'s fingertips, on desktop, web, and mobile.\n\n'
+                'and put 81 AI-powered tools at Claude\'s fingertips, on desktop, web, and mobile.\n\n'
                 '★ Index local and OneDrive documents from any folder — 65+ file formats '
                 'supported including scanned PDFs and images with full OCR text extraction.\n\n'
                 '★ ChromaDB vector database with semantic search — Claude queries '
                 'intelligently across 10,000+ files with provenance-aware results.\n\n'
-                '★ 80 MCP tools across 12 categories: Agentic RAG, Code Tools, '
+                '★ 81 MCP tools across 12 categories: Agentic RAG, Code Tools, '
                 'Self-Learning, Action Tools, Email, SMS, Scheduling, Dev Tools, '
                 'Indexing, Job Tracking, Analysis, and Health checks.\n\n'
                 '★ Code Tools — Claude can create, edit, back up, and restore files '
@@ -3637,6 +3637,7 @@ or from the Help menu."""
                 # install. If present, it REPLACES the fallback list. This
                 # is what lets a release ship the user guide, icons, and any
                 # new modules without editing this code each time.
+                _file_hashes = {}   # path -> expected sha256, or None if unknown
                 try:
                     _manifest_url = f"{_base}update_manifest.json"
                     _man_req = urllib.request.Request(
@@ -3647,23 +3648,43 @@ or from the Help menu."""
                     _man_files = _manifest.get("files", [])
                     if isinstance(_man_files, list) and _man_files:
                         # Manifest entries may be plain strings or objects
-                        # with a "path" key (for future SHA support). Accept
-                        # both.
+                        # with "path" + "sha256" keys. Accept both; keep the
+                        # hash (if present) so the download loop below can
+                        # verify integrity per file.
                         _resolved = []
+                        _resolved_hashes = {}
                         for _entry in _man_files:
                             if isinstance(_entry, str):
                                 _resolved.append(_entry)
+                                _resolved_hashes[_entry] = None
                             elif isinstance(_entry, dict) and _entry.get("path"):
-                                _resolved.append(_entry["path"])
+                                _p = _entry["path"]
+                                _resolved.append(_p)
+                                _resolved_hashes[_p] = _entry.get("sha256")
                         if _resolved:
                             _files = _resolved
+                            _file_hashes = _resolved_hashes
+                            _n_hashed = sum(1 for v in _file_hashes.values() if v)
                             print(f"[UPDATE] Manifest loaded — "
-                                  f"{len(_files)} file(s) to update.")
+                                  f"{len(_files)} file(s) to update "
+                                  f"({_n_hashed} with integrity hashes).")
                 except Exception as _man_exc:
                     print(f"[UPDATE] No manifest ({_man_exc}) — using "
                           f"fallback list of {len(_fallback_files)} files.")
 
-                downloaded = 0
+                # ── Download + verify everything into memory first ────────
+                # Nothing is written to the staging directory until EVERY
+                # file has downloaded successfully AND (where a hash is
+                # known) verified correctly. Deliberate all-or-nothing
+                # policy: applying only some of a set of interdependent
+                # Python files (e.g. rag_gui.py updated but ai_prowler_mcp.py
+                # not) can leave a worse-off install than not updating at
+                # all, so a single bad file aborts the whole batch instead
+                # of partially applying the rest.
+                import hashlib as _hashlib_upd
+                _downloaded_content = {}   # path -> bytes
+                _failures = []             # list of (path, reason)
+
                 for fname in _files:
                     try:
                         _url = f"{_base}{fname}"
@@ -3672,28 +3693,83 @@ or from the Help menu."""
                             headers={"User-Agent": f"AI-Prowler/{APP_VERSION}"})
                         with urllib.request.urlopen(req, timeout=30) as resp:
                             content = resp.read()
-                        out_path = staging_dir / fname
-                        # Manifest entries may include subdirectories
-                        # (e.g. "skills/foo.md"). Ensure the parent exists
-                        # before writing.
-                        out_path.parent.mkdir(parents=True, exist_ok=True)
-                        out_path.write_bytes(content)
-                        downloaded += 1
-                        print(f"[UPDATE] Downloaded: {fname}")
+
+                        _expected = _file_hashes.get(fname)
+                        if _expected:
+                            _actual = _hashlib_upd.sha256(content).hexdigest()
+                            if _actual != _expected:
+                                _failures.append(
+                                    (fname,
+                                     f"integrity check failed (expected "
+                                     f"{_expected[:12]}…, got "
+                                     f"{_actual[:12]}…)"))
+                                print(f"[UPDATE] HASH MISMATCH: {fname}")
+                                continue
+
+                        _downloaded_content[fname] = content
+                        _tag_str = "verified" if _expected else "downloaded"
+                        print(f"[UPDATE] {fname}: {_tag_str}")
                     except Exception as exc:
+                        _failures.append((fname, str(exc)))
                         print(f"[UPDATE] Failed to download {fname}: {exc}")
+
+                if _failures:
+                    # Nothing gets staged — current install is completely
+                    # untouched. Retrying is just clicking the button again.
+                    _fail_lines = "\n".join(
+                        f"  • {fn} — {reason}"
+                        for fn, reason in _failures[:8])
+                    _more = (f"\n  …and {len(_failures) - 8} more file(s)"
+                             if len(_failures) > 8 else "")
+                    self.root.after(0, lambda: messagebox.showerror(
+                        "Update Not Applied",
+                        f"The update for v{version} could not be verified "
+                        f"and was NOT installed.\n\n"
+                        f"{len(_failures)} of {len(_files)} file(s) "
+                        f"failed:\n{_fail_lines}{_more}\n\n"
+                        f"Your current AI-Prowler installation is "
+                        f"unchanged and safe to keep using.\n\n"
+                        f"This is usually a temporary network issue — "
+                        f"click '📥 Download Update' again to retry."
+                    ))
+                    self.root.after(0, lambda: self.status_var.set(
+                        f"❌ Update v{version} failed integrity check — "
+                        f"click Download Update to retry"))
+                    return
+
+                # ── Every file verified — write to staging now ────────────
+                # Clear any leftover files from a prior attempt first, so a
+                # retry after a failure, or an update whose file list
+                # shrank since the last release, never leaves stale files
+                # behind for RAG_RUN.bat to pick up.
+                import shutil as _shutil_upd
+                if staging_dir.exists():
+                    _shutil_upd.rmtree(staging_dir, ignore_errors=True)
+                staging_dir.mkdir(parents=True, exist_ok=True)
+
+                downloaded = 0
+                for fname, content in _downloaded_content.items():
+                    out_path = staging_dir / fname
+                    # Manifest entries may include subdirectories
+                    # (e.g. "skills/foo.md"). Ensure the parent exists
+                    # before writing.
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    out_path.write_bytes(content)
+                    downloaded += 1
 
                 if downloaded > 0:
                     # Write the flag file so RAG_RUN.bat knows to apply
                     flag_file.write_text(
                         f"AI-Prowler update v{version}\n"
-                        f"Downloaded: {downloaded} files\n"
+                        f"Downloaded: {downloaded} files "
+                        f"(all integrity-verified)\n"
                         f"Date: {datetime.now().isoformat()}\n",
                         encoding='utf-8'
                     )
                     self.root.after(0, lambda: messagebox.showinfo(
                         "Update Downloaded",
-                        f"AI-Prowler™ v{version} downloaded successfully.\n\n"
+                        f"AI-Prowler™ v{version} downloaded and verified "
+                        f"successfully.\n\n"
                         f"{downloaded} file(s) staged for install.\n\n"
                         f"The update will be applied automatically\n"
                         f"the next time you start AI-Prowler.\n\n"
@@ -5171,7 +5247,8 @@ or from the Help menu."""
                  bg='#0d1a26', fg='#ffffff',
                  font=('Arial', 10, 'bold')).pack(side='left')
 
-        _custom_count_var = tk.StringVar(value="0 / 10")
+        _custom_count_var = tk.StringVar(value="0 / 25")
+        self._custom_count_var = _custom_count_var  # exposed for tests/polling
         tk.Label(_custom_hdr_row,
                  textvariable=_custom_count_var,
                  bg='#0d1a26', fg='#4a6a82',
@@ -5180,6 +5257,7 @@ or from the Help menu."""
         # Task list container
         _custom_list_frame = tk.Frame(_custom_outer, bg='#0d1a26')
         _custom_list_frame.pack(fill='x', padx=10, pady=(0, 4))
+        self._custom_list_frame = _custom_list_frame  # exposed for tests/polling
 
         def _refresh_custom_list():
             """Rebuild the custom task list UI."""
@@ -5200,7 +5278,7 @@ or from the Help menu."""
                          font=('Arial', 8)).pack(anchor='w', padx=4)
                 return
 
-            _custom_count_var.set(f"{len(tasks)} / 10")
+            _custom_count_var.set(f"{len(tasks)} / {_ctm.MAX_CUSTOM_TASKS}")
 
             if not tasks:
                 tk.Label(_custom_list_frame,
@@ -5552,13 +5630,12 @@ or from the Help menu."""
                             report_folder=folder_var.get().strip()
                         )
                     else:
-                        if len(tasks) >= _ctm2.MAX_CUSTOM_TASKS:
-                            from tkinter import messagebox as _mb2
-                            _mb2.showwarning(
-                                "Limit Reached",
-                                f"Maximum {_ctm2.MAX_CUSTOM_TASKS} custom tasks allowed.\n"
-                                "Delete an existing task to add a new one.")
-                            return
+                        # MAX_CUSTOM_TASKS is enforced inside create_task()
+                        # itself (raises ValueError, caught below) — not
+                        # checked here, so the GUI and any MCP tool that
+                        # calls create_task() share one single source of
+                        # truth for the limit instead of two checks that
+                        # could drift out of sync.
                         new_task = _ctm2.create_task(
                             label=label, prompt=prompt,
                             scope_dirs=scope,
@@ -5686,6 +5763,55 @@ or from the Help menu."""
 
         # Initial render
         _refresh_custom_list()
+
+        # ── Live refresh when the custom-tasks file changes externally ──────
+        # create_analysis_task() (the MCP tool Claude calls) writes to this
+        # same custom_analysis_tasks.json file from a SEPARATE process (the
+        # MCP server) — without this, a task Claude creates during a
+        # conversation wouldn't appear here until some other GUI action
+        # happened to rebuild this panel. Poll the file's mtime periodically
+        # and auto-refresh only when it actually changed — same
+        # self.root.after() polling pattern already used elsewhere in this
+        # file (e.g. the Ollama status light), not a new dependency.
+        _custom_tasks_mtime = {"last": None}
+
+        def _sync_custom_tasks_mtime():
+            """Record the current mtime without refreshing — call once right
+            after the initial render so the first poll tick doesn't
+            redundantly refresh a panel that's already up to date."""
+            try:
+                import custom_tasks_manager as _ctm_poll
+                _custom_tasks_mtime["last"] = (
+                    _ctm_poll.CUSTOM_TASKS_PATH.stat().st_mtime
+                    if _ctm_poll.CUSTOM_TASKS_PATH.exists() else None
+                )
+            except Exception:
+                pass
+
+        def _poll_custom_tasks_file():
+            try:
+                import custom_tasks_manager as _ctm_poll
+                mtime = (_ctm_poll.CUSTOM_TASKS_PATH.stat().st_mtime
+                        if _ctm_poll.CUSTOM_TASKS_PATH.exists() else None)
+                if mtime != _custom_tasks_mtime["last"]:
+                    _custom_tasks_mtime["last"] = mtime
+                    _refresh_custom_list()
+            except Exception:
+                pass
+            finally:
+                self.root.after(3000, _poll_custom_tasks_file)
+
+        # Exposed for tests (and general programmatic use) — calling this
+        # directly runs the exact same check-and-refresh logic the timer
+        # uses, synchronously, without waiting on a real .after() callback.
+        # Test harnesses that cancel pending after() callbacks for isolation
+        # (as this app's GUI test fixture does) would otherwise make the
+        # live-refresh behavior unobservable in tests.
+        self._poll_custom_tasks_file = _poll_custom_tasks_file
+        self._refresh_custom_task_list = _refresh_custom_list
+
+        _sync_custom_tasks_mtime()
+        self.root.after(3000, _poll_custom_tasks_file)
 
         ttk.Separator(query_frame, orient='horizontal').pack(
             fill='x', padx=20, pady=(4, 6))

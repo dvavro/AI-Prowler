@@ -209,15 +209,15 @@ When you ask Claude a question with AI-Prowler connected, Claude follows this pa
 
 ## 6. MCP Tools Reference
 
-AI-Prowler exposes **80 tools** total to Claude across thirteen categories in v8.0.0 (this doc's own category breakdown — a separate, narrower ten-family grouping is used internally by the `how_to_use_ai_prowler` tool's guide text). Exactly how many are actually *visible* on a given connection depends on mode — see the table below.
+AI-Prowler exposes **81 tools** total to Claude across thirteen categories in v8.0.0 (this doc's own category breakdown — a separate, narrower ten-family grouping is used internally by the `how_to_use_ai_prowler` tool's guide text). Exactly how many are actually *visible* on a given connection depends on mode — see the table below.
 
 ### 6.1 Tool Counts by Mode
 
 | Install type | Mode | Tools visible | Notes |
 |---|---|---|---|
-| Personal / Home | personal | 79 | All 80 tools minus `check_sms_replies` (§6.2b — meaningless with a single user) |
-| Business — employee personal install | personal | 79 | Same as above — personal mode is personal mode regardless of edition |
-| Business — company server | server | 54 | All 80 tools minus the 26 in `_TIER_A_SUPPRESSED` (§6.2) — remaining 54 are further gated per-role/per-call inside the tool itself, not by registration |
+| Personal / Home | personal | 80 | All 81 tools minus `check_sms_replies` (§6.2b — meaningless with a single user) |
+| Business — employee personal install | personal | 80 | Same as above — personal mode is personal mode regardless of edition |
+| Business — company server | server | 54 | All 81 tools minus the 27 in `_TIER_A_SUPPRESSED` (§6.2) — remaining 54 are further gated per-role/per-call inside the tool itself, not by registration |
 
 ### 6.2 Tier A Tool Suppression (Server Mode Only)
 
@@ -481,12 +481,13 @@ Two different status tools — know which to call:
 
 ---
 
-#### Agentic Analysis Tools (3 tools — Personal Only)
+#### Agentic Analysis Tools (4 tools — Personal Only)
 
 These tools power the **Common Business AI Analysis** and **My Custom Analyses** sections in the Quick Links tab. Not available in server mode.
 
 | Tool | What It Does | Mode |
 |---|---|---|
+| `create_analysis_task` | Defines a new recurring or one-off custom task from a plain-language request — the same thing the "+ New Custom Analysis" GUI dialog builds. **Day-granularity scheduling only** — there's no time-of-day in this system, so "every Monday at 8am" is stored as "due every Monday"; the "8am" isn't representable. **Pull-based, not autonomous** — creating a task doesn't make anything run unattended; the task becomes visible next time `get_pending_analysis_tasks()` is called after it's due AND queued (GUI "Queue"/"Run Due Tasks" button, or a future conversation). Enforces the same 25-task cap as the GUI dialog (`MAX_CUSTOM_TASKS`, centralized inside `create_task()` itself). | Personal |
 | `get_pending_analysis_tasks` | Returns all pending tasks from `~/.ai-prowler/pending_tasks.json`. Claude calls this when you paste the run-queue command. Returns a JSON object with `pending_count`, `tasks` array (including `task_id`, `label`, `prompt`, `scope_dirs`, `schedule`, `next_due`, `queued_ago`), and execution instructions. Returns a plain informational message when the queue is empty. | Personal |
 | `complete_analysis_task` | Marks a pending task as completed after Claude finishes the analysis. Stamps `completed_at` and stores the optional `summary`. For scheduled tasks (both built-in and custom), auto-advances `next_due` anchored to the original due date — not the completion date. | Personal |
 | `save_analysis_report` | Saves a full analysis as a Word document (`.docx`) to the configured report folder. Default: `~/Documents/AI-Prowler_tasks_reports`. | Personal |
@@ -1972,4 +1973,4 @@ To upgrade: `pip install --upgrade mcp`
 
 *AI-Prowler — Your Personal Agentic RAG Knowledge Base*
 *Copyright © 2026 David Kevin Vavro · david.vavro1@gmail.com*
-*Version 8.0.0 — Updated June 25, 2026 (80 tools · 234 analysis tests)*
+*Version 8.0.0 — Updated June 25, 2026 (81 tools · 234 analysis tests)*
