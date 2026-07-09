@@ -248,9 +248,13 @@ class TestSendEmailCap:
 # =============================================================================
 
 class TestEmailAllowedForUser:
-    """configure_email, send_file, and send_learnings_report use this gate.
-    Blocked in server mode for ALL roles, including field_crew -- field crew
-    can SEND (via _send_email_cap) but cannot CONFIGURE or ATTACH arbitrary files.
+    """configure_email and send_file use this gate. Blocked in server mode
+    for ALL roles, including field_crew -- field crew can SEND (via
+    _send_email_cap) but cannot CONFIGURE or ATTACH arbitrary files.
+
+    send_learnings_report does NOT use this gate -- it uses _send_email_cap
+    like send_email/send_alert, and is available to all roles in server
+    mode. It is not tested here; see test_send_learnings_report_scope.py.
     """
 
     def test_D_CFG_01_personal_mode_allowed(self, mcp_module):

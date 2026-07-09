@@ -1155,7 +1155,7 @@ then ask Claude questions from your desktop or phone.
 ─────────────────────────────────────────────────
  KNOWLEDGE BASE (RAG)
 ─────────────────────────────────────────────────
-• 85 MCP tools across 12 categories
+• 80 MCP tools across 13 categories
 • 65+ file types: PDF, Word, Excel, PowerPoint, HTML,
 • Automatic OCR for scanned PDFs and images
 • Incremental indexing — only changed files reprocessed
@@ -1673,6 +1673,7 @@ Built with Python, ChromaDB, FastMCP, and Claude"""
         # Load current config to surface the URL + token
         url = ""
         token = ""
+        _is_srv = False
         try:
             cfg_path = Path.home() / '.ai-prowler' / 'config.json'
             if cfg_path.exists():
@@ -1684,8 +1685,19 @@ Built with Python, ChromaDB, FastMCP, and Claude"""
                         'http://', '').rstrip('/')
                     url = f"https://{domain}/mcp"
                 token = cfg.get('remote_token', '')
+                _is_srv = (str(cfg.get('edition', '')).lower() == 'business'
+                           and str(cfg.get('mode', '')).lower() == 'server')
         except Exception:
             pass
+
+        # Recommended connector name: distinct per mode so Claude (and the
+        # person) can tell multiple connected AI-Prowler instances apart —
+        # e.g. someone with both a personal seat AND the shared company
+        # server connected sees "AI-Prowler Local" vs "AI-Prowler Server"
+        # rather than two connectors both just called "AI-Prowler".
+        _connector_name = "AI-Prowler Server" if _is_srv else "AI-Prowler Local"
+        _connector_desc = ("Shared company knowledge base" if _is_srv
+                            else "My personal knowledge base")
 
         # Body that adapts based on what's configured
         url_line = url if url else "(not yet configured — see Step 1 below)"
@@ -1729,9 +1741,17 @@ Built with Python, ChromaDB, FastMCP, and Claude"""
             ]),
 
             ("Step 3 — Fill in the connector form", [
-                "Name:           AI-Prowler",
-                "Description:    My personal knowledge base",
+                f"Name:           {_connector_name}",
+                f"Description:    {_connector_desc}",
                 "MCP Server URL: (click 'Copy URL' below, then paste)",
+                "",
+                "IMPORTANT — use this exact Name (not just \"AI-Prowler\"):",
+                "  Claude uses the connector's Name to tell instances apart.",
+                "  If you (or a teammate) ever connect BOTH a personal seat",
+                "  AND the shared company server in the same Claude account,",
+                "  distinct names — \"AI-Prowler Local\" vs \"AI-Prowler",
+                "  Server\" — let Claude know which one it's talking to and",
+                "  route requests to the right one instead of guessing.",
                 "",
                 "Advanced settings — OAuth fields:",
                 "  OAuth Client ID:     (leave blank — not required)",
@@ -2768,12 +2788,12 @@ or from the Help menu."""
             'body': (
                 'Your Personal Agentic AI Knowledge Base for Claude.\n\n'
                 'AI-Prowler™ Home v8.0.0 for Windows 11 — index your local documents '
-                'and put 85 AI-powered tools at Claude\'s fingertips, on desktop, web, and mobile.\n\n'
+                'and put 80 AI-powered tools at Claude\'s fingertips, on desktop, web, and mobile.\n\n'
                 '★ Index local and OneDrive documents from any folder — 65+ file formats '
                 'supported including scanned PDFs and images with full OCR text extraction.\n\n'
                 '★ ChromaDB vector database with semantic search — Claude queries '
                 'intelligently across 10,000+ files with provenance-aware results.\n\n'
-                '★ 85 MCP tools across 12 categories: Agentic RAG, Code Tools, '
+                '★ 80 MCP tools across 12 categories: Agentic RAG, Code Tools, '
                 'Self-Learning, Action Tools, Email, SMS, Scheduling, Dev Tools, '
                 'Indexing, Job Tracking, Analysis, and Health checks.\n\n'
                 '★ Code Tools — Claude can create, edit, back up, and restore files '
@@ -5851,7 +5871,16 @@ or from the Help menu."""
                 if cfg["enabled"] and not _sched_eng.is_running():
                     _sched_eng.start()
                 elif not cfg["enabled"] and _sched_eng.is_running():
-                    _sched_eng.stop()
+                    # See _toggle_engine() — stop() now blocks until the
+                    # thread actually exits, so run it off-thread here too.
+                    _al_status_var.set("⏳ Stopping…")
+
+                    def _do_stop():
+                        _sched_eng.stop()
+                        self.root.after(0, _refresh_engine_status)
+
+                    threading.Thread(target=_do_stop, daemon=True).start()
+                    return
                 _refresh_engine_status()
 
             def _refresh_engine_status():
@@ -5864,9 +5893,20 @@ or from the Help menu."""
 
             def _toggle_engine():
                 if _sched_eng.is_running():
-                    _sched_eng.stop()
-                    _al_status_var.set("● Stopped")
-                    _al_status_lbl.config(fg='#aa4444')
+                    # v8.0.1: scheduler_engine.stop() now blocks (join()) until
+                    # the background thread has actually exited — correct and
+                    # race-free, but if a job tick is mid-run (e.g. a slow
+                    # SMTP/weather API call) that join can take a few seconds.
+                    # Run it off the Tkinter main thread so the GUI never
+                    # freezes; update the status label once it's truly done.
+                    _al_status_var.set("⏳ Stopping…")
+                    _al_status_lbl.config(fg='#aa8800')
+
+                    def _do_stop():
+                        _sched_eng.stop()
+                        self.root.after(0, _refresh_engine_status)
+
+                    threading.Thread(target=_do_stop, daemon=True).start()
                 else:
                     _save_scheduler_config()
                     _sched_eng.start()
@@ -7837,7 +7877,7 @@ or from the Help menu."""
                 # armed so typing an email address fills in host/port.
                 return
             try:
-                d = _j.loads(p.read_text(encoding='utf-8')) or {}
+                d = _j.loads(p.read_text(encoding='utf-8-sig')) or {}
                 saved_host = d.get('smtp_host', '')
                 saved_port = str(d.get('smtp_port', 587))
                 _smtp_host_var.set(saved_host)
@@ -8099,7 +8139,7 @@ or from the Help menu."""
             try:
                 import json as _j
                 p = Path.home() / '.ai-prowler' / 'config.json'
-                cfg = _j.loads(p.read_text(encoding='utf-8')) if p.exists() else {}
+                cfg = _j.loads(p.read_text(encoding='utf-8-sig')) if p.exists() else {}
                 base = cfg.get('public_base', '').rstrip('/')
                 if base:
                     path = '/whatsapp-webhook' if (_prov_id() == 'twilio' and _wa_enabled_var.get()) else '/sms-webhook'
@@ -8134,7 +8174,7 @@ or from the Help menu."""
             p = Path.home() / '.ai-prowler' / 'config.json'
             if not p.exists(): _toggle_sms_fields(); return
             try:
-                d = _j.loads(p.read_text(encoding='utf-8')) or {}
+                d = _j.loads(p.read_text(encoding='utf-8-sig')) or {}
                 pid = d.get('sms_provider', 'twilio').lower()
                 for label, _pid in _sms_providers:
                     if _pid == pid: _sms_provider_var.set(label); break
@@ -8169,7 +8209,7 @@ or from the Help menu."""
             pid = _prov_id()
             p = Path.home() / '.ai-prowler' / 'config.json'
             p.parent.mkdir(parents=True, exist_ok=True)
-            try: existing = _j.loads(p.read_text(encoding='utf-8')) if p.exists() else {}
+            try: existing = _j.loads(p.read_text(encoding='utf-8-sig')) if p.exists() else {}
             except Exception: existing = {}
             for k in ('twilio_account_sid','twilio_auth_token','twilio_from_number',
                       'twilio_sms_enabled','whatsapp_enabled',
@@ -8222,7 +8262,7 @@ or from the Help menu."""
             p = Path.home() / '.ai-prowler' / 'config.json'
             try:
                 import json as _j
-                ex = _j.loads(p.read_text(encoding='utf-8')) if p.exists() else {}
+                ex = _j.loads(p.read_text(encoding='utf-8-sig')) if p.exists() else {}
                 for k in ('twilio_account_sid','twilio_auth_token','twilio_from_number',
                           'twilio_sms_enabled','whatsapp_enabled',
                           'signalwire_project_id','signalwire_auth_token',
@@ -10677,7 +10717,7 @@ or from the Help menu."""
             import json as _jmod_rc
             _rc_path = Path.home() / '.ai-prowler' / 'config.json'
             if _rc_path.exists():
-                _rc_data = _jmod_rc.loads(_rc_path.read_text(encoding='utf-8'))
+                _rc_data = _jmod_rc.loads(_rc_path.read_text(encoding='utf-8-sig'))
                 _tun_name_var.set(_rc_data.get('tunnel_name', ''))
                 _tun_domain_var.set(_rc_data.get('tunnel_domain', ''))
         except Exception:

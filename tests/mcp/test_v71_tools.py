@@ -14,7 +14,10 @@ Automated validation tests for AI-Prowler v7.1.0 new MCP tools:
     EM-08  send_alert      — rejects missing config
     EM-09  send_alert      — rejects missing message
     EM-10  send_file       — rejects missing config
-    EM-11  server-mode: ALL roles blocked (email is personal-mode only)
+    EM-11  server-mode: configure_email/send_file/send_learnings_report(operator)
+           are blocked for ALL roles (personal-mode-only email tools) —
+           does NOT apply to send_email/send_alert, which allow all roles
+           in server mode; see TestSendEmailCap in test_role_tool_matrix.py
 
   LEARNINGS EXPORT TOOLS
     EL-01  get_learnings_report — empty store returns info message
@@ -225,8 +228,16 @@ class TestConfigureEmail:
             filepath=str(isolated_email_env.sample_dir / "note.txt"))
         assert "❌" in out
 
-    def test_EM_11_server_mode_blocked(self, isolated_email_env):
-        """EM-11: all email tools are blocked in server mode (any role)."""
+    def test_EM_11_personal_only_email_tools_blocked_in_server_mode(self, isolated_email_env):
+        """EM-11: configure_email / send_file / send_learnings_report(operator)
+        are blocked for ALL roles in server mode — these use personal SMTP
+        credentials and aren't appropriate for a shared company server.
+
+        This does NOT apply to send_email or send_alert, which explicitly
+        allow all roles in server mode via the separate _send_email_cap gate
+        (see TestSendEmailCap in test_role_tool_matrix.py) — don't read this
+        test as "email is blocked in server mode" in general.
+        """
         # In server mode _current_user returns a user dict (not None).
         # _email_allowed_for_user blocks any non-None user regardless of role.
         for role in ("owner", "manager", "staff", "field_crew"):

@@ -272,7 +272,9 @@ def _get_personal_owner_name() -> str:
     try:
         _ai_cfg_path = Path.home() / '.ai-prowler' / 'config.json'
         if _ai_cfg_path.exists():
-            with open(_ai_cfg_path, 'r', encoding='utf-8') as _f:
+            # utf-8-sig tolerates a BOM (e.g. from PowerShell Out-File or some
+            # editors saving "UTF-8" with BOM) as well as plain utf-8.
+            with open(_ai_cfg_path, 'r', encoding='utf-8-sig') as _f:
                 _ai_cfg = json.load(_f)
             name = _ai_cfg.get('owner_name', '').strip()
             if name:
@@ -564,14 +566,20 @@ def _detect_server_mode() -> bool:
 
 _IS_SERVER_MODE: bool = _detect_server_mode()
 
-# The 25 Tier A tools: suppressed for ALL roles in server mode.
+# The 26 Tier A tools: suppressed for ALL roles in server mode.
 _TIER_A_SUPPRESSED: frozenset = frozenset({
     # Dev / code-execution — run arbitrary code on the host OS
     "compile_check", "syntax_check", "lint_check",
     "run_script", "run_script_start", "run_script_status", "run_script_kill",
     "check_python_import",
-    # Host filesystem writes — create/modify/delete files on the server host
-    "create_file", "write_file", "str_replace_in_file", "create_directory",
+    # Host filesystem writes NOT scoped by _check_personal_write_scope() —
+    # backup/restore/approval-management tools, still operator/dev-only.
+    # create_file, write_file, str_replace_in_file, fuzzy_replace_in_file,
+    # line_replace_in_file, and create_directory are DELIBERATELY absent
+    # from this set — they're gated per-call instead, via
+    # _check_personal_write_scope(): server-mode users may write ONLY
+    # inside their own personal directory, and not at all if they don't
+    # have one configured. See that function's docstring for details.
     "copy_to_backup", "restore_backup", "list_backups", "list_directory",
     "reset_write_counter", "grant_write_access", "revoke_write_access",
     # Backup cleanup — deletes files on the host, operator/dev action only
@@ -585,12 +593,39 @@ _TIER_A_SUPPRESSED: frozenset = frozenset({
     "export_learnings_file",
     # Bulk index rebuild — destructive operator action, not for remote users
     "rebuild_learnings_index",
+    # Agentic analysis task queue — personal-install-only (Quick Links tab's
+    # Common Business AI Analysis / My Custom Analyses panels are hidden in
+    # server mode's GUI, so the queue they drive has no server-mode caller).
+    "get_pending_analysis_tasks", "complete_analysis_task", "save_analysis_report",
+    # Raw/unscoped SMS inbox — personal-install-only. sms_inbox_read() has no
+    # per-user filtering (unlike sms_inbox_read_for_user()), so in a
+    # multi-user server it would let any employee read every inbound
+    # SMS/WhatsApp message company-wide, not just their own threads.
+    # check_sms_replies (which IS per-user isolated) is the server-mode
+    # equivalent — see _PERSONAL_MODE_SUPPRESSED below for the reverse gate.
+    "check_sms_inbox",
 })
 
 _log.info(
     "v7.0.1 Tier A suppression: server_mode=%s — %d tools will be hidden "
     "from the MCP tool list when server_mode=True",
     _IS_SERVER_MODE, len(_TIER_A_SUPPRESSED)
+)
+
+# The 1 personal-mode-only-suppressed tool: hidden when server_mode=False.
+# Mirror image of Tier A — some tools only make sense once there's more than
+# one user. check_sms_replies is per-user thread-isolated (Mike sees Karen's
+# reply, not Jake's), which is meaningless with a single personal-install
+# user; check_sms_inbox (the unscoped, richer-filtered view — provider,
+# unread_only, since_hours=0 for "everything") is the personal-mode tool.
+_PERSONAL_MODE_SUPPRESSED: frozenset = frozenset({
+    "check_sms_replies",
+})
+
+_log.info(
+    "Personal-mode suppression: server_mode=%s — %d tool(s) will be hidden "
+    "from the MCP tool list when server_mode=False",
+    _IS_SERVER_MODE, len(_PERSONAL_MODE_SUPPRESSED)
 )
 
 # ── Monkeypatch mcp.tool() ───────────────────────────────────────────────────
@@ -607,6 +642,10 @@ def _counting_mcp_tool(*tool_args, **tool_kwargs):
     _TIER_A_SUPPRESSED is returned as a plain Python function without
     being passed to the real mcp.tool() decorator, so it never appears
     in the MCP tool list for any client connecting to the server.
+
+    Mirror gate: in personal mode, any tool whose name appears in
+    _PERSONAL_MODE_SUPPRESSED is suppressed the same way — tools that
+    only make sense with more than one registered user.
     """
     def _outer(fn):
         _tool_name = getattr(fn, '__name__', '_unknown')
@@ -614,6 +653,11 @@ def _counting_mcp_tool(*tool_args, **tool_kwargs):
         # Tier A: skip registration entirely in server mode.
         if _IS_SERVER_MODE and _tool_name in _TIER_A_SUPPRESSED:
             _log.debug("Tier A: suppressing '%s' (not registered with MCP)", _tool_name)
+            return fn  # plain Python function — invisible to MCP clients
+
+        # Mirror gate: skip registration entirely in personal mode.
+        if not _IS_SERVER_MODE and _tool_name in _PERSONAL_MODE_SUPPRESSED:
+            _log.debug("Personal-mode gate: suppressing '%s' (not registered with MCP)", _tool_name)
             return fn  # plain Python function — invisible to MCP clients
 
         real_decorator = _orig_mcp_tool(*tool_args, **tool_kwargs)
@@ -720,12 +764,23 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
     CALL THIS TOOL FIRST at the start of any new research or question-answering
     session to understand the correct tool sequence and capabilities.
 
+    The main guide is IDENTICAL regardless of mode or which connector it's
+    called on — deliberately. In a conversation with two connectors attached
+    (e.g. a personal install AND a company server), a guide whose CONTENT
+    varied per-connector risked Claude conflating "not available on THIS
+    connector" with "doesn't exist in AI-Prowler at all," and misapplying one
+    connector's limitations to the other. Server-mode-specific caveats (dev
+    tools, code-aware retrieval, and file-editing scoping are personal-mode
+    concepts that don't apply in server mode) are written inline in their
+    sections, the same way the COMMUNICATIONS section already handles both
+    modes in one block of text — nothing is removed or hidden per-connector.
+
     Ends with a "THIS CONNECTION" section that's computed live from the
     actual server-mode role gates (_ROLE_CAPS) for whichever connector this
-    was called on — so when both a personal install and a company server
-    are connected in the same conversation, calling this tool on each one
-    tells you exactly what's different for that specific connection, instead
-    of a generic description you'd have to mentally apply yourself.
+    was called on — this is the ONE part of the output that varies by
+    connector, and it's clearly labeled as being about this specific
+    connection, so it can't be mistaken for a change to the tool catalog
+    itself.
 
     Returns:
         Step-by-step guidance on which tools to use and in what order,
@@ -739,16 +794,24 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
 
     instructions_active = "instructions" in _fastmcp_params
 
+    # Computed early (was previously computed only for the footer) so the
+    # main guide body can also be dynamically trimmed for server mode —
+    # see the section-stripping block right after base_text is built.
+    _user = _current_user(ctx)
+    _htu_priv_status, _htu_priv_dir = _user_private_write_dir(ctx)
+
     base_text = (
         "AI-Prowler — Agentic RAG Knowledge Base\n"
         + "=" * 50 + "\n\n"
 
-        "TOOL CATEGORIES (85 tools total)\n"
+        "TOOL CATEGORIES (80 tools total — 79 visible in personal mode,\n"
+        "54 visible in server mode; call check_tools_status() for a precise\n"
+        "per-tool breakdown on this connection)\n"
         + "-" * 30 + "\n"
-        "AI-Prowler exposes twelve tool families. Most question-answering\n"
+        "AI-Prowler exposes ten tool families. Most question-answering\n"
         "tasks use the first two; the others cover indexing, code editing,\n"
         "dev tooling, communications, contractor/field-service workflows,\n"
-        "agentic analysis, and job image storage.\n\n"
+        "and agentic analysis.\n\n"
 
         "  • Knowledge retrieval (RAG over indexed documents):\n"
         "      get_knowledge_base_overview, list_indexed_documents,\n"
@@ -806,24 +869,6 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "      save_analysis_report(content, title, task_id, report_folder) —\n"
         "        saves the full analysis as a .docx Word document.\n\n"
 
-        "  • Job image storage (personal + server):\n"
-        "      get_job_images_path() — returns the current storage root path,\n"
-        "        source (default or custom), and total job/image counts. Call\n"
-        "        this first to confirm where photos will be saved.\n"
-        "      set_job_images_path(path) — change the storage root to any\n"
-        "        absolute path (e.g. D:\\JobPhotos). Saves to config.json and\n"
-        "        takes effect immediately. Pass '' to reset to default.\n"
-        "        Does NOT move existing images — ask Claude to help if needed.\n"
-        "      save_job_image(job_id, filename, image_base64, description,\n"
-        "        tags, media_type) — saves a photo to the configured root\n"
-        "        under <root>/<job_id>/. Accepts raw base64 or full data URI.\n"
-        "        Timestamp-prefix added automatically. Supports 15 formats:\n"
-        "        JPEG, HEIC, HEIF, PNG, WebP, GIF, AVIF, DNG, TIFF, BMP,\n"
-        "        RAW, CR2, CR3, NEF, ARW. Images are NOT indexed in ChromaDB.\n"
-        "      list_job_images(job_id, tag?) — returns metadata catalogue for\n"
-        "        a job. Optional tag filter (e.g. tag='before'). Returns file\n"
-        "        paths and a hint to ask the user to re-upload for visual review.\n"
-        "      delete_job_image(job_id, filename) — removes file + index entry.\n\n"
 
         "PREFERRED TOOL SEQUENCE — KNOWLEDGE RETRIEVAL\n"
         + "-" * 30 + "\n"
@@ -896,7 +941,11 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "  Both tools read only files under the tracked-paths allowlist.\n"
         "  Useful especially for mobile users who cannot attach files —\n"
         "  ask them to index_path() the project once, then\n"
-        "  use grep + read_file_lines for all subsequent code questions.\n\n"
+        "  use grep + read_file_lines for all subsequent code questions.\n"
+        "  Server mode: grep_documents and read_file_lines are NOT available\n"
+        "  to any role — raw filesystem access is a personal-install-only\n"
+        "  capability. search_documents still works for code files in server\n"
+        "  mode, just without exact-match/line-number precision.\n\n"
 
         "EDITING FILES — REINDEX WHEN DONE\n"
         + "-" * 30 + "\n"
@@ -922,7 +971,14 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "    compile_check() to catch typos, then check_python_import() to\n"
         "    catch load-time errors syntax checking alone would miss.\n"
         "  Rationale: re-embedding on every write deadlocked the HTTP server\n"
-        "  on large files; explicit end-of-session reindex avoids that.\n\n"
+        "  on large files; explicit end-of-session reindex avoids that.\n"
+        "  Server mode: create_file/write_file/str_replace_in_file/\n"
+        "  fuzzy_replace_in_file/line_replace_in_file/create_directory are\n"
+        "  scoped to the caller's own personal directory (blocked entirely if\n"
+        "  they don't have one) — see the THIS CONNECTION footer below for\n"
+        "  this specific caller's status. reset_write_counter() and\n"
+        "  restore_backup() are NOT available in server mode. reindex_file/\n"
+        "  reindex_directory/reindex_all are owner/manager only there.\n\n"
 
         "DEV TOOLS — VERIFY CODE WITHOUT LEAVING THE CONVERSATION\n"
         + "-" * 30 + "\n"
@@ -936,7 +992,9 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "                                  to syntax_check, which has no lint tool\n"
         "  run_script(path)             — execute a script, return its output\n"
         "  run_script_start / _status / _kill — background job runner for\n"
-        "                                  long-running scripts (tests, builds)\n\n"
+        "                                  long-running scripts (tests, builds)\n"
+        "  Server mode: NONE of these dev tools are available to any role —\n"
+        "  code execution and static-analysis tools are personal-install-only.\n\n"
 
         "COMMUNICATIONS — EMAIL, SMS, WHATSAPP\n"
         + "-" * 30 + "\n"
@@ -1080,25 +1138,11 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "    Check whether tools whose names contain 'quickbooks' or 'qbo'\n"
         "    are in your available tool list. If yes, use QuickBooks as the\n"
         "    primary financial source. If no, use AI-Prowler Job Tracker tools.\n\n"
+        "  Server mode: get_pending_analysis_tasks, complete_analysis_task,\n"
+        "  and save_analysis_report are NOT available to any role — the\n"
+        "  Quick Links tab that queues this workflow is a personal-install-\n"
+        "  only GUI feature.\n\n"
 
-        "JOB IMAGE WORKFLOW\n"
-        + "-" * 30 + "\n"
-        "When a user uploads a photo and asks to save it to a job:\n\n"
-
-        "  1. User uploads image in the Claude chat\n"
-        "  2. Encode image as base64 (strip 'data:image/...;base64,' prefix if present)\n"
-        "  3. Call save_job_image(job_id, filename, image_base64, description, tags)\n"
-        "     job_id matches the JobID in the Job Tracker spreadsheet.\n"
-        "     tags is comma-separated (e.g. 'before,gutters,blocked').\n"
-        "     media_type defaults to 'image/jpeg' — set 'image/heic' for iPhone photos.\n"
-        "  4. The image is saved to ~/Documents/AI-Prowler_job_images/<job_id>/\n"
-        "     with a timestamp prefix. A sidecar index.json stores metadata.\n\n"
-
-        "  To retrieve images for a job: list_job_images(job_id)\n"
-        "    Returns metadata only — not pixel data. Images cannot be re-shown\n"
-        "    to Claude without the user re-uploading the file.\n"
-        "    Tell the user: 'To see this image, please re-upload the file at:\n"
-        "    [path shown in list_job_images result]'\n\n"
 
         "PROACTIVE ALERTS (background scheduler — no Claude needed)\n"
         + "-" * 30 + "\n"
@@ -1134,12 +1178,24 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "AI-Prowler Agentic RAG ready."
     )
 
+    # The main guide above is IDENTICAL regardless of mode or connector — this
+    # is deliberate, not an oversight. In a conversation with two connectors
+    # (a personal install AND a company server both attached), a guide that
+    # varied per-connector risked Claude conflating "not available on THIS
+    # connector" with "doesn't exist in AI-Prowler at all," and misapplying
+    # one connector's limitations to the other. Every tool is described here,
+    # on every connector; the "THIS CONNECTION" footer below is the ONE place
+    # that varies, clearly labeled as being about this specific connection —
+    # server-mode caveats for dev tools, code-aware retrieval, file editing,
+    # etc. are inline in their sections above instead of removing them.
+
     # ── THIS CONNECTION — computed live from the real role-gate tables ──────────
     # Tells Claude exactly what's true for the connector this call was made on,
     # so when both a personal install and a company server are connected in the
     # same conversation, each one's how_to_use_ai_prowler() call reports its own
     # situation rather than a generic description Claude has to mentally apply.
-    _user = _current_user(ctx)
+    # (_user already computed above, before base_text, so the main guide body
+    # could also be dynamically trimmed.)
     footer_lines = ["", "─" * 50, "", "THIS CONNECTION", "─" * 30]
 
     if _user is None:
@@ -1167,6 +1223,15 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
             footer_lines.append("     only; shared-collection and destructive operations are blocked.")
         else:
             footer_lines.append("  ⛔ Not available to your role — ask an owner or manager.")
+
+        footer_lines.append("")
+        footer_lines.append("File editing (create_file, write_file, str_replace_in_file,")
+        footer_lines.append("fuzzy_replace_in_file, line_replace_in_file, create_directory):")
+        if _htu_priv_status == "scoped":
+            footer_lines.append(f"  ✅ Scoped to your personal directory: {_htu_priv_dir}")
+        else:
+            footer_lines.append("  ⛔ Not available — no personal directory configured.")
+            footer_lines.append("     Ask your owner/admin to set one up in the Admin tab.")
 
         footer_lines.append("")
         footer_lines.append("Email / SMS / WhatsApp:")
@@ -1317,6 +1382,19 @@ def index_path(
                     `update_tracked_directories` calls will pick up changes
                     (default True).
 
+    Server mode role gating:
+        Owner / manager — index anywhere, routed per the company's
+        collection_map rules.
+        Staff — index into their own scopes/private collection per
+        collection_map / index_target.
+        Field_crew (or any role with no manage_db capability) — indexing is
+        allowed ONLY if the user has a private collection configured, and
+        ONLY for paths inside their own personal directory. Content always
+        lands in their own user:<id> collection regardless of any company
+        path→scope rule, and becomes semantically searchable to them (and
+        the owner) via search_documents like anything else they've indexed.
+        Users with no private collection set up cannot index at all.
+
     Returns:
         Summary of how many files were indexed and any errors encountered.
     """
@@ -1334,12 +1412,45 @@ def index_path(
     #   • purge_gate  — blocks overwriting/destroying chunks the user doesn't own.
     _user = _current_user(ctx)
 
-    # v7.0.1 Q1: staff or above required; field_crew cannot index.
+    # v7.0.1 Q1: staff or above required; field_crew cannot index — UNLESS
+    # they (or any role with manage_db='none') have a private collection set
+    # up, in which case indexing is allowed but strictly confined: the target
+    # path must resolve inside their own personal directory, and every chunk
+    # is force-routed to their own user:<id> collection regardless of any
+    # company path→scope rule. Mirrors the personal-directory write-scoping
+    # gate — same "own area only, or nothing" pattern, applied to indexing.
     _db_ok, _db_reason = _check_db_cap(_user, "limited")
+    _private_only_index = False
+    if not _db_ok and _user is not None:
+        _priv_status, _priv_dir = _user_private_write_dir(ctx)
+        if _priv_status == "scoped":
+            _resolved_target = str(target.resolve())
+            if not _path_is_under(_resolved_target, str(_priv_dir)):
+                return (
+                    f"⛔ index_path: your role has no DB-management "
+                    f"permissions, and this path is outside your personal "
+                    f"directory ({_priv_dir}). You may only index files "
+                    f"inside your own personal directory."
+                )
+            _db_ok = True
+            _private_only_index = True
+            _db_reason = (
+                f"role '{_user.get('role')}' has no manage_db capability, "
+                "but has a private collection set up — indexing allowed, "
+                "confined to their own personal directory and collection"
+            )
     if not _db_ok:
         return f"⛔ index_path: {_db_reason}"
 
-    _resolver = _build_collection_resolver(_user) if _user else None
+    if _private_only_index:
+        # Force every chunk into the caller's own private collection —
+        # bypass company path→scope rules and index_target defaults
+        # entirely, so this narrower grant can never land content anywhere
+        # but the user's own private space.
+        _own_logical_collection = f"user:{_user['id']}"
+        _resolver = lambda _fp, _c=_own_logical_collection: _c
+    else:
+        _resolver = _build_collection_resolver(_user) if _user else None
     _indexer_user = _user
     _purge_gate = None
     if _user:
@@ -1466,6 +1577,13 @@ def get_database_stats(ctx: Context = None) -> str:
     Return statistics about the indexed knowledge base: total chunk count,
     number of unique documents, breakdown by file type, and database location.
 
+    Personal mode: always covers the entire database (unchanged).
+
+    Server mode: scoped to the caller's accessible collections — owners (and
+    managers with read_all_role_scopes) still see the full company-wide
+    total; staff and field_crew see only their own private, assigned scope,
+    and shared collections, matching every other read tool.
+
     Returns:
         A formatted statistics report.
     """
@@ -1474,22 +1592,41 @@ def get_database_stats(ctx: Context = None) -> str:
     # MCP pipe and must never be redirected) and HTTP mode.
     try:
         from rag_preprocessor import CHROMA_DB_PATH, get_chroma_client
-        try:
-            # Fix v7.0.1: always enumerate ALL collections via list_collections()
-            # so the count matches check_ai_prowler_status exactly regardless of
-            # edition or mode. _scoped_collections_for_ctx(ctx) in personal mode
-            # (ctx=None) only returns the single default 'documents' collection,
-            # missing any scoped collections written by Business Server mode.
-            client, embedding_func = get_chroma_client()
-            all_cols = client.list_collections()
-            if not all_cols:
+
+        user = _current_user(ctx)
+        scoped_note = ""
+
+        if user is None:
+            # Personal mode — unchanged. Fix v7.0.1: always enumerate ALL
+            # collections via list_collections() so the count matches
+            # check_ai_prowler_status exactly regardless of edition or mode.
+            # _scoped_collections_for_ctx(ctx) in personal mode only returns
+            # the single default 'documents' collection, missing any scoped
+            # collections left over from switching to/from Business Server.
+            try:
+                client, embedding_func = get_chroma_client()
+                all_cols = client.list_collections()
+                if not all_cols:
+                    return "📭 Database is empty or not yet created."
+                _collections = [
+                    client.get_collection(name=col.name, embedding_function=embedding_func)
+                    for col in all_cols
+                ]
+            except RuntimeError:
                 return "📭 Database is empty or not yet created."
-            _collections = [
-                client.get_collection(name=col.name, embedding_function=embedding_func)
-                for col in all_cols
-            ]
-        except RuntimeError:
-            return "📭 Database is empty or not yet created."
+        else:
+            # Server mode: scope to exactly what this caller can read — the
+            # same function search_documents()/get_knowledge_base_overview()
+            # already use, instead of a raw company-wide list_collections()
+            # enumeration. Owners (and managers with read_all_role_scopes)
+            # still see the full company-wide total via their real
+            # entitlement inside _scoped_collections_for_ctx(); staff and
+            # field_crew see only their own private + assigned scopes +
+            # shared collections, matching every other read tool.
+            _collections = _scoped_collections_for_ctx(ctx)
+            if not _collections:
+                return "📭 Database is empty or not yet created."
+            scoped_note = "  (scoped to your accessible collections)"
 
         total_chunks = 0
         metadatas = []
@@ -1512,7 +1649,7 @@ def get_database_stats(ctx: Context = None) -> str:
                 ext_counts[ext] = ext_counts.get(ext, 0) + 1
 
         lines = [
-            "📊 AI-Prowler Database Statistics",
+            f"📊 AI-Prowler Database Statistics{scoped_note}",
             "─" * 40,
             f"  Total chunks     : {total_chunks:,}",
             f"  Unique documents : {len(unique_files):,}",
@@ -1535,7 +1672,7 @@ def get_database_stats(ctx: Context = None) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
-def list_tracked_directories() -> str:
+def list_tracked_directories(ctx: "Context | None" = None) -> str:
     """
     List all paths (directories AND individually-tracked files) currently
     registered for auto-update tracking.
@@ -1543,9 +1680,22 @@ def list_tracked_directories() -> str:
     Each entry is annotated with its type — 📁 for directories, 📄 for files —
     so it's clear which entries are watched as folders vs. as single files.
 
+    Server mode: owner or manager only — same gate as untrack_directory and
+    update_tracked_directories, the two other tools this list is meant to
+    support. The raw tracked-paths list is company-wide administrative
+    information (including paths belonging to other employees' private
+    collections), not something staff/field_crew need for their own work.
+
     Returns:
         A formatted list of tracked paths, or a message if none are registered.
     """
+    # Owner/manager only — mirrors untrack_directory's gate exactly, since
+    # this tool exists to support that same tracking-administration workflow.
+    _ltd_user = _current_user(ctx)
+    _ltd_ok, _ltd_reason = _check_db_cap(_ltd_user, "full")
+    if not _ltd_ok:
+        return f"⛔ list_tracked_directories: {_ltd_reason}"
+
     dirs = load_auto_update_list()
     if not dirs:
         return (
@@ -1607,10 +1757,20 @@ def untrack_directory(directory: str, ctx: Context = None) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
-def check_ai_prowler_status() -> str:
+def check_ai_prowler_status(ctx: "Context | None" = None) -> str:
     """
     Check AI-Prowler's health: ChromaDB connectivity, embedding model status,
     document count, and database path. No Ollama or local LLM involved.
+
+    The chunk count and connectivity summary are always company-wide (a basic
+    "is the server alive" signal, not a data-browsing result) — this is
+    unchanged in server mode for any role.
+
+    The tracked-paths list, however, reveals internal folder/file names —
+    real information, not just a health signal — so in server mode it's
+    shown only to owner/manager (same gate as list_tracked_directories).
+    Staff/field_crew still see the chunk count and health status; the
+    tracked-paths section is simply omitted for them.
 
     Returns:
         A diagnostic status report for the Agentic RAG knowledge base.
@@ -1711,27 +1871,37 @@ def check_ai_prowler_status() -> str:
         lines.append("   Once indexed, search_documents and friends will return real results.")
 
     # ── Tracked paths (directories + individually-tracked files) ─────────────
-    try:
-        from rag_preprocessor import load_auto_update_list
-        tracked = load_auto_update_list() or []
-        n_files = sum(1 for p in tracked if Path(p).is_file())
-        n_dirs  = sum(1 for p in tracked if Path(p).is_dir())
-        lines.append("")
-        suffix_parts = []
-        if n_dirs:  suffix_parts.append(f"{n_dirs} dir(s)")
-        if n_files: suffix_parts.append(f"{n_files} file(s)")
-        suffix = f" ({', '.join(suffix_parts)})" if suffix_parts else ""
-        lines.append(f"📁 Tracked paths : {len(tracked)}{suffix}")
-        for d in tracked[:5]:
-            try:
-                icon = "📄" if Path(d).is_file() else ("📁" if Path(d).exists() else "❓")
-            except Exception:
-                icon = "❓"
-            lines.append(f"   {icon} {d}")
-        if len(tracked) > 5:
-            lines.append(f"   ... and {len(tracked) - 5} more")
-    except Exception:
-        pass
+    # Server mode: owner/manager only — same gate as list_tracked_directories.
+    # The chunk count above is a health signal; this list is real internal
+    # folder/file names, so staff/field_crew don't see it here.
+    _cas_user = _current_user(ctx)
+    _cas_show_paths = True
+    if _cas_user is not None:
+        _cas_full_access, _ = _check_db_cap(_cas_user, "full")
+        _cas_show_paths = _cas_full_access
+
+    if _cas_show_paths:
+        try:
+            from rag_preprocessor import load_auto_update_list
+            tracked = load_auto_update_list() or []
+            n_files = sum(1 for p in tracked if Path(p).is_file())
+            n_dirs  = sum(1 for p in tracked if Path(p).is_dir())
+            lines.append("")
+            suffix_parts = []
+            if n_dirs:  suffix_parts.append(f"{n_dirs} dir(s)")
+            if n_files: suffix_parts.append(f"{n_files} file(s)")
+            suffix = f" ({', '.join(suffix_parts)})" if suffix_parts else ""
+            lines.append(f"📁 Tracked paths : {len(tracked)}{suffix}")
+            for d in tracked[:5]:
+                try:
+                    icon = "📄" if Path(d).is_file() else ("📁" if Path(d).exists() else "❓")
+                except Exception:
+                    icon = "❓"
+                lines.append(f"   {icon} {d}")
+            if len(tracked) > 5:
+                lines.append(f"   ... and {len(tracked) - 5} more")
+        except Exception:
+            pass
 
     lines.append("")
     lines.append("✅ AI-Prowler Agentic RAG ready." if db_ok else "⚠️  Knowledge base unavailable.")
@@ -1979,6 +2149,18 @@ def get_knowledge_base_overview(ctx: Context = None) -> str:
             dir_counts[tree_key].add(fp)
 
     tracked_dirs = load_auto_update_list() or []
+
+    # Server mode: only show tracked directories that actually contributed at
+    # least one chunk visible in this caller's scoped collections. The raw
+    # global list would otherwise leak every tracked path company-wide to
+    # every role — including directories the caller has no read access to —
+    # even though every other section of this report is properly scoped.
+    if _current_user(ctx) is not None and tracked_dirs:
+        visible_paths = list(unique_files.keys())
+        tracked_dirs = [
+            d for d in tracked_dirs
+            if any(_path_is_under(fp, d) for fp in visible_paths)
+        ]
 
     lines = [
         "AI-Prowler Knowledge Base Overview",
@@ -3282,11 +3464,81 @@ def _get_default_spreadsheet_path() -> str:
         _cfg_path = Path.home() / '.ai-prowler' / 'config.json'
         if _cfg_path.exists():
             import json as _jcfg
-            cfg = _jcfg.loads(_cfg_path.read_text(encoding='utf-8'))
+            cfg = _jcfg.loads(_cfg_path.read_text(encoding='utf-8-sig'))
             return cfg.get('default_spreadsheet_path', '').strip()
     except Exception as _e:
         _log.warning("Could not read default_spreadsheet_path from config: %s", _e)
     return ''
+
+
+# Serialises every job-spreadsheet WRITE (update_job_spreadsheet,
+# schedule_next_recurring_job, log_time_entry) so two concurrent server-mode
+# users calling a write tool at the same moment queue up instead of racing —
+# openpyxl has no file locking of its own: load-modify-save is a full
+# read-then-overwrite cycle, so two interleaved saves would silently drop
+# whichever one finished first. Mirrors _index_write_lock's role for
+# ChromaDB writes in rag_preprocessor.py. Read-only tools (read_job_spreadsheet,
+# email_invoice, get_ar_aging_report) do not need the lock.
+import threading as _sheet_threading
+_spreadsheet_write_lock = _sheet_threading.RLock()
+
+
+def _resolve_job_spreadsheet_path(ctx, filepath_arg: str = "") -> str:
+    """
+    Resolve which .xlsx file a job-spreadsheet tool should use.
+
+    Personal mode (ctx has no user): unchanged from all prior versions —
+    an explicit filepath_arg is honored exactly as given; otherwise falls
+    back to the configured default_spreadsheet_path. Full flexibility,
+    exactly like every version before this function existed.
+
+    Server mode: filepath_arg is IGNORED — every role's tool call resolves
+    through the shared default_spreadsheet_path (Settings -> Business ->
+    Default Spreadsheet Path) instead. This closes a real gap: previously
+    any server-mode role could point these tools at an arbitrary .xlsx file
+    anywhere on the host with zero access control.
+
+    Within that, two models, both driven by the SAME single config value:
+      - default_spreadsheet_path points at an .xlsx file that exists ->
+        that IS the master file (today's behaviour, unchanged). Every
+        role reads/writes that one shared spreadsheet.
+      - The calling user has their OWN per-user file sitting in the same
+        folder as default_spreadsheet_path, named exactly "<user_id>.xlsx"
+        -> that takes priority over the master file for THIS user only.
+        If no such file exists, falls back to the master file above.
+
+    A manager sets up per-user tracking simply by dropping "jake-r.xlsx",
+    "vicki-vavro.xlsx" etc. into the same folder as the master spreadsheet
+    (whatever filename was chosen via the Business tab's Browse button —
+    defaults to AI-Prowler_Job_Tracker.xlsx on a fresh install). No
+    separate config field is needed; the folder is simply
+    dirname(default_spreadsheet_path).
+    """
+    user = _current_user(ctx)
+    default_path = _get_default_spreadsheet_path()
+
+    if user is None:
+        # Personal mode: unrestricted, exactly as before this feature existed.
+        if filepath_arg:
+            return filepath_arg
+        return default_path
+
+    # Server mode: filepath_arg is ignored from here on.
+    if not default_path:
+        return ""
+
+    user_id = (user.get("id") or "").strip()
+    if user_id:
+        try:
+            folder = os.path.dirname(default_path)
+            if folder:
+                candidate = os.path.join(folder, f"{user_id}.xlsx")
+                if os.path.exists(candidate):
+                    return candidate
+        except Exception:
+            pass
+
+    return default_path
 
 
 def _backup_spreadsheet(fp: str, keep_days: int = 30) -> str:
@@ -3344,6 +3596,7 @@ def update_job_spreadsheet(
     id_column:      str = "Customer",
     sheet_name:     str = "",
     backup:         bool = True,
+    ctx: "Context | None" = None,
 ) -> str:
     """
     Update a row in a job tracking spreadsheet after a job is completed.
@@ -3392,8 +3645,7 @@ def update_job_spreadsheet(
         return "❌ openpyxl not installed. Run: pip install openpyxl"
 
     # Resolve filepath — use default from config if not supplied
-    if not filepath:
-        filepath = _get_default_spreadsheet_path()
+    filepath = _resolve_job_spreadsheet_path(ctx, filepath)
     if not filepath:
         return (
             "❌ No spreadsheet path provided and no default path configured.\n"
@@ -3421,82 +3673,86 @@ def update_job_spreadsheet(
                 "Spreadsheet was NOT modified. Fix the backup issue or pass backup=False to skip."
             )
 
-    try:
-        wb = _opx.load_workbook(fp)
-    except Exception as exc:
-        return f"❌ Could not open spreadsheet: {exc}"
+    # Serialise the whole load -> modify -> save cycle so two concurrent
+    # server-mode writers can never interleave and silently drop each
+    # other's changes (openpyxl has no file locking of its own).
+    with _spreadsheet_write_lock:
+        try:
+            wb = _opx.load_workbook(fp)
+        except Exception as exc:
+            return f"❌ Could not open spreadsheet: {exc}"
 
-    ws = (wb[sheet_name] if sheet_name and sheet_name in wb.sheetnames
-          else wb.active)
+        ws = (wb[sheet_name] if sheet_name and sheet_name in wb.sheetnames
+              else wb.active)
 
-    # ── Detect header row (skip title/banner rows, same logic as read tool) ───
-    # Scans the first 5 rows and uses the first row that has ≥ 3 non-empty
-    # cells as the real header row.  This handles decorative title rows like
-    # "📅 JOBS & SCHEDULE — All Service Appointments" in row 1.
-    header_row_num: int | None = None
-    headers: dict[str, int] = {}
-    for r in ws.iter_rows(min_row=1, max_row=5):
-        non_empty = [c for c in r if c.value is not None]
-        if len(non_empty) >= 3:
-            header_row_num = r[0].row
-            for col_idx, cell in enumerate(r, 1):
-                if cell.value is not None:
-                    raw = str(cell.value).strip()
-                    headers[raw] = col_idx
-                    # Register a newline-normalised alias so callers can pass
-                    # either "Job\nStatus" or "Job Status" and both resolve.
-                    normalised = raw.replace('\n', ' ')
-                    if normalised != raw:
-                        headers.setdefault(normalised, col_idx)
-            break
+        # ── Detect header row (skip title/banner rows, same logic as read tool) ───
+        # Scans the first 5 rows and uses the first row that has ≥ 3 non-empty
+        # cells as the real header row.  This handles decorative title rows like
+        # "📅 JOBS & SCHEDULE — All Service Appointments" in row 1.
+        header_row_num: int | None = None
+        headers: dict[str, int] = {}
+        for r in ws.iter_rows(min_row=1, max_row=5):
+            non_empty = [c for c in r if c.value is not None]
+            if len(non_empty) >= 3:
+                header_row_num = r[0].row
+                for col_idx, cell in enumerate(r, 1):
+                    if cell.value is not None:
+                        raw = str(cell.value).strip()
+                        headers[raw] = col_idx
+                        # Register a newline-normalised alias so callers can pass
+                        # either "Job\nStatus" or "Job Status" and both resolve.
+                        normalised = raw.replace('\n', ' ')
+                        if normalised != raw:
+                            headers.setdefault(normalised, col_idx)
+                break
 
-    if header_row_num is None or not headers:
-        return (
-            "❌ Could not detect a header row in the spreadsheet.\n"
-            "Expected a row with at least 3 non-empty cells in the first 5 rows."
-        )
+        if header_row_num is None or not headers:
+            return (
+                "❌ Could not detect a header row in the spreadsheet.\n"
+                "Expected a row with at least 3 non-empty cells in the first 5 rows."
+            )
 
-    if id_column not in headers:
-        avail = [k for k in headers.keys() if '\n' not in k][:15]
-        return (
-            f"❌ Column '{id_column}' not found in headers (detected on row {header_row_num}).\n"
-            f"Available columns: {', '.join(avail)}"
-        )
+        if id_column not in headers:
+            avail = [k for k in headers.keys() if '\n' not in k][:15]
+            return (
+                f"❌ Column '{id_column}' not found in headers (detected on row {header_row_num}).\n"
+                f"Available columns: {', '.join(avail)}"
+            )
 
-    id_col_idx = headers[id_column]
+        id_col_idx = headers[id_column]
 
-    # ── Find matching row ─────────────────────────────────────────────────────
-    found_row = None
-    for row in ws.iter_rows(min_row=header_row_num + 1):
-        cell_val = row[id_col_idx - 1].value
-        if cell_val and job_identifier.lower() in str(cell_val).lower():
-            found_row = row
-            break
+        # ── Find matching row ─────────────────────────────────────────────────────
+        found_row = None
+        for row in ws.iter_rows(min_row=header_row_num + 1):
+            cell_val = row[id_col_idx - 1].value
+            if cell_val and job_identifier.lower() in str(cell_val).lower():
+                found_row = row
+                break
 
-    if found_row is None:
-        return (
-            f"❌ No row found where {id_column} contains '{job_identifier}'.\n"
-            "Check the spelling — partial matches are accepted."
-        )
+        if found_row is None:
+            return (
+                f"❌ No row found where {id_column} contains '{job_identifier}'.\n"
+                "Check the spelling — partial matches are accepted."
+            )
 
-    # ── Apply updates ─────────────────────────────────────────────────────────
-    updated:    list[str] = []
-    not_found:  list[str] = []
+        # ── Apply updates ─────────────────────────────────────────────────────────
+        updated:    list[str] = []
+        not_found:  list[str] = []
 
-    for col_name, new_val in updates.items():
-        if col_name in headers:
-            found_row[headers[col_name] - 1].value = new_val
-            updated.append(f"{col_name} → {new_val}")
-        else:
-            not_found.append(col_name)
+        for col_name, new_val in updates.items():
+            if col_name in headers:
+                found_row[headers[col_name] - 1].value = new_val
+                updated.append(f"{col_name} → {new_val}")
+            else:
+                not_found.append(col_name)
 
-    # ── Save ──────────────────────────────────────────────────────────────────
-    try:
-        wb.save(fp)
-    except Exception as exc:
-        return f"❌ Could not save spreadsheet: {exc}"
+        # ── Save ──────────────────────────────────────────────────────────────────
+        try:
+            wb.save(fp)
+        except Exception as exc:
+            return f"❌ Could not save spreadsheet: {exc}"
 
-    row_num = found_row[0].row
+        row_num = found_row[0].row
     lines   = [
         f"✅ Spreadsheet updated: {os.path.basename(fp)}",
         f"   Row:     {row_num}  ({id_column}: {job_identifier})",
@@ -3525,6 +3781,7 @@ def read_job_spreadsheet(
     sheet_name:  str = "",
     filter_date: str = "",
     max_rows:    int = 200,
+    ctx: "Context | None" = None,
 ) -> str:
     """
     Read job data from the AI-Prowler job tracking spreadsheet.
@@ -3566,8 +3823,7 @@ def read_job_spreadsheet(
     except ImportError:
         return "❌ openpyxl not installed. Run: pip install openpyxl"
 
-    if not filepath:
-        filepath = _get_default_spreadsheet_path()
+    filepath = _resolve_job_spreadsheet_path(ctx, filepath)
     if not filepath:
         return (
             "❌ No spreadsheet path provided and no default path configured.\n"
@@ -3839,7 +4095,7 @@ def check_tools_status(ctx: "Context | None" = None) -> str:
         f"     Reads Invoices sheet, sends branded HTML invoice via SMTP",
         f"     {xl_status}",
         "",
-        f"  {'✅' if opx_ok else '❌'} schedule_next_recurring_job(job_id, filepath?)",
+        f"  {'✅' if opx_ok else '❌'} schedule_next_recurring_job(job_id, filepath?, when?)",
         f"     Auto-creates next job based on customer frequency (W/BW/M/Q)",
         "",
         f"  {'✅' if opx_ok else '❌'} log_time_entry(job_id, action, filepath?)",
@@ -3895,28 +4151,77 @@ def check_tools_status(ctx: "Context | None" = None) -> str:
     lines += [
         "─" * 50,
         "",
-        "DEV TOOLS & FILE EDITING  (always available — no setup required):",
-        "",
-        "  ✅ syntax_check / compile_check / check_python_import / lint_check",
-        "     Verify code without leaving the conversation.",
-        "",
-        "  ✅ run_script / run_script_start / run_script_status / run_script_kill",
-        "     Execute scripts synchronously or as a tracked background job.",
-        "",
-        "  ✅ create_file / write_file / str_replace_in_file / fuzzy_replace_in_file /",
-        "     line_replace_in_file / create_directory / list_directory",
-        "     Edit files on disk under a tracked, writable directory.",
-        "",
-        "  ✅ copy_to_backup / list_backups / restore_backup / cleanup_backups",
-        "     Every write auto-backs up first — these tools manage that history.",
-        "",
-        "  ✅ diff_files / reset_write_counter",
-        "     Compare two files; reset the per-session write circuit breaker.",
-        "",
-        "  💡 Write tools do NOT auto-index — call reindex_file(path) once you're",
-        "     done editing a file so ChromaDB reflects the new content.",
+        "DEV TOOLS & FILE EDITING:",
         "",
     ]
+
+    # Server mode: most dev tools are Tier A suppressed entirely, and the
+    # write/edit tools are scoped to the caller's own personal directory —
+    # neither is "always available, no setup" the way personal mode is.
+    # Check the CALLING user's actual status so this report is accurate
+    # per-caller, not a blanket claim.
+    _cts_user = _current_user(ctx)
+
+    if _cts_user is None:
+        # Personal mode — unchanged from every version before this fix.
+        lines += [
+            "  ✅ syntax_check / compile_check / check_python_import / lint_check",
+            "     Verify code without leaving the conversation.",
+            "",
+            "  ✅ run_script / run_script_start / run_script_status / run_script_kill",
+            "     Execute scripts synchronously or as a tracked background job.",
+            "",
+            "  ✅ create_file / write_file / str_replace_in_file / fuzzy_replace_in_file /",
+            "     line_replace_in_file / create_directory / list_directory",
+            "     Edit files on disk under a tracked, writable directory.",
+            "",
+            "  ✅ copy_to_backup / list_backups / restore_backup / cleanup_backups",
+            "     Every write auto-backs up first — these tools manage that history.",
+            "",
+            "  ✅ diff_files / reset_write_counter",
+            "     Compare two files; reset the per-session write circuit breaker.",
+            "",
+            "  💡 Write tools do NOT auto-index — call reindex_file(path) once you're",
+            "     done editing a file so ChromaDB reflects the new content.",
+            "",
+        ]
+    else:
+        # Server mode — accurate per-tool, per-caller status.
+        _cts_priv_status, _cts_priv_dir = _user_private_write_dir(ctx)
+        if _cts_priv_status == "scoped":
+            _cts_write_line = f"✅ Scoped to your personal directory: {_cts_priv_dir}"
+        else:
+            _cts_write_line = ("⚠️  Not available — no personal directory configured. "
+                               "Ask your owner/admin to set one up in the Admin tab.")
+
+        lines += [
+            "  ❌ syntax_check / compile_check / check_python_import / lint_check",
+            "     Not available in server mode — personal-install tools only.",
+            "",
+            "  ❌ run_script / run_script_start / run_script_status / run_script_kill",
+            "     Not available in server mode — personal-install tools only.",
+            "",
+            "  create_file / write_file / str_replace_in_file / fuzzy_replace_in_file /",
+            "  line_replace_in_file / create_directory",
+            f"     {_cts_write_line}",
+            "",
+            "  ❌ list_directory",
+            "     Not available in server mode — personal-install tool only.",
+            "",
+            "  ❌ copy_to_backup / list_backups / restore_backup / cleanup_backups /",
+            "     reset_write_counter",
+            "     Not available in server mode — backup/write-zone management is",
+            "     operator-only.",
+            "",
+            "  ✅ diff_files",
+            "     Compare two files — available to every role, scoped to files",
+            "     you're allowed to read.",
+            "",
+            "  💡 Write tools do NOT auto-index — ask an owner/manager to call",
+            "     reindex_file(path) (owner/manager only in server mode) once",
+            "     editing is done.",
+            "",
+        ]
 
     lines += [
         "─" * 50,
@@ -3967,8 +4272,7 @@ def email_invoice(
     except ImportError:
         return "❌ openpyxl not installed. Run: pip install openpyxl"
 
-    if not filepath:
-        filepath = _get_default_spreadsheet_path()
+    filepath = _resolve_job_spreadsheet_path(ctx, filepath)
     if not filepath:
         return "❌ No spreadsheet path configured. Set one in Settings → Small Business."
 
@@ -4236,9 +4540,11 @@ def save_contact(
     _sc_user = _current_user(ctx)
     rec = _contact_save(name, phone=phone, email=email, user=_sc_user)
 
-    cache_file = (f"contacts_cache_{(_sc_user.get('username') or _sc_user.get('name') or 'me').lower()}.json"
-                  if _sc_user is not None
-                  else 'contacts_cache.json')
+    # Report the ACTUAL filename the record was saved to — reuse
+    # _CONTACTS_CACHE_PATH() itself rather than recomputing the filename
+    # with separate (and previously mismatched) logic, which could show a
+    # different, unsanitised filename than where the data really landed.
+    cache_file = _CONTACTS_CACHE_PATH(_sc_user).name
 
     lines = [f"✅ Contact saved: {name.strip()}"]
     if rec.get('phone'):
@@ -4389,7 +4695,7 @@ def send_sms(
         _full_cfg: dict = {}
         if _cfg_path.exists():
             import json as _jcfg
-            _full_cfg = _jcfg.loads(_cfg_path.read_text(encoding='utf-8'))
+            _full_cfg = _jcfg.loads(_cfg_path.read_text(encoding='utf-8-sig'))
         _sig = _full_cfg.get('sms_callback_signature', '').strip()
         if _sig and _sig not in message:
             message = f"{message.rstrip()}\n{_sig}"
@@ -4603,6 +4909,12 @@ def get_sms_thread(
     chronological order — like a phone's message history.
     Works for both SMS and WhatsApp.
 
+    Server mode: only returns the thread if YOU are the one who last
+    sent to this contact — otherwise another employee's conversation
+    with the same contact would be visible to anyone who just knows or
+    guesses their name/number, since threads are keyed by phone number
+    company-wide, not per employee.
+
     Args:
         contact:     Contact name or phone number (any format).
         since_hours: How far back to include replies (default 168 = 7 days).
@@ -4628,6 +4940,20 @@ def get_sms_thread(
             f"📭 No SMS thread found for '{contact}'.\n\n"
             f"Start a conversation: \"Text {contact} that we're on our way\""
         )
+
+    # Server mode: only show this thread if the caller is the one who
+    # last sent to this contact. Threads are keyed by phone number alone
+    # (not per employee), so without this check any role could pull up
+    # a different employee's conversation just by naming the contact.
+    _gst_user = _current_user(ctx)
+    if _gst_user is not None:
+        _gst_uid = _gst_user.get('id', '')
+        if conv.get('last_sent_by') != _gst_uid:
+            return (
+                f"📭 No SMS/WhatsApp thread found for '{contact}' that you "
+                f"personally sent to. (A thread with this contact may exist "
+                f"for a different team member.)"
+            )
 
     msgs  = conv.get('messages', [])
     name  = conv.get('contact_name', contact)
@@ -4662,6 +4988,11 @@ def list_sms_contacts_with_replies(
     Shows who you've been in contact with, reply counts, and how many
     are unread — like a conversations list on your phone.
 
+    Server mode: scoped to threads YOU personally sent — Mike sees only
+    his own conversation list, not Karen's or Jake's. A brand-new user
+    with no thread history yet sees everything until they've sent their
+    first message, matching check_sms_replies' identical fallback.
+
     Args:
         since_hours: How far back to include (default 168 = 7 days).
         ctx:         MCP context (injected automatically).
@@ -4682,6 +5013,21 @@ def list_sms_contacts_with_replies(
         return f"❌ SMS inbox module not found: {_ie}"
 
     threads = sms_active_threads(since_hours=since_hours)
+
+    # Server mode: scope to threads THIS user has sent to — same ownership
+    # check sms_inbox_read_for_user() already uses for check_sms_replies
+    # (last_sent_by == user_id). Without this, any role — including
+    # field_crew — would see every active SMS conversation company-wide.
+    # New user with no thread history yet: fall back to showing everything,
+    # matching sms_inbox_read_for_user()'s identical fallback so both tools
+    # behave consistently for a brand-new employee.
+    _user = _current_user(ctx)
+    if _user is not None:
+        _uid = _user.get("id", "")
+        _own_threads = [t for t in threads if t.get("last_sent_by") == _uid]
+        if _own_threads:
+            threads = _own_threads
+
     if not threads:
         return f"📭 No SMS activity in the last {since_hours:.0f} hours."
 
@@ -4787,6 +5133,10 @@ def check_whatsapp_replies(
     Reads from the local inbox (populated by /whatsapp-webhook) —
     instant, no API call. Shows only WhatsApp messages, not SMS.
 
+    Server mode: scoped to threads YOU personally sent — same per-user
+    isolation as check_sms_replies. Mike sees Karen's WhatsApp reply,
+    not Jake's.
+
     Args:
         since_hours: How far back to look (default 24).
         from_number: Filter to one contact (number or name).
@@ -4801,13 +5151,53 @@ def check_whatsapp_replies(
     """
     _telemetry_increment_tool_count("check_whatsapp_replies")
 
-    return check_sms_inbox(
-        since_hours = since_hours,
-        from_number = from_number,
-        unread_only = False,
-        provider    = 'whatsapp',
-        ctx         = ctx,
-    )
+    try:
+        from sms_inbox import sms_inbox_read, sms_inbox_read_for_user
+    except ImportError as _ie:
+        return f"❌ SMS inbox module not found: {_ie}"
+
+    _wr_user    = _current_user(ctx)
+    _wr_user_id = (_wr_user or {}).get('id', 'personal') if _wr_user else 'personal'
+
+    # Server mode: scope to threads THIS user has sent to — same ownership
+    # check check_sms_replies() already uses. Closes a bypass where this
+    # tool previously called check_sms_inbox() directly (a plain Python
+    # function call that skips MCP-level Tier A suppression entirely),
+    # giving every role an unscoped, company-wide dump filtered only by
+    # provider, not by who's asking.
+    if _wr_user:
+        _wr_msgs = sms_inbox_read_for_user(_wr_user_id, since_hours=since_hours)
+        _wr_msgs = [m for m in _wr_msgs if m.get('provider', '') == 'whatsapp']
+        if from_number.strip():
+            import re as _re6
+            _wr_digits = _re6.sub(r'\D', '', from_number)
+            if len(_wr_digits) == 11 and _wr_digits[0] == '1':
+                _wr_digits = _wr_digits[1:]
+            _wr_msgs = [m for m in _wr_msgs
+                       if _re6.sub(r'\D', '', m.get('from', ''))[-10:] == _wr_digits]
+    else:
+        _wr_msgs = sms_inbox_read(
+            since_hours = since_hours,
+            from_number = from_number,
+            unread_only = False,
+            user_id     = _wr_user_id,
+            provider    = 'whatsapp',
+        )
+
+    if not _wr_msgs:
+        hours = f"in the last {since_hours}h" if since_hours > 0 else "ever"
+        return f"📭 No whatsapp messages {hours}."
+
+    lines = [f"📬 {len(_wr_msgs)} message(s):", ""]
+    for m in _wr_msgs:
+        from_display = m.get('contact_name') or m.get('from', 'unknown')
+        unread_flag  = " 🔵" if _wr_user_id not in (m.get('read_by') or []) else ""
+        lines.append(f"  💬 From: {from_display}{unread_flag}")
+        lines.append(f"     When: {m.get('timestamp','')[:19]}")
+        lines.append(f"     Msg:  {(m.get('body') or '').strip()}")
+        lines.append("")
+
+    return '\n'.join(lines).rstrip()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -4818,6 +5208,8 @@ def check_whatsapp_replies(
 def schedule_next_recurring_job(
     job_identifier: str,
     filepath:       str = "",
+    when:           str = "",
+    ctx: "Context | None" = None,
 ) -> str:
     """
     Auto-create the next recurring job after a job is marked complete.
@@ -4837,6 +5229,18 @@ def schedule_next_recurring_job(
     Args:
         job_identifier: JobID (e.g. "JOB-0001") or customer name/company.
         filepath:       Path to the .xlsx tracker. Uses default if omitted.
+                         In server mode this argument is ignored — see
+                         _resolve_job_spreadsheet_path().
+        when:           Which jobs to search among — works in BOTH personal
+                         and server mode: "today" (default if omitted),
+                         "tomorrow", "yesterday", "this_week", "next_week",
+                         "any" (no date restriction), or an explicit
+                         "YYYY-MM-DD" date.
+
+    Server mode: staff/field_crew only search jobs assigned to THEM
+    (Crew / Technician matches their own name) — owner/manager search
+    every crew's jobs. This crew restriction applies regardless of `when`
+    and does not apply at all in personal mode (single user).
 
     Returns:
         New JobID and scheduled date, or explanation if no recurring job applies.
@@ -4845,7 +5249,57 @@ def schedule_next_recurring_job(
         "Schedule the next recurring job after JOB-0003"
         "Set up the next job for Blue Wave Cafe"
         "Auto-book the next visit after today's Sunshine Realty job"
+        "Schedule the next job after the one I did yesterday"
+        "Reschedule next week's Crabby's job"
     """
+    # Serialise the whole load -> modify -> save cycle so two concurrent
+    # server-mode writers can never interleave and silently drop each
+    # other's changes (openpyxl has no file locking of its own).
+    with _spreadsheet_write_lock:
+        return _schedule_next_recurring_job_impl(job_identifier, filepath, when, ctx)
+
+
+def _srj_resolve_date_range(when: str, today):
+    """
+    Resolve a human date-range keyword into an inclusive (start, end) date
+    range for scoping schedule_next_recurring_job()'s job search.
+
+    Returns (None, None) for "any" — no date restriction at all.
+    Falls back to (today, today) for anything unrecognised, since "today"
+    is the safe default this tool is normally used for.
+    """
+    import datetime as _dt
+    w = (when or "today").strip().lower().replace("-", "_").replace(" ", "_")
+    if w in ("any", "all", ""):
+        return (None, None)
+    if w == "today":
+        return (today, today)
+    if w == "tomorrow":
+        d = today + _dt.timedelta(days=1)
+        return (d, d)
+    if w == "yesterday":
+        d = today - _dt.timedelta(days=1)
+        return (d, d)
+    if w in ("this_week", "thisweek"):
+        start = today - _dt.timedelta(days=today.weekday())  # Monday
+        end   = start + _dt.timedelta(days=6)                # Sunday
+        return (start, end)
+    if w in ("next_week", "nextweek"):
+        start = today - _dt.timedelta(days=today.weekday()) + _dt.timedelta(days=7)
+        end   = start + _dt.timedelta(days=6)
+        return (start, end)
+    # Explicit date, e.g. "2026-07-15"
+    try:
+        d = _dt.datetime.strptime(w.replace("_", "-"), "%Y-%m-%d").date()
+        return (d, d)
+    except ValueError:
+        pass
+    return (today, today)
+
+
+def _schedule_next_recurring_job_impl(job_identifier: str, filepath: str, when: str, ctx) -> str:
+    """Implementation body, called under _spreadsheet_write_lock. See
+    schedule_next_recurring_job() for the public docstring."""
     _telemetry_increment_tool_count("schedule_next_recurring_job")
 
     try:
@@ -4856,8 +5310,7 @@ def schedule_next_recurring_job(
     import datetime as _dt
     import calendar as _cal
 
-    if not filepath:
-        filepath = _get_default_spreadsheet_path()
+    filepath = _resolve_job_spreadsheet_path(ctx, filepath)
     if not filepath:
         return "❌ No spreadsheet path configured."
 
@@ -4890,16 +5343,87 @@ def schedule_next_recurring_job(
     if not job_hdrs:
         return "❌ Could not detect header row in Jobs_Schedule."
 
-    found_job = None
+    # ── Scoping ─────────────────────────────────────────────────────────────
+    # Staff/field_crew (server mode only): only search jobs assigned to THEM
+    # (Crew / Technician matches their own name) — prevents accidentally
+    # rescheduling a coworker's job by a job-name/JobID match alone.
+    # Owner/manager see every crew's jobs — their real entitlement, same
+    # _check_db_cap('full') gate used by list_writable_directories /
+    # list_tracked_directories. This crew restriction never applies in
+    # personal mode (single user).
+    #
+    # Date range (`when`): a common feature in BOTH modes now. If the caller
+    # doesn't specify one: server mode defaults to "today" (this tool is
+    # normally called right after finishing a job); personal mode defaults
+    # to "any" (unrestricted) so every version before this parameter existed
+    # keeps working unchanged. An explicitly-passed `when` behaves
+    # identically in both modes.
+    _srj_user = _current_user(ctx)
+    _srj_full_access = True
+    _srj_crew_name = None
+    if _srj_user is not None:
+        _srj_full_access, _ = _check_db_cap(_srj_user, "full")
+        _srj_crew_name = (_srj_user.get('name') or '').strip().lower()
+
+    _srj_effective_when = when.strip() if when and when.strip() else "today"
+    _srj_range_start, _srj_range_end = _srj_resolve_date_range(
+        _srj_effective_when, _dt.date.today())
+
+    def _srj_parse_date(value):
+        if isinstance(value, _dt.datetime):
+            return value.date()
+        if isinstance(value, _dt.date):
+            return value
+        if value:
+            for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y'):
+                try:
+                    return _dt.datetime.strptime(str(value).strip(), fmt).date()
+                except ValueError:
+                    continue
+        return None
+
+    _crew_col_idx = next((i for i, h in enumerate(job_hdrs) if h == "Crew / Technician"), None)
+    _date_col_idx = next((i for i, h in enumerate(job_hdrs) if h == "Service Date"), None)
+
+    _srj_matches = []
     for row in ws_jobs.iter_rows(min_row=job_hdr_row + 1):
         vals = [c.value for c in row]
         row_text = " ".join(str(v) for v in vals if v)
-        if job_identifier.lower() in row_text.lower():
-            found_job = dict(zip(job_hdrs, vals))
-            break
+        if job_identifier.lower() not in row_text.lower():
+            continue
+        if _srj_range_start is not None:  # None,None means "any" - unrestricted
+            row_date = _srj_parse_date(vals[_date_col_idx]) if _date_col_idx is not None else None
+            if row_date is None or not (_srj_range_start <= row_date <= _srj_range_end):
+                continue
+        if _srj_user is not None and not _srj_full_access:
+            row_crew = str(vals[_crew_col_idx] or '').strip().lower() if _crew_col_idx is not None else ''
+            if row_crew != _srj_crew_name:
+                continue
+        _srj_matches.append(dict(zip(job_hdrs, vals)))
 
-    if not found_job:
-        return f"❌ No job found matching '{job_identifier}' in Jobs_Schedule."
+    if not _srj_matches:
+        _scope_note = " assigned to you" if (_srj_user is not None and not _srj_full_access) else ""
+        _when_note = (
+            "" if _srj_range_start is None
+            else f" scheduled {_srj_range_start}" if _srj_range_start == _srj_range_end
+            else f" scheduled {_srj_range_start} to {_srj_range_end}"
+        )
+        return (
+            f"❌ No job found matching '{job_identifier}'{_when_note}{_scope_note} "
+            f"in Jobs_Schedule." + ("" if _srj_range_start is None else " Try when='any' to search all dates.")
+        )
+
+    if len(_srj_matches) > 1:
+        _srj_candidates = "\n".join(
+            f"   • {m.get('JobID (JOB-####)','?')} — {m.get('Customer Name / Company','?')}"
+            for m in _srj_matches[:10]
+        )
+        return (
+            f"❌ '{job_identifier}' matches {len(_srj_matches)} jobs — please "
+            f"specify which one:\n{_srj_candidates}\n\nTry again with the exact JobID."
+        )
+
+    found_job = _srj_matches[0]
 
     cust_id   = str(found_job.get("CustomerID (Customers!A)", "") or "")
     cust_name = str(found_job.get("Customer Name / Company",  "") or "")
@@ -5056,6 +5580,7 @@ def log_time_entry(
     job_identifier: str,
     action:         str,
     filepath:       str = "",
+    ctx: "Context | None" = None,
 ) -> str:
     """
     Clock in or out for a job. Records timestamps to the TimeLog sheet for
@@ -5068,6 +5593,8 @@ def log_time_entry(
         job_identifier: JobID (e.g. "JOB-0001") or customer name.
         action:         "start" to clock in, "stop" to clock out.
         filepath:       Path to the .xlsx tracker. Uses default if omitted.
+                         In server mode this argument is ignored — see
+                         _resolve_job_spreadsheet_path().
 
     Returns:
         Confirmation with timestamp and elapsed time (on stop), or error.
@@ -5078,6 +5605,16 @@ def log_time_entry(
         "Clock out — I just finished the Harbor Inn job"
         "Stop the timer for JOB-0001"
     """
+    # Serialise the whole load -> modify -> save cycle so two concurrent
+    # server-mode writers (e.g. two crew members clocking in/out at once)
+    # can never interleave and silently drop each other's changes.
+    with _spreadsheet_write_lock:
+        return _log_time_entry_impl(job_identifier, action, filepath, ctx)
+
+
+def _log_time_entry_impl(job_identifier: str, action: str, filepath: str, ctx) -> str:
+    """Implementation body, called under _spreadsheet_write_lock. See
+    log_time_entry() for the public docstring."""
     _telemetry_increment_tool_count("log_time_entry")
 
     try:
@@ -5091,8 +5628,7 @@ def log_time_entry(
     if action not in ("start", "stop"):
         return "❌ action must be 'start' or 'stop'."
 
-    if not filepath:
-        filepath = _get_default_spreadsheet_path()
+    filepath = _resolve_job_spreadsheet_path(ctx, filepath)
     if not filepath:
         return "❌ No spreadsheet path configured."
 
@@ -5112,7 +5648,8 @@ def log_time_entry(
     # ── Ensure TimeLog sheet exists ───────────────────────────────────────────
     _TIMELOG_HEADERS = [
         "EntryID", "JobID", "Customer Name / Company",
-        "Clock In", "Clock Out", "Elapsed (min)", "Crew / Technician", "Notes"
+        "Clock In", "Clock Out", "Elapsed (min)", "Crew / Technician", "Notes",
+        "Logged By (User ID)",
     ]
     if "TimeLog" not in wb.sheetnames:
         ws_log = wb.create_sheet("TimeLog")
@@ -5133,8 +5670,12 @@ def log_time_entry(
     if not log_hdrs:
         return "❌ Could not detect header row in TimeLog sheet."
 
-    # ── Find the job in Jobs_Schedule ─────────────────────────────────────────
-    cust_name, job_id_found, crew = job_identifier, job_identifier, ""
+    # ── Find the job in Jobs_Schedule — must match exactly ONE row ────────────
+    # Requiring an unambiguous match (not silently taking the first hit, and
+    # not silently falling back to the raw identifier string when nothing
+    # matches) is what makes "clock in" / "clock out" actually specify a
+    # real job rather than guessing.
+    cust_name, job_id_found, crew = None, None, ""
     if "Jobs_Schedule" in wb.sheetnames:
         ws_jobs = wb["Jobs_Schedule"]
         job_hdr_row, job_hdrs = None, []
@@ -5145,31 +5686,68 @@ def log_time_entry(
                 job_hdrs = [str(c.value).strip().replace('\n',' ') if c.value else '' for c in r]
                 break
         if job_hdrs:
+            _matches = []
             for row in ws_jobs.iter_rows(min_row=job_hdr_row + 1):
                 vals = [c.value for c in row]
                 row_text = " ".join(str(v) for v in vals if v)
                 if job_identifier.lower() in row_text.lower():
                     jrow = dict(zip(job_hdrs, vals))
-                    job_id_found = str(jrow.get("JobID (JOB-####)", job_identifier) or job_identifier)
-                    cust_name    = str(jrow.get("Customer Name / Company", job_identifier) or job_identifier)
-                    crew         = str(jrow.get("Crew / Technician", "") or "")
-                    break
+                    _matches.append((
+                        str(jrow.get("JobID (JOB-####)", "") or ""),
+                        str(jrow.get("Customer Name / Company", "") or ""),
+                        str(jrow.get("Crew / Technician", "") or ""),
+                    ))
+            if not _matches:
+                return (
+                    f"❌ No job found matching '{job_identifier}' in Jobs_Schedule.\n"
+                    "Check the JobID or customer name and try again — clocking in/out "
+                    "requires an exact job, not a guess."
+                )
+            if len(_matches) > 1:
+                _candidates = "\n".join(
+                    f"   • {jid or '(no JobID)'} — {cust}" for jid, cust, _ in _matches[:10]
+                )
+                return (
+                    f"❌ '{job_identifier}' matches {len(_matches)} jobs — please specify "
+                    f"which one:\n{_candidates}\n\nTry again with the exact JobID."
+                )
+            job_id_found, cust_name, crew = _matches[0]
+            job_id_found = job_id_found or job_identifier
+            cust_name = cust_name or job_identifier
+    if job_id_found is None:
+        return (
+            "❌ No Jobs_Schedule sheet found — cannot verify job identity. "
+            "Clocking in/out requires a real job in the tracker."
+        )
+
+    _lte_user = _current_user(ctx)
 
     now_ts = _dt.datetime.now()
     now_str = now_ts.strftime('%Y-%m-%d %H:%M:%S')
 
+    _lte_uid = _lte_user.get('id', '') if _lte_user else ''
+    _lte_display = _lte_user.get('name', _lte_uid) if _lte_user else ''
+
     if action == "start":
-        # Check for already-open entry
+        # Check for an already-open entry. Server mode: scoped to THIS
+        # user's own open entries — Jake starting a shift doesn't block
+        # Karen from also starting her own shift on the same job. Personal
+        # mode: unchanged, any open entry for the job blocks re-starting
+        # (there's only one user, so a second concurrent entry can only
+        # mean a forgotten clock-out).
         for row in ws_log.iter_rows(min_row=log_hdr_row + 1):
             rvals = [c.value for c in row]
             rdict = dict(zip(log_hdrs, rvals))
-            if (job_id_found.lower() in str(rdict.get("JobID", "")).lower()
+            if not (job_id_found.lower() in str(rdict.get("JobID", "")).lower()
                     and not rdict.get("Clock Out")):
-                return (
-                    f"⚠️  A clock-in for {job_id_found} is already open.\n"
-                    f"   Clocked in at: {rdict.get('Clock In')}\n"
-                    "   Call log_time_entry with action='stop' to clock out first."
-                )
+                continue
+            if _lte_user is not None and rdict.get("Logged By (User ID)", "") != _lte_uid:
+                continue  # someone else's open entry — doesn't block you
+            return (
+                f"⚠️  A clock-in for {job_id_found} is already open.\n"
+                f"   Clocked in at: {rdict.get('Clock In')}\n"
+                "   Call log_time_entry with action='stop' to clock out first."
+            )
 
         # Generate entry ID
         existing_ids = []
@@ -5189,12 +5767,19 @@ def log_time_entry(
             if any(c.value for c in row):
                 last_log_row = row[0].row
 
+        # Server mode: the actual calling user's identity is authoritative
+        # for who's clocking in — not whatever's pre-filled in the job's
+        # Crew / Technician assignment. Personal mode: unchanged, uses the
+        # job's assigned crew field since there's only one user anyway.
+        crew_display = _lte_display if _lte_user is not None else crew
+
         new_row = {
             "EntryID":                  entry_id,
             "JobID":                    job_id_found,
             "Customer Name / Company":  cust_name,
             "Clock In":                 now_str,
-            "Crew / Technician":        crew,
+            "Crew / Technician":        crew_display,
+            "Logged By (User ID)":      _lte_uid if _lte_user is not None else "",
         }
         new_row_num = last_log_row + 1
         for col_idx, col_name in enumerate(log_hdrs, 1):
@@ -5212,24 +5797,38 @@ def log_time_entry(
             f"   Job:       {job_id_found}\n"
             f"   Customer:  {cust_name}\n"
             f"   Clock In:  {now_str}\n"
-            f"   Crew:      {crew or '(unspecified)'}\n"
+            f"   Crew:      {crew_display or '(unspecified)'}\n"
             "   Call log_time_entry(action='stop') when finished."
         )
 
     else:  # action == "stop"
-        # Find open entry for this job
+        # Find YOUR open entry for this job. Server mode: only entries this
+        # caller personally opened (Logged By (User ID) match) — you cannot
+        # clock out a coworker's still-open shift, even for the same job.
+        # Personal mode: unchanged, single-user, so any open entry qualifies.
         open_row_num = None
         open_entry   = None
+        _stop_someone_elses_entry_exists = False
         for row in ws_log.iter_rows(min_row=log_hdr_row + 1):
             rvals = [c.value for c in row]
             rdict = dict(zip(log_hdrs, rvals))
-            if (job_id_found.lower() in str(rdict.get("JobID", "")).lower()
+            if not (job_id_found.lower() in str(rdict.get("JobID", "")).lower()
                     and not rdict.get("Clock Out")):
-                open_row_num = row[0].row
-                open_entry   = (rdict, row)
-                break
+                continue
+            if _lte_user is not None and rdict.get("Logged By (User ID)", "") != _lte_uid:
+                _stop_someone_elses_entry_exists = True
+                continue
+            open_row_num = row[0].row
+            open_entry   = (rdict, row)
+            break
 
         if open_entry is None:
+            if _stop_someone_elses_entry_exists:
+                return (
+                    f"❌ No open clock-in found for '{job_identifier}' under your "
+                    f"name. Someone else on the crew has an open entry for this "
+                    f"job, but you can only clock out your own."
+                )
             return (
                 f"❌ No open clock-in found for '{job_identifier}'.\n"
                 "   Call log_time_entry(action='start') first."
@@ -5303,6 +5902,7 @@ def log_time_entry(
 def get_ar_aging_report(
     filepath:    str  = "",
     as_of_date:  str  = "today",
+    ctx: "Context | None" = None,
 ) -> str:
     """
     Generate an Accounts Receivable aging report from the Invoices sheet.
@@ -5336,8 +5936,7 @@ def get_ar_aging_report(
 
     import datetime as _dt
 
-    if not filepath:
-        filepath = _get_default_spreadsheet_path()
+    filepath = _resolve_job_spreadsheet_path(ctx, filepath)
     if not filepath:
         return "❌ No spreadsheet path configured."
 
@@ -6902,34 +7501,17 @@ def read_file_lines(
     return "\n".join(header + body + footer)
 #!/usr/bin/env python3
 """
-AI-Prowler Code Tools — WRITE-SIDE PATCH (8 tools)
-====================================================
+AI-Prowler Code Tools — WRITE-SIDE
+====================================
 
-This file contains the 8 new write-side code tools, plus all supporting
-infrastructure (writable-path allowlist, hard blocklist, GUI approval queue,
-re-index helper, write-counter circuit breaker).
-
-INSTALL INSTRUCTIONS:
-   1. Open C:/Users/david/AI-Prowler_V601_to_V602_work/AI-Prowler/ai_prowler_mcp.py
-   2. Find the end of read_file_lines() — line 4135 in the May 18 2026 snapshot,
-      ends with `return "\n".join(header + body + footer)`
-   3. Paste this entire file's contents IMMEDIATELY AFTER that line, BEFORE the
-      `# HTTP transport with Bearer-token auth ...` banner at line 4138.
-   4. Save. The 8 new tools are registered automatically by the @mcp.tool()
-      decorator pattern already in use.
-
-DEPENDENCIES ALREADY IN AI_PROWLER_MCP.PY (no new imports required at top of file):
-   import os, sys, json, re, threading
-   from pathlib import Path
-   from typing import Optional
-   _log               (the logger)
-   _prewarm_event     (initialization sync)
-   _BINARY_SNIFF_BYTES, _READ_FILE_MAX_BYTES
-   _resolve_allowlisted_path   (from code-tools section)
-   _looks_binary               (from code-tools section)
-   mcp                         (the FastMCP instance — @mcp.tool() decorator)
-
-The patch only uses these existing names plus standard-library imports.
+Write-side code tools (create_file, write_file, str_replace_in_file,
+fuzzy_replace_in_file, line_replace_in_file, create_directory,
+list_directory, copy_to_backup, list_backups, restore_backup,
+cleanup_backups, reset_write_counter, diff_files — 13 tools as of v8.0.0),
+plus all supporting infrastructure (writable-path allowlist, hard
+blocklist, GUI approval queue, re-index helper, write-counter circuit
+breaker, and server-mode personal-directory write scoping via
+_check_personal_write_scope()).
 
 DESIGN REFERENCE: Self-learning entries
    6412cfe3-26e6-4029-a408-a9ea3b43b88a  — design spec
@@ -6939,11 +7521,12 @@ DESIGN REFERENCE: Self-learning entries
 # ══════════════════════════════════════════════════════════════════════════════
 # CODE TOOLS — WRITE-SIDE
 #
-# 8 tools that complement grep_documents and read_file_lines to give Claude
+# 13 tools that complement grep_documents and read_file_lines to give Claude
 # in-place editing capability over the tracked-paths allowlist. All writes
 # require BOTH read-allowlist membership AND writable-allowlist approval.
-# Backups land alongside the file as <name>.bak<N>. Auto re-index on every
-# successful write keeps ChromaDB in sync. See design spec for full rationale.
+# Backups land alongside the file as <name>.bak<N>. Writes do NOT auto-index
+# (see how_to_use_ai_prowler's EDITING FILES section) — call reindex_file()
+# once editing is done. See design spec for full rationale.
 # ══════════════════════════════════════════════════════════════════════════════
 
 import shutil as _shutil
@@ -7184,6 +7767,83 @@ def _path_is_under(target: str, ancestor: str) -> bool:
         return False
 
 
+# ── Server-mode personal-directory write scoping ─────────────────────────────
+# Server-mode users may only write inside their OWN personal (private)
+# directory — never anywhere else in the writable allowlist, and never at
+# all if they don't have a personal directory configured. Personal-mode
+# installs (ctx has no user) are completely unaffected: full write access,
+# exactly as before this feature was added.
+def _user_private_write_dir(ctx) -> "tuple[str, Path | None]":
+    """
+    Determine the write-scope status for the calling user.
+
+    Returns a (status, path) tuple:
+      ("personal", None)     — personal mode (no user on ctx); unrestricted,
+                                 no change from prior behaviour.
+      ("scoped", Path(...))  — server mode; user has a private directory.
+                                 Writes must resolve under this path.
+      ("blocked", None)      — server mode; user has no private directory
+                                 configured (private_collection_enabled is
+                                 False, or no folder has been set up for
+                                 them yet). No writes are allowed at all.
+    """
+    user = _current_user(ctx)
+    if user is None:
+        return ("personal", None)
+
+    if not user.get("private_collection_enabled"):
+        return ("blocked", None)
+
+    try:
+        company_map = _company_collection_map()
+        target_collection = f"user:{user.get('id', '')}"
+        for rule in (company_map.get("rules") or []):
+            if rule.get("collection") == target_collection:
+                prefix = (rule.get("prefix") or "").strip()
+                if prefix and Path(prefix).exists():
+                    return ("scoped", Path(prefix))
+    except Exception:
+        pass
+
+    # private_collection_enabled=True but no folder actually set up yet —
+    # fail closed, same as not having one at all.
+    return ("blocked", None)
+
+
+def _check_personal_write_scope(ctx, resolved_path: str) -> "str | None":
+    """
+    Enforce server-mode personal-directory write scoping against an already
+    read/write-allowlist-resolved path.
+
+    Returns None if the write is allowed (personal mode, or the path is
+    inside the calling user's own private directory). Returns a formatted
+    denial string otherwise — callers should `return` it immediately.
+    """
+    status, private_dir = _user_private_write_dir(ctx)
+
+    if status == "personal":
+        return None
+
+    if status == "blocked":
+        return (
+            "🚫 Write denied — you don't have a personal directory configured.\n"
+            "Server-mode users may only write inside their own personal "
+            "directory. Ask your owner/admin to enable 'Private collection' "
+            "and set up your personal folder in the Admin tab. Until then "
+            "you have read-only access."
+        )
+
+    # status == "scoped"
+    if _path_is_under(resolved_path, str(private_dir)):
+        return None
+
+    return (
+        f"🚫 Write denied — '{resolved_path}' is outside your personal directory.\n"
+        f"Server-mode users may only write inside their own personal directory:\n"
+        f"    {private_dir}"
+    )
+
+
 # ── Backup naming (.bak<N> alongside the file) ───────────────────────────────
 _BAK_RE = _re.compile(r"\.bak(\d+)$", _re.IGNORECASE)
 
@@ -7415,7 +8075,7 @@ def _parent_dir_check(filepath: str) -> Optional[str]:
 # TOOL 1 — create_file
 # ══════════════════════════════════════════════════════════════════════════════
 @mcp.tool()
-def create_file(filepath: str, content: str, encoding: str = "text") -> str:
+def create_file(filepath: str, content: str, encoding: str = "text", ctx: "Context | None" = None) -> str:
     """
     CODE TOOLS — Create a NEW file. FAILS if the file already exists.
 
@@ -7460,6 +8120,11 @@ def create_file(filepath: str, content: str, encoding: str = "text") -> str:
     resolved, deny = _resolve_writable_path(filepath)
     if not resolved:
         return deny
+
+    # Server-mode: writes are scoped to the caller's own personal directory
+    scope_denial = _check_personal_write_scope(ctx, resolved)
+    if scope_denial:
+        return scope_denial
 
     # Existence check — create_file fails if file exists (negative space: use write_file)
     if Path(resolved).exists():
@@ -7523,7 +8188,7 @@ def create_file(filepath: str, content: str, encoding: str = "text") -> str:
 # TOOL 2 — write_file
 # ══════════════════════════════════════════════════════════════════════════════
 @mcp.tool()
-def write_file(filepath: str, content: str, verify_after_write: bool = False, encoding: str = "text") -> str:
+def write_file(filepath: str, content: str, verify_after_write: bool = False, encoding: str = "text", ctx: "Context | None" = None) -> str:
     """
     CODE TOOLS — Overwrite an EXISTING file with new content. FAILS if the
     file does not exist.
@@ -7571,6 +8236,11 @@ def write_file(filepath: str, content: str, verify_after_write: bool = False, en
     resolved, deny = _resolve_writable_path(filepath)
     if not resolved:
         return deny
+
+    # Server-mode: writes are scoped to the caller's own personal directory
+    scope_denial = _check_personal_write_scope(ctx, resolved)
+    if scope_denial:
+        return scope_denial
 
     # Existence check — write_file requires the file to exist
     if not Path(resolved).exists():
@@ -7669,7 +8339,8 @@ def str_replace_in_file(filepath: str,
                         old_str: str,
                         new_str: str,
                         dry_run: bool = False,
-                        verify_after_write: bool = True) -> str:
+                        verify_after_write: bool = True,
+                        ctx: "Context | None" = None) -> str:
     """
     CODE TOOLS — Surgical in-place edit: replace one unique occurrence of
     old_str with new_str. This is THE primary write tool — prefer it over
@@ -7748,6 +8419,11 @@ def str_replace_in_file(filepath: str,
     resolved, deny = _resolve_writable_path(filepath, queue_approval=not dry_run)
     if not resolved:
         return deny
+
+    # Server-mode: writes are scoped to the caller's own personal directory
+    scope_denial = _check_personal_write_scope(ctx, resolved)
+    if scope_denial:
+        return scope_denial
 
     if not Path(resolved).exists():
         return f"⚠️  File does not exist: {resolved}"
@@ -8002,7 +8678,8 @@ def str_replace_in_file(filepath: str,
 def fuzzy_replace_in_file(filepath: str,
                           old_str: str,
                           new_str: str,
-                          dry_run: bool = False) -> str:
+                          dry_run: bool = False,
+                          ctx: "Context | None" = None) -> str:
     """
     CODE TOOLS — Whitespace-tolerant surgical edit. Same as str_replace_in_file
     but normalises whitespace differences before matching so it succeeds where
@@ -8045,6 +8722,11 @@ def fuzzy_replace_in_file(filepath: str,
         return deny
     if not Path(resolved).exists():
         return f"⚠️  File does not exist: {resolved}"
+
+    # Server-mode: writes are scoped to the caller's own personal directory
+    scope_denial = _check_personal_write_scope(ctx, resolved)
+    if scope_denial:
+        return scope_denial
 
     try:
         size = Path(resolved).stat().st_size
@@ -8215,7 +8897,8 @@ def line_replace_in_file(filepath: str,
                          start_line: int,
                          end_line: int,
                          new_content: str,
-                         dry_run: bool = False) -> str:
+                         dry_run: bool = False,
+                         ctx: "Context | None" = None) -> str:
     """
     CODE TOOLS — Replace a range of lines by line number. Zero text-matching
     ambiguity — works on any file regardless of encoding, tabs, or Unicode.
@@ -8257,6 +8940,11 @@ def line_replace_in_file(filepath: str,
         return deny
     if not Path(resolved).exists():
         return f"⚠️  File does not exist: {resolved}"
+
+    # Server-mode: writes are scoped to the caller's own personal directory
+    scope_denial = _check_personal_write_scope(ctx, resolved)
+    if scope_denial:
+        return scope_denial
 
     try:
         size = Path(resolved).stat().st_size
@@ -8360,7 +9048,7 @@ def line_replace_in_file(filepath: str,
 
 
 @mcp.tool()
-def create_directory(dirpath: str, parents: bool = True) -> str:
+def create_directory(dirpath: str, parents: bool = True, ctx: "Context | None" = None) -> str:
     """
     CODE TOOLS — Create a directory inside an indexed AND writable area.
     Idempotent: succeeds if the directory already exists.
@@ -8380,6 +9068,11 @@ def create_directory(dirpath: str, parents: bool = True) -> str:
     resolved, deny = _resolve_writable_path(dirpath)
     if not resolved:
         return deny
+
+    # Server-mode: writes are scoped to the caller's own personal directory
+    scope_denial = _check_personal_write_scope(ctx, resolved)
+    if scope_denial:
+        return scope_denial
 
     dp = Path(resolved)
     if dp.exists():
@@ -11584,610 +12277,6 @@ def save_analysis_report(task_id: str,
     )
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# JOB IMAGE STORAGE TOOLS
-# ══════════════════════════════════════════════════════════════════════════════
-# Three tools for storing, listing, and deleting photos tied to job records.
-# Images are stored as binary files (not indexed in ChromaDB — binary files
-# are not searchable by content). A sidecar index.json per job directory
-# stores metadata (filename, job_id, description, tags, date, size) so
-# Claude can retrieve the image catalogue for any job without loading pixels.
-#
-# Default root:  ~/Documents/AI-Prowler_job_images/<job_id>/
-#
-# Typical workflow:
-#   User uploads photo to Claude → "Save this as the before photo for job 1042"
-#   Claude calls save_job_image(job_id="1042", filename="before.jpg",
-#                               image_base64="...", description="Before cleaning",
-#                               tags=["before", "gutters"])
-#   → Saved to ~/Documents/AI-Prowler_job_images/1042/20260624_143022_before.jpg
-#   → Metadata appended to ~/Documents/AI-Prowler_job_images/1042/index.json
-# ══════════════════════════════════════════════════════════════════════════════
-
-_JOB_IMAGES_ROOT = None   # resolved lazily — reads config.json each call
-
-def _job_images_root():
-    """Return the root Path for job images, creating it if needed.
-
-    Reads 'job_images_root_path' from ~/.ai-prowler/config.json.
-    Falls back to ~/Documents/AI-Prowler_job_images if not set.
-    Claude can change the path with set_job_images_path().
-    """
-    from pathlib import Path
-    import json as _jimg
-    try:
-        _cfg = Path.home() / ".ai-prowler" / "config.json"
-        if _cfg.exists():
-            _saved = _jimg.loads(_cfg.read_text(encoding="utf-8"))
-            _custom = _saved.get("job_images_root_path", "").strip()
-            if _custom:
-                root = Path(_custom)
-                root.mkdir(parents=True, exist_ok=True)
-                return root
-    except Exception:
-        pass
-    # Default
-    root = Path.home() / "Documents" / "AI-Prowler_job_images"
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
-# MIME type → canonical file extension mapping
-# Used to infer a sensible extension when the filename has none.
-_MIME_TO_EXT = {
-    "image/jpeg":          ".jpg",
-    "image/jpg":           ".jpg",
-    "image/jfif":          ".jpg",
-    "image/pjpeg":         ".jpg",
-    "image/png":           ".png",
-    "image/gif":           ".gif",
-    "image/webp":          ".webp",
-    "image/heic":          ".heic",
-    "image/heif":          ".heif",
-    "image/avif":          ".avif",
-    "image/tiff":          ".tiff",
-    "image/bmp":           ".bmp",
-    "image/x-bmp":         ".bmp",
-    "image/x-ms-bmp":      ".bmp",
-    "image/x-adobe-dng":   ".dng",
-    "image/x-raw":         ".raw",
-    "image/x-canon-cr2":   ".cr2",
-    "image/x-canon-cr3":   ".cr3",
-    "image/x-nikon-nef":   ".nef",
-    "image/x-sony-arw":    ".arw",
-    "image/jpeg2000":      ".jp2",
-    "image/jp2":           ".jp2",
-    "image/svg+xml":       ".svg",
-}
-
-def _job_user_slug(ctx) -> str:
-    """Return a filesystem-safe user slug for per-user image isolation.
-
-    In server mode: derived from the authenticated user's username or name
-    (e.g. 'vicki_vavro', 'jake_r'). Each user's images land under
-    <root>/<user_slug>/<job_id>/ so users cannot see each other's photos.
-
-    In personal mode (ctx=None or no user on request): returns "" — images
-    go directly under <root>/<job_id>/ as before (single-user install).
-    """
-    user = _current_user(ctx)
-    if user is None:
-        return ""
-    raw = (user.get("username") or user.get("name") or
-           str(user.get("id", ""))).strip()
-    if not raw:
-        return ""
-    # Sanitise to filesystem-safe characters
-    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in raw.lower())
-    return safe
-
-
-def _job_image_dir(job_id: str, ctx=None):
-    """Return the Path for a specific job's image directory.
-
-    Personal mode:  <root>/<safe_job_id>/
-    Server mode:    <root>/<user_slug>/<safe_job_id>/
-
-    This ensures each server user's photos are completely isolated —
-    a field crew member cannot see another crew member's job images.
-    """
-    safe_job = "".join(
-        c if c.isalnum() or c in "-_" else "_"
-        for c in str(job_id).strip()
-    )
-    user_slug = _job_user_slug(ctx)
-    if user_slug:
-        d = _job_images_root() / user_slug / safe_job
-    else:
-        d = _job_images_root() / safe_job
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-def _load_job_index(job_dir) -> list:
-    from pathlib import Path
-    import json
-    idx_path = Path(job_dir) / "index.json"
-    if not idx_path.exists():
-        return []
-    try:
-        return json.loads(idx_path.read_text(encoding="utf-8")) or []
-    except Exception:
-        return []
-
-def _save_job_index(job_dir, index: list):
-    import json
-    from pathlib import Path
-    idx_path = Path(job_dir) / "index.json"
-    idx_path.write_text(
-        json.dumps(index, indent=2, ensure_ascii=False),
-        encoding="utf-8"
-    )
-
-
-@mcp.tool()
-def get_job_images_path(ctx: Context = None) -> str:
-    """
-    Return the current root directory where job images are stored.
-
-    Shows the active path (either the custom path set via set_job_images_path()
-    or the default ~/Documents/AI-Prowler_job_images) and a breakdown of
-    how many jobs have images stored.
-
-    Use this to confirm where photos will be saved before calling save_job_image(),
-    or to show the user where their images are stored.
-
-    Returns:
-        The active root path, source (default or custom), and job count summary.
-    """
-    from pathlib import Path
-    import json as _jimg
-
-    # Check for custom path in config
-    custom = ""
-    try:
-        _cfg = Path.home() / ".ai-prowler" / "config.json"
-        if _cfg.exists():
-            _saved = _jimg.loads(_cfg.read_text(encoding="utf-8"))
-            custom = _saved.get("job_images_root_path", "").strip()
-    except Exception:
-        pass
-
-    root   = _job_images_root()
-    source = "custom (set via set_job_images_path)" if custom else "default"
-
-    # In server mode show the user's personal scoped sub-directory
-    user_slug = _job_user_slug(ctx)
-    if user_slug:
-        active_root = root / user_slug
-        scope_note  = f"\n   Your personal scope: {active_root}"
-    else:
-        active_root = root
-        scope_note  = ""
-
-    # Count jobs and images within the user's own scope
-    try:
-        job_dirs     = [d for d in active_root.iterdir() if d.is_dir()] if active_root.exists() else []
-        total_jobs   = len(job_dirs)
-        total_images = sum(
-            len(list(d.glob("*.*"))) - (1 if (d / "index.json").exists() else 0)
-            for d in job_dirs
-        )
-    except Exception:
-        total_jobs = total_images = 0
-
-    return (
-        f"📁 Job image storage root ({source}):\n"
-        f"   {root}{scope_note}\n\n"
-        f"   Jobs with images: {total_jobs}\n"
-        f"   Total images:     {total_images}\n\n"
-        f"To change: call set_job_images_path(path='C:\\\\Your\\\\Custom\\\\Path')\n"
-        f"To reset to default: call set_job_images_path(path='')"
-    )
-
-
-@mcp.tool()
-def set_job_images_path(
-    path:      str,
-    ctx: Context = None,
-) -> str:
-    """
-    Set the root directory where job images are stored.
-
-    The new path is saved to ~/.ai-prowler/config.json and takes effect
-    immediately — no restart needed. All subsequent save_job_image() and
-    list_job_images() calls will use the new location.
-
-    Existing images at the old location are NOT moved automatically.
-    If you want to move them, ask Claude to help you do so after setting
-    the new path.
-
-    Pass an empty string to reset to the default location:
-        ~/Documents/AI-Prowler_job_images
-
-    Args:
-        path: Absolute path to the desired root directory.
-              Examples:
-                "C:\\Users\\david\\Pictures\\JobPhotos"
-                "D:\\AI-Prowler\\JobImages"
-                "C:\\Users\\david\\OneDrive\\Pictures\\Jobs"
-              Pass "" (empty string) to restore the default.
-
-    Returns:
-        Confirmation with the new active path, or an error message.
-    """
-    from pathlib import Path
-    import json as _jimg
-
-    cfg_path = Path.home() / ".ai-prowler" / "config.json"
-
-    # Load existing config
-    try:
-        cfg: dict = {}
-        if cfg_path.exists():
-            cfg = _jimg.loads(cfg_path.read_text(encoding="utf-8")) or {}
-    except Exception as _e:
-        return f"❌ Could not read config.json: {_e}"
-
-    clean = path.strip()
-
-    if clean:
-        # Validate the path
-        try:
-            target = Path(clean)
-            if not target.is_absolute():
-                return (
-                    f"❌ Path must be absolute (e.g. C:\\Users\\david\\Pictures\\Jobs).\n"
-                    f"   You passed: '{clean}'"
-                )
-            # Create it now to confirm it's writable
-            target.mkdir(parents=True, exist_ok=True)
-            # Quick write test
-            _test = target / ".ai_prowler_write_test"
-            _test.write_text("ok")
-            _test.unlink()
-        except Exception as _e:
-            return f"❌ Cannot use '{clean}': {_e}"
-
-        cfg["job_images_root_path"] = clean
-        action = f"set to:\n   {clean}"
-    else:
-        # Reset to default
-        cfg.pop("job_images_root_path", None)
-        default = Path.home() / "Documents" / "AI-Prowler_job_images"
-        action = f"reset to default:\n   {default}"
-
-    # Save config
-    try:
-        cfg_path.parent.mkdir(parents=True, exist_ok=True)
-        cfg_path.write_text(
-            _jimg.dumps(cfg, indent=2, ensure_ascii=False),
-            encoding="utf-8"
-        )
-    except Exception as _e:
-        return f"❌ Could not save config.json: {_e}"
-
-    # Confirm active path
-    active = _job_images_root()
-    return (
-        f"✅ Job image storage path {action}\n\n"
-        f"   Active path: {active}\n"
-        f"   Takes effect immediately — no restart needed.\n\n"
-        f"   Note: existing images at the old location are NOT moved.\n"
-        f"   Ask me to help move them if needed."
-    )
-
-
-@mcp.tool()
-def save_job_image(
-    job_id:      str,
-    filename:    str,
-    image_base64: str,
-    description: str = "",
-    tags:        str = "",
-    media_type:  str = "image/jpeg",
-    ctx: Context = None,
-) -> str:
-    """
-    Save a photo or image to the job image store for a specific job record.
-
-    Images are stored as binary files in ~/Documents/AI-Prowler_job_images/<job_id>/.
-    A sidecar index.json records metadata for each image so Claude can list
-    them in future sessions without re-uploading the pixel data.
-
-    WHEN TO USE:
-    Call this whenever the user uploads a photo and asks to save it to a job.
-    The user must have uploaded the image to Claude first — Claude then passes
-    the base64-encoded content to this tool.
-
-    GETTING THE BASE64 FROM AN UPLOADED IMAGE:
-    When a user uploads an image in the Claude chat, read its content and
-    encode it as base64. Pass the encoded string (no data: URI prefix needed)
-    as image_base64.
-
-    Args:
-        job_id:       Job identifier — matches the job_id in the Job Tracker
-                      spreadsheet (e.g. "1042", "JOB-2026-001").
-        filename:     Desired filename (e.g. "before_gutters.jpg"). A timestamp
-                      prefix is added automatically to prevent collisions.
-        image_base64: Base64-encoded image bytes. Do NOT include the
-                      "data:image/jpeg;base64," prefix — raw base64 only.
-        description:  Human-readable description of what the photo shows
-                      (e.g. "Gutters blocked with debris, before cleaning").
-        tags:         Comma-separated tags for categorisation
-                      (e.g. "before,gutters,blockage"). Optional.
-        media_type:   MIME type of the image. Common values:
-
-                      iPhone (iOS 11+, default format):
-                        "image/heic"   — .heic  (most iPhone photos since 2017)
-                        "image/heif"   — .heif  (same codec, alternate extension)
-                        "image/jpeg"   — .jpg   (older iPhone or "Most Compatible" mode)
-                        "image/png"    — .png   (iPhone screenshots)
-
-                      Android:
-                        "image/jpeg"   — .jpg   (default on most Android phones)
-                        "image/webp"   — .webp  (Google Pixel and others)
-                        "image/png"    — .png   (Android screenshots)
-                        "image/x-adobe-dng" — .dng (Pixel/Samsung Pro/RAW mode)
-
-                      Other common formats:
-                        "image/png"    — .png   (lossless)
-                        "image/gif"    — .gif   (animated)
-                        "image/webp"   — .webp  (modern web format)
-                        "image/avif"   — .avif  (AV1, newest Android/Chrome)
-                        "image/tiff"   — .tiff  (uncompressed, high-end cameras)
-                        "image/bmp"    — .bmp   (Windows screenshots)
-                        "image/x-raw"  — .raw   (generic camera RAW)
-                        "image/x-canon-cr2"  — .cr2 (Canon RAW)
-                        "image/x-canon-cr3"  — .cr3 (Canon RAW v2)
-                        "image/x-nikon-nef"  — .nef (Nikon RAW)
-                        "image/x-sony-arw"   — .arw (Sony RAW)
-
-                      If unsure, pass the MIME type that matches the file
-                      extension. The value is stored as metadata only — it
-                      does not affect how the binary is saved to disk.
-                      Defaults to "image/jpeg".
-
-    Returns:
-        Confirmation string with the saved file path and index entry.
-    """
-    import base64
-    import datetime as _dt
-    from pathlib import Path
-
-    # ── Validate inputs ───────────────────────────────────────────────────────
-    if not job_id or not job_id.strip():
-        return "❌ job_id is required."
-    if not filename or not filename.strip():
-        return "❌ filename is required."
-    if not image_base64 or not image_base64.strip():
-        return "❌ image_base64 is required — pass the base64-encoded image bytes."
-
-    # Strip data URI prefix if present (Claude sometimes includes it)
-    b64 = image_base64.strip()
-    if "," in b64 and b64.startswith("data:"):
-        b64 = b64.split(",", 1)[1]
-
-    # Decode
-    try:
-        image_bytes = base64.b64decode(b64)
-    except Exception as _e:
-        return f"❌ Could not decode image_base64: {_e}"
-
-    if len(image_bytes) == 0:
-        return "❌ Decoded image is empty — check the base64 data."
-
-    # ── Build timestamped filename ────────────────────────────────────────────
-    ts      = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    raw_fn  = filename.strip()
-
-    # If filename has no extension, infer one from media_type
-    from pathlib import Path as _PPath
-    if not _PPath(raw_fn).suffix:
-        inferred_ext = _MIME_TO_EXT.get(media_type.strip().lower(), ".jpg")
-        raw_fn = raw_fn + inferred_ext
-
-    safe_fn = "".join(
-        c if c.isalnum() or c in ".-_" else "_"
-        for c in raw_fn
-    )
-    final_filename = f"{ts}_{safe_fn}"
-
-    # ── Save binary file ──────────────────────────────────────────────────────
-    job_dir  = _job_image_dir(job_id.strip(), ctx=ctx)
-    out_path = job_dir / final_filename
-
-    try:
-        out_path.write_bytes(image_bytes)
-    except Exception as _e:
-        return f"❌ Could not write image file: {_e}"
-
-    file_size = out_path.stat().st_size
-
-    # ── Update index.json ─────────────────────────────────────────────────────
-    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
-
-    entry = {
-        "filename":    final_filename,
-        "original":    filename.strip(),
-        "job_id":      job_id.strip(),
-        "description": description.strip(),
-        "tags":        tag_list,
-        "media_type":  media_type.strip(),
-        "saved_at":    _dt.datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "size_bytes":  file_size,
-    }
-
-    index = _load_job_index(job_dir)
-    # Remove any existing entry with the same final_filename (idempotent)
-    index = [e for e in index if e.get("filename") != final_filename]
-    index.append(entry)
-    try:
-        _save_job_index(job_dir, index)
-    except Exception as _e:
-        return (
-            f"✅ Image saved: {out_path}\n"
-            f"⚠️  Warning: could not update index.json: {_e}"
-        )
-
-    tag_str = ", ".join(tag_list) if tag_list else "(none)"
-    return (
-        f"✅ Image saved for job {job_id.strip()}\n"
-        f"   File:        {out_path}\n"
-        f"   Size:        {file_size:,} bytes\n"
-        f"   Description: {description.strip() or '(none)'}\n"
-        f"   Tags:        {tag_str}\n"
-        f"   Index:       {job_dir / 'index.json'} ({len(index)} image(s) total)"
-    )
-
-
-@mcp.tool()
-def list_job_images(
-    job_id:    str,
-    tag:       str = "",
-    ctx: Context = None,
-) -> str:
-    """
-    List all images stored for a specific job, with their metadata.
-
-    Returns metadata only (filename, description, tags, date, size) — not
-    the pixel data itself. Images must be re-uploaded by the user for Claude
-    to see their visual content again.
-
-    Args:
-        job_id: Job identifier to look up.
-        tag:    Optional tag filter — if supplied, only images with this tag
-                are returned (e.g. tag="before" or tag="damage").
-
-    Returns:
-        Formatted list of image records for the job, or a message if none found.
-    """
-    import json
-    from pathlib import Path
-
-    if not job_id or not job_id.strip():
-        return "❌ job_id is required."
-
-    # Use _job_image_dir so server-mode users only see their own images
-    safe_job = "".join(
-        c if c.isalnum() or c in "-_" else "_"
-        for c in job_id.strip()
-    )
-    user_slug = _job_user_slug(ctx)
-    if user_slug:
-        job_dir = _job_images_root() / user_slug / safe_job
-    else:
-        job_dir = _job_images_root() / safe_job
-
-    if not job_dir.exists():
-        return f"📂 No images found for job {job_id.strip()} — directory does not exist yet."
-
-    index = _load_job_index(job_dir)
-    if not index:
-        return f"📂 No images indexed for job {job_id.strip()}."
-
-    # Apply tag filter
-    tag_filter = tag.strip().lower()
-    if tag_filter:
-        index = [e for e in index
-                 if tag_filter in [t.lower() for t in e.get("tags", [])]]
-        if not index:
-            return f"📂 No images with tag '{tag_filter}' found for job {job_id.strip()}."
-
-    lines = [f"📸 Images for job {job_id.strip()} ({len(index)} found):\n"]
-    for i, e in enumerate(index, 1):
-        size_kb = e.get("size_bytes", 0) / 1024
-        tags_str = ", ".join(e.get("tags", [])) or "(no tags)"
-        lines.append(
-            f"  {i}. {e.get('filename', '?')}\n"
-            f"     Description: {e.get('description', '(none)')}\n"
-            f"     Tags:        {tags_str}\n"
-            f"     Saved:       {e.get('saved_at', '?')}\n"
-            f"     Size:        {size_kb:.1f} KB\n"
-            f"     Path:        {job_dir / e.get('filename', '')}\n"
-        )
-
-    lines.append(
-        f"\nTo view an image, ask the user to re-upload the file from:\n"
-        f"  {job_dir}"
-    )
-    return "\n".join(lines)
-
-
-@mcp.tool()
-def delete_job_image(
-    job_id:   str,
-    filename: str,
-    ctx: Context = None,
-) -> str:
-    """
-    Delete a specific image from a job's image store.
-
-    Removes the file from disk and removes its entry from index.json.
-    The job directory itself is kept even if empty, so the index remains
-    as an audit trail.
-
-    Args:
-        job_id:   Job identifier the image belongs to.
-        filename: The stored filename to delete — use list_job_images() first
-                  to find the exact filename (includes the timestamp prefix,
-                  e.g. "20260624_143022_before_gutters.jpg").
-
-    Returns:
-        Confirmation of deletion, or an error message.
-    """
-    from pathlib import Path
-
-    if not job_id or not job_id.strip():
-        return "❌ job_id is required."
-    if not filename or not filename.strip():
-        return "❌ filename is required. Use list_job_images() to find the exact filename."
-
-    # Use user-scoped path so users can only delete their own images
-    safe_id = "".join(
-        c if c.isalnum() or c in "-_" else "_"
-        for c in job_id.strip()
-    )
-    user_slug = _job_user_slug(ctx)
-    if user_slug:
-        job_dir = _job_images_root() / user_slug / safe_id
-    else:
-        job_dir = _job_images_root() / safe_id
-    file_path = job_dir / filename.strip()
-
-    if not job_dir.exists():
-        return f"❌ No image directory found for job {job_id.strip()}."
-
-    if not file_path.exists():
-        return (
-            f"❌ File '{filename.strip()}' not found in job {job_id.strip()}.\n"
-            f"   Use list_job_images(job_id='{job_id.strip()}') to see available files."
-        )
-
-    # Remove file
-    try:
-        file_path.unlink()
-    except Exception as _e:
-        return f"❌ Could not delete file: {_e}"
-
-    # Update index — remove matching entry
-    index = _load_job_index(job_dir)
-    original_count = len(index)
-    index = [e for e in index if e.get("filename") != filename.strip()]
-    try:
-        _save_job_index(job_dir, index)
-    except Exception as _e:
-        return (
-            f"✅ File deleted: {file_path}\n"
-            f"⚠️  Warning: could not update index.json: {_e}"
-        )
-
-    removed = original_count - len(index)
-    return (
-        f"✅ Deleted: {file_path}\n"
-        f"   Index updated: {removed} entr{'y' if removed == 1 else 'ies'} removed "
-        f"({len(index)} image(s) remaining for job {job_id.strip()})"
-    )
-
 
 @mcp.tool()
 def get_pending_analysis_tasks(ctx: Context = None) -> str:
@@ -12480,19 +12569,63 @@ def _write_zone_allowed_for_user(user: "dict | None", directory: str,
 @mcp.tool()
 def list_writable_directories(ctx: Context = None) -> str:
     """
-    List all directories currently in the write-zone allowlist
+    List directories currently in the write-zone allowlist
     (~/.rag_writable_dirs.json) with their status.
 
-    Returns a formatted list of writable directories. Also shows the read
-    allowlist for reference so you can see what's readable vs writable.
+    Personal mode: full write-zone and read-zone allowlist, unchanged.
+
+    Server mode:
+      - Owner / manager (full DB-management capability): full company-wide
+        list, same as personal mode — they're the ones who manage the
+        write-zone config via the Admin tab / grant_write_access.
+      - Staff / field_crew: shows ONLY their own personal directory's
+        read/write status (whether it's currently in the writable
+        allowlist), not the company-wide list of arbitrary host paths.
+        This tells them whether create_file/write_file etc. will actually
+        work for them right now, without exposing internal folder layout
+        unrelated to their own work.
 
     Voice examples:
         "What directories can Claude write to?"
         "Show me my write permissions"
-        "List all writable folders"
+        "Can I write to my personal folder?"
     """
     _telemetry_increment_tool_count("list_writable_directories")
 
+    _lwd_user = _current_user(ctx)
+
+    if _lwd_user is not None:
+        _lwd_db_ok, _ = _check_db_cap(_lwd_user, "full")
+        if not _lwd_db_ok:
+            # Staff / field_crew: own personal directory status only.
+            _lwd_status, _lwd_priv_dir = _user_private_write_dir(ctx)
+            if _lwd_status == "blocked":
+                return (
+                    "📁 Personal Directory Status\n\n"
+                    "🚫 You don't have a personal directory configured.\n"
+                    "Ask your owner/admin to enable 'Private collection' and set "
+                    "up your personal folder in the Admin tab."
+                )
+            _lwd_writable = _writable_allowlist_load()
+            _lwd_priv_norm = _normalize_path_for_match(str(_lwd_priv_dir))
+            _lwd_is_writable = any(
+                _normalize_path_for_match(w) == _lwd_priv_norm for w in _lwd_writable
+            )
+            if _lwd_is_writable:
+                return (
+                    "📁 Personal Directory Status\n\n"
+                    f"  ✅ [W]  {_lwd_priv_dir}\n\n"
+                    "Your personal directory is read + write — create_file, "
+                    "write_file, and similar tools will work inside it."
+                )
+            return (
+                "📁 Personal Directory Status\n\n"
+                f"  📖 [R]  {_lwd_priv_dir}\n\n"
+                "Your personal directory is currently read-only. Ask your "
+                "owner/admin to enable write access in the Admin tab."
+            )
+
+    # Personal mode, or server-mode owner/manager: full list, unchanged.
     writable = _writable_allowlist_load()
     read_dirs = load_auto_update_list() or []
 
@@ -12672,6 +12805,12 @@ def reindex_file(filepath: str, ctx: Context = None) -> str:
     run this. Delete-then-add: purges the file's existing chunks, then re-chunks
     and re-embeds the current content.
 
+    Server mode: collection-aware. Stale chunks are purged from whichever
+    collection they actually live in (own private, an assigned scope, or
+    shared) — not just the default — and fresh chunks are routed back into
+    the correct collection via the same resolver index_path() uses, so
+    content never gets relocated into a broader collection than it started in.
+
     Args:
         filepath: Absolute path to the file. Must be under a tracked
                   read-allowlisted root.
@@ -12705,22 +12844,40 @@ def reindex_file(filepath: str, ctx: Context = None) -> str:
     if not Path(resolved).is_file():
         return f"❌ Not a file (or does not exist): {resolved}"
 
+    # Server mode: route through the SAME collection resolver index_path()
+    # uses, so re-indexing puts content back wherever it actually belongs
+    # (the caller's own private collection, an assigned scope, or shared)
+    # instead of always collapsing everything into the single shared
+    # "documents" collection regardless of where it originally lived.
+    _resolver_rf = _build_collection_resolver(_user_rf) if _user_rf else None
+    _indexer_user_rf = _user_rf
+
     # All ChromaDB writes run on the single dedicated db-writer thread to avoid
     # the HNSW cross-thread EDEADLK ("resource deadlock would occur") that wedges
     # the HTTP server. purge + re-index happen together inside one job.
     def _job():
         try:
             client, embedding_func = get_chroma_client()
-            coll = client.get_or_create_collection(
-                name=COLLECTION_NAME,
-                embedding_function=embedding_func,
-            )
-            coll.delete(where={"filepath": resolved})
+            # Purge stale chunks for this file from EVERY collection, not
+            # just the single default — the file may currently live in a
+            # scoped collection (user:<id>, scope:<name>) rather than
+            # "documents", especially in server mode.
+            for _col_info in client.list_collections():
+                try:
+                    _coll = client.get_collection(
+                        name=_col_info.name, embedding_function=embedding_func)
+                    _coll.delete(where={"filepath": resolved})
+                except Exception as _pe:
+                    _log.warning(
+                        "reindex_file: purge failed in collection %s for %s: %s",
+                        getattr(_col_info, "name", "?"), resolved, _pe)
         except Exception as exc:
             _log.warning("reindex_file: purge failed for %s: %s", resolved, exc)
             # continue — index_file_list still adds fresh chunks
         return index_file_list([resolved], label="reindex_file",
-                               root_directory=str(Path(resolved).parent))
+                               root_directory=str(Path(resolved).parent),
+                               collection_resolver=_resolver_rf,
+                               indexer_user=_indexer_user_rf)
 
     try:
         stats = _db_write(_job, timeout=900.0)
@@ -12747,6 +12904,13 @@ def reindex_directory(directory: str, purge_first: bool = True,
     rebuild from scratch. More thorough than update_tracked_directories which
     only processes changed files. Use this after chunk-size changes, suspected
     index corruption, or when you want a guaranteed clean slate.
+
+    Server mode: collection-aware. Stale chunks are purged from EVERY
+    collection (own private, assigned scopes, shared) — not just the
+    default — and each file is re-indexed back into the collection it
+    actually belongs to via the same resolver index_path() uses, so a
+    directory containing a mix of private and shared content doesn't get
+    collapsed into one collection on reindex.
 
     Args:
         directory:   Absolute path to the tracked directory to reindex.
@@ -12783,6 +12947,13 @@ def reindex_directory(directory: str, purge_first: bool = True,
     if err:
         return f"❌ {err}"
 
+    # Server mode: route through the SAME collection resolver index_path()
+    # uses, so re-indexing puts each file back wherever it actually belongs
+    # (the caller's own private collection, an assigned scope, or shared)
+    # instead of always collapsing everything into "documents".
+    _resolver_rd = _build_collection_resolver(_user_rd) if _user_rd else None
+    _indexer_user_rd = _user_rd
+
     try:
         import datetime as _dt6
         start = _dt6.datetime.now()
@@ -12795,24 +12966,40 @@ def reindex_directory(directory: str, purge_first: bool = True,
                     client = _engine.get_chroma_client()
                     if isinstance(client, tuple):
                         client = client[0]
-                    coll   = client.get_or_create_collection("documents")
-                    existing = coll.get(where={"source": {"$regex": ".*"}},
-                                        include=["metadatas"])
                     norm_dir = _normalize_path_for_match(resolved)
-                    ids_to_del = [
-                        existing["ids"][i]
-                        for i, meta in enumerate(existing.get("metadatas") or [])
-                        if _normalize_path_for_match(
-                               str(meta.get("source",""))).startswith(norm_dir)
-                    ]
-                    if ids_to_del:
-                        coll.delete(ids=ids_to_del)
-                        _log.info("reindex_directory: purged %d chunks for %s",
-                                  len(ids_to_del), resolved)
+                    total_purged = 0
+                    # Purge stale chunks from EVERY collection, not just
+                    # "documents" — content under this directory may live
+                    # in scoped collections (user:<id>, scope:<name>,
+                    # shared) rather than the single default.
+                    for _col_info in client.list_collections():
+                        try:
+                            coll = client.get_collection(_col_info.name)
+                            existing = coll.get(where={"source": {"$regex": ".*"}},
+                                                include=["metadatas"])
+                            ids_to_del = [
+                                existing["ids"][i]
+                                for i, meta in enumerate(existing.get("metadatas") or [])
+                                if _normalize_path_for_match(
+                                       str(meta.get("source",""))).startswith(norm_dir)
+                            ]
+                            if ids_to_del:
+                                coll.delete(ids=ids_to_del)
+                                total_purged += len(ids_to_del)
+                        except Exception as _pe2:
+                            _log.warning(
+                                "reindex_directory: purge step warning in %s: %s",
+                                getattr(_col_info, "name", "?"), _pe2)
+                    if total_purged:
+                        _log.info(
+                            "reindex_directory: purged %d chunks for %s across all collections",
+                            total_purged, resolved)
                 except Exception as _pe:
                     _log.warning("reindex_directory: purge step warning: %s", _pe)
             with _capture_stdout() as buf:
-                _r = index_directory(resolved)
+                _r = index_directory(resolved,
+                                     collection_resolver=_resolver_rd,
+                                     indexer_user=_indexer_user_rd)
             return _r, buf.getvalue()
 
         result, _out = _db_write(_job, timeout=1800.0)
@@ -14171,6 +14358,27 @@ def _load_users() -> "dict | None":
     return None
 
 
+def _hot_reload_users(users_data: "dict | None") -> "dict | None":
+    """Re-read users.json from disk, falling back to the given snapshot if the
+    file is missing/unreadable right now. PURE wrapper around _load_users().
+
+    Every auth-check call site in server mode MUST route through this (not
+    reference a captured `users_data` closure variable directly) so that
+    token corrections, additions, and suspensions made to users.json while
+    the server is already running take effect immediately — on BOTH the
+    /authorize login page and subsequent MCP bearer-auth requests — without
+    requiring a server restart.
+
+    Historical bug (fixed 2026-07-08): the /authorize handler used to
+    resolve logins against the stale startup-time `users_data` snapshot
+    directly, while the MCP request path already hot-reloaded. That
+    inconsistency meant a corrected bearer token would keep failing at
+    the login page until the process was restarted, even though the
+    file on disk was correct.
+    """
+    return _load_users() or users_data
+
+
 def _owner_user_id(users_data: "dict | None" = None) -> "str | None":
     """Return the stable slug id of the OWNER from users.json, or None if no
     owner is defined / users.json absent. Used to PROTECT the owner's private
@@ -14566,7 +14774,9 @@ def _run_server_mode(port: int, token: str,
                     body_bytes  = await _read_body(receive)
                     form_params = _parse_qs(body_bytes)
                     entered     = form_params.get("token", "").strip()
-                    user        = _resolve_user(users_data, entered)
+                    # Hot-reload users.json here too, mirroring the MCP bearer-auth
+                    # path below. See _hot_reload_users() docstring for why this matters.
+                    user        = _resolve_user(_hot_reload_users(users_data), entered)
                     if user is not None:
                         code = _srv_secrets.token_urlsafe(32)
                         _srv_auth_codes[code] = {
@@ -14687,8 +14897,9 @@ def _run_server_mode(port: int, token: str,
             # Resolve the presented token: it may be an OAuth-issued access
             # token (map back to users.json token first) or a raw users.json token.
             # Hot-reload users.json so suspensions/additions take effect
-            # immediately without a server restart.
-            _live_users = _load_users() or users_data
+            # immediately without a server restart. (Shared with the /authorize
+            # login page via _hot_reload_users() — see that docstring.)
+            _live_users = _hot_reload_users(users_data)
             for _new_tok in (_live_users.get("users") or {}).keys():
                 if _new_tok not in _srv_access_tokens:
                     _srv_access_tokens[_new_tok] = _new_tok

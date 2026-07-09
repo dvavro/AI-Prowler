@@ -226,6 +226,15 @@ def get_last_run(job_id: str) -> str:
 
 _running = False
 _thread: threading.Thread | None = None
+# Per-generation stop signal. Created fresh in start(), owned exclusively by
+# the thread it was created for. Fixes a real bug where the old shared
+# boolean flag let an orphaned thread from a PRIOR start()/stop() cycle
+# "resurrect" itself: stop() only flipped _running and returned immediately
+# (no join()), so the old thread could still be mid-sleep when a new
+# start() flipped _running back to True — at which point the orphan woke
+# up, saw _running == True, and kept ticking concurrently with the new
+# thread, both writing to the same LOG_PATH file with no coordination.
+_stop_event: threading.Event | None = None
 
 
 def _tick() -> None:
@@ -288,38 +297,57 @@ def _tick() -> None:
         _log(f"Job {job_id}: sent '{subject}' to {email_to} — {'OK' if ok else 'FAILED'}")
 
 
-def _loop() -> None:
-    """Background thread: tick every 60 seconds."""
-    global _running
+def _loop(stop_event: threading.Event) -> None:
+    """Background thread: tick every 60 seconds.
+
+    stop_event belongs exclusively to this thread's generation (created by
+    the start() call that spawned this thread). It is never shared across
+    generations, so an orphaned thread from an earlier stop() can never be
+    mistaken for the current one — even if a new start()/stop() cycle
+    happens while this thread is still winding down.
+    """
     _load_last_run()
     _log("Scheduler started")
-    while _running:
+    while not stop_event.is_set():
         try:
             _tick()
         except Exception:
             _log(f"ERROR in _tick: {traceback.format_exc()}")
-        # Sleep in 5-second intervals so stop() is responsive
-        for _ in range(12):
-            if not _running:
-                break
-            time.sleep(5)
+        # Wait up to 60s, but wake immediately (no polling delay) as soon as
+        # stop_event is set — more responsive than the old 12×5s poll loop
+        # and, more importantly, race-free.
+        stop_event.wait(60)
     _log("Scheduler stopped")
 
 
 def start() -> None:
     """Start the background scheduler thread."""
-    global _running, _thread
+    global _running, _thread, _stop_event
     if _running:
         return
     _running = True
-    _thread = threading.Thread(target=_loop, daemon=True, name="AI-Prowler-Scheduler")
+    _stop_event = threading.Event()
+    _thread = threading.Thread(
+        target=_loop, args=(_stop_event,),
+        daemon=True, name="AI-Prowler-Scheduler")
     _thread.start()
 
 
 def stop() -> None:
-    """Stop the background scheduler thread."""
+    """Stop the background scheduler thread and wait for it to actually exit.
+
+    Callers (including tests) can rely on the thread being fully terminated
+    — not just a flag being flipped — by the time this returns. Uses a
+    bounded join() rather than blocking forever in case the thread is stuck
+    mid-tick; 65s covers the worst case (a tick already in progress plus one
+    full 60s wait cycle) with margin.
+    """
     global _running
     _running = False
+    if _stop_event is not None:
+        _stop_event.set()
+    if _thread is not None and _thread.is_alive():
+        _thread.join(timeout=65)
 
 
 def is_running() -> bool:

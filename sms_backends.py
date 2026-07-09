@@ -500,6 +500,11 @@ def load_sms_config() -> dict:
     if not cfg_path.exists():
         return {}
     try:
-        return json.loads(cfg_path.read_text(encoding="utf-8")) or {}
+        # utf-8-sig tolerates a BOM (e.g. from PowerShell Out-File or some
+        # editors saving "UTF-8" with BOM) as well as plain utf-8. Without
+        # this, a BOM'd config.json makes this silently return {} — every
+        # SMS/WhatsApp send then fails as "not configured" with zero
+        # indication that valid credentials are actually sitting in the file.
+        return json.loads(cfg_path.read_text(encoding="utf-8-sig")) or {}
     except Exception:
         return {}

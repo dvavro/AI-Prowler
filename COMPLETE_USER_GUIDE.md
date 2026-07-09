@@ -64,7 +64,7 @@ This produces dramatically better results — equivalent to having a skilled res
 - **Token recovery simplified** — token recovery is now email-only (SMS removed). The "Forgot your token?" flow sends a recovery code to the admin's configured email address.
 - **`send_sms` and `send_email` enabled for all roles** — `can_send_sms` and `can_send_email` are now `True` for owner, manager, staff, and field_crew roles in server mode.
 - **`send_learnings_report` available in server mode** — with expanded filters (category, date range, tag).
-- **Total tools: 85** — up from 77 in v7.0.0. New in v8.0.0: 3 agentic analysis tools (`get_pending_analysis_tasks`, `complete_analysis_task`, `save_analysis_report`), 5 job image storage tools (`get_job_images_path`, `set_job_images_path`, `save_job_image`, `list_job_images`, `delete_job_image`), plus expanded contractor/business workflow tools.
+- **Total tools: 80** — up from 77 in v7.0.0. New in v8.0.0: 3 agentic analysis tools (`get_pending_analysis_tasks`, `complete_analysis_task`, `save_analysis_report`), plus expanded contractor/business workflow tools. (Job image storage tools, present earlier in v8.0.0, were removed.)
 - **Common Business AI Analysis renamed** — the "AI Analysis" section in the Quick Links tab is now named "Common Business AI Analysis" for clarity.
 - **Scope Directory Picker** — AI Analysis buttons and Custom Analyses tasks now support optional scope restriction to specific indexed directories before queuing.
 - **Server mode GUI suppression** — Common Business AI Analysis and My Custom Analyses sections are now fully hidden in server mode.
@@ -209,15 +209,15 @@ When you ask Claude a question with AI-Prowler connected, Claude follows this pa
 
 ## 6. MCP Tools Reference
 
-AI-Prowler exposes **85 tools** to Claude across twelve categories in v8.0.0.
+AI-Prowler exposes **80 tools** total to Claude across thirteen categories in v8.0.0 (this doc's own category breakdown — a separate, narrower ten-family grouping is used internally by the `how_to_use_ai_prowler` tool's guide text). Exactly how many are actually *visible* on a given connection depends on mode — see the table below.
 
 ### 6.1 Tool Counts by Mode
 
 | Install type | Mode | Tools visible | Notes |
 |---|---|---|---|
-| Personal / Home | personal | 85 | All tools available |
-| Business — employee personal install | personal | 85 | Full individual tool set |
-| Business — company server | server | 35+ | Tier A tools suppressed; remaining gated by role |
+| Personal / Home | personal | 79 | All 80 tools minus `check_sms_replies` (§6.2b — meaningless with a single user) |
+| Business — employee personal install | personal | 79 | Same as above — personal mode is personal mode regardless of edition |
+| Business — company server | server | 54 | All 80 tools minus the 26 in `_TIER_A_SUPPRESSED` (§6.2) — remaining 54 are further gated per-role/per-call inside the tool itself, not by registration |
 
 ### 6.2 Tier A Tool Suppression (Server Mode Only)
 
@@ -226,12 +226,42 @@ The following tools are never registered when AI-Prowler runs in server mode:
 | Category | Suppressed tools |
 |---|---|
 | Dev / code execution | `run_script`, `run_script_start`, `run_script_status`, `run_script_kill`, `compile_check`, `check_python_import`, `syntax_check`, `lint_check` |
-| Host filesystem writes | `create_file`, `write_file`, `str_replace_in_file`, `fuzzy_replace_in_file`, `line_replace_in_file`, `create_directory`, `list_directory`, `copy_to_backup`, `list_backups`, `restore_backup`, `cleanup_backups`, `reset_write_counter` |
+| Host filesystem writes (unscoped) | `list_directory`, `copy_to_backup`, `list_backups`, `restore_backup`, `cleanup_backups`, `reset_write_counter`, `grant_write_access`, `revoke_write_access` — backup/restore/approval-management tools remain operator/dev-only. `create_file`, `write_file`, `str_replace_in_file`, `fuzzy_replace_in_file`, `line_replace_in_file`, and `create_directory` are **not** in this list — see §6.2c, they're gated per-call instead of blanket-suppressed. |
 | Raw filesystem reads | `read_file_lines`, `grep_documents` |
-| Email operator tools | `configure_email`, `send_file`, `send_learnings_report` (operator config) |
+| Email operator tools | `configure_email`, `send_file` — use personal SMTP credentials, not appropriate for a shared server. `send_learnings_report` is **not** in this category — see the note below. |
 | Bulk index rebuild | `reindex_all` |
+| Agentic analysis task queue | `get_pending_analysis_tasks`, `complete_analysis_task`, `save_analysis_report` — the Quick Links tab's Common Business AI Analysis / My Custom Analyses panels are hidden in server mode's GUI, so the queue these tools drive has no server-mode caller |
+| Raw/unscoped SMS inbox | `check_sms_inbox` — reads the local inbox with no per-user filtering (unlike `check_sms_replies`, which uses the per-user-scoped read path). In a multi-user server this would let any employee read every inbound SMS/WhatsApp message company-wide, not just their own. `check_sms_replies` is the server-mode equivalent. |
 
 > **Note:** `send_sms`, `send_email`, `send_alert`, `send_whatsapp`, `send_learnings_report` (user-facing) are **not** suppressed in server mode — they remain available to users via the Tier B role gate.
+
+### 6.2b Personal-Mode-Only Tool Suppression (Mirror Gate)
+
+The reverse of §6.2: some tools only make sense once there's more than one registered user, so they're never registered when AI-Prowler runs in **personal** mode:
+
+| Category | Suppressed tools |
+|---|---|
+| Per-user-scoped SMS replies | `check_sms_replies` — its per-user thread isolation (Mike sees Karen's reply, not Jake's) is meaningless with a single personal-install user. `check_sms_inbox` is the personal-mode equivalent — same underlying data, but with a richer filter set (provider, unread-only, `since_hours=0` for everything ever received) that doesn't need per-user scoping. |
+
+### 6.2c Server-Mode Personal-Directory Write Scoping
+
+Unlike the blanket suppression in §6.2, six write/modify tools use **per-call scoping** instead: `create_file`, `write_file`, `str_replace_in_file`, `fuzzy_replace_in_file`, `line_replace_in_file`, and `create_directory`.
+
+**Personal mode:** fully unrestricted — identical to every prior version. No change.
+
+**Server mode:** every call from every role is checked against `_check_personal_write_scope()`:
+
+| Situation | Result |
+|---|---|
+| User has a personal (private) directory configured and the target path resolves inside it | ✅ Allowed |
+| User has a personal directory configured but the target path is anywhere else — a shared scope, another user's private directory, the job tracker, etc. | 🚫 Denied — "outside your personal directory" |
+| User does not have a personal directory configured at all (`private_collection_enabled=False`, or no folder was ever set up in the Admin tab) | 🚫 Denied for **any** path — read-only until an admin sets one up |
+
+This means a field crew member with a personal directory can save their own notes, drafts, or working files there — but cannot touch the job tracker spreadsheet, another employee's private folder, or any shared company document. A field crew member with no personal directory configured has no write access anywhere, full stop; they can still use every read tool (`search_documents`, `read_document`, etc.).
+
+**Setup:** a personal directory is the same private-collection folder created via the Admin tab's "Set Up Private Folder" flow when adding or editing a user (§6 — Admin Tab). If `Private collection` isn't ticked for a user, or the folder was never created, that user gets no server-mode write access under this feature.
+
+This scoping applies independently of Tier B role gating (§6.3) — even an owner or manager writing from a *server-mode session* is scoped to their own personal directory by this check. (Owners/managers still have unrestricted write access from a *personal-mode* install, e.g. their own PC.)
 
 ### 6.3 Role-Based Tool Access in Server Mode (Tier B)
 
@@ -239,15 +269,19 @@ The following tools are never registered when AI-Prowler runs in server mode:
 |---|---|---|---|---|
 | RAG Search (search, overview, list docs, etc.) | ✅ | ✅ | ✅ | ✅ |
 | Field Service (weather, geocode, route, maps, spreadsheet) | ✅ | ✅ | ✅ | ✅ |
-| SMS & WhatsApp (send_sms, send_whatsapp, check_sms_inbox, check_sms_replies, check_whatsapp_replies) | ✅ | ✅ | ✅ | ✅ |
+| SMS & WhatsApp (send_sms, send_whatsapp, check_sms_replies, check_whatsapp_replies) | ✅ | ✅ | ✅ | ✅ |
 | Self-Learning (record, check, list, update, delete, stats) | ✅ | ✅ | ✅ | ✅ |
 | `check_ai_prowler_status`, `how_to_use_ai_prowler` | ✅ | ✅ | ✅ | ✅ |
 | `check_tools_status` (field-service health) | ✅ | ✅ | ✅ | ✅ |
 | `send_email`, `send_alert` | ✅ | ✅ | ✅ | ✅ |
 | `send_learnings_report` | ✅ | ✅ | ✅ | ✅ |
-| `index_path` (limited — own scopes only) | ✅ | ✅ | ✅ | ❌ |
-| `reindex_file`, `reindex_directory` | ✅ | ✅ | ❌ | ❌ |
+| `index_path` (limited — own scopes only) | ✅ | ✅ | ✅ | ⚠️ own private dir only |
+| `list_tracked_directories`, `reindex_file`, `reindex_directory` | ✅ | ✅ | ❌ | ❌ |
 | `untrack_directory`, `update_tracked_directories` | ✅ | ✅ | ❌ | ❌ |
+
+**field_crew and `index_path`:** field_crew (or any role with no `manage_db` capability) can only call `index_path` if they have a personal directory configured (same one used for the write-scoping in §6.2c) — and only for files/folders located inside it. Content always lands in their own private collection, never a shared or company scope, regardless of any collection-map rule that would otherwise apply. Once indexed, it's automatically semantically searchable via `search_documents` and friends, the same as any other content in their private collection. A field_crew member with no personal directory configured cannot index at all.
+
+**`reindex_file` / `reindex_directory` / `reindex_all` — collection-aware in server mode.** These purge stale chunks from *every* collection (own private, assigned scopes, shared) rather than only the default one, and re-index each file back into the collection it actually belongs to via the same resolver `index_path()` uses. Without this, reindexing a file or directory containing scoped content would relocate it into the shared collection — visible to every role — rather than putting it back where it started. `reindex_all` needs no separate handling: it calls `reindex_directory()` once per tracked directory and inherits the fix automatically. Personal mode is unaffected — always the single default collection, as before.
 
 ### 6.4 Complete Tool Reference Table
 
@@ -257,10 +291,11 @@ The following tools are never registered when AI-Prowler runs in server mode:
 
 | Tool | What It Does | Mode |
 |---|---|---|
-| `how_to_use_ai_prowler` | Returns the recommended workflow and tool sequence. Claude calls this automatically at the start of research sessions. | Personal + Server |
+| `how_to_use_ai_prowler` | Returns the recommended workflow and tool sequence. Claude calls this automatically at the start of research sessions. Identical guide body in every mode and role — see its entry under "Status & System" below for why. | Personal + Server |
 | `get_knowledge_base_overview` | High-level summary: document count, file types, chunk count, database location, tracked directories. Start here before any research task. | Personal + Server |
 | `search_documents` | Primary retrieval tool. Semantic vector search returning raw document chunks with source metadata and similarity scores. | Personal + Server |
 | `multi_query_search` | Runs 2–6 search queries in parallel and returns deduplicated results ranked by best similarity. More efficient than multiple `search_documents` calls. | Personal + Server |
+| `search_within_directory` | Semantic search restricted to a single directory/case/project — use when you need to guarantee results come only from one folder tree, not the whole index. Tries an exact `parent_directory` match first, falling back to a broader search filtered by `directory_chain`/`filepath`. **Server mode:** the directory filter stacks on top of the caller's role-based collection scoping — a staff/field_crew query never touches collections outside their own private/assigned-scope/shared set, regardless of what directory is requested. This is the tool the "Vicki bug" regression suite (`test_private_dir_isolation.py`) is built around — a manager cannot read the owner's private directory just by naming it. | Personal + Server |
 | `expand_search_result` | Fetches chunks immediately before and after a specific result chunk. Use when a result is cut off at a boundary and you need more context. | Personal + Server |
 | `read_document` | Reads a full document in sequential chunk order. Best for contracts, manuals, and reports where you need the whole text. | Personal + Server |
 | `list_indexed_documents` | Browses all indexed documents grouped by file type, with chunk counts. | Personal + Server |
@@ -278,7 +313,7 @@ The following tools are never registered when AI-Prowler runs in server mode:
 | `update_tracked_directories` | Re-scans all tracked paths and re-indexes only new or changed files. | Personal + Server |
 | `list_tracked_directories` | Lists every path currently registered for auto-update tracking. | Personal + Server |
 | `untrack_directory` | Removes a path from the tracking list and deletes all its chunks from ChromaDB. Destructive — chunks are gone until re-indexed. | Personal + Server |
-| `get_database_stats` | Chunk count, unique document count, and file-type breakdown for the ChromaDB index. In server mode shows scoped collections separately. | Personal + Server |
+| `get_database_stats` | Chunk count, unique document count, and file-type breakdown for the ChromaDB index. Personal mode always covers the whole database. **Server mode:** scoped to the caller's accessible collections — owners (and managers with `read_all_role_scopes`) still see the full company-wide total; staff/field_crew see only their own private, assigned scope, and shared collections. | Personal + Server |
 
 ---
 
@@ -299,8 +334,8 @@ The following tools are never registered when AI-Prowler runs in server mode:
 | `record_learning` | Saves a new lesson, fact, client preference, or business insight. Instantly indexed. In server mode the recording employee's name is automatically stamped. | Personal + Server |
 | `search_learnings` | Semantic search of the learning store. Claude calls this proactively before answering questions so personal knowledge overrides generic responses. | Personal + Server |
 | `list_learnings` | Browses learnings by recency with exact-match filters on category, status, or tag. | Personal + Server |
-| `update_learning` | Edits any field of an existing learning — content, confidence, outcome, status, tags. | Personal + Server |
-| `delete_learning` | Permanently removes a learning from both JSON and ChromaDB. Consider archiving instead. | Personal + Server |
+| `update_learning` | Edits fields of an existing learning — content, confidence, outcome, status, tags. **Server mode ownership:** each employee may only edit learnings they personally recorded; managers may edit any employee's learning but never the owner's; the owner may edit anything. Reading/searching learnings stays fully shared (§ above) — only modification is ownership-gated. | Personal + Server |
+| `delete_learning` | Permanently removes a learning from both JSON and ChromaDB. Consider archiving instead. **Same server-mode ownership rules as `update_learning`.** | Personal + Server |
 | `get_learning_stats` | Summary statistics: totals by category, source, outcome, and status. | Personal + Server |
 | `get_learnings_report` | Returns learnings as formatted text in-conversation (summary, full detail, or titles-only). Works on mobile. | Personal + Server |
 | `rebuild_learnings_index` | Rebuilds the ChromaDB learnings index from the JSON data file. Fixes index/data mismatches. | Personal |
@@ -319,21 +354,21 @@ The following tools are never registered when AI-Prowler runs in server mode:
 | `build_maps_url` | Generates a tap-to-navigate Google Maps (or Apple Maps) URL with all stops pre-loaded in optimized order. Splits into multiple leg links for routes over 9 stops. | Personal + Server |
 | `read_job_spreadsheet` | Reads job data from the AI-Prowler Job Tracker spreadsheet. Supports date filtering to show today's or a specific day's jobs. | Personal + Server |
 | `update_job_spreadsheet` | Updates a row in the job tracker after a job is completed — status, invoice number, duration, actual amount, etc. Auto-backs up the spreadsheet before writing. | Personal + Server |
-| `check_tools_status` | Field-service health check. Reports which action tools are ready to use and which need configuration (SMTP, spreadsheet path, routing APIs). | Personal + Server |
+| `check_tools_status` | Field-service health check. Reports which action tools are ready to use and which need configuration (SMTP, spreadsheet path, routing APIs). **Server mode:** the dev-tools/file-editing section reflects the caller's actual availability — most dev tools (code execution, backups, `list_directory`) are unavailable in server mode; the write/edit tools show a live check of whether the caller currently has a personal directory configured. | Personal + Server |
 
 ---
 
 #### SMS & WhatsApp Tools (5 tools — New in v8.0.0)
 
-These tools enable two-way SMS and WhatsApp communication between field crew, registered server users, and spreadsheet customers. Available to all roles in server mode.
+These tools enable two-way SMS and WhatsApp communication between field crew, registered server users, and spreadsheet customers. `check_sms_inbox` and `check_sms_replies` are mode-exclusive — see §6.2 and §6.2b — because they answer the same underlying question ("what's come in?") with different scoping that only makes sense in one mode or the other.
 
 | Tool | What It Does | Mode |
 |---|---|---|
-| `send_sms` | Sends an SMS message to a registered user (from users.json) or a spreadsheet customer (from AI-Prowler_Job_Tracker.xlsx). Provider-abstracted: works with Twilio, SignalWire, or Vonage. In server mode, the sending employee's identity is stamped in the thread log. | Personal + Server |
-| `send_whatsapp` | Sends a WhatsApp message via the Twilio WhatsApp Business API. Same recipient lookup as `send_sms`. Works worldwide — no carrier gateway issues. | Personal + Server |
-| `check_sms_inbox` | Reads the local SMS inbox (populated in real time via the `/sms-webhook` endpoint). Returns inbound messages grouped by sender phone number. Thread-isolated per crew member. | Personal + Server |
-| `check_sms_replies` | Checks for inbound SMS replies from a specific contact or phone number. Returns the most recent replies in chronological order. | Personal + Server |
-| `check_whatsapp_replies` | Checks for inbound WhatsApp messages from a specific contact. Returns the most recent messages in chronological order. | Personal + Server |
+| `send_sms` | Sends an SMS message to a registered user (from users.json) or a spreadsheet customer (from AI-Prowler_Job_Tracker.xlsx). If neither matches, falls back to your own saved personal contacts (`save_contact`) — server mode: your own contacts only, never a coworker's. Provider-abstracted: works with Twilio, SignalWire, or Vonage. In server mode, the sending employee's identity is stamped in the thread log. | Personal + Server |
+| `send_whatsapp` | Sends a WhatsApp message via the Twilio WhatsApp Business API. Same three-tier recipient lookup as `send_sms` (registered users → spreadsheet customers → your own saved contacts). Works worldwide — no carrier gateway issues. Server mode: sender identity stamped in the thread log, same as `send_sms`. | Personal + Server |
+| `check_sms_inbox` | Reads the entire local SMS/WhatsApp inbox (populated in real time via the `/sms-webhook` and `/whatsapp-webhook` endpoints) — every inbound message from any sender, not just people you've texted. Filterable by provider and unread-only; `since_hours=0` returns everything ever received. Personal mode only — it has no per-user scoping, so it's suppressed in server mode to prevent one employee from reading everyone's messages. | Personal |
+| `check_sms_replies` | Checks for inbound SMS replies, scoped to threads **you personally sent** — in server mode, Mike sees only Karen's reply, not Jake's or Bob's. Server mode only — with a single personal-install user this attribution is meaningless, so `check_sms_inbox` covers personal mode instead. | Server |
+| `check_whatsapp_replies` | Checks for inbound WhatsApp messages. **Server mode:** scoped to threads you personally sent — same per-user isolation as `check_sms_replies` (it no longer delegates to `check_sms_inbox` internally, which would have bypassed that scoping entirely). | Personal + Server |
 
 **SMS Setup (Personal Mode):** Tell Claude your Twilio (or SignalWire/Vonage) Account SID, Auth Token, and from-number. Claude calls `configure_sms` once and credentials are saved. For inbound messages, configure your Twilio phone number's webhook URL to point to `https://your-tunnel-domain/sms-webhook`.
 
@@ -352,7 +387,7 @@ Most email tools are personal-mode only, but `send_email` and `send_alert` are a
 | Tool | What It Does | Mode |
 |---|---|---|
 | `configure_email` | Saves SMTP credentials so Claude can send email. Auto-detects provider from email domain. Called once; credentials persist. | Personal only |
-| `send_email` | Sends a plain-text email. Optional file attachment from any tracked directory. In server mode uses the server's SMTP config with employee Reply-To header. | Personal + Server (all roles) |
+| `send_email` | Sends a plain-text email. Optional file attachment from any tracked directory. In server mode uses the server's SMTP config with employee Reply-To header. Resolves a name-only `to` in order: Customers sheet, registered users (`users.json`), then your own saved personal contacts (`save_contact`) as a final fallback. The Customers-sheet lookup always reads the single master spreadsheet directly (unlike the job-spreadsheet tools under "Server Mode: Which Spreadsheet Gets Used," it does **not** follow per-user tracker routing) — same behavior in both modes. | Personal + Server (all roles) |
 | `send_alert` | Fires a quick one-line alert email — subject auto-generated from the message. Great for voice-commanded notifications from the field. | Personal + Server (all roles) |
 | `send_file` | Sends any tracked file as an email attachment. Auto-generates subject from filename if not specified. | Personal only |
 | `send_learnings_report` | Emails a formatted HTML learnings report. Available in server mode with expanded filters. | Personal + Server |
@@ -368,25 +403,25 @@ Most email tools are personal-mode only, but `send_email` and `send_alert` are a
 
 ---
 
-#### Code Tools — Write-Side (13 tools — Personal Installs Only)
+#### Code Tools — Write-Side (13 tools — Personal + Server, Server Scoped to Own Directory)
 
-All write operations are protected by four independent layers: read allowlist, writable allowlist, hard blocklist, and per-session circuit breaker. Suppressed in server mode.
+All write operations are protected by four independent layers: read allowlist, writable allowlist, hard blocklist, and per-session circuit breaker. In server mode, a fifth layer applies to `create_file`, `write_file`, `str_replace_in_file`, `fuzzy_replace_in_file`, `line_replace_in_file`, and `create_directory`: writes are scoped to the caller's own personal directory only, and denied entirely for users without one configured (see §6.2b). The remaining dev/backup-management tools (`copy_to_backup`, `restore_backup`, `list_backups`, `list_directory`, `reset_write_counter`, `grant_write_access`, `revoke_write_access`, `cleanup_backups`) stay fully suppressed in server mode (§6.2).
 
 | Tool | What It Does | Mode |
 |---|---|---|
-| `create_file` | Creates a new file. Fails if the file already exists. | Personal |
-| `write_file` | Overwrites an existing file. Auto-backs up to `.bakN` before writing. | Personal |
-| `str_replace_in_file` | Surgical in-place edit: replaces one unique occurrence of `old_str` with `new_str`. Requires exact whitespace match including indentation. Use `dry_run=True` to preview the diff before committing. 1000× cheaper than a full file rewrite for large files. | Personal |
-| `fuzzy_replace_in_file` | **New in v8.0.0.** Whitespace-tolerant surgical edit. Tries four progressively looser matching strategies: exact → CRLF normalization → trailing whitespace strip → full whitespace collapse. Use when `str_replace_in_file` fails due to indentation or line-ending differences. | Personal |
-| `line_replace_in_file` | **New in v8.0.0.** Replaces a range of lines by line number. Zero text-matching ambiguity — works on any file regardless of encoding or Unicode. Always pair with `read_file_lines` first to confirm exact line numbers. Last resort when both replace tools fail. | Personal |
-| `create_directory` | Creates a directory and any missing parents. Idempotent. | Personal |
+| `create_file` | Creates a new file. Fails if the file already exists. **Server mode:** scoped to the caller's own personal directory only — denied entirely for users without one configured. | Personal + Server (own dir) |
+| `write_file` | Overwrites an existing file. Auto-backs up to `.bakN` before writing. **Server mode:** scoped to the caller's own personal directory only. | Personal + Server (own dir) |
+| `str_replace_in_file` | Surgical in-place edit: replaces one unique occurrence of `old_str` with `new_str`. Requires exact whitespace match including indentation. Use `dry_run=True` to preview the diff before committing. 1000× cheaper than a full file rewrite for large files. **Server mode:** scoped to the caller's own personal directory only. | Personal + Server (own dir) |
+| `fuzzy_replace_in_file` | **New in v8.0.0.** Whitespace-tolerant surgical edit. Tries four progressively looser matching strategies: exact → CRLF normalization → trailing whitespace strip → full whitespace collapse. Use when `str_replace_in_file` fails due to indentation or line-ending differences. **Server mode:** scoped to the caller's own personal directory only. | Personal + Server (own dir) |
+| `line_replace_in_file` | **New in v8.0.0.** Replaces a range of lines by line number. Zero text-matching ambiguity — works on any file regardless of encoding or Unicode. Always pair with `read_file_lines` first to confirm exact line numbers. Last resort when both replace tools fail. **Server mode:** scoped to the caller's own personal directory only. | Personal + Server (own dir) |
+| `create_directory` | Creates a directory and any missing parents. Idempotent. **Server mode:** scoped to the caller's own personal directory only. | Personal + Server (own dir) |
 | `list_directory` | Lists the immediate contents of a directory: files, subdirectories, and backups. Read-only. | Personal |
 | `copy_to_backup` | Takes a manual snapshot of a file as `.bakN` without modifying the original. | Personal |
 | `list_backups` | Lists all backups for a given file with timestamps and sizes. | Personal |
 | `restore_backup` | Overwrites the active file with the contents of the specified backup. | Personal |
 | `cleanup_backups` | Finds and optionally deletes backup files. Always run with `dry_run=True` first to preview. | Personal |
 | `reset_write_counter` | Resets the per-session 20-write circuit breaker so large editing sessions can continue without restarting the server. | Personal |
-| `list_writable_directories` | Lists all directories in the write-zone allowlist with read allowlist for reference. | Personal |
+| `list_writable_directories` | Personal mode / server-mode owner+manager: full write-zone and read-zone allowlist. Server-mode staff/field_crew: only their own personal directory's read/write status — not the company-wide list. | Personal + Server |
 
 **File Edit Escalation Order:** Use `str_replace_in_file` first (exact match). If it fails due to whitespace, use `fuzzy_replace_in_file`. If that also fails (Unicode characters, complex indentation), use `line_replace_in_file` with `read_file_lines` to confirm line numbers first.
 
@@ -427,8 +462,8 @@ Two different status tools — know which to call:
 
 | Tool | What It Does | Mode |
 |---|---|---|
-| `check_ai_prowler_status` | RAG engine health check. Verifies ChromaDB connectivity, embedding model status, chunk count, and tracked paths. | Personal + Server |
-| `how_to_use_ai_prowler` | Returns the recommended Agentic RAG workflow and tool-call sequence. Call at the start of any new research session. | Personal + Server |
+| `check_ai_prowler_status` | RAG engine health check. Verifies ChromaDB connectivity, embedding model status, and chunk count — always shown to every role, a basic health signal. The tracked-paths list (real folder/file names) is shown only to owner/manager in server mode, same gate as `list_tracked_directories`; staff/field_crew still get the health check, just without that section. | Personal + Server |
+| `how_to_use_ai_prowler` | Returns the recommended Agentic RAG workflow and tool-call sequence. Call at the start of any new research session. **The main guide is identical across every mode and role** — deliberate, so a conversation with two connectors attached (e.g. a personal install and a company server) can't have Claude conflate "not available on this connector" with "doesn't exist at all." Server-mode caveats (dev tools, code-aware retrieval, file-editing scoping, agentic analysis) are written inline in the guide text itself, present for every reader. Only the "THIS CONNECTION" footer varies — computed live per caller, including their personal-directory write status. | Personal + Server |
 
 ---
 
@@ -436,13 +471,13 @@ Two different status tools — know which to call:
 
 | Tool | What It Does | Mode |
 |---|---|---|
-| `log_time_entry` | Clocks in or out for a job. Records start/stop times and computes duration in the TimeLog sheet of the Job Tracker spreadsheet. | Personal + Server |
+| `log_time_entry` | Clocks in or out for a job. Records start/stop times and computes duration in the TimeLog sheet of the Job Tracker spreadsheet. Requires an exact, unambiguous job match — an identifier matching zero or multiple jobs is rejected rather than guessed. **Server mode:** the `Crew / Technician` field is stamped with the caller's own name (not the job's pre-assigned crew), and a new `Logged By (User ID)` column tracks ownership — you can only clock out an entry you personally opened, and one teammate's open shift never blocks another's on the same job. | Personal + Server |
 | `email_invoice` | Reads the Invoices sheet and emails a branded HTML invoice directly to the customer. | Personal + Server |
-| `schedule_next_recurring_job` | Auto-creates the next recurring job entry (weekly, bi-weekly, monthly, quarterly) after a job is marked complete. | Personal + Server |
+| `schedule_next_recurring_job` | Auto-creates the next recurring job entry (weekly, bi-weekly, monthly, quarterly) after a job is marked complete. Requires an exact, unambiguous job match — a `job_identifier` matching zero or multiple jobs is rejected with a candidate list rather than guessed. Accepts a `when` argument in **both** modes — `"today"` (default if omitted, in both modes), `"tomorrow"`, `"yesterday"`, `"this_week"`, `"next_week"`, `"any"` (no date restriction), or an explicit `"YYYY-MM-DD"` — to scope which jobs are searched by date. **Server mode:** staff/field_crew only search jobs assigned to them (`Crew / Technician` matches their own name); owner/manager search every crew's jobs. | Personal + Server |
 | `get_ar_aging_report` | Generates an Accounts Receivable aging report from the Invoices sheet, broken into Current / 1–30 / 31–60 / 61–90 / 90+ day buckets. | Personal + Server |
-| `save_contact` | Saves or updates a personal contact (phone and/or email) so future `send_sms` / `send_email` calls can resolve them by name. | Personal + Server |
-| `get_sms_thread` | Returns the full two-way conversation thread with a contact — both outbound and inbound messages in chronological order. | Personal + Server |
-| `list_sms_contacts_with_replies` | Lists all contacts you've texted recently, with unread inbound reply counts highlighted. | Personal + Server |
+| `save_contact` | Saves or updates a personal contact (phone and/or email) so future `send_sms` / `send_email` calls can resolve them by name. Merges with any existing saved fields rather than overwriting. **Server mode:** each user gets their own separate file (`contacts_cache_<user_id>.json`) — genuinely private, not a shared company address book; the confirmation message shows exactly which file it saved to. | Personal + Server |
+| `get_sms_thread` | Returns the full two-way conversation thread with a contact — both outbound and inbound messages in chronological order. **Server mode:** only shown if you personally last sent to this contact — threads are keyed by phone number company-wide, so this prevents seeing another employee's conversation just by naming their contact. | Personal + Server |
+| `list_sms_contacts_with_replies` | Lists all contacts you've texted recently, with unread inbound reply counts highlighted. **Server mode:** scoped to threads you personally sent — same per-user isolation as `check_sms_replies`. A brand-new user with no thread history yet sees everything until they send their first message. | Personal + Server |
 
 ---
 
@@ -456,77 +491,7 @@ These tools power the **Common Business AI Analysis** and **My Custom Analyses**
 | `complete_analysis_task` | Marks a pending task as completed after Claude finishes the analysis. Stamps `completed_at` and stores the optional `summary`. For scheduled tasks (both built-in and custom), auto-advances `next_due` anchored to the original due date — not the completion date. | Personal |
 | `save_analysis_report` | Saves a full analysis as a Word document (`.docx`) to the configured report folder. Default: `~/Documents/AI-Prowler_tasks_reports`. | Personal |
 
----
 
-#### Job Image Storage Tools (5 tools — Personal + Server)
-
-Store, catalogue, and delete photos tied to job records. Images are saved as binary files — they are **not indexed in ChromaDB** and cannot be searched by content. A sidecar `index.json` per job directory records metadata (filename, description, tags, date, size) so Claude can list a job's image catalogue in any future session without the user re-uploading pixel data.
-
-**Default storage location:** `~/Documents/AI-Prowler_job_images/<job_id>/`
-**Configurable:** Use `set_job_images_path()` from Claude chat to change the root to any local or network path — no restart needed.
-
-| Tool | What It Does | Mode |
-|---|---|---|
-| `get_job_images_path` | Returns the current storage root path (default or custom), whether a custom path is configured, and a count of jobs and total images stored. Call this to confirm where photos will be saved before uploading. | Personal + Server |
-| `set_job_images_path(path)` | Sets the root directory for all job image storage. Saves to `~/.ai-prowler/config.json`, takes effect immediately — no restart needed. Pass `""` to reset to default. Validates the path is absolute and writable before saving. Does NOT move existing images — ask Claude to help if needed. | Personal + Server |
-| `save_job_image` | Saves a photo to the configured root under `<root>/<job_id>/`. Accepts raw base64 or full data URI — both work. Timestamp-prefix added automatically. Updates `index.json` with full metadata. | Personal + Server |
-| `list_job_images` | Lists all images stored for a job with metadata (filename, description, tags, date, size, file path). Accepts an optional `tag` filter (e.g. `tag="before"`). Returns metadata only — not pixel data. Includes a reminder to ask the user to re-upload for visual inspection. | Personal + Server |
-| `delete_job_image` | Deletes a specific image file from disk and removes its entry from `index.json`. Use `list_job_images()` first to get the exact stored filename (which includes the timestamp prefix). The job directory is kept even if empty. | Personal + Server |
-
-**Changing the storage path from Claude chat:**
-
-```
-"Where are my job photos stored?"
-→ Claude calls get_job_images_path() — shows current path and image count
-
-"Store job photos on my D: drive at D:\JobPhotos"
-→ Claude calls set_job_images_path(path="D:\\JobPhotos")
-→ ✅ Takes effect immediately, no restart needed
-
-"Reset job photo storage back to the default"
-→ Claude calls set_job_images_path(path="")
-→ ✅ Resets to ~/Documents/AI-Prowler_job_images
-```
-
-**Supported image formats (15 types):**
-
-| Format | Extension | Source | Claude can see pixels? |
-|---|---|---|---|
-| JPEG | `.jpg` `.jpeg` `.jfif` | All phones (Android default, iPhone "Most Compatible") | ✅ Yes |
-| HEIC | `.heic` | **iPhone default since iOS 11** | ⚠️ Stored, not visible |
-| HEIF | `.heif` | Same codec as HEIC, alternate extension | ⚠️ Stored, not visible |
-| PNG | `.png` | All phones (screenshots) | ✅ Yes |
-| WebP | `.webp` | Google Pixel, Android | ✅ Yes |
-| GIF | `.gif` | All (animated) | ✅ Yes |
-| AVIF | `.avif` | Newest Android / Chrome | ⚠️ Stored, not visible |
-| DNG | `.dng` | Android Pro/RAW mode | ⚠️ Stored, not visible |
-| TIFF | `.tiff` | High-end cameras, scanners | ⚠️ Stored, not visible |
-| BMP | `.bmp` | Windows screenshots | ⚠️ Stored, not visible |
-| RAW | `.raw` | Generic camera RAW | ⚠️ Stored, not visible |
-| Canon RAW | `.cr2` `.cr3` | Canon cameras | ⚠️ Stored, not visible |
-| Nikon RAW | `.nef` | Nikon cameras | ⚠️ Stored, not visible |
-| Sony RAW | `.arw` | Sony cameras | ⚠️ Stored, not visible |
-| JPEG 2000 | `.jp2` | Rare | ⚠️ Stored, not visible |
-
-> **"Stored, not visible"** means AI-Prowler saves the file correctly and the metadata is indexed, but Claude cannot visually analyze the pixel content. For HEIC photos from iPhones, the user can share them directly — Claude stores them as-is. To have Claude visually describe a stored image, ask the user to re-upload the file.
-
-> **Extension inference:** If no file extension is provided in the filename, AI-Prowler automatically infers the correct extension from the `media_type` parameter (e.g. `media_type="image/heic"` → `.heic` appended).
-
-**Index schema** (`<root>/<job_id>/index.json`):
-```json
-[
-  {
-    "filename":    "20260624_143022_before_gutters.jpg",
-    "original":    "before_gutters.jpg",
-    "job_id":      "1042",
-    "description": "Gutters clogged before cleaning",
-    "tags":        ["before", "gutters"],
-    "media_type":  "image/jpeg",
-    "saved_at":    "2026-06-24T14:30:22Z",
-    "size_bytes":  284571
-  }
-]
-```
 ### 6.5 Email Tool Setup
 
 #### How to Configure Email (Personal Installs)
@@ -608,7 +573,7 @@ The Remote Access feature lets you use AI-Prowler with Claude.ai from any device
    - Installs `cloudflared` as a Windows service
    - Starts the tunnel (shown as **Tunnel active (Windows service)**)
    - Auto-fills your license key, domain, and tunnel token fields
-5. **Connect Claude.ai** — Click the red **📖 Connect Claude.ai (auto)** button. A popup explains the steps and copies your MCP URL to the clipboard. Click OK — Claude.ai opens to the Add Custom Connector dialog. Paste the URL, name it AI-Prowler, leave OAuth fields blank, click Add. Enter your Bearer token when prompted. Set **Always Allow** for all tools.
+5. **Connect Claude.ai** — Click the red **📖 Connect Claude.ai (auto)** button. A popup explains the steps and copies your MCP URL to the clipboard. Click OK — Claude.ai opens to the Add Custom Connector dialog. Paste the URL, name it **AI-Prowler Local**, leave OAuth fields blank, click Add. Enter your Bearer token when prompted. Set **Always Allow** for all tools.
 
 > **No Cloudflare account needed.** The subscription automatically provisions and manages your Cloudflare tunnel. No manual DNS, no dashboard setup, no domain purchase required.
 
@@ -644,7 +609,7 @@ The **Keep It Running** panel ensures Windows doesn't interrupt your MCP server.
 2. Read the popup instructions — your MCP URL is already copied to clipboard
 3. Click OK — Claude.ai opens to the Add Custom Connector form
 4. Paste URL into **Remote MCP server URL** field
-5. Name it **AI-Prowler**
+5. Name it **AI-Prowler Local** — this exact name matters: if you ever also connect to a company **AI-Prowler Server**, distinct names let Claude tell the two knowledge bases apart instead of guessing which one you mean
 6. Leave **OAuth Client ID** and **OAuth Client Secret** blank
 7. Click **Add** — Claude.ai connects to your tunnel and prompts for auth
 8. Enter your Bearer token
@@ -687,8 +652,8 @@ Each employee needs a **Claude Pro** (individual) or the company needs a **Claud
 
 | Option | Connector setup |
 |---|---|
-| **Claude Pro** (per person) | Each employee adds the connector individually: Settings → Connectors → + → Add custom connector |
-| **Claude Team** (org plan) | Owner adds once via Organization Settings → Connectors; employees just click Connect |
+| **Claude Pro** (per person) | Each employee adds the connector individually: Settings → Connectors → + → Add custom connector — name it **AI-Prowler Server** |
+| **Claude Team** (org plan) | Owner adds once via Organization Settings → Connectors (name it **AI-Prowler Server**); employees just click Connect |
 
 👉 Upgrade at: https://claude.ai/upgrade
 
@@ -779,10 +744,10 @@ Employee steps:
 1. Download and install **AI-Prowler Personal** from the website
 2. Go to Settings → Remote Access → paste their personal activation code
 3. Click **⚡ Configure Mobile Access** — their own tunnel goes live
-4. Click the red **📖 Connect Claude.ai (auto)** button — adds their personal AI-Prowler connector
-5. Add the company server connector URL separately in Claude.ai → Settings → Connectors → + → Add custom connector
+4. Click the red **📖 Connect Claude.ai (auto)** button — adds their personal connector; name it **AI-Prowler Local**
+5. Add the company server connector URL separately in Claude.ai → Settings → Connectors → + → Add custom connector, naming it **AI-Prowler Server**
 
-They now have **two connectors** in Claude.ai: their personal AI-Prowler (private documents) and the company AI-Prowler Server (shared company knowledge base).
+They now have **two connectors** in Claude.ai: **AI-Prowler Local** (their own private documents) and **AI-Prowler Server** (the shared company knowledge base). Using these exact, distinct names — rather than naming both just "AI-Prowler" — lets Claude tell the two apart and route requests to the right one instead of guessing.
 
 ### Edition and Mode
 
@@ -906,6 +871,19 @@ Four tools require no setup and work immediately:
 The installer deploys a pre-built `AI-Prowler_Job_Tracker.xlsx` to `Documents\AI-Prowler\`.
 
 > **Column headers are what `update_job_spreadsheet()` and `read_job_spreadsheet()` match on — do not rename headers or the tools will fail to find the right columns.**
+
+#### Server Mode: Which Spreadsheet Gets Used
+
+Every job-spreadsheet tool (`read_job_spreadsheet`, `update_job_spreadsheet`, `email_invoice`, `schedule_next_recurring_job`, `log_time_entry`, `get_ar_aging_report`) resolves the file differently depending on mode:
+
+**Personal mode:** unrestricted — an explicit `filepath` argument is used as given; otherwise falls back to the configured default path.
+
+**Server mode:** any `filepath` argument is **ignored**. Instead, the file is resolved from **Settings → Business → Default Spreadsheet Path** (the same path/filename you pick via that tab's Browse button — defaults to `AI-Prowler_Job_Tracker.xlsx` unless you saved it under a different name):
+
+- **Shared master (default)** — everyone reads and writes the exact file at that path. Simple, and the whole crew stays in sync automatically.
+- **Per-user tracking** — drop additional files named exactly `<user_id>.xlsx` (e.g. `jake-r.xlsx`, `vicki-vavro.xlsx` — the user's ID from the Admin tab, not their display name) into the **same folder** as the master file. A user with a matching file gets their own private tracker instead of the shared one; anyone without one still falls back to the master. No separate setting to configure — it's entirely folder-based.
+
+**Concurrent writes:** `update_job_spreadsheet`, `schedule_next_recurring_job`, and `log_time_entry` are serialized behind an internal write lock, so two crew members saving at the same moment queue up instead of one silently overwriting the other's change. Combined with the automatic pre-write backup (see below), this means a bad or conflicting write is always recoverable, and simultaneous writes are always applied cleanly one after another rather than racing.
 
 #### Sheets
 
@@ -1055,10 +1033,11 @@ The installer deploys a pre-built `AI-Prowler_Job_Tracker.xlsx` to `Documents\AI
 | `Clock In (HH:MM:SS)` | Start time — written by `log_time_entry()` | `08:02:15` |
 | `Clock Out (HH:MM:SS)` | End time — written by `log_time_entry()` | `09:28:44` |
 | `Elapsed (min)` | Auto-calculated: (Out − In) × 1440 | `86` |
-| `Crew / Technician` | Who performed the work | `Mike C.` |
+| `Crew / Technician` | Who performed the work — personal mode: pulled from the job's assignment; server mode: the actual calling user's name | `Mike C.` |
 | `Notes` | Entry source / notes | `Clocked via AI-Prowler log_time_entry` |
+| `Logged By (User ID)` | Server mode only — the calling user's ID, used to enforce that only the person who clocked in can clock out that entry | `jake-r` |
 
-To log time: *"Clock me in on job JOB-0003"* → Claude calls `log_time_entry()` and writes a new row. *"Clock out"* → Claude fills the Clock Out time and calculates Elapsed automatically.
+To log time: *"Clock me in on job JOB-0003"* → Claude calls `log_time_entry()` and writes a new row. *"Clock out"* → Claude fills the Clock Out time and calculates Elapsed automatically. The job must be specified precisely enough to match exactly one row in Jobs_Schedule — a vague identifier matching several jobs returns a list of candidates instead of guessing.
 
 ---
 
@@ -1777,10 +1756,11 @@ Error 1033 means `cloudflared` is running but cannot reach the local AI-Prowler 
 2. Check that your Twilio/SignalWire/Vonage Account SID and Auth Token are correct in Settings → SMS Configuration
 3. Verify your from-number is correctly formatted (E.164: `+15555551234`)
 
-**Problem: Inbound SMS not appearing in `check_sms_inbox`**
+**Problem: Inbound SMS not appearing (`check_sms_inbox` in personal mode, `check_sms_replies` in server mode)**
 1. Verify the HTTP server is running and the Cloudflare Tunnel is active
 2. In your Twilio Console, confirm the webhook URL for your phone number is set to `https://your-tunnel-domain/sms-webhook`
 3. Check `mcp_server.log` for any webhook POST entries
+4. In server mode, `check_sms_replies` only shows replies to threads *you* personally sent — if the reply was to a text a different employee sent, ask them to check instead, or the owner can pull it from `sms_inbox.json` directly.
 
 ---
 
@@ -1992,4 +1972,4 @@ To upgrade: `pip install --upgrade mcp`
 
 *AI-Prowler — Your Personal Agentic RAG Knowledge Base*
 *Copyright © 2026 David Kevin Vavro · david.vavro1@gmail.com*
-*Version 8.0.0 — Updated June 25, 2026 (85 tools · 234 analysis tests)*
+*Version 8.0.0 — Updated June 25, 2026 (80 tools · 234 analysis tests)*

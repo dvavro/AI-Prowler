@@ -610,6 +610,10 @@ class TestScheduleNextRecurringJob:
             result = mcp_module.schedule_next_recurring_job(
                 job_identifier="JOB-0001",
                 filepath=fp,
+                # Fixture uses a fixed 2026-03-30 Service Date unrelated to
+                # "today" — when="any" is needed since schedule_next_recurring_job
+                # now defaults to "today" if `when` is omitted.
+                when="any",
             )
 
         assert isinstance(result, str)
@@ -623,6 +627,7 @@ class TestScheduleNextRecurringJob:
             result = mcp_module.schedule_next_recurring_job(
                 job_identifier="JOB-0002",
                 filepath=fp,
+                when="any",
             )
 
         assert isinstance(result, str)
@@ -633,7 +638,7 @@ class TestScheduleNextRecurringJob:
         """After scheduling, the new job row must exist in the spreadsheet."""
         fp = str(_make_test_spreadsheet(tmp_path))
         with patch.object(mcp_module, "_backup_spreadsheet", return_value="Backup saved"):
-            mcp_module.schedule_next_recurring_job(job_identifier="JOB-0001", filepath=fp)
+            mcp_module.schedule_next_recurring_job(job_identifier="JOB-0001", filepath=fp, when="any")
 
         wb = openpyxl.load_workbook(fp, data_only=True)
         ws = wb["Jobs_Schedule"]
@@ -674,6 +679,7 @@ class TestScheduleNextRecurringJob:
             result = mcp_module.schedule_next_recurring_job(
                 job_identifier="JOB-0099",
                 filepath=str(fp),
+                when="any",
             )
 
         assert any(w in result.lower() for w in ["one-time", "ot", "one time", "no recurring"])
@@ -685,6 +691,7 @@ class TestScheduleNextRecurringJob:
             result = mcp_module.schedule_next_recurring_job(
                 job_identifier="JOB-9999",
                 filepath=fp,
+                when="any",
             )
 
         assert any(w in result.lower() for w in ["not found", "error", "no job", "could not"])
@@ -696,6 +703,7 @@ class TestScheduleNextRecurringJob:
             result = mcp_module.schedule_next_recurring_job(
                 job_identifier="JOB-0001",
                 filepath=fp,
+                when="any",
             )
 
         if "JOB-0003" not in result and "scheduled" not in result.lower():

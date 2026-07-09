@@ -63,17 +63,7 @@
 ;   - Log stored at:    %USERPROFILE%\.ai-prowler\scheduler_log.txt
 ;   - Last-run at:      %USERPROFILE%\.ai-prowler\scheduler_last_run.json
 ;
-; JOB IMAGE STORAGE (v8.0.0):
-;   - Three new MCP tools built into ai_prowler_mcp.py (no separate file):
-;       * save_job_image   — saves photo/image binary to job image store
-;       * list_job_images  — returns metadata index for a job
-;       * delete_job_image — removes file and index entry
-;   - Supports 15 image formats including HEIC (iPhone default), DNG (Android
-;     RAW), WebP, PNG, JPEG, AVIF, TIFF, BMP, CR2, CR3, NEF, ARW
-;   - Images stored at: %USERPROFILE%\Documents\AI-Prowler_job_images\<job_id>\
-;   - Index per job at: %USERPROFILE%\Documents\AI-Prowler_job_images\<job_id>\index.json
-;   - Images NOT indexed in ChromaDB (binary files) — metadata only
-;
+
 ; COMMON BUSINESS AI ANALYSIS (v8.0.0):
 ;   - Five analysis buttons in Quick Links tab (personal mode only):
 ;       * Run Pending Analysis, Analyze My Business, Weekly Business Advisor,

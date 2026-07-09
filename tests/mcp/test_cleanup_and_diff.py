@@ -267,6 +267,66 @@ class TestCleanupBackups:
         """CB-07: cleanup_backups is in the Tier A suppressed set."""
         assert "cleanup_backups" in mcp_module._TIER_A_SUPPRESSED
 
+    def test_CB_07b_analysis_queue_tools_suppressed_in_server_mode(self, mcp_module):
+        """
+        Analysis task-queue tools (get_pending_analysis_tasks,
+        complete_analysis_task, save_analysis_report) must be Tier A
+        suppressed. The Quick Links tab's Common Business AI Analysis / My
+        Custom Analyses panels are hidden in server mode's GUI, so nothing
+        in server mode can ever queue a task — these tools must not be
+        registered with MCP clients in server mode either.
+        """
+        for tool_name in (
+            "get_pending_analysis_tasks",
+            "complete_analysis_task",
+            "save_analysis_report",
+        ):
+            assert tool_name in mcp_module._TIER_A_SUPPRESSED, (
+                f"{tool_name} must be Tier A suppressed in server mode — "
+                f"the analysis task queue it drives has no server-mode caller"
+            )
+
+    def test_CB_07c_schedule_next_recurring_job_not_suppressed(self, mcp_module):
+        """
+        schedule_next_recurring_job is a Job Tracker / Customers-sheet tool
+        (auto-books the next recurring job by service frequency) — it is
+        NOT part of the analysis task queue (pending_tasks.json) and must
+        remain available to every role in both personal and server mode.
+        """
+        assert "schedule_next_recurring_job" not in mcp_module._TIER_A_SUPPRESSED
+
+    def test_CB_07d_check_sms_inbox_suppressed_in_server_mode(self, mcp_module):
+        """
+        check_sms_inbox reads the raw, unscoped local inbox — it has no
+        per-user filtering (sms_inbox_read() vs the per-user
+        sms_inbox_read_for_user() that check_sms_replies uses), so in a
+        multi-user server it would let any employee read every inbound
+        SMS/WhatsApp message company-wide, not just their own threads.
+        Must be Tier A suppressed.
+        """
+        assert "check_sms_inbox" in mcp_module._TIER_A_SUPPRESSED
+
+    def test_CB_07e_check_sms_replies_suppressed_in_personal_mode(self, mcp_module):
+        """
+        check_sms_replies's per-user thread isolation (Mike sees Karen's
+        reply, not Jake's) is meaningless with a single personal-install
+        user. check_sms_inbox is the richer personal-mode equivalent
+        (provider filter, unread_only, since_hours=0 for everything).
+        check_sms_replies must be suppressed in personal mode.
+        """
+        assert "check_sms_replies" in mcp_module._PERSONAL_MODE_SUPPRESSED
+
+    def test_CB_07f_sms_inbox_tools_not_cross_suppressed(self, mcp_module):
+        """
+        Sanity check against copy-paste error: check_sms_inbox must NOT
+        also be in _PERSONAL_MODE_SUPPRESSED (it's the personal-mode tool,
+        not the suppressed one), and check_sms_replies must NOT also be
+        in _TIER_A_SUPPRESSED (it's the server-mode tool). Each tool is
+        gated in exactly one direction, never both.
+        """
+        assert "check_sms_inbox" not in mcp_module._PERSONAL_MODE_SUPPRESSED
+        assert "check_sms_replies" not in mcp_module._TIER_A_SUPPRESSED
+
     def test_CB_08_dry_run_shows_count_and_bytes(self, bak_env):
         """CB-08: dry run output includes file count and total byte size."""
         out = bak_env.mcp.cleanup_backups(dry_run=True)
