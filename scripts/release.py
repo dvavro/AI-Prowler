@@ -472,6 +472,23 @@ MANIFEST_FILES = [
     "README.md",
     "COMPLETE_USER_GUIDE.md",
     "VERSION",
+    # Added 2026-07-09: these were already in AI-Prowler-Setup.iss's [Files]
+    # section (i.e. every fresh/full install already gets them) but had never
+    # been added here, so every in-app auto-update silently skipped them —
+    # auto-updated clients kept running old code in these files indefinitely
+    # while everything else updated. Found by diffing MANIFEST_FILES against
+    # the installer's actual [Files] entries; this list should always be a
+    # superset match of that section for every .py/.bat app file.
+    "scope_resolver.py",
+    "file_watchdog.py",
+    "subscription_client.py",
+    "mobile_activator.py",
+    "cloudflared_service_helper.py",
+    "sms_backends.py",
+    "sms_inbox.py",
+    "custom_tasks_manager.py",
+    "scheduler_jobs.py",
+    "scheduler_engine.py",
     # NOTE: rag_icon.ico and python-3.11.8-amd64.exe are intentionally excluded.
     # rag_icon.ico rarely changes and is large binary noise in the update.
     # python-3.11.8-amd64.exe is the bundled Python installer — it is never

@@ -1,0 +1,121 @@
+{
+  "version": "8.0.0",
+  "generated": "2026-07-09T10:17:11",
+  "files": [
+    {
+      "path": "rag_gui.py",
+      "sha256": "254275ab36e22c62daae00f34385630fa1599e4acfa7e71daaa8f975b01d1f81",
+      "bytes": 1039085
+    },
+    {
+      "path": "rag_preprocessor.py",
+      "sha256": "5da6f979f58cb2914f4b88cd0780efe09b70ae5ce49f180702faf0f0422ca408",
+      "bytes": 292821
+    },
+    {
+      "path": "ai_prowler_mcp.py",
+      "sha256": "a2945cbcf1c8b87d5e62c9b8d63b9ad8de52b8b3af98c7db3cc799207670bc6f",
+      "bytes": 762009
+    },
+    {
+      "path": "mcp_diagnostics.py",
+      "sha256": "8a377974c525f12657bedcc159bfa73299c951c052a2ede8b1a11eec281e5c51",
+      "bytes": 21883
+    },
+    {
+      "path": "self_learning.py",
+      "sha256": "2cac57b3b9ce3f38bd3a2f1a9da2fb7c9530b0c205524080d1987ffd138cd19b",
+      "bytes": 43131
+    },
+    {
+      "path": "RAG_RUN.bat",
+      "sha256": "5dc094bd14102748f83b67c611e5982187e421ec6a43e6749a8563c53680bf95",
+      "bytes": 5289
+    },
+    {
+      "path": "create_shortcut.py",
+      "sha256": "5728f0d0c932c72e1f19ca151e54e122832fab6b52300162d8f7f957c9855e93",
+      "bytes": 3454
+    },
+    {
+      "path": "requirements.txt",
+      "sha256": "1e200e4a13729a099363971d6517f389c41eaadd3def40c950a153e48f8d6643",
+      "bytes": 7538
+    },
+    {
+      "path": "claude_desktop_config_example.json",
+      "sha256": "4826b7906bd165f35dd8e93041230fb3494d888c0cabfd531c9da11ec09eaaee",
+      "bytes": 3853
+    },
+    {
+      "path": "subscription_instructions.txt",
+      "sha256": "dd48b129467137cfac523b9a65e48d59e9470f2fbe474e911d4a06853f87e7fb",
+      "bytes": 3479
+    },
+    {
+      "path": "README.md",
+      "sha256": "93d627f70f7f1ec1ee7cd71c44ce426441f3b05b846fca7170deb9e660426ac7",
+      "bytes": 19305
+    },
+    {
+      "path": "COMPLETE_USER_GUIDE.md",
+      "sha256": "fccc60b2b62c6199e68edc1fadbefd6ccf13dad2636c720131b325819b4f3055",
+      "bytes": 130015
+    },
+    {
+      "path": "VERSION",
+      "sha256": "64906a57372f3a7c4b5a906870dc3e11226c5969db650fe0c6f5028d380b444b",
+      "bytes": 7
+    },
+    {
+      "path": "scope_resolver.py",
+      "sha256": "d0b6fae4d5f31a70d3aea15495b1cc2f94f786405284389052ce11aa08d27a1e",
+      "bytes": 4069
+    },
+    {
+      "path": "file_watchdog.py",
+      "sha256": "fac9f25f3e515535677bcbd5bd0256a7b94a04fbc170e6d173319c86117bca2b",
+      "bytes": 24718
+    },
+    {
+      "path": "subscription_client.py",
+      "sha256": "0dcead596afb2d3fee70928656c07d15f5191c69c28a0364fc6ca648dbc52695",
+      "bytes": 22046
+    },
+    {
+      "path": "mobile_activator.py",
+      "sha256": "0ab0f4f5ea3480949df44e0145923ceec51008b2b5a226c3887535f06ce75cd2",
+      "bytes": 28433
+    },
+    {
+      "path": "cloudflared_service_helper.py",
+      "sha256": "05f8dbe803783171bbbaf243796eac81bd509aaa62f43e24e79a33f0e6be64b8",
+      "bytes": 5373
+    },
+    {
+      "path": "sms_backends.py",
+      "sha256": "2494b65605ac17edc268bb4a11e820843b995e867d44f115423e811c83ca4003",
+      "bytes": 21816
+    },
+    {
+      "path": "sms_inbox.py",
+      "sha256": "612b479b3b22143f3c0134883667351a23dde1a83593b87767548bd540983104",
+      "bytes": 19408
+    },
+    {
+      "path": "custom_tasks_manager.py",
+      "sha256": "e741d805815a6ec7382cd4a9970db9b224ca7f83061d0053fddc121ccf7ec39a",
+      "bytes": 18275
+    },
+    {
+      "path": "scheduler_jobs.py",
+      "sha256": "5af30e9e6277f4f323035711d660cf0a84e1c3449057f09bfaafd6d635073168",
+      "bytes": 10806
+    },
+    {
+      "path": "scheduler_engine.py",
+      "sha256": "63ac7a89cc35aacf1f96645175236b233ccaed6fac60e605702d19d21f98935d",
+      "bytes": 14117
+    }
+  ]
+}
