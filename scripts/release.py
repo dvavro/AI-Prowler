@@ -507,11 +507,30 @@ def write_update_manifest(new_version: str) -> None:
         if not fp.exists():
             missing.append(rel)
             continue
-        digest = hashlib.sha256(fp.read_bytes()).hexdigest()
+        raw_bytes = fp.read_bytes()
+        # Hash the LF-normalized bytes, not the raw local-disk bytes.
+        #
+        # This repo has core.autocrlf=true and no .gitattributes overrides,
+        # so git stores every text file as LF internally and converts to
+        # CRLF only on checkout to the local Windows working tree. Without
+        # this normalization, hashlib.sha256(fp.read_bytes()) hashes the
+        # CRLF version that happens to be sitting on THIS machine right
+        # now -- which is NOT the byte sequence GitHub actually serves at
+        # raw.githubusercontent.com/.../v{tag}/{path} (that's the LF git
+        # blob). Every hash in the manifest was silently wrong as a result:
+        # harmless today only because the client doesn't verify sha256 yet,
+        # but it would make integrity verification fail 100% of the time
+        # the moment that check gets added, and the "bytes" field was also
+        # reporting the wrong (CRLF, larger) size compared to what's
+        # actually downloaded. Found and fixed 2026-07-09 by testing the
+        # live tag URL end-to-end and comparing against a fresh `git show
+        # v8.0.0:{path}` blob read, which surfaced the mismatch.
+        normalized = raw_bytes.replace(b"\r\n", b"\n")
+        digest = hashlib.sha256(normalized).hexdigest()
         entries.append({
             "path": rel,
             "sha256": digest,
-            "bytes": fp.stat().st_size,
+            "bytes": len(normalized),
         })
 
     if missing:
