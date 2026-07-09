@@ -9334,6 +9334,11 @@ or from the Help menu."""
                        command=_open_subscribe_business).pack(
                            side='left', padx=(0, 0))
 
+            ttk.Label(sub_outer, font=('Arial', 8), foreground='gray',
+                      text="Business does not include server HW or install "
+                           "support — visit www.ai-prowler.com for additional info."
+                      ).pack(anchor='w', pady=(2, 0))
+
             ttk.Separator(sub_outer, orient='horizontal').pack(
                 fill='x', pady=(4, 8))
 
@@ -9668,6 +9673,11 @@ or from the Help menu."""
                        text="🛒 Subscribe — Business",
                        command=_open_subscribe_business_srv).pack(
                            side='left', padx=(12, 0))
+
+            ttk.Label(srv_sub_outer, font=('Arial', 8), foreground='gray',
+                      text="Business does not include server HW or install "
+                           "support — visit www.ai-prowler.com for additional info."
+                      ).pack(anchor='w', pady=(2, 0))
 
             ttk.Separator(srv_sub_outer, orient='horizontal').pack(
                 fill='x', pady=(4, 8))

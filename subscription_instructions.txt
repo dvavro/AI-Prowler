@@ -2,13 +2,19 @@ AI-Prowler Remote Access — Subscription Information
 =====================================================
 
 AI-Prowler is free to use with Claude Desktop on your PC. No
-subscription is required for local desktop use.
+subscription is required for local desktop use. Indexing, searching,
+OCR, and local Claude Desktop integration all remain free regardless
+of your subscription status.
 
 If you want remote access to your AI-Prowler knowledge base from
-a phone, tablet, or other computer, you can subscribe for mobile
-access at the pricing below. You will also need a Claude Pro
+a phone, tablet, or other computer, you'll need an AI-Prowler
+Remote Access subscription. You will also need a Claude Pro
 subscription (separate, from Anthropic) to use HTTP MCP support
 with Claude.
+
+This popup only appears when you click ▶ Start HTTP Server in
+Settings → 📡 Remote Access — if you only use AI-Prowler with Claude
+Desktop on this PC, you'll never see it.
 
 
 WHAT IS REMOTE ACCESS?
@@ -23,82 +29,79 @@ remote access, you can cancel anytime and continue using
 AI-Prowler with Claude Desktop on your PC.
 
 
-SUBSCRIPTION PLAN
-------------------
+SUBSCRIPTION PLANS
+--------------------
   AI-Prowler Home Remote Access  —  $10 / month per user
 
   Includes:
-    - Remote access from any mobile device with claude.ai App 
+    - Remote access from any mobile device with the Claude.ai app
     - 1 active connection per user
-    - Email support
     - Cancel anytime, no penalty
 
-  AI-Prowler Buniness - $20 / month per user
+  AI-Prowler Business  —  $20 / month per user
 
   Includes:
-    - AI-Prowler Personal with Remote Access from any mobile device with claude.ai App
-    - Server has Remote access from any mobile device with claude.ai App
-    - Server 1 active registered domain from claudeflare with up to 50 tunnels connections
-    - server has controller access per user with Role and Scope control and Email support for field crews
+    - AI-Prowler Personal with Remote Access from any mobile device
+    - Server has Remote Access from any mobile device
+    - 1 registered domain from Cloudflare with up to 50 tunnel
+      connections
+    - Per-user role and scope control, with email support for
+      field crews
     - Cancel anytime, no penalty
 
 
+NEW SUBSCRIBER — HOW TO SIGN UP
+----------------------------------
+Everything is automated — no email, no waiting.
 
-HOW TO SUBSCRIBE OR RENEW
---------------------------
-  Email:   david.vavro1@gmail.com
-  Subject: AI-Prowler Subscription
-
-  Include:
-    - Your name or company name
-    - Email address you want associated with the subscription
-
-  You will receive a confirmation and license key within
-  1 business day.
-
-
-PAYMENT
--------
-  Payment is accepted via PayPal, Venmo, or bank transfer.
-  Details provided on request by email.
-
-  Monthly billing — cancel anytime with no penalty.
+  1. Go to Settings → 📡 Remote Access
+  2. Click 🛒 Subscribe — Personal (or 🛒 Subscribe — Business)
+  3. Your browser opens a secure Stripe checkout page — complete
+     payment there
+  4. You'll receive an ACTIVATION CODE by email within a few minutes
+  5. Paste the activation code into Settings and click
+     ⚡ Configure Mobile Access
+     → your Cloudflare tunnel is provisioned and started
+       automatically, no separate Cloudflare account needed
+  6. Click 📖 Connect Claude.ai (auto) to finish connecting Claude.ai
 
 
-WHAT HAPPENS AFTER PAYMENT
----------------------------
-  1. After payment, you will receive a LICENSE KEY by email.
-  2. Open AI-Prowler → Settings → Remote Access.
-  3. Paste the license key into the 'License key' field.
-  4. Restart AI-Prowler's HTTP server — remote access is enabled.
-  5. No other changes needed on your machine.
+ALREADY SUBSCRIBED? — RENEW, CANCEL, OR UPDATE
+--------------------------------------------------
+Use the Manage Subscription → button in Settings → 📡 Remote Access.
 
-  Important: Your Bearer token stays on your own machine and is
-  never sent to anyone. Only the license key issued by AI-Prowler
-  is needed to activate your subscription.
+This opens a secure, pre-authenticated Stripe-hosted page where you
+can:
+  - Update your payment method
+  - Cancel your subscription
+  - Change your Business seat count
+  - Review billing history and renewal date
+
+No password or extra login needed — the button opens your account
+directly.
 
 
 GRACE PERIOD
 ------------
-  If your subscription lapses, you have a 30-day grace period
-  during which remote access continues to work with a warning
-  banner shown on the login page. After 30 days, remote access
-  is suspended until renewal.
+If your subscription lapses, you have a 30-day grace period during
+which remote access continues to work with a warning banner shown
+in the app. After 30 days, remote access is suspended until you
+renew via Manage Subscription →.
 
 
 DESKTOP FEATURES
 ----------------
-  Your AI-Prowler desktop application continues to work fully
-  regardless of your remote access subscription status. Indexing,
-  searching, OCR, and local Claude Desktop integration all remain
-  free.
+Your AI-Prowler desktop application continues to work fully
+regardless of your remote access subscription status. Indexing,
+searching, OCR, and local Claude Desktop integration all remain
+free.
 
-  Note: Claude (the LLM itself) requires a separate Claude Pro
-  subscription (~$20/month from Anthropic) to support remote
-  HTTP MCP port operation.
+Note: Claude (the LLM itself) requires a separate Claude Pro
+subscription (~$20/month from Anthropic) to support remote
+HTTP MCP port operation.
 
 
-QUESTIONS?
-----------
-  david.vavro1@gmail.com
-  Response within 2 business days.
+QUESTIONS OR ISSUES?
+----------------------
+If an activation code doesn't arrive, or Manage Subscription → isn't
+working for you, visit https://www.ai-prowler.com for support.
