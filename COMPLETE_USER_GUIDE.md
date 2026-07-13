@@ -1,5 +1,5 @@
 # AI-Prowler — Complete User Guide
-## Version 8.0.0
+## Version 8.1.0
 
 ---
 
@@ -69,6 +69,14 @@ This produces dramatically better results — equivalent to having a skilled res
 - **Scope Directory Picker** — AI Analysis buttons and Custom Analyses tasks now support optional scope restriction to specific indexed directories before queuing.
 - **Server mode GUI suppression** — Common Business AI Analysis and My Custom Analyses sections are now fully hidden in server mode.
 - **`last_updated` scope bug fixed** — metadata keys no longer appear as fake directory checkboxes in the scope picker.
+
+**Recently added (pending next release — not yet version-bumped):**
+
+- **Newsletter opt-in** — a dismissible "📬 Get AI-Prowler updates and usage tips by email" banner on the Home tab. Purely opt-in, independent of licensing — reaches Home, Mobile, and Business users alike. See **Section 23**.
+- **Proactive Alerts redesign** — the six background email jobs (morning briefing, overdue invoices, etc.) now use independent per-job ON/OFF toggles instead of one master "Enable proactive alerts" checkbox plus a separate Save/Start/Stop button row. Every field (job toggle, time, days, shared email) auto-saves the instant it changes — Save Config and Start/Stop buttons are gone. The background engine starts automatically the moment any job is switched on, and stops automatically when the last one is switched off. See **Section 17**.
+- **Two new MCP tools:**
+  - `list_analysis_tasks` — lists the FULL custom-analysis task definition list (up to 25), regardless of due date. Complements `get_pending_analysis_tasks`, which only shows tasks already queued into the run queue.
+  - `cleanup_job_logs` — deletes old `run_script_start` job files (`.json`/`.log`/`_wrapper.py`) from `~/.ai-prowler/jobs/`, which had no automatic retention and could accumulate thousands of files over time. Mirrors `cleanup_backups`'s dry-run-by-default design.
 
 ---
 
@@ -209,15 +217,15 @@ When you ask Claude a question with AI-Prowler connected, Claude follows this pa
 
 ## 6. MCP Tools Reference
 
-AI-Prowler exposes **81 tools** total to Claude across thirteen categories in v8.0.0 (this doc's own category breakdown — a separate, narrower ten-family grouping is used internally by the `how_to_use_ai_prowler` tool's guide text). Exactly how many are actually *visible* on a given connection depends on mode — see the table below.
+AI-Prowler exposes **83 tools** total to Claude across thirteen categories (this doc's own category breakdown — a separate, narrower ten-family grouping is used internally by the `how_to_use_ai_prowler` tool's guide text; 81 of the 83 shipped in v8.0.0, `list_analysis_tasks` and `cleanup_job_logs` were added since). Exactly how many are actually *visible* on a given connection depends on mode — see the table below.
 
 ### 6.1 Tool Counts by Mode
 
 | Install type | Mode | Tools visible | Notes |
 |---|---|---|---|
-| Personal / Home | personal | 80 | All 81 tools minus `check_sms_replies` (§6.2b — meaningless with a single user) |
-| Business — employee personal install | personal | 80 | Same as above — personal mode is personal mode regardless of edition |
-| Business — company server | server | 54 | All 81 tools minus the 27 in `_TIER_A_SUPPRESSED` (§6.2) — remaining 54 are further gated per-role/per-call inside the tool itself, not by registration |
+| Personal / Home | personal | 82 | All 83 tools minus `check_sms_replies` (§6.2b — meaningless with a single user) |
+| Business — employee personal install | personal | 82 | Same as above — personal mode is personal mode regardless of edition |
+| Business — company server | server | 54 | All 83 tools minus the 29 in `_TIER_A_SUPPRESSED` (§6.2) — remaining 54 are further gated per-role/per-call inside the tool itself, not by registration |
 
 ### 6.2 Tier A Tool Suppression (Server Mode Only)
 
@@ -226,11 +234,11 @@ The following tools are never registered when AI-Prowler runs in server mode:
 | Category | Suppressed tools |
 |---|---|
 | Dev / code execution | `run_script`, `run_script_start`, `run_script_status`, `run_script_kill`, `compile_check`, `check_python_import`, `syntax_check`, `lint_check` |
-| Host filesystem writes (unscoped) | `list_directory`, `copy_to_backup`, `list_backups`, `restore_backup`, `cleanup_backups`, `reset_write_counter`, `grant_write_access`, `revoke_write_access` — backup/restore/approval-management tools remain operator/dev-only. `create_file`, `write_file`, `str_replace_in_file`, `fuzzy_replace_in_file`, `line_replace_in_file`, and `create_directory` are **not** in this list — see §6.2c, they're gated per-call instead of blanket-suppressed. |
+| Host filesystem writes (unscoped) | `list_directory`, `copy_to_backup`, `list_backups`, `restore_backup`, `cleanup_backups`, `cleanup_job_logs`, `reset_write_counter`, `grant_write_access`, `revoke_write_access` — backup/restore/approval-management tools remain operator/dev-only. `create_file`, `write_file`, `str_replace_in_file`, `fuzzy_replace_in_file`, `line_replace_in_file`, and `create_directory` are **not** in this list — see §6.2c, they're gated per-call instead of blanket-suppressed. |
 | Raw filesystem reads | `read_file_lines`, `grep_documents` |
 | Email operator tools | `configure_email`, `send_file` — use personal SMTP credentials, not appropriate for a shared server. `send_learnings_report` is **not** in this category — see the note below. |
 | Bulk index rebuild | `reindex_all` |
-| Agentic analysis task queue | `get_pending_analysis_tasks`, `complete_analysis_task`, `save_analysis_report` — the Quick Links tab's Common Business AI Analysis / My Custom Analyses panels are hidden in server mode's GUI, so the queue these tools drive has no server-mode caller |
+| Agentic analysis task queue | `get_pending_analysis_tasks`, `complete_analysis_task`, `save_analysis_report`, `list_analysis_tasks` — the Quick Links tab's Common Business AI Analysis / My Custom Analyses panels are hidden in server mode's GUI, so the queue these tools drive has no server-mode caller |
 | Raw/unscoped SMS inbox | `check_sms_inbox` — reads the local inbox with no per-user filtering (unlike `check_sms_replies`, which uses the per-user-scoped read path). In a multi-user server this would let any employee read every inbound SMS/WhatsApp message company-wide, not just their own. `check_sms_replies` is the server-mode equivalent. |
 
 > **Note:** `send_sms`, `send_email`, `send_alert`, `send_whatsapp`, `send_learnings_report` (user-facing) are **not** suppressed in server mode — they remain available to users via the Tier B role gate.
@@ -403,9 +411,9 @@ Most email tools are personal-mode only, but `send_email` and `send_alert` are a
 
 ---
 
-#### Code Tools — Write-Side (13 tools — Personal + Server, Server Scoped to Own Directory)
+#### Code Tools — Write-Side (14 tools — Personal + Server, Server Scoped to Own Directory)
 
-All write operations are protected by four independent layers: read allowlist, writable allowlist, hard blocklist, and per-session circuit breaker. In server mode, a fifth layer applies to `create_file`, `write_file`, `str_replace_in_file`, `fuzzy_replace_in_file`, `line_replace_in_file`, and `create_directory`: writes are scoped to the caller's own personal directory only, and denied entirely for users without one configured (see §6.2b). The remaining dev/backup-management tools (`copy_to_backup`, `restore_backup`, `list_backups`, `list_directory`, `reset_write_counter`, `grant_write_access`, `revoke_write_access`, `cleanup_backups`) stay fully suppressed in server mode (§6.2).
+All write operations are protected by four independent layers: read allowlist, writable allowlist, hard blocklist, and per-session circuit breaker. In server mode, a fifth layer applies to `create_file`, `write_file`, `str_replace_in_file`, `fuzzy_replace_in_file`, `line_replace_in_file`, and `create_directory`: writes are scoped to the caller's own personal directory only, and denied entirely for users without one configured (see §6.2b). The remaining dev/backup-management tools (`copy_to_backup`, `restore_backup`, `list_backups`, `list_directory`, `reset_write_counter`, `grant_write_access`, `revoke_write_access`, `cleanup_backups`, `cleanup_job_logs`) stay fully suppressed in server mode (§6.2).
 
 | Tool | What It Does | Mode |
 |---|---|---|
@@ -420,6 +428,7 @@ All write operations are protected by four independent layers: read allowlist, w
 | `list_backups` | Lists all backups for a given file with timestamps and sizes. | Personal |
 | `restore_backup` | Overwrites the active file with the contents of the specified backup. | Personal |
 | `cleanup_backups` | Finds and optionally deletes backup files. Always run with `dry_run=True` first to preview. | Personal |
+| `cleanup_job_logs` | **Recently added.** Deletes old `run_script_start` job files (manifest `.json`, `.log`, `_wrapper.py`) from `~/.ai-prowler/jobs/`, which has no automatic retention. A job is only deleted if it's BOTH older than `older_than_days` (default 7) AND ranked beyond the `keep_last` most recent jobs (default 20) — either condition alone protects it. A job still marked "running" is never deleted. Always run with `dry_run=True` first (the default). | Personal |
 | `reset_write_counter` | Resets the per-session 20-write circuit breaker so large editing sessions can continue without restarting the server. | Personal |
 | `list_writable_directories` | Personal mode / server-mode owner+manager: full write-zone and read-zone allowlist. Server-mode staff/field_crew: only their own personal directory's read/write status — not the company-wide list. | Personal + Server |
 
@@ -481,13 +490,14 @@ Two different status tools — know which to call:
 
 ---
 
-#### Agentic Analysis Tools (4 tools — Personal Only)
+#### Agentic Analysis Tools (5 tools — Personal Only)
 
 These tools power the **Common Business AI Analysis** and **My Custom Analyses** sections in the Quick Links tab. Not available in server mode.
 
 | Tool | What It Does | Mode |
 |---|---|---|
 | `create_analysis_task` | Defines a new recurring or one-off custom task from a plain-language request — the same thing the "+ New Custom Analysis" GUI dialog builds. **Day-granularity scheduling only** — there's no time-of-day in this system, so "every Monday at 8am" is stored as "due every Monday"; the "8am" isn't representable. **Pull-based, not autonomous** — creating a task doesn't make anything run unattended; the task becomes visible next time `get_pending_analysis_tasks()` is called after it's due AND queued (GUI "Queue"/"Run Due Tasks" button, or a future conversation). Enforces the same 25-task cap as the GUI dialog (`MAX_CUSTOM_TASKS`, centralized inside `create_task()` itself). | Personal |
+| `list_analysis_tasks` | **Recently added.** Lists the FULL custom-analysis task definition list (`custom_analysis_tasks.json`), up to 25, regardless of due date — with an `is_due` flag per task. Complements `get_pending_analysis_tasks`, which only shows tasks that have already been queued into the run queue (`pending_tasks.json`). Use this for "what's in my task queue" / "list everything I've scheduled" — those questions are about the full definition list, not just what's currently due. Strictly read-only; never modifies or queues anything. | Personal |
 | `get_pending_analysis_tasks` | Returns all pending tasks from `~/.ai-prowler/pending_tasks.json`. Claude calls this when you paste the run-queue command. Returns a JSON object with `pending_count`, `tasks` array (including `task_id`, `label`, `prompt`, `scope_dirs`, `schedule`, `next_due`, `queued_ago`), and execution instructions. Returns a plain informational message when the queue is empty. | Personal |
 | `complete_analysis_task` | Marks a pending task as completed after Claude finishes the analysis. Stamps `completed_at` and stores the optional `summary`. For scheduled tasks (both built-in and custom), auto-advances `next_due` anchored to the original due date — not the completion date. | Personal |
 | `save_analysis_report` | Saves a full analysis as a Word document (`.docx`) to the configured report folder. Default: `~/Documents/AI-Prowler_tasks_reports`. | Personal |
@@ -1697,6 +1707,20 @@ Set up automatic index updates from **Settings → Schedule**:
 
 For always-on remote access, activate the Named Tunnel as a Windows service via **Settings → Remote Access → Activate Tunnel Service**. The tunnel starts automatically at boot.
 
+### Proactive Alerts (Background Email Scheduler)
+
+Proactive Alerts sends scheduled email briefings and alerts without needing an active Claude session — a background daemon thread inside the AI-Prowler desktop process ticks every 60 seconds and fires any job whose configured time/day has arrived. Configured from the Links & Analysis tab.
+
+**Six built-in jobs:** Morning Briefing, Overdue Invoice Alert, Due Analysis Tasks, SMS Reply Monitor, Weather Watch, End-of-Day Summary. Each has its own ON/OFF toggle, a time field (`HH:MM` 24-hour, or `every_Nh`/`every_Nm` for interval jobs), and a days selector (daily / weekdays / weekends / a specific day). Email is shared across all jobs — a single field, since this is a personal-mode, single-user feature.
+
+**Auto-save, no manual Save/Start/Stop:** every field saves the instant it changes — clicking a job's toggle, tabbing out of the time field, or selecting a day all save immediately. There is no separate "Save Config" button and no master "Enable proactive alerts" checkbox. The background engine starts automatically the moment any single job is switched ON, and stops automatically the moment the last enabled job is switched OFF — the engine's running/stopped state is fully derived from the job toggles, never a separate thing to manage.
+
+**Important limitation — this requires AI-Prowler to actually be running.** The scheduler is a thread inside the desktop app's own process, not a separate Windows service. If AI-Prowler is closed, or your PC is asleep, nothing fires — there is no cloud-side scheduler keeping it alive. For a briefing to reliably arrive every morning, AI-Prowler needs to be open (or configured to launch and stay open) at that time.
+
+**Run any job immediately:** each job has a "▶ Now" button that runs it on demand, regardless of its schedule — useful for testing a new configuration without waiting for the next scheduled time.
+
+**View Log:** the one remaining manual control — opens the last 200 lines of `~/.ai-prowler/scheduler_log.txt` in a read-only popup.
+
 ---
 
 ## 18. GPU Support
@@ -1866,6 +1890,12 @@ AI-Prowler checks for updates on launch by reading a version file from the publi
 
 The footer at the bottom of the Welcome tab can be customized by the AI-Prowler admin via a push to the public GitHub `welcome_ad.json` file. The default text is shown until the network fetch completes.
 
+### Newsletter Opt-In
+
+A dismissible banner — "📬 Get AI-Prowler updates and usage tips by email" — appears on the Home tab for anyone not already subscribed. Enter an email and click Subscribe, or click the ✕ to dismiss it for the current session (it reappears next launch, since it only fully disappears once you've actually subscribed).
+
+This is a separate, purely opt-in mailing list — independent of licensing or telemetry. Subscribing or not has no effect on which features are available, and unsubscribing (via the link in any newsletter email) doesn't affect your license or account in any way.
+
 ---
 
 ## 24. Heartbeats & Analytics
@@ -1973,4 +2003,4 @@ To upgrade: `pip install --upgrade mcp`
 
 *AI-Prowler — Your Personal Agentic RAG Knowledge Base*
 *Copyright © 2026 David Kevin Vavro · david.vavro1@gmail.com*
-*Version 8.0.0 — Updated June 25, 2026 (81 tools · 234 analysis tests)*
+*Version 8.0.0 — Updated June 25, 2026 (83 tools · 234 analysis tests)*

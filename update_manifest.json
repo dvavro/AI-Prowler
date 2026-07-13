@@ -1,11 +1,11 @@
 {
-  "version": "8.0.0",
-  "generated": "2026-07-09T10:30:00",
+  "version": "8.1.0",
+  "generated": "2026-07-12T20:02:39",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "f5e61a18203c4d6cc30cf1ee3e7fa7d46e3ec79f699d176ebe2816f848b65cc8",
-      "bytes": 1018508
+      "sha256": "08a7c311a966be934ceecc47ff69efcd78bacbda644183f8230c24e6e46a531e",
+      "bytes": 1035929
     },
     {
       "path": "rag_preprocessor.py",
@@ -14,8 +14,8 @@
     },
     {
       "path": "ai_prowler_mcp.py",
-      "sha256": "012039d46b60d38acb663471e80a74046bb32f9328839781028b8f41307c156e",
-      "bytes": 745632
+      "sha256": "d2dd88dc723845143aa8ed5a34d2865c01d59d55e5fec9e2c1852cb440c4dd81",
+      "bytes": 763285
     },
     {
       "path": "mcp_diagnostics.py",
@@ -49,8 +49,8 @@
     },
     {
       "path": "subscription_instructions.txt",
-      "sha256": "26c3fb6a57b79d0d52183aa029d19d54e09d62f5aae6c5e18d4bbd8badfa3a0e",
-      "bytes": 3375
+      "sha256": "83117d5892b15d3eb68f3547df995939f76622eebfe523ee01e625a25ea44bbf",
+      "bytes": 3830
     },
     {
       "path": "README.md",
@@ -59,12 +59,12 @@
     },
     {
       "path": "COMPLETE_USER_GUIDE.md",
-      "sha256": "85145e19b8de97a1c5e10ec6fee8d12e7adee9408002b9f485864f63f3c62ef6",
-      "bytes": 128040
+      "sha256": "43ea075a5752b3373411b78bf4dad03569e8efcd4a0aa278998cd3206e4f3f36",
+      "bytes": 133992
     },
     {
       "path": "VERSION",
-      "sha256": "462c9aaa608fb2014cd9649af1c5c009485c60b9c8b15b89401fdc10cf6161c6",
+      "sha256": "14e6eb17bfb2bed74871b7ae972ad0ef1a6fdf08966bf35ec7ef279ad87dff57",
       "bytes": 6
     },
     {
@@ -104,8 +104,8 @@
     },
     {
       "path": "custom_tasks_manager.py",
-      "sha256": "ec704f074d6f6cfd05b929120e1efca454234a35ee3bcbf2a87dcfb208a8e269",
-      "bytes": 17766
+      "sha256": "0022fe4981cd997f7d216db0dc8a4f7f75c4b79d015162bdee72286219ea5986",
+      "bytes": 18266
     },
     {
       "path": "scheduler_jobs.py",
@@ -114,8 +114,8 @@
     },
     {
       "path": "scheduler_engine.py",
-      "sha256": "a0f06a6fa1410229d7561689310579e8c1acaa46776ccad422f1d7a120bfceea",
-      "bytes": 13740
+      "sha256": "66cb340b4ef961901d7ea4fe5e8cb1bf7666fc0b06896fa1b354702d2fcb84e4",
+      "bytes": 13900
     }
   ]
 }

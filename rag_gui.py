@@ -92,7 +92,7 @@ if sys.stderr is None:
 # Single source of truth for the app version. Bump this one line when releasing
 # a new version; all UI labels, About dialogs, help text, and update checks
 # read from here.
-APP_VERSION = "8.0.0"
+APP_VERSION = "8.1.0"
 
 # ── UI feature flags ─────────────────────────────────────────────────────────
 # Toggle visibility of advanced/legacy GUI sections without removing any
@@ -128,6 +128,15 @@ _TELEMETRY_DEFAULT_ENDPOINT = (
     "https://ai-prowler-telemetry.david-vavro1.workers.dev"
 )
 _TELEMETRY_HEARTBEAT_INTERVAL_SEC = 24 * 3600   # daily
+
+# ── Newsletter opt-in (v8.1) ───────────────────────────────────────────────
+# Independent of telemetry — a separate, purely-opt-in email list. Shares
+# the same Worker/D1 deployment as telemetry+licensing (ai-prowler-telemetry)
+# but a dedicated table (newsletter_subscribers) and its own endpoints.
+# Local subscription state lives at ~/.ai-prowler/newsletter_subscription.json.
+_NEWSLETTER_SUBSCRIBE_URL = (
+    _TELEMETRY_DEFAULT_ENDPOINT + "/newsletter/subscribe"
+)
 _TELEMETRY_FIRST_DELAY_SEC = 5 * 60             # wait 5 min after launch
 _TELEMETRY_RETRY_DELAY_SEC = 60 * 60            # 1h backoff on failure
 
@@ -1155,7 +1164,7 @@ then ask Claude questions from your desktop or phone.
 ─────────────────────────────────────────────────
  KNOWLEDGE BASE (RAG)
 ─────────────────────────────────────────────────
-• 81 MCP tools across 13 categories
+• 83 MCP tools across 13 categories
 • 65+ file types: PDF, Word, Excel, PowerPoint, HTML,
 • Automatic OCR for scanned PDFs and images
 • Incremental indexing — only changed files reprocessed
@@ -2788,12 +2797,12 @@ or from the Help menu."""
             'body': (
                 'Your Personal Agentic AI Knowledge Base for Claude.\n\n'
                 'AI-Prowler™ Home v8.0.0 for Windows 11 — index your local documents '
-                'and put 81 AI-powered tools at Claude\'s fingertips, on desktop, web, and mobile.\n\n'
+                'and put 83 AI-powered tools at Claude\'s fingertips, on desktop, web, and mobile.\n\n'
                 '★ Index local and OneDrive documents from any folder — 65+ file formats '
                 'supported including scanned PDFs and images with full OCR text extraction.\n\n'
                 '★ ChromaDB vector database with semantic search — Claude queries '
                 'intelligently across 10,000+ files with provenance-aware results.\n\n'
-                '★ 81 MCP tools across 12 categories: Agentic RAG, Code Tools, '
+                '★ 83 MCP tools across 12 categories: Agentic RAG, Code Tools, '
                 'Self-Learning, Action Tools, Email, SMS, Scheduling, Dev Tools, '
                 'Indexing, Job Tracking, Analysis, and Health checks.\n\n'
                 '★ Code Tools — Claude can create, edit, back up, and restore files '
@@ -2882,6 +2891,14 @@ or from the Help menu."""
         # Used by _display_notifications to suppress full-installer notification
         # cards while the in-place updater can do the upgrade.
         self._update_available = False
+
+        # ── Newsletter opt-in banner (v8.1) ────────────────────────────────
+        # Its own frame, separate from _notif_frame, so _display_notifications
+        # clearing/rebuilding notification widgets never touches it.
+        self._newsletter_frame = ttk.Frame(container)
+        self._newsletter_frame.pack(fill='x', pady=(0, 6))
+        self._newsletter_dismissed_this_session = False
+        self._build_newsletter_banner()
 
         # Debug label — hidden by default, only shown if notification
         # fetch fails. Helper methods _show_notif_debug / _hide_notif_debug
@@ -2979,6 +2996,165 @@ or from the Help menu."""
         # the call runs from the Tk event loop, after all tabs exist.
         self.root.after(150, self._refresh_welcome_ad)
         self._schedule_ad_refresh()
+
+    # ── Newsletter opt-in (v8.1) ────────────────────────────────────────────
+
+    def _newsletter_state_path(self) -> Path:
+        return Path.home() / '.ai-prowler' / 'newsletter_subscription.json'
+
+    def _load_newsletter_state(self) -> dict:
+        """Load local newsletter subscription state. Never raises — a
+        missing/corrupt file is treated the same as 'never subscribed'."""
+        import json as _json
+        default = {'subscribed': False, 'email': ''}
+        try:
+            p = self._newsletter_state_path()
+            if p.exists():
+                data = _json.loads(p.read_text(encoding='utf-8'))
+                default['subscribed'] = bool(data.get('subscribed', False))
+                default['email'] = str(data.get('email', ''))
+        except Exception:
+            pass
+        return default
+
+    def _save_newsletter_state(self, subscribed: bool, email: str) -> None:
+        import json as _json
+        try:
+            p = self._newsletter_state_path()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(
+                _json.dumps({'subscribed': subscribed, 'email': email}, indent=2),
+                encoding='utf-8')
+        except Exception:
+            pass
+
+    @staticmethod
+    def _should_show_newsletter_banner(state: dict, dismissed_this_session: bool) -> bool:
+        """PURE decision logic, kept separate from the Tk widget code so it's
+        unit-testable without a display. Per spec: show unless the user has
+        actually subscribed. A same-session dismissal (the ✕) hides it only
+        until the app is closed/reopened — it reappears every launch until
+        they subscribe, per David's explicit design choice (2026-07-12)."""
+        if state.get('subscribed'):
+            return False
+        if dismissed_this_session:
+            return False
+        return True
+
+    def _build_newsletter_banner(self):
+        """(Re)build the newsletter opt-in banner inside self._newsletter_frame.
+        Safe to call repeatedly — clears any existing children first."""
+        for child in self._newsletter_frame.winfo_children():
+            child.destroy()
+
+        state = self._load_newsletter_state()
+        if not self._should_show_newsletter_banner(
+                state, self._newsletter_dismissed_this_session):
+            return
+
+        card = ttk.Frame(self._newsletter_frame, padding=(12, 8))
+        card.pack(fill='x')
+        try:
+            card.configure(relief='groove', borderwidth=1)
+        except Exception:
+            pass
+
+        row = ttk.Frame(card)
+        row.pack(fill='x')
+
+        ttk.Label(row, text="📬 Get AI-Prowler updates and usage tips by email",
+                  font=('Arial', 9, 'bold')).pack(side='left')
+
+        def _dismiss():
+            self._newsletter_dismissed_this_session = True
+            self._build_newsletter_banner()
+
+        ttk.Button(row, text="✕", width=3, command=_dismiss).pack(side='right')
+
+        entry_row = ttk.Frame(card)
+        entry_row.pack(fill='x', pady=(6, 0))
+
+        email_var = tk.StringVar(value=state.get('email', ''))
+        entry = ttk.Entry(entry_row, textvariable=email_var, width=32)
+        entry.pack(side='left', padx=(0, 6))
+
+        status_var = tk.StringVar(value='')
+        status_lbl = ttk.Label(entry_row, textvariable=status_var,
+                                font=('Arial', 8), foreground='gray')
+
+        def _subscribe():
+            email = email_var.get().strip()
+            if '@' not in email or '.' not in email.split('@')[-1]:
+                status_var.set("Please enter a valid email address.")
+                status_lbl.pack(side='left', padx=(6, 0))
+                return
+            subscribe_btn.configure(state='disabled')
+            status_var.set("Subscribing…")
+            status_lbl.pack(side='left', padx=(6, 0))
+            threading.Thread(
+                target=self._newsletter_do_subscribe,
+                args=(email,), daemon=True, name="newsletter-subscribe"
+            ).start()
+
+        subscribe_btn = ttk.Button(entry_row, text="Subscribe", command=_subscribe)
+        subscribe_btn.pack(side='left')
+
+    def _newsletter_do_subscribe(self, email: str):
+        """Background-thread worker: POST the subscription, then marshal the
+        result back to the Tk main thread via root.after(0, ...)."""
+        import json as _json
+        import platform
+        import urllib.request
+        install_id = ''
+        try:
+            if self._install_id_path.exists():
+                install_id = self._install_id_path.read_text(encoding='utf-8').strip()
+        except Exception:
+            pass
+
+        payload = {
+            'email': email,
+            'install_id': install_id,
+            'version': APP_VERSION,
+            'os': platform.system(),
+            'source': 'home_tab_banner',
+        }
+        ok = False
+        err_msg = ''
+        try:
+            req = urllib.request.Request(
+                _NEWSLETTER_SUBSCRIBE_URL,
+                data=_json.dumps(payload).encode('utf-8'),
+                headers={'Content-Type': 'application/json',
+                         'User-Agent': f'AI-Prowler/{APP_VERSION}'},
+                method='POST',
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = _json.loads(resp.read().decode('utf-8'))
+                ok = bool(data.get('ok'))
+                if not ok:
+                    err_msg = str(data.get('reason', 'unknown error'))
+        except Exception as ex:
+            err_msg = str(ex)
+
+        def _finish():
+            if ok:
+                self._save_newsletter_state(True, email)
+                self._newsletter_dismissed_this_session = False
+                self._build_newsletter_banner()
+            else:
+                # Rebuild so the button re-enables; show the error inline.
+                self._build_newsletter_banner()
+                try:
+                    messagebox.showerror(
+                        "Subscribe",
+                        f"Could not subscribe right now:\n{err_msg or 'unknown error'}\n\n"
+                        "You can try again any time — this banner will keep showing "
+                        "until you subscribe.")
+                except Exception:
+                    pass
+
+        self.root.after(0, _finish)
 
     def _load_ad_content(self) -> dict:
         """Load ad content from local defaults → GitHub cache (cache wins)."""
@@ -5867,23 +6043,75 @@ or from the Help menu."""
                      bg='#1a2e1a', fg='#cc8800',
                      font=('Arial', 8)).pack(anchor='w')
         else:
-            # ── Master enable + email ─────────────────────────────────────────
+            # ── Email (shared across all jobs — personal mode, single user) ────
             _cfg_now = _sched_eng.load_config()
 
             _al_top = tk.Frame(_al_inner, bg='#1a2e1a')
             _al_top.pack(fill='x', pady=(0, 6))
 
-            _sched_enabled_var = tk.BooleanVar(
-                value=_cfg_now.get("enabled", False))
-            ttk.Checkbutton(_al_top,
-                            text="Enable proactive alerts",
-                            variable=_sched_enabled_var).pack(side='left')
-
-            tk.Label(_al_top, text="  Email:", bg='#1a2e1a',
+            tk.Label(_al_top, text="Email:", bg='#1a2e1a',
                      fg='#cccccc', font=('Arial', 8)).pack(side='left')
-            _email_var = tk.StringVar(value=_cfg_now.get("email_to", ""))
-            ttk.Entry(_al_top, textvariable=_email_var,
-                      width=30).pack(side='left', padx=(4, 0))
+            self._email_var = _email_var = tk.StringVar(value=_cfg_now.get("email_to", ""))
+            self._email_entry = _email_entry = ttk.Entry(
+                _al_top, textvariable=_email_var, width=30)
+            _email_entry.pack(side='left', padx=(4, 0))
+
+            def _refresh_engine_status():
+                if _sched_eng.is_running():
+                    _al_status_var.set("● Running")
+                    _al_status_lbl.config(fg='#6ab86a')
+                else:
+                    _al_status_var.set("● Stopped")
+                    _al_status_lbl.config(fg='#aa4444')
+
+            # ── Persistence + engine lifecycle (v8.2 — auto-save, no master
+            # switch) ────────────────────────────────────────────────────────
+            # There is no user-visible "enable proactive alerts" toggle
+            # anymore — the underlying scheduler_config.json still has a
+            # top-level "enabled" flag that scheduler_engine._tick() checks
+            # before running ANY job, but this GUI now derives that flag
+            # automatically as "is at least one job enabled" and writes it
+            # on every save. The engine thread starts the moment the first
+            # job goes green and stops the moment the last one goes red —
+            # never something the user has to think about separately from
+            # the individual job switches themselves.
+            def _save_and_sync_engine(status_msg="✅ Saved"):
+                cfg = _sched_eng.load_config()
+                cfg["email_to"] = _email_var.get().strip()
+                jobs_out = {}
+                any_enabled = False
+                for jid in _sched_jobs.JOB_REGISTRY:
+                    en = _job_enabled_vars[jid].get()
+                    any_enabled = any_enabled or en
+                    jobs_out[jid] = {
+                        "enabled": en,
+                        "time":    _job_time_vars[jid].get().strip(),
+                        "days":    _job_days_vars[jid].get().strip(),
+                    }
+                cfg["jobs"]    = jobs_out
+                cfg["enabled"] = any_enabled
+                _sched_eng.save_config(cfg)
+
+                if any_enabled and not _sched_eng.is_running():
+                    _sched_eng.start()
+                    _refresh_engine_status()
+                elif not any_enabled and _sched_eng.is_running():
+                    _al_status_var.set("⏳ Stopping…")
+                    _al_status_lbl.config(fg='#aa8800')
+
+                    def _do_stop():
+                        _sched_eng.stop()
+                        self.root.after(0, _refresh_engine_status)
+
+                    threading.Thread(target=_do_stop, daemon=True).start()
+                else:
+                    _refresh_engine_status()
+
+            # Save on blur/Enter — same debounce reasoning as the per-job
+            # Time fields below: saving on every keystroke while the user is
+            # still typing an address would write partial/invalid values.
+            _email_entry.bind('<FocusOut>', lambda e: _save_and_sync_engine())
+            _email_entry.bind('<Return>', lambda e: _save_and_sync_engine())
 
             # ── Job list ──────────────────────────────────────────────────────
             _jobs_frame = tk.Frame(_al_inner, bg='#0e1e0e',
@@ -5893,12 +6121,26 @@ or from the Help menu."""
             _job_enabled_vars: dict[str, tk.BooleanVar]  = {}
             _job_time_vars:    dict[str, tk.StringVar]   = {}
             _job_days_vars:    dict[str, tk.StringVar]   = {}
+            _job_toggle_btns:  dict[str, tk.Button]       = {}
+            self._job_enabled_vars = _job_enabled_vars
+            self._job_time_vars    = _job_time_vars
+            self._job_days_vars    = _job_days_vars
+            self._job_toggle_btns  = _job_toggle_btns
 
             DAYS_OPTIONS = ["daily", "weekdays", "weekends",
                             "monday", "tuesday", "wednesday",
                             "thursday", "friday", "saturday", "sunday"]
 
             _jobs_cfg = _cfg_now.get("jobs", {})
+
+            def _paint_toggle(jid):
+                btn = _job_toggle_btns[jid]
+                if _job_enabled_vars[jid].get():
+                    btn.config(text="● ON", bg='#2a5a2a', fg='#8ee88e',
+                               activebackground='#356a35')
+                else:
+                    btn.config(text="○ OFF", bg='#5a2a2a', fg='#e88e8e',
+                               activebackground='#6a3535')
 
             for _jid, _jmeta in _sched_jobs.JOB_REGISTRY.items():
                 _jcfg = _jobs_cfg.get(
@@ -5914,25 +6156,57 @@ or from the Help menu."""
 
                 _ev = tk.BooleanVar(value=_jcfg.get("enabled", False))
                 _job_enabled_vars[_jid] = _ev
-                ttk.Checkbutton(_row_top, text=_jmeta["label"],
-                                variable=_ev,
-                                width=24).pack(side='left')
+
+                def _make_toggle_cmd(jid=_jid):
+                    def _toggle():
+                        _job_enabled_vars[jid].set(
+                            not _job_enabled_vars[jid].get())
+                        _paint_toggle(jid)
+                        _save_and_sync_engine()
+                    return _toggle
+
+                _toggle_btn = tk.Button(
+                    _row_top, width=6, font=('Arial', 8, 'bold'),
+                    relief='flat', cursor='hand2', bd=0,
+                    command=_make_toggle_cmd())
+                _toggle_btn.pack(side='left', padx=(0, 8))
+                _job_toggle_btns[_jid] = _toggle_btn
+                _paint_toggle(_jid)
+
+                tk.Label(_row_top, text=_jmeta["label"], bg='#0e1e0e',
+                         fg='#e0e0e0', font=('Arial', 9),
+                         width=24, anchor='w').pack(side='left')
 
                 tk.Label(_row_top, text="Time:", bg='#0e1e0e',
                          fg='#aaaaaa', font=('Arial', 7)).pack(side='left', padx=(4, 2))
                 _tv = tk.StringVar(value=_jcfg.get("time",
                                    _jmeta.get("default_time", "08:00")))
                 _job_time_vars[_jid] = _tv
-                ttk.Entry(_row_top, textvariable=_tv, width=9).pack(side='left')
+                _time_entry = ttk.Entry(_row_top, textvariable=_tv, width=9)
+                _time_entry.pack(side='left')
+                # Save on blur/Enter, not on every keystroke — saving a
+                # half-typed "0" while the user is still typing "08:00"
+                # would write an invalid time to disk mid-edit.
+                _time_entry.bind(
+                    '<FocusOut>', lambda e: _save_and_sync_engine())
+                _time_entry.bind(
+                    '<Return>', lambda e: _save_and_sync_engine())
 
                 tk.Label(_row_top, text="  Days:", bg='#0e1e0e',
                          fg='#aaaaaa', font=('Arial', 7)).pack(side='left', padx=(4, 2))
                 _dv = tk.StringVar(value=_jcfg.get("days",
                                    _jmeta.get("default_days", "daily")))
                 _job_days_vars[_jid] = _dv
-                ttk.Combobox(_row_top, textvariable=_dv,
+                _days_combo = ttk.Combobox(_row_top, textvariable=_dv,
                              values=DAYS_OPTIONS,
-                             state='readonly', width=10).pack(side='left')
+                             state='readonly', width=10)
+                _days_combo.pack(side='left')
+                # A readonly Combobox has no meaningful FocusOut-while-typing
+                # risk — every value is a complete, valid selection the
+                # instant it's chosen, so saving immediately on selection is
+                # safe (unlike the free-typed Time field above).
+                _days_combo.bind(
+                    '<<ComboboxSelected>>', lambda e: _save_and_sync_engine())
 
                 # Last run
                 _last = _sched_eng.get_last_run(_jid)
@@ -5973,71 +6247,12 @@ or from the Help menu."""
                 tk.Frame(_jobs_frame, bg='#1a2e1a', height=1).pack(
                     fill='x', padx=6)
 
-            # ── Save + Start/Stop controls ────────────────────────────────────
+            # ── View Log (the only remaining manual button — Save/Start/Stop
+            # are gone now that every field auto-saves and the engine tracks
+            # itself) ────────────────────────────────────────────────────────
             _al_btn_row = tk.Frame(_al_inner, bg='#1a2e1a')
             _al_btn_row.pack(fill='x', pady=(4, 0))
-
-            def _save_scheduler_config():
-                cfg = _sched_eng.load_config()
-                cfg["enabled"]  = _sched_enabled_var.get()
-                cfg["email_to"] = _email_var.get().strip()
-                jobs_out = {}
-                for jid in _sched_jobs.JOB_REGISTRY:
-                    jobs_out[jid] = {
-                        "enabled": _job_enabled_vars[jid].get(),
-                        "time":    _job_time_vars[jid].get().strip(),
-                        "days":    _job_days_vars[jid].get().strip(),
-                    }
-                cfg["jobs"] = jobs_out
-                _sched_eng.save_config(cfg)
-                _al_status_var.set("✅ Config saved")
-                self.root.after(3000, lambda: _al_status_var.set(
-                    "● Running" if _sched_eng.is_running() else "● Stopped"))
-                # Start/stop engine based on enabled flag
-                if cfg["enabled"] and not _sched_eng.is_running():
-                    _sched_eng.start()
-                elif not cfg["enabled"] and _sched_eng.is_running():
-                    # See _toggle_engine() — stop() now blocks until the
-                    # thread actually exits, so run it off-thread here too.
-                    _al_status_var.set("⏳ Stopping…")
-
-                    def _do_stop():
-                        _sched_eng.stop()
-                        self.root.after(0, _refresh_engine_status)
-
-                    threading.Thread(target=_do_stop, daemon=True).start()
-                    return
-                _refresh_engine_status()
-
-            def _refresh_engine_status():
-                if _sched_eng.is_running():
-                    _al_status_var.set("● Running")
-                    _al_status_lbl.config(fg='#6ab86a')
-                else:
-                    _al_status_var.set("● Stopped")
-                    _al_status_lbl.config(fg='#aa4444')
-
-            def _toggle_engine():
-                if _sched_eng.is_running():
-                    # v8.0.1: scheduler_engine.stop() now blocks (join()) until
-                    # the background thread has actually exited — correct and
-                    # race-free, but if a job tick is mid-run (e.g. a slow
-                    # SMTP/weather API call) that join can take a few seconds.
-                    # Run it off the Tkinter main thread so the GUI never
-                    # freezes; update the status label once it's truly done.
-                    _al_status_var.set("⏳ Stopping…")
-                    _al_status_lbl.config(fg='#aa8800')
-
-                    def _do_stop():
-                        _sched_eng.stop()
-                        self.root.after(0, _refresh_engine_status)
-
-                    threading.Thread(target=_do_stop, daemon=True).start()
-                else:
-                    _save_scheduler_config()
-                    _sched_eng.start()
-                    _al_status_var.set("● Running")
-                    _al_status_lbl.config(fg='#6ab86a')
+            self._al_btn_row = _al_btn_row
 
             def _view_log():
                 _log_win = tk.Toplevel(self.root)
@@ -6050,15 +6265,14 @@ or from the Help menu."""
                 _lt.insert('1.0', _sched_eng.get_log_tail(200))
                 _lt.configure(state='disabled')
 
-            ttk.Button(_al_btn_row, text="💾 Save Config",
-                       command=_save_scheduler_config).pack(side='left', padx=(0, 6))
-            ttk.Button(_al_btn_row, text="▶/■ Start/Stop",
-                       command=_toggle_engine).pack(side='left', padx=(0, 6))
             ttk.Button(_al_btn_row, text="📋 View Log",
                        command=_view_log).pack(side='left')
 
-            # Auto-start if config says enabled
-            if _cfg_now.get("enabled") and not _sched_eng.is_running():
+            # Auto-start if any job is enabled (mirrors _save_and_sync_engine's
+            # derivation — config on disk may have been hand-edited or left
+            # over from before this auto-save redesign).
+            if any(j.get("enabled") for j in _jobs_cfg.values()) \
+                    and not _sched_eng.is_running():
                 _sched_eng.start()
             _refresh_engine_status()
         # When SUPPORT_LOCAL_HW_LLM is False, all of the input/attachment/

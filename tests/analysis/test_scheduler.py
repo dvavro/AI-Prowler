@@ -643,3 +643,92 @@ class TestSchedulerLifecycle:
                    tmp_path / "nonexistent.log"):
             result = se.get_log_tail(10)
         assert "no log" in result.lower() or isinstance(result, str)
+
+
+# ---------------------------------------------------------------------------
+# TC-SCHED-009  scheduler_engine — _send_email() delivery contract
+#
+# Regression test for a real bug (found 2026-07-12): _send_email() called
+# send_email(..., html=True) and send_alert(subject=..., message=...), but
+# neither ai_prowler_mcp.send_email() nor send_alert() actually accept those
+# keyword arguments. Every prior test in this file mocks send_email/send_alert
+# with plain MagicMock(), which silently accepts ANY kwargs — so the mismatch
+# never raised and was invisible to the suite. run_job_now() reported success
+# generating the briefing but the email itself silently failed every time.
+#
+# Fix: use autospec=True (or spec_set with the real function object) so the
+# mock enforces the REAL signature — a wrong kwarg raises TypeError in tests
+# exactly as it would against the live function.
+# ---------------------------------------------------------------------------
+
+class TestSchedulerEmailDeliveryContract:
+
+    def test_TC_SCHED_009_send_email_uses_real_send_email_signature(self):
+        """_send_email()'s primary path must call ai_prowler_mcp.send_email()
+        with only kwargs that function actually accepts (to, subject, body,
+        attachment_path). autospec=True raises TypeError on any others —
+        this is what would have caught the 'html=True' bug immediately."""
+        import scheduler_engine as se
+        import ai_prowler_mcp as apm
+
+        with patch("ai_prowler_mcp.send_email", autospec=True,
+                   return_value="✅ Email sent to test@example.com") as mock_send:
+            ok = se._send_email("test@example.com", "Test Subject", "<p>body</p>")
+
+        assert ok is True
+        mock_send.assert_called_once()
+        # autospec already guarantees no invalid kwargs were passed (it would
+        # have raised TypeError above); also confirm 'html' was never used.
+        assert "html" not in mock_send.call_args.kwargs
+
+    def test_TC_SCHED_009_send_email_fallback_uses_real_send_alert_signature(self):
+        """When send_email() fails/raises, the send_alert() fallback must also
+        only use kwargs send_alert() actually accepts (message, to) — not
+        'subject', which send_alert() has never supported."""
+        import scheduler_engine as se
+
+        with patch("ai_prowler_mcp.send_email", autospec=True,
+                   side_effect=RuntimeError("SMTP down")), \
+             patch("ai_prowler_mcp.send_alert", autospec=True,
+                   return_value="✅ Alert sent to test@example.com") as mock_alert:
+            ok = se._send_email("test@example.com", "Test Subject", "<p>body</p>")
+
+        assert ok is True
+        mock_alert.assert_called_once()
+        assert "subject" not in mock_alert.call_args.kwargs
+        # subject must be folded into the message text instead
+        assert "Test Subject" in mock_alert.call_args.kwargs.get("message", "")
+
+    def test_TC_SCHED_009_send_email_both_paths_fail_returns_false(self):
+        """If both send_email and send_alert genuinely fail, _send_email()
+        must return False rather than raising — run_job_now() depends on
+        this to report '⚠️ Generated but email failed' instead of crashing."""
+        import scheduler_engine as se
+
+        with patch("ai_prowler_mcp.send_email", autospec=True,
+                   side_effect=RuntimeError("SMTP down")), \
+             patch("ai_prowler_mcp.send_alert", autospec=True,
+                   side_effect=RuntimeError("also down")):
+            ok = se._send_email("test@example.com", "Test Subject", "<p>body</p>")
+
+        assert ok is False
+
+    def test_TC_SCHED_009_run_job_now_end_to_end_delivery(self):
+        """End-to-end: run_job_now() with a configured email_to and a mocked
+        (real-signature-enforced) send_email must report success, not
+        'Generated but email failed'."""
+        import scheduler_engine as se
+
+        with patch("scheduler_engine.load_config",
+                   return_value={"email_to": "test@example.com",
+                                 "name": "Test", "location": "Test"}), \
+             patch("ai_prowler_mcp.get_ar_aging_report", return_value="Current: $0"), \
+             patch("ai_prowler_mcp.get_weather", return_value="Sunny"), \
+             patch("ai_prowler_mcp.read_job_spreadsheet", return_value=""), \
+             patch("ai_prowler_mcp.list_sms_contacts_with_replies", return_value=""), \
+             patch("ai_prowler_mcp.send_email", autospec=True,
+                   return_value="✅ Email sent to test@example.com"):
+            result = se.run_job_now("morning_briefing")
+
+        assert "✅ Sent" in result
+        assert "failed" not in result.lower()

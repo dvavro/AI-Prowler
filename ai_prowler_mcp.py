@@ -566,7 +566,9 @@ def _detect_server_mode() -> bool:
 
 _IS_SERVER_MODE: bool = _detect_server_mode()
 
-# The 27 Tier A tools: suppressed for ALL roles in server mode.
+# The Tier A tools: suppressed for ALL roles in server mode. (Count drifts
+# as tools are added — see the log line just below for the live count
+# rather than trusting a number in this comment.)
 _TIER_A_SUPPRESSED: frozenset = frozenset({
     # Dev / code-execution — run arbitrary code on the host OS
     "compile_check", "syntax_check", "lint_check",
@@ -584,6 +586,10 @@ _TIER_A_SUPPRESSED: frozenset = frozenset({
     "reset_write_counter", "grant_write_access", "revoke_write_access",
     # Backup cleanup — deletes files on the host, operator/dev action only
     "cleanup_backups",
+    # Job-log cleanup — same reasoning as cleanup_backups: deletes files on
+    # the host, and run_script_start/status/kill (the feature it cleans up
+    # after) are themselves personal-install-only.
+    "cleanup_job_logs",
     # Raw filesystem reads — arbitrary path access, bypasses the RAG layer
     "grep_documents", "read_file_lines",
     # Email operator / high-risk tools — personal-install-only.
@@ -597,7 +603,7 @@ _TIER_A_SUPPRESSED: frozenset = frozenset({
     # Common Business AI Analysis / My Custom Analyses panels are hidden in
     # server mode's GUI, so the queue they drive has no server-mode caller).
     "get_pending_analysis_tasks", "complete_analysis_task", "save_analysis_report",
-    "create_analysis_task",
+    "create_analysis_task", "list_analysis_tasks",
     # Raw/unscoped SMS inbox — personal-install-only. sms_inbox_read() has no
     # per-user filtering (unlike sms_inbox_read_for_user()), so in a
     # multi-user server it would let any employee read every inbound
@@ -805,7 +811,7 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "AI-Prowler — Agentic RAG Knowledge Base\n"
         + "=" * 50 + "\n\n"
 
-        "TOOL CATEGORIES (81 tools total — 80 visible in personal mode,\n"
+        "TOOL CATEGORIES (83 tools total — 82 visible in personal mode,\n"
         "54 visible in server mode; call check_tools_status() for a precise\n"
         "per-tool breakdown on this connection)\n"
         + "-" * 30 + "\n"
@@ -848,7 +854,7 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "      create_file, write_file, str_replace_in_file,\n"
         "      fuzzy_replace_in_file, line_replace_in_file, create_directory,\n"
         "      list_directory, copy_to_backup, list_backups, restore_backup,\n"
-        "      cleanup_backups, reset_write_counter, diff_files\n\n"
+        "      cleanup_backups, cleanup_job_logs, reset_write_counter, diff_files\n\n"
 
         "  • Dev tools (run/check code without leaving the conversation):\n"
         "      syntax_check, compile_check, check_python_import, lint_check,\n"
@@ -865,6 +871,11 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "        custom analysis task from a plain-language request. Day-\n"
         "        granularity scheduling only; pull-based, not autonomous —\n"
         "        see its own docstring for the full behavior explanation.\n"
+        "      list_analysis_tasks — lists the FULL custom-task definition\n"
+        "        list (up to 25) regardless of due date, with an is_due flag\n"
+        "        per task. Use for 'what's in my task queue' — different from\n"
+        "        get_pending_analysis_tasks below, which only shows tasks\n"
+        "        already queued into the run queue. Read-only.\n"
         "      get_pending_analysis_tasks — returns all pending tasks from\n"
         "        pending_tasks.json; call when the user pastes the run-queue\n"
         "        command from the Quick Links tab.\n"
@@ -9514,6 +9525,187 @@ def cleanup_backups(path: str = "", dry_run: bool = True) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# TOOL — cleanup_job_logs  (Tier A: personal mode only)
+# ══════════════════════════════════════════════════════════════════════════════
+# Added 2026-07-12 after ~.ai-prowler/jobs/ was found to have accumulated
+# 1000+ files (333+ background job runs × 3 files each: manifest .json,
+# .log, and _wrapper.py) with zero automatic retention — run_script_start's
+# _jobs_dir() only ever creates, never prunes. Mirrors cleanup_backups()'s
+# dry-run-by-default shape.
+@mcp.tool()
+def cleanup_job_logs(older_than_days: int = 7, keep_last: int = 20,
+                     dry_run: bool = True) -> str:
+    """
+    CODE TOOLS — Delete old run_script_start job files (manifest .json,
+    .log, and _wrapper.py) from ~/.ai-prowler/jobs/, which has no automatic
+    retention and grows by 3 files every background job run forever.
+
+    Always call with dry_run=True first (the default) — it lists every job
+    it would delete without removing anything. Then call again with
+    dry_run=False to actually delete them.
+
+    Not available in server mode (Tier A suppressed) — this whole feature
+    (run_script_start/status/kill) is personal-install-only.
+
+    Retention rule (deliberately conservative — a job is only deleted if
+    BOTH conditions hold):
+      1. Older than `older_than_days` (by the manifest's started_at, falling
+         back to file mtime if the manifest is missing/corrupt), AND
+      2. Not among the `keep_last` most recently started jobs.
+    So a very recent job is kept even if you pass older_than_days=0, and an
+    old-but-still-within-keep_last job is kept too. Only jobs that are BOTH
+    old and not among the recent handful get removed.
+
+    A job whose manifest status is still "running" is NEVER deleted,
+    regardless of age or rank — safety against removing a job's log out
+    from under it while it's actively executing.
+
+    Args:
+        older_than_days: Age threshold in days (default 7). 0 disables the
+                         age check (age condition always satisfied), leaving
+                         keep_last as the only protection — use with care.
+        keep_last:       Always keep at least this many of the most recent
+                         jobs regardless of age (default 20).
+        dry_run:         True (default) = list only, nothing deleted.
+                         False = delete all qualifying jobs.
+
+    Examples:
+        cleanup_job_logs()
+            → lists jobs older than 7 days beyond the most recent 20 (dry run)
+        cleanup_job_logs(dry_run=False)
+            → actually deletes them
+        cleanup_job_logs(older_than_days=30, keep_last=50, dry_run=False)
+            → more conservative: only jobs over a month old, keep the last 50
+    """
+    import json as _j_clean
+    import datetime as _dt
+    from pathlib import Path as _Pjobs
+
+    jobs_dir = _jobs_dir()
+    if not jobs_dir.exists():
+        return "✅ No jobs directory found — nothing to clean up."
+
+    # Group files by job_id. A job_id looks like job_20260712_131646_9agp;
+    # its three files are <id>.json, <id>.log, <id>_wrapper.py.
+    manifests = sorted(jobs_dir.glob("job_*.json"))
+    if not manifests:
+        return "✅ No job files found — nothing to clean up."
+
+    now = _dt.datetime.now()
+    jobs: list[dict] = []
+    for mpath in manifests:
+        job_id = mpath.stem
+        status = None
+        started_at = None
+        try:
+            data = _j_clean.loads(mpath.read_text(encoding="utf-8"))
+            status = data.get("status")
+            started_raw = data.get("started_at")
+            if started_raw:
+                started_at = _dt.datetime.fromisoformat(started_raw)
+        except Exception:
+            pass
+        if started_at is None:
+            try:
+                started_at = _dt.datetime.fromtimestamp(mpath.stat().st_mtime)
+            except Exception:
+                started_at = now  # worst case: treat as brand-new, never deleted by age
+
+        related = [mpath]
+        log_p = jobs_dir / f"{job_id}.log"
+        wrap_p = jobs_dir / f"{job_id}_wrapper.py"
+        if log_p.exists():
+            related.append(log_p)
+        if wrap_p.exists():
+            related.append(wrap_p)
+
+        jobs.append({
+            "job_id": job_id, "status": status, "started_at": started_at,
+            "files": related,
+        })
+
+    # Most recent first — this ordering IS the keep_last ranking.
+    jobs.sort(key=lambda j: j["started_at"], reverse=True)
+
+    age_cutoff = now - _dt.timedelta(days=older_than_days)
+    to_delete = []
+    skipped_running = []
+    for rank, job in enumerate(jobs):
+        if job["status"] == "running":
+            if job["started_at"] < age_cutoff or rank >= keep_last:
+                skipped_running.append(job["job_id"])
+            continue
+        is_old = job["started_at"] < age_cutoff
+        is_recent_rank = rank < keep_last
+        if is_old and not is_recent_rank:
+            to_delete.append(job)
+
+    if not to_delete:
+        msg = (f"✅ Nothing to clean up — {len(jobs)} job(s) total, all within "
+               f"the last {keep_last} or under {older_than_days} day(s) old.")
+        if skipped_running:
+            msg += (f"\n⚠️  {len(skipped_running)} job(s) would otherwise qualify "
+                    f"but are still marked 'running' — left alone: "
+                    f"{', '.join(skipped_running)}")
+        return msg
+
+    total_files = sum(len(j["files"]) for j in to_delete)
+    total_bytes = 0
+    for j in to_delete:
+        for f in j["files"]:
+            try:
+                total_bytes += f.stat().st_size
+            except Exception:
+                pass
+
+    if dry_run:
+        lines = [
+            f"🔍 Dry run — {len(to_delete)} job(s) / {total_files} file(s) "
+            f"totalling {total_bytes:,} bytes would be deleted.",
+            "   Nothing deleted. Re-run with dry_run=False to actually delete.",
+            "",
+        ]
+        for j in to_delete:
+            age_days = (now - j["started_at"]).days
+            lines.append(f"  • {j['job_id']}  ({age_days}d old, "
+                        f"{len(j['files'])} file(s))")
+        if skipped_running:
+            lines.append("")
+            lines.append(f"⚠️  {len(skipped_running)} job(s) qualify by age/rank "
+                        f"but are still 'running' — will NOT be deleted: "
+                        f"{', '.join(skipped_running)}")
+        return "\n".join(lines)
+
+    # ── Actually delete ────────────────────────────────────────────────────
+    deleted_jobs: list[str] = []
+    failed: list[str] = []
+    freed = 0
+    for j in to_delete:
+        job_ok = True
+        for f in j["files"]:
+            try:
+                freed += f.stat().st_size
+                f.unlink()
+            except Exception as exc:
+                job_ok = False
+                failed.append(f"{f}: {exc}")
+        if job_ok:
+            deleted_jobs.append(j["job_id"])
+
+    lines = [f"🗑️  Deleted {len(deleted_jobs)} job(s) — {freed:,} bytes freed."]
+    for d in deleted_jobs:
+        lines.append(f"  ✅ {d}")
+    if failed:
+        lines.append(f"\n⚠️  Failed to delete {len(failed)} file(s):")
+        for e in failed:
+            lines.append(f"  ❌ {e}")
+    if skipped_running:
+        lines.append(f"\n⚠️  {len(skipped_running)} job(s) left alone (still "
+                    f"'running'): {', '.join(skipped_running)}")
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # BONUS — reset_write_counter (admin tool, not part of the 8)
 # ══════════════════════════════════════════════════════════════════════════════
 @mcp.tool()
@@ -12474,6 +12666,85 @@ def get_pending_analysis_tasks(ctx: Context = None) -> str:
 
     except Exception as _e:
         return f"❌ Could not load pending tasks: {_e}"
+
+
+@mcp.tool()
+def list_analysis_tasks(ctx: Context = None) -> str:
+    """
+    AGENTIC ANALYSIS — List EVERY custom analysis task the user has defined
+    in the Links & Analysis tab's "My Custom Analyses" panel (up to 25),
+    regardless of whether it's currently due.
+
+    This is DIFFERENT from get_pending_analysis_tasks(), which only shows
+    tasks that have already been QUEUED into pending_tasks.json (either by
+    clicking "Run Due Tasks" in the GUI, or by a task actually being due).
+    A task can exist here — fully defined, scheduled, recurring — and never
+    show up in get_pending_analysis_tasks() until its next_due date arrives
+    AND someone queues it. Use this tool whenever the user asks something
+    like "what's in my task queue", "what tasks do I have set up", "list
+    all my custom analyses", or "show me everything I've scheduled" — those
+    are asking about the full definition list, not just what's due right now.
+
+    Does NOT modify anything and does NOT queue anything — read-only. To
+    actually run a task before its due date, call the analysis directly
+    (or tell the user to click "Run Due Tasks" / queue it manually in the
+    GUI, or use create_analysis_task with a near-term schedule).
+
+    Returns:
+        JSON with:
+          total_count — how many custom tasks exist (max 25)
+          tasks       — full list, each with:
+            task_id, label, prompt, schedule, first_due, next_due,
+            is_due (bool — true if next_due <= today AND schedule != none),
+            last_run, last_status, output_learnings, output_report,
+            report_folder, scope_dirs
+
+        Returns a plain message if no custom tasks are defined yet.
+
+    Examples:
+        "What's in my task queue?"
+        "List all my scheduled analyses"
+        "Show me every custom task I've set up, even ones not due yet"
+    """
+    _telemetry_increment_tool_count("list_analysis_tasks")
+
+    try:
+        import custom_tasks_manager as _ctm
+    except Exception as _ie:
+        return f"❌ custom_tasks_manager module not available: {_ie}"
+
+    try:
+        tasks = _ctm.load_custom_tasks()
+    except Exception as _e:
+        return f"❌ Could not load custom tasks: {_e}"
+
+    if not tasks:
+        return (
+            "✅ No custom analysis tasks defined yet. "
+            "Use create_analysis_task() or the \"+ New Custom Analysis\" "
+            "button in the Links & Analysis tab to create one."
+        )
+
+    try:
+        due_ids = {t["task_id"] for t in _ctm.get_due_tasks(tasks)}
+    except Exception:
+        due_ids = set()
+    for t in tasks:
+        t["is_due"] = t.get("task_id") in due_ids
+
+    result = {
+        "total_count": len(tasks),
+        "max_tasks": _ctm.MAX_CUSTOM_TASKS,
+        "tasks": tasks,
+        "note": (
+            "This is the full definition list (custom_analysis_tasks.json), "
+            "not the run queue. A task with is_due=true is not automatically "
+            "running — it still needs to be queued (Run Due Tasks in the GUI, "
+            "or check get_pending_analysis_tasks() in a future session) or "
+            "run directly right now if the user asks for that."
+        ),
+    }
+    return json.dumps(result, indent=2, ensure_ascii=False)
 
 
 @mcp.tool()

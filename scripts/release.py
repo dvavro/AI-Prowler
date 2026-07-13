@@ -67,10 +67,47 @@ INSTALLER_NAME = "AI-Prowler_INSTALL.exe"
 RELEASE_DRAFTS = REPO_ROOT / "release-drafts"
 LOCAL_CONFIG = REPO_ROOT / ".release-config.json"  # gitignored, admin-repo paths
 
+# ── Sibling admin-repo paths (Worker test suites) ────────────────────────────
+# These live OUTSIDE this repo (separate Cloudflare Worker projects), so they
+# can't be resolved via SCRIPT_PATH the way REPO_ROOT is. Defaults match what
+# release_gate.bat hardcodes; override any of them via LOCAL_CONFIG
+# (.release-config.json, gitignored) with keys "subs_root", "subscription_root",
+# "telemetry_root" if your machine's layout differs.
+_ADMIN_ROOT_DEFAULT = Path(r"C:\Users\david\AI-Prowler-ADMIN-V8")
+SUBS_ROOT_DEFAULT = _ADMIN_ROOT_DEFAULT / "ai-prowler-subs"
+SUBSCRIPTION_ROOT_DEFAULT = _ADMIN_ROOT_DEFAULT / "ai-prowler-subscription"
+TELEMETRY_ROOT_DEFAULT = _ADMIN_ROOT_DEFAULT / "ai-prowler-telemetry"
+
+
+def load_local_config() -> dict:
+    """Read .release-config.json if present. Never fatal — a missing or
+    malformed config just means every admin-repo path falls back to its
+    default. Previously this file was defined (LOCAL_CONFIG) but never
+    actually read anywhere — this is the first real use of it."""
+    if not LOCAL_CONFIG.exists():
+        return {}
+    try:
+        return json.loads(LOCAL_CONFIG.read_text(encoding="utf-8"))
+    except Exception as e:
+        warn(f"Could not parse {LOCAL_CONFIG.name} ({e}) — using defaults.")
+        return {}
+
+
+def admin_repo_paths() -> tuple[Path, Path, Path]:
+    """Return (subs_root, subscription_root, telemetry_root), honoring any
+    LOCAL_CONFIG overrides."""
+    cfg = load_local_config()
+    subs = Path(cfg["subs_root"]) if cfg.get("subs_root") else SUBS_ROOT_DEFAULT
+    sub = (Path(cfg["subscription_root"]) if cfg.get("subscription_root")
+           else SUBSCRIPTION_ROOT_DEFAULT)
+    tel = (Path(cfg["telemetry_root"]) if cfg.get("telemetry_root")
+           else TELEMETRY_ROOT_DEFAULT)
+    return subs, sub, tel
+
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 APP_VERSION_LINE_RE = re.compile(r'^APP_VERSION\s*=\s*"(\d+\.\d+\.\d+)"', re.M)
 ISS_APPVERSION_RE = re.compile(r"^AppVersion=(\d+\.\d+\.\d+)", re.M)
-GUIDE_VERSION_RE = re.compile(r"^\*\*Version\s+(\d+\.\d+\.\d+)\*\*", re.M)
+GUIDE_VERSION_RE = re.compile(r"^##\s+Version\s+(\d+\.\d+\.\d+)", re.M)
 
 # Inno Setup compiler — standard locations. Override via env ISCC_EXE.
 ISCC_CANDIDATES = [
@@ -304,13 +341,13 @@ def bump_changes(new_version: str) -> list[tuple[Path, str]]:
     # VERSION file is authoritative
     changes.append((VERSION_FILE, new_version + "\n"))
 
-    # COMPLETE_USER_GUIDE.md: replace **Version X.Y.Z** banner if present
+    # COMPLETE_USER_GUIDE.md: replace the "## Version X.Y.Z" heading if present
     if USER_GUIDE.exists():
         text = USER_GUIDE.read_text(encoding="utf-8")
-        new_text, n = GUIDE_VERSION_RE.subn(f"**Version {new_version}**", text, count=1)
+        new_text, n = GUIDE_VERSION_RE.subn(f"## Version {new_version}", text, count=1)
         if n == 0:
             warn(
-                f"COMPLETE_USER_GUIDE.md has no `**Version X.Y.Z**` banner to "
+                f"COMPLETE_USER_GUIDE.md has no `## Version X.Y.Z` heading to "
                 f"update. Please add or update it manually."
             )
         elif new_text != text:
@@ -383,17 +420,60 @@ def run_tests() -> None:
     step("Running tests (py -m pytest tests)")
     if not TESTS_DIR.exists():
         warn("No tests/ directory — skipping.")
-        return
-    # Stream output so the user sees progress live instead of a long silence
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "pytest", str(TESTS_DIR)],
-        cwd=str(REPO_ROOT),
-    )
-    rc = proc.wait()
-    if rc != 0:
-        err(f"Tests failed (exit {rc}). Aborting before any irreversible step.")
-        sys.exit(3)
-    ok("All tests passed.")
+    else:
+        # Stream output so the user sees progress live instead of a long silence
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "pytest", str(TESTS_DIR)],
+            cwd=str(REPO_ROOT),
+        )
+        rc = proc.wait()
+        if rc != 0:
+            err(f"Tests failed (exit {rc}). Aborting before any irreversible step.")
+            sys.exit(3)
+        ok("Main suite: all tests passed.")
+
+    run_worker_tests()
+
+
+def run_worker_tests() -> None:
+    """Run the Vitest suites in the two Cloudflare Worker repos
+    (ai-prowler-subscription, ai-prowler-telemetry). Added because this
+    script previously had ZERO knowledge of either repo — a version bump
+    could sail straight through to compiling the installer even with a
+    completely broken newsletter/subscription Worker, since only the main
+    pytest suite was ever run here. release_gate.bat already covers both
+    Worker suites; this brings the one-shot release.py path to parity.
+
+    A missing repo WARNS and skips rather than aborting the release — the
+    two admin repos are optional siblings, not part of this repo, and not
+    every environment running this script will have them checked out.
+    A test FAILURE inside a repo that IS present, however, aborts exactly
+    like the main suite does.
+    """
+    subs_root, subscription_root, telemetry_root = admin_repo_paths()
+
+    for label, root in (
+        ("ai-prowler-subscription", subscription_root),
+        ("ai-prowler-telemetry", telemetry_root),
+    ):
+        step(f"Running {label} Worker suite (npm test)")
+        if not (root / "package.json").exists():
+            warn(f"{label} not found at {root} — skipping "
+                 f"(override via .release-config.json if it moved).")
+            continue
+        proc = subprocess.Popen(
+            ["npm", "test"], cwd=str(root), shell=(os.name == "nt"),
+        )
+        rc = proc.wait()
+        if rc != 0:
+            err(f"{label} Worker suite failed (exit {rc}). "
+                f"Aborting before any irreversible step.")
+            sys.exit(3)
+        ok(f"{label}: all tests passed.")
+
+    if not (subs_root / "subs_client.py").exists():
+        warn(f"ai-prowler-subs not found at {subs_root} — nothing to check "
+             f"there anyway (no automated suite exists for it yet).")
 
 
 # ── Inno Setup compile ───────────────────────────────────────────────────────
@@ -616,7 +696,20 @@ def print_checklist(new_version: str, installer: Optional[Path]) -> None:
 
   5. In Subscription Manager: push the v{new_version} notification.
 
-  6. Send update emails to beta testers.
+  6. Deploy the Workers IF their source changed since the last deploy —
+     tests passing does NOT mean deployed; run_tests() only validates
+     Worker logic locally, it never touches the live Workers:
+       cd ai-prowler-subscription && npx wrangler deployments list
+       cd ai-prowler-telemetry    && npx wrangler deployments list
+     Compare the latest timestamp against your last source edit; if the
+     Worker is stale, deploy it:
+       npx wrangler deploy
+     If ai-prowler-telemetry's schema.sql changed, also re-apply it to
+     the REMOTE database (the IF NOT EXISTS guards make this safe to
+     re-run even when nothing changed):
+       npx wrangler d1 execute ai-prowler-telemetry --file=schema.sql --remote
+
+  7. Send update emails to beta testers.
 """)
 
 

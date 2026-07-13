@@ -153,15 +153,17 @@ def _send_email(to: str, subject: str, body_html: str) -> bool:
     """Send alert via AI-Prowler's existing send_alert / send_email tools."""
     try:
         from ai_prowler_mcp import send_email as _send
-        result = _send(to=to, subject=subject, body=body_html, html=True)
+        # send_email(to, subject, body, attachment_path="") — no 'html' kwarg.
+        result = _send(to=to, subject=subject, body=body_html)
         return "✅" in str(result) or "sent" in str(result).lower()
     except Exception:
         try:
             from ai_prowler_mcp import send_alert as _alert
-            # send_alert is plain-text only — strip HTML tags for fallback
+            # send_alert(message, to="") — no 'subject' kwarg. Fold subject
+            # into the message body since send_alert has nowhere else to put it.
             import re
             plain = re.sub(r"<[^>]+>", " ", body_html).strip()
-            _alert(subject=subject, message=plain[:500])
+            _alert(message=f"{subject}\n\n{plain[:450]}", to=to)
             return True
         except Exception:
             return False
