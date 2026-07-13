@@ -92,7 +92,7 @@ if sys.stderr is None:
 # Single source of truth for the app version. Bump this one line when releasing
 # a new version; all UI labels, About dialogs, help text, and update checks
 # read from here.
-APP_VERSION = "8.1.0"
+APP_VERSION = "8.1.1"
 
 # ── UI feature flags ─────────────────────────────────────────────────────────
 # Toggle visibility of advanced/legacy GUI sections without removing any
@@ -1449,6 +1449,36 @@ Built with Python, ChromaDB, FastMCP, and Claude"""
             except Exception as e:
                 messagebox.showerror("Clear failed", str(e), parent=win)
 
+        def _reset_newsletter_state():
+            """Wipe the local newsletter subscription flag so the Subscribe
+            banner reappears. Needed because unsubscribing via the email
+            link only updates the server-side D1 record — nothing tells
+            this local install about it, so the locally-cached
+            subscribed=true flag would otherwise stay stuck forever with
+            no other way to clear it."""
+            if not messagebox.askyesno(
+                    "Reset newsletter subscription state?",
+                    "Forget this install's local 'subscribed' flag?\n\n"
+                    "The Subscribe banner will reappear on the Welcome tab. "
+                    "Use this after unsubscribing via the email link if you "
+                    "want to resubscribe — that action only updates the "
+                    "server side, not this local flag.",
+                    parent=win):
+                return
+            try:
+                p = self._newsletter_state_path()
+                if p.exists():
+                    p.unlink()
+                # Rebuild live rather than requiring a restart — the banner
+                # widget is normally only (re)built once at Welcome-tab
+                # construction time, so without this the reset wouldn't be
+                # visible until the app was closed and reopened.
+                self._newsletter_dismissed_this_session = False
+                self._build_newsletter_banner()
+                _render()
+            except Exception as e:
+                messagebox.showerror("Reset failed", str(e), parent=win)
+
         # ── Button row ─────────────────────────────────────────────
         btn_row = ttk.Frame(win)
         btn_row.pack(fill='x', padx=10, pady=(0, 10))
@@ -1457,6 +1487,8 @@ Built with Python, ChromaDB, FastMCP, and Claude"""
                    command=_refresh_now).pack(side='left')
         ttk.Button(btn_row, text="🗑 Clear Dismissed",
                    command=_clear_dismissed).pack(side='left', padx=(8, 0))
+        ttk.Button(btn_row, text="📬 Reset Newsletter State",
+                   command=_reset_newsletter_state).pack(side='left', padx=(8, 0))
         ttk.Button(btn_row, text="Close",
                    command=win.destroy).pack(side='right')
 
@@ -3006,24 +3038,29 @@ or from the Help menu."""
         """Load local newsletter subscription state. Never raises — a
         missing/corrupt file is treated the same as 'never subscribed'."""
         import json as _json
-        default = {'subscribed': False, 'email': ''}
+        default = {'subscribed': False, 'email': '', 'awaiting_confirmation': False}
         try:
             p = self._newsletter_state_path()
             if p.exists():
                 data = _json.loads(p.read_text(encoding='utf-8'))
                 default['subscribed'] = bool(data.get('subscribed', False))
                 default['email'] = str(data.get('email', ''))
+                default['awaiting_confirmation'] = bool(
+                    data.get('awaiting_confirmation', False))
         except Exception:
             pass
         return default
 
-    def _save_newsletter_state(self, subscribed: bool, email: str) -> None:
+    def _save_newsletter_state(self, subscribed: bool, email: str,
+                               awaiting_confirmation: bool = False) -> None:
         import json as _json
         try:
             p = self._newsletter_state_path()
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(
-                _json.dumps({'subscribed': subscribed, 'email': email}, indent=2),
+                _json.dumps({'subscribed': subscribed, 'email': email,
+                            'awaiting_confirmation': awaiting_confirmation},
+                           indent=2),
                 encoding='utf-8')
         except Exception:
             pass
@@ -3041,13 +3078,43 @@ or from the Help menu."""
             return False
         return True
 
-    def _build_newsletter_banner(self):
+    @staticmethod
+    def _should_show_pending_card(state: dict) -> bool:
+        """PURE decision logic for the 'check your email to confirm' card
+        shown right after a successful Subscribe click (v8.1.1 — double
+        opt-in). Mutually exclusive with _should_show_newsletter_banner:
+        that one already returns False once subscribed=True, so the two
+        never render at the same time.
+
+        Unlike the ✕ on the original subscribe form (session-only —
+        reappears next launch), dismissing THIS card is persisted — once
+        the checkbox is checked, it's gone until Reset Newsletter State
+        (Help -> Notification Status) clears everything. There is no
+        client-side polling to detect the real click-through confirmation
+        (David's explicit simplicity choice, 2026-07-13) — this card is
+        purely a one-time reminder, not a live status indicator."""
+        return bool(state.get('subscribed')) and bool(state.get('awaiting_confirmation'))
+
+    def _build_newsletter_banner(self, email_sent: bool = True):
         """(Re)build the newsletter opt-in banner inside self._newsletter_frame.
-        Safe to call repeatedly — clears any existing children first."""
+        Safe to call repeatedly — clears any existing children first.
+
+        email_sent is a ONE-TIME render hint, not persisted state — it's
+        only meaningful immediately after a subscribe response, to show an
+        honest message if the confirmation email itself failed to send
+        (the subscriber row still exists server-side either way). On any
+        other call (initial tab build, dismiss, reset) it defaults True,
+        the normal case, since a stale send-failure from a previous launch
+        isn't worth remembering."""
         for child in self._newsletter_frame.winfo_children():
             child.destroy()
 
         state = self._load_newsletter_state()
+
+        if self._should_show_pending_card(state):
+            self._build_newsletter_pending_card(state, email_sent)
+            return
+
         if not self._should_show_newsletter_banner(
                 state, self._newsletter_dismissed_this_session):
             return
@@ -3099,6 +3166,43 @@ or from the Help menu."""
         subscribe_btn = ttk.Button(entry_row, text="Subscribe", command=_subscribe)
         subscribe_btn.pack(side='left')
 
+    def _build_newsletter_pending_card(self, state: dict, email_sent: bool):
+        """Build the 'check your email to confirm' card with a dismiss
+        checkbox. Shown after a successful Subscribe click, before the
+        confirmation link has been (or is known to have been) clicked."""
+        card = ttk.Frame(self._newsletter_frame, padding=(12, 8))
+        card.pack(fill='x')
+        try:
+            card.configure(relief='groove', borderwidth=1)
+        except Exception:
+            pass
+
+        row = ttk.Frame(card)
+        row.pack(fill='x')
+
+        if email_sent:
+            msg = "📬 Check your email to confirm your subscription"
+        else:
+            # The subscribe request succeeded server-side (the row exists
+            # as pending), but the confirmation email itself failed to
+            # send — say so honestly rather than pointing them at an
+            # inbox that has nothing in it.
+            msg = ("⚠ Subscribed, but the confirmation email couldn't be "
+                   "sent right now — try again later")
+        ttk.Label(row, text=msg, font=('Arial', 9, 'bold'),
+                  wraplength=520, justify='left').pack(side='left')
+
+        def _dismiss():
+            self._save_newsletter_state(True, state.get('email', ''),
+                                        awaiting_confirmation=False)
+            self._build_newsletter_banner()
+
+        check_row = ttk.Frame(card)
+        check_row.pack(fill='x', pady=(4, 0))
+        dismiss_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(check_row, text="Dismiss", variable=dismiss_var,
+                        command=_dismiss).pack(side='left')
+
     def _newsletter_do_subscribe(self, email: str):
         """Background-thread worker: POST the subscription, then marshal the
         result back to the Tk main thread via root.after(0, ...)."""
@@ -3121,6 +3225,7 @@ or from the Help menu."""
         }
         ok = False
         err_msg = ''
+        email_sent = True
         try:
             req = urllib.request.Request(
                 _NEWSLETTER_SUBSCRIBE_URL,
@@ -3132,6 +3237,7 @@ or from the Help menu."""
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = _json.loads(resp.read().decode('utf-8'))
                 ok = bool(data.get('ok'))
+                email_sent = bool(data.get('email_sent', True))
                 if not ok:
                     err_msg = str(data.get('reason', 'unknown error'))
         except Exception as ex:
@@ -3139,9 +3245,14 @@ or from the Help menu."""
 
         def _finish():
             if ok:
-                self._save_newsletter_state(True, email)
+                # v8.1.1 — double opt-in: subscribing no longer means
+                # actually confirmed. subscribed=True suppresses the
+                # original form permanently (matches pre-8.1.1 behavior);
+                # awaiting_confirmation=True is what makes the "check your
+                # email" card show instead, until dismissed or confirmed.
+                self._save_newsletter_state(True, email, awaiting_confirmation=True)
                 self._newsletter_dismissed_this_session = False
-                self._build_newsletter_banner()
+                self._build_newsletter_banner(email_sent=email_sent)
             else:
                 # Rebuild so the button re-enables; show the error inline.
                 self._build_newsletter_banner()

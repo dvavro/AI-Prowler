@@ -1,5 +1,5 @@
 # AI-Prowler — Complete User Guide
-## Version 8.1.0
+## Version 8.1.1
 
 ---
 
@@ -70,13 +70,18 @@ This produces dramatically better results — equivalent to having a skilled res
 - **Server mode GUI suppression** — Common Business AI Analysis and My Custom Analyses sections are now fully hidden in server mode.
 - **`last_updated` scope bug fixed** — metadata keys no longer appear as fake directory checkboxes in the scope picker.
 
-**Recently added (pending next release — not yet version-bumped):**
+**New in v8.1.0:**
 
 - **Newsletter opt-in** — a dismissible "📬 Get AI-Prowler updates and usage tips by email" banner on the Home tab. Purely opt-in, independent of licensing — reaches Home, Mobile, and Business users alike. See **Section 23**.
 - **Proactive Alerts redesign** — the six background email jobs (morning briefing, overdue invoices, etc.) now use independent per-job ON/OFF toggles instead of one master "Enable proactive alerts" checkbox plus a separate Save/Start/Stop button row. Every field (job toggle, time, days, shared email) auto-saves the instant it changes — Save Config and Start/Stop buttons are gone. The background engine starts automatically the moment any job is switched on, and stops automatically when the last one is switched off. See **Section 17**.
 - **Two new MCP tools:**
   - `list_analysis_tasks` — lists the FULL custom-analysis task definition list (up to 25), regardless of due date. Complements `get_pending_analysis_tasks`, which only shows tasks already queued into the run queue.
   - `cleanup_job_logs` — deletes old `run_script_start` job files (`.json`/`.log`/`_wrapper.py`) from `~/.ai-prowler/jobs/`, which had no automatic retention and could accumulate thousands of files over time. Mirrors `cleanup_backups`'s dry-run-by-default design.
+
+**New in v8.1.1:**
+
+- **Newsletter double opt-in** — subscribing now sends a confirmation email first; you're not added to the active mailing list until you click the link in it. This protects against typos in the email field and confirms the address is actually reachable before anything gets sent to it. See **Section 23**.
+- **Reset Newsletter State** — a new option in Help → Notification Status lets you manually clear your local subscription state (e.g. if you want to resubscribe with a different address, or dismissed the confirmation reminder by mistake).
 
 ---
 
@@ -1893,6 +1898,8 @@ The footer at the bottom of the Welcome tab can be customized by the AI-Prowler 
 ### Newsletter Opt-In
 
 A dismissible banner — "📬 Get AI-Prowler updates and usage tips by email" — appears on the Home tab for anyone not already subscribed. Enter an email and click Subscribe, or click the ✕ to dismiss it for the current session (it reappears next launch, since it only fully disappears once you've actually subscribed).
+
+**Double opt-in (v8.1.1):** clicking Subscribe doesn't add you to the mailing list immediately. It sends a confirmation email first, and the banner changes to "📬 Check your email to confirm your subscription" with a **Dismiss** checkbox next to it. You're only added to the active list once you click the confirmation link in that email — this protects against typos in the email field and confirms the address is actually reachable. Checking Dismiss hides the reminder permanently (not just for the session); if you want it back — for example, to resubscribe with a different address — use **Reset Newsletter State** in Help → Notification Status, which clears your local subscription state entirely and brings back the original Subscribe form.
 
 This is a separate, purely opt-in mailing list — independent of licensing or telemetry. Subscribing or not has no effect on which features are available, and unsubscribing (via the link in any newsletter email) doesn't affect your license or account in any way.
 

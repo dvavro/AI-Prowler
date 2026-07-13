@@ -64,14 +64,15 @@ class TestNewsletterStatePersistence:
     def test_NL_02_load_defaults_when_no_file_exists(self, gui, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         state = gui.app._load_newsletter_state()
-        assert state == {'subscribed': False, 'email': ''}
+        assert state == {'subscribed': False, 'email': '', 'awaiting_confirmation': False}
 
     def test_NL_02_save_then_load_round_trips(self, gui, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        gui.app._save_newsletter_state(True, 'david@example.com')
+        gui.app._save_newsletter_state(True, 'david@example.com', awaiting_confirmation=True)
 
         state = gui.app._load_newsletter_state()
-        assert state == {'subscribed': True, 'email': 'david@example.com'}
+        assert state == {'subscribed': True, 'email': 'david@example.com',
+                         'awaiting_confirmation': True}
 
         # File actually landed where expected.
         expected_path = tmp_path / '.ai-prowler' / 'newsletter_subscription.json'
@@ -79,6 +80,23 @@ class TestNewsletterStatePersistence:
         on_disk = json.loads(expected_path.read_text(encoding='utf-8'))
         assert on_disk['subscribed'] is True
         assert on_disk['email'] == 'david@example.com'
+        assert on_disk['awaiting_confirmation'] is True
+
+    def test_NL_02_awaiting_confirmation_defaults_false_for_old_state_files(
+            self, gui, tmp_path, monkeypatch):
+        # A state file written before v8.1.1 (double opt-in) has no
+        # awaiting_confirmation key at all — must default to False, not
+        # crash, and must NOT retroactively show the pending card for
+        # someone who subscribed under the old single-opt-in behavior.
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        p = tmp_path / '.ai-prowler' / 'newsletter_subscription.json'
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({'subscribed': True, 'email': 'old@example.com'}),
+                     encoding='utf-8')
+
+        state = gui.app._load_newsletter_state()
+        assert state == {'subscribed': True, 'email': 'old@example.com',
+                         'awaiting_confirmation': False}
 
     def test_NL_02_corrupt_file_falls_back_to_defaults_without_raising(
             self, gui, tmp_path, monkeypatch):
@@ -88,7 +106,7 @@ class TestNewsletterStatePersistence:
         p.write_text("{not valid json", encoding='utf-8')
 
         state = gui.app._load_newsletter_state()
-        assert state == {'subscribed': False, 'email': ''}
+        assert state == {'subscribed': False, 'email': '', 'awaiting_confirmation': False}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -161,7 +179,19 @@ class TestNewsletterBannerRendering:
 def _fake_urlopen_success(*args, **kwargs):
     resp = MagicMock()
     resp.read.return_value = json.dumps(
-        {'ok': True, 'email': 'david@example.com', 'status': 'active'}
+        {'ok': True, 'email': 'david@example.com', 'status': 'pending',
+         'email_sent': True}
+    ).encode('utf-8')
+    resp.__enter__ = lambda self: resp
+    resp.__exit__ = lambda self, *a: False
+    return resp
+
+
+def _fake_urlopen_success_email_not_sent(*args, **kwargs):
+    resp = MagicMock()
+    resp.read.return_value = json.dumps(
+        {'ok': True, 'email': 'david@example.com', 'status': 'pending',
+         'email_sent': False}
     ).encode('utf-8')
     resp.__enter__ = lambda self: resp
     resp.__exit__ = lambda self, *a: False
@@ -180,8 +210,12 @@ def _fake_urlopen_failure(*args, **kwargs):
 
 class TestNewsletterSubscribeFlow:
 
-    def test_NL_04_successful_subscribe_persists_state_and_hides_banner(
+    def test_NL_04_successful_subscribe_persists_state_and_shows_pending_card(
             self, gui, tmp_path, monkeypatch):
+        # v8.1.1 — double opt-in: a successful subscribe no longer hides
+        # the whole banner outright. It persists subscribed=True (so the
+        # original form never comes back) AND awaiting_confirmation=True
+        # (so the "check your email" card shows instead of nothing).
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         gui.app._newsletter_dismissed_this_session = False
         gui.app._build_newsletter_banner()
@@ -196,7 +230,11 @@ class TestNewsletterSubscribeFlow:
         state = gui.app._load_newsletter_state()
         assert state['subscribed'] is True
         assert state['email'] == 'david@example.com'
-        assert len(gui.app._newsletter_frame.winfo_children()) == 0
+        assert state['awaiting_confirmation'] is True
+        # The pending card IS rendered (not zero children) — that's the
+        # whole point of double opt-in: the user isn't done yet, they
+        # still need to check their inbox.
+        assert len(gui.app._newsletter_frame.winfo_children()) > 0
 
     def test_NL_04_failed_subscribe_keeps_banner_and_does_not_persist(
             self, gui, tmp_path, monkeypatch):
@@ -256,3 +294,132 @@ class TestNewsletterSubscribeFlow:
         assert captured['body']['source'] == 'home_tab_banner'
         assert 'version' in captured['body']
         assert 'os' in captured['body']
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NL-05 — the "check your email" pending card (v8.1.1, double opt-in)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestShouldShowPendingCard:
+
+    def test_NL_05_hidden_when_never_subscribed(self):
+        state = {'subscribed': False, 'email': '', 'awaiting_confirmation': False}
+        assert gui_mod.RAGGui._should_show_pending_card(state) is False
+
+    def test_NL_05_shown_when_subscribed_and_awaiting_confirmation(self):
+        state = {'subscribed': True, 'email': 'david@example.com',
+                 'awaiting_confirmation': True}
+        assert gui_mod.RAGGui._should_show_pending_card(state) is True
+
+    def test_NL_05_hidden_once_dismissed_even_though_still_subscribed(self):
+        # This is the "Dismiss" checkbox's persisted end state — subscribed
+        # stays True forever (the form must never come back), but
+        # awaiting_confirmation flips to False so the reminder card is gone.
+        state = {'subscribed': True, 'email': 'david@example.com',
+                 'awaiting_confirmation': False}
+        assert gui_mod.RAGGui._should_show_pending_card(state) is False
+
+    def test_NL_05_mutually_exclusive_with_original_banner(self):
+        # Whenever the pending card would show, the original subscribe-form
+        # banner must NOT also show — verified against the real (unchanged)
+        # _should_show_newsletter_banner logic, not just asserted by design.
+        state = {'subscribed': True, 'email': 'david@example.com',
+                 'awaiting_confirmation': True}
+        assert gui_mod.RAGGui._should_show_pending_card(state) is True
+        assert gui_mod.RAGGui._should_show_newsletter_banner(state, False) is False
+
+
+class TestNewsletterPendingCardRendering:
+
+    def test_NL_05_pending_card_renders_after_subscribe(
+            self, gui, tmp_path, monkeypatch):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        gui.app._save_newsletter_state(True, 'david@example.com',
+                                       awaiting_confirmation=True)
+        gui.app._build_newsletter_banner()
+        gui.pump()
+
+        assert len(gui.app._newsletter_frame.winfo_children()) > 0
+
+    def test_NL_05_email_sent_true_shows_check_email_message(
+            self, gui, tmp_path, monkeypatch):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        gui.app._save_newsletter_state(True, 'david@example.com',
+                                       awaiting_confirmation=True)
+        gui.app._build_newsletter_banner(email_sent=True)
+        gui.pump()
+
+        # Walk the widget tree for the expected message text.
+        found = False
+        def _walk(w):
+            nonlocal found
+            txt = str(w.cget('text')) if 'text' in w.keys() else ''
+            if 'check your email' in txt.lower():
+                found = True
+            for c in w.winfo_children():
+                _walk(c)
+        _walk(gui.app._newsletter_frame)
+        assert found, "expected the 'check your email' message to render"
+
+    def test_NL_05_email_sent_false_shows_honest_failure_message(
+            self, gui, tmp_path, monkeypatch):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        gui.app._save_newsletter_state(True, 'david@example.com',
+                                       awaiting_confirmation=True)
+        gui.app._build_newsletter_banner(email_sent=False)
+        gui.pump()
+
+        found = False
+        def _walk(w):
+            nonlocal found
+            txt = str(w.cget('text')) if 'text' in w.keys() else ''
+            if "couldn't be" in txt.lower():
+                found = True
+            for c in w.winfo_children():
+                _walk(c)
+        _walk(gui.app._newsletter_frame)
+        assert found, "expected an honest send-failure message, not the generic one"
+
+    def test_NL_05_dismiss_checkbox_persists_and_hides_card(
+            self, gui, tmp_path, monkeypatch):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        gui.app._save_newsletter_state(True, 'david@example.com',
+                                       awaiting_confirmation=True)
+        gui.app._build_newsletter_banner()
+        gui.pump()
+        assert len(gui.app._newsletter_frame.winfo_children()) > 0
+
+        # Find and invoke the dismiss checkbox rather than calling the
+        # internal handler directly — exercises the actual widget wiring.
+        def _find_checkbutton(w):
+            for c in w.winfo_children():
+                if c.winfo_class() == 'TCheckbutton':
+                    return c
+                found = _find_checkbutton(c)
+                if found is not None:
+                    return found
+            return None
+
+        cb = _find_checkbutton(gui.app._newsletter_frame)
+        assert cb is not None, "expected a Checkbutton in the pending card"
+        cb.invoke()
+        gui.pump()
+
+        # Persisted — not session-only like the original form's ✕.
+        state = gui.app._load_newsletter_state()
+        assert state['subscribed'] is True
+        assert state['awaiting_confirmation'] is False
+        assert len(gui.app._newsletter_frame.winfo_children()) == 0
+
+    def test_NL_05_dismissal_survives_a_fresh_banner_rebuild(
+            self, gui, tmp_path, monkeypatch):
+        # Simulates relaunching the app — unlike the original form's ✕
+        # (session-only), a dismissed pending card must stay dismissed.
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        gui.app._save_newsletter_state(True, 'david@example.com',
+                                       awaiting_confirmation=False)
+        gui.app._newsletter_dismissed_this_session = False
+        gui.app._build_newsletter_banner()
+        gui.pump()
+
+        assert len(gui.app._newsletter_frame.winfo_children()) == 0
