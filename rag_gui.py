@@ -3237,7 +3237,13 @@ or from the Help menu."""
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = _json.loads(resp.read().decode('utf-8'))
                 ok = bool(data.get('ok'))
-                email_sent = bool(data.get('email_sent', True))
+                # Default to False (fail-safe), not True. A response that's
+                # missing this key entirely — e.g. talking to a Worker that
+                # hasn't been redeployed with the double-opt-in code yet —
+                # must never be silently read as "email was sent". That
+                # exact mismatch happened once already: client shipped
+                # before server, and the missing key got treated as success.
+                email_sent = bool(data.get('email_sent', False))
                 if not ok:
                     err_msg = str(data.get('reason', 'unknown error'))
         except Exception as ex:

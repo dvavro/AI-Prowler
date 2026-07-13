@@ -208,7 +208,52 @@ def _fake_urlopen_failure(*args, **kwargs):
     return resp
 
 
+def _fake_urlopen_success_missing_email_sent_key(*args, **kwargs):
+    # Simulates the OLD (pre-double-opt-in) Worker response shape — no
+    # email_sent key at all. This is exactly what caused the real bug:
+    # the client used to default a missing key to True ("assume it sent"),
+    # showing "check your email" even though the live Worker never had
+    # any email-sending code at all. Regression guard for that fix.
+    resp = MagicMock()
+    resp.read.return_value = json.dumps(
+        {'ok': True, 'email': 'david@example.com', 'status': 'active'}
+    ).encode('utf-8')
+    resp.__enter__ = lambda self: resp
+    resp.__exit__ = lambda self, *a: False
+    return resp
+
+
 class TestNewsletterSubscribeFlow:
+
+    def test_NL_04_missing_email_sent_key_defaults_to_false_not_true(
+            self, gui, tmp_path, monkeypatch):
+        # Regression test for a real production bug (2026-07-13): an
+        # un-deployed Worker's response has no email_sent key. Must be
+        # treated as "don't know it sent" (False), not silently assumed
+        # to have succeeded (True) — a false "check your email" message
+        # is worse than an honest "couldn't be sent" one.
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        gui.app._newsletter_dismissed_this_session = False
+        gui.app._build_newsletter_banner()
+        gui.pump()
+
+        with patch('urllib.request.urlopen',
+                   side_effect=_fake_urlopen_success_missing_email_sent_key):
+            gui.app._newsletter_do_subscribe('david@example.com')
+        gui.pump()
+
+        found_honest_warning = False
+        def _walk(w):
+            nonlocal found_honest_warning
+            txt = str(w.cget('text')) if 'text' in w.keys() else ''
+            if "couldn't be" in txt.lower():
+                found_honest_warning = True
+            for c in w.winfo_children():
+                _walk(c)
+        _walk(gui.app._newsletter_frame)
+        assert found_honest_warning, (
+            "a response missing email_sent must show the honest "
+            "send-failure message, not silently claim success")
 
     def test_NL_04_successful_subscribe_persists_state_and_shows_pending_card(
             self, gui, tmp_path, monkeypatch):
