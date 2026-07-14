@@ -1989,6 +1989,24 @@ begin
             ExpandConstant(TESSERACT_FOLDER) + ';%Path%');
           AppendInstallLog('[Tesseract] Added to user PATH: '
             + ExpandConstant(TESSERACT_FOLDER));
+
+          // FIX (2026-07-14): broadcast WM_SETTINGCHANGE again, here.
+          // The one broadcast earlier in this procedure (~30% progress,
+          // after PYTHONNOUSERSITE) fires LONG before this PATH write
+          // (85% progress) even exists -- so Explorer and any already-
+          // running process never learned about THIS specific change.
+          // Result: a brand-new cmd.exe window, spawned from the same
+          // still-running Explorer session, kept the stale pre-install
+          // PATH and reported 'tesseract is not recognized' even though
+          // the install itself succeeded. Broadcasting again immediately
+          // after this write (reusing the same MsgDummy var declared
+          // above) means a freshly-opened terminal sees Tesseract on
+          // PATH right away, with no logoff/logon required.
+          SendMessageTimeoutA(HWND_BROADCAST, WM_SETTINGCHANGE, 0,
+            'Environment', SMTO_ABORTIFHUNG, 5000, MsgDummy);
+          AppendInstallLog('[Tesseract] Broadcast WM_SETTINGCHANGE - '
+            + 'new terminals will see Tesseract on PATH immediately.');
+
           AppendInstallLog('[Tesseract] Install complete.');
         end
         else
