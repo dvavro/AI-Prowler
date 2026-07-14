@@ -3172,6 +3172,22 @@ def build_collection_resolver(users_json_path: str = None) -> "callable | None":
       - no collection_map rules are defined
 
     This is the safe entry point for rag_gui.py — it never raises.
+
+    IMPORTANT (fixed 2026-07-14, alongside command_update's identical fix
+    for the Scheduled Task/watchdog): the returned resolver now uses
+    scope_resolver.resolve_collection_for_unattended_path — the SAME safe
+    logic as the rest of this fix — instead of the general-purpose
+    resolve_collection_for_path. The GUI's "Update Selected"/"Update All"
+    buttons have no per-file acting-user context any more than the
+    Scheduled Task does (this whole function is parameterless — there was
+    never a real user identity to fall back to safely), so an unmatched
+    file must return None (meaning "skip, don't guess"), not silently fall
+    through to the single default 'documents' collection. default_collection
+    is deliberately NOT carried into the mapping here either — see
+    resolve_collection_for_unattended_path's docstring for the full
+    rationale. _cmd_get_col() in command_update() (the function this
+    resolver is actually passed into) already knows how to turn a None
+    return into a clean per-file skip rather than a silent misroute.
     """
     import json as _json
     from pathlib import Path as _Path
@@ -3193,12 +3209,16 @@ def build_collection_resolver(users_json_path: str = None) -> "callable | None":
         rules = cm.get("rules")
         if not rules:
             return None
-        # Snapshot the mapping so the closure is self-contained
+        # Snapshot the mapping so the closure is self-contained. No
+        # default_collection — deliberately excluded, see docstring.
         mapping = {"rules": list(rules)}
-        if cm.get("default_collection"):
-            mapping["default_collection"] = cm["default_collection"]
-        def _resolver(fp, _m=mapping):
-            return resolve_collection_for_path(fp, _m)
+
+        import scope_resolver as _sr
+        known_ids = _sr.known_user_ids(data)
+
+        def _resolver(fp, _m=mapping, _k=known_ids):
+            return _sr.resolve_collection_for_unattended_path(
+                fp, _m, known_ids=_k)
         return _resolver
     except Exception:
         return None
@@ -5661,6 +5681,89 @@ def _update_tracked_file(filepath: str, auto_confirm: bool = False) -> None:
     print()
 
 
+def _log_scope_skip(context: str, path: str, reason: str) -> None:
+    """Append one line to a shared, persistent log of scope-resolution
+    skips, reviewable regardless of which unattended path triggered it
+    (file watchdog, Scheduled Task, or a GUI Update button — the last two
+    both rely on print(), which is silently discarded when running under
+    pythonw.exe with sys.stdout redirected to devnull; see the
+    stdout-safety comment near the top of this file). Writing directly to
+    a file, not relying on stdout capture, is what makes this reliable
+    across all of them. Never raises — a logging failure must never block
+    or crash an indexing operation.
+
+    context: which caller — 'watchdog', 'scheduled_task', 'gui_update',
+             or 'command_update' (the shared function all but watchdog
+             route through).
+    """
+    try:
+        log_dir = Path.home() / "AI-Prowler" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "index_scope_skips.log"
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"[{ts}] [{context}] {path} — {reason}\n")
+    except Exception:
+        pass
+
+
+def _load_users_data_for_unattended_resolve():
+    """Load ~/.ai-prowler/users.json for command_update's unattended-caller
+    fallback (see command_update's docstring). Returns None if the file
+    doesn't exist / can't be parsed — the normal, expected case for a
+    personal-mode install. Mirrors file_watchdog.py's _load_users_data();
+    duplicated rather than imported to avoid rag_preprocessor depending on
+    a GUI-adjacent module — this is the lower-level module in the stack."""
+    try:
+        p = Path.home() / ".ai-prowler" / "users.json"
+        if not p.exists():
+            return None
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _resolve_unattended_directory_scope(directory: str):
+    """Determine the collection scope for `directory`, for a caller with NO
+    acting user/session — currently only the Scheduled Task's CLI 'update'
+    command (rag_auto_update.bat), which never supplies collection_resolver
+    or indexer_user at all. Mirrors file_watchdog.py's
+    _resolve_unattended_collection — see that function's docstring, and
+    scope_resolver.resolve_collection_for_unattended_path's, for the full
+    rationale (added after the 2026-07 Christina incident).
+
+    Returns a 3-state tuple, same convention as ai_prowler_mcp.py's
+    _user_private_write_dir:
+      ("personal", None)        — no users.json/collection_map at all;
+                                   caller should use the single default
+                                   'documents' collection, unchanged.
+      ("scoped", collection)    — server mode, a rule safely matched.
+      ("blocked", None)         — server mode, but nothing safely matched
+                                   (unmatched path, or a rule pointing at a
+                                   deleted user). Caller MUST NOT index
+                                   into any collection — skip and log.
+    """
+    users_data = _load_users_data_for_unattended_resolve()
+    if not users_data:
+        return ("personal", None)
+
+    collection_map = users_data.get("collection_map")
+    if not isinstance(collection_map, dict) or not collection_map.get("rules"):
+        return ("personal", None)
+
+    try:
+        import scope_resolver as _sr
+    except Exception:
+        return ("blocked", None)
+
+    known_ids = _sr.known_user_ids(users_data)
+    target = _sr.resolve_collection_for_unattended_path(
+        directory, collection_map, known_ids=known_ids)
+    if target is None:
+        return ("blocked", None)
+    return ("scoped", target)
+
+
 def command_update(directory, recursive=True, auto_confirm=False,
                    collection_resolver=None, indexer_user=None, purge_gate=None):
     """Check for changes and update index with new/modified files, and
@@ -5668,8 +5771,21 @@ def command_update(directory, recursive=True, auto_confirm=False,
 
     The collection_resolver, indexer_user, and purge_gate kwargs are accepted
     for forward-compatibility with the v7.0.0 multi-user/scoped-collection MCP
-    layer. In personal (single-user) mode they are unused — routing always goes
-    to the default 'documents' collection.
+    layer. Callers that DO supply collection_resolver (e.g. the MCP
+    update_tracked_directories tool, which has a real acting user) are
+    unaffected by anything below.
+
+    When collection_resolver is NOT supplied (personal mode, OR the
+    Scheduled Task's CLI 'update' invocation, which has no session at all
+    to build one from) — this now attempts to resolve server-mode scoping
+    itself via _resolve_unattended_directory_scope before falling back to
+    the single 'documents' collection. Added after the 2026-07 Christina
+    incident: the Scheduled Task previously always indexed into 'documents'
+    regardless of server mode, silently orphaning content that belonged in
+    a scoped (personal or team) collection. If this install has server-mode
+    collection_map rules configured but this specific directory doesn't
+    safely match one, the update is SKIPPED entirely with a warning rather
+    than guessed into 'documents' — see _resolve_unattended_directory_scope.
 
     Handles both directories and individually-tracked files.
 
@@ -5693,6 +5809,20 @@ def command_update(directory, recursive=True, auto_confirm=False,
       • BAT  -> rag_auto_update.bat scheduled task
     Fixing it here covers all four entry-points simultaneously.
     """
+    if collection_resolver is None and indexer_user is None:
+        _status, _target = _resolve_unattended_directory_scope(directory)
+        if _status == "blocked":
+            _reason = ("no collection_map rule safely matches this path "
+                      "(or its rule points at a user who no longer exists)")
+            print(f"⚠️  Skipping {directory} — {_reason}. Add a scope rule "
+                  f"for this directory in the Admin tab, or update it "
+                  f"manually via the GUI/MCP tools (which route through a "
+                  f"real user) to fix it.")
+            _log_scope_skip("command_update", directory, _reason)
+            return
+        if _status == "scoped":
+            collection_resolver = lambda _fp, _c=_target: _c
+        # "personal" -> collection_resolver stays None, unchanged behavior.
 
     # ── Route individually-tracked files to index_file_list ──────────────────
     # File targets bypass SKIP_EXTENSIONS (smart-scan restrictions are for
@@ -5756,6 +5886,21 @@ def command_update(directory, recursive=True, auto_confirm=False,
                     client, embedding_func)
             return _cmd_col_cache['__default__']
         logical = collection_resolver(fp)
+        if logical is None:
+            # The resolver explicitly could not safely match this file (no
+            # rule, or a rule pointing at a user who no longer exists) —
+            # this is scope_resolver.resolve_collection_for_unattended_
+            # path's contract: None means "skip, never guess a
+            # destination". Raise rather than fall through to phys =
+            # chroma_collection_name(None) — this propagates to the
+            # existing per-file try/except in the purge/index passes
+            # below, which correctly report it as a failed/skipped file
+            # instead of silently indexing into the wrong collection.
+            _reason = "no collection_map rule safely matches this file"
+            _log_scope_skip("command_update", fp, _reason)
+            raise RuntimeError(
+                f"{_reason} (or its rule points at a deleted user) — "
+                f"skipping. Add a scope rule in the Admin tab.")
         phys    = chroma_collection_name(logical)
         if phys not in _cmd_col_cache:
             try:
@@ -6273,12 +6418,29 @@ def generate_auto_update_script():
         return None
 
 def generate_windows_script(directories):
-    """Generate Windows batch script"""
+    """Generate Windows batch script.
+
+    Fixed 2026-07-14: the actual update command's output (including any
+    "no collection_map rule safely matches" skip warning) is now
+    redirected to a persistent log file. Previously ONLY a single
+    "Auto-update completed" timestamp line was ever logged — none of the
+    real command output, meaning a skip warning fired by a Scheduled Task
+    run (which Windows Task Scheduler executes with no visible console at
+    all) was completely unreviewable; it printed to a console that didn't
+    exist. The decorative "echo [i/N] Updating..." progress lines are
+    deliberately left un-redirected so a manual double-click run still
+    shows basic progress on screen; the detailed output (including any
+    warning) always goes to the log either way.
+    """
+    log_path = r'%USERPROFILE%\AI-Prowler\.rag_update.log'
     script = """@echo off
 REM ============================================================
 REM AI Prowler Auto-Update Script
 REM Auto-generated from indexed directories
 REM Last updated: {timestamp}
+REM
+REM Full output from each update (including any scope-skip warnings)
+REM is logged to: {log_path}
 REM ============================================================
 
 echo ============================================================
@@ -6287,31 +6449,35 @@ echo ============================================================
 echo Started: %DATE% %TIME%
 echo.
 
-""".format(timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-    
+echo [%DATE% %TIME%] ===== Auto-update run started ===== >> "{log_path}"
+
+""".format(timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+          log_path=log_path)
+
     for i, directory in enumerate(directories, 1):
         dir_name = Path(directory).name or Path(directory).as_posix()
         script += f"""echo [{i}/{len(directories)}] Updating: {dir_name}
-"{sys.executable}" "{Path(__file__).resolve()}" update "{directory}" --yes
+echo [%DATE% %TIME%] --- Updating: {directory} --- >> "{log_path}"
+"{sys.executable}" "{Path(__file__).resolve()}" update "{directory}" --yes >> "{log_path}" 2>&1
 if errorlevel 1 (
-    echo   [FAIL] Update failed
+    echo   [FAIL] Update failed - see {log_path}
 ) else (
     echo   [OK] Updated
 )
 echo.
 
 """
-    
+
     script += """echo ============================================================
 echo COMPLETE
 echo ============================================================
 echo Finished: %DATE% %TIME%
+echo Full log: {log_path}
 echo.
 
-REM Optional: Log completion
-echo [%DATE% %TIME%] Auto-update completed >> "%USERPROFILE%\\AI-Prowler\\.rag_update.log"
-"""
-    
+echo [%DATE% %TIME%] Auto-update completed >> "{log_path}"
+""".format(log_path=log_path)
+
     return script
 
 def generate_unix_script(directories):

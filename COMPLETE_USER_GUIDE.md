@@ -1,5 +1,5 @@
 # AI-Prowler — Complete User Guide
-## Version 8.1.1
+## Version 8.1.2
 
 ---
 
@@ -82,6 +82,10 @@ This produces dramatically better results — equivalent to having a skilled res
 
 - **Newsletter double opt-in** — subscribing now sends a confirmation email first; you're not added to the active mailing list until you click the link in it. This protects against typos in the email field and confirms the address is actually reachable before anything gets sent to it. See **Section 23**.
 - **Reset Newsletter State** — a new option in Help → Notification Status lets you manually clear your local subscription state (e.g. if you want to resubscribe with a different address, or dismissed the confirmation reminder by mistake).
+
+**New in v8.1.2 (Business Server only):**
+
+- **Server-mode collection routing fix** — all three background/automated indexing paths (the File Watchdog, the Windows Scheduled Task, and the GUI's Update Selected/Update All buttons) now correctly route indexed content into its proper scoped collection instead of silently falling back to the single default collection. A file that doesn't safely match a scope rule is now skipped and logged rather than mis-filed. See **Section 4 → Server-Mode Collection Routing** and **Section 17**.
 
 ---
 
@@ -179,6 +183,18 @@ Indexing is incremental — on subsequent runs, only new or modified files are p
 ### Automatic Purge of Deleted Files
 
 When you delete a file from a tracked folder and run **Update Selected** or **Update All**, AI-Prowler automatically purges that file's chunks from ChromaDB. The vector database stays in sync with your file system — no manual cleanup required.
+
+### Server-Mode Collection Routing (Business Server Only)
+
+On a Business Server install, indexed content is split into separate, access-controlled collections — your own personal directory, each team's scoped area (Sales, Office, etc.), and any shared company space are kept apart from each other. This applies no matter *how* a file gets indexed: manually via **Update Selected**/**Update All**, the File Watchdog's real-time auto-indexing (below), or the Scheduled Task.
+
+**Every tracked directory has exactly one registered scope.** This is set up once (Admin tab) and from then on any file placed anywhere inside that directory routes to the correct collection automatically — you never have to think about it file-by-file.
+
+**If a directory is tracked but was never assigned a scope**, AI-Prowler does **not** guess. It will not silently file that content into your personal collection, a shared collection, or anyone else's — it skips indexing that file entirely and writes a clear warning to a log file (see below) so you notice and fix the missing scope rule, rather than content quietly ending up somewhere nobody expects it. The same applies if a scope rule points at an employee who has since been removed — their old rule is treated as if it no longer exists, never as a live target.
+
+**Where to check for skipped files:** `~/AI-Prowler/logs/index_scope_skips.log` — one line per skip, with a timestamp, which indexing method caught it, the file path, and why. This is the single place to check across all indexing methods; the File Watchdog additionally keeps its own more detailed activity log (see below).
+
+Personal/Home installs are entirely unaffected by any of this — everything simply goes into the single default collection, exactly as always.
 
 ### Mobile Write Zones — Granting Claude Write Access
 
@@ -1700,6 +1716,14 @@ AI-Prowler uses `Message-ID` headers for deduplication. On re-import, only new e
 
 ## 17. Scheduling & Automation
 
+### File Watchdog (Real-Time Auto-Indexing)
+
+The File Watchdog runs continuously in the background while AI-Prowler is open — a monitor on every tracked directory that detects new or changed files and indexes them automatically, typically within 3-5 seconds, with no button click needed. It's what makes a newly-saved document searchable almost immediately.
+
+On a Business Server install, the watchdog routes each file into its correct scoped collection using the same rules described in **Section 4 → Server-Mode Collection Routing** — a file that doesn't safely match a rule is skipped, not guessed into the wrong place.
+
+**Log:** `~/AI-Prowler/logs/file_watchdog.log` — the watchdog's full activity log (every file it processes, not just skips). Skipped files are also written to the shared `index_scope_skips.log` described in Section 4, so you don't need to check two different logs to find a scope problem — only the watchdog's own log if you want the fuller picture of everything it's done.
+
 ### Windows Task Scheduler Integration
 
 Set up automatic index updates from **Settings → Schedule**:
@@ -1707,6 +1731,12 @@ Set up automatic index updates from **Settings → Schedule**:
 1. Choose update frequency (daily, specific days, custom)
 2. Set the time (default: 2:00 AM)
 3. Click **Create Schedule**
+
+This generates `rag_auto_update.bat` and registers it with Windows Task Scheduler — it runs even when AI-Prowler itself is closed, re-scanning every tracked directory for new, changed, and deleted files the same way **Update All** does.
+
+**Log:** `~/AI-Prowler/.rag_update.log` — the full output of every scheduled run, including any collection-routing skip warnings (Business Server only — see Section 4). Since Task Scheduler runs this with no visible window, this log file is the only way to review what a scheduled run actually did.
+
+If you change your tracked directories after setting up the schedule, re-visit **Settings → Schedule** and click **Create Schedule** again to regenerate the script with the current list.
 
 ### Cloudflare Tunnel as Windows Service
 

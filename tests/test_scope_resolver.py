@@ -118,3 +118,148 @@ def test_upsert_does_not_clobber_sibling():
                                "C:/CompanyDocs/Sales", "role:exec")
     assert sum(1 for r in out if r["collection"] == "role:office") == 1
     assert sum(1 for r in out if r["collection"] == "role:exec") == 1
+
+
+# ── known_user_ids ─────────────────────────────────────────────────────────
+# Added 2026-07-13 after the Christina incident: the watchdog and scheduled
+# task both need to know which user:<id> collections currently correspond
+# to a REAL, live user, so a rule pointing at a deleted account is never
+# silently treated as safe.
+
+def test_known_user_ids_dict_shape_keyed_by_token():
+    # users.json's "users" key is keyed by bearer TOKEN, not id — id is a
+    # field INSIDE each entry. This is the actual real-world shape.
+    users_data = {"users": {
+        "sometoken123": {"id": "christina01", "role": "staff"},
+        "othertoken456": {"id": "david-owner", "role": "owner"},
+    }}
+    assert sr.known_user_ids(users_data) == {"christina01", "david-owner"}
+
+
+def test_known_user_ids_list_shape_tolerated():
+    users_data = {"users": [
+        {"id": "alice01"}, {"id": "bob02"},
+    ]}
+    assert sr.known_user_ids(users_data) == {"alice01", "bob02"}
+
+
+def test_known_user_ids_missing_key_returns_empty_set():
+    assert sr.known_user_ids({}) == set()
+    assert sr.known_user_ids(None) == set()
+
+
+def test_known_user_ids_malformed_entries_skipped():
+    users_data = {"users": {
+        "t1": {"id": "good01"},
+        "t2": "garbage",
+        "t3": {"no_id_field": True},
+        "t4": None,
+    }}
+    assert sr.known_user_ids(users_data) == {"good01"}
+
+
+def test_known_user_ids_never_raises_on_garbage_input():
+    # Must degrade to empty set, never throw — a caller with a corrupt
+    # users.json should skip everything (safe), not crash the watchdog.
+    assert sr.known_user_ids("not a dict at all") == set()
+    assert sr.known_user_ids({"users": "not a dict or list"}) == set()
+
+
+# ── resolve_collection_for_unattended_path ──────────────────────────────────
+# Added 2026-07-13 (the Christina incident): the file watchdog and scheduled
+# task have NO acting user/session, unlike resolve_collection_for_path (live
+# MCP calls, which always has a real user to fall back to). This function's
+# contract is deliberately different: no default_collection fallback, no
+# indexer-identity fallback — a match must come from an actual rule, and if
+# that rule points at a user:<id>, that id must be verified as a real
+# CURRENT user. Anything else returns None, meaning "skip and log", never
+# a guessed destination.
+
+CHRISTINA_RULE = {"prefix": "C:/CompanyDocs/Personal/Christina",
+                  "collection": "user:christina01"}
+SALES_RULE = {"prefix": "C:/CompanyDocs/Sales", "collection": "role:sales"}
+
+
+def test_unattended_matches_rule_like_the_normal_resolver():
+    mapping = {"rules": [SALES_RULE]}
+    assert sr.resolve_collection_for_unattended_path(
+        "C:/CompanyDocs/Sales/q3.pdf", mapping) == "role:sales"
+
+
+def test_unattended_longest_prefix_still_wins():
+    mapping = {"rules": [
+        {"prefix": "C:/Co", "collection": "role:all"},
+        {"prefix": "C:/Co/Sales", "collection": "role:sales"},
+    ]}
+    assert sr.resolve_collection_for_unattended_path(
+        "C:/Co/Sales/q3.pdf", mapping) == "role:sales"
+
+
+def test_unattended_no_rule_matched_returns_none_not_a_guess():
+    # This is THE core behavior difference from resolve_collection_for_path:
+    # no rule -> None, never "documents", never the caller's own space
+    # (there is no caller), never "shared".
+    assert sr.resolve_collection_for_unattended_path(
+        "C:/SomeRandomFolder/x.pdf", {"rules": [SALES_RULE]}) is None
+
+
+def test_unattended_ignores_default_collection_entirely():
+    # Deliberately different from resolve_collection_for_path: even if an
+    # admin configured a default_collection, the unattended resolver must
+    # NOT use it — see the function's own docstring for the full rationale
+    # (skip + log is the only safe unattended fallback).
+    mapping = {"rules": [SALES_RULE], "default_collection": "shared"}
+    assert sr.resolve_collection_for_unattended_path(
+        "C:/Unmatched/x.pdf", mapping) is None
+
+
+def test_unattended_personal_collection_matches_when_user_is_known():
+    mapping = {"rules": [CHRISTINA_RULE]}
+    known = {"christina01", "david-owner"}
+    assert sr.resolve_collection_for_unattended_path(
+        "C:/CompanyDocs/Personal/Christina/notes.docx",
+        mapping, known_ids=known) == "user:christina01"
+
+
+def test_unattended_personal_collection_REJECTED_when_user_deleted():
+    # The core safety check this whole function exists for: a rule that
+    # still technically matches, but names a user who no longer exists,
+    # must be treated exactly like no match at all — never write into an
+    # orphaned private collection.
+    mapping = {"rules": [CHRISTINA_RULE]}
+    known = {"david-owner"}  # christina01 is NOT in this set — she's gone
+    assert sr.resolve_collection_for_unattended_path(
+        "C:/CompanyDocs/Personal/Christina/notes.docx",
+        mapping, known_ids=known) is None
+
+
+def test_unattended_known_ids_none_skips_existence_check():
+    # Explicitly passing known_ids=None means "trust the id as-is" — the
+    # caller's own choice, documented as not recommended but supported for
+    # callers that already validated some other way.
+    mapping = {"rules": [CHRISTINA_RULE]}
+    assert sr.resolve_collection_for_unattended_path(
+        "C:/CompanyDocs/Personal/Christina/notes.docx",
+        mapping, known_ids=None) == "user:christina01"
+
+
+def test_unattended_non_user_collection_unaffected_by_known_ids():
+    # The existence check only applies to "user:<id>" targets — a
+    # role/scope collection match is unaffected by known_ids entirely.
+    mapping = {"rules": [SALES_RULE]}
+    assert sr.resolve_collection_for_unattended_path(
+        "C:/CompanyDocs/Sales/deal.docx", mapping,
+        known_ids=set()) == "role:sales"
+
+
+def test_unattended_empty_mapping_returns_none():
+    assert sr.resolve_collection_for_unattended_path("C:/x", None) is None
+    assert sr.resolve_collection_for_unattended_path("C:/x", {}) is None
+
+
+def test_unattended_segment_boundary_matching_matches_normal_resolver():
+    # Same boundary-safety as resolve_collection_for_path — 'Sales' must
+    # not spuriously match 'SalesArchive'.
+    mapping = {"rules": [SALES_RULE]}
+    assert sr.resolve_collection_for_unattended_path(
+        "C:/CompanyDocs/SalesArchive/x.pdf", mapping) is None

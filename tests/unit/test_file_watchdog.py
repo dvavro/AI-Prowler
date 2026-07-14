@@ -69,7 +69,7 @@ import time
 import threading
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, ANY
 
 import pytest
 
@@ -445,6 +445,198 @@ class TestIndexPipeline:
         """WD-33: _do_index_directory graceful when dir gone before index."""
         index_env.wd._do_index_directory("C:\\ghost\\missing_dir")
         index_env.mock_rp.index_file_list.assert_not_called()
+
+
+# =============================================================================
+# WD-38 to WD-46 -- Server-mode collection awareness
+# (added 2026-07-13 after the Christina incident: the watchdog previously
+# always indexed into the single "documents" collection, silently ignoring
+# server-mode per-user/per-scope collections entirely. See
+# _resolve_unattended_collection's docstring in file_watchdog.py, and
+# tests/test_scope_resolver.py for the underlying pure-function coverage.)
+# =============================================================================
+
+class TestServerModeCollectionAwareness:
+
+    @pytest.fixture
+    def server_env(self, tmp_path, wd, mock_rag_sets, monkeypatch):
+        """Same shape as index_env, but with ~/.ai-prowler/users.json
+        present — puts the watchdog into "server mode" for these tests."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        test_file = tmp_path / "personal" / "christina" / "notes.docx"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("meeting notes", encoding="utf-8")
+
+        mock_rp = MagicMock()
+        mock_rp.normalise_path.side_effect = lambda p: p.replace("/", "\\")
+        mock_rp.index_file_list.return_value = {"chunks": 2}
+        mock_rp.is_backup_filename.return_value = False
+        mock_rp.COLLECTION_NAME = "documents"
+        mock_rp.SKIP_EXTENSIONS = mock_rag_sets.skip_ext
+        mock_rp.SUPPORTED_EXTENSIONS = mock_rag_sets.supported_ext
+        mock_rp.SKIP_DIRECTORIES = mock_rag_sets.skip_dirs
+
+        mock_coll = MagicMock()
+        mock_client = MagicMock()
+        mock_client.get_or_create_collection.return_value = mock_coll
+        mock_rp.get_chroma_client.return_value = (mock_client, MagicMock())
+
+        monkeypatch.setitem(sys.modules, "rag_preprocessor", mock_rp)
+        monkeypatch.setattr(wd, "_rag_preprocessor", mock_rp)
+
+        def _write_users_json(rules, users=None):
+            data = {
+                "collection_map": {"rules": rules},
+                "users": users or {
+                    "tok-christina": {"id": "christina01", "role": "staff"},
+                    "tok-david": {"id": "david-owner", "role": "owner"},
+                },
+            }
+            users_dir = tmp_path / ".ai-prowler"
+            users_dir.mkdir(parents=True, exist_ok=True)
+            (users_dir / "users.json").write_text(
+                json.dumps(data), encoding="utf-8")
+
+        return SimpleNamespace(
+            wd=wd, test_file=test_file, mock_rp=mock_rp, mock_coll=mock_coll,
+            mock_client=mock_client, write_users_json=_write_users_json,
+            tmp_path=tmp_path,
+        )
+
+    def test_WD_38_no_users_json_is_unchanged_personal_behavior(self, server_env):
+        """WD-38: no ~/.ai-prowler/users.json at all -> exactly today's
+        behavior, single "documents" collection, no skip, no warning."""
+        # Deliberately do NOT call write_users_json — personal mode.
+        server_env.wd._do_reindex_file(str(server_env.test_file))
+        server_env.mock_rp.index_file_list.assert_called_once()
+        _, kwargs = server_env.mock_rp.index_file_list.call_args
+        assert "collection_resolver" not in kwargs
+        server_env.mock_client.get_or_create_collection.assert_called_with(
+            name="documents", embedding_function=ANY)
+
+    def test_WD_39_matched_personal_rule_routes_to_users_own_collection(
+            self, server_env):
+        """WD-39: the actual Christina scenario — a file under her personal
+        directory, with her rule present and her id still current, must
+        route into user:christina01, NOT documents."""
+        server_env.write_users_json(rules=[
+            {"prefix": str(server_env.test_file.parent).replace("\\", "/"),
+             "collection": "user:christina01"},
+        ])
+        server_env.wd._do_reindex_file(str(server_env.test_file))
+
+        server_env.mock_rp.index_file_list.assert_called_once()
+        _, kwargs = server_env.mock_rp.index_file_list.call_args
+        assert "collection_resolver" in kwargs
+        assert kwargs["collection_resolver"]("anything") == "user:christina01"
+        server_env.mock_client.get_or_create_collection.assert_called_with(
+            name="user:christina01", embedding_function=ANY)
+
+    def test_WD_40_rule_pointing_at_deleted_user_is_skipped_not_documents(
+            self, server_env):
+        """WD-40: the safety check — a rule technically matches, but the
+        user it names no longer exists. Must skip entirely, never fall
+        back to 'documents' (that would be the same silent-orphan bug in
+        a different shape)."""
+        server_env.write_users_json(
+            rules=[{"prefix": str(server_env.test_file.parent).replace("\\", "/"),
+                   "collection": "user:christina01"}],
+            users={"tok-david": {"id": "david-owner", "role": "owner"}},
+            # christina01 is NOT in the users list — she's been removed.
+        )
+        server_env.wd._do_reindex_file(str(server_env.test_file))
+        server_env.mock_rp.index_file_list.assert_not_called()
+
+    def test_WD_41_unmatched_path_is_skipped_not_documents(self, server_env):
+        """WD-41: server mode IS active (users.json/collection_map exist),
+        but this specific path matches no rule at all. Must skip, never
+        silently fall into 'documents'."""
+        server_env.write_users_json(rules=[
+            {"prefix": "C:/CompanyDocs/Sales", "collection": "role:sales"},
+        ])
+        server_env.wd._do_reindex_file(str(server_env.test_file))
+        server_env.mock_rp.index_file_list.assert_not_called()
+
+    def test_WD_42_default_collection_is_never_consulted(self, server_env):
+        """WD-42: even if an admin configured default_collection (e.g. to
+        "shared"), the watchdog must NOT use it for an unmatched path —
+        confirmed at the integration level, not just in scope_resolver's
+        own unit tests."""
+        users_dir = server_env.tmp_path / ".ai-prowler"
+        users_dir.mkdir(parents=True, exist_ok=True)
+        data = {
+            "collection_map": {
+                "rules": [{"prefix": "C:/CompanyDocs/Sales", "collection": "role:sales"}],
+                "default_collection": "shared",
+            },
+            "users": {"tok-david": {"id": "david-owner", "role": "owner"}},
+        }
+        (users_dir / "users.json").write_text(json.dumps(data), encoding="utf-8")
+
+        server_env.wd._do_reindex_file(str(server_env.test_file))
+        server_env.mock_rp.index_file_list.assert_not_called()
+
+    def test_WD_43_team_scope_rule_routes_correctly(self, server_env):
+        """WD-43: a non-personal (team scope) rule works the same way as a
+        personal one — the existence check only applies to user:<id>."""
+        scope_dir = server_env.tmp_path / "CompanyDocs" / "Sales"
+        scope_dir.mkdir(parents=True)
+        sales_file = scope_dir / "q3.pdf"
+        sales_file.write_text("deal terms", encoding="utf-8")
+
+        server_env.write_users_json(rules=[
+            {"prefix": str(scope_dir).replace("\\", "/"), "collection": "role:sales"},
+        ])
+        server_env.wd._do_reindex_file(str(sales_file))
+
+        _, kwargs = server_env.mock_rp.index_file_list.call_args
+        assert kwargs["collection_resolver"]("anything") == "role:sales"
+
+    def test_WD_44_corrupt_users_json_treated_as_personal_mode(self, server_env):
+        """WD-44: a corrupt users.json must degrade to personal-mode
+        behavior (safe: nothing gets silently dropped into a wrong scoped
+        collection), never crash the watchdog."""
+        users_dir = server_env.tmp_path / ".ai-prowler"
+        users_dir.mkdir(parents=True, exist_ok=True)
+        (users_dir / "users.json").write_text("{not valid json", encoding="utf-8")
+
+        server_env.wd._do_reindex_file(str(server_env.test_file))
+        server_env.mock_rp.index_file_list.assert_called_once()
+        _, kwargs = server_env.mock_rp.index_file_list.call_args
+        assert "collection_resolver" not in kwargs
+
+    def test_WD_45_index_directory_resolves_once_for_whole_directory(
+            self, server_env):
+        """WD-45: _do_index_directory (newly-dropped folder) resolves the
+        scope ONCE for the directory itself, then applies it uniformly —
+        matching the "one scope per directory" design."""
+        server_env.mock_rp.scan_directory.return_value = {
+            "to_index": [(str(server_env.test_file), ".docx")],
+            "skipped_bin": [], "unsupported": [],
+        }
+        server_env.write_users_json(rules=[
+            {"prefix": str(server_env.test_file.parent).replace("\\", "/"),
+             "collection": "user:christina01"},
+        ])
+        server_env.wd._do_index_directory(str(server_env.test_file.parent))
+
+        server_env.mock_rp.index_file_list.assert_called_once()
+        _, kwargs = server_env.mock_rp.index_file_list.call_args
+        assert kwargs["collection_resolver"]("anything") == "user:christina01"
+
+    def test_WD_46_index_directory_unmatched_is_skipped(self, server_env):
+        """WD-46: same skip-not-guess behavior for the directory-drop path."""
+        server_env.mock_rp.scan_directory.return_value = {
+            "to_index": [(str(server_env.test_file), ".docx")],
+            "skipped_bin": [], "unsupported": [],
+        }
+        server_env.write_users_json(rules=[
+            {"prefix": "C:/SomewhereElse", "collection": "role:sales"},
+        ])
+        server_env.wd._do_index_directory(str(server_env.test_file.parent))
+        server_env.mock_rp.index_file_list.assert_not_called()
+        server_env.mock_rp.scan_directory.assert_not_called()  # skipped before scanning at all
 
 
 # =============================================================================

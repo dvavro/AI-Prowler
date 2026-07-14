@@ -1,16 +1,16 @@
 {
-  "version": "8.1.1",
-  "generated": "2026-07-13T14:01:07",
+  "version": "8.1.2",
+  "generated": "2026-07-14T11:58:16",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "09a704afd51fbce675b62542a778ef042f4a04cfb4b8e1da03b445522b737878",
-      "bytes": 1041830
+      "sha256": "279a5566b97fa49d4d2b1359bfb67c4e40b88e041812b3cd4a9f06f4bff47ad2",
+      "bytes": 1042282
     },
     {
       "path": "rag_preprocessor.py",
-      "sha256": "5c9d9b8c1c36456dce99856cee5d2cfe0f52bf9725eeee024bbc7eb75ba6bd9e",
-      "bytes": 286062
+      "sha256": "92d83f3b1c6bbba22c0cf625aa868db9e88512b70680e08e688d7b5de9c287c1",
+      "bytes": 294871
     },
     {
       "path": "ai_prowler_mcp.py",
@@ -59,23 +59,23 @@
     },
     {
       "path": "COMPLETE_USER_GUIDE.md",
-      "sha256": "3bedb7b1b0c13d05f1d974929ee5b8f6da6decd42685fb775150520acb18b1e8",
-      "bytes": 135271
+      "sha256": "fa573a093d3d40c37c248a79307949a1dcaff039945d4077b1303c4396666511",
+      "bytes": 139329
     },
     {
       "path": "VERSION",
-      "sha256": "7aeae32cd8e4dd6a657fc2c67b296252886e373524a63fa23b5c3b499a61f112",
+      "sha256": "cfafbd8ce8cdca50d618b6c3ebb4e2252a5030349d41e98b39031f41c4bf3226",
       "bytes": 6
     },
     {
       "path": "scope_resolver.py",
-      "sha256": "504b0e4d97397a9173a3895e4b69b4447fb6b9a15a9cc6689a8d5baa558f6d28",
-      "bytes": 3962
+      "sha256": "b9a4c02d0651226883e16632e18608f4ae3e420fb2733ae71f487d29ab3a2042",
+      "bytes": 8827
     },
     {
       "path": "file_watchdog.py",
-      "sha256": "05ec90e843de6d88d5906b0a47e9d9971bd2469cceaefb813dc131804be0e111",
-      "bytes": 24100
+      "sha256": "5b641b4a7a374e41b47a03717a5bdd65c2d2098b6dd30083e8e907c6a6052a0e",
+      "bytes": 30883
     },
     {
       "path": "subscription_client.py",
