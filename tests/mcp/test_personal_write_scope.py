@@ -5,13 +5,13 @@ Tests for the server-mode personal-directory write scoping feature.
 
 Background
 ----------
-create_file, write_file, str_replace_in_file, fuzzy_replace_in_file,
+create_file, write_file, str_replace_in_file,
 line_replace_in_file, and create_directory were previously either fully
 Tier-A-suppressed in server mode (the first four) or accidentally
 un-suppressed with no scoping at all (the last two — a real gap found and
 fixed in this same change).
 
-All six are now registered in BOTH personal and server mode, but
+All five are now registered in BOTH personal and server mode, but
 in server mode every write is gated per-call via _check_personal_write_scope():
 
   - Personal mode (ctx has no user): fully unrestricted — unchanged from
@@ -27,7 +27,7 @@ in server mode every write is gated per-call via _check_personal_write_scope():
 Sections:
   A. _user_private_write_dir()      — status resolution (personal/scoped/blocked)
   B. _check_personal_write_scope()  — the gate itself
-  C. Tier A membership               — the 6 tools must NOT be blanket-suppressed
+  C. Tier A membership               — the 5 tools must NOT be blanket-suppressed
   D. Integration — create_file() end-to-end through the real tool function
 """
 
@@ -218,7 +218,7 @@ class TestNotBlanketSuppressed:
 
     @pytest.mark.parametrize("tool_name", [
         "create_file", "write_file", "str_replace_in_file",
-        "fuzzy_replace_in_file", "line_replace_in_file", "create_directory",
+        "line_replace_in_file", "create_directory",
     ])
     def test_C01_write_tools_not_tier_a_suppressed(self, mcp_mod, tool_name):
         assert tool_name not in mcp_mod._TIER_A_SUPPRESSED, (

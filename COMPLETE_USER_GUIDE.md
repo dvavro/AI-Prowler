@@ -1,5 +1,5 @@
 # AI-Prowler — Complete User Guide
-## Version 8.1.2
+## Version 8.1.3
 
 ---
 
@@ -86,6 +86,16 @@ This produces dramatically better results — equivalent to having a skilled res
 **New in v8.1.2 (Business Server only):**
 
 - **Server-mode collection routing fix** — all three background/automated indexing paths (the File Watchdog, the Windows Scheduled Task, and the GUI's Update Selected/Update All buttons) now correctly route indexed content into its proper scoped collection instead of silently falling back to the single default collection. A file that doesn't safely match a scope rule is now skipped and logged rather than mis-filed. See **Section 4 → Server-Mode Collection Routing** and **Section 17**.
+
+**New in v8.1.3:**
+
+- **Proactive Alerts Location field** — the town/city used for weather now has an actual GUI field (next to Email in the Proactive Alerts panel), instead of a hardcoded value with no way to change it. See **Section 17 → Proactive Alerts**.
+- **Per-job weather in Morning Briefing** — each of today's scheduled jobs now gets weather checked for its own City/State (read from the Jobs_Schedule spreadsheet), with a rain-risk flag shown next to affected jobs, instead of one fixed location's weather disconnected from the actual job list. See **Section 17 → Proactive Alerts**.
+- **Proactive Alerts HTML formatting fix** — background email jobs (Morning Briefing, Weather Watch, etc.) were sending their HTML body as plain text, so recipients saw raw `<h2>`, `<p>`, `<hr>` tags instead of a formatted email. `send_email()` now accepts a `body_html` parameter and sends a proper `multipart/alternative` message, with a tag-stripped plain-text fallback for clients that don't render HTML. See **Section 17 → Proactive Alerts**.
+- **SMTP configuration status LED** — the Proactive Alerts panel now shows a green/red indicator confirming whether SMTP is actually set up (Settings → Email Configuration), separate from the "Email:" field there (which is only the *recipient* address). Previously, alerts could run and log "sent" indefinitely with nothing arriving if SMTP was never configured, with no indication why. See **Section 17 → Proactive Alerts**.
+- **`fuzzy_replace_in_file` removed** — this whitespace-tolerant file-editing tool (added in v8.0.0) had a bug where, if its stricter matching strategies failed and it fell back to whitespace-collapse matching, that normalization was applied to the *entire file* rather than just the matched region, risking corruption of unrelated content. Removed entirely; `str_replace_in_file` (exact match) and `line_replace_in_file` (by line number) remain as the two-tool escalation path for surgical file edits. See **Section 6.2c** and **Section 6 → Code Tools — Write-Side**.
+- **Total tools: 82** — down from 83, reflecting the `fuzzy_replace_in_file` removal above.
+- **Auto-updater now refreshes the Documents\AI-Prowler user guide copy** — `update_manifest.json` has included `COMPLETE_USER_GUIDE.md` since v8.1.0, but the in-app updater (`RAG_RUN.bat`) only ever applied staged files into the install directory (`C:\Program Files\AI-Prowler`), never to the separate `%USERPROFILE%\Documents\AI-Prowler\COMPLETE_USER_GUIDE.md` copy the installer seeds — which is both the copy most users actually open and the one tracked for ChromaDB indexing, so Claude's own answers about AI-Prowler went stale after every auto-update even though the app code updated correctly. `RAG_RUN.bat` now also copies the updated guide into Documents\AI-Prowler if a copy already exists there. See **Section 23 → Update Notifications**.
 
 ---
 
@@ -255,7 +265,7 @@ The following tools are never registered when AI-Prowler runs in server mode:
 | Category | Suppressed tools |
 |---|---|
 | Dev / code execution | `run_script`, `run_script_start`, `run_script_status`, `run_script_kill`, `compile_check`, `check_python_import`, `syntax_check`, `lint_check` |
-| Host filesystem writes (unscoped) | `list_directory`, `copy_to_backup`, `list_backups`, `restore_backup`, `cleanup_backups`, `cleanup_job_logs`, `reset_write_counter`, `grant_write_access`, `revoke_write_access` — backup/restore/approval-management tools remain operator/dev-only. `create_file`, `write_file`, `str_replace_in_file`, `fuzzy_replace_in_file`, `line_replace_in_file`, and `create_directory` are **not** in this list — see §6.2c, they're gated per-call instead of blanket-suppressed. |
+| Host filesystem writes (unscoped) | `list_directory`, `copy_to_backup`, `list_backups`, `restore_backup`, `cleanup_backups`, `cleanup_job_logs`, `reset_write_counter`, `grant_write_access`, `revoke_write_access` — backup/restore/approval-management tools remain operator/dev-only. `create_file`, `write_file`, `str_replace_in_file`, `line_replace_in_file`, and `create_directory` are **not** in this list — see §6.2c, they're gated per-call instead of blanket-suppressed. |
 | Raw filesystem reads | `read_file_lines`, `grep_documents` |
 | Email operator tools | `configure_email`, `send_file` — use personal SMTP credentials, not appropriate for a shared server. `send_learnings_report` is **not** in this category — see the note below. |
 | Bulk index rebuild | `reindex_all` |
@@ -274,7 +284,7 @@ The reverse of §6.2: some tools only make sense once there's more than one regi
 
 ### 6.2c Server-Mode Personal-Directory Write Scoping
 
-Unlike the blanket suppression in §6.2, six write/modify tools use **per-call scoping** instead: `create_file`, `write_file`, `str_replace_in_file`, `fuzzy_replace_in_file`, `line_replace_in_file`, and `create_directory`.
+Unlike the blanket suppression in §6.2, five write/modify tools use **per-call scoping** instead: `create_file`, `write_file`, `str_replace_in_file`, `line_replace_in_file`, and `create_directory`.
 
 **Personal mode:** fully unrestricted — identical to every prior version. No change.
 
@@ -432,17 +442,16 @@ Most email tools are personal-mode only, but `send_email` and `send_alert` are a
 
 ---
 
-#### Code Tools — Write-Side (14 tools — Personal + Server, Server Scoped to Own Directory)
+#### Code Tools — Write-Side (13 tools — Personal + Server, Server Scoped to Own Directory)
 
-All write operations are protected by four independent layers: read allowlist, writable allowlist, hard blocklist, and per-session circuit breaker. In server mode, a fifth layer applies to `create_file`, `write_file`, `str_replace_in_file`, `fuzzy_replace_in_file`, `line_replace_in_file`, and `create_directory`: writes are scoped to the caller's own personal directory only, and denied entirely for users without one configured (see §6.2b). The remaining dev/backup-management tools (`copy_to_backup`, `restore_backup`, `list_backups`, `list_directory`, `reset_write_counter`, `grant_write_access`, `revoke_write_access`, `cleanup_backups`, `cleanup_job_logs`) stay fully suppressed in server mode (§6.2).
+All write operations are protected by four independent layers: read allowlist, writable allowlist, hard blocklist, and per-session circuit breaker. In server mode, a fifth layer applies to `create_file`, `write_file`, `str_replace_in_file`, `line_replace_in_file`, and `create_directory`: writes are scoped to the caller's own personal directory only, and denied entirely for users without one configured (see §6.2b). The remaining dev/backup-management tools (`copy_to_backup`, `restore_backup`, `list_backups`, `list_directory`, `reset_write_counter`, `grant_write_access`, `revoke_write_access`, `cleanup_backups`, `cleanup_job_logs`) stay fully suppressed in server mode (§6.2).
 
 | Tool | What It Does | Mode |
 |---|---|---|
 | `create_file` | Creates a new file. Fails if the file already exists. **Server mode:** scoped to the caller's own personal directory only — denied entirely for users without one configured. | Personal + Server (own dir) |
 | `write_file` | Overwrites an existing file. Auto-backs up to `.bakN` before writing. **Server mode:** scoped to the caller's own personal directory only. | Personal + Server (own dir) |
 | `str_replace_in_file` | Surgical in-place edit: replaces one unique occurrence of `old_str` with `new_str`. Requires exact whitespace match including indentation. Use `dry_run=True` to preview the diff before committing. 1000× cheaper than a full file rewrite for large files. **Server mode:** scoped to the caller's own personal directory only. | Personal + Server (own dir) |
-| `fuzzy_replace_in_file` | **New in v8.0.0.** Whitespace-tolerant surgical edit. Tries four progressively looser matching strategies: exact → CRLF normalization → trailing whitespace strip → full whitespace collapse. Use when `str_replace_in_file` fails due to indentation or line-ending differences. **Server mode:** scoped to the caller's own personal directory only. | Personal + Server (own dir) |
-| `line_replace_in_file` | **New in v8.0.0.** Replaces a range of lines by line number. Zero text-matching ambiguity — works on any file regardless of encoding or Unicode. Always pair with `read_file_lines` first to confirm exact line numbers. Last resort when both replace tools fail. **Server mode:** scoped to the caller's own personal directory only. | Personal + Server (own dir) |
+| `line_replace_in_file` | **New in v8.0.0.** Replaces a range of lines by line number. Zero text-matching ambiguity — works on any file regardless of encoding or Unicode. Always pair with `read_file_lines` first to confirm exact line numbers. Last resort when `str_replace_in_file` fails (e.g. whitespace or Unicode differences make an exact match impractical). **Server mode:** scoped to the caller's own personal directory only. | Personal + Server (own dir) |
 | `create_directory` | Creates a directory and any missing parents. Idempotent. **Server mode:** scoped to the caller's own personal directory only. | Personal + Server (own dir) |
 | `list_directory` | Lists the immediate contents of a directory: files, subdirectories, and backups. Read-only. | Personal |
 | `copy_to_backup` | Takes a manual snapshot of a file as `.bakN` without modifying the original. | Personal |
@@ -453,7 +462,7 @@ All write operations are protected by four independent layers: read allowlist, w
 | `reset_write_counter` | Resets the per-session 20-write circuit breaker so large editing sessions can continue without restarting the server. | Personal |
 | `list_writable_directories` | Personal mode / server-mode owner+manager: full write-zone and read-zone allowlist. Server-mode staff/field_crew: only their own personal directory's read/write status — not the company-wide list. | Personal + Server |
 
-**File Edit Escalation Order:** Use `str_replace_in_file` first (exact match). If it fails due to whitespace, use `fuzzy_replace_in_file`. If that also fails (Unicode characters, complex indentation), use `line_replace_in_file` with `read_file_lines` to confirm line numbers first.
+**File Edit Escalation Order:** Use `str_replace_in_file` first (exact match). If it fails due to whitespace, Unicode characters, or complex indentation making an exact match impractical, use `line_replace_in_file` with `read_file_lines` to confirm line numbers first.
 
 ---
 
@@ -1748,6 +1757,10 @@ Proactive Alerts sends scheduled email briefings and alerts without needing an a
 
 **Six built-in jobs:** Morning Briefing, Overdue Invoice Alert, Due Analysis Tasks, SMS Reply Monitor, Weather Watch, End-of-Day Summary. Each has its own ON/OFF toggle, a time field (`HH:MM` 24-hour, or `every_Nh`/`every_Nm` for interval jobs), and a days selector (daily / weekdays / weekends / a specific day). Email is shared across all jobs — a single field, since this is a personal-mode, single-user feature.
 
+**Location (v8.1.3):** a single shared **Location** field, next to Email, sets the town/city used for weather. Previously this had no GUI field at all — it silently defaulted to a hardcoded value with no way to change it short of hand-editing `scheduler_config.json` directly. Same auto-save behavior as every other field here: saves the instant you tab out or press Enter, no separate save step. Leaving it blank falls back to a sensible default rather than breaking Weather Watch/Morning Briefing outright.
+
+**Per-job weather (v8.1.3):** Morning Briefing no longer checks one fixed location for the whole day — it looks up weather for **each job's own City/State** (read directly from the Jobs_Schedule spreadsheet), since a real day's jobs are often scattered across several towns. Weather is fetched once per unique town among the day's jobs, not once per job, so having five jobs in the same town doesn't trigger five lookups. A job with no rain risk shows plainly; a job with a rainy forecast gets a **⚠️ Rain risk** flag right next to it. The shared Location field above is only used as a fallback — when a specific job has no City on file, or when there are no jobs scheduled at all for the day. Weekly Weather Watch continues to use the shared Location field, since it's a general week-ahead outlook rather than a per-job breakdown.
+
 **Auto-save, no manual Save/Start/Stop:** every field saves the instant it changes — clicking a job's toggle, tabbing out of the time field, or selecting a day all save immediately. There is no separate "Save Config" button and no master "Enable proactive alerts" checkbox. The background engine starts automatically the moment any single job is switched ON, and stops automatically the moment the last enabled job is switched OFF — the engine's running/stopped state is fully derived from the job toggles, never a separate thing to manage.
 
 **Important limitation — this requires AI-Prowler to actually be running.** The scheduler is a thread inside the desktop app's own process, not a separate Windows service. If AI-Prowler is closed, or your PC is asleep, nothing fires — there is no cloud-side scheduler keeping it alive. For a briefing to reliably arrive every morning, AI-Prowler needs to be open (or configured to launch and stay open) at that time.
@@ -1782,6 +1795,10 @@ PyTorch stable does not yet include CUDA 12.8 compute kernels for Blackwell SM 1
 | Subscription cache | `C:\Program Files\AI-Prowler\subscription_cache.json` | Cached subscription registry |
 | SMS inbox | `~/.ai-prowler/sms_inbox.json` | Inbound SMS/WhatsApp messages |
 | SMS thread log | `~/.ai-prowler/sms_threads.json` | Outbound SMS thread history per crew member |
+| Proactive Alerts log | `~/.ai-prowler/scheduler_log.txt` | Every scheduled job run — sent / nothing to report / error, capped at 500 lines |
+| File Watchdog log | `~/AI-Prowler/logs/file_watchdog.log` | Real-time auto-indexing activity — every file detected and indexed |
+| Scheduled Task (index) log | `~/AI-Prowler/.rag_update.log` | Full output of every Windows-Task-Scheduler-triggered index update (v8.1.2+; previously only logged a completion timestamp, not the actual output) |
+| Scope-routing skip log (Business Server) | `~/AI-Prowler/logs/index_scope_skips.log` | Shared across the File Watchdog, Scheduled Task, and GUI Update buttons — one line per file skipped because it didn't safely match a collection scope rule (v8.1.2+) |
 
 ### MCP Server Log
 

@@ -92,7 +92,7 @@ if sys.stderr is None:
 # Single source of truth for the app version. Bump this one line when releasing
 # a new version; all UI labels, About dialogs, help text, and update checks
 # read from here.
-APP_VERSION = "8.1.2"
+APP_VERSION = "8.1.3"
 
 # ── UI feature flags ─────────────────────────────────────────────────────────
 # Toggle visibility of advanced/legacy GUI sections without removing any
@@ -6173,6 +6173,75 @@ or from the Help menu."""
                 _al_top, textvariable=_email_var, width=30)
             _email_entry.pack(side='left', padx=(4, 0))
 
+            # ── Location (shared across all jobs — v8.1.3) ──────────────────────
+            # ONE place for the town/city Weather Watch and Morning Briefing's
+            # fallback location use — previously this had NO GUI field at all,
+            # silently defaulting to a hardcoded "New Smyrna Beach, Florida"
+            # baked into scheduler_engine.py's own load_config() defaults, with
+            # no way to change it short of hand-editing scheduler_config.json.
+            # Morning Briefing's PER-JOB weather (see scheduler_jobs.py's
+            # _todays_jobs_structured) uses each job's own City/State instead
+            # of this value whenever a job has one on file — this field is the
+            # fallback for Weather Watch and for days with no scheduled jobs.
+            tk.Label(_al_top, text="  Location:", bg='#1a2e1a',
+                     fg='#cccccc', font=('Arial', 8)).pack(side='left')
+            self._location_var = _location_var = tk.StringVar(
+                value=_cfg_now.get("location", "New Smyrna Beach, Florida"))
+            self._location_entry = _location_entry = ttk.Entry(
+                _al_top, textvariable=_location_var, width=26)
+            _location_entry.pack(side='left', padx=(4, 0))
+
+            # ── SMTP configuration status LED (v8.2+) ───────────────────────
+            # The "Email:" field above is only the RECIPIENT address. Proactive
+            # Alerts actually SENDS via the SMTP account set up in Settings ->
+            # Email Configuration (~/.ai-prowler/email_config.json, the same
+            # file configure_email() writes). If that was never configured,
+            # every job silently "succeeds" in the log but no mail ever
+            # arrives — this was previously invisible in this panel. Surface
+            # it here so an empty inbox has an obvious explanation.
+            def _smtp_is_configured() -> bool:
+                try:
+                    import json as _al_json
+                    _cfg_p = Path.home() / ".ai-prowler" / "email_config.json"
+                    if not _cfg_p.exists():
+                        return False
+                    _cfg_d = _al_json.loads(_cfg_p.read_text(encoding="utf-8-sig")) or {}
+                    return bool(_cfg_d.get("smtp_host", "").strip()
+                                and _cfg_d.get("username", "").strip())
+                except Exception:
+                    return False
+
+            _al_smtp_row = tk.Frame(_al_inner, bg='#1a2e1a')
+            _al_smtp_row.pack(fill='x', pady=(0, 8))
+
+            _smtp_led = tk.Canvas(_al_smtp_row, width=10, height=10,
+                                  bg='#1a2e1a', highlightthickness=0)
+            _smtp_led.pack(side='left', padx=(0, 6))
+
+            _smtp_status_var = tk.StringVar(value="")
+            _smtp_status_lbl = tk.Label(_al_smtp_row, textvariable=_smtp_status_var,
+                                        bg='#1a2e1a', fg='#cccccc',
+                                        font=('Arial', 8),
+                                        wraplength=640, justify='left')
+            _smtp_status_lbl.pack(side='left')
+
+            def _refresh_smtp_status():
+                _smtp_led.delete("all")
+                if _smtp_is_configured():
+                    _smtp_led.create_oval(1, 1, 9, 9, fill='#3fbf3f', outline='')
+                    _smtp_status_var.set("SMTP is set up — alerts can actually send.")
+                    _smtp_status_lbl.config(fg='#8ab88a')
+                else:
+                    _smtp_led.create_oval(1, 1, 9, 9, fill='#cc3333', outline='')
+                    _smtp_status_var.set(
+                        "SMTP not set up yet — alerts will NOT be delivered even "
+                        "though jobs run. Go to Settings → Email Configuration, "
+                        "enter your SMTP host/username/password, Save, then "
+                        "Send Test Email to confirm.")
+                    _smtp_status_lbl.config(fg='#e08888')
+
+            _refresh_smtp_status()
+
             def _refresh_engine_status():
                 if _sched_eng.is_running():
                     _al_status_var.set("● Running")
@@ -6195,6 +6264,7 @@ or from the Help menu."""
             def _save_and_sync_engine(status_msg="✅ Saved"):
                 cfg = _sched_eng.load_config()
                 cfg["email_to"] = _email_var.get().strip()
+                cfg["location"] = _location_var.get().strip() or "New Smyrna Beach, Florida"
                 jobs_out = {}
                 any_enabled = False
                 for jid in _sched_jobs.JOB_REGISTRY:
@@ -6229,6 +6299,8 @@ or from the Help menu."""
             # still typing an address would write partial/invalid values.
             _email_entry.bind('<FocusOut>', lambda e: _save_and_sync_engine())
             _email_entry.bind('<Return>', lambda e: _save_and_sync_engine())
+            _location_entry.bind('<FocusOut>', lambda e: _save_and_sync_engine())
+            _location_entry.bind('<Return>', lambda e: _save_and_sync_engine())
 
             # ── Job list ──────────────────────────────────────────────────────
             _jobs_frame = tk.Frame(_al_inner, bg='#0e1e0e',

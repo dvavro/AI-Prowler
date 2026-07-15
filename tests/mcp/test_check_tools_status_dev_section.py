@@ -13,8 +13,8 @@ claimed was available in server mode was actually completely blocked:
 compile_check/syntax_check/check_python_import/lint_check, all four
 run_script* tools, list_directory, copy_to_backup/list_backups/
 restore_backup/cleanup_backups, and reset_write_counter are all Tier A
-suppressed. The six write/edit tools (create_file, write_file,
-str_replace_in_file, fuzzy_replace_in_file, line_replace_in_file,
+suppressed. The five write/edit tools (create_file, write_file,
+str_replace_in_file, line_replace_in_file,
 create_directory) aren't suppressed, but ARE scoped to the caller's own
 personal directory (or blocked entirely without one) per the earlier
 personal-directory write-scoping feature — also not "always available."
@@ -22,7 +22,7 @@ personal-directory write-scoping feature — also not "always available."
 Fixed by making the section mode-aware:
   - Personal mode: unchanged — everything shown as available, exactly as
     before this fix.
-  - Server mode: Tier-A-suppressed tools shown as unavailable; the six
+  - Server mode: Tier-A-suppressed tools shown as unavailable; the five
     write tools show a LIVE per-caller status via _user_private_write_dir
     (scoped to their own directory, or blocked with a clear reason);
     diff_files remains correctly shown as available (it was never

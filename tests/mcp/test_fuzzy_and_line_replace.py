@@ -1,16 +1,22 @@
 """
 tests/mcp/test_fuzzy_and_line_replace.py
 =========================================
-Tests for the two new file-editing tools added in V8.0.0:
+Tests for line_replace_in_file, the line-number-based file-editing tool
+added in v8.0.0.
 
-    fuzzy_replace_in_file   — whitespace-tolerant str_replace fallback
-    line_replace_in_file    — replace by line number range (last resort)
+v8.1.3: fuzzy_replace_in_file (the whitespace-tolerant str_replace fallback
+this file used to test as FLR-01 ... FLR-20) was REMOVED — it had a bug
+where, if its stricter matching strategies failed and it fell back to
+whitespace-collapse matching, that normalization was applied to the entire
+file rather than just the matched region, risking corruption of unrelated
+content. str_replace_in_file (exact match) and line_replace_in_file (by
+line number) remain as the two-tool escalation path; the FLR-01...FLR-20
+ids are retired along with the tool and not reused.
 
 Test IDs follow the existing convention in test_write_tools.py.
 
-    fuzzy_replace_in_file   FLR-01 … FLR-20
-    line_replace_in_file    FLR-21 … FLR-40
-    integration             FLR-41 … FLR-45
+    line_replace_in_file    FLR-21 ... FLR-40
+    integration             FLR-41 ... FLR-45
 
 Isolation
 ---------
@@ -57,7 +63,8 @@ def writable_env(isolated_env, mcp_mod, monkeypatch, tmp_path):
         encoding="utf-8",
     )
 
-    # File with TABS — str_replace_in_file fails, fuzzy should fix it
+    # File with TABS — str_replace_in_file fails on it (exact-match only);
+    # line_replace_in_file works regardless since it's purely positional.
     (project / "tabbed.py").write_bytes(
         b"def tabbed_func():\n"
         b"\treturn 42\n"
@@ -123,227 +130,6 @@ def writable_env(isolated_env, mcp_mod, monkeypatch, tmp_path):
     e.unicode   = project / "unicode.py"
     e.secret    = untracked / "secret.py"
     return e
-
-
-# ╔════════════════════════════════════════════════════════════════════════════╗
-# ║  fuzzy_replace_in_file  —  FLR-01 … FLR-20                                ║
-# ╚════════════════════════════════════════════════════════════════════════════╝
-
-class TestFuzzyReplaceInFile:
-
-    # ── Basic success cases ───────────────────────────────────────────────────
-
-    def test_FLR_01_clean_file_exact_match(self, mcp_mod, writable_env):
-        """FLR-01: fuzzy works on clean files (same as str_replace)."""
-        result = mcp_mod.fuzzy_replace_in_file(
-            str(writable_env.clean),
-            "def farewell():\n    return 'goodbye'",
-            "def farewell():\n    return 'see you later'",
-        )
-        assert "✅" in result
-        assert "goodbye" not in writable_env.clean.read_text()
-        assert "see you later" in writable_env.clean.read_text()
-
-    def test_FLR_02_matches_file_with_tabs(self, mcp_mod, writable_env):
-        """FLR-02: fuzzy matches when file uses tabs but old_str uses spaces."""
-        # Pass old_str with spaces — file has tabs
-        result = mcp_mod.fuzzy_replace_in_file(
-            str(writable_env.tabbed),
-            "def tabbed_func():\n    return 42",   # spaces in old_str
-            "def tabbed_func():\n    return 100",
-        )
-        assert "✅" in result
-        assert b"100" in writable_env.tabbed.read_bytes()
-
-    def test_FLR_03_matches_file_with_trailing_whitespace(self, mcp_mod, writable_env):
-        """FLR-03: fuzzy matches when file has trailing whitespace."""
-        result = mcp_mod.fuzzy_replace_in_file(
-            str(writable_env.trailing),
-            "x = 1\ny = 2",       # no trailing spaces
-            "x = 10\ny = 20",
-        )
-        assert "✅" in result
-        content = writable_env.trailing.read_text()
-        assert "x = 10" in content
-        assert "y = 20" in content
-
-    def test_FLR_04_matches_crlf_file(self, mcp_mod, writable_env):
-        """FLR-04: fuzzy matches CRLF file with LF old_str."""
-        result = mcp_mod.fuzzy_replace_in_file(
-            str(writable_env.crlf),
-            "def second():\n    return True",
-            "def second():\n    return False",
-        )
-        assert "✅" in result
-        assert b"False" in writable_env.crlf.read_bytes()
-
-    def test_FLR_05_reports_normalisation_used(self, mcp_mod, writable_env):
-        """FLR-05: success message includes which normalisation strategy was used."""
-        result = mcp_mod.fuzzy_replace_in_file(
-            str(writable_env.trailing),
-            "z = 3",
-            "z = 300",
-        )
-        assert "✅" in result
-        assert "normalisation" in result.lower() or "normali" in result.lower()
-
-    def test_FLR_06_unicode_file_works(self, mcp_mod, writable_env):
-        """FLR-06: fuzzy handles Unicode content correctly."""
-        result = mcp_mod.fuzzy_replace_in_file(
-            str(writable_env.unicode),
-            "VERSION = '8.0.0'",
-            "VERSION = '8.0.1'",
-        )
-        assert "✅" in result
-        assert "8.0.1" in writable_env.unicode.read_text(encoding="utf-8")
-
-    def test_FLR_07_backup_created(self, mcp_mod, writable_env):
-        """FLR-07: backup file is created before write."""
-        result = mcp_mod.fuzzy_replace_in_file(
-            str(writable_env.clean),
-            "def greet():\n    return 'hello'",
-            "def greet():\n    return 'hi'",
-        )
-        assert "✅" in result
-        assert "Backup" in result
-        bak = list(writable_env.project.glob("clean.py.bak*"))
-        assert len(bak) >= 1
-
-    def test_FLR_08_verify_block_in_output(self, mcp_mod, writable_env):
-        """FLR-08: output includes the verify context block."""
-        result = mcp_mod.fuzzy_replace_in_file(
-            str(writable_env.clean),
-            "def greet():\n    return 'hello'",
-            "def greet():\n    return 'verified'",
-        )
-        assert "Verify" in result
-        assert "verified" in result
-
-    # ── Dry run ───────────────────────────────────────────────────────────────
-
-    def test_FLR_09_dry_run_no_write(self, mcp_mod, writable_env):
-        """FLR-09: dry_run=True shows diff but does NOT write."""
-        original = writable_env.clean.read_text()
-        result = mcp_mod.fuzzy_replace_in_file(
-            str(writable_env.clean),
-            "def greet():\n    return 'hello'",
-            "def greet():\n    return 'DRY'",
-            dry_run=True,
-        )
-        assert "DRY RUN" in result
-        assert writable_env.clean.read_text() == original
-
-    def test_FLR_10_dry_run_shows_diff(self, mcp_mod, writable_env):
-        """FLR-10: dry_run output includes unified diff."""
-        result = mcp_mod.fuzzy_replace_in_file(
-            str(writable_env.clean),
-            "def greet():\n    return 'hello'",
-            "def greet():\n    return 'DIFFED'",
-            dry_run=True,
-        )
-        assert "---" in result or "+++" in result or "DIFFED" in result
-
-    # ── Failure cases ─────────────────────────────────────────────────────────
-
-    def test_FLR_11_not_found_after_all_normalisations(self, mcp_mod, writable_env):
-        """FLR-11: returns clear error when old_str not in file even after fuzzy."""
-        result = mcp_mod.fuzzy_replace_in_file(
-            str(writable_env.clean),
-            "def totally_nonexistent_function():\n    pass",
-            "replaced",
-        )
-        assert "⚠️" in result
-        assert "not found" in result.lower()
-
-    def test_FLR_12_suggests_line_replace_on_failure(self, mcp_mod, writable_env):
-        """FLR-12: failure message suggests line_replace_in_file as next step."""
-        result = mcp_mod.fuzzy_replace_in_file(
-            str(writable_env.clean),
-            "this text does not exist anywhere",
-            "replacement",
-        )
-        assert "line_replace_in_file" in result
-
-    def test_FLR_13_ambiguous_match_returns_error(self, mcp_mod, writable_env):
-        """FLR-13: multiple matches after normalisation returns error."""
-        # numbered.py has 50 lines all matching 'line_\d\d\d = \d+'
-        # Use a fragment that appears on multiple lines
-        result = mcp_mod.fuzzy_replace_in_file(
-            str(writable_env.numbered),
-            "= 1",     # too short — matches many lines
-            "= 999",
-        )
-        # Should either error (ambiguous) or succeed on exactly one match
-        # Either is valid — just must not silently corrupt the file
-        if "⚠️" in result:
-            assert "times" in result or "unique" in result.lower() or "not found" in result.lower()
-
-    def test_FLR_14_empty_old_str_returns_error(self, mcp_mod, writable_env):
-        """FLR-14: empty old_str returns error."""
-        result = mcp_mod.fuzzy_replace_in_file(
-            str(writable_env.clean), "", "anything"
-        )
-        assert "⚠️" in result
-
-    def test_FLR_15_file_not_found_returns_error(self, mcp_mod, writable_env):
-        """FLR-15: non-existent file returns error."""
-        result = mcp_mod.fuzzy_replace_in_file(
-            str(writable_env.project / "does_not_exist.py"),
-            "old", "new",
-        )
-        assert "⚠️" in result
-
-    def test_FLR_16_untracked_file_blocked(self, mcp_mod, writable_env):
-        """FLR-16: file outside writable allowlist is blocked."""
-        result = mcp_mod.fuzzy_replace_in_file(
-            str(writable_env.secret), "SECRET", "HACKED"
-        )
-        assert "⚠️" in result or "denied" in result.lower() or "not" in result.lower()
-
-    def test_FLR_17_leading_trailing_blank_lines_stripped(self, mcp_mod, writable_env):
-        """FLR-17: leading/trailing blank lines in old_str are ignored."""
-        result = mcp_mod.fuzzy_replace_in_file(
-            str(writable_env.clean),
-            "\ndef farewell():\n    return 'goodbye'\n",  # blank lines around it
-            "def farewell():\n    return 'stripped'",
-        )
-        assert "✅" in result
-        assert "stripped" in writable_env.clean.read_text()
-
-    def test_FLR_18_crlf_preserved_after_edit(self, mcp_mod, writable_env):
-        """FLR-18: CRLF line endings are preserved after edit."""
-        mcp_mod.fuzzy_replace_in_file(
-            str(writable_env.crlf),
-            "def crlf_func():\n    pass",
-            "def crlf_func():\n    return 1",
-        )
-        raw = writable_env.crlf.read_bytes()
-        assert b"\r\n" in raw   # CRLF preserved
-
-    def test_FLR_19_write_counter_incremented(self, mcp_mod, writable_env):
-        """FLR-19: successful write increments the circuit-breaker counter."""
-        mcp_mod._reset_write_counter_internal()
-        mcp_mod.fuzzy_replace_in_file(
-            str(writable_env.clean),
-            "def greet():\n    return 'hello'",
-            "def greet():\n    return 'counted'",
-        )
-        # Counter should now block at 1 if limit is 1, or succeed
-        # Key: a second check_and_increment after the write must reflect it
-        ok1, _ = mcp_mod._check_and_increment_write_counter()
-        # If limit > 1 it still passes — just confirm it's counting
-        # If at limit it returns False — also valid
-        assert isinstance(ok1, bool)
-
-    def test_FLR_20_new_str_written_exactly(self, mcp_mod, writable_env):
-        """FLR-20: new_str content is written exactly (no whitespace mangling)."""
-        new_content = "def farewell():\n    # exactly as written\n    return 'exact'"
-        mcp_mod.fuzzy_replace_in_file(
-            str(writable_env.clean),
-            "def farewell():\n    return 'goodbye'",
-            new_content,
-        )
-        assert "# exactly as written" in writable_env.clean.read_text()
 
 
 # ╔════════════════════════════════════════════════════════════════════════════╗
@@ -536,12 +322,15 @@ class TestLineReplaceInFile:
 
 # ╔════════════════════════════════════════════════════════════════════════════╗
 # ║  Integration — FLR-41 … FLR-45                                             ║
+# ║  v8.1.3: rewritten for the two-tool escalation path (str_replace_in_file   ║
+# ║  → line_replace_in_file) now that fuzzy_replace_in_file is removed.        ║
 # ╚════════════════════════════════════════════════════════════════════════════╝
 
 class TestIntegration:
 
-    def test_FLR_41_str_replace_fails_fuzzy_succeeds(self, mcp_mod, writable_env):
-        """FLR-41: str_replace_in_file fails on tabs; fuzzy_replace_in_file succeeds."""
+    def test_FLR_41_str_replace_fails_line_replace_succeeds(self, mcp_mod, writable_env):
+        """FLR-41: str_replace_in_file fails on tabs (exact match only);
+        line_replace_in_file always works since it's purely positional."""
         # str_replace should fail (tabs vs spaces mismatch)
         str_result = mcp_mod.str_replace_in_file(
             str(writable_env.tabbed),
@@ -550,21 +339,21 @@ class TestIntegration:
         )
         assert "⚠️" in str_result or "not found" in str_result.lower()
 
-        # fuzzy should succeed
-        fuzzy_result = mcp_mod.fuzzy_replace_in_file(
-            str(writable_env.tabbed),
-            "def tabbed_func():\n    return 42",  # spaces
-            "def tabbed_func():\n    return 0",
+        # line_replace should succeed regardless — it targets a line number,
+        # not text content, so tabs vs. spaces is irrelevant.
+        line_result = mcp_mod.line_replace_in_file(
+            str(writable_env.tabbed), 2, 2, "\treturn 0"
         )
-        assert "✅" in fuzzy_result
+        assert "✅" in line_result
 
-    def test_FLR_42_fuzzy_fails_line_replace_succeeds(self, mcp_mod, writable_env):
-        """FLR-42: when fuzzy fails, line_replace_in_file always works."""
-        # Write a file with content that would confuse both text matchers
+    def test_FLR_42_exotic_encoding_line_replace_still_works(self, mcp_mod, writable_env):
+        """FLR-42: for content that would confuse a text matcher entirely
+        (e.g. non-UTF-8 bytes), line_replace_in_file always works since
+        it never inspects file content to find its target."""
+        # Write a file with content that would confuse text matchers
         target = writable_env.project / "tricky.py"
         target.write_bytes(b"\xff\xfeHELLO\r\nWORLD\r\n")   # UTF-16 LE BOM
 
-        # fuzzy will likely fail (binary-ish content)
         # line_replace always works since it's purely positional
         result = mcp_mod.line_replace_in_file(
             str(target), 1, 1, "REPLACED"
@@ -574,29 +363,24 @@ class TestIntegration:
         assert isinstance(result, str)
 
     def test_FLR_43_escalation_workflow(self, mcp_mod, writable_env):
-        """FLR-43: full escalation — str_replace -> fuzzy -> line_replace."""
-        # All three tools should be callable in sequence without error
+        """FLR-43: two-tool escalation — str_replace_in_file, then
+        line_replace_in_file if the exact match fails."""
         fp = str(writable_env.trailing)
 
         # 1. str_replace (may fail due to trailing whitespace)
         r1 = mcp_mod.str_replace_in_file(fp, "x = 1", "x = 10")
 
-        # 2. If str_replace failed, try fuzzy
+        # 2. If str_replace failed, fall back to line_replace (last resort)
         if "⚠️" in r1:
-            r2 = mcp_mod.fuzzy_replace_in_file(fp, "x = 1", "x = 10")
-            if "⚠️" in r2:
-                # 3. Last resort: line replace
-                r3 = mcp_mod.line_replace_in_file(fp, 1, 1, "x = 10   ")
-                assert "✅" in r3
-            else:
-                assert "✅" in r2
+            r2 = mcp_mod.line_replace_in_file(fp, 1, 1, "x = 10   ")
+            assert "✅" in r2
         else:
             assert "✅" in r1
 
     def test_FLR_44_multiple_edits_accumulate_backups(self, mcp_mod, writable_env):
         """FLR-44: successive edits to same file create numbered backup chain."""
         fp  = str(writable_env.clean)
-        mcp_mod.fuzzy_replace_in_file(fp,
+        mcp_mod.str_replace_in_file(fp,
             "def greet():\n    return 'hello'",
             "def greet():\n    return 'edit1'")
         mcp_mod.line_replace_in_file(fp, 4, 4, "def farewell():")
@@ -613,3 +397,4 @@ class TestIntegration:
         assert "SENTINEL_VALUE" in result          # verify block shows it
         text = writable_env.numbered.read_text()
         assert "SENTINEL_VALUE = 'verify_me'" in text   # actually written
+

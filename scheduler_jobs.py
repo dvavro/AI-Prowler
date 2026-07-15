@@ -56,6 +56,108 @@ def _job_rows(sheet: str = "Jobs_Schedule") -> list[str]:
     except Exception:
         return []
 
+def _todays_jobs_structured() -> list[dict]:
+    """Read TODAY's rows directly from the Jobs_Schedule sheet as structured
+    dicts (not the pre-formatted multi-line-per-job text _job_rows() returns),
+    so callers can access each job's own City/State individually — needed for
+    per-job weather cross-referencing in the Morning Briefing.
+
+    Reuses the exact same header-detection (>=3 non-empty cells in the first
+    5 rows) and Service-Date matching logic as the tested read_job_spreadsheet
+    MCP tool, just returning structured rows instead of formatted text.
+
+    Returns a list of dicts, each with whatever of these keys were found as
+    actual columns (missing columns are simply absent, never guessed):
+        customer, city, state, service_type, crew
+    Empty list on any error, missing file, or no matching rows — callers
+    must treat this as "couldn't determine, fall back to the generic
+    report", never a hard failure. Personal-mode only, matching this
+    module's own scope (see module docstring).
+    """
+    try:
+        from ai_prowler_mcp import _get_default_spreadsheet_path
+        import openpyxl as _opx
+        import datetime as _dt
+
+        fp = _get_default_spreadsheet_path()
+        if not fp or not Path(fp).exists():
+            return []
+
+        wb = _opx.load_workbook(fp, data_only=True)
+        if "Jobs_Schedule" not in wb.sheetnames:
+            return []
+        ws = wb["Jobs_Schedule"]
+
+        header_row_idx = None
+        headers: list = []
+        for r in ws.iter_rows(min_row=1, max_row=5):
+            non_empty = [c for c in r if c.value is not None]
+            if len(non_empty) >= 3:
+                header_row_idx = r[0].row
+                headers = [str(c.value).strip().replace('\n', ' ') if c.value else ''
+                          for c in r]
+                break
+        if header_row_idx is None or not headers:
+            return []
+
+        # Map the columns we actually care about — tolerant of the
+        # "★ AI Route" suffix used on City/Address/ZIP headers.
+        col_idx = {}
+        for idx, h in enumerate(headers):
+            hl = h.lower()
+            if 'customer name' in hl or 'company' in hl:
+                col_idx.setdefault('customer', idx)
+            elif hl.startswith('city'):
+                col_idx.setdefault('city', idx)
+            elif hl.strip() == 'state':
+                col_idx.setdefault('state', idx)
+            elif 'service type' in hl:
+                col_idx.setdefault('service_type', idx)
+            elif 'crew' in hl or 'technician' in hl:
+                col_idx.setdefault('crew', idx)
+            elif 'service' in hl and 'date' in hl:
+                col_idx.setdefault('service_date', idx)
+
+        if 'service_date' not in col_idx:
+            return []
+
+        today = _dt.date.today()
+        results = []
+        for row in ws.iter_rows(min_row=header_row_idx + 1):
+            vals = [c.value for c in row]
+            if all(v is None or str(v).strip() == '' for v in vals):
+                continue
+
+            cell_val = vals[col_idx['service_date']] if col_idx['service_date'] < len(vals) else None
+            if cell_val is None:
+                continue
+            if isinstance(cell_val, (_dt.datetime, _dt.date)):
+                cell_date = cell_val.date() if isinstance(cell_val, _dt.datetime) else cell_val
+            else:
+                cell_date = None
+                for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y', '%d/%m/%Y'):
+                    try:
+                        cell_date = _dt.datetime.strptime(str(cell_val).strip(), fmt).date()
+                        break
+                    except ValueError:
+                        continue
+            if cell_date != today:
+                continue
+
+            entry = {}
+            for key, idx in col_idx.items():
+                if key == 'service_date' or idx >= len(vals):
+                    continue
+                v = vals[idx]
+                if v is not None and str(v).strip():
+                    entry[key] = str(v).strip()
+            if entry:
+                results.append(entry)
+
+        return results
+    except Exception:
+        return []
+
 def _pending_tasks() -> list[dict]:
     try:
         p = Path.home() / ".ai-prowler" / "pending_tasks.json"
@@ -69,7 +171,18 @@ def _pending_tasks() -> list[dict]:
 # ── Job functions ─────────────────────────────────────────────────────────────
 
 def job_morning_briefing(config: dict):
-    """Daily: jobs today, weather, overdue invoices, unanswered SMS, due tasks."""
+    """Daily: jobs today (with per-job weather by town), overdue invoices,
+    unanswered SMS, due tasks.
+
+    Per-job weather (added v8.1.3): each of today's jobs is checked against
+    the weather for ITS OWN City/State — not one fixed location — since a
+    field-service day's jobs are frequently scattered across several towns.
+    Weather is fetched once per UNIQUE town among today's jobs (dedup), not
+    once per job, to avoid redundant API calls when multiple jobs share a
+    town. Falls back to config['location'] only when a job has no City on
+    file, or when the spreadsheet can't be read at all (personal-mode-only
+    feature — see _todays_jobs_structured's docstring).
+    """
     try:
         name = config.get("name", "David")
         loc  = config.get("location", "New Smyrna Beach, Florida")
@@ -77,22 +190,40 @@ def job_morning_briefing(config: dict):
 
         parts = [f"<h2>☀️ Good morning, {name}!</h2><p><b>{dow}</b></p><hr>"]
 
-        # Today's jobs
-        rows = _job_rows()
-        today = [r for r in rows if _today() in r]
-        if today:
-            parts.append(f"<h3>📋 Today\'s Jobs ({len(today)})</h3><ul>")
-            for r in today[:10]:
-                parts.append(f"<li>{r}</li>")
+        # Today's jobs — structured, with per-job weather by town
+        jobs = _todays_jobs_structured()
+        if jobs:
+            # Fetch weather once per unique town, not once per job.
+            weather_cache: dict[str, str] = {}
+            def _job_weather(job: dict) -> str:
+                city, state = job.get("city", ""), job.get("state", "")
+                job_loc = f"{city}, {state}".strip(", ") if (city or state) else loc
+                if job_loc not in weather_cache:
+                    weather_cache[job_loc] = _weather(job_loc)
+                return weather_cache[job_loc]
+
+            parts.append(f"<h3>📋 Today's Jobs ({len(jobs)})</h3><ul>")
+            for j in jobs[:10]:
+                label = j.get("customer", "Job")
+                where = ", ".join(x for x in (j.get("city"), j.get("state")) if x)
+                if where:
+                    label += f" — {where}"
+                if j.get("service_type"):
+                    label += f" ({j['service_type']})"
+                w = _job_weather(j)
+                rain_flag = ""
+                if w and any(x in w for x in ("⚠️", "rain", "Rain")):
+                    rain_flag = " <b style='color:#c00'>⚠️ Rain risk</b>"
+                parts.append(f"<li>{label}{rain_flag}</li>")
             parts.append("</ul>")
         else:
             parts.append("<p>📋 No jobs scheduled today.</p>")
-
-        # Weather
-        w = _weather(loc)
-        if w:
-            wl = [l for l in w.splitlines() if l.strip()][:4]
-            parts.append(f"<h3>🌤️ Weather</h3><p>{'<br>'.join(wl)}</p>")
+            # No per-job locations to check — fall back to the single
+            # configured location so the briefing still shows something.
+            w = _weather(loc)
+            if w:
+                wl = [l for l in w.splitlines() if l.strip()][:4]
+                parts.append(f"<h3>🌤️ Weather — {loc}</h3><p>{'<br>'.join(wl)}</p>")
 
         # Overdue invoices
         ar = _ar_aging()

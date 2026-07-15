@@ -151,6 +151,161 @@ class TestSchedulerHelpers:
 
 
 # ---------------------------------------------------------------------------
+# TC-SCHED-010  _todays_jobs_structured — real xlsx, per-job City/State
+# extraction for per-job weather cross-referencing (v8.1.3)
+# ---------------------------------------------------------------------------
+
+class TestTodaysJobsStructured:
+    """
+    Uses a REAL temp .xlsx workbook (via openpyxl) rather than mocking —
+    this is the actual risky logic (header detection, date-cell matching,
+    column mapping), the same class of thing read_job_spreadsheet already
+    has tested coverage for. Mocking it out would leave the real parsing
+    completely unverified.
+    """
+
+    def _make_workbook(self, tmp_path, rows, headers=None):
+        import openpyxl
+        headers = headers or [
+            "JobID (JOB-####)", "Customer Name / Company",
+            "City ★ AI Route", "State", "Service Type",
+            "Crew / Technician", "Service Date",
+        ]
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Jobs_Schedule"
+        ws.append(headers)
+        for row in rows:
+            ws.append(row)
+        fp = tmp_path / "jobs.xlsx"
+        wb.save(fp)
+        return str(fp)
+
+    def test_TC_SCHED_010_extracts_todays_jobs_with_city_state(self, tmp_path):
+        import scheduler_jobs as sj
+        today = datetime.date.today().isoformat()
+        fp = self._make_workbook(tmp_path, rows=[
+            ["JOB-0001", "Torres Residence", "New Smyrna Beach", "FL",
+             "Window Cleaning", "Jake", today],
+            ["JOB-0002", "Blue Wave Cafe", "Port Orange", "FL",
+             "Pressure Washing", "Sam", today],
+        ])
+        with patch("ai_prowler_mcp._get_default_spreadsheet_path", return_value=fp):
+            result = sj._todays_jobs_structured()
+
+        assert len(result) == 2
+        assert result[0]["customer"] == "Torres Residence"
+        assert result[0]["city"] == "New Smyrna Beach"
+        assert result[0]["state"] == "FL"
+        assert result[1]["city"] == "Port Orange"
+
+    def test_TC_SCHED_010_excludes_jobs_on_other_dates(self, tmp_path):
+        import scheduler_jobs as sj
+        today = datetime.date.today().isoformat()
+        yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+        tomorrow = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+        fp = self._make_workbook(tmp_path, rows=[
+            ["JOB-0001", "Today Job", "New Smyrna Beach", "FL",
+             "Window Cleaning", "Jake", today],
+            ["JOB-0002", "Yesterday Job", "Edgewater", "FL",
+             "Window Cleaning", "Jake", yesterday],
+            ["JOB-0003", "Tomorrow Job", "Daytona Beach", "FL",
+             "Window Cleaning", "Jake", tomorrow],
+        ])
+        with patch("ai_prowler_mcp._get_default_spreadsheet_path", return_value=fp):
+            result = sj._todays_jobs_structured()
+
+        assert len(result) == 1
+        assert result[0]["customer"] == "Today Job"
+
+    def test_TC_SCHED_010_handles_datetime_object_service_date(self, tmp_path):
+        """openpyxl often returns actual datetime objects for date cells,
+        not strings — must be handled, not just string-formatted dates."""
+        import scheduler_jobs as sj
+        import openpyxl
+        today_dt = datetime.datetime.combine(datetime.date.today(), datetime.time())
+        headers = ["JobID (JOB-####)", "Customer Name / Company",
+                  "City ★ AI Route", "State", "Service Type",
+                  "Crew / Technician", "Service Date"]
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Jobs_Schedule"
+        ws.append(headers)
+        ws.append(["JOB-0001", "Datetime Job", "New Smyrna Beach", "FL",
+                   "Window Cleaning", "Jake", today_dt])
+        fp = tmp_path / "jobs.xlsx"
+        wb.save(fp)
+
+        with patch("ai_prowler_mcp._get_default_spreadsheet_path", return_value=str(fp)):
+            result = sj._todays_jobs_structured()
+
+        assert len(result) == 1
+        assert result[0]["customer"] == "Datetime Job"
+
+    def test_TC_SCHED_010_no_spreadsheet_path_returns_empty(self):
+        import scheduler_jobs as sj
+        with patch("ai_prowler_mcp._get_default_spreadsheet_path", return_value=""):
+            result = sj._todays_jobs_structured()
+        assert result == []
+
+    def test_TC_SCHED_010_missing_file_returns_empty(self, tmp_path):
+        import scheduler_jobs as sj
+        fp = str(tmp_path / "does_not_exist.xlsx")
+        with patch("ai_prowler_mcp._get_default_spreadsheet_path", return_value=fp):
+            result = sj._todays_jobs_structured()
+        assert result == []
+
+    def test_TC_SCHED_010_missing_jobs_schedule_sheet_returns_empty(self, tmp_path):
+        import scheduler_jobs as sj
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "SomeOtherSheet"
+        ws.append(["A", "B", "C"])
+        fp = tmp_path / "wrong_sheet.xlsx"
+        wb.save(fp)
+
+        with patch("ai_prowler_mcp._get_default_spreadsheet_path", return_value=str(fp)):
+            result = sj._todays_jobs_structured()
+        assert result == []
+
+    def test_TC_SCHED_010_no_service_date_column_returns_empty(self, tmp_path):
+        """A sheet with no recognizable Service Date column must return []
+        rather than guess — mirrors read_job_spreadsheet's own behavior."""
+        import scheduler_jobs as sj
+        fp = self._make_workbook(
+            tmp_path,
+            rows=[["JOB-0001", "No Date Job", "Edgewater", "FL", "Cleaning", "Jake"]],
+            headers=["JobID (JOB-####)", "Customer Name / Company",
+                    "City ★ AI Route", "State", "Service Type",
+                    "Crew / Technician"],
+        )
+        with patch("ai_prowler_mcp._get_default_spreadsheet_path", return_value=fp):
+            result = sj._todays_jobs_structured()
+        assert result == []
+
+    def test_TC_SCHED_010_never_raises_on_corrupt_workbook(self, tmp_path):
+        import scheduler_jobs as sj
+        fp = tmp_path / "corrupt.xlsx"
+        fp.write_text("this is not a real xlsx file", encoding="utf-8")
+        with patch("ai_prowler_mcp._get_default_spreadsheet_path", return_value=str(fp)):
+            result = sj._todays_jobs_structured()  # must not raise
+        assert result == []
+
+    def test_TC_SCHED_010_blank_rows_skipped(self, tmp_path):
+        import scheduler_jobs as sj
+        today = datetime.date.today().isoformat()
+        fp = self._make_workbook(tmp_path, rows=[
+            ["JOB-0001", "Real Job", "New Smyrna Beach", "FL",
+             "Cleaning", "Jake", today],
+            [None, None, None, None, None, None, None],
+        ])
+        with patch("ai_prowler_mcp._get_default_spreadsheet_path", return_value=fp):
+            result = sj._todays_jobs_structured()
+        assert len(result) == 1
+
+
+# ---------------------------------------------------------------------------
 # TC-SCHED-003  Job functions return correct types
 # ---------------------------------------------------------------------------
 
@@ -243,6 +398,138 @@ class TestJobReturnTypes:
         assert result is not None
         _, body = result
         assert "AI-Prowler" in body
+
+
+# ---------------------------------------------------------------------------
+# TC-SCHED-011  job_morning_briefing — per-job weather by town (v8.1.3)
+# ---------------------------------------------------------------------------
+
+class TestMorningBriefingPerJobWeather:
+    """
+    job_morning_briefing now checks weather PER JOB'S OWN city/state via
+    _todays_jobs_structured, instead of one fixed config['location'] for
+    the whole report. These tests mock _todays_jobs_structured and _weather
+    directly (the per-job xlsx parsing itself is covered by
+    TestTodaysJobsStructured above) to verify the briefing's OWN logic:
+    dedup by town, rain-flag rendering, and the no-jobs fallback.
+    """
+
+    def _cfg(self):
+        return {"name": "David", "location": "New Smyrna Beach, Florida",
+                "email_to": "david.vavro1@gmail.com"}
+
+    def _run(self, jobs, weather_by_loc=None, ar="", sms="", tasks=None):
+        import scheduler_jobs as sj
+        weather_by_loc = weather_by_loc or {}
+
+        def _fake_weather(loc):
+            return weather_by_loc.get(loc, "Sunny 80F")
+
+        with patch("scheduler_jobs._todays_jobs_structured", return_value=jobs), \
+             patch("scheduler_jobs._weather", side_effect=_fake_weather), \
+             patch("ai_prowler_mcp.get_ar_aging_report", return_value=ar), \
+             patch("ai_prowler_mcp.list_sms_contacts_with_replies", return_value=sms), \
+             patch("builtins.open", side_effect=FileNotFoundError):
+            return sj.job_morning_briefing(self._cfg())
+
+    def test_TC_SCHED_011_lists_each_jobs_own_town(self):
+        subject, body = self._run(jobs=[
+            {"customer": "Torres Residence", "city": "New Smyrna Beach", "state": "FL"},
+            {"customer": "Blue Wave Cafe", "city": "Port Orange", "state": "FL"},
+        ])
+        assert "Torres Residence" in body
+        assert "New Smyrna Beach" in body
+        assert "Blue Wave Cafe" in body
+        assert "Port Orange" in body
+
+    def test_TC_SCHED_011_weather_fetched_once_per_unique_town_not_per_job(self):
+        """Two jobs in the SAME town must only trigger one _weather() call
+        for that town — not one per job."""
+        import scheduler_jobs as sj
+        calls = []
+
+        def _counting_weather(loc):
+            calls.append(loc)
+            return "Sunny 80F"
+
+        with patch("scheduler_jobs._todays_jobs_structured", return_value=[
+                {"customer": "Job A", "city": "New Smyrna Beach", "state": "FL"},
+                {"customer": "Job B", "city": "New Smyrna Beach", "state": "FL"},
+                {"customer": "Job C", "city": "Port Orange", "state": "FL"},
+            ]), \
+             patch("scheduler_jobs._weather", side_effect=_counting_weather), \
+             patch("ai_prowler_mcp.get_ar_aging_report", return_value=""), \
+             patch("ai_prowler_mcp.list_sms_contacts_with_replies", return_value=""), \
+             patch("builtins.open", side_effect=FileNotFoundError):
+            sj.job_morning_briefing(self._cfg())
+
+        # Two unique towns among three jobs -> exactly two _weather() calls.
+        assert len(calls) == 2
+        assert calls.count("New Smyrna Beach, FL") == 1
+
+    def test_TC_SCHED_011_rain_flag_shown_for_rainy_town(self):
+        subject, body = self._run(
+            jobs=[{"customer": "Torres Residence", "city": "New Smyrna Beach", "state": "FL"}],
+            weather_by_loc={"New Smyrna Beach, FL": "⚠️ Rain likely, 72F"},
+        )
+        assert "Rain risk" in body
+        assert "Torres Residence" in body
+
+    def test_TC_SCHED_011_no_rain_flag_for_sunny_town(self):
+        subject, body = self._run(
+            jobs=[{"customer": "Torres Residence", "city": "New Smyrna Beach", "state": "FL"}],
+            weather_by_loc={"New Smyrna Beach, FL": "Sunny 84F"},
+        )
+        assert "Rain risk" not in body
+
+    def test_TC_SCHED_011_job_missing_city_falls_back_to_config_location(self):
+        """A job with no City on file must still get SOME weather check —
+        using config['location'], not silently skipping it."""
+        import scheduler_jobs as sj
+        calls = []
+
+        def _counting_weather(loc):
+            calls.append(loc)
+            return "Sunny 80F"
+
+        with patch("scheduler_jobs._todays_jobs_structured",
+                   return_value=[{"customer": "No City Job"}]), \
+             patch("scheduler_jobs._weather", side_effect=_counting_weather), \
+             patch("ai_prowler_mcp.get_ar_aging_report", return_value=""), \
+             patch("ai_prowler_mcp.list_sms_contacts_with_replies", return_value=""), \
+             patch("builtins.open", side_effect=FileNotFoundError):
+            sj.job_morning_briefing(self._cfg())
+
+        assert calls == ["New Smyrna Beach, Florida"]
+
+    def test_TC_SCHED_011_no_jobs_falls_back_to_configured_location_weather(self):
+        """When there are no jobs at all, the briefing still shows a
+        general weather section for config['location'] — not nothing."""
+        subject, body = self._run(jobs=[])
+        assert "No jobs scheduled today" in body
+        assert "New Smyrna Beach, Florida" in body
+
+    def test_TC_SCHED_011_service_type_shown_when_present(self):
+        subject, body = self._run(jobs=[
+            {"customer": "Torres Residence", "city": "New Smyrna Beach",
+             "state": "FL", "service_type": "Window Cleaning"},
+        ])
+        assert "Window Cleaning" in body
+
+    def test_TC_SCHED_011_never_raises_when_weather_lookup_fails(self):
+        import scheduler_jobs as sj
+        with patch("scheduler_jobs._todays_jobs_structured",
+                   return_value=[{"customer": "Torres Residence",
+                                 "city": "New Smyrna Beach", "state": "FL"}]), \
+             patch("scheduler_jobs._weather", side_effect=Exception("timeout")), \
+             patch("ai_prowler_mcp.get_ar_aging_report", return_value=""), \
+             patch("ai_prowler_mcp.list_sms_contacts_with_replies", return_value=""), \
+             patch("builtins.open", side_effect=FileNotFoundError):
+            result = sj.job_morning_briefing(self._cfg())
+        # job_morning_briefing's own try/except catches this — but
+        # _weather() itself also never raises in production (see
+        # TC-SCHED-002), so this is a defense-in-depth check.
+        assert result is not None
 
 
 # ---------------------------------------------------------------------------
@@ -666,8 +953,13 @@ class TestSchedulerEmailDeliveryContract:
     def test_TC_SCHED_009_send_email_uses_real_send_email_signature(self):
         """_send_email()'s primary path must call ai_prowler_mcp.send_email()
         with only kwargs that function actually accepts (to, subject, body,
-        attachment_path). autospec=True raises TypeError on any others —
-        this is what would have caught the 'html=True' bug immediately."""
+        attachment_path, body_html as of v8.2+). autospec=True raises
+        TypeError on any others — this is what would have caught the
+        original 'html=True' bug immediately.
+
+        v8.2+: body_html is now a real, supported kwarg carrying the actual
+        HTML content (fixing raw-tags-in-inbox), while body carries a
+        tag-stripped plain-text fallback."""
         import scheduler_engine as se
         import ai_prowler_mcp as apm
 
@@ -678,8 +970,12 @@ class TestSchedulerEmailDeliveryContract:
         assert ok is True
         mock_send.assert_called_once()
         # autospec already guarantees no invalid kwargs were passed (it would
-        # have raised TypeError above); also confirm 'html' was never used.
-        assert "html" not in mock_send.call_args.kwargs
+        # have raised TypeError above). Confirm the HTML content actually
+        # reaches send_email via body_html, and body is a plain-text fallback
+        # (not raw HTML) — this is the actual formatting-fix contract.
+        kwargs = mock_send.call_args.kwargs
+        assert kwargs.get("body_html") == "<p>body</p>"
+        assert "<p>" not in kwargs.get("body", "")
 
     def test_TC_SCHED_009_send_email_fallback_uses_real_send_alert_signature(self):
         """When send_email() fails/raises, the send_alert() fallback must also

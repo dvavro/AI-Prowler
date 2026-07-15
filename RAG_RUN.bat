@@ -88,6 +88,24 @@ if exist "%UPDATE_FLAG%" (
         echo   Update applied successfully.
     )
 
+    REM ── Also refresh the Documents\AI-Prowler copy of the user guide ────────
+    REM (v8.1.3 bug fix) The manifest includes COMPLETE_USER_GUIDE.md and it
+    REM gets applied above into %INSTALL_DIR%, but that is NOT the copy most
+    REM users actually open — the installer seeds a SEPARATE copy at
+    REM %USERPROFILE%\Documents\AI-Prowler\ (tracked in
+    REM ~/.rag_auto_update_dirs.json so ChromaDB indexes it and Claude can
+    REM answer questions from it). Without this step, every in-app auto-update
+    REM silently left that copy — and therefore Claude's own indexed
+    REM knowledge of AI-Prowler's docs — stale indefinitely, even though the
+    REM app code itself updated correctly. Only overwrites if the destination
+    REM already exists, so we never resurrect a copy the user deliberately
+    REM removed.
+    if exist "%UPDATE_DIR%\COMPLETE_USER_GUIDE.md" (
+        if exist "%USERPROFILE%\Documents\AI-Prowler\COMPLETE_USER_GUIDE.md" (
+            copy /Y "%UPDATE_DIR%\COMPLETE_USER_GUIDE.md" "%USERPROFILE%\Documents\AI-Prowler\COMPLETE_USER_GUIDE.md" >nul 2>&1
+        )
+    )
+
     REM Clean up staging area and flag
     del "%UPDATE_FLAG%" >nul 2>&1
     rmdir /S /Q "%UPDATE_DIR%" >nul 2>&1

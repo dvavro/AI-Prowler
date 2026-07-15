@@ -150,19 +150,26 @@ def _already_ran_today(job_id: str) -> bool:
 # ── Email delivery ────────────────────────────────────────────────────────────
 
 def _send_email(to: str, subject: str, body_html: str) -> bool:
-    """Send alert via AI-Prowler's existing send_alert / send_email tools."""
+    """Send alert via AI-Prowler's existing send_alert / send_email tools.
+
+    body_html is real HTML (see scheduler_jobs.py job functions). send_email()
+    now accepts an explicit body_html kwarg (v8.2+) and sends a proper
+    multipart/alternative message so mail clients render the formatting
+    instead of showing raw tags — 'body' still carries a tag-stripped
+    plain-text fallback for clients that don't render HTML.
+    """
+    import re
+    plain = re.sub(r"<[^>]+>", " ", body_html).strip()
     try:
         from ai_prowler_mcp import send_email as _send
-        # send_email(to, subject, body, attachment_path="") — no 'html' kwarg.
-        result = _send(to=to, subject=subject, body=body_html)
+        # send_email(to, subject, body, attachment_path="", body_html="")
+        result = _send(to=to, subject=subject, body=plain, body_html=body_html)
         return "✅" in str(result) or "sent" in str(result).lower()
     except Exception:
         try:
             from ai_prowler_mcp import send_alert as _alert
             # send_alert(message, to="") — no 'subject' kwarg. Fold subject
             # into the message body since send_alert has nowhere else to put it.
-            import re
-            plain = re.sub(r"<[^>]+>", " ", body_html).strip()
             _alert(message=f"{subject}\n\n{plain[:450]}", to=to)
             return True
         except Exception:

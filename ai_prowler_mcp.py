@@ -576,7 +576,7 @@ _TIER_A_SUPPRESSED: frozenset = frozenset({
     "check_python_import",
     # Host filesystem writes NOT scoped by _check_personal_write_scope() —
     # backup/restore/approval-management tools, still operator/dev-only.
-    # create_file, write_file, str_replace_in_file, fuzzy_replace_in_file,
+    # create_file, write_file, str_replace_in_file,
     # line_replace_in_file, and create_directory are DELIBERATELY absent
     # from this set — they're gated per-call instead, via
     # _check_personal_write_scope(): server-mode users may write ONLY
@@ -852,7 +852,7 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
 
         "  • File editing (write tools — see EDITING FILES section below):\n"
         "      create_file, write_file, str_replace_in_file,\n"
-        "      fuzzy_replace_in_file, line_replace_in_file, create_directory,\n"
+        "      line_replace_in_file, create_directory,\n"
         "      list_directory, copy_to_backup, list_backups, restore_backup,\n"
         "      cleanup_backups, cleanup_job_logs, reset_write_counter, diff_files\n\n"
 
@@ -966,11 +966,11 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "EDITING FILES — REINDEX WHEN DONE\n"
         + "-" * 30 + "\n"
         "Write tools (create_file, write_file, str_replace_in_file,\n"
-        "fuzzy_replace_in_file, line_replace_in_file, restore_backup) do NOT\n"
+        "line_replace_in_file, restore_backup) do NOT\n"
         "auto-index. They write to disk and create backups, but ChromaDB is\n"
         "NOT updated until you ask for it.\n"
         "  • Make ALL your edits to a file first (any number of\n"
-        "    str_replace_in_file / fuzzy_replace_in_file / line_replace_in_file\n"
+        "    str_replace_in_file / line_replace_in_file\n"
         "    calls).\n"
         "  • When you are DONE editing that file, call reindex_file(path)\n"
         "    ONCE to sync it into the database.\n"
@@ -989,7 +989,7 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "  Rationale: re-embedding on every write deadlocked the HTTP server\n"
         "  on large files; explicit end-of-session reindex avoids that.\n"
         "  Server mode: create_file/write_file/str_replace_in_file/\n"
-        "  fuzzy_replace_in_file/line_replace_in_file/create_directory are\n"
+        "  line_replace_in_file/create_directory are\n"
         "  scoped to the caller's own personal directory (blocked entirely if\n"
         "  they don't have one) — see the THIS CONNECTION footer below for\n"
         "  this specific caller's status. reset_write_counter() and\n"
@@ -1242,7 +1242,7 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
 
         footer_lines.append("")
         footer_lines.append("File editing (create_file, write_file, str_replace_in_file,")
-        footer_lines.append("fuzzy_replace_in_file, line_replace_in_file, create_directory):")
+        footer_lines.append("line_replace_in_file, create_directory):")
         if _htu_priv_status == "scoped":
             footer_lines.append(f"  ✅ Scoped to your personal directory: {_htu_priv_dir}")
         else:
@@ -4187,7 +4187,7 @@ def check_tools_status(ctx: "Context | None" = None) -> str:
             "  ✅ run_script / run_script_start / run_script_status / run_script_kill",
             "     Execute scripts synchronously or as a tracked background job.",
             "",
-            "  ✅ create_file / write_file / str_replace_in_file / fuzzy_replace_in_file /",
+            "  ✅ create_file / write_file / str_replace_in_file /",
             "     line_replace_in_file / create_directory / list_directory",
             "     Edit files on disk under a tracked, writable directory.",
             "",
@@ -4217,7 +4217,7 @@ def check_tools_status(ctx: "Context | None" = None) -> str:
             "  ❌ run_script / run_script_start / run_script_status / run_script_kill",
             "     Not available in server mode — personal-install tools only.",
             "",
-            "  create_file / write_file / str_replace_in_file / fuzzy_replace_in_file /",
+            "  create_file / write_file / str_replace_in_file /",
             "  line_replace_in_file / create_directory",
             f"     {_cts_write_line}",
             "",
@@ -7521,9 +7521,9 @@ AI-Prowler Code Tools — WRITE-SIDE
 ====================================
 
 Write-side code tools (create_file, write_file, str_replace_in_file,
-fuzzy_replace_in_file, line_replace_in_file, create_directory,
+line_replace_in_file, create_directory,
 list_directory, copy_to_backup, list_backups, restore_backup,
-cleanup_backups, reset_write_counter, diff_files — 13 tools as of v8.0.0),
+cleanup_backups, reset_write_counter, diff_files — 12 tools as of v8.2.0),
 plus all supporting infrastructure (writable-path allowlist, hard
 blocklist, GUI approval queue, re-index helper, write-counter circuit
 breaker, and server-mode personal-directory write scoping via
@@ -8687,223 +8687,6 @@ def str_replace_in_file(filepath: str,
     return "\n".join(out)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TOOL 3b — fuzzy_replace_in_file
-# ══════════════════════════════════════════════════════════════════════════════
-@mcp.tool()
-def fuzzy_replace_in_file(filepath: str,
-                          old_str: str,
-                          new_str: str,
-                          dry_run: bool = False,
-                          ctx: "Context | None" = None) -> str:
-    """
-    CODE TOOLS — Whitespace-tolerant surgical edit. Same as str_replace_in_file
-    but normalises whitespace differences before matching so it succeeds where
-    str_replace_in_file fails due to:
-      • Tab vs spaces differences
-      • Trailing whitespace on lines
-      • CRLF vs LF line endings
-      • Unicode normalisation (em-dash variants, BOM)
-      • Leading/trailing blank lines in old_str
-
-    Use this as the FALLBACK when str_replace_in_file reports "not found" but
-    you can see the text is clearly in the file. Always try str_replace_in_file
-    first — this tool normalises for matching only; the actual replacement is
-    written exactly as new_str (your new content is not whitespace-mangled).
-
-    The tool shows you WHICH normalisation fixed the match so you know what
-    the file's actual whitespace looks like for future edits.
-
-    Args:
-        filepath: Absolute path to edit. Must be writable-allowlisted.
-        old_str:  Text to find (whitespace-tolerant match).
-        new_str:  Replacement text (written exactly as given).
-        dry_run:  If True, shows the diff without writing.
-
-    Returns:
-        Success: same confirmation as str_replace_in_file plus a note on
-                 which normalisation was used.
-        Failure: detailed diagnostic including what was tried.
-    """
-    if not _prewarm_event.wait(timeout=60):
-        return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
-
-    if not old_str:
-        return "⚠️  old_str cannot be empty."
-    if new_str is None:
-        return "⚠️  new_str cannot be None."
-
-    resolved, deny = _resolve_writable_path(filepath, queue_approval=not dry_run)
-    if not resolved:
-        return deny
-    if not Path(resolved).exists():
-        return f"⚠️  File does not exist: {resolved}"
-
-    # Server-mode: writes are scoped to the caller's own personal directory
-    scope_denial = _check_personal_write_scope(ctx, resolved)
-    if scope_denial:
-        return scope_denial
-
-    try:
-        size = Path(resolved).stat().st_size
-    except Exception as exc:
-        return f"⚠️  Cannot stat file: {exc}"
-    if size > _READ_FILE_MAX_BYTES:
-        return f"⚠️  File too large ({size:,} bytes, cap {_READ_FILE_MAX_BYTES:,})."
-
-    try:
-        text, line_ending, file_encoding = _read_text_preserving_endings(resolved)
-    except Exception as exc:
-        return f"⚠️  Read failed: {exc}"
-
-    # ── Normalisation strategies tried in order ────────────────────────────────
-    def _norm_ws(s: str) -> str:
-        """Strip trailing whitespace from every line, normalise tabs to spaces."""
-        return "\n".join(line.rstrip().expandtabs(4) for line in s.split("\n"))
-
-    def _norm_strip(s: str) -> str:
-        """Also strip leading/trailing blank lines."""
-        return _norm_ws(s).strip()
-
-    def _norm_collapse(s: str) -> str:
-        """Collapse all internal whitespace runs to single space per line."""
-        import re as _re
-        lines = s.split("\n")
-        return "\n".join(_re.sub(r'[ \t]+', ' ', line.rstrip()) for line in lines)
-
-    strategies = [
-        ("CRLF normalisation",          lambda s: s.replace("\r\n", "\n").replace("\r", "\n")),
-        ("trailing whitespace strip",   _norm_ws),
-        ("leading/trailing strip",      _norm_strip),
-        ("whitespace collapse",         _norm_collapse),
-    ]
-
-    # Normalise old_str with CRLF first always
-    old_norm_base = old_str.replace("\r\n", "\n").replace("\r", "\n")
-
-    matched_strategy = None
-    matched_old = None
-    matched_text = None   # normalised file text that matched
-
-    # Try each strategy: normalise BOTH file text and old_str the same way
-    for strategy_name, norm_fn in strategies:
-        t_norm = norm_fn(text)
-        o_norm = norm_fn(old_norm_base)
-        if not o_norm:
-            continue
-        count = t_norm.count(o_norm)
-        if count == 1:
-            matched_strategy = strategy_name
-            matched_old = o_norm
-            matched_text = t_norm
-            break
-        if count > 1:
-            return (f"⚠️  fuzzy_replace_in_file: old_str matched {count} times "
-                    f"after '{strategy_name}' normalisation.\n"
-                    f"Add more surrounding context to make it unique.")
-
-    if matched_text is None:
-        return (
-            f"⚠️  fuzzy_replace_in_file: old_str not found in {resolved} "
-            f"even after trying all whitespace normalisations:\n"
-            f"  • CRLF normalisation\n"
-            f"  • trailing whitespace strip\n"
-            f"  • leading/trailing strip\n"
-            f"  • whitespace collapse\n\n"
-            f"Tip: use read_file_lines() to see the exact bytes, then use "
-            f"line_replace_in_file() with the line numbers instead."
-        )
-
-    # Build new text: replace in the ORIGINAL file text using the matched
-    # normalised position to find the replacement point, then splice in new_str.
-    # We find the match position in the normalised text and map it back to
-    # character offsets in the original.
-    idx_norm = matched_text.find(matched_old)
-    # Count newlines before match to get line number
-    line_of_change = matched_text.count("\n", 0, idx_norm) + 1
-
-    # For the actual write, do the replacement in the normalised text
-    # then re-apply the original whitespace for the unchanged parts.
-    # Simplest safe approach: replace in normalised, write normalised.
-    # This means the file's whitespace in the changed region becomes normalised —
-    # acceptable since we're fixing a whitespace-inconsistent file anyway.
-    new_text = matched_text.replace(matched_old, new_str.replace("\r\n", "\n"), 1)
-
-    new_bytes_on_disk = _apply_line_ending(new_text, line_ending).encode(
-        file_encoding, errors="replace"
-    )
-    new_byte_count = len(new_bytes_on_disk)
-
-    if dry_run:
-        out = [
-            f"🔎 DRY RUN (fuzzy) — no changes written to {resolved}",
-            f"   Match found at line {line_of_change} via '{matched_strategy}'",
-            f"   File size would change: {size:,} → {new_byte_count:,} bytes",
-            "",
-            "─── Unified diff (a=before, b=after) ───",
-        ]
-        try:
-            import difflib as _dl
-            diff = list(_dl.unified_diff(
-                matched_text.splitlines(keepends=False),
-                new_text.splitlines(keepends=False),
-                fromfile=f"a/{Path(resolved).name}",
-                tofile=f"b/{Path(resolved).name}",
-                lineterm="", n=3,
-            ))
-            out.extend(diff[:200])
-        except Exception as exc:
-            out.append(f"(diff failed: {exc})")
-        out.append("")
-        out.append("To apply: call again with dry_run=False.")
-        return "\n".join(out)
-
-    ok, msg = _check_and_increment_write_counter()
-    if not ok:
-        return msg
-
-    if new_byte_count > _WRITE_MAX_BYTES:
-        return f"⚠️  Result too large ({new_byte_count:,} bytes, cap {_WRITE_MAX_BYTES:,})."
-
-    backup_path, backup_err = _make_backup(resolved)
-    if backup_err:
-        return f"⚠️  Could not create backup: {backup_err}"
-
-    try:
-        with open(resolved, "wb") as f:
-            f.write(new_bytes_on_disk)
-    except Exception as exc:
-        return f"⚠️  Write failed (backup at {backup_path}): {exc}"
-
-    _log.info("fuzzy_replace_in_file: %s line=%d via '%s' (%d -> %d bytes)",
-              resolved, line_of_change, matched_strategy, size, new_byte_count)
-
-    # Verify block
-    out = [
-        f"✅ Edited {resolved}",
-        f"   Change at line {line_of_change}",
-        f"   {size:,} bytes  →  {new_byte_count:,} bytes",
-        f"   Encoding: {file_encoding}",
-        f"   Backup: {backup_path}",
-        f"   Normalisation used: '{matched_strategy}'",
-        f"   NOT yet indexed — call reindex_file() when done editing.",
-        "",
-        "─── Verify (5 lines before, change region, 5 lines after) ───",
-    ]
-    try:
-        new_lines_list = new_text.splitlines()
-        new_total = len(new_lines_list)
-        new_str_lc = new_str.count("\n") + 1
-        change_start = max(1, line_of_change - 5)
-        change_end   = min(new_total, line_of_change + new_str_lc + 4)
-        for i in range(change_start, change_end + 1):
-            marker = "▶" if line_of_change <= i < line_of_change + new_str_lc else " "
-            if i <= new_total:
-                out.append(f"  {marker}{i:>5}  {new_lines_list[i - 1]}")
-    except Exception as exc:
-        out.append(f"  (verify read failed: {exc})")
-    return "\n".join(out)
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TOOL 3c — line_replace_in_file
@@ -8919,8 +8702,8 @@ def line_replace_in_file(filepath: str,
     CODE TOOLS — Replace a range of lines by line number. Zero text-matching
     ambiguity — works on any file regardless of encoding, tabs, or Unicode.
 
-    This is the LAST RESORT when both str_replace_in_file and
-    fuzzy_replace_in_file fail. The workflow is:
+    This is the LAST RESORT when str_replace_in_file fails (e.g. whitespace
+    or Unicode differences make an exact match impractical). The workflow is:
         1. read_file_lines(filepath, start, end)   ← confirm exact lines
         2. line_replace_in_file(filepath, start, end, new_content)
 
@@ -11552,6 +11335,7 @@ def configure_email(smtp_host: str, smtp_port: int, username: str,
 @mcp.tool()
 def send_email(to: str, subject: str, body: str,
                attachment_path: str = "",
+               body_html: str = "",
                ctx: Context = None) -> str:
     """
     Send an email via the configured SMTP account.
@@ -11559,16 +11343,22 @@ def send_email(to: str, subject: str, body: str,
     In server mode, any role (owner, manager, staff, field_crew) may email:
       • Other registered users of this server (by email address or name).
       • Customers listed in the job spreadsheet (by name, company, or CustomerID).
-        The Customers sheet Email column is used — no need to know the address.
+          The Customers sheet Email column is used — no need to know the address.
 
     Args:
         to:              Recipient email address, or a customer/user name to look
                          up automatically (e.g. "Torres", "Blue Wave Cafe",
                          "CUST-0003"). Leave blank to use the configured default_to.
         subject:         Email subject line.
-        body:            Plain-text email body.
+        body:            Plain-text email body. Always used as the plain-text
+                         part (and as the sole body if body_html is omitted).
         attachment_path: Optional — absolute path to a file in a tracked
                          read-allowlisted directory to attach to the email.
+        body_html:       Optional — HTML version of the body. When provided,
+                         the email is sent as multipart/alternative so HTML
+                         mail clients render the formatted version instead of
+                         showing raw tags, with `body` kept as the plain-text
+                         fallback.
         ctx:             MCP context (injected automatically)
 
     Returns:
@@ -11668,6 +11458,7 @@ def send_email(to: str, subject: str, body: str,
         attach = resolved_attach
 
     ok, msg = _send_smtp(to, subject, body, attachment_path=attach,
+                         body_html=(body_html.strip() or None),
                          reply_to=reply_to, sender_display=sender_display)
     return msg
 

@@ -1,11 +1,11 @@
 {
-  "version": "8.1.2",
-  "generated": "2026-07-14T11:58:16",
+  "version": "8.1.3",
+  "generated": "2026-07-15T14:47:31",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "279a5566b97fa49d4d2b1359bfb67c4e40b88e041812b3cd4a9f06f4bff47ad2",
-      "bytes": 1042282
+      "sha256": "9320085d19a202703d6ed1e492c204cac6b814f0da478aa038b2c77a22db5e6f",
+      "bytes": 1046658
     },
     {
       "path": "rag_preprocessor.py",
@@ -14,8 +14,8 @@
     },
     {
       "path": "ai_prowler_mcp.py",
-      "sha256": "d2dd88dc723845143aa8ed5a34d2865c01d59d55e5fec9e2c1852cb440c4dd81",
-      "bytes": 763285
+      "sha256": "452149c655aba83b268bda6d9eeec9b6b853d56be71d4f5db3789e27bc219fcf",
+      "bytes": 754204
     },
     {
       "path": "mcp_diagnostics.py",
@@ -29,8 +29,8 @@
     },
     {
       "path": "RAG_RUN.bat",
-      "sha256": "f8c9168c140ead7e731aa87be90e8d362d2532ca43bbe76e398e4729bb282295",
-      "bytes": 5179
+      "sha256": "7657fb0bced4a117c1dbd657411845869c369aac8a52da45d33bfec7852def9d",
+      "bytes": 6312
     },
     {
       "path": "create_shortcut.py",
@@ -59,12 +59,12 @@
     },
     {
       "path": "COMPLETE_USER_GUIDE.md",
-      "sha256": "fa573a093d3d40c37c248a79307949a1dcaff039945d4077b1303c4396666511",
-      "bytes": 139329
+      "sha256": "d4ab2cf95ed9790fabe2371bf39a263b1649cd3c05d9842b7868aa9291fa3820",
+      "bytes": 143925
     },
     {
       "path": "VERSION",
-      "sha256": "cfafbd8ce8cdca50d618b6c3ebb4e2252a5030349d41e98b39031f41c4bf3226",
+      "sha256": "52b1ca1b6f682dd4cd3fab312f12a06891212719793625d6d520c8ff595927b7",
       "bytes": 6
     },
     {
@@ -109,13 +109,13 @@
     },
     {
       "path": "scheduler_jobs.py",
-      "sha256": "a93ac113a12cfc441bcb3093e18bf897103a4daad036b0e05b8b55bd603d5de2",
-      "bytes": 10530
+      "sha256": "2466609f019498364a1ef1ccb02a11e159e9967c43fe6d558f69b3816821940d",
+      "bytes": 16508
     },
     {
       "path": "scheduler_engine.py",
-      "sha256": "66cb340b4ef961901d7ea4fe5e8cb1bf7666fc0b06896fa1b354702d2fcb84e4",
-      "bytes": 13900
+      "sha256": "8ca5826359c005d3dd642a9b7067616b8080600796cdee2b496818bccccc6bc8",
+      "bytes": 14254
     }
   ]
 }
