@@ -158,58 +158,74 @@ def _make_chroma(tmp_path):
         anonymized_telemetry=False,
     ))
 
-def _seed(client, phys_name):
-    import chromadb
-    ef = chromadb.utils.embedding_functions.DefaultEmbeddingFunction()
-    col = client.get_or_create_collection(name=phys_name, embedding_function=ef)
-    col.add(
+def _seed_one(collection, scope_value, key):
+    collection.add(
         documents=["dummy"],
-        metadatas=[{"filepath": f"/fake/{phys_name}/f.txt", "filename": "f.txt",
-                    "extension": "txt", "parent_directory": phys_name,
-                    "directory_chain": phys_name, "total_chunks": 1}],
-        ids=[f"{phys_name}-0"],
+        metadatas=[{"filepath": f"/fake/{key}/f.txt", "filename": "f.txt",
+                    "extension": "txt", "parent_directory": key,
+                    "directory_chain": key, "total_chunks": 1,
+                    "scope": scope_value}],
+        ids=[f"{key}-0"],
     )
 
 def _seed_all(client, mcp_mod):
-    """Seed every physical collection that exists on a real server.
-    Physical names are derived from slug ids (via _make_user_id + chroma_collection_name),
-    NOT from bearer token keys."""
+    """SCOPE_SIMPLIFICATION_SPEC.md section 3.7 (Phase 7 cutover, query-side,
+    2026-07-17): seeds ONE physical collection now, with every chunk tagged
+    via "scope" metadata instead of being split across many physical
+    collections. Returns {key: scope_value} so tests can assert on scope
+    strings directly."""
     import chromadb
-    from rag_preprocessor import chroma_collection_name
-    # Resolve each user to get their slug id, then build the physical collection name
-    phys = {
-        "owner":        chroma_collection_name(f"user:{mcp_mod._resolve_user(_USERS_DATA, _OWNER_TOK)['id']}"),
-        "mgr_adm":      chroma_collection_name(f"user:{mcp_mod._resolve_user(_USERS_DATA, _MANAGER_ADM_TOK)['id']}"),
-        "mgr_plain":    chroma_collection_name(f"user:{mcp_mod._resolve_user(_USERS_DATA, _MANAGER_PLAIN_TOK)['id']}"),
-        "staff":        chroma_collection_name(f"user:{mcp_mod._resolve_user(_USERS_DATA, _STAFF_TOK)['id']}"),
-        "crew_nopri":   chroma_collection_name(f"user:{mcp_mod._resolve_user(_USERS_DATA, _CREW_NOPRI_TOK)['id']}"),
-        "crew_pri":     chroma_collection_name(f"user:{mcp_mod._resolve_user(_USERS_DATA, _CREW_PRI_TOK)['id']}"),
-        "scope_sales":  "scope-role-sales",
-        "scope_office": "scope-role-office",
+    from rag_preprocessor import COLLECTION_NAME
+    ef = chromadb.utils.embedding_functions.DefaultEmbeddingFunction()
+    coll = client.get_or_create_collection(name=COLLECTION_NAME, embedding_function=ef)
+
+    scopes = {
+        "owner":        f"private:{mcp_mod._resolve_user(_USERS_DATA, _OWNER_TOK)['id']}",
+        "mgr_adm":      f"private:{mcp_mod._resolve_user(_USERS_DATA, _MANAGER_ADM_TOK)['id']}",
+        "mgr_plain":    f"private:{mcp_mod._resolve_user(_USERS_DATA, _MANAGER_PLAIN_TOK)['id']}",
+        "staff":        f"private:{mcp_mod._resolve_user(_USERS_DATA, _STAFF_TOK)['id']}",
+        "crew_nopri":   f"private:{mcp_mod._resolve_user(_USERS_DATA, _CREW_NOPRI_TOK)['id']}",
+        "crew_pri":     f"private:{mcp_mod._resolve_user(_USERS_DATA, _CREW_PRI_TOK)['id']}",
+        "scope_sales":  "sales",
+        "scope_office": "office",
         "shared":       "shared",
     }
-    for name in phys.values():
-        _seed(client, name)
-    return phys
+    for key, scope_value in scopes.items():
+        _seed_one(coll, scope_value, key)
+    return scopes
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # TABLE 1 — READ access via _scoped_collections_for_ctx
+#
+# SUPERSEDED 2026-07-16/17 (SCOPE_SIMPLIFICATION_SPEC.md section 3.7, Phase 7
+# cutover): the original TABLE 1 documented an owner/can_manage_users
+# elevation carve-out ("Owner ALSO sees every other user's private dir (data
+# custodian)") that browsed every team member's role/private PHYSICAL
+# collection. That whole mechanism is gone -- there is one physical
+# collection now, access is enforced by a "scope" metadata where-filter, and
+# _allowed_scopes()'s own direct product decision (2026-07-16, tested
+# separately in test_allowed_scopes.py) is NO role-based elevation, ever:
+# every role -- including owner -- gets the IDENTICAL formula: shared +
+# their own assigned scopes + their own private scope (if enabled). This
+# replacement tests that formula end-to-end: querying the single collection
+# with the where-filter _scoped_collections_for_ctx returns must actually
+# retrieve only the scope-tagged chunks the caller should see.
 # ═════════════════════════════════════════════════════════════════════════════
 
 class TestReadAccessMatrix:
-    """
-    Full matrix coverage for _scoped_collections_for_ctx.
-    Every row in TABLE 1 gets positive AND negative assertions so a regression
-    in either direction (gaining access or losing access) is caught.
-    """
+    """End-to-end coverage: _scoped_collections_for_ctx's where-filter,
+    applied to a real .get() call against the single seeded collection,
+    returns exactly the scope-tagged chunks each user should see -- no
+    more, no less. Every assertion is a real ChromaDB query, not just a
+    check of the filter's shape."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, tmp_path, monkeypatch, mcp_mod):
         import gc
         import chromadb as _chromadb
         self.client = _make_chroma(tmp_path)
-        self.phys   = _seed_all(self.client, mcp_mod)
+        self.scopes = _seed_all(self.client, mcp_mod)
         ef = _chromadb.utils.embedding_functions.DefaultEmbeddingFunction()
 
         import rag_preprocessor as rp
@@ -223,9 +239,9 @@ class TestReadAccessMatrix:
         yield
 
         # Explicitly release the ChromaDB client so the Rust segment manager
-        # closes its SQLite/HNSW file handles promptly. Without this, 65 tests
-        # × ~65 leaked kernel handles = 4,000+ accumulated handles, which
-        # exhausts the process limit long before the suite finishes.
+        # closes its SQLite/HNSW file handles promptly. Without this, many
+        # tests × leaked kernel handles exhausts the process limit before
+        # the suite finishes.
         client = self.client
         self.client = None
         try:
@@ -236,168 +252,184 @@ class TestReadAccessMatrix:
         del client
         gc.collect()
 
-    def _cols(self, token):
-        return {c.name for c in self.m._scoped_collections_for_ctx(_ctx(self.m, token))}
+    def _visible_keys(self, token):
+        """Return the set of seed KEYS (owner/mgr_adm/.../shared) visible to
+        this token, by actually querying the single collection with the
+        where-filter _scoped_collections_for_ctx returns."""
+        coll, where_filter = self.m._scoped_collections_for_ctx(_ctx(self.m, token))
+        kwargs = {"include": ["metadatas"]}
+        if where_filter:
+            kwargs["where"] = where_filter
+        result = coll.get(**kwargs)
+        visible_scopes = {m.get("scope") for m in result.get("metadatas", [])}
+        return {key for key, scope in self.scopes.items() if scope in visible_scopes}
 
-    # ── OWNER (David) ─────────────────────────────────────────────────────────
+    # ── OWNER (David) -- no more elevation; identical formula as everyone ────
 
     def test_R01_owner_sees_own_private(self):
-        assert self.phys["owner"] in self._cols(_OWNER_TOK)
+        assert "owner" in self._visible_keys(_OWNER_TOK)
 
-    def test_R02_owner_sees_manager_adm_private(self):
-        assert self.phys["mgr_adm"] in self._cols(_OWNER_TOK)
+    def test_R02_owner_no_longer_sees_manager_adm_private(self):
+        """The core behavior change this cutover documents: owner no
+        longer has custody-browse access to another user's private
+        content via search tools."""
+        assert "mgr_adm" not in self._visible_keys(_OWNER_TOK)
 
-    def test_R03_owner_sees_manager_plain_private(self):
-        assert self.phys["mgr_plain"] in self._cols(_OWNER_TOK)
+    def test_R03_owner_no_longer_sees_manager_plain_private(self):
+        assert "mgr_plain" not in self._visible_keys(_OWNER_TOK)
 
-    def test_R04_owner_sees_staff_private(self):
-        assert self.phys["staff"] in self._cols(_OWNER_TOK)
+    def test_R04_owner_no_longer_sees_staff_private(self):
+        assert "staff" not in self._visible_keys(_OWNER_TOK)
 
-    def test_R05_owner_sees_crew_pri_private(self):
-        assert self.phys["crew_pri"] in self._cols(_OWNER_TOK)
+    def test_R05_owner_no_longer_sees_crew_pri_private(self):
+        assert "crew_pri" not in self._visible_keys(_OWNER_TOK)
 
-    def test_R06_owner_sees_assigned_scope_sales(self):
-        assert self.phys["scope_sales"] in self._cols(_OWNER_TOK)
+    def test_R06_owner_sees_own_assigned_scope_sales(self):
+        assert "scope_sales" in self._visible_keys(_OWNER_TOK)
 
-    def test_R06b_owner_sees_assigned_scope_office(self):
-        """Owner has two scopes; both must be visible."""
-        assert self.phys["scope_office"] in self._cols(_OWNER_TOK)
+    def test_R06b_owner_sees_own_assigned_scope_office(self):
+        assert "scope_office" in self._visible_keys(_OWNER_TOK)
 
     def test_R07_owner_sees_shared(self):
-        assert self.phys["shared"] in self._cols(_OWNER_TOK)
+        assert "shared" in self._visible_keys(_OWNER_TOK)
 
-    def test_R08_owner_sees_crew_nopri_private(self):
-        """Owner sees all physical user: collections even when
-        private_collection_enabled=False for that user — the collection
-        exists on disk and the owner is the data custodian."""
-        assert self.phys["crew_nopri"] in self._cols(_OWNER_TOK)
+    def test_R08_owner_no_longer_sees_crew_nopri_private(self):
+        assert "crew_nopri" not in self._visible_keys(_OWNER_TOK)
 
-    # ── MANAGER with can_manage_users=True (Vicki) ────────────────────────────
+    # ── MANAGER with can_manage_users=True (Vicki) — same formula, unaffected
+    #    by the can_manage_users flag (that flag only ever gated ADMIN/DELETE
+    #    rights via _can_manage_user_data, TABLE 2 below -- never read/browse
+    #    rights, even before this cutover) ─────────────────────────────────
 
     def test_R10_manager_adm_sees_own_private(self):
-        assert self.phys["mgr_adm"] in self._cols(_MANAGER_ADM_TOK)
+        assert "mgr_adm" in self._visible_keys(_MANAGER_ADM_TOK)
 
     def test_R11_manager_adm_sees_assigned_scope(self):
-        assert self.phys["scope_sales"] in self._cols(_MANAGER_ADM_TOK)
+        assert "scope_sales" in self._visible_keys(_MANAGER_ADM_TOK)
 
     def test_R12_manager_adm_sees_shared(self):
-        assert self.phys["shared"] in self._cols(_MANAGER_ADM_TOK)
+        assert "shared" in self._visible_keys(_MANAGER_ADM_TOK)
 
     def test_R13_manager_adm_BLOCKED_from_owner_private(self):
-        assert self.phys["owner"] not in self._cols(_MANAGER_ADM_TOK), (
+        assert "owner" not in self._visible_keys(_MANAGER_ADM_TOK), (
             "SECURITY: manager (can_manage_users) must not browse owner private dir"
         )
 
     def test_R14_manager_adm_BLOCKED_from_staff_private(self):
-        assert self.phys["staff"] not in self._cols(_MANAGER_ADM_TOK), (
+        assert "staff" not in self._visible_keys(_MANAGER_ADM_TOK), (
             "SECURITY: manager must not browse other employees' private dirs"
         )
 
     def test_R15_manager_adm_BLOCKED_from_plain_manager_private(self):
-        assert self.phys["mgr_plain"] not in self._cols(_MANAGER_ADM_TOK), (
+        assert "mgr_plain" not in self._visible_keys(_MANAGER_ADM_TOK), (
             "SECURITY: manager must not browse another manager's private dir"
         )
 
     def test_R16_manager_adm_BLOCKED_from_unassigned_scope(self):
-        assert self.phys["scope_office"] not in self._cols(_MANAGER_ADM_TOK)
+        assert "scope_office" not in self._visible_keys(_MANAGER_ADM_TOK)
 
     def test_R17_manager_adm_BLOCKED_from_crew_nopri_private(self):
-        """Manager must not see crew member's private dir even if it exists."""
-        assert self.phys["crew_nopri"] not in self._cols(_MANAGER_ADM_TOK)
+        assert "crew_nopri" not in self._visible_keys(_MANAGER_ADM_TOK)
 
     # ── MANAGER without can_manage_users (plain manager) ──────────────────────
 
     def test_R20_manager_plain_sees_own_private(self):
-        assert self.phys["mgr_plain"] in self._cols(_MANAGER_PLAIN_TOK)
+        assert "mgr_plain" in self._visible_keys(_MANAGER_PLAIN_TOK)
 
     def test_R21_manager_plain_sees_assigned_scope(self):
-        assert self.phys["scope_sales"] in self._cols(_MANAGER_PLAIN_TOK)
+        assert "scope_sales" in self._visible_keys(_MANAGER_PLAIN_TOK)
 
     def test_R22_manager_plain_sees_shared(self):
-        assert self.phys["shared"] in self._cols(_MANAGER_PLAIN_TOK)
+        assert "shared" in self._visible_keys(_MANAGER_PLAIN_TOK)
 
     def test_R23_manager_plain_BLOCKED_from_owner_private(self):
-        assert self.phys["owner"] not in self._cols(_MANAGER_PLAIN_TOK)
+        assert "owner" not in self._visible_keys(_MANAGER_PLAIN_TOK)
 
     def test_R24_manager_plain_BLOCKED_from_staff_private(self):
-        assert self.phys["staff"] not in self._cols(_MANAGER_PLAIN_TOK)
+        assert "staff" not in self._visible_keys(_MANAGER_PLAIN_TOK)
 
     def test_R25_manager_plain_BLOCKED_from_unassigned_scope(self):
-        assert self.phys["scope_office"] not in self._cols(_MANAGER_PLAIN_TOK)
+        assert "scope_office" not in self._visible_keys(_MANAGER_PLAIN_TOK)
 
     def test_R26_manager_plain_BLOCKED_from_crew_nopri_private(self):
-        assert self.phys["crew_nopri"] not in self._cols(_MANAGER_PLAIN_TOK)
+        assert "crew_nopri" not in self._visible_keys(_MANAGER_PLAIN_TOK)
 
     # ── STAFF (Alice) ─────────────────────────────────────────────────────────
 
     def test_R30_staff_sees_own_private(self):
-        assert self.phys["staff"] in self._cols(_STAFF_TOK)
+        assert "staff" in self._visible_keys(_STAFF_TOK)
 
     def test_R31_staff_sees_assigned_scope(self):
-        assert self.phys["scope_sales"] in self._cols(_STAFF_TOK)
+        assert "scope_sales" in self._visible_keys(_STAFF_TOK)
 
     def test_R32_staff_sees_shared(self):
-        assert self.phys["shared"] in self._cols(_STAFF_TOK)
+        assert "shared" in self._visible_keys(_STAFF_TOK)
 
     def test_R33_staff_BLOCKED_from_owner_private(self):
-        assert self.phys["owner"] not in self._cols(_STAFF_TOK)
+        assert "owner" not in self._visible_keys(_STAFF_TOK)
 
     def test_R34_staff_BLOCKED_from_manager_private(self):
-        assert self.phys["mgr_adm"] not in self._cols(_STAFF_TOK)
+        assert "mgr_adm" not in self._visible_keys(_STAFF_TOK)
 
     def test_R35_staff_BLOCKED_from_unassigned_scope(self):
-        assert self.phys["scope_office"] not in self._cols(_STAFF_TOK)
+        assert "scope_office" not in self._visible_keys(_STAFF_TOK)
 
     def test_R36_staff_BLOCKED_from_crew_nopri_private(self):
-        assert self.phys["crew_nopri"] not in self._cols(_STAFF_TOK)
+        assert "crew_nopri" not in self._visible_keys(_STAFF_TOK)
 
     # ── FIELD CREW — private_collection_enabled=False (Bob NoPri) ────────────
 
     def test_R40_crew_nopri_sees_shared(self):
-        assert self.phys["shared"] in self._cols(_CREW_NOPRI_TOK)
+        assert "shared" in self._visible_keys(_CREW_NOPRI_TOK)
 
     def test_R41_crew_nopri_has_NO_private_dir(self):
-        assert self.phys["crew_nopri"] not in self._cols(_CREW_NOPRI_TOK)
+        assert "crew_nopri" not in self._visible_keys(_CREW_NOPRI_TOK)
 
     def test_R42_crew_nopri_BLOCKED_from_owner_private(self):
-        assert self.phys["owner"] not in self._cols(_CREW_NOPRI_TOK)
+        assert "owner" not in self._visible_keys(_CREW_NOPRI_TOK)
 
     def test_R43_crew_nopri_BLOCKED_from_staff_private(self):
-        assert self.phys["staff"] not in self._cols(_CREW_NOPRI_TOK)
+        assert "staff" not in self._visible_keys(_CREW_NOPRI_TOK)
 
     def test_R44_crew_nopri_BLOCKED_from_any_scope(self):
-        assert self.phys["scope_sales"] not in self._cols(_CREW_NOPRI_TOK)
+        assert "scope_sales" not in self._visible_keys(_CREW_NOPRI_TOK)
 
     # ── FIELD CREW — private_collection_enabled=True (admin-enabled) ─────────
 
     def test_R50_crew_pri_sees_own_private(self):
-        assert self.phys["crew_pri"] in self._cols(_CREW_PRI_TOK)
+        assert "crew_pri" in self._visible_keys(_CREW_PRI_TOK)
 
     def test_R51_crew_pri_sees_shared(self):
-        assert self.phys["shared"] in self._cols(_CREW_PRI_TOK)
+        assert "shared" in self._visible_keys(_CREW_PRI_TOK)
 
     def test_R52_crew_pri_BLOCKED_from_owner_private(self):
-        assert self.phys["owner"] not in self._cols(_CREW_PRI_TOK)
+        assert "owner" not in self._visible_keys(_CREW_PRI_TOK)
 
     def test_R53_crew_pri_BLOCKED_from_staff_private(self):
-        assert self.phys["staff"] not in self._cols(_CREW_PRI_TOK)
+        assert "staff" not in self._visible_keys(_CREW_PRI_TOK)
 
     def test_R54_crew_pri_BLOCKED_from_any_scope(self):
-        assert self.phys["scope_sales"] not in self._cols(_CREW_PRI_TOK)
+        assert "scope_sales" not in self._visible_keys(_CREW_PRI_TOK)
 
-    # ── FAIL-CLOSED — owner_id unknown ────────────────────────────────────────
+    # ── owner_id no longer relevant here at all ───────────────────────────────
+    # The old fail-closed owner_id tests (R60/R61) tested a mechanism inside
+    # the removed elevation carve-out -- _scoped_collections_for_ctx no
+    # longer calls _owner_user_id() at all. This replacement locks in that
+    # removal explicitly rather than silently dropping the coverage.
 
-    def test_R60_fail_closed_owner_id_none_owner_still_sees_all(self, monkeypatch):
-        """owner_id unknown has no effect on the owner themselves."""
-        monkeypatch.setattr(self.m, "_owner_user_id", lambda ud=None: None)
-        names = self._cols(_OWNER_TOK)
-        assert self.phys["owner"] in names
-        assert self.phys["staff"] in names
+    def test_R60_owner_user_id_no_longer_consulted(self, monkeypatch):
+        """Regardless of what _owner_user_id() would return -- including
+        None -- results must be identical, since _scoped_collections_for_ctx
+        no longer calls it."""
+        monkeypatch.setattr(
+            self.m, "_owner_user_id",
+            lambda ud=None: (_ for _ in ()).throw(
+                AssertionError("_owner_user_id should not be called")))
+        # Must not raise for any of the six users.
+        for tok in (_OWNER_TOK, _MANAGER_ADM_TOK, _MANAGER_PLAIN_TOK,
+                    _STAFF_TOK, _CREW_NOPRI_TOK, _CREW_PRI_TOK):
+            self._visible_keys(tok)
 
-    def test_R61_fail_closed_owner_id_none_manager_still_blocked(self, monkeypatch):
-        """When owner_id unknown, manager must NOT gain access to owner private."""
-        monkeypatch.setattr(self.m, "_owner_user_id", lambda ud=None: None)
-        assert self.phys["owner"] not in self._cols(_MANAGER_ADM_TOK)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

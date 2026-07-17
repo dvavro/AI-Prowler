@@ -237,34 +237,36 @@ class TestEngineAutoLifecycle:
         assert _read_config(tmp_path)["enabled"] is True
 
 
+def _find_label_text(widget, needle):
+    """Recursively search a widget tree for a Label whose current
+    displayed text contains `needle`. Used to verify the read-only
+    Proactive Alerts recipient/location display without depending on
+    any particular internal attribute name."""
+    for child in widget.winfo_children():
+        try:
+            text = child.cget("text")
+        except Exception:
+            text = None
+        if text and needle in text:
+            return text
+        found = _find_label_text(child, needle)
+        if found is not None:
+            return found
+    return None
+
+
+def _latest_query_tab(app):
+    """create_query_tab() ADDS a new tab frame to the notebook on every
+    call rather than replacing the previous one — repeated calls across
+    tests in a reused `gui`/`alerts_env` fixture leave older
+    "Links & Analysis" tabs sitting in the widget tree with stale
+    (or unconfigured) content. Searching the whole notebook can match
+    one of those stale tabs instead of the one this test just built, so
+    scope any widget-text search to the most-recently-added tab only."""
+    return app.notebook.winfo_children()[-1]
+
+
 class TestFieldAutoSaveDebounce:
-
-    def test_email_does_not_save_on_every_keystroke(self, alerts_env, tmp_path):
-        """Regression guard for the exact mistake caught before this was
-        applied: binding email saves to <FocusOut>/<Return>, not to a
-        StringVar trace, which would fire on every character typed."""
-        _write_config(tmp_path, enabled_jobs=set(), email="old@example.com")
-
-        alerts_env.app.create_query_tab()
-        alerts_env.pump()
-
-        entry = alerts_env.app._email_entry
-        entry.delete(0, "end")
-        entry.insert(0, "n")
-        alerts_env.pump()
-        # Mid-typing — must NOT have saved yet.
-        assert _read_config(tmp_path)["email_to"] == "old@example.com"
-
-        entry.delete(0, "end")
-        entry.insert(0, "new@example.com")
-        # Directly synthesize <FocusOut> on the widget rather than trying to
-        # shift real window-manager focus — focus_set() depends on the test
-        # Tk root actually holding WM-level focus, which is unreliable in a
-        # headless/background test run. event_generate('<FocusOut>') fires
-        # the bound handler directly regardless of real WM focus state.
-        entry.event_generate("<FocusOut>")
-        alerts_env.pump()
-        assert _read_config(tmp_path)["email_to"] == "new@example.com"
 
     def test_time_field_saves_on_focus_out(self, alerts_env, tmp_path):
         import scheduler_jobs as sj
@@ -281,104 +283,116 @@ class TestFieldAutoSaveDebounce:
         assert _read_config(tmp_path)["jobs"][first_job]["time"] != "09:30"
 
 
-class TestLocationField:
+class TestRecipientAndLocationDisplay:
     """
-    v8.1.3 — the centralized Location field in the Proactive Alerts panel.
-    Previously there was NO GUI field for this at all — it was a hardcoded
-    default buried in scheduler_engine.py's load_config(), with no way to
-    change it short of hand-editing scheduler_config.json. See
-    scheduler_jobs.py's job_morning_briefing/_todays_jobs_structured for
-    how this value is actually used (as the fallback when a job has no
-    City on file, or when there are no jobs scheduled at all).
+    v8.1.3 — the Proactive Alerts panel's Recipient/Location fields were
+    made READ-ONLY (see rag_gui.py, the comment above _read_default_to /
+    _read_owner_location). There used to be separate editable Entry
+    widgets here (self._email_entry, self._location_entry,
+    self._location_var), each with its own storage in
+    scheduler_config.json — meaning up to three disconnected copies of
+    "who/where" could exist at once. Now the panel only DISPLAYS the one
+    real source for each:
+      - Recipient <- Settings -> Email Configuration's default_to
+                     (~/.ai-prowler/email_config.json)
+      - Location  <- Settings -> Owner Name/Address
+                     (rag_preprocessor.OWNER_CITY/STATE/ZIP)
+    Nothing here is editable anymore, so there's no debounce/keystroke
+    behavior left to test — these tests confirm the panel reflects
+    whatever Settings currently holds, and that the old editable-field
+    attributes are actually gone rather than just relabeled.
     """
 
-    def test_field_loads_saved_location_on_tab_build(self, alerts_env, tmp_path):
-        _write_config(tmp_path, enabled_jobs=set(), location="Port Orange, Florida")
+    def test_old_editable_field_attributes_are_gone(self, alerts_env, tmp_path):
+        _write_config(tmp_path, enabled_jobs=set())
         alerts_env.app.create_query_tab()
         alerts_env.pump()
-        assert alerts_env.app._location_var.get() == "Port Orange, Florida"
 
-    def test_field_defaults_when_config_has_no_location_key(self, alerts_env, tmp_path):
-        """A config file saved BEFORE this field existed has no "location"
-        key at all — must fall back gracefully, not KeyError."""
+        assert not hasattr(alerts_env.app, "_email_entry")
+        assert not hasattr(alerts_env.app, "_location_entry")
+        assert not hasattr(alerts_env.app, "_location_var")
+
+    def test_panel_displays_recipient_from_email_settings(
+            self, alerts_env, tmp_path, monkeypatch):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        (tmp_path / ".ai-prowler").mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".ai-prowler" / "email_config.json").write_text(
+            json.dumps({"default_to": "crew@example.com"}), encoding="utf-8")
+        _write_config(tmp_path, enabled_jobs=set())
+
+        alerts_env.app.create_query_tab()
+        alerts_env.pump()
+
+        text = _find_label_text(_latest_query_tab(alerts_env.app), "Sends to:")
+        assert text is not None
+        assert "crew@example.com" in text
+
+    def test_panel_shows_placeholder_when_recipient_not_configured(
+            self, alerts_env, tmp_path, monkeypatch):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        # No .ai-prowler/email_config.json written at all.
+        _write_config(tmp_path, enabled_jobs=set())
+
+        alerts_env.app.create_query_tab()
+        alerts_env.pump()
+
+        text = _find_label_text(_latest_query_tab(alerts_env.app), "Sends to:")
+        assert text is not None
+        assert "not set" in text
+
+    def test_panel_displays_location_from_owner_settings(
+            self, alerts_env, tmp_path, monkeypatch):
+        import rag_preprocessor as rp
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(rp, "OWNER_CITY", "Port Orange")
+        monkeypatch.setattr(rp, "OWNER_STATE", "Florida")
+        monkeypatch.setattr(rp, "OWNER_ZIP", "32127")
+        _write_config(tmp_path, enabled_jobs=set())
+
+        alerts_env.app.create_query_tab()
+        alerts_env.pump()
+
+        text = _find_label_text(_latest_query_tab(alerts_env.app), "Weather location:")
+        assert text is not None
+        assert "Port Orange, Florida 32127" in text
+
+    def test_panel_shows_placeholder_when_location_not_configured(
+            self, alerts_env, tmp_path, monkeypatch):
+        import rag_preprocessor as rp
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(rp, "OWNER_CITY", "")
+        monkeypatch.setattr(rp, "OWNER_STATE", "")
+        monkeypatch.setattr(rp, "OWNER_ZIP", "")
+        _write_config(tmp_path, enabled_jobs=set())
+
+        alerts_env.app.create_query_tab()
+        alerts_env.pump()
+
+        text = _find_label_text(_latest_query_tab(alerts_env.app), "Weather location:")
+        assert text is not None
+        assert "not set" in text
+
+    def test_saving_a_job_toggle_does_not_touch_legacy_email_or_location_keys(
+            self, alerts_env, tmp_path, monkeypatch):
+        """_save_and_sync_engine deliberately no longer writes email_to/
+        location into scheduler_config.json — confirms a save (triggered
+        by flipping a job toggle) leaves whatever was already in the
+        file untouched rather than clearing or overwriting it."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
         import scheduler_jobs as sj
-        cfg = {
-            "enabled": False, "email_to": "david@example.com",
-            "jobs": {jid: {"enabled": False, "time": "08:00", "days": "daily"}
-                    for jid in sj.JOB_REGISTRY},
-        }
-        (tmp_path / "scheduler_config.json").write_text(json.dumps(cfg), encoding="utf-8")
-
-        alerts_env.app.create_query_tab()
-        alerts_env.pump()
-        assert alerts_env.app._location_var.get() == "New Smyrna Beach, Florida"
-
-    def test_location_does_not_save_on_every_keystroke(self, alerts_env, tmp_path):
-        """Same debounce contract as email — save on FocusOut/Return only,
-        never on a StringVar trace firing per character typed."""
-        _write_config(tmp_path, enabled_jobs=set(), location="Old Town, Florida")
-
-        alerts_env.app.create_query_tab()
-        alerts_env.pump()
-
-        entry = alerts_env.app._location_entry
-        entry.delete(0, "end")
-        entry.insert(0, "N")
-        alerts_env.pump()
-        assert _read_config(tmp_path)["location"] == "Old Town, Florida"
-
-        entry.delete(0, "end")
-        entry.insert(0, "New Smyrna Beach, Florida")
-        entry.event_generate("<FocusOut>")
-        alerts_env.pump()
-        assert _read_config(tmp_path)["location"] == "New Smyrna Beach, Florida"
-
-    # NOTE: a dedicated "saves on <Return>" test was tried here and removed —
-    # synthetic KeyPress-Return events are unreliably dispatched by Tk's
-    # event_generate() in a headless/background test process regardless of
-    # focus_set()+update(), a known category of Tk test-harness flakiness
-    # (the underlying binding, e.g. entry.bind('<Return>', ...), is real and
-    # correct — a real user pressing Enter in a real focused window fires it
-    # normally). The <Return> binding is the exact same one-line pattern as
-    # the email field's, which is not independently return-key-tested either
-    # for the same reason. Confidence in the actual save mechanism comes from
-    # the <FocusOut>-based tests above, which exercise the identical
-    # _save_and_sync_engine() call.
-
-    def test_saving_location_does_not_clobber_email(self, alerts_env, tmp_path):
-        """Regression guard: _save_and_sync_engine writes both fields from
-        their own StringVars each time — saving one must not blank the
-        other out."""
+        first_job = next(iter(sj.JOB_REGISTRY))
         _write_config(tmp_path, enabled_jobs=set(),
-                      email="keep-me@example.com", location="Old Town, Florida")
+                      email="legacy@example.com", location="Legacy Town, FL")
+
         alerts_env.app.create_query_tab()
         alerts_env.pump()
 
-        entry = alerts_env.app._location_entry
-        entry.delete(0, "end")
-        entry.insert(0, "Edgewater, Florida")
-        entry.event_generate("<FocusOut>")
+        alerts_env.app._job_toggle_btns[first_job].invoke()
         alerts_env.pump()
 
         saved = _read_config(tmp_path)
-        assert saved["location"] == "Edgewater, Florida"
-        assert saved["email_to"] == "keep-me@example.com"
-
-    def test_blank_location_falls_back_to_default_on_save(self, alerts_env, tmp_path):
-        """Clearing the field entirely and saving must not persist an
-        empty string — scheduler_jobs.py's fallback default is used
-        instead, so Weather Watch/Morning Briefing always have SOMETHING
-        to check rather than silently failing on an empty location."""
-        _write_config(tmp_path, enabled_jobs=set(), location="Old Town, Florida")
-        alerts_env.app.create_query_tab()
-        alerts_env.pump()
-
-        entry = alerts_env.app._location_entry
-        entry.delete(0, "end")
-        entry.event_generate("<FocusOut>")
-        alerts_env.pump()
-
-        assert _read_config(tmp_path)["location"] == "New Smyrna Beach, Florida"
+        assert saved["email_to"] == "legacy@example.com"
+        assert saved["location"] == "Legacy Town, FL"
 
 
 class TestOldControlsRemoved:

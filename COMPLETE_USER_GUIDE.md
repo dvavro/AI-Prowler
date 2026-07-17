@@ -1,5 +1,5 @@
 # AI-Prowler — Complete User Guide
-## Version 8.1.3
+## Version 8.1.4
 
 ---
 
@@ -89,13 +89,24 @@ This produces dramatically better results — equivalent to having a skilled res
 
 **New in v8.1.3:**
 
-- **Proactive Alerts Location field** — the town/city used for weather now has an actual GUI field (next to Email in the Proactive Alerts panel), instead of a hardcoded value with no way to change it. See **Section 17 → Proactive Alerts**.
+- **One source of truth for Proactive Alerts' recipient and location** — the Proactive Alerts panel no longer has its own separate Email/Location fields with their own hardcoded defaults. The recipient now always comes from Settings → Email Configuration, and the weather location from a new Home Address field under Settings → Owner Name. See **Section 17 → Proactive Alerts**.
 - **Per-job weather in Morning Briefing** — each of today's scheduled jobs now gets weather checked for its own City/State (read from the Jobs_Schedule spreadsheet), with a rain-risk flag shown next to affected jobs, instead of one fixed location's weather disconnected from the actual job list. See **Section 17 → Proactive Alerts**.
 - **Proactive Alerts HTML formatting fix** — background email jobs (Morning Briefing, Weather Watch, etc.) were sending their HTML body as plain text, so recipients saw raw `<h2>`, `<p>`, `<hr>` tags instead of a formatted email. `send_email()` now accepts a `body_html` parameter and sends a proper `multipart/alternative` message, with a tag-stripped plain-text fallback for clients that don't render HTML. See **Section 17 → Proactive Alerts**.
 - **SMTP configuration status LED** — the Proactive Alerts panel now shows a green/red indicator confirming whether SMTP is actually set up (Settings → Email Configuration), separate from the "Email:" field there (which is only the *recipient* address). Previously, alerts could run and log "sent" indefinitely with nothing arriving if SMTP was never configured, with no indication why. See **Section 17 → Proactive Alerts**.
 - **`fuzzy_replace_in_file` removed** — this whitespace-tolerant file-editing tool (added in v8.0.0) had a bug where, if its stricter matching strategies failed and it fell back to whitespace-collapse matching, that normalization was applied to the *entire file* rather than just the matched region, risking corruption of unrelated content. Removed entirely; `str_replace_in_file` (exact match) and `line_replace_in_file` (by line number) remain as the two-tool escalation path for surgical file edits. See **Section 6.2c** and **Section 6 → Code Tools — Write-Side**.
 - **Total tools: 82** — down from 83, reflecting the `fuzzy_replace_in_file` removal above.
 - **Auto-updater now refreshes the Documents\AI-Prowler user guide copy** — `update_manifest.json` has included `COMPLETE_USER_GUIDE.md` since v8.1.0, but the in-app updater (`RAG_RUN.bat`) only ever applied staged files into the install directory (`C:\Program Files\AI-Prowler`), never to the separate `%USERPROFILE%\Documents\AI-Prowler\COMPLETE_USER_GUIDE.md` copy the installer seeds — which is both the copy most users actually open and the one tracked for ChromaDB indexing, so Claude's own answers about AI-Prowler went stale after every auto-update even though the app code updated correctly. `RAG_RUN.bat` now also copies the updated guide into Documents\AI-Prowler if a copy already exists there. See **Section 23 → Update Notifications**.
+
+**New in v8.1.4 (Business Server — single unified knowledge base):**
+
+- **One shared knowledge base instead of one collection per scope** — Business Server installs now index everything into a single ChromaDB database, with each chunk tagged by a `scope` label instead of being routed into a separate physical collection. Simpler under the hood, and removes an entire class of "which collection is this in" bugs. See **Section 4 → Server-Mode Scope Tagging** and **Section 9 → Scopes**.
+- **No more owner search-visibility exception** — every role, including the owner, now sees exactly `shared` + their own assigned scopes + their own private scope (if enabled) — no exceptions. If the owner needs to see a scope, it's assigned to them the same way as anyone else. See **Section 9 → Scopes**.
+- **Indexing opened up to every role** — `index_path`, `update_tracked_directories`, `reindex_file`, and `reindex_directory` no longer require owner/manager and are no longer confined to a field crew member's own personal directory. Indexing was never the actual confidentiality boundary — scope-based search access is, and that boundary is unchanged. `untrack_directory` and `list_tracked_directories` remain owner/manager-only. See **Section 6.3**.
+- **Admin-managed scope catalog** — scopes are now picked from a shared, admin-managed list (🏷️ Manage Scopes in the Admin tab, up to 15 entries) instead of free-typed comma-separated text on each user. See **Section 9**.
+- **Multi-select scope picker on Add/Edit User** — replaces the old comma-separated text field. See **Section 9**.
+- **Editable scope column on the Update Index tab** — assign or change a tracked folder's scope directly from Update Index via **🔀 Change Scope for Selected**; the change is staged and takes effect the next time you run Update Selected/Update All. See **Section 9 → Assigning Scopes to Folders**.
+- **Scheduler jobs (Morning Briefing, Weather Watch) now read the email recipient and owner location live from Settings** instead of a separate `scheduler_config.json` copy with its own hardcoded defaults, closing a gap where the two could silently diverge from your actual SMTP setup. See **Section 17 → Proactive Alerts**.
+- **Learnings tab live auto-refresh** — a learning recorded by Claude during a live session now appears in the 🧠 Learnings tab without a manual Refresh click, while that tab is the one currently open. Never refreshes with Semantic search toggled on (that mode fires a live ChromaDB query, which should only ever happen on an explicit action) or while looking at a different tab.
 
 ---
 
@@ -194,17 +205,15 @@ Indexing is incremental — on subsequent runs, only new or modified files are p
 
 When you delete a file from a tracked folder and run **Update Selected** or **Update All**, AI-Prowler automatically purges that file's chunks from ChromaDB. The vector database stays in sync with your file system — no manual cleanup required.
 
-### Server-Mode Collection Routing (Business Server Only)
+### Server-Mode Scope Tagging (Business Server Only, v8.1.4)
 
-On a Business Server install, indexed content is split into separate, access-controlled collections — your own personal directory, each team's scoped area (Sales, Office, etc.), and any shared company space are kept apart from each other. This applies no matter *how* a file gets indexed: manually via **Update Selected**/**Update All**, the File Watchdog's real-time auto-indexing (below), or the Scheduled Task.
+On a Business Server install, every indexed chunk is tagged with a **scope** (`sales`, `office`, `shared`, `private:<user>`, etc.) instead of being routed into a separate physical database. All indexed content lives in one shared knowledge base; the scope tag is what search filters on at query time — see **Section 9 → Scopes** for the full access-control picture. This applies no matter *how* a file gets indexed: manually via **Update Selected**/**Update All**, the File Watchdog's real-time auto-indexing (below), or the Scheduled Task.
 
-**Every tracked directory has exactly one registered scope.** This is set up once (Admin tab) and from then on any file placed anywhere inside that directory routes to the correct collection automatically — you never have to think about it file-by-file.
+**Every tracked directory has exactly one assigned scope**, set from the Update Index tab (**Section 9 → Assigning Scopes to Folders**). From then on, any file placed anywhere inside that directory is tagged with that scope automatically — you never have to think about it file-by-file.
 
-**If a directory is tracked but was never assigned a scope**, AI-Prowler does **not** guess. It will not silently file that content into your personal collection, a shared collection, or anyone else's — it skips indexing that file entirely and writes a clear warning to a log file (see below) so you notice and fix the missing scope rule, rather than content quietly ending up somewhere nobody expects it. The same applies if a scope rule points at an employee who has since been removed — their old rule is treated as if it no longer exists, never as a live target.
+**A directory with no scope assigned is never skipped or blocked** — it indexes normally and defaults to `shared`, visible to everyone. Earlier versions silently skipped an unmatched directory and logged a warning instead; that behavior is gone, since scope is now purely a metadata label applied at index time, not a routing decision that can misfire.
 
-**Where to check for skipped files:** `~/AI-Prowler/logs/index_scope_skips.log` — one line per skip, with a timestamp, which indexing method caught it, the file path, and why. This is the single place to check across all indexing methods; the File Watchdog additionally keeps its own more detailed activity log (see below).
-
-Personal/Home installs are entirely unaffected by any of this — everything simply goes into the single default collection, exactly as always.
+Personal/Home installs are entirely unaffected by any of this — everything simply goes into the single database, exactly as always (this has always been true for personal mode; what changed in v8.1.4 is that Business Server now works the same way under the hood too, just with the scope tag doing the access-control work that used to be done by separate collections).
 
 ### Mobile Write Zones — Granting Claude Write Access
 
@@ -314,13 +323,12 @@ This scoping applies independently of Tier B role gating (§6.3) — even an own
 | `check_tools_status` (field-service health) | ✅ | ✅ | ✅ | ✅ |
 | `send_email`, `send_alert` | ✅ | ✅ | ✅ | ✅ |
 | `send_learnings_report` | ✅ | ✅ | ✅ | ✅ |
-| `index_path` (limited — own scopes only) | ✅ | ✅ | ✅ | ⚠️ own private dir only |
-| `list_tracked_directories`, `reindex_file`, `reindex_directory` | ✅ | ✅ | ❌ | ❌ |
-| `untrack_directory`, `update_tracked_directories` | ✅ | ✅ | ❌ | ❌ |
+| `index_path`, `update_tracked_directories`, `reindex_file`, `reindex_directory` | ✅ | ✅ | ✅ | ✅ |
+| `list_tracked_directories`, `untrack_directory` | ✅ | ✅ | ❌ | ❌ |
 
-**field_crew and `index_path`:** field_crew (or any role with no `manage_db` capability) can only call `index_path` if they have a personal directory configured (same one used for the write-scoping in §6.2c) — and only for files/folders located inside it. Content always lands in their own private collection, never a shared or company scope, regardless of any collection-map rule that would otherwise apply. Once indexed, it's automatically semantically searchable via `search_documents` and friends, the same as any other content in their private collection. A field_crew member with no personal directory configured cannot index at all.
+**Indexing is open to every role (v8.1.4).** Earlier versions gated `index_path`/`update_tracked_directories`/`reindex_*` down to owner/manager, with a narrower carve-out letting field_crew index only inside their own personal directory. That role gate is gone — indexing was never the actual confidentiality boundary, since every role's *search* results are already scoped independently (§9 — Scopes). Any authenticated user can trigger indexing on any already-tracked path; a path only becomes tracked in the first place through an owner/manager action in the Admin tab or Index Docs tab, so this doesn't open up arbitrary filesystem access. `list_tracked_directories` and `untrack_directory` remain owner/manager-only, since those reveal or remove company-wide tracking state rather than just adding to the shared index.
 
-**`reindex_file` / `reindex_directory` / `reindex_all` — collection-aware in server mode.** These purge stale chunks from *every* collection (own private, assigned scopes, shared) rather than only the default one, and re-index each file back into the collection it actually belongs to via the same resolver `index_path()` uses. Without this, reindexing a file or directory containing scoped content would relocate it into the shared collection — visible to every role — rather than putting it back where it started. `reindex_all` needs no separate handling: it calls `reindex_directory()` once per tracked directory and inherits the fix automatically. Personal mode is unaffected — always the single default collection, as before.
+**`reindex_file` / `reindex_directory` / `reindex_all` — single unified index (v8.1.4).** These purge and rebuild against the one shared ChromaDB collection every install uses now — there's no longer a separate physical collection per scope to sweep. Each chunk is retagged with its current scope during the rebuild (see §9), so a reindex always reflects whatever scope assignment is in effect at that moment. `reindex_all` calls `reindex_directory()` once per tracked directory and inherits this automatically. Personal mode is unaffected either way — always the single database, as it always has been.
 
 ### 6.4 Complete Tool Reference Table
 
@@ -334,7 +342,7 @@ This scoping applies independently of Tier B role gating (§6.3) — even an own
 | `get_knowledge_base_overview` | High-level summary: document count, file types, chunk count, database location, tracked directories. Start here before any research task. | Personal + Server |
 | `search_documents` | Primary retrieval tool. Semantic vector search returning raw document chunks with source metadata and similarity scores. | Personal + Server |
 | `multi_query_search` | Runs 2–6 search queries in parallel and returns deduplicated results ranked by best similarity. More efficient than multiple `search_documents` calls. | Personal + Server |
-| `search_within_directory` | Semantic search restricted to a single directory/case/project — use when you need to guarantee results come only from one folder tree, not the whole index. Tries an exact `parent_directory` match first, falling back to a broader search filtered by `directory_chain`/`filepath`. **Server mode:** the directory filter stacks on top of the caller's role-based collection scoping — a staff/field_crew query never touches collections outside their own private/assigned-scope/shared set, regardless of what directory is requested. This is the tool the "Vicki bug" regression suite (`test_private_dir_isolation.py`) is built around — a manager cannot read the owner's private directory just by naming it. | Personal + Server |
+| `search_within_directory` | Semantic search restricted to a single directory/case/project — use when you need to guarantee results come only from one folder tree, not the whole index. Tries an exact `parent_directory` match first, falling back to a broader search filtered by `directory_chain`/`filepath`. **Server mode:** the directory filter stacks on top of the caller's scope-based access — a staff/field_crew query never returns chunks tagged with a scope outside their own private/assigned/shared set, regardless of what directory is requested. This is the tool the private-directory isolation regression suite (`test_owner_dir_isolation.py`) is built around — a manager cannot read the owner's private content just by naming the directory. | Personal + Server |
 | `expand_search_result` | Fetches chunks immediately before and after a specific result chunk. Use when a result is cut off at a boundary and you need more context. | Personal + Server |
 | `read_document` | Reads a full document in sequential chunk order. Best for contracts, manuals, and reports where you need the whole text. | Personal + Server |
 | `list_indexed_documents` | Browses all indexed documents grouped by file type, with chunk counts. | Personal + Server |
@@ -352,7 +360,7 @@ This scoping applies independently of Tier B role gating (§6.3) — even an own
 | `update_tracked_directories` | Re-scans all tracked paths and re-indexes only new or changed files. | Personal + Server |
 | `list_tracked_directories` | Lists every path currently registered for auto-update tracking. | Personal + Server |
 | `untrack_directory` | Removes a path from the tracking list and deletes all its chunks from ChromaDB. Destructive — chunks are gone until re-indexed. | Personal + Server |
-| `get_database_stats` | Chunk count, unique document count, and file-type breakdown for the ChromaDB index. Personal mode always covers the whole database. **Server mode:** scoped to the caller's accessible collections — owners (and managers with `read_all_role_scopes`) still see the full company-wide total; staff/field_crew see only their own private, assigned scope, and shared collections. | Personal + Server |
+| `get_database_stats` | Chunk count, unique document count, and file-type breakdown for the ChromaDB index. Personal mode always covers the whole database. **Server mode:** scoped to the caller's own accessible scopes — every role, including owner, sees only their own private, assigned scope, and shared totals (§9 — no role gets a company-wide-total exception). | Personal + Server |
 
 ---
 
@@ -805,32 +813,38 @@ The Admin tab appears only when `edition = business` AND `mode = server`.
 
 ### Roles
 
-| Role | Description | Manages Users | Tool Access |
-|---|---|---|---|
-| owner | The company account holder. One per company. | ✅ Always | Full (all server-mode tools) |
-| manager | Senior user. Can be granted delegated admin rights. | ✅ If granted | Full (all server-mode tools) |
-| staff | Regular employee. | ❌ | Core RAG + limited indexing (own scopes only) |
-| field_crew | Field employee. | ❌ | Core RAG + send_email + send_sms + SMS/WhatsApp tools |
+| Role | Description | Manages Users |
+|---|---|---|
+| owner | The company account holder. One per company. | ✅ Always |
+| manager | Senior user. Can be granted delegated admin rights. | ✅ If granted |
+| staff | Regular employee. | ❌ |
+| field_crew | Field employee. | ❌ |
 
-### Scopes — Controlling What Each User Can See
+Role only ever gates two things: Admin tab access (owner, and manager if granted "Can manage users") and a couple of destructive/company-wide tools (`untrack_directory`, `list_tracked_directories` — see §6.3). It does **not** gate what a user can search, or whether they can index — those are controlled entirely by scopes, below. The role labels themselves are also useful just for the Admin tab's own bookkeeping — a quick visual read of who's who in the Active Users table.
 
-Scopes are data-access groups you define to match how your business is organized. Each scope corresponds to a named slice of the shared knowledge base. You enter them as a comma-separated list on each user in the Admin tab.
+### Scopes — Controlling What Each User Can See (v8.1.4)
 
-**Scope naming convention:** `scope:name` — for example `scope:sales`, `scope:office`, `scope:ops`.
+Scopes are the data-access groups you define to match how your business is organized. Under the hood, every install now uses **one shared knowledge base** — there's no longer a separate database "collection" per scope. Each indexed chunk carries a scope tag (`sales`, `office`, `shared`, `private:<user>`, etc.), and search results are filtered by that tag at query time. This is simpler and safer than the old per-scope-collection design: a scope is purely a label you assign, not infrastructure you have to keep in sync.
 
-**How scopes work:**
-- Each scope maps to a dedicated ChromaDB collection on the server.
-- When a user searches, results are limited to the collections their scopes grant access to.
-- A user can have multiple scopes (e.g. `scope:sales, scope:office`) to access more than one slice.
-- A user can also have a private collection — a personal slice only they can search.
+**Every user's search visibility follows the exact same formula, with no exceptions for role — including the owner:**
+
+- `shared` (always included — the company-wide default)
+- their own assigned scopes
+- their own private scope, if **Private collection enabled** is ticked for them
+
+There is no "see everything" role anymore. If the owner needs to see a scope, it has to be assigned to them like anyone else. This also means indexing content doesn't leak it to anyone new — indexing was never the confidentiality boundary; scope + search always was, and it's the *only* boundary now.
+
+**Managing the scope catalog:** scopes are picked from an admin-managed list, not free-typed. In the Admin tab, click **🏷️ Manage Scopes** to add or remove entries (up to 15). `shared` is always available and isn't listed — it can't be removed. Private scopes are per-user and also aren't listed here — they're controlled by the **Private collection enabled** checkbox on each user, not the catalog. Removing a scope from the catalog only stops it being offered for *new* assignments — it does not retroactively unassign it from anyone who already has it, or unscope any file already tagged with it.
 
 **Scope example — a window and pressure washing company:**
 
-| Employee | Role | Scopes | What they can search |
+| Employee | Scopes assigned | Private enabled | What they can search |
 |---|---|---|---|
-| David (owner) | owner | (all) | Everything |
-| Maria (office manager) | manager | `scope:office` | Office documents, invoices, customer records |
-| Jake (field crew) | field_crew | `scope:field` | Job sheets, equipment manuals, cleaning procedures |
+| David (owner) | `office`, `sales` | ✅ | office docs, sales docs, shared, own private |
+| Maria (office manager) | `office` | ❌ | office docs, shared |
+| Jake (field crew) | `field` | ✅ | job sheets/manuals, shared, own private |
+
+Note David (the owner) only sees `office`/`sales`/shared/his own private here — not Maria's or Jake's content — because there's no more owner-sees-everything exception. If David needs visibility into a scope he doesn't have, he assigns it to himself the same way he'd assign it to anyone else.
 
 ### The Admin Tab (Server Mode Only)
 
@@ -846,10 +860,10 @@ The Admin tab appears only when `edition = business` AND `mode = server`. Authen
 | Email | Optional contact email (used for Reply-To on outbound emails) |
 | Cell Phone | Optional cell number for SMS |
 | Cell Carrier | Carrier for email-to-SMS gateway (if applicable) |
-| Role | owner / manager / staff / field_crew |
-| Scopes | Comma-separated data-access scopes |
+| Role | owner / manager / staff / field_crew — see §9's note on what role does and doesn't gate |
+| Scopes | The data-access scopes assigned to this user, from the catalog |
 | Manages Users | ✓ if this user has delegated admin rights |
-| Private Coll. | ✓ if a private knowledge-base collection is enabled |
+| Private Coll. | ✓ if a private knowledge-base scope is enabled for this user |
 | Seat (key) | The masked child license key assigned to this user |
 | Status | active or suspended |
 | Token | ●●●●●●●● (always masked — use Regenerate Token to issue a new one) |
@@ -863,13 +877,14 @@ The Admin tab appears only when `edition = business` AND `mode = server`. Authen
 | 🔑 Regenerate Token | Issues a new random bearer token — old token stops working immediately |
 | 🚫 Suspend/Activate | Toggles active/suspended without deleting the user |
 | 🗑 Remove | Permanently deletes the user and frees their seat |
+| 🏷️ Manage Scopes | **New in v8.1.4.** Add or remove entries in the shared scope catalog (up to 15) — see the Scopes section above |
 | ↻ Refresh | Reloads users.json and repaints the table |
 
 **Adding a User (Step by Step)**
 1. Click ➕ Add User
 2. Fill in Name (required), Email (optional), Cell Phone (optional), Cell Carrier (optional)
 3. Choose a Role
-4. Enter Scopes (comma-separated, e.g. `scope:field, scope:office`)
+4. **Select Scopes** — a multi-select list (Ctrl/Shift-click for multiple) populated from the scope catalog. Manage the catalog itself via 🏷️ Manage Scopes if the scope you need isn't listed yet. **(v8.1.4 — replaces the old comma-separated free-text field.)**
 5. Optionally tick **Can manage users** (managers only) and **Private collection enabled**
 6. Assign a **License seat** from the dropdown (unassigned child keys)
 7. Bearer token — leave blank to auto-generate (recommended)
@@ -881,6 +896,18 @@ Once added, hand them:
 2. The company's Claude.ai connector URL — shown in Settings → Remote Access → **Server Connection Test** panel. Copy it with the **📋 Copy** button.
 
 The employee adds that connector in Claude.ai settings, authenticates with their bearer token, and starts a new conversation. Their personal AI-Prowler (from their seat email) connects them to their private documents. The server connector connects them to the shared company knowledge base. Both connectors can be active simultaneously in Claude.ai.
+
+### Assigning Scopes to Folders — Update Index Tab (v8.1.4)
+
+Beyond assigning scopes to *users*, an owner/manager also assigns a scope to each tracked *folder or file*, from the Update Index tab:
+
+1. Select a tracked folder or file in the list.
+2. Click **🔀 Change Scope for Selected**.
+3. Pick a scope from the dropdown (same catalog as the Admin tab) and click **Stage Change**.
+
+The change is **staged, not immediate** — the tracked-items list shows `→<scope> (pending)` for that row until you actually run **Update Selected** or **Update All**. Running either commits the staged scope and re-indexes the path in the same step, so every chunk comes out freshly tagged with the new scope. Nothing is written to disk from the staging step alone; if you stage a change and never run an update, it simply never takes effect.
+
+A folder with no scope assigned at all defaults to `shared` once it's tracked and indexed — never blocked, never silently guessed into something more restrictive.
 
 ### Replacing the Server Machine
 
@@ -1755,11 +1782,14 @@ For always-on remote access, activate the Named Tunnel as a Windows service via 
 
 Proactive Alerts sends scheduled email briefings and alerts without needing an active Claude session — a background daemon thread inside the AI-Prowler desktop process ticks every 60 seconds and fires any job whose configured time/day has arrived. Configured from the Links & Analysis tab.
 
-**Six built-in jobs:** Morning Briefing, Overdue Invoice Alert, Due Analysis Tasks, SMS Reply Monitor, Weather Watch, End-of-Day Summary. Each has its own ON/OFF toggle, a time field (`HH:MM` 24-hour, or `every_Nh`/`every_Nm` for interval jobs), and a days selector (daily / weekdays / weekends / a specific day). Email is shared across all jobs — a single field, since this is a personal-mode, single-user feature.
+**Six built-in jobs:** Morning Briefing, Overdue Invoice Alert, Due Analysis Tasks, SMS Reply Monitor, Weather Watch, End-of-Day Summary. Each has its own ON/OFF toggle, a time field (`HH:MM` 24-hour, or `every_Nh`/`every_Nm` for interval jobs), and a days selector (daily / weekdays / weekends / a specific day).
 
-**Location (v8.1.3):** a single shared **Location** field, next to Email, sets the town/city used for weather. Previously this had no GUI field at all — it silently defaulted to a hardcoded value with no way to change it short of hand-editing `scheduler_config.json` directly. Same auto-save behavior as every other field here: saves the instant you tab out or press Enter, no separate save step. Leaving it blank falls back to a sensible default rather than breaking Weather Watch/Morning Briefing outright.
+**Recipient and location come from Settings, not this panel (v8.1.3).** This panel shows two read-only lines — "📧 Sends to: ..." and "📍 Weather location: ..." — confirming what will actually be used, but neither is editable here anymore. Earlier versions had separate Email and Location fields right in this panel, each with its own hardcoded default and no relationship to anything else in the app; that meant up to three different, silently disconnected copies of "who/where" could exist at once. There is now exactly one place to change each:
 
-**Per-job weather (v8.1.3):** Morning Briefing no longer checks one fixed location for the whole day — it looks up weather for **each job's own City/State** (read directly from the Jobs_Schedule spreadsheet), since a real day's jobs are often scattered across several towns. Weather is fetched once per unique town among the day's jobs, not once per job, so having five jobs in the same town doesn't trigger five lookups. A job with no rain risk shows plainly; a job with a rainy forecast gets a **⚠️ Rain risk** flag right next to it. The shared Location field above is only used as a fallback — when a specific job has no City on file, or when there are no jobs scheduled at all for the day. Weekly Weather Watch continues to use the shared Location field, since it's a general week-ahead outlook rather than a per-job breakdown.
+- **Recipient:** set the default recipient in **Settings → Email Configuration** — the same SMTP setup used for every other emailing feature in AI-Prowler.
+- **Location:** set your home address (Street/City/State/ZIP) in **Settings → Owner Name → Home Address**. If you've never set one, the panel shows "(not set — ...)" instead of guessing a town.
+
+**Per-job weather (v8.1.3):** Morning Briefing no longer checks one fixed location for the whole day — it looks up weather for **each job's own City/State** (read directly from the Jobs_Schedule spreadsheet), since a real day's jobs are often scattered across several towns. Weather is fetched once per unique town among the day's jobs, not once per job, so having five jobs in the same town doesn't trigger five lookups. A job with no rain risk shows plainly; a job with a rainy forecast gets a **⚠️ Rain risk** flag right next to it. Your Settings home address is only used as a fallback — when a specific job has no City on file, or when there are no jobs scheduled at all for the day. Weekly Weather Watch always uses your Settings home address, since it's a general week-ahead outlook rather than a per-job breakdown; with no address configured, it simply produces nothing that week rather than reporting on a guessed town.
 
 **Auto-save, no manual Save/Start/Stop:** every field saves the instant it changes — clicking a job's toggle, tabbing out of the time field, or selecting a day all save immediately. There is no separate "Save Config" button and no master "Enable proactive alerts" checkbox. The background engine starts automatically the moment any single job is switched ON, and stops automatically the moment the last enabled job is switched OFF — the engine's running/stopped state is fully derived from the job toggles, never a separate thing to manage.
 

@@ -560,6 +560,7 @@ MANIFEST_FILES = [
     # the installer's actual [Files] entries; this list should always be a
     # superset match of that section for every .py/.bat app file.
     "scope_resolver.py",
+    "scope_lookup.py",
     "file_watchdog.py",
     "subscription_client.py",
     "mobile_activator.py",

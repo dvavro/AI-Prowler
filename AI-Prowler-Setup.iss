@@ -161,7 +161,7 @@
 
 [Setup]
 AppName=AI-Prowler
-AppVersion=8.1.3
+AppVersion=8.1.4
 ; AppId pins the upgrade identity so Inno reliably detects prior installations
 ; of any version and runs only OUR uninstaller — never a mismatched one.
 ; Must remain constant across all future releases (do NOT change this GUID).
@@ -203,6 +203,7 @@ Source: "rag_gui.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "rag_preprocessor.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "ai_prowler_mcp.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "scope_resolver.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: "scope_lookup.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "file_watchdog.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "claude_desktop_config_example.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "RAG_RUN.bat"; DestDir: "{app}"; Flags: ignoreversion

@@ -92,7 +92,7 @@ if sys.stderr is None:
 # Single source of truth for the app version. Bump this one line when releasing
 # a new version; all UI labels, About dialogs, help text, and update checks
 # read from here.
-APP_VERSION = "8.1.3"
+APP_VERSION = "8.1.4"
 
 # ── UI feature flags ─────────────────────────────────────────────────────────
 # Toggle visibility of advanced/legacy GUI sections without removing any
@@ -1259,6 +1259,34 @@ Built with Python, ChromaDB, FastMCP, and Claude"""
             win, wrap=tk.WORD, font=('Consolas', 9))
         text_widget.pack(fill='both', expand=True, padx=10, pady=(10, 6))
 
+        # v8.1.3: visible, always-reachable update action area — the tab
+        # banner (_show_update_banner) lives inside Server mode's unpacked
+        # _notif_frame and never renders there, so this popup is the one
+        # place BOTH personal and server mode can actually click "Download
+        # Update". Rebuilt on every _render() call so Refresh Now reflects
+        # the latest fetched state instead of going stale.
+        update_action_frame = ttk.Frame(win)
+        update_action_frame.pack(fill='x', padx=10, pady=(0, 6))
+        _update_state = {'is_newer': False, 'version': '', 'url': '', 'notes': ''}
+
+        def _render_update_buttons():
+            for w in update_action_frame.winfo_children():
+                w.destroy()
+            if not _update_state['is_newer']:
+                return
+            tk.Label(update_action_frame,
+                     text=f"🆕 AI-Prowler™ v{_update_state['version']} is available!",
+                     font=('Arial', 10, 'bold')).pack(side='left')
+            ttk.Button(
+                update_action_frame, text="📥 Download Update",
+                command=lambda: self._download_update(
+                    _update_state['url'], _update_state['version'])
+            ).pack(side='right', padx=(6, 0))
+            ttk.Button(
+                update_action_frame, text="🔗 View Release",
+                command=lambda u=_update_state['url']: webbrowser.open(u)
+            ).pack(side='right')
+
         # Configure text tags for color-coded sections
         text_widget.tag_configure('header',
                                    font=('Consolas', 11, 'bold'),
@@ -1332,6 +1360,15 @@ Built with Python, ChromaDB, FastMCP, and Claude"""
                             f"{' — UPDATE AVAILABLE' if is_newer else ''})")
                         text_widget.insert(tk.END,
                             f"v{latest_v}{suffix}\n", tag)
+                        # v8.1.3: feed the always-visible button row above —
+                        # see _render_update_buttons(). update_url/notes are
+                        # the same fields _check_for_update() reads.
+                        _update_state['is_newer'] = is_newer
+                        _update_state['version']  = latest_v
+                        _update_state['url']      = cache_data.get('update_url', '')
+                        _update_state['notes']    = cache_data.get('update_notes', '')
+                    else:
+                        _update_state['is_newer'] = False
                 except Exception as e:
                     text_widget.insert(tk.END,
                         f"  ERROR reading cache: {e}\n", 'err')
@@ -1339,7 +1376,9 @@ Built with Python, ChromaDB, FastMCP, and Claude"""
                 text_widget.insert(tk.END,
                     "  (no cache file — fetch has never succeeded)\n",
                     'warn')
+                _update_state['is_newer'] = False
             text_widget.insert(tk.END, "\n")
+            _render_update_buttons()
 
             # ── Dismissed list ───────────────────────────────────
             text_widget.insert(tk.END, "Dismissed Notifications\n",
@@ -2349,7 +2388,153 @@ Built with Python, ChromaDB, FastMCP, and Claude"""
         ttk.Button(btn_row, text="Close",
                    command=win.destroy,
                    width=8).pack(side='right')
-    
+
+    def show_job_tracker_guide(self):
+        """Show the Job Tracker spreadsheet explainer — what it does for a
+        multi-employee or high-volume service business, how the crew/mobile
+        workflow works in Server mode, and how QuickBooks + Claude can pull
+        customer data straight into it. Opened from the Small Business tab.
+        v8.1.3."""
+        self.show_help_window("Job Tracker Spreadsheet Guide",
+                              self.get_job_tracker_guide_content())
+
+    def get_job_tracker_guide_content(self):
+        """Markdown content for the Job Tracker guide popup. All facts here
+        (sheet names, column names, server-mode behavior) are pulled from
+        COMPLETE_USER_GUIDE.md section 'Job Tracker Spreadsheet' — keep the
+        two in sync if that section changes."""
+        return """# The Job Tracker Spreadsheet — What It's Actually For
+
+One `.xlsx` file is your customer list, daily schedule, quotes, invoices,
+time clock, and pricing catalog — all cross-linked, all readable and
+writable by Claude in plain English. No app to log into, no separate CRM
+subscription, no double-entry between "the schedule" and "the invoice."
+
+You (or your crew) never open the spreadsheet directly for day-to-day work
+— you just talk to Claude. The spreadsheet is the shared source of truth
+underneath.
+
+## The 9 Sheets, At a Glance
+
+| Sheet | What lives here |
+|---|---|
+| `Customers` | Your customer list — address, service type, frequency, phone, email, gate codes, access notes |
+| `Jobs_Schedule` | Every appointment — date, time, address, assigned crew member, weather, route, billing |
+| `Route_Planner` | Daily route optimization — Claude fills in lat/lon and map links |
+| `Quotes` | Estimates sent before a job is booked |
+| `Invoices` | Billing and payment tracking, feeds the AR aging report |
+| `TimeLog` | Clock-in / clock-out per job, per employee |
+| `QB_Daily_Export` | Daily rows formatted for QuickBooks or other accounting software import |
+| `Services_Pricing` | Your service catalog — base prices, multipliers, tax rates |
+| `AI-Prowler_Commands` | A cheat sheet of Claude prompts, right in the workbook |
+
+Nothing here is manual bookkeeping. Ask Claude "mark the Miller job
+complete and record invoice #1048" and Claude finds the row, updates
+`Job Status`, `Invoice Total`, `Invoice Sent Date` — whatever you asked
+for — in one step.
+
+## Built for Multiple Employees, Not Just One Owner
+
+This is where it stops being "a spreadsheet" and starts being a real
+scheduling system for a crew:
+
+- **Every job has a `Crew / Technician` column.** Assign "Mike C." to one
+  job and "Sarah T." to another in the same `Jobs_Schedule` sheet — Claude
+  reads and writes this like any other field. Ask "what's on Mike's
+  schedule tomorrow?" and Claude filters to just his jobs.
+
+- **In Server mode, each employee automatically only sees their own jobs.**
+  When a staff or field-crew member asks Claude to clock in, look up
+  today's schedule, or schedule the next recurring visit, AI-Prowler
+  scopes the search to jobs where `Crew / Technician` matches *their own
+  name* — automatically, with no filter to remember. Owners and managers
+  still see the whole crew's schedule.
+
+- **Clock-ins are per-person, not per-job.** The `TimeLog` sheet tracks
+  who logged in and out with a `Logged By` field — one teammate's open
+  shift on a job never blocks another's, and you can only clock yourself
+  out of a shift you personally opened.
+
+- **Two ways to organize a crew's data**, depending on how tightly you
+  want everyone's schedule linked:
+    - **Shared master (the default)** — everyone reads and writes the
+      same file. The whole crew stays in sync automatically; this is
+      right for most small teams.
+    - **Per-user tracking files** — drop a file named after each
+      employee's user ID (e.g. `jake-r.xlsx`) next to the master file,
+      and that person gets their own private tracker instead of the
+      shared one. Anyone without a personal file still uses the master.
+      No extra setup — it's entirely based on which files exist in the
+      folder.
+
+- **No lost updates when two people save at once.** Writes are queued
+  behind an internal lock, and every write takes an automatic backup
+  first. Two crew members updating the schedule in the same minute never
+  silently overwrite each other.
+
+## Mobile Access — Your Crew Doesn't Need a Laptop
+
+Each employee gets their own seat and their own mobile login to the
+company server (set up once in the Admin tab) — from that point on, they
+can talk to Claude from their phone the same way you do from your desktop,
+and every "clock me in," "what's my next job," or "text the customer I'm
+on my way" reads and writes the exact same shared spreadsheet in real
+time. There's no separate mobile app to install or sync — it's the same
+Claude conversation, on any device with a browser.
+
+## QuickBooks + Claude — Filling the Spreadsheet Without Retyping
+
+If you connect the QuickBooks Online MCP connector in Claude.ai (Settings
+→ Connectors), Claude automatically detects it and can pull real
+financial data — invoices, payments, customer records, P&L — directly
+into your workflow. This already powers the Quick Links business-analysis
+prompts (Analyze My Business, Weekly Business Advisor, Find Problems,
+Growth Opportunities), which use QuickBooks as the primary source when
+it's connected and fall back to the Job Tracker when it's not.
+
+Because Claude has both the QuickBooks connector *and* the spreadsheet
+tools available in the same conversation, you can also ask it to bridge
+the two directly — for example, pulling a customer list from QuickBooks
+and writing new rows into the `Customers` sheet, instead of retyping
+names, addresses, and phone numbers by hand. Try:
+
+> *"Pull my active customers from QuickBooks and add any that aren't
+> already in my Job Tracker's Customers sheet."*
+
+> *"Cross-check today's invoices in QuickBooks against the Invoices sheet
+> and flag anything that's out of sync."*
+
+This isn't a separate one-click sync button — it's Claude reasoning
+across both tools in one request, which means you can phrase it however
+fits what you actually need done.
+
+## Example Prompts
+
+| Goal | What to say |
+|---|---|
+| Add a new customer | *"Add a new customer: Sunshine Realty LLC, 125 Harbor Blvd, New Smyrna Beach FL 32168, monthly window cleaning, contact Karen at karen@sunshine.com."* |
+| Assign a job to an employee | *"Schedule a window cleaning for the Walsh account next Monday at 8am, assign it to Mike."* |
+| Check a crew member's day | *"What does Sarah have scheduled today?"* |
+| Complete a job + invoice | *"Mark the Miller Windows job complete, invoice #1048, amount $312."* |
+| Route + navigate | *"Optimize my route for today's jobs and send me the Google Maps link."* |
+| Get paid faster | *"Show me every invoice more than 30 days overdue."* |
+| Pull in QuickBooks data | *"Sync any new QuickBooks customers into my Job Tracker."* |
+
+## Why This Beats a Generic Scheduling App
+
+- **One system, not three** — no separate CRM, invoicing tool, and time
+  clock that all need to agree with each other.
+- **No typing into forms** — every update is a sentence to Claude.
+- **Scales with your crew** — one owner or ten employees, the same
+  spreadsheet and the same conversational workflow, with automatic
+  per-employee scoping built in.
+- **Works from the truck** — mobile access means the schedule is never
+  stuck on an office PC.
+- **Real accounting data when you want it** — QuickBooks integration adds
+  true financials on top of the operational data already in the sheet,
+  without forcing every business to set up QuickBooks first.
+"""
+
     def get_quick_start_content(self):
         """Get quick start guide content"""
         return f"""AI-PROWLER QUICK START GUIDE
@@ -2672,7 +2857,12 @@ or from the Help menu."""
 
         Replaces the full Home/welcome tab so the GUI is clean and
         purpose-built for a server environment. No ad content, no
-        notification banners, no outbound GitHub fetches.
+        notification banner CARDS shown on this tab — but the underlying
+        notification fetch (and the version-update check riding on the same
+        feed) DOES run, same as personal mode, so an admin can learn about
+        and install updates via Help -> Notifications Status. See the
+        v8.1.3 note below on _notif_url / _ad_url for why only half of
+        _refresh_welcome_ad's work actually surfaces here.
 
         Shows: edition/mode badge, version, database path, chunk count,
         tracked directory count, and a manual Refresh button.
@@ -2682,6 +2872,12 @@ or from the Help menu."""
 
         # Stub out ad/notification attributes so any shared code that
         # references them doesn't crash (e.g. _display_notifications).
+        # This frame is deliberately never .pack()'d — _show_update_banner
+        # and _display_notifications still build widgets inside it (harmless,
+        # since an unpacked parent renders nothing), keeping this tab's
+        # layout exactly the stats-only view above. The real, VISIBLE update
+        # UI lives in show_notifications_status() instead (Help menu) —
+        # see the Download/View Release buttons added there in v8.1.3.
         self._notif_frame         = ttk.Frame(server_frame)
         self._notif_widgets       = []
         self._update_banner_widget = None
@@ -2691,7 +2887,15 @@ or from the Help menu."""
         self._notif_cache_path    = Path.home() / '.ai-prowler' / 'notifications_cache.json'
         self._ad_cache_path       = Path.home() / '.ai-prowler' / 'welcome_ad_cache.json'
         self._ad_local_path       = Path.home() / '.ai-prowler' / 'welcome_config.json'
-        self._notif_url           = ""
+        # v8.1.3: notifications ARE fetched in server mode (see below) so
+        # version-update detection works — but _ad_url stays "" so the
+        # promo/ad half of _refresh_welcome_ad fails fast and silently
+        # (caught in its own try/except), keeping this tab ad-free exactly
+        # as before. Same URL personal mode uses for notifications.
+        self._notif_url           = (
+            "https://raw.githubusercontent.com/"
+            "dvavro/ai-prowler-public/main/notifications.json"
+        )
         self._ad_url              = ""
         self._install_id_path     = Path.home() / '.ai-prowler' / 'install_id'
         self._telemetry_counter_path = Path.home() / '.ai-prowler' / 'telemetry_counter.json'
@@ -2700,6 +2904,15 @@ or from the Help menu."""
 
         # Schedule telemetry tick (same as Home mode — server still phones home)
         self.root.after(_TELEMETRY_FIRST_DELAY_SEC * 1000, self._telemetry_tick)
+
+        # v8.1.3: schedule the notifications/update-check fetch the same way
+        # personal mode does — deferred until mainloop is running (see the
+        # matching comment in create_welcome_tab for why), then a recurring
+        # 24h re-check via _schedule_ad_refresh(). This is what lets a
+        # Server-mode admin actually learn a new version exists without
+        # needing to remember to open Help -> Notifications Status manually.
+        self.root.after(150, self._refresh_welcome_ad)
+        self._schedule_ad_refresh()
 
         # ── Layout ────────────────────────────────────────────────────────────
         container = ttk.Frame(server_frame, padding=(40, 30))
@@ -4627,8 +4840,15 @@ or from the Help menu."""
                  anchor='w').pack(anchor='w', pady=(2, 6))
 
         # The exact command text shown in a read-only entry for transparency
-        _CONN_TEST_CMD = ("Check the status of AI-Prowler and "
-                          "list all the tools.")
+        _CONN_TEST_CMD = ("Check the status and available tools of "
+                          "AI-Prowler separately on both the Personal and "
+                          "Server connectors, call the How to use "
+                          "AI-Prowler tool, index the user guide at "
+                          "Documents\\AI-Prowler\\COMPLETE_USER_GUIDE.md, "
+                          "and list in a table all the available tools "
+                          "for each connector. The guide is now "
+                          "searchable, so you should be able to help me "
+                          "configure and use any AI-Prowler feature.")
 
         _cmd_entry = tk.Entry(_ct_text_col,
                               font=('Consolas', 9),
@@ -6160,36 +6380,69 @@ or from the Help menu."""
                      bg='#1a2e1a', fg='#cc8800',
                      font=('Arial', 8)).pack(anchor='w')
         else:
-            # ── Email (shared across all jobs — personal mode, single user) ────
+            # ── Recipient + Location (read-only, v8.1.3) ─────────────────────
+            # These used to be editable fields RIGHT HERE, each with their
+            # own separate storage — email_to defaulted to a hardcoded
+            # address, location defaulted to a hardcoded town, and NEITHER
+            # had any relationship to Settings or the actual configured
+            # SMTP recipient. That meant up to three different, silently
+            # disconnected copies of "who/where" could exist at once.
+            # Fixed: this panel now only DISPLAYS what will actually be
+            # used, sourced live from the one real place each belongs —
+            # Settings -> Owner Name/Address for location, and Settings ->
+            # Email Configuration's default_to for the recipient. Nothing
+            # is editable here anymore; there's exactly one place to change
+            # each, and it's always the same place regardless of which
+            # job you're looking at.
             _cfg_now = _sched_eng.load_config()
 
+            def _read_default_to() -> str:
+                try:
+                    import json as _al_json
+                    _cfg_p = Path.home() / ".ai-prowler" / "email_config.json"
+                    if not _cfg_p.exists():
+                        return ""
+                    _cfg_d = _al_json.loads(_cfg_p.read_text(encoding="utf-8-sig")) or {}
+                    return (_cfg_d.get("default_to") or "").strip()
+                except Exception:
+                    return ""
+
+            def _read_owner_location() -> str:
+                if not RAG_AVAILABLE:
+                    return ""
+                parts = [p for p in (_rag_engine.OWNER_CITY, _rag_engine.OWNER_STATE) if p]
+                loc = ", ".join(parts)
+                if _rag_engine.OWNER_ZIP:
+                    loc = f"{loc} {_rag_engine.OWNER_ZIP}".strip()
+                return loc
+
             _al_top = tk.Frame(_al_inner, bg='#1a2e1a')
-            _al_top.pack(fill='x', pady=(0, 6))
+            _al_top.pack(fill='x', pady=(0, 2))
 
-            tk.Label(_al_top, text="Email:", bg='#1a2e1a',
-                     fg='#cccccc', font=('Arial', 8)).pack(side='left')
-            self._email_var = _email_var = tk.StringVar(value=_cfg_now.get("email_to", ""))
-            self._email_entry = _email_entry = ttk.Entry(
-                _al_top, textvariable=_email_var, width=30)
-            _email_entry.pack(side='left', padx=(4, 0))
+            _recipient_var = tk.StringVar()
+            tk.Label(_al_top, textvariable=_recipient_var, bg='#1a2e1a',
+                    fg='#8ab8cc', font=('Arial', 8)).pack(anchor='w')
 
-            # ── Location (shared across all jobs — v8.1.3) ──────────────────────
-            # ONE place for the town/city Weather Watch and Morning Briefing's
-            # fallback location use — previously this had NO GUI field at all,
-            # silently defaulting to a hardcoded "New Smyrna Beach, Florida"
-            # baked into scheduler_engine.py's own load_config() defaults, with
-            # no way to change it short of hand-editing scheduler_config.json.
-            # Morning Briefing's PER-JOB weather (see scheduler_jobs.py's
-            # _todays_jobs_structured) uses each job's own City/State instead
-            # of this value whenever a job has one on file — this field is the
-            # fallback for Weather Watch and for days with no scheduled jobs.
-            tk.Label(_al_top, text="  Location:", bg='#1a2e1a',
-                     fg='#cccccc', font=('Arial', 8)).pack(side='left')
-            self._location_var = _location_var = tk.StringVar(
-                value=_cfg_now.get("location", "New Smyrna Beach, Florida"))
-            self._location_entry = _location_entry = ttk.Entry(
-                _al_top, textvariable=_location_var, width=26)
-            _location_entry.pack(side='left', padx=(4, 0))
+            _al_top2 = tk.Frame(_al_inner, bg='#1a2e1a')
+            _al_top2.pack(fill='x', pady=(0, 6))
+
+            _location_display_var = tk.StringVar()
+            tk.Label(_al_top2, textvariable=_location_display_var, bg='#1a2e1a',
+                    fg='#8ab8cc', font=('Arial', 8)).pack(anchor='w')
+
+            def _refresh_recipient_and_location_display():
+                _to = _read_default_to()
+                _recipient_var.set(
+                    f"📧 Sends to: {_to}" if _to else
+                    "📧 Sends to: (not set — Settings → Email Configuration → "
+                    "Default recipient)")
+                _loc = _read_owner_location()
+                _location_display_var.set(
+                    f"📍 Weather location: {_loc}" if _loc else
+                    "📍 Weather location: (not set — Settings → Owner Name → "
+                    "Home address)")
+
+            _refresh_recipient_and_location_display()
 
             # ── SMTP configuration status LED (v8.2+) ───────────────────────
             # The "Email:" field above is only the RECIPIENT address. Proactive
@@ -6263,8 +6516,12 @@ or from the Help menu."""
             # the individual job switches themselves.
             def _save_and_sync_engine(status_msg="✅ Saved"):
                 cfg = _sched_eng.load_config()
-                cfg["email_to"] = _email_var.get().strip()
-                cfg["location"] = _location_var.get().strip() or "New Smyrna Beach, Florida"
+                # email_to/location are no longer set here (v8.1.3) — they
+                # come from Settings -> Email Configuration/Owner Name
+                # instead, read live by scheduler_jobs.py at send time.
+                # Deliberately NOT overwritten on every save so any legacy
+                # value already in the file is simply left alone rather
+                # than being actively cleared.
                 jobs_out = {}
                 any_enabled = False
                 for jid in _sched_jobs.JOB_REGISTRY:
@@ -6288,19 +6545,25 @@ or from the Help menu."""
 
                     def _do_stop():
                         _sched_eng.stop()
-                        self.root.after(0, _refresh_engine_status)
+                        # This runs on a background thread, so by the time
+                        # stop() returns the Tk root may already be gone
+                        # (app closing, or — in tests — the mainloop torn
+                        # down between test cases). self.root.after() tries
+                        # to register a Tcl command via the interpreter and
+                        # raises RuntimeError("main thread is not in main
+                        # loop") if that interpreter is no longer running;
+                        # winfo_exists() itself can also raise TclError once
+                        # the underlying interpreter is destroyed. Either
+                        # way there's no UI left to refresh, so just drop it.
+                        try:
+                            if self.root.winfo_exists():
+                                self.root.after(0, _refresh_engine_status)
+                        except (RuntimeError, tk.TclError):
+                            pass
 
                     threading.Thread(target=_do_stop, daemon=True).start()
                 else:
                     _refresh_engine_status()
-
-            # Save on blur/Enter — same debounce reasoning as the per-job
-            # Time fields below: saving on every keystroke while the user is
-            # still typing an address would write partial/invalid values.
-            _email_entry.bind('<FocusOut>', lambda e: _save_and_sync_engine())
-            _email_entry.bind('<Return>', lambda e: _save_and_sync_engine())
-            _location_entry.bind('<FocusOut>', lambda e: _save_and_sync_engine())
-            _location_entry.bind('<Return>', lambda e: _save_and_sync_engine())
 
             # ── Job list ──────────────────────────────────────────────────────
             _jobs_frame = tk.Frame(_al_inner, bg='#0e1e0e',
@@ -6884,11 +7147,12 @@ or from the Help menu."""
                       wraplength=900, justify='left').pack(anchor='w')
             scope_btn_row = ttk.Frame(scope_frame)
             scope_btn_row.pack(fill='x', pady=(4, 0))
-            ttk.Button(scope_btn_row, text="🎯 Set Scope for Selected Folder",
+            ttk.Button(scope_btn_row, text="🔀 Change Scope for Selected",
                        command=self._set_scope_for_selected).pack(side='left')
             ttk.Label(scope_btn_row,
-                      text="(one scope per folder; a subfolder can add its own "
-                           "rule to override the parent)",
+                      text="(one scope per folder; staged until you Update Selected/"
+                           "Update All — pick options from 🏷️ Manage Scopes on the "
+                           "Admin tab)",
                       font=('Arial', 8), foreground='gray').pack(
                 side='left', padx=(8, 0))
             self.tracked_listbox.bind(
@@ -7005,12 +7269,19 @@ or from the Help menu."""
                 f"\u201c{path}\u201d  \u2192  read scope: {scope}")
 
     def _set_scope_for_selected(self):
-        """Owner-only (server mode): assign ONE read scope to the selected tracked
-        folder by upserting an exact-prefix rule in users.json's collection_map.
-        One scope per folder by design — chunks live in one physical ChromaDB
-        collection; a subfolder may add its own rule to override the parent."""
+        """Owner-only (server mode): STAGE a scope change for the selected
+        tracked folder/file (SCOPE_SIMPLIFICATION_SPEC.md section 3.3b).
+
+        Does NOT write to scope_map immediately -- the change is held in
+        self._pending_scope_changes_dict and only committed (persisted +
+        triggers the normal purge/rebuild reindex, which tags fresh chunks
+        with the new scope) when the operator runs Update Selected/Update
+        All on this path. See _commit_pending_scope_changes(). One scope
+        per folder by design -- staging a path that already has a pending
+        change replaces it, never adds a second one."""
         import tkinter as tk
         from tkinter import ttk, messagebox
+        import scope_lookup as _sl
 
         path = self._selected_tracked_path()
         if not path:
@@ -7026,12 +7297,17 @@ or from the Help menu."""
         if not isinstance(rules, list):
             rules = []
 
-        current = self._resolve_scope_for_path(
+        pending = self._get_pending_scope_changes()
+        current_pending = pending.get(_sl.normalize_path_for_match(path))
+        current_persisted = self._resolve_scope_for_path(
             path, rules, cm.get("default_collection", "shared"))
-        options = self._known_scopes()
+        current = current_pending or current_persisted
+
+        catalog = self._admin_get_scope_catalog(data)
+        options = _sl.scope_picker_options(catalog, [current_persisted] if current_persisted else [])
 
         dlg = tk.Toplevel(self.root)
-        dlg.title("Set Read Scope")
+        dlg.title("Change Scope")
         dlg.transient(self.root)
         dlg.grab_set()
         dlg.resizable(False, False)
@@ -7044,11 +7320,14 @@ or from the Help menu."""
 
         ttk.Label(frm, text="Read scope:").grid(row=1, column=0, sticky='e', padx=6, pady=4)
         scope_var = tk.StringVar(value=current or "shared")
-        ttk.Combobox(frm, textvariable=scope_var, width=34,
-                     values=options).grid(row=1, column=1, sticky='w', padx=6, pady=4)
+        ttk.Combobox(frm, textvariable=scope_var, width=34, state='readonly',
+                     values=options or ["shared"]).grid(row=1, column=1, sticky='w', padx=6, pady=4)
         ttk.Label(frm,
-                  text="Pick an existing scope or type a new one (e.g. scope:sales).\n"
-                       "Any user whose record holds this scope can search this folder.",
+                  text="Pick from the catalog (manage it via \U0001f3f7\ufe0f Manage "
+                       "Scopes on the Admin tab). This stages the change -- it takes "
+                       "effect the next time you run Update Selected/Update All on "
+                       "this path, which re-indexes it under the new scope.",
+                  wraplength=420, justify='left',
                   font=('Segoe UI', 8), foreground='gray').grid(
             row=2, column=1, sticky='w', padx=6)
 
@@ -7059,7 +7338,7 @@ or from the Help menu."""
             if not new_scope:
                 messagebox.showwarning(
                     "Scope required",
-                    "Enter a scope name or choose one from the list.")
+                    "Choose a scope from the list.")
                 return
             result["ok"] = True
             result["scope"] = new_scope
@@ -7067,7 +7346,7 @@ or from the Help menu."""
 
         btns = ttk.Frame(frm)
         btns.grid(row=3, column=0, columnspan=2, pady=(10, 0))
-        ttk.Button(btns, text="Save", command=_save,
+        ttk.Button(btns, text="Stage Change", command=_save,
                    style='Accent.TButton').pack(side='left', padx=4)
         ttk.Button(btns, text="Cancel", command=dlg.destroy).pack(side='left', padx=4)
         dlg.wait_window()
@@ -7075,19 +7354,19 @@ or from the Help menu."""
         if not result.get("ok"):
             return
 
-        import scope_resolver
-        cm["rules"] = scope_resolver.upsert_scope_rule(rules, path, result["scope"])
-        cm.setdefault("default_collection", "shared")
-        data["collection_map"] = cm
-        self._admin_save_users(data)
-
-        self._refresh_selected_scope_label()
+        new_scope = result["scope"]
+        if new_scope == current_persisted and not current_pending:
+            # No actual change from what's already persisted -- nothing to stage.
+            return
+        pending[_sl.normalize_path_for_match(path)] = new_scope
+        self.refresh_tracked_dirs()
         messagebox.showinfo(
-            "Scope updated",
-            f"This folder now maps to read scope:  {result['scope']}\n\n"
-            "Already-indexed chunks stay in their old collection until you "
-            "re-index — use \u201cUpdate Selected\u201d on this folder so its "
-            "content moves into the new scope.")
+            "Scope staged",
+            f"\u201c{path}\u201d will move to scope \u201c{new_scope}\u201d the next "
+            "time you run Update Selected or Update All on it.\n\n"
+            "Nothing has been written yet -- the tracked list now shows "
+            f"\u201c\u2192{new_scope} (pending)\u201d for this row until then.")
+
 
     # ── Watchdog helpers ──────────────────────────────────────────────────────
 
@@ -7935,6 +8214,65 @@ or from the Help menu."""
             ttk.Label(owner_frame,
                       text="Leave blank to show 'operator' in the Source column instead.",
                       font=('Arial', 8), foreground='gray').pack(anchor='w', pady=(4, 0))
+
+            # ── Home Address (v8.1.3) ────────────────────────────────────────
+            # Used by Proactive Alerts for weather — Morning Briefing's
+            # fallback when a job has no City on file (or no jobs at all
+            # that day), and Weekly Weather Watch's week-ahead outlook.
+            # Previously Proactive Alerts had its own separate Location
+            # field, disconnected from Settings entirely, defaulting to a
+            # hardcoded address with no way to change it. That field has
+            # been removed — this is now the one place it's configured.
+            ttk.Separator(owner_frame, orient='horizontal').pack(
+                fill='x', pady=(10, 8))
+            ttk.Label(owner_frame,
+                      text="Home address — used by Proactive Alerts for weather "
+                           "(Morning Briefing, Weekly Weather Watch).",
+                      font=('Arial', 9), foreground='gray', wraplength=600,
+                      justify='left').pack(anchor='w', pady=(0, 6))
+
+            _street_row = ttk.Frame(owner_frame)
+            _street_row.pack(fill='x', pady=(0, 4))
+            ttk.Label(_street_row, text="Street:", width=8, anchor='w').pack(side='left')
+            _owner_street_var = tk.StringVar(
+                value=_rag_engine.OWNER_STREET if RAG_AVAILABLE else "")
+            ttk.Entry(_street_row, textvariable=_owner_street_var, width=40).pack(side='left')
+
+            _csz_row = ttk.Frame(owner_frame)
+            _csz_row.pack(fill='x', pady=(0, 4))
+            ttk.Label(_csz_row, text="City:", width=8, anchor='w').pack(side='left')
+            _owner_city_var = tk.StringVar(
+                value=_rag_engine.OWNER_CITY if RAG_AVAILABLE else "")
+            ttk.Entry(_csz_row, textvariable=_owner_city_var, width=22).pack(side='left', padx=(0, 10))
+            ttk.Label(_csz_row, text="State:").pack(side='left')
+            _owner_state_var = tk.StringVar(
+                value=_rag_engine.OWNER_STATE if RAG_AVAILABLE else "")
+            ttk.Entry(_csz_row, textvariable=_owner_state_var, width=6).pack(side='left', padx=(4, 10))
+            ttk.Label(_csz_row, text="ZIP:").pack(side='left')
+            _owner_zip_var = tk.StringVar(
+                value=_rag_engine.OWNER_ZIP if RAG_AVAILABLE else "")
+            ttk.Entry(_csz_row, textvariable=_owner_zip_var, width=10).pack(side='left', padx=(4, 0))
+
+            def _save_owner_address():
+                street = _owner_street_var.get().strip()
+                city   = _owner_city_var.get().strip()
+                state  = _owner_state_var.get().strip()
+                zip_   = _owner_zip_var.get().strip()
+                if RAG_AVAILABLE:
+                    _rag_engine.OWNER_STREET = street
+                    _rag_engine.OWNER_CITY   = city
+                    _rag_engine.OWNER_STATE  = state
+                    _rag_engine.OWNER_ZIP    = zip_
+                    save_config(owner_street=street, owner_city=city,
+                               owner_state=state, owner_zip=zip_)
+                self.status_var.set("✅ Address saved" if (street or city or state or zip_)
+                                    else "✅ Address cleared")
+                self.root.after(3000, lambda: self.status_var.set("Ready"))
+
+            _addr_btn_row = ttk.Frame(owner_frame)
+            _addr_btn_row.pack(fill='x', pady=(4, 0))
+            ttk.Button(_addr_btn_row, text="💾 Save Address",
+                       command=_save_owner_address).pack(side='left')
 
         # ── Visibility-controlled parent frames ──────────────────────────────
         # Sections that are hidden when their feature flag is off get parented
@@ -12403,6 +12741,14 @@ or from the Help menu."""
                         "Contractor tools (invoicing, SMS, time logging, AR aging) require Twilio/SMTP — see Settings."
                   )).pack(anchor='w')
 
+        # v8.1.3: the Job Tracker's real value — multi-employee scheduling,
+        # mobile crew access, QuickBooks + Claude autofill — was previously
+        # undersold here (just a "Job Spreadsheet Updater" tool description
+        # further down). This button opens a full explainer/guide instead.
+        ttk.Button(banner, text="📊  What Can the Job Tracker Do for My Business?  →",
+                   command=self.show_job_tracker_guide
+                   ).pack(anchor='w', pady=(8, 0))
+
         # Claude prompt examples
         ex_frame = ttk.LabelFrame(banner, text="Example prompts to use with Claude",
                                   padding=(8, 4))
@@ -12569,7 +12915,9 @@ or from the Help menu."""
         ttk.Button(xl_btn_row, text="💾  Save Default Path",
                    command=_save_xl).pack(side='left', padx=(0, 8))
         ttk.Button(xl_btn_row, text="📂  Open Spreadsheet Now",
-                   command=_open_xl).pack(side='left')
+                   command=_open_xl).pack(side='left', padx=(0, 8))
+        ttk.Button(xl_btn_row, text="📖  Multi-Employee & QuickBooks Guide",
+                   command=self.show_job_tracker_guide).pack(side='left')
 
         ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
 
@@ -13047,6 +13395,16 @@ or from the Help menu."""
                 self._sl_stat_categories.set("")
 
         def _refresh_table():
+            # Preserve the current selection across a refresh, keyed by the
+            # learning's own stable UUID rather than the Treeview's iid —
+            # _sl_tree.delete(*get_children()) below discards all iids and
+            # rebuilds fresh ones, so an iid-based selection would silently
+            # vanish on every refresh (manual OR auto). Restored at the end.
+            _prev_sel = self._sl_tree.selection()
+            _prev_selected_learning_id = (
+                self._sl_data_map.get(_prev_sel[0], {}).get('id')
+                if _prev_sel else None)
+
             learnings = _load_learnings()
 
             cat_filter     = self._sl_filter_cat.get()
@@ -13154,6 +13512,17 @@ or from the Help menu."""
                     l.get('source', 'operator'),
                 ))
                 self._sl_data_map[iid] = l
+
+            # Restore the pre-refresh selection, if that learning still
+            # exists in the (possibly filtered) results — silently does
+            # nothing if it was deleted, filtered out, or there was no
+            # prior selection at all.
+            if _prev_selected_learning_id is not None:
+                for _iid, _l in self._sl_data_map.items():
+                    if _l.get('id') == _prev_selected_learning_id:
+                        self._sl_tree.selection_set(_iid)
+                        self._sl_tree.see(_iid)
+                        break
 
         def _sort_column(col):
             if self._sl_sort_col == col:
@@ -14089,6 +14458,57 @@ or from the Help menu."""
         # ── Initial load ─────────────────────────────────────────────────────
         _refresh_all()
 
+        # ── Auto-refresh while this tab is actively being viewed (v8.1.3) ────
+        # Mirrors the exact same mtime-poll pattern already proven for Quick
+        # Links' Custom Tasks list (_poll_custom_tasks_file) — cheap when
+        # idle (one stat() call), only does real work when the file actually
+        # changed. Two things make this specific to the Learnings tab:
+        #   1. Gated on the Learnings tab being the CURRENTLY SELECTED
+        #      notebook tab — no point re-rendering a tab nobody is looking
+        #      at, and it avoids fighting for CPU with whatever tab IS
+        #      active.
+        #   2. Skipped entirely while Semantic search is toggled ON — a
+        #      refresh in that mode also fires a live ChromaDB query
+        #      (check_learned), which should only happen when the user
+        #      explicitly asks for it (Filter button / Enter), never as a
+        #      side effect of a background timer.
+        # Filter/search selections are untouched either way — _refresh_table
+        # already reads them fresh from their own StringVars every call,
+        # never resets them. Row selection survives too (see _refresh_table's
+        # own preservation logic above).
+        _learnings_mtime = {"last": None}
+
+        def _sync_learnings_mtime():
+            try:
+                _learnings_mtime["last"] = (
+                    _learnings_file.stat().st_mtime
+                    if _learnings_file.exists() else None)
+            except Exception:
+                pass
+
+        def _poll_learnings_file():
+            try:
+                if str(outer) == self.notebook.select() \
+                        and not self._sl_semantic_search.get():
+                    mtime = (_learnings_file.stat().st_mtime
+                             if _learnings_file.exists() else None)
+                    if mtime != _learnings_mtime["last"]:
+                        _learnings_mtime["last"] = mtime
+                        _refresh_all()
+            except Exception:
+                pass
+            finally:
+                self.root.after(3000, _poll_learnings_file)
+
+        # Exposed for tests (and general programmatic use) — calling this
+        # directly runs the exact same check-and-refresh logic the timer
+        # uses, synchronously, without waiting on a real .after() callback.
+        self._poll_learnings_file = _poll_learnings_file
+        self._refresh_learnings_all = _refresh_all
+
+        _sync_learnings_mtime()
+        self.root.after(3000, _poll_learnings_file)
+
     def _show_partial_delete_dialog(self, error_text: str):
         """
         Show a partial-delete diagnostic dialog with a scrollable, selectable
@@ -14459,6 +14879,142 @@ or from the Help menu."""
         """Generate a 16-hex bearer token (secrets.token_hex(8)) — spec §5.2."""
         import secrets
         return secrets.token_hex(8)
+
+    # ── Scope catalog (SCOPE_SIMPLIFICATION_SPEC.md section 3.3a) ──────────
+    # Thin GUI-side wrappers around scope_lookup.py's pure catalog functions.
+    # Each takes an optional `data` dict (already-loaded users.json) so
+    # callers that are already mid-edit-session don't force a redundant
+    # disk read; when omitted, loads/saves through the existing
+    # _admin_load_users()/_admin_save_users() so scope_catalog changes go
+    # through the same atomic-write + collection_map-sync path as every
+    # other users.json edit. Mirrors the existing _admin_sync_collection_map
+    # (self, data) signature style for testability with the _FakeGui
+    # pattern in tests/gui/test_admin_tab.py.
+
+    def _admin_get_scope_catalog(self, data=None):
+        """Return the admin-managed scope catalog list, for populating
+        every scope-picker dropdown (Index Docs tab, Update Index tab,
+        Add/Edit User dialog)."""
+        import scope_lookup as _sl
+        if data is None:
+            data = self._admin_load_users()
+        return _sl.get_scope_catalog(data)
+
+    def _admin_add_scope_to_catalog(self, name, data=None, save=True):
+        """Add `name` to the scope catalog. Returns (ok, reason) — see
+        scope_lookup.add_scope_to_catalog for the full validation rules
+        (rejects blank/shared/private:-prefixed/duplicate/over-cap).
+        Saves immediately by default; pass save=False when the caller is
+        batching several changes and will save once at the end."""
+        import scope_lookup as _sl
+        if data is None:
+            data = self._admin_load_users()
+        catalog = _sl.get_scope_catalog(data)
+        new_catalog, ok, reason = _sl.add_scope_to_catalog(catalog, name)
+        if ok:
+            data["scope_catalog"] = new_catalog
+            if save:
+                self._admin_save_users(data)
+        return (ok, reason)
+
+    def _admin_remove_scope_from_catalog(self, name, data=None, save=True):
+        """Remove `name` from the scope catalog. Does NOT touch scope_map
+        or any user's assigned scopes — see scope_lookup.
+        remove_scope_from_catalog's docstring: this only stops the name
+        from being offered for new assignments going forward. Returns
+        True if the catalog actually changed (name was present), False
+        if it was a no-op."""
+        import scope_lookup as _sl
+        if data is None:
+            data = self._admin_load_users()
+        before = _sl.get_scope_catalog(data)
+        after = _sl.remove_scope_from_catalog(before, name)
+        changed = after != before
+        if changed:
+            data["scope_catalog"] = after
+            if save:
+                self._admin_save_users(data)
+        return changed
+
+    def _admin_manage_scope_catalog_dialog(self):
+        """Owner/admin-only: small dialog to view, add, and remove entries
+        in the company-wide scope catalog. Every scope-picker dropdown
+        elsewhere in the app reads this same list, so an operator edits
+        it in exactly one place."""
+        import tkinter as tk
+        from tkinter import ttk, messagebox
+
+        data = self._admin_load_users()
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Manage Scope Catalog")
+        dlg.transient(self.root)
+        dlg.grab_set()
+        dlg.resizable(False, False)
+        frm = ttk.Frame(dlg, padding=12)
+        frm.pack(fill='both', expand=True)
+
+        ttk.Label(frm, text="Scopes (max 15) — used everywhere a scope is "
+                             "assigned to a file, folder, or user.\n"
+                             "\u201cshared\u201d is always available and isn't "
+                             "listed here; private scopes are per-user and "
+                             "aren't listed here either.",
+                  wraplength=420, justify='left',
+                  font=('Segoe UI', 8), foreground='gray'
+                  ).grid(row=0, column=0, columnspan=2, sticky='w', pady=(0, 8))
+
+        listbox = tk.Listbox(frm, height=8, width=40, exportselection=False)
+        listbox.grid(row=1, column=0, sticky='nsew', padx=(0, 6))
+        scroll = ttk.Scrollbar(frm, orient='vertical', command=listbox.yview)
+        scroll.grid(row=1, column=1, sticky='ns')
+        listbox.config(yscrollcommand=scroll.set)
+
+        def _refresh():
+            listbox.delete(0, tk.END)
+            for s in self._admin_get_scope_catalog(data):
+                listbox.insert(tk.END, s)
+        _refresh()
+
+        entry_row = ttk.Frame(frm)
+        entry_row.grid(row=2, column=0, columnspan=2, sticky='ew', pady=(8, 0))
+        new_scope_var = tk.StringVar()
+        ttk.Entry(entry_row, textvariable=new_scope_var, width=28).pack(
+            side='left', padx=(0, 6))
+
+        def _add():
+            name = new_scope_var.get().strip()
+            ok, reason = self._admin_add_scope_to_catalog(name, data=data)
+            if not ok:
+                messagebox.showwarning("Could not add scope", reason)
+                return
+            new_scope_var.set("")
+            _refresh()
+
+        def _remove():
+            sel = listbox.curselection()
+            if not sel:
+                messagebox.showinfo("No scope selected",
+                                    "Select a scope in the list first.")
+                return
+            name = listbox.get(sel[0])
+            if not messagebox.askyesno(
+                    "Remove scope",
+                    f"Remove \u201c{name}\u201d from the catalog?\n\n"
+                    "This does not change any file's or user's already-"
+                    "assigned scope — it only stops this name from being "
+                    "offered for new assignments going forward."):
+                return
+            self._admin_remove_scope_from_catalog(name, data=data)
+            _refresh()
+
+        ttk.Button(entry_row, text="➕ Add", command=_add).pack(side='left')
+
+        btns = ttk.Frame(frm)
+        btns.grid(row=3, column=0, columnspan=2, pady=(10, 0))
+        ttk.Button(btns, text="🗑 Remove Selected", command=_remove).pack(
+            side='left', padx=4)
+        ttk.Button(btns, text="Close", command=dlg.destroy).pack(
+            side='left', padx=4)
 
     # ── Slice 2: seat pool (child license keys) ────────────────────────────
     #  Provisioning Model A: David mints parent + N child keys, delivers them as
@@ -15341,6 +15897,8 @@ or from the Help menu."""
                    command=self._admin_send_token_to_user).pack(side='left', padx=4)
         ttk.Button(btn_row, text="📱 Send Token SMS",
                    command=self._admin_send_token_via_sms).pack(side='left', padx=4)
+        ttk.Button(btn_row, text="🏷️ Manage Scopes",
+                   command=self._admin_manage_scope_catalog_dialog).pack(side='left', padx=4)
         ttk.Button(btn_row, text="↻ Refresh",
                    command=self._admin_refresh_table).pack(side='right')
         ttk.Button(btn_row, text="☁ Refresh Seats",
@@ -15738,14 +16296,44 @@ or from the Help menu."""
         role_cb.grid(row=5, column=1, columnspan=2, **pad)
 
         # ── Row 6: Scopes ──────────────────────────────────────────────────
+        # SCOPE_SIMPLIFICATION_SPEC.md section 3.3a: multi-select from the
+        # admin-managed catalog (Admin tab -> 🏷️ Manage Scopes) instead of
+        # free-typed comma-separated text -- picking from a controlled list
+        # prevents near-duplicate scopes ("office" vs "Office" vs
+        # "offices") from silently fragmenting search results.
         ttk.Label(frm, text="Scopes:").grid(row=6, column=0, sticky='ne', **pad)
-        scopes_var = tk.StringVar(value=", ".join(ex.get("scopes") or []))
-        scopes_entry = ttk.Entry(frm, textvariable=scopes_var, width=34)
-        scopes_entry.grid(row=6, column=1, columnspan=2, **pad)
-        ttk.Label(frm, text="(the data groups this user may access — you define "
-                            "these, e.g. scope:sales, scope:office, scope:ops)",
-                  font=('Segoe UI', 8)).grid(row=7, column=1, columnspan=2,
-                                             sticky='w', padx=8)
+        _catalog = self._admin_get_scope_catalog()
+        _ex_scopes_raw = list(ex.get("scopes") or [])
+        import scope_lookup as _sl
+        _display_scopes = _sl.scope_picker_options(_catalog, _ex_scopes_raw)
+        _ex_scopes_canon = _sl.scope_picker_selected(_ex_scopes_raw)
+
+        scopes_frame = ttk.Frame(frm)
+        scopes_frame.grid(row=6, column=1, columnspan=2, sticky='ew', **pad)
+        scopes_listbox = tk.Listbox(scopes_frame, selectmode='extended',
+                                    height=min(6, max(3, len(_display_scopes) or 3)),
+                                    exportselection=False)
+        scopes_listbox.pack(side='left', fill='both', expand=True)
+        scopes_scroll = ttk.Scrollbar(scopes_frame, orient='vertical',
+                                      command=scopes_listbox.yview)
+        scopes_scroll.pack(side='left', fill='y')
+        scopes_listbox.config(yscrollcommand=scopes_scroll.set)
+        for _i, _s in enumerate(_display_scopes):
+            scopes_listbox.insert(tk.END, _s)
+            if _s in _ex_scopes_canon:
+                scopes_listbox.selection_set(_i)
+
+        if not _catalog:
+            ttk.Label(frm, text="(no scopes in the catalog yet — add some via "
+                                "🏷️ Manage Scopes on the Admin tab)",
+                      font=('Segoe UI', 8), foreground='gray'
+                      ).grid(row=7, column=1, columnspan=2, sticky='w', padx=8)
+        else:
+            ttk.Label(frm, text="(the data groups this user may access — "
+                                "Ctrl/Shift-click to select multiple; manage the "
+                                "list via 🏷️ Manage Scopes on the Admin tab)",
+                      font=('Segoe UI', 8)).grid(row=7, column=1, columnspan=2,
+                                                 sticky='w', padx=8)
 
         # ── Row 8: Manage users checkbox ───────────────────────────────────
         manage_var = tk.BooleanVar(value=bool(ex.get("can_manage_users")))
@@ -15825,7 +16413,7 @@ or from the Help menu."""
                                        parent=dlg)
                 return
             full_name = f"{first} {last}"
-            scopes = [s.strip() for s in scopes_var.get().split(",") if s.strip()]
+            scopes = [scopes_listbox.get(_i) for _i in scopes_listbox.curselection()]
             chosen_key = key_labels.get(seat_var.get(), "")
             _role = role_var.get()
             _can_manage = True if _role == "owner" else bool(manage_var.get())
@@ -18357,6 +18945,70 @@ or from the Help menu."""
             return "scope:" + s.split(":", 1)[1].strip()
         return "scope:" + s
 
+    # ── Update Index tab: editable scope column (SCOPE_SIMPLIFICATION_SPEC.md
+    # section 3.3b) ─────────────────────────────────────────────────────────
+    # A scope change made here does NOT write to scope_map immediately -- it
+    # is staged in self._pending_scope_changes_dict (normalized_path ->
+    # scope) and only committed (written + triggers the existing purge/
+    # rebuild reindex, which now tags fresh chunks with the new scope) when
+    # the operator runs Update Selected / Update All. See
+    # _commit_pending_scope_changes(), called from update_directory_worker
+    # and update_all_worker before the actual reindex work starts.
+
+    def _get_pending_scope_changes(self) -> dict:
+        """Lazily-initialized in-memory {normalized_path: staged_scope} map.
+        Same shape as scope_map itself -- staging and committing are just
+        scope_lookup.set_scope_for_path()/get_scope_map() calls against a
+        different dict, no separate data structure needed."""
+        if not hasattr(self, "_pending_scope_changes_dict"):
+            self._pending_scope_changes_dict = {}
+        return self._pending_scope_changes_dict
+
+    def _tracked_row_scope_text(self, directory, scope_rules, scope_default):
+        """Text to show in a tracked-directory list row's scope column:
+        the persisted scope, or a staged-but-not-yet-committed replacement
+        if one exists for this path."""
+        import scope_lookup as _sl
+        resolved = self._display_scope(
+            self._resolve_scope_for_path(directory, scope_rules, scope_default))
+        pending = self._get_pending_scope_changes().get(
+            _sl.normalize_path_for_match(directory))
+        return _sl.format_scope_display(resolved, pending)
+
+    def _commit_pending_scope_changes(self, directories):
+        """Called at the start of update_directory_worker/update_all_worker,
+        before the actual reindex work: for every path in `directories` that
+        has a staged scope change, persist it to scope_map (via
+        _admin_save_users, so it gets the same atomic-write + collection_map-
+        sync path as every other users.json edit) and clear it from the
+        pending dict. The reindex that follows immediately after already
+        purges and rebuilds every chunk for that path unconditionally --
+        committing the scope_map entry FIRST means build_scope_resolver()
+        (which re-reads scope_map fresh on every call) tags the freshly-
+        rebuilt chunks with the new scope, with no separate purge step
+        needed here.
+
+        Silently does nothing if server mode isn't active or nothing is
+        pending for these paths -- always safe to call unconditionally."""
+        pending = self._get_pending_scope_changes()
+        if not pending or not self._is_business_server_mode():
+            return
+        import scope_lookup as _sl
+        keys_to_commit = {
+            _sl.normalize_path_for_match(d) for d in (directories or [])
+        }
+        to_commit = {k: v for k, v in pending.items() if k in keys_to_commit}
+        if not to_commit:
+            return
+        data = self._admin_load_users()
+        scope_map = _sl.get_scope_map(data)
+        for norm_path, scope in to_commit.items():
+            scope_map = _sl.set_scope_for_path(scope_map, norm_path, scope)
+        data["scope_map"] = scope_map
+        self._admin_save_users(data)
+        for norm_path in to_commit:
+            pending.pop(norm_path, None)
+
     def refresh_tracked_dirs(self):
         """Refresh tracked directories list from the auto-update tracking file.
 
@@ -18405,9 +19057,9 @@ or from the Help menu."""
                     else:
                         prefix = "[R] "
                     self.tracked_listbox.insert(  # v7.0.1 Q4: scope column in server mode
-                          tk.END,
-                          (f"{prefix} {self._display_scope(self._resolve_scope_for_path(directory, _scope_rules, _scope_default)):<13} {directory}"
-                           if _server_scope else f"{prefix} {directory}"))
+                        tk.END,
+                        (f"{prefix} {self._tracked_row_scope_text(directory, _scope_rules, _scope_default):<20} {directory}"
+                         if _server_scope else f"{prefix} {directory}"))
                     self._tracked_raw_paths.append(directory)
             else:
                 self.tracked_listbox.insert(
@@ -18858,14 +19510,20 @@ or from the Help menu."""
             sys.stdout = TextRedirector(self.output_queue, 'update')
             is_file = Path(directory).is_file()
 
-            # Build collection_resolver for server mode
+            # Commit any staged scope change for this path BEFORE indexing --
+            # build_scope_resolver below re-reads scope_map fresh, so this
+            # must land first for the reindex that follows to tag chunks
+            # with the new scope. See SCOPE_SIMPLIFICATION_SPEC.md section
+            # 3.3b.
+            self._commit_pending_scope_changes([directory])
+
+            # SCOPE_SIMPLIFICATION_SPEC.md section 3.7 (Phase 7 cutover,
+            # 2026-07-16): no longer builds a collection_resolver -- there is
+            # only one physical collection now. Scope is carried entirely by
+            # build_scope_resolver()'s "scope" chunk-metadata tag (wired into
+            # index_file_list/command_update already), not by which physical
+            # collection a file's chunks are routed into.
             _col_resolver_upd = None
-            if self._is_business_server_mode():
-                try:
-                    from rag_preprocessor import build_collection_resolver
-                    _col_resolver_upd = build_collection_resolver()
-                except Exception:
-                    pass
 
             if is_file:
                 # Individual tracked file — check mtime before re-indexing
@@ -18904,14 +19562,15 @@ or from the Help menu."""
                 self.output_queue.put(('update', "No tracked directories or files found.\n"
                                                  "Index a directory or file first to start tracking it.\n"))
             else:
-                # Build collection_resolver once for the whole run (server mode only)
+                # Commit any staged scope changes for paths in this run BEFORE
+                # indexing -- see update_directory_worker's identical comment
+                # and SCOPE_SIMPLIFICATION_SPEC.md section 3.3b.
+                self._commit_pending_scope_changes(dirs)
+
+                # SCOPE_SIMPLIFICATION_SPEC.md section 3.7 (Phase 7 cutover,
+                # 2026-07-16): no longer builds a collection_resolver -- see
+                # update_directory_worker's identical comment.
                 _col_resolver = None
-                if self._is_business_server_mode():
-                    try:
-                        from rag_preprocessor import build_collection_resolver
-                        _col_resolver = build_collection_resolver()
-                    except Exception as _cre:
-                        print(f"   ⚠️  collection_resolver unavailable: {_cre}")
 
                 for i, entry in enumerate(dirs, 1):
                     entry_name = Path(entry).name or entry

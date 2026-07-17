@@ -798,6 +798,22 @@ CONFIG_FILE = Path.home() / '.rag_config.json'
 # recorded by the owner on a personal install. Set via Settings tab.
 OWNER_NAME: str = ""
 
+# Owner's home address — Street/City/State/ZIP, set via Settings tab under
+# the owner name field (added v8.1.3). Used by Proactive Alerts (Morning
+# Briefing fallback, Weekly Weather Watch) as the single source of truth
+# for "what town's weather should we check" — previously each job read
+# from its own separate, hardcoded default inside scheduler_engine.py's
+# config schema, with no GUI field of any kind to change it. Weather
+# lookups only use City/State/ZIP (Street isn't useful for geocoding);
+# Street is stored for completeness as part of a real mailing address,
+# not currently read by anything else. See ai_prowler_mcp.py's
+# _get_personal_owner_address()/_get_personal_owner_location_string() for
+# how this is actually consumed.
+OWNER_STREET: str = ""
+OWNER_CITY: str = ""
+OWNER_STATE: str = ""
+OWNER_ZIP: str = ""
+
 # Allow the test sandbox (and power users) to redirect ChromaDB to a different
 # directory via env var. AIPROWLER_TEST_STATE_DIR is the sandbox root; we place
 # the DB in a 'rag_database' subdir there — same layout as production.
@@ -810,6 +826,7 @@ def load_config():
     """Load configuration from file"""
     global OLLAMA_MODEL, OLLAMA_URL, CHUNK_SIZE, CHUNK_OVERLAP, SHOW_SOURCES, GPU_LAYERS, DEBUG_OUTPUT
     global ACTIVE_PROVIDER, PROVIDER_API_KEYS, PROVIDER_TIMEOUTS, OCR_DEBUG, OWNER_NAME
+    global OWNER_STREET, OWNER_CITY, OWNER_STATE, OWNER_ZIP
 
     config = {}
     if CONFIG_FILE.exists():
@@ -834,9 +851,10 @@ def load_config():
         except:
             pass
 
-    # owner_name is now stored in ~/.ai-prowler/config.json — read it from
-    # there so it survives reinstall. Takes priority over any legacy value
-    # that may still exist in ~/.rag_config.json.
+    # owner_name/owner_street/owner_city/owner_state/owner_zip are stored in
+    # ~/.ai-prowler/config.json — read them from there so they survive
+    # reinstall. Takes priority over any legacy value that may still exist
+    # in ~/.rag_config.json.
     try:
         _ai_cfg_path = Path.home() / '.ai-prowler' / 'config.json'
         if _ai_cfg_path.exists():
@@ -844,6 +862,10 @@ def load_config():
                 _ai_cfg = json.load(f)
             if _ai_cfg.get('owner_name', '').strip():
                 OWNER_NAME = _ai_cfg['owner_name'].strip()
+            OWNER_STREET = _ai_cfg.get('owner_street', OWNER_STREET)
+            OWNER_CITY   = _ai_cfg.get('owner_city',   OWNER_CITY)
+            OWNER_STATE  = _ai_cfg.get('owner_state',  OWNER_STATE)
+            OWNER_ZIP    = _ai_cfg.get('owner_zip',    OWNER_ZIP)
     except Exception:
         pass
 
@@ -895,7 +917,8 @@ def save_config(model=None, url=None, chunk_size=None, chunk_overlap=None,
                 show_sources=None, gpu_layers=None, mic_silence_secs=None,
                 debug_output=None, debug_view=None, auto_start_ollama=None,
                 active_provider=None, provider_api_keys=None, provider_timeouts=None,
-                ocr_debug=None, owner_name=None):
+                ocr_debug=None, owner_name=None, owner_street=None,
+                owner_city=None, owner_state=None, owner_zip=None):
     """Save configuration to file"""
     config = {}
 
@@ -927,12 +950,15 @@ def save_config(model=None, url=None, chunk_size=None, chunk_overlap=None,
     except:
         return False
 
-    # owner_name is stored in ~/.ai-prowler/config.json (not CONFIG_FILE) so
-    # it survives reinstall — the uninstaller always deletes ~/.rag_config.json
-    # but never touches ~/.ai-prowler/. Also allows _get_personal_owner_name()
-    # to read it fresh on every call without depending on the stale in-memory
-    # OWNER_NAME global (fixes live-update bug when name is set mid-session).
-    if owner_name is not None:
+    # owner_name/owner_street/owner_city/owner_state/owner_zip are stored in
+    # ~/.ai-prowler/config.json (not CONFIG_FILE) so they survive reinstall —
+    # the uninstaller always deletes ~/.rag_config.json but never touches
+    # ~/.ai-prowler/. Also allows _get_personal_owner_name()/
+    # _get_personal_owner_address() to read fresh on every call without
+    # depending on the stale in-memory OWNER_* globals (fixes live-update
+    # bug when these are set mid-session).
+    if any(v is not None for v in
+          (owner_name, owner_street, owner_city, owner_state, owner_zip)):
         try:
             _ai_cfg_path = Path.home() / '.ai-prowler' / 'config.json'
             _ai_cfg_path.parent.mkdir(parents=True, exist_ok=True)
@@ -943,7 +969,16 @@ def save_config(model=None, url=None, chunk_size=None, chunk_overlap=None,
                         _ai_cfg = json.load(f)
                 except Exception:
                     pass
-            _ai_cfg['owner_name'] = owner_name.strip()
+            if owner_name is not None:
+                _ai_cfg['owner_name'] = owner_name.strip()
+            if owner_street is not None:
+                _ai_cfg['owner_street'] = owner_street.strip()
+            if owner_city is not None:
+                _ai_cfg['owner_city'] = owner_city.strip()
+            if owner_state is not None:
+                _ai_cfg['owner_state'] = owner_state.strip()
+            if owner_zip is not None:
+                _ai_cfg['owner_zip'] = owner_zip.strip()
             with open(_ai_cfg_path, 'w', encoding='utf-8') as f:
                 json.dump(_ai_cfg, f, indent=2)
         except Exception:
@@ -2731,6 +2766,7 @@ def build_rich_metadata(filepath: str, filename: str, chunk_idx: int,
                         document_id: str = '',
                         file_modified: str = '',
                         file_size_bytes: int = 0,
+                        scope: str = '',
                         extra: dict = None) -> dict:
     """Assemble the full rich metadata dict for a single chunk.
 
@@ -2747,6 +2783,15 @@ def build_rich_metadata(filepath: str, filename: str, chunk_idx: int,
         document_id:    SHA-256 content hash string.
         file_modified:  ISO timestamp of file's last modification.
         file_size_bytes: File size in bytes.
+        scope:          Server-mode scope tag (e.g. 'sales', 'shared',
+                        'private:<id>') from scope_lookup.resolve_scope_
+                        for_path(), via build_scope_resolver(). Empty
+                        string in personal mode -- see
+                        SCOPE_SIMPLIFICATION_SPEC.md section 3.3b. Added
+                        2026-07-16, additive: does not change which
+                        physical ChromaDB collection a chunk lands in
+                        yet, only tags it for the eventual single-
+                        collection query-side switch.
         extra:          Optional dict of additional fields (e.g. email_uid).
 
     Returns:
@@ -2775,6 +2820,8 @@ def build_rich_metadata(filepath: str, filename: str, chunk_idx: int,
         'doc_title':        doc_title,
         'chunk_header':     build_chunk_header(filepath, filename, chunk_idx,
                                                total_chunks, file_modified),
+        # ── Server-mode scope tag (new, 2026-07-16) ──
+        'scope':            scope,
     }
 
     if extra:
@@ -3162,63 +3209,79 @@ def resolve_collection_for_path(filepath: str, mapping: dict,
     return COLLECTION_NAME   # personal/Home fallback
 
 
-def build_collection_resolver(users_json_path: str = None) -> "callable | None":
-    """Build and return a collection_resolver(filepath)->logical_name callable
-    by reading collection_map rules from users.json.
+# SCOPE_SIMPLIFICATION_SPEC.md section 3.7 (Phase 7 cleanup, 2026-07-17):
+# build_collection_resolver() (the collection_map-based WHERE router
+# rag_gui.py's Update Selected/Update All buttons and command_update()'s
+# unattended path used before the single-collection cutover) has been
+# removed -- zero remaining callers. There is only one physical collection
+# now; scope is carried entirely by build_scope_resolver() below, which
+# tags chunk metadata directly instead of proposing a collection target.
 
-    Returns None if:
-      - users.json does not exist or is unreadable
-      - edition/mode is not business/server
-      - no collection_map rules are defined
 
-    This is the safe entry point for rag_gui.py — it never raises.
+def build_scope_resolver(users_json_path: str = None) -> "callable | None":
+    """Build and return a scope_resolver(filepath)->scope_name callable by
+    reading scope_map from users.json, for tagging each indexed chunk's
+    metadata with a "scope" field (SCOPE_SIMPLIFICATION_SPEC.md section
+    3.3b -- the sole write-side scope-tagging mechanism now that
+    build_collection_resolver has been removed; see section 3.7).
 
-    IMPORTANT (fixed 2026-07-14, alongside command_update's identical fix
-    for the Scheduled Task/watchdog): the returned resolver now uses
-    scope_resolver.resolve_collection_for_unattended_path — the SAME safe
-    logic as the rest of this fix — instead of the general-purpose
-    resolve_collection_for_path. The GUI's "Update Selected"/"Update All"
-    buttons have no per-file acting-user context any more than the
-    Scheduled Task does (this whole function is parameterless — there was
-    never a real user identity to fall back to safely), so an unmatched
-    file must return None (meaning "skip, don't guess"), not silently fall
-    through to the single default 'documents' collection. default_collection
-    is deliberately NOT carried into the mapping here either — see
-    resolve_collection_for_unattended_path's docstring for the full
-    rationale. _cmd_get_col() in command_update() (the function this
-    resolver is actually passed into) already knows how to turn a None
-    return into a clean per-file skip rather than a silent misroute.
+    Returns None if users.json does not exist or is unreadable/malformed
+    -- callers should treat None as "personal mode, scope tagging not
+    applicable" and simply omit the scope field (build_rich_metadata's
+    scope='' default already handles that).
+
+    IMPORTANT: an EMPTY
+    scope_map (server mode, but the admin hasn't assigned any scopes yet)
+    is NOT treated as "not applicable" here -- it still returns a working
+    resolver, because scope_lookup.resolve_scope_for_path() has its own
+    safe default: an unmatched path resolves to "shared", never None
+    (direct product decision, section 3.4 -- unscoped tracked content is
+    indexed and shared-visible immediately, never skipped). Bailing out
+    on an empty scope_map the way the collection resolver does would
+    incorrectly disable ALL scope tagging -- including private-folder-by-
+    convention resolution -- for every server-mode install until the
+    admin has assigned at least one explicit scope, which is exactly the
+    kind of silent gap this whole redesign exists to eliminate.
+
+    Test sandbox: honors the AIPROWLER_TEST_STATE_DIR env var the same way
+    ai_prowler_mcp.py's _state_dir() (the AUTHENTICATION layer's users.json
+    resolver) and this module's own CHROMA_DB_PATH redirect already do --
+    found and fixed 2026-07-17 after e2e test failures traced scope=''
+    tags on every chunk back to this function silently reading the
+    operator's real ~/.ai-prowler/users.json (unrelated to the sandbox)
+    instead of the sandboxed one, since AIPROWLER_TEST_STATE_DIR only
+    redirected ChromaDB, not this. Without this, indexing under the e2e
+    sandbox always resolves scope tagging against whatever (if anything)
+    happens to exist in the real production users.json -- not the test's
+    fixture data -- and any real production scope_map entirely unrelated
+    to the temp paths in play).
     """
     import json as _json
+    import os as _os
     from pathlib import Path as _Path
 
-    # Determine users.json path
     if users_json_path is None:
-        users_json_path = str(_Path.home() / ".ai-prowler" / "users.json")
+        _test_state_dir = _os.environ.get("AIPROWLER_TEST_STATE_DIR", "").strip()
+        if _test_state_dir:
+            users_json_path = str(_Path(_test_state_dir) / "users.json")
+        else:
+            users_json_path = str(_Path.home() / ".ai-prowler" / "users.json")
 
     try:
         p = _Path(users_json_path)
         if not p.exists():
-            return None
+            return None   # personal mode -- no users.json at all
         data = _json.loads(p.read_text(encoding="utf-8-sig"))
         if not isinstance(data, dict):
             return None
-        cm = data.get("collection_map")
-        if not isinstance(cm, dict):
-            return None
-        rules = cm.get("rules")
-        if not rules:
-            return None
-        # Snapshot the mapping so the closure is self-contained. No
-        # default_collection — deliberately excluded, see docstring.
-        mapping = {"rules": list(rules)}
 
-        import scope_resolver as _sr
-        known_ids = _sr.known_user_ids(data)
+        import scope_lookup as _sl
+        # {} is a legitimate server-mode state -- see docstring above.
+        scope_map = _sl.get_scope_map(data)
+        privates_root = str(_Path.home() / "Documents" / "AI-Prowler-Server-privates")
 
-        def _resolver(fp, _m=mapping, _k=known_ids):
-            return _sr.resolve_collection_for_unattended_path(
-                fp, _m, known_ids=_k)
+        def _resolver(fp, _m=scope_map, _root=privates_root):
+            return _sl.resolve_scope_for_path(fp, _m, privates_root=_root)
         return _resolver
     except Exception:
         return None
@@ -3477,6 +3540,20 @@ def _index_file_list_impl(file_paths: list, label: str = "",
                 return _col_cache['__default__']
         return _col_cache[phys]
 
+    # ── Scope tagging (additive, SCOPE_SIMPLIFICATION_SPEC.md section 3.3b) ──
+    # Tags every chunk's metadata with a "scope" field, alongside (not
+    # instead of) the collection routing above. Personal mode (no
+    # users.json) resolves to None and every chunk's scope is simply ''.
+    _scope_resolver = build_scope_resolver()
+
+    def _scope_for_file(fp: str) -> str:
+        if _scope_resolver is None:
+            return ''
+        try:
+            return _scope_resolver(fp)
+        except Exception:
+            return ''
+
     # Pre-warm the default collection in personal mode so the variable exists
     # for the stale-chunk delete below (which used the old module-level
     # `collection` variable).  In server mode each file resolves its own.
@@ -3620,6 +3697,7 @@ def _index_file_list_impl(file_paths: list, label: str = "",
             document_id=prov['document_id'],
             file_modified=prov['file_modified'],
             file_size_bytes=prov['file_size_bytes'],
+            scope=_scope_for_file(filepath),
         ) for j in range(len(chunks))]
 
         _file_col = _get_col_for_file(filepath)
@@ -3745,6 +3823,17 @@ def index_email_archive(filepath: str,
     client, embedding_func = get_chroma_client()
     collection             = create_or_get_collection(client, embedding_func)
 
+    # ── Scope tagging (additive, SCOPE_SIMPLIFICATION_SPEC.md section 3.3b) ──
+    _scope_resolver = build_scope_resolver()
+
+    def _scope_for_file(fp: str) -> str:
+        if _scope_resolver is None:
+            return ''
+        try:
+            return _scope_resolver(fp)
+        except Exception:
+            return ''
+
     # ── Load existing email index for this file ────────────────────────────────
     email_db     = load_email_index()
     file_key     = filepath_norm
@@ -3833,6 +3922,7 @@ def index_email_archive(filepath: str,
             document_id=prov['document_id'],
             file_modified=prov['file_modified'],
             file_size_bytes=prov['file_size_bytes'],
+            scope=_scope_for_file(filepath_norm),
             extra={"email_uid": uid},
         ) for j in range(len(chunks))]
 
@@ -3951,6 +4041,17 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False,
     # Convenience alias used below — same as before for personal mode.
     collection = _get_col_d
 
+    # ── Scope tagging (additive, SCOPE_SIMPLIFICATION_SPEC.md section 3.3b) ──
+    _scope_resolver_d = build_scope_resolver()
+
+    def _scope_for_file_d(fp: str) -> str:
+        if _scope_resolver_d is None:
+            return ''
+        try:
+            return _scope_resolver_d(fp)
+        except Exception:
+            return ''
+
     # Find all files — skip binaries, executables and known-useless dirs
     all_files = []
     if recursive:
@@ -4029,6 +4130,7 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False,
             document_id=prov['document_id'],
             file_modified=prov['file_modified'],
             file_size_bytes=prov['file_size_bytes'],
+            scope=_scope_for_file_d(filepath),
         ) for j in range(len(chunks))]
         
         # Remove any existing chunks for this file before re-adding
@@ -5809,20 +5911,15 @@ def command_update(directory, recursive=True, auto_confirm=False,
       • BAT  -> rag_auto_update.bat scheduled task
     Fixing it here covers all four entry-points simultaneously.
     """
-    if collection_resolver is None and indexer_user is None:
-        _status, _target = _resolve_unattended_directory_scope(directory)
-        if _status == "blocked":
-            _reason = ("no collection_map rule safely matches this path "
-                      "(or its rule points at a user who no longer exists)")
-            print(f"⚠️  Skipping {directory} — {_reason}. Add a scope rule "
-                  f"for this directory in the Admin tab, or update it "
-                  f"manually via the GUI/MCP tools (which route through a "
-                  f"real user) to fix it.")
-            _log_scope_skip("command_update", directory, _reason)
-            return
-        if _status == "scoped":
-            collection_resolver = lambda _fp, _c=_target: _c
-        # "personal" -> collection_resolver stays None, unchanged behavior.
+    # SCOPE_SIMPLIFICATION_SPEC.md section 3.7 (Phase 7 cutover, 2026-07-16):
+    # this used to auto-build a collection_resolver from collection_map for
+    # unattended callers (this function's own CLI/Scheduled-Task path, which
+    # never supplies one). Removed -- there is only one physical collection
+    # now, so collection_resolver stays whatever the caller passed (None,
+    # unchanged behavior) and every file lands in the single default
+    # collection. Scope is carried entirely by build_scope_resolver()'s
+    # "scope" chunk-metadata tag (see build_rich_metadata), not by which
+    # physical collection a file's chunks are routed into.
 
     # ── Route individually-tracked files to index_file_list ──────────────────
     # File targets bypass SKIP_EXTENSIONS (smart-scan restrictions are for
@@ -5830,6 +5927,7 @@ def command_update(directory, recursive=True, auto_confirm=False,
     target_path = Path(directory)
     if target_path.exists() and target_path.is_file():
         return _update_tracked_file(directory, auto_confirm=auto_confirm)
+
 
     print("=" * 70)
     print("🔍 CHECKING FOR CHANGES")
@@ -5918,6 +6016,22 @@ def command_update(directory, recursive=True, auto_confirm=False,
 
     # Default collection (used for purge pass where we scan all collections)
     collection = _cmd_get_col()
+
+    # ── Scope tagging (additive, SCOPE_SIMPLIFICATION_SPEC.md section 3.3b) ──
+    # Deliberately independent of _cmd_get_col's strict "skip on no rule"
+    # behavior above -- a file that command_update indexes (because a
+    # collection_map rule matched) still gets a scope tag from the SEPARATE
+    # scope_map, which has its own, more permissive default (see
+    # build_scope_resolver's docstring: unmatched -> "shared", never skipped).
+    _cmd_scope_resolver = build_scope_resolver()
+
+    def _cmd_scope_for_file(fp: str) -> str:
+        if _cmd_scope_resolver is None:
+            return ''
+        try:
+            return _cmd_scope_resolver(fp)
+        except Exception:
+            return ''
 
     # ═══════════════════════════════════════════════════════════════════════════
     # PASS 1 — PURGE DELETED FILES
@@ -6041,6 +6155,7 @@ def command_update(directory, recursive=True, auto_confirm=False,
                 document_id=prov['document_id'],
                 file_modified=prov['file_modified'],
                 file_size_bytes=prov['file_size_bytes'],
+                scope=_cmd_scope_for_file(filepath),
             ) for j in range(len(chunks))]
 
             try:

@@ -1,26 +1,34 @@
 """
 tests/gui/test_server_status_tab.py
 =====================================
-GUI regression tests for v7.0.1:
+GUI regression tests for v7.0.1, updated in v8.1.3:
 
   CHANGE 1 — rag_gui.py: create_welcome_tab() routes to _create_server_status_tab()
              in Business Server mode instead of building the full Home page with
-             ad content, notification fetches, and GitHub traffic.
+             ad content and welcome-page UI.
 
   CHANGE 2 — rag_gui.py: _create_server_status_tab() builds a clean Server Status
              panel showing edition/mode, version, database path, chunk count,
              document count, tracked folder count, and a Refresh button.
+
+  CHANGE 3 (v8.1.3) — rag_gui.py: server mode now DOES fetch notifications and
+             run the version-update check (_notif_url set, _refresh_welcome_ad
+             scheduled) — only the ad/promo half stays disabled (_ad_url empty).
+             The resulting Download Update / View Release buttons surface in
+             show_notifications_status() (Help menu), not on the tab itself, so
+             the tab's stats-only layout is unchanged.
 
 Test IDs
 --------
   SS-01  Home mode: notebook tab 0 is labelled "🏠 Home" not "🖥️ Server"
   SS-02  Server mode: notebook tab 0 is labelled "🖥️ Server" not "🏠 Home"
   SS-03  Home mode: _refresh_welcome_ad is scheduled (ad/notif system active)
-  SS-04  Server mode: _refresh_welcome_ad is NOT called (no GitHub traffic)
+  SS-04  Server mode: _ad_url is empty string (no outbound ad fetch)
   SS-05  Server mode: _notif_frame attribute exists (shared code does not crash)
   SS-06  Server mode: _notif_widgets attribute is an empty list
   SS-07  Server mode: _ad_url is empty string (no outbound ad fetch)
-  SS-08  Server mode: _notif_url is empty string (no outbound notif fetch)
+  SS-08  Server mode: _notif_url is set to a real URL (version-update checks work)
+  SS-08b Server mode: _refresh_welcome_ad is callable without error
   SS-09  Server mode: _srv_status_vars dict contains expected keys
   SS-10  Server mode: _refresh_server_status populates chunk count from live DB
   SS-11  Server mode: _refresh_server_status populates db_path from rag_preprocessor
@@ -34,6 +42,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tkinter as tk
 from pathlib import Path
 
 import pytest
@@ -236,14 +245,43 @@ def test_ss07_server_mode_ad_url_empty(server_gui):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SS-08  Server mode: _notif_url is empty string
+# SS-08  Server mode: _notif_url is set (version-update checks work)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_ss08_server_mode_notif_url_empty(server_gui):
-    """_notif_url must be empty string in server mode — no notification fetch."""
-    assert getattr(server_gui.app, "_notif_url", "NOT_SET") == "", (
-        "SS-08 FAIL: _notif_url must be empty in server mode."
+def test_ss08_server_mode_notif_url_set_for_updates(server_gui):
+    """v8.1.3: _notif_url must be a real, non-empty URL in server mode —
+    identical to home mode's. Version-update notifications now ride the
+    same fetch in server mode too (see _create_server_status_tab), so an
+    admin can learn about and install updates via Help -> Notifications
+    Status, without the tab itself showing any ad/promo content (_ad_url
+    stays empty — see SS-04/SS-07)."""
+    notif_url = getattr(server_gui.app, "_notif_url", "")
+    assert notif_url, (
+        f"SS-08 FAIL: Server mode should have a non-empty _notif_url so "
+        f"version-update checks work. Got: {notif_url!r}"
     )
+    assert "github" in notif_url.lower() or "http" in notif_url.lower(), (
+        f"SS-08 FAIL: _notif_url should be a real URL. Got: {notif_url!r}"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SS-08b  Server mode: _refresh_welcome_ad is callable without error
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_ss08b_server_mode_refresh_welcome_ad_callable(server_gui):
+    """v8.1.3: _refresh_welcome_ad (the fetch that also drives the version-
+    update check) must exist and be callable in server mode without raising
+    — it's scheduled automatically via root.after() at tab construction and
+    every 24h thereafter, matching home mode's cadence."""
+    try:
+        server_gui.app._refresh_welcome_ad()
+        server_gui.pump()
+    except Exception as e:
+        pytest.fail(
+            f"SS-08b FAIL: _refresh_welcome_ad raised an exception in "
+            f"server mode: {e}"
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -411,3 +449,119 @@ def test_ss15_server_mode_telemetry_paths_set(server_gui):
         assert isinstance(val, Path), (
             f"SS-15 FAIL: {attr} should be a Path, got {type(val)}"
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SS-16 / SS-17  show_notifications_status(): Download Update button
+#                (v8.1.3 — the actual user-facing fix, both modes)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _widget_texts(widget):
+    """Recursively collect the 'text' option of every descendant widget."""
+    texts = []
+    try:
+        texts.append(str(widget.cget('text')))
+    except Exception:
+        pass
+    for child in widget.winfo_children():
+        texts.extend(_widget_texts(child))
+    return texts
+
+
+@pytest.fixture
+def notif_cache(request):
+    """Write a real notifications_cache.json for the duration of a test,
+    restoring whatever was there before on teardown. Mirrors the real-path
+    pattern the server_gui/home_gui fixtures already use for config.json."""
+    cache_path = Path.home() / ".ai-prowler" / "notifications_cache.json"
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    original = cache_path.read_text(encoding="utf-8") if cache_path.exists() else None
+
+    cache_path.write_text(json.dumps(request.param), encoding="utf-8")
+
+    yield cache_path
+
+    if original is not None:
+        cache_path.write_text(original, encoding="utf-8")
+    else:
+        try:
+            cache_path.unlink()
+        except Exception:
+            pass
+
+
+def _open_notifications_popup(gui_fixture):
+    """Call show_notifications_status() and return the new Toplevel it
+    created, by diffing root's children before/after."""
+    before = set(gui_fixture.app.root.winfo_children())
+    gui_fixture.app.show_notifications_status()
+    gui_fixture.pump()
+    after = set(gui_fixture.app.root.winfo_children())
+    new_windows = [w for w in (after - before) if isinstance(w, tk.Toplevel)]
+    assert new_windows, "show_notifications_status() did not open a Toplevel"
+    return new_windows[0]
+
+
+@pytest.mark.parametrize("notif_cache", [{
+    "notifications": [],
+    "latest_version": "99.0.0",
+    "update_url": "https://github.com/dvavro/AI-Prowler/releases/tag/v99.0.0",
+    "update_notes": "Test release notes",
+}], indirect=True)
+def test_ss16_server_mode_update_button_shown_when_newer(server_gui, notif_cache):
+    """v8.1.3: when a newer version is cached, the Notifications Status
+    popup must show a Download Update button — this is THE fix, since the
+    tab banner (_show_update_banner) never renders in server mode (lives
+    in an unpacked frame). Works identically for server and home mode since
+    show_notifications_status() has no mode branching."""
+    win = _open_notifications_popup(server_gui)
+    try:
+        texts = _widget_texts(win)
+        assert any("Download Update" in t for t in texts), (
+            f"SS-16 FAIL: no Download Update button found. Widget texts: {texts}"
+        )
+        assert any("View Release" in t for t in texts), (
+            f"SS-16 FAIL: no View Release button found. Widget texts: {texts}"
+        )
+    finally:
+        win.destroy()
+
+
+@pytest.mark.parametrize("notif_cache", [{
+    "notifications": [],
+    "latest_version": "0.0.1",
+    "update_url": "",
+    "update_notes": "",
+}], indirect=True)
+def test_ss17_server_mode_no_update_button_when_current(server_gui, notif_cache):
+    """v8.1.3: when the cached 'latest_version' is NOT newer than the
+    running version, no Download Update button should appear."""
+    win = _open_notifications_popup(server_gui)
+    try:
+        texts = _widget_texts(win)
+        assert not any("Download Update" in t for t in texts), (
+            f"SS-17 FAIL: Download Update button shown for a non-newer "
+            f"version. Widget texts: {texts}"
+        )
+    finally:
+        win.destroy()
+
+
+@pytest.mark.parametrize("notif_cache", [{
+    "notifications": [],
+    "latest_version": "99.0.0",
+    "update_url": "https://github.com/dvavro/AI-Prowler/releases/tag/v99.0.0",
+    "update_notes": "Test release notes",
+}], indirect=True)
+def test_ss18_home_mode_update_button_shown_when_newer(home_gui, notif_cache):
+    """v8.1.3: same behavior in home mode — no regression from adding the
+    button row, since it existed as a tab banner there before too."""
+    win = _open_notifications_popup(home_gui)
+    try:
+        texts = _widget_texts(win)
+        assert any("Download Update" in t for t in texts), (
+            f"SS-18 FAIL: no Download Update button found in home mode. "
+            f"Widget texts: {texts}"
+        )
+    finally:
+        win.destroy()

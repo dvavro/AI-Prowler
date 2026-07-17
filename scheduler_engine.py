@@ -11,12 +11,19 @@ Design:
   - All config lives in ~/.ai-prowler/scheduler_config.json
   - Never crashes the host process — all exceptions logged and swallowed
 
+v8.1.3: email_to/location/name are no longer read from this config at
+all. The send recipient now comes live from Settings -> Email
+Configuration (~/.ai-prowler/email_config.json's default_to — see
+_read_default_to_email()). The owner's name/address for job body text
+now comes live from Settings -> Owner Name (~/.ai-prowler/config.json's
+owner_name/owner_city/owner_state/owner_zip — see ai_prowler_mcp.py's
+_get_personal_owner_name()/_get_personal_owner_location_string()).
+These three keys may still be PRESENT in an existing config file for
+backward compatibility, but are dead weight — nothing reads them anymore.
+
 Config schema:
   {
     "enabled": true,
-    "email_to": "david.vavro1@gmail.com",
-    "location": "New Smyrna Beach, Florida",
-    "name": "David",
     "jobs": {
       "morning_briefing":      {"enabled": true,  "time": "07:00", "days": "weekdays"},
       "overdue_invoice_alert": {"enabled": true,  "time": "08:00", "days": "daily"},
@@ -41,12 +48,15 @@ _last_run: dict[str, str] = {}   # job_id -> "YYYY-MM-DD HH:MM" of last run
 # ── Config ────────────────────────────────────────────────────────────────────
 
 def load_config() -> dict:
-    """Load scheduler config, returning defaults if missing."""
+    """Load scheduler config, returning defaults if missing.
+
+    v8.1.3: no longer defaults email_to/location/name to anything — those
+    keys are dead weight now (see module docstring). An existing config
+    file with those keys still present is left untouched (harmless), but
+    nothing reads them anymore.
+    """
     defaults = {
         "enabled":  False,
-        "email_to": "",
-        "location": "New Smyrna Beach, Florida",
-        "name":     "David",
         "jobs": {}
     }
     try:
@@ -246,6 +256,26 @@ _thread: threading.Thread | None = None
 _stop_event: threading.Event | None = None
 
 
+def _read_default_to_email() -> str:
+    """Read the recipient address from Settings -> Email Configuration
+    (~/.ai-prowler/email_config.json's default_to — the same file
+    configure_email() writes). Added v8.1.3, replacing scheduler_config.
+    json's own separate email_to field, which had its own hardcoded
+    default and no relationship to the actual SMTP setup — a real bug
+    where the "sent" recipient and the configured SMTP default_to could
+    silently be two different addresses. Never raises; "" means not
+    configured, which the caller must treat as "nowhere to send this,
+    skip the tick" rather than guessing an address."""
+    try:
+        p = Path.home() / ".ai-prowler" / "email_config.json"
+        if not p.exists():
+            return ""
+        cfg = json.loads(p.read_text(encoding="utf-8-sig")) or {}
+        return (cfg.get("default_to") or "").strip()
+    except Exception:
+        return ""
+
+
 def _tick() -> None:
     """Called every 60 seconds. Checks which jobs are due and runs them."""
     global _last_run
@@ -259,9 +289,11 @@ def _tick() -> None:
     if not cfg.get("enabled"):
         return
 
-    email_to = cfg.get("email_to", "").strip()
+    email_to = _read_default_to_email()
     if not email_to:
-        _log("WARNING: email_to not configured — alerts have nowhere to go")
+        _log("WARNING: no default recipient configured — go to Settings -> "
+             "Email Configuration and set a default recipient. Alerts have "
+             "nowhere to go.")
         return
 
     now = datetime.datetime.now()
@@ -374,13 +406,16 @@ def run_job_now(job_id: str) -> str:
         if result is None:
             return "ℹ️ Job ran but had nothing to report."
         subject, body = result
-        email_to = cfg.get("email_to", "").strip()
+        # v8.1.3: recipient comes from Settings -> Email Configuration's
+        # default_to, same as _tick() — see _read_default_to_email().
+        email_to = _read_default_to_email()
         if email_to:
             ok = _send_email(email_to, subject, body)
             _last_run[job_id] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
             _save_last_run()
             return f"✅ Sent: {subject}" if ok else f"⚠️ Generated but email failed: {subject}"
         else:
-            return f"⚠️ No email configured. Would have sent: {subject}"
+            return f"⚠️ No default recipient configured (Settings -> Email " \
+                   f"Configuration). Would have sent: {subject}"
     except Exception:
         return f"❌ Error: {traceback.format_exc()}"

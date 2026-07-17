@@ -39,7 +39,6 @@ users.json schema (key = bearer token, value = user record):
 
 import sys
 import json
-import pytest
 import tempfile
 import os
 from pathlib import Path
@@ -53,11 +52,10 @@ if str(_SRC) not in sys.path:
 # These are module-level pure functions — no server startup needed.
 from ai_prowler_mcp import (
     _resolve_user,
-    _allowed_collections,
+    _allowed_scopes,
     _can_index,
     _can_manage_user_data,
     _can_purge_chunks,
-    _chunk_owners,
     _owner_user_id,
     _check_db_cap,
     _user_has_role,
@@ -66,8 +64,6 @@ from ai_prowler_mcp import (
     _canon_scope,
     _ROLE_CAPS,
     _USER_ROLES,
-    _SHARED_COLLECTION,
-    _OWNERLESS,
 )
 import scope_resolver as sr
 
@@ -328,80 +324,105 @@ class TestBearerTokenEnforcement:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# SECTION C — _allowed_collections: scope isolation per user
+# SECTION C — _allowed_scopes: scope isolation per user
+# SCOPE_SIMPLIFICATION_SPEC.md section 3.6/3.7 (2026-07-16/17): the old
+# multi-collection _allowed_collections() (a list of physical ChromaDB
+# collections a user's search could open, with an owner/admin
+# all_role_collections elevation carve-out) is GONE. Replaced by
+# _allowed_scopes() -- a set of SCOPE STRINGS used as a metadata where-filter
+# against the single unified collection. No all_role_collections parameter
+# exists any more: there IS no role-based elevation, for anyone, including
+# owner -- a direct, deliberate product decision (see _allowed_scopes'
+# own docstring). An owner who wants to search "office" needs "office" in
+# their own scopes list, exactly like anyone else.
 # ════════════════════════════════════════════════════════════════════════════
 
-class TestAllowedCollections:
+class TestAllowedScopes:
 
     def test_owner_always_has_shared(self):
-        cols = _allowed_collections(OWNER)
-        assert _SHARED_COLLECTION in cols
+        scopes = _allowed_scopes(OWNER)
+        assert "shared" in scopes
 
-    def test_owner_has_private_collection(self):
-        cols = _allowed_collections(OWNER)
-        assert f"user:{OWNER['id']}" in cols
+    def test_owner_has_own_private_scope(self):
+        scopes = _allowed_scopes(OWNER)
+        assert f"private:{OWNER['id']}" in scopes
 
-    def test_owner_with_all_role_collections_sees_all(self):
-        all_role = ["scope:sales", "scope:office", "scope:warehouse"]
-        cols = _allowed_collections(OWNER, all_role_collections=all_role)
-        for c in all_role:
-            assert c in cols
+    def test_owner_sees_only_own_assigned_scopes_not_every_scope(self):
+        """Direct product decision: owner gets NO elevation. OWNER's fixture
+        has scopes=["sales", "office"] -- they see exactly those, nothing
+        more, the same as any other role would for the same assignment."""
+        scopes = _allowed_scopes(OWNER)
+        assert "sales" in scopes
+        assert "office" in scopes
+        assert "warehouse" not in scopes  # not assigned to OWNER -- not elevated in either
 
     def test_manager_sees_assigned_scopes(self):
-        cols = _allowed_collections(MANAGER)
-        # scopes: ["sales", "office"] → canonicalized to scope:sales, scope:office
-        assert "scope:sales" in cols
-        assert "scope:office" in cols
+        scopes = _allowed_scopes(MANAGER)
+        # scopes: ["sales", "office"] -- bare names now (no scope: prefix
+        # in the single-collection metadata-filter design).
+        assert "sales" in scopes
+        assert "office" in scopes
 
     def test_manager_sees_shared(self):
-        cols = _allowed_collections(MANAGER)
-        assert _SHARED_COLLECTION in cols
+        scopes = _allowed_scopes(MANAGER)
+        assert "shared" in scopes
 
-    def test_manager_has_private_collection(self):
-        cols = _allowed_collections(MANAGER)
-        assert f"user:{MANAGER['id']}" in cols
+    def test_manager_has_own_private_scope(self):
+        scopes = _allowed_scopes(MANAGER)
+        assert f"private:{MANAGER['id']}" in scopes
 
     def test_staff_sees_assigned_scopes(self):
-        cols = _allowed_collections(STAFF)
-        assert "scope:sales" in cols
+        scopes = _allowed_scopes(STAFF)
+        assert "sales" in scopes
 
-    def test_staff_has_private_collection(self):
-        cols = _allowed_collections(STAFF)
-        assert f"user:{STAFF['id']}" in cols
+    def test_staff_has_own_private_scope(self):
+        scopes = _allowed_scopes(STAFF)
+        assert f"private:{STAFF['id']}" in scopes
 
     def test_staff_does_not_see_unassigned_scope(self):
-        cols = _allowed_collections(STAFF)
-        assert "scope:office" not in cols
+        scopes = _allowed_scopes(STAFF)
+        assert "office" not in scopes
 
-    def test_field_crew_no_private_collection(self):
+    def test_field_crew_no_private_scope_when_disabled(self):
         """Bob has private_collection_enabled=False."""
-        cols = _allowed_collections(CREW)
-        assert f"user:{CREW['id']}" not in cols
+        scopes = _allowed_scopes(CREW)
+        assert f"private:{CREW['id']}" not in scopes
 
     def test_field_crew_sees_shared(self):
-        cols = _allowed_collections(CREW)
-        assert _SHARED_COLLECTION in cols
+        scopes = _allowed_scopes(CREW)
+        assert "shared" in scopes
 
     def test_none_user_returns_empty(self):
-        assert _allowed_collections(None) == []
+        assert _allowed_scopes(None) == set()
 
     # ── Cross-user isolation ──────────────────────────────────────────────────
 
-    def test_staff_alice_cannot_see_bob_private_collection(self):
-        alice_cols = _allowed_collections(STAFF)
-        assert f"user:{CREW['id']}" not in alice_cols
+    def test_staff_alice_cannot_see_bob_private_scope(self):
+        alice_scopes = _allowed_scopes(STAFF)
+        assert f"private:{CREW['id']}" not in alice_scopes
 
-    def test_manager_cannot_see_owner_private_collection_without_role_list(self):
-        """Manager without the all_role_collections list cannot see owner private."""
-        manager_cols = _allowed_collections(MANAGER)
-        assert f"user:{OWNER['id']}" not in manager_cols
+    def test_manager_cannot_see_owner_private_scope(self):
+        """No elevation for anyone -- manager never sees owner's private
+        scope, with no carve-out/parameter that could grant it."""
+        manager_scopes = _allowed_scopes(MANAGER)
+        assert f"private:{OWNER['id']}" not in manager_scopes
 
-    def test_owner_sees_other_user_private_when_given_role_list(self):
-        """Owner with read_others_private=True CAN see user:* if passed in."""
-        # Simulate the admin view — server would pass user:* collections too
-        all_role = [f"user:{STAFF['id']}", "scope:sales"]
-        cols = _allowed_collections(OWNER, all_role_collections=all_role)
-        assert f"user:{STAFF['id']}" in cols
+    def test_owner_cannot_see_staff_private_scope_either(self):
+        """The old test here (test_owner_sees_other_user_private_when_given_
+        role_list) asserted owner COULD see it when an admin-view
+        all_role_collections list was passed in. That parameter no longer
+        exists at all -- there is nothing to pass. Owner's visibility is
+        computed identically to everyone else's: their own scopes only."""
+        owner_scopes = _allowed_scopes(OWNER)
+        assert f"private:{STAFF['id']}" not in owner_scopes
+
+    def test_owner_cannot_see_scope_not_in_their_own_assignment(self):
+        """Replaces test_owner_with_all_role_collections_sees_all -- that
+        test's premise (an admin-supplied list of every business scope)
+        doesn't exist any more. Owner sees 'warehouse' only if 'warehouse'
+        is actually in their own user record's scopes list."""
+        scopes = _allowed_scopes(OWNER)
+        assert "warehouse" not in scopes
 
 
 # ════════════════════════════════════════════════════════════════════════════

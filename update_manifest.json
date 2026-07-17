@@ -1,21 +1,21 @@
 {
-  "version": "8.1.3",
-  "generated": "2026-07-15T14:47:31",
+  "version": "8.1.4",
+  "generated": "2026-07-17T19:31:18",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "9320085d19a202703d6ed1e492c204cac6b814f0da478aa038b2c77a22db5e6f",
-      "bytes": 1046658
+      "sha256": "70b14fdd3321c2c494b1aa630be874b7977650d0901a2e7925bf043feb1d0cf7",
+      "bytes": 1082058
     },
     {
       "path": "rag_preprocessor.py",
-      "sha256": "92d83f3b1c6bbba22c0cf625aa868db9e88512b70680e08e688d7b5de9c287c1",
-      "bytes": 294871
+      "sha256": "3e55e1172c3b1928352baf1d594c9d68c047faeb59503ff57d6956178b1f0156",
+      "bytes": 300780
     },
     {
       "path": "ai_prowler_mcp.py",
-      "sha256": "452149c655aba83b268bda6d9eeec9b6b853d56be71d4f5db3789e27bc219fcf",
-      "bytes": 754204
+      "sha256": "44817814ed882360f422b9d55785cff833f17f57f6ba6cc68ed327cce5bde758",
+      "bytes": 750480
     },
     {
       "path": "mcp_diagnostics.py",
@@ -59,12 +59,12 @@
     },
     {
       "path": "COMPLETE_USER_GUIDE.md",
-      "sha256": "d4ab2cf95ed9790fabe2371bf39a263b1649cd3c05d9842b7868aa9291fa3820",
-      "bytes": 143925
+      "sha256": "91cae62d9c9a21b66bd56913593152151d4d92e200212db38733df90450bc2b5",
+      "bytes": 149992
     },
     {
       "path": "VERSION",
-      "sha256": "52b1ca1b6f682dd4cd3fab312f12a06891212719793625d6d520c8ff595927b7",
+      "sha256": "f795e05b4a3a7a7ea168eb0711762c62db84c19803a564cc7a0631f1c61163f3",
       "bytes": 6
     },
     {
@@ -73,9 +73,14 @@
       "bytes": 8827
     },
     {
+      "path": "scope_lookup.py",
+      "sha256": "3fa43ac1680811b20675ac1bedbccd8dd3e354d0efce918a1124e97d2dd66e0f",
+      "bytes": 17304
+    },
+    {
       "path": "file_watchdog.py",
-      "sha256": "5b641b4a7a374e41b47a03717a5bdd65c2d2098b6dd30083e8e907c6a6052a0e",
-      "bytes": 30883
+      "sha256": "718dc4d4aebea7a753cf0cba870246e553f61f4c1b11d3ea947a2e95d4805e50",
+      "bytes": 26894
     },
     {
       "path": "subscription_client.py",
@@ -109,13 +114,13 @@
     },
     {
       "path": "scheduler_jobs.py",
-      "sha256": "2466609f019498364a1ef1ccb02a11e159e9967c43fe6d558f69b3816821940d",
-      "bytes": 16508
+      "sha256": "4086d0020a688dab15eb1561bb4442b2ecac36e05d13e195a3bb241bc6a7d2ae",
+      "bytes": 18374
     },
     {
       "path": "scheduler_engine.py",
-      "sha256": "8ca5826359c005d3dd642a9b7067616b8080600796cdee2b496818bccccc6bc8",
-      "bytes": 14254
+      "sha256": "fe4d1155dff8ec8771b73eef3126ea13474bd072f211810b0b2e0888e00f5fa8",
+      "bytes": 16175
     }
   ]
 }

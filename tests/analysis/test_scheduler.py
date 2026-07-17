@@ -366,11 +366,21 @@ class TestJobReturnTypes:
 
     def test_TC_SCHED_003_weather_watch_returns_tuple(self):
         import scheduler_jobs as sj
-        result = self._run_with_mocks(sj.job_weather_watch,
-                                      weather="Monday: Rain 72F")
+        with patch("scheduler_jobs._owner_location", return_value="New Smyrna Beach, FL"):
+            result = self._run_with_mocks(sj.job_weather_watch,
+                                          weather="Monday: Rain 72F")
         assert isinstance(result, tuple)
         _, body = result
         assert "Rain" in body
+
+    def test_TC_SCHED_003_weather_watch_returns_none_when_no_location_configured(self):
+        """v8.1.3: location now comes from Settings, not a hardcoded
+        default — with nothing configured, this must return None (silence)
+        rather than reporting on a guessed town."""
+        import scheduler_jobs as sj
+        with patch("scheduler_jobs._owner_location", return_value=""):
+            result = self._run_with_mocks(sj.job_weather_watch)
+        assert result is None
 
     def test_TC_SCHED_003_never_raises_on_exception(self):
         """All job functions must catch their own exceptions."""
@@ -418,7 +428,8 @@ class TestMorningBriefingPerJobWeather:
         return {"name": "David", "location": "New Smyrna Beach, Florida",
                 "email_to": "david.vavro1@gmail.com"}
 
-    def _run(self, jobs, weather_by_loc=None, ar="", sms="", tasks=None):
+    def _run(self, jobs, weather_by_loc=None, ar="", sms="", tasks=None,
+            owner_name="David", owner_location="New Smyrna Beach, Florida"):
         import scheduler_jobs as sj
         weather_by_loc = weather_by_loc or {}
 
@@ -427,6 +438,8 @@ class TestMorningBriefingPerJobWeather:
 
         with patch("scheduler_jobs._todays_jobs_structured", return_value=jobs), \
              patch("scheduler_jobs._weather", side_effect=_fake_weather), \
+             patch("scheduler_jobs._owner_name", return_value=owner_name), \
+             patch("scheduler_jobs._owner_location", return_value=owner_location), \
              patch("ai_prowler_mcp.get_ar_aging_report", return_value=ar), \
              patch("ai_prowler_mcp.list_sms_contacts_with_replies", return_value=sms), \
              patch("builtins.open", side_effect=FileNotFoundError):
@@ -458,6 +471,8 @@ class TestMorningBriefingPerJobWeather:
                 {"customer": "Job C", "city": "Port Orange", "state": "FL"},
             ]), \
              patch("scheduler_jobs._weather", side_effect=_counting_weather), \
+             patch("scheduler_jobs._owner_name", return_value="David"), \
+             patch("scheduler_jobs._owner_location", return_value="New Smyrna Beach, Florida"), \
              patch("ai_prowler_mcp.get_ar_aging_report", return_value=""), \
              patch("ai_prowler_mcp.list_sms_contacts_with_replies", return_value=""), \
              patch("builtins.open", side_effect=FileNotFoundError):
@@ -484,7 +499,8 @@ class TestMorningBriefingPerJobWeather:
 
     def test_TC_SCHED_011_job_missing_city_falls_back_to_config_location(self):
         """A job with no City on file must still get SOME weather check —
-        using config['location'], not silently skipping it."""
+        using the Settings-tab owner location (v8.1.3), not silently
+        skipping it."""
         import scheduler_jobs as sj
         calls = []
 
@@ -495,6 +511,8 @@ class TestMorningBriefingPerJobWeather:
         with patch("scheduler_jobs._todays_jobs_structured",
                    return_value=[{"customer": "No City Job"}]), \
              patch("scheduler_jobs._weather", side_effect=_counting_weather), \
+             patch("scheduler_jobs._owner_name", return_value="David"), \
+             patch("scheduler_jobs._owner_location", return_value="New Smyrna Beach, Florida"), \
              patch("ai_prowler_mcp.get_ar_aging_report", return_value=""), \
              patch("ai_prowler_mcp.list_sms_contacts_with_replies", return_value=""), \
              patch("builtins.open", side_effect=FileNotFoundError):
@@ -631,9 +649,12 @@ class TestSchedulerConfig:
                    tmp_path / "nonexistent.json"):
             cfg = se.load_config()
         assert "enabled" in cfg
-        assert "email_to" in cfg
         assert "jobs" in cfg
         assert cfg["enabled"] is False
+        # v8.1.3: email_to/location/name are no longer part of the default
+        # schema — they come live from Settings -> Email Configuration/
+        # Owner Name instead (see scheduler_engine.py's module docstring).
+        assert "email_to" not in cfg
 
     def test_TC_SCHED_005_save_and_load_roundtrip(self, tmp_path):
         import scheduler_engine as se
@@ -887,11 +908,14 @@ class TestSchedulerLifecycle:
         assert "❌" in result or "Unknown" in result
 
     def test_TC_SCHED_008_run_job_now_no_email_returns_warning(self):
+        """v8.1.3: no default recipient configured (via
+        _read_default_to_email(), not cfg['email_to']) must return the
+        warning, never silently 'succeed' with nowhere to send."""
         import scheduler_engine as se
-        # Config with no email_to
-        with patch("scheduler_engine.load_config",
-                   return_value={"email_to": "", "name": "Test",
-                                 "location": "Test"}), \
+        with patch("scheduler_engine.load_config", return_value={"jobs": {}}), \
+             patch("scheduler_engine._read_default_to_email", return_value=""), \
+             patch("scheduler_jobs._owner_name", return_value="Test"), \
+             patch("scheduler_jobs._owner_location", return_value="Test"), \
              patch("ai_prowler_mcp.get_ar_aging_report",
                    return_value="Current: $500"), \
              patch("ai_prowler_mcp.get_weather",
@@ -901,7 +925,7 @@ class TestSchedulerLifecycle:
              patch("ai_prowler_mcp.list_sms_contacts_with_replies",
                    return_value=""):
             result = se.run_job_now("morning_briefing")
-        assert "⚠️" in result or "No email" in result
+        assert "⚠️" in result or "No default recipient" in result
 
     def test_TC_SCHED_008_get_log_tail_returns_string(self, tmp_path):
         import scheduler_engine as se
@@ -1010,14 +1034,17 @@ class TestSchedulerEmailDeliveryContract:
         assert ok is False
 
     def test_TC_SCHED_009_run_job_now_end_to_end_delivery(self):
-        """End-to-end: run_job_now() with a configured email_to and a mocked
-        (real-signature-enforced) send_email must report success, not
-        'Generated but email failed'."""
+        """End-to-end: run_job_now() with a configured default recipient
+        (v8.1.3: from _read_default_to_email(), not cfg['email_to']) and a
+        mocked (real-signature-enforced) send_email must report success,
+        not 'Generated but email failed'."""
         import scheduler_engine as se
 
-        with patch("scheduler_engine.load_config",
-                   return_value={"email_to": "test@example.com",
-                                 "name": "Test", "location": "Test"}), \
+        with patch("scheduler_engine.load_config", return_value={"jobs": {}}), \
+             patch("scheduler_engine._read_default_to_email",
+                   return_value="test@example.com"), \
+             patch("scheduler_jobs._owner_name", return_value="Test"), \
+             patch("scheduler_jobs._owner_location", return_value="Test"), \
              patch("ai_prowler_mcp.get_ar_aging_report", return_value="Current: $0"), \
              patch("ai_prowler_mcp.get_weather", return_value="Sunny"), \
              patch("ai_prowler_mcp.read_job_spreadsheet", return_value=""), \

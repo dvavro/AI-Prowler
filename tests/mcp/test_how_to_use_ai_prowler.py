@@ -159,7 +159,8 @@ class TestToolCountFixed:
         result = mcp_mod.how_to_use_ai_prowler(ctx=None)
         assert "85 tools total" not in result
         assert "81 tools total" not in result
-        assert "83 tools total" in result
+        assert "83 tools total" not in result
+        assert "82 tools total" in result
 
     def test_count_correct_in_server_mode_too(self, mcp_mod, monkeypatch):
         user = _user("owner")
@@ -168,7 +169,8 @@ class TestToolCountFixed:
         result = mcp_mod.how_to_use_ai_prowler(ctx=_make_ctx(user))
         assert "85 tools total" not in result
         assert "81 tools total" not in result
-        assert "83 tools total" in result
+        assert "83 tools total" not in result
+        assert "82 tools total" in result
 
 
 class TestFooterVariesCorrectly:

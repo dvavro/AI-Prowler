@@ -288,6 +288,76 @@ def _get_personal_owner_name() -> str:
         return ""
 
 
+def _get_personal_owner_address() -> dict:
+    """Return the owner's home address (Street/City/State/ZIP) as a dict,
+    for personal-mode Proactive Alerts (Morning Briefing fallback, Weekly
+    Weather Watch). Reads fresh from ~/.ai-prowler/config.json on every
+    call, mirroring _get_personal_owner_name()'s live-update fix exactly —
+    set via Settings tab, no MCP server restart required to pick it up.
+
+    Added v8.1.3, replacing the old design where Proactive Alerts had its
+    own separate Location field with a hardcoded default and no
+    relationship to Settings at all. Falls back to the in-memory
+    _engine.OWNER_* globals (loaded at startup), then "" for any field
+    still unset — callers should treat an all-empty result as "the owner
+    hasn't configured an address yet" rather than erroring.
+
+    Returns:
+        {"street": str, "city": str, "state": str, "zip": str} — any/all
+        may be empty strings.
+    """
+    result = {"street": "", "city": "", "state": "", "zip": ""}
+    try:
+        _ai_cfg_path = Path.home() / '.ai-prowler' / 'config.json'
+        if _ai_cfg_path.exists():
+            with open(_ai_cfg_path, 'r', encoding='utf-8-sig') as _f:
+                _ai_cfg = json.load(_f)
+            result["street"] = (_ai_cfg.get('owner_street') or '').strip()
+            result["city"]   = (_ai_cfg.get('owner_city')   or '').strip()
+            result["state"]  = (_ai_cfg.get('owner_state')  or '').strip()
+            result["zip"]    = (_ai_cfg.get('owner_zip')    or '').strip()
+    except Exception:
+        pass
+    # Fallback to in-memory globals for any field the file didn't provide
+    # (e.g. file missing entirely, or an older config predating this field).
+    try:
+        if not result["street"]:
+            result["street"] = (_engine.OWNER_STREET or "").strip()
+        if not result["city"]:
+            result["city"] = (_engine.OWNER_CITY or "").strip()
+        if not result["state"]:
+            result["state"] = (_engine.OWNER_STATE or "").strip()
+        if not result["zip"]:
+            result["zip"] = (_engine.OWNER_ZIP or "").strip()
+    except Exception:
+        pass
+    return result
+
+
+def _get_personal_owner_location_string() -> str:
+    """Return the owner's City/State/ZIP as a single geocodable string for
+    weather lookups (get_weather() / _weather() in scheduler_jobs.py) —
+    Street is deliberately excluded, it's not useful for geocoding and can
+    make Nominatim's lookup less reliable, not more.
+
+    Returns "" (not a hardcoded fallback like "New Smyrna Beach, Florida")
+    when nothing is configured — callers must handle the empty case
+    explicitly (e.g. skip the weather section, or fall back to a job's own
+    City/State) rather than this function silently defaulting to any
+    particular person's real address.
+    """
+    addr = _get_personal_owner_address()
+    parts = []
+    if addr["city"]:
+        parts.append(addr["city"])
+    if addr["state"]:
+        parts.append(addr["state"])
+    loc = ", ".join(parts) if len(parts) > 1 else "".join(parts)
+    if addr["zip"]:
+        loc = f"{loc} {addr['zip']}".strip()
+    return loc
+
+
 @contextlib.contextmanager
 def _capture_stdout():
     """
@@ -811,7 +881,7 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "AI-Prowler — Agentic RAG Knowledge Base\n"
         + "=" * 50 + "\n\n"
 
-        "TOOL CATEGORIES (83 tools total — 82 visible in personal mode,\n"
+        "TOOL CATEGORIES (82 tools total — 82 visible in personal mode,\n"
         "54 visible in server mode; call check_tools_status() for a precise\n"
         "per-tool breakdown on this connection)\n"
         + "-" * 30 + "\n"
@@ -993,8 +1063,10 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "  scoped to the caller's own personal directory (blocked entirely if\n"
         "  they don't have one) — see the THIS CONNECTION footer below for\n"
         "  this specific caller's status. reset_write_counter() and\n"
-        "  restore_backup() are NOT available in server mode. reindex_file/\n"
-        "  reindex_directory/reindex_all are owner/manager only there.\n\n"
+        "  restore_backup() are NOT available in server mode. Indexing tools\n"
+        "  (index_path, update_tracked_directories, reindex_file/\n"
+        "  reindex_directory/reindex_all) are open to every role there —\n"
+        "  indexing isn't a data leak; only search access is scope-gated.\n\n"
 
         "DEV TOOLS — VERIFY CODE WITHOUT LEAVING THE CONVERSATION\n"
         + "-" * 30 + "\n"
@@ -1228,15 +1300,18 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         footer_lines += [
             f"Mode: Server  (role: {role}, user: {name})",
             "",
-            "Database / admin (index_path, update_tracked_directories, reindex_*,",
-            "untrack_directory, grant/revoke_write_access):",
+            "Indexing (index_path, update_tracked_directories, reindex_*):",
+            "  ✅ Full access — every role may index, update, and reindex the",
+            "     shared knowledge base. Indexing isn't a data leak — only",
+            "     search results are scope-gated (see allowed_scopes above).",
+            "",
+            "Tracking administration (untrack_directory,",
+            "list_tracked_directories) and write-zone grants",
+            "(grant_write_access, revoke_write_access):",
         ]
         manage_db = caps.get("manage_db", "none")
         if manage_db == "full":
-            footer_lines.append("  ✅ Full access — your role may manage the whole knowledge base.")
-        elif manage_db == "limited":
-            footer_lines.append("  ⚠️  Limited — you may index into your own private/assigned scopes")
-            footer_lines.append("     only; shared-collection and destructive operations are blocked.")
+            footer_lines.append("  ✅ Full access — your role may manage tracked paths and write grants.")
         else:
             footer_lines.append("  ⛔ Not available to your role — ask an owner or manager.")
 
@@ -1398,18 +1473,13 @@ def index_path(
                     `update_tracked_directories` calls will pick up changes
                     (default True).
 
-    Server mode role gating:
-        Owner / manager — index anywhere, routed per the company's
-        collection_map rules.
-        Staff — index into their own scopes/private collection per
-        collection_map / index_target.
-        Field_crew (or any role with no manage_db capability) — indexing is
-        allowed ONLY if the user has a private collection configured, and
-        ONLY for paths inside their own personal directory. Content always
-        lands in their own user:<id> collection regardless of any company
-        path→scope rule, and becomes semantically searchable to them (and
-        the owner) via search_documents like anything else they've indexed.
-        Users with no private collection set up cannot index at all.
+    Server mode: indexing is open to every role (v8.1.4) — there is no
+        longer a role gate here. Content always lands in the single
+        shared knowledge base, tagged with a "scope" (see search tools'
+        docs) rather than routed into a separate collection per role.
+        A path under a user's own private folder is still tagged
+        private to them automatically by naming convention. Access
+        control lives entirely at search time (scope-based), not here.
 
     Returns:
         Summary of how many files were indexed and any errors encountered.
@@ -1428,45 +1498,23 @@ def index_path(
     #   • purge_gate  — blocks overwriting/destroying chunks the user doesn't own.
     _user = _current_user(ctx)
 
-    # v7.0.1 Q1: staff or above required; field_crew cannot index — UNLESS
-    # they (or any role with manage_db='none') have a private collection set
-    # up, in which case indexing is allowed but strictly confined: the target
-    # path must resolve inside their own personal directory, and every chunk
-    # is force-routed to their own user:<id> collection regardless of any
-    # company path→scope rule. Mirrors the personal-directory write-scoping
-    # gate — same "own area only, or nothing" pattern, applied to indexing.
-    _db_ok, _db_reason = _check_db_cap(_user, "limited")
-    _private_only_index = False
-    if not _db_ok and _user is not None:
-        _priv_status, _priv_dir = _user_private_write_dir(ctx)
-        if _priv_status == "scoped":
-            _resolved_target = str(target.resolve())
-            if not _path_is_under(_resolved_target, str(_priv_dir)):
-                return (
-                    f"⛔ index_path: your role has no DB-management "
-                    f"permissions, and this path is outside your personal "
-                    f"directory ({_priv_dir}). You may only index files "
-                    f"inside your own personal directory."
-                )
-            _db_ok = True
-            _private_only_index = True
-            _db_reason = (
-                f"role '{_user.get('role')}' has no manage_db capability, "
-                "but has a private collection set up — indexing allowed, "
-                "confined to their own personal directory and collection"
-            )
-    if not _db_ok:
-        return f"⛔ index_path: {_db_reason}"
-
-    if _private_only_index:
-        # Force every chunk into the caller's own private collection —
-        # bypass company path→scope rules and index_target defaults
-        # entirely, so this narrower grant can never land content anywhere
-        # but the user's own private space.
-        _own_logical_collection = f"user:{_user['id']}"
-        _resolver = lambda _fp, _c=_own_logical_collection: _c
-    else:
-        _resolver = _build_collection_resolver(_user) if _user else None
+    # SCOPE_SIMPLIFICATION_SPEC.md section 3.7 (Phase 7 cutover, 2026-07-16):
+    # direct product decision -- indexing is not a data leak (only search
+    # is), and every directory that can be indexed was already created and
+    # tracked by an admin/owner in the first place, so there is no
+    # arbitrary-path risk from letting any authenticated user trigger
+    # indexing on it. The old role-based manage_db gate (_check_db_cap) and
+    # the narrower "field_crew with a private collection may index ONLY
+    # inside their own personal directory, force-routed into their own
+    # collection" carve-out are both removed -- any authenticated (or
+    # personal-mode) caller may index any path. Content always lands in
+    # the single unified index; build_scope_resolver() still automatically
+    # tags anything under a <slug>-private folder as "private:<their own
+    # id>" via the same path-convention detection, so a user's own private
+    # content stays exactly as private as before -- nothing here weakens
+    # that, since the actual boundary was always enforced at search time
+    # (allowed_scopes()), not at index time.
+    _resolver = None
     _indexer_user = _user
     _purge_gate = None
     if _user:
@@ -1547,12 +1595,20 @@ def update_tracked_directories(directory: Optional[str] = None,
     # matters especially here: command_update PURGES deleted files (destructive).
     _user = _current_user(ctx)
 
-    # v7.0.1 Q1: full DB management required (owner or manager).
-    _db_ok, _db_reason = _check_db_cap(_user, "full")
-    if not _db_ok:
-        return f"⛔ update_tracked_directories: {_db_reason}"
-
-    _resolver = _build_collection_resolver(_user) if _user else None
+    # SCOPE_SIMPLIFICATION_SPEC.md section 3.7 (Phase 7 cutover, 2026-07-16):
+    # the role-based manage_db gate is removed -- see index_path's identical
+    # comment for the full rationale (indexing isn't a leak; every tracked
+    # path was already admin/owner-created). Destructive purging of deleted
+    # files (this tool's real risk, not indexing itself) is still protected
+    # separately by _purge_gate below, which is ownership-based, not role-
+    # based, and is unaffected by this change.
+    #
+    # No longer builds a collection_resolver either -- there is only one
+    # physical collection now. Scope is carried entirely by
+    # build_scope_resolver()'s "scope" chunk-metadata tag (wired into
+    # command_update already), not by which physical collection a file's
+    # chunks are routed into.
+    _resolver = None
     _purge_gate = None
     if _user:
         _oid = _owner_user_id()
@@ -1595,10 +1651,10 @@ def get_database_stats(ctx: Context = None) -> str:
 
     Personal mode: always covers the entire database (unchanged).
 
-    Server mode: scoped to the caller's accessible collections — owners (and
-    managers with read_all_role_scopes) still see the full company-wide
-    total; staff and field_crew see only their own private, assigned scope,
-    and shared collections, matching every other read tool.
+    Server mode: scoped to the caller's own accessible scopes — every role,
+    including owner, sees only their own private, assigned scope, and
+    shared totals (no role gets a company-wide-total exception), matching
+    every other read tool.
 
     Returns:
         A formatted statistics report.
@@ -1613,12 +1669,11 @@ def get_database_stats(ctx: Context = None) -> str:
         scoped_note = ""
 
         if user is None:
-            # Personal mode — unchanged. Fix v7.0.1: always enumerate ALL
-            # collections via list_collections() so the count matches
-            # check_ai_prowler_status exactly regardless of edition or mode.
-            # _scoped_collections_for_ctx(ctx) in personal mode only returns
-            # the single default 'documents' collection, missing any scoped
-            # collections left over from switching to/from Business Server.
+            # Personal mode — unchanged. Enumerate ALL physical collections
+            # via list_collections() so stats stay accurate even with old
+            # scoped collections still lingering from before the Phase 7
+            # single-collection cutover (they only fully disappear once the
+            # operator does a full wipe-and-reindex).
             try:
                 client, embedding_func = get_chroma_client()
                 all_cols = client.list_collections()
@@ -1630,28 +1685,31 @@ def get_database_stats(ctx: Context = None) -> str:
                 ]
             except RuntimeError:
                 return "📭 Database is empty or not yet created."
-        else:
-            # Server mode: scope to exactly what this caller can read — the
-            # same function search_documents()/get_knowledge_base_overview()
-            # already use, instead of a raw company-wide list_collections()
-            # enumeration. Owners (and managers with read_all_role_scopes)
-            # still see the full company-wide total via their real
-            # entitlement inside _scoped_collections_for_ctx(); staff and
-            # field_crew see only their own private + assigned scopes +
-            # shared collections, matching every other read tool.
-            _collections = _scoped_collections_for_ctx(ctx)
-            if not _collections:
-                return "📭 Database is empty or not yet created."
-            scoped_note = "  (scoped to your accessible collections)"
 
-        total_chunks = 0
-        metadatas = []
-        for _col in _collections:
-            c = _col.count()
-            total_chunks += c
-            if c:
-                sample = _col.get(limit=min(5000, c), include=["metadatas"])
-                metadatas.extend(sample.get('metadatas', []))
+            total_chunks = 0
+            metadatas = []
+            for _col in _collections:
+                c = _col.count()
+                total_chunks += c
+                if c:
+                    sample = _col.get(limit=min(5000, c), include=["metadatas"])
+                    metadatas.extend(sample.get('metadatas', []))
+        else:
+            # Server mode: scope to exactly what this caller can read via the
+            # single collection's "scope" metadata filter (SCOPE_SIMPLIFICATION_
+            # SPEC.md section 3.7) — same helper search_documents() and
+            # get_knowledge_base_overview() use.
+            coll, where_filter = _scoped_collections_for_ctx(ctx)
+            scoped_note = "  (scoped to your accessible scopes)"
+
+            id_probe = coll.get(where=where_filter, include=[])
+            total_chunks = len(id_probe.get('ids') or [])
+            if total_chunks == 0:
+                return "📭 Database is empty or not yet created."
+            sample = coll.get(where=where_filter, limit=min(5000, total_chunks),
+                              include=["metadatas"])
+            metadatas = sample.get('metadatas', [])
+
         if total_chunks == 0:
             return "📭 Database is empty."
 
@@ -1954,126 +2012,64 @@ def _get_collection():
 
 
 def _scoped_collections_for_ctx(ctx):
-    """Return the list of ChromaDB collection OBJECTS the current request may
-    read. v7.0.0 Phase B Step 2 — the shared foundation for the read tools that
-    access collections directly (via .get()/.query()) rather than delegating to
-    rag_preprocessor.search_documents.
+    """Return (collection, where_filter) for the current request.
 
-    Personal mode (no user on the request, i.e. ctx None or no .user): returns
-    [the single default 'documents' collection] — byte-for-byte the old
-    single-collection behavior, so these tools are unchanged for personal use.
+    SCOPE_SIMPLIFICATION_SPEC.md section 3.7 (Phase 7 cutover, query-side,
+    2026-07-17): there is only one physical ChromaDB collection now. This
+    used to return a LIST of collection OBJECTS (one per logical scope the
+    caller could read, built by _allowed_collections() + a multi-collection
+    fan-out with an owner/admin elevation carve-out to browse every role
+    and private collection on the server). That whole mechanism is gone.
 
-    Server mode (a user is present): returns one collection object per entry in
-    _allowed_collections(user), skipping any that don't exist yet. Logical scope
-    names are sanitized to physical names via chroma_collection_name().
+    Callers now get back exactly one collection plus a `where` dict to pass
+    into every .query()/.get() call on it -- access control is enforced by
+    filtering on each chunk's "scope" metadata field (build_scope_resolver,
+    wired into indexing) instead of by which physical collection existed.
 
-    Raises RuntimeError only in personal mode when nothing is indexed (preserves
-    the existing _get_collection error contract for the tools' try/except).
+    Returns:
+        (collection, where_filter) -- where_filter is None in personal mode
+        (no filtering needed/possible) or a real {"scope": {"$in": [...]}}
+        dict in server mode. An empty allowed-scopes set still produces a
+        real (non-None) filter with an empty $in list, which matches
+        nothing -- fail-closed, never fail-open.
+
+    Raises RuntimeError only in personal mode when nothing is indexed
+    (preserves the existing error contract every caller's try/except
+    already handles).
+
+    IMPORTANT CONSEQUENCE (documented, not silently dropped): the previous
+    owner/can_manage_users elevation to browse every team member's role
+    and private collection via search tools is GONE -- matches
+    _allowed_scopes()'s own "no role-based elevation, ever" direct product
+    decision (2026-07-16), which deliberately did not carry that carve-out
+    forward (see its docstring). The owner retains full filesystem access
+    to any directory directly (GUI, or list_writable_directories /
+    grant_write_access), and can still browse a user's private FOLDER on
+    disk -- what's gone is browsing another user's already-indexed private
+    CONTENT through search_documents et al.
     """
-    from rag_preprocessor import (get_chroma_client, COLLECTION_NAME,
-                                  chroma_collection_name)
+    from rag_preprocessor import get_chroma_client, COLLECTION_NAME
     client, embedding_func = get_chroma_client()
 
     user = _current_user(ctx)
     if user is None:
-        # Personal mode — single collection, original contract (raises if absent).
+        # Personal mode -- single collection, no filter, original contract
+        # (raises if nothing indexed yet).
         try:
-            return [client.get_collection(name=COLLECTION_NAME,
-                                          embedding_function=embedding_func)]
+            coll = client.get_collection(name=COLLECTION_NAME,
+                                         embedding_function=embedding_func)
+            return (coll, None)
         except Exception:
             raise RuntimeError(
                 "No indexed documents found. "
                 "Use index_path to index some documents first.")
 
-    # Two SEPARATE elevated capabilities (decoupled by design):
-    #   • read_all_role_scopes (role cap; owner has it) → read every role:*
-    #     collection ("see all team knowledge bases").
-    #   • owner only → read every user:* PRIVATE collection for browsing.
-    #     can_manage_users grants ADMIN/DELETE rights (via _can_manage_user_data)
-    #     but NOT read-browse rights over other employees' private dirs.
-    #     Every user sees only their own private dir when browsing; the owner
-    #     sees all. This separation was clarified in v7.0.1 (Vicki bug fix).
-    caps = _role_caps(user.get("role"))
-    can_read_all_roles    = bool(caps.get("read_all_role_scopes")) or _is_admin(user)
-    # Only the owner gets full custody read over all user: private collections.
-    # Non-owner admins (can_manage_users=True) use _can_manage_user_data for
-    # cleanup operations but never browse other employees' private dirs.
-    can_read_all_privates = _user_has_role(user, "owner")
+    scopes = _allowed_scopes(user)
+    where_filter = {"scope": {"$in": sorted(scopes)}}  # [] -> matches nothing, fail-closed
+    coll = client.get_or_create_collection(name=COLLECTION_NAME,
+                                           embedding_function=embedding_func)
+    return (coll, where_filter)
 
-    if can_read_all_roles or can_read_all_privates:
-        # Build the elevated set from physical collections directly (avoids any
-        # logical<->physical round-trip fragility). Always include the user's own
-        # base set first (shared + own scopes + own private), then add the
-        # elevated categories they're entitled to.
-        cols = []
-        seen = set()
-
-        def _add_phys(phys):
-            if phys in seen:
-                return
-            seen.add(phys)
-            try:
-                cols.append(client.get_collection(
-                    name=phys, embedding_function=embedding_func))
-            except Exception:
-                pass  # not created yet — skip
-
-        # The user's own base allowed set (shared + their scopes + own private).
-        for logical in _allowed_collections(user, None):
-            _add_phys(chroma_collection_name(logical))
-
-        # Elevated role visibility.
-        if can_read_all_roles:
-            _add_phys(chroma_collection_name(_SHARED_COLLECTION))
-            for phys in _enumerate_scope_collections(client, "scope-role-"):
-                _add_phys(phys)
-
-        # Elevated private/custody visibility (can_manage_users). The OWNER's
-        # private collection is PROTECTED from every non-owner, including admins
-        # with can_manage_users=True (the "Vicki bug" fix, v7.0.1).
-        #
-        # FAIL-CLOSED: if the owner's id cannot be determined at read-time,
-        # a non-owner admin is DENIED access to ALL user: private collections
-        # rather than accidentally granting access to the owner's directory.
-        # The owner themselves is never excluded from their own collection.
-        if can_read_all_privates:
-            requester_is_owner = _user_has_role(user, "owner")
-            if requester_is_owner:
-                # Owner sees all user: private collections including their own.
-                for phys in _enumerate_scope_collections(client, "scope-user-"):
-                    _add_phys(phys)
-            else:
-                # Non-owner admin (can_manage_users=True): enumerate all
-                # employee private collections but NEVER the owner's.
-                # Fail-closed: if we cannot identify the owner, deny the
-                # entire scope-user-* enumeration to this requester.
-                owner_id = _owner_user_id()
-                if owner_id is None:
-                    _log.warning(
-                        "_scoped_collections_for_ctx: owner_id unknown — "
-                        "denying scope-user-* to non-owner admin '%s' (fail-closed)",
-                        user.get("id", "?"),
-                    )
-                    # Skip scope-user-* entirely for this requester.
-                else:
-                    owner_priv_phys = chroma_collection_name(f"user:{owner_id}")
-                    for phys in _enumerate_scope_collections(client, "scope-user-"):
-                        if phys == owner_priv_phys:
-                            continue  # owner's personal dir is off-limits
-                        _add_phys(phys)
-
-        return cols
-
-    # Standard user: own scopes + shared + own private only.
-    cols = []
-    for logical in _allowed_collections(user, None):
-        phys = chroma_collection_name(logical)
-        try:
-            cols.append(client.get_collection(name=phys,
-                                              embedding_function=embedding_func))
-        except Exception:
-            continue  # scope collection not created yet — skip, not an error
-    return cols
 
 
 def _enumerate_scope_collections(client, prefix: str = "scope-") -> list:
@@ -2125,21 +2121,22 @@ def get_knowledge_base_overview(ctx: Context = None) -> str:
 
     from rag_preprocessor import CHROMA_DB_PATH, load_auto_update_list
     try:
-        _collections = _scoped_collections_for_ctx(ctx)
+        coll, where_filter = _scoped_collections_for_ctx(ctx)
     except Exception:
         return (
             "Knowledge base is empty — no documents indexed yet.\n"
             "Use index_path to index a folder of documents."
         )
 
-    total_chunks = 0
+    id_probe = coll.get(where=where_filter, include=[]) if where_filter else coll.get(include=[])
+    total_chunks = len(id_probe.get('ids') or [])
     metadatas = []
-    for _col in _collections:
-        c = _col.count()
-        total_chunks += c
-        if c:
-            sample = _col.get(limit=min(2000, c))
-            metadatas.extend(sample.get('metadatas', []))
+    if total_chunks:
+        if where_filter:
+            sample = coll.get(where=where_filter, limit=min(2000, total_chunks))
+        else:
+            sample = coll.get(limit=min(2000, total_chunks))
+        metadatas.extend(sample.get('metadatas', []))
     if total_chunks == 0:
         return "Knowledge base is empty."
 
@@ -2247,15 +2244,12 @@ def search_documents(
 
     n_results = min(max(1, n_results), 20)
 
-    # ── Server-mode collection scoping (v7.0.0 Phase B) ────────────────────────
-    # Use _scoped_collections_for_ctx() to get the ChromaDB collection OBJECTS
-    # the current user may read, then query them directly — this is the same
-    # approach used by get_knowledge_base_overview and avoids passing
-    # collection_names through rag_preprocessor (which adds an extra import
-    # round-trip and was the source of the original collection_names error).
-    # Personal mode (no user): falls back to the single 'documents' collection.
+    # ── Server-mode scope filtering (SCOPE_SIMPLIFICATION_SPEC.md section 3.7) ─
+    # Use _scoped_collections_for_ctx() to get the single ChromaDB collection
+    # plus a "scope" metadata where-filter for this caller, then query it
+    # directly. Personal mode: where_filter is None (no filtering needed).
     try:
-        _collections = _scoped_collections_for_ctx(ctx)
+        coll, where_filter = _scoped_collections_for_ctx(ctx)
     except RuntimeError:
         # Personal mode and no documents indexed yet.
         return (
@@ -2265,27 +2259,18 @@ def search_documents(
     except Exception as exc:
         return f"Search failed resolving collections: {exc}"
 
-    if not _collections:
-        return (
-            f"No results found for: '{query}'\n"
-            "No accessible collections found. Check that documents have been "
-            "indexed and your user account has the correct scopes."
-        )
-
-    # Query each accessible collection and merge results.
+    # Query the single collection, filtered by scope.
     _all_chunks = []
     _seen_ids   = set()
-    for _col in _collections:
-        try:
-            _safe_n = min(n_results, _col.count())
-            if _safe_n == 0:
-                continue
-            from rag_preprocessor import get_chroma_client as _gcc
-            _res = _col.query(query_texts=[query], n_results=_safe_n)
-        except Exception as _qe:
-            _log.warning("search_documents: query failed on collection %s: %s",
-                         getattr(_col, 'name', '?'), _qe)
-            continue
+    try:
+        _query_kwargs = {"query_texts": [query], "n_results": n_results}
+        if where_filter:
+            _query_kwargs["where"] = where_filter
+        _res = coll.query(**_query_kwargs)
+    except Exception as _qe:
+        _log.warning("search_documents: query failed: %s", _qe)
+        _res = None
+    if _res and _res.get('documents'):
         for _i in range(len(_res['documents'][0])):
             _cid = (_res.get('ids') or [[]])[0][_i] if _res.get('ids') else None
             if _cid and _cid in _seen_ids:
@@ -2303,8 +2288,7 @@ def search_documents(
     # Sort by similarity descending, cap at n_results.
     _all_chunks.sort(key=lambda c: c['similarity'], reverse=True)
     chunks = _all_chunks[:n_results]
-    _log.debug("search_documents: %d chunk(s) across %d collection(s)",
-               len(chunks), len(_collections))
+    _log.debug("search_documents: %d chunk(s)", len(chunks))
 
     if not chunks:
         return (
@@ -2396,19 +2380,21 @@ def expand_search_result(
     window = max(1, min(5, window))
 
     try:
-        _collections = _scoped_collections_for_ctx(ctx)
+        coll, where_filter = _scoped_collections_for_ctx(ctx)
     except RuntimeError as e:
         return str(e)
 
     try:
         fn_lower  = filename.lower()
         chunk_map = {}
-        for _col in _collections:
-            sample = _col.get(limit=5000, include=["metadatas", "documents"])
-            for doc, meta in zip(sample['documents'], sample['metadatas']):
-                if fn_lower in meta.get('filename', '').lower() or \
-                   fn_lower in meta.get('filepath', '').lower():
-                    chunk_map[meta.get('chunk_index', 0)] = (doc, meta)
+        _get_kwargs = {"limit": 5000, "include": ["metadatas", "documents"]}
+        if where_filter:
+            _get_kwargs["where"] = where_filter
+        sample = coll.get(**_get_kwargs)
+        for doc, meta in zip(sample['documents'], sample['metadatas']):
+            if fn_lower in meta.get('filename', '').lower() or \
+               fn_lower in meta.get('filepath', '').lower():
+                chunk_map[meta.get('chunk_index', 0)] = (doc, meta)
     except Exception as exc:
         return f"Could not retrieve chunks: {exc}"
 
@@ -2476,19 +2462,21 @@ def read_document(
     max_chunks = min(max(1, max_chunks), 30)
 
     try:
-        _collections = _scoped_collections_for_ctx(ctx)
+        coll, where_filter = _scoped_collections_for_ctx(ctx)
     except RuntimeError as e:
         return str(e)
 
     try:
         fn_lower = filename.lower()
         matches  = []
-        for _col in _collections:
-            sample = _col.get(limit=5000, include=["metadatas", "documents"])
-            for doc, meta in zip(sample['documents'], sample['metadatas']):
-                if fn_lower in meta.get('filename', '').lower() or \
-                   fn_lower in meta.get('filepath', '').lower():
-                    matches.append((meta.get('chunk_index', 0), doc, meta))
+        _get_kwargs = {"limit": 5000, "include": ["metadatas", "documents"]}
+        if where_filter:
+            _get_kwargs["where"] = where_filter
+        sample = coll.get(**_get_kwargs)
+        for doc, meta in zip(sample['documents'], sample['metadatas']):
+            if fn_lower in meta.get('filename', '').lower() or \
+               fn_lower in meta.get('filepath', '').lower():
+                matches.append((meta.get('chunk_index', 0), doc, meta))
     except Exception as exc:
         return f"Could not access knowledge base: {exc}"
 
@@ -2561,16 +2549,23 @@ def list_indexed_documents(
         Sorted list of indexed documents grouped by file type.
     """
     try:
-        _collections = _scoped_collections_for_ctx(ctx)
+        coll, where_filter = _scoped_collections_for_ctx(ctx)
     except RuntimeError as e:
         return str(e)
 
-    # Aggregate metadata across all allowed collections (one in personal mode).
+    # Aggregate metadata across the accessible scope (single collection now).
     try:
+        _get_kwargs = {"include": []}
+        if where_filter:
+            _get_kwargs["where"] = where_filter
+        id_probe = coll.get(**_get_kwargs)
+        total = len(id_probe.get('ids') or [])
         metas = []
-        for _col in _collections:
-            total   = _col.count()
-            sample  = _col.get(limit=min(5000, total), include=["metadatas"])
+        if total:
+            _get_kwargs2 = {"limit": min(5000, total), "include": ["metadatas"]}
+            if where_filter:
+                _get_kwargs2["where"] = where_filter
+            sample = coll.get(**_get_kwargs2)
             metas.extend(sample.get('metadatas', []))
     except Exception as exc:
         return f"Could not list documents: {exc}"
@@ -2654,24 +2649,35 @@ def multi_query_search(
     n_results_each = min(max(1, n_results_each), 10)
 
     try:
-        from rag_preprocessor import search_documents as _search
+        coll, where_filter = _scoped_collections_for_ctx(ctx)
+    except RuntimeError:
+        return (
+            "No results found for any query:\n"
+            + "\n".join(f"  - {q}" for q in queries)
+            + "\nNo documents are indexed yet. Use index_path to index a folder."
+        )
     except Exception as exc:
         return f"Could not access knowledge base: {exc}"
-
-    # Server-mode scoping (personal mode → None → single 'documents' collection).
-    _scoped_collections = None
-    _user = _current_user(ctx)
-    if _user is not None:
-        _scoped_collections = _allowed_collections(_user)
 
     all_chunks: dict = {}
     for q in queries:
         try:
-            results = _search(q, n_results=n_results_each,
-                             collection_names=_scoped_collections)
+            _query_kwargs = {"query_texts": [q], "n_results": n_results_each}
+            if where_filter:
+                _query_kwargs["where"] = where_filter
+            _res = coll.query(**_query_kwargs)
         except Exception:
             continue
-        for chunk in results:
+        if not _res or not _res.get('documents'):
+            continue
+        for _i in range(len(_res['documents'][0])):
+            _dist = _res['distances'][0][_i]
+            chunk = {
+                'content':  _res['documents'][0][_i],
+                'metadata': _res['metadatas'][0][_i],
+                'distance': _dist,
+                'similarity': 1.0 - _dist,
+            }
             sim  = chunk.get('similarity', 0.0)
             if sim < min_similarity:
                 continue
@@ -2791,25 +2797,32 @@ def search_within_directory(
     dir_lower = directory.strip().lower()
 
     try:
-        _collections = _scoped_collections_for_ctx(ctx)
+        coll, where_filter = _scoped_collections_for_ctx(ctx)
     except RuntimeError as e:
         return str(e)
 
+    def _merge_where(extra):
+        """Combine the caller's scope where_filter with an additional
+        condition, using ChromaDB's $and when both are present."""
+        if where_filter and extra:
+            return {"$and": [where_filter, extra]}
+        return where_filter or extra
+
     # ── Strategy: fetch more results than requested, then filter by directory ──
     # ChromaDB's `where` filter supports exact match on metadata fields.
-    # We try parent_directory exact match first (fastest).  If that yields
+    # We try parent_directory exact match first (fastest). If that yields
     # too few results, fall back to a broader search + client-side filter
-    # on directory_chain (substring match). Both attempts run across EACH of the
-    # user's allowed collections (one in personal mode) and accumulate.
+    # on directory_chain (substring match). Both attempts are scoped to
+    # this caller's accessible "scope" metadata via where_filter above.
     chunks_raw = []
-    # Attempt 1: exact match on parent_directory, per collection.
-    for collection in _collections:
-        try:
-            results = collection.query(
-                query_texts=[query],
-                n_results=min(n_results * 3, 60),
-                where={"parent_directory": directory.strip()}
-            )
+    # Attempt 1: exact match on parent_directory.
+    try:
+        results = coll.query(
+            query_texts=[query],
+            n_results=min(n_results * 3, 60),
+            where=_merge_where({"parent_directory": directory.strip()})
+        )
+        if results and results.get('documents'):
             for i in range(len(results['documents'][0])):
                 chunks_raw.append({
                     'content':    results['documents'][0][i],
@@ -2817,18 +2830,19 @@ def search_within_directory(
                     'distance':   results['distances'][0][i],
                     'similarity': 1 - results['distances'][0][i],
                 })
-        except Exception:
-            continue
+    except Exception:
+        pass
 
     # Attempt 2: if exact match found nothing, do a broad search and
     # filter client-side on directory_chain (case-insensitive substring).
     if not chunks_raw:
-        for collection in _collections:
-            try:
-                results = collection.query(
-                    query_texts=[query],
-                    n_results=min(n_results * 5, 100),
-                )
+        try:
+            results = coll.query(
+                query_texts=[query],
+                n_results=min(n_results * 5, 100),
+                where=where_filter,
+            )
+            if results and results.get('documents'):
                 for i in range(len(results['documents'][0])):
                     meta = results['metadatas'][0][i]
                     chain = meta.get('directory_chain', '').lower()
@@ -2842,10 +2856,10 @@ def search_within_directory(
                             'distance':   results['distances'][0][i],
                             'similarity': 1 - results['distances'][0][i],
                         })
-            except Exception:
-                continue
+        except Exception:
+            pass
 
-    # Merge across collections by best similarity before filtering/truncating.
+    # Sort by best similarity before filtering/truncating.
     chunks_raw.sort(key=lambda c: c['distance'])
 
     if min_similarity > 0.0:
@@ -2927,17 +2941,22 @@ def list_indexed_directories(ctx: Context = None) -> str:
         return "⏳ AI-Prowler is still initializing. Please wait a moment and try again."
 
     try:
-        _collections = _scoped_collections_for_ctx(ctx)
+        coll, where_filter = _scoped_collections_for_ctx(ctx)
     except RuntimeError as e:
         return str(e)
 
     try:
+        _get_kwargs = {"include": []}
+        if where_filter:
+            _get_kwargs["where"] = where_filter
+        id_probe = coll.get(**_get_kwargs)
+        total = len(id_probe.get('ids') or [])
         metadatas = []
-        for _col in _collections:
-            total = _col.count()
-            if total == 0:
-                continue
-            sample = _col.get(limit=min(5000, total), include=["metadatas"])
+        if total:
+            _get_kwargs2 = {"limit": min(5000, total), "include": ["metadatas"]}
+            if where_filter:
+                _get_kwargs2["where"] = where_filter
+            sample = coll.get(**_get_kwargs2)
             metadatas.extend(sample.get('metadatas', []))
     except Exception as exc:
         return f"Could not read knowledge base: {exc}"
@@ -12998,11 +13017,11 @@ def reindex_file(filepath: str, ctx: Context = None) -> str:
     """
     _telemetry_increment_tool_count("reindex_file")
 
-    # v7.0.1 Q1: full DB management required.
+    # SCOPE_SIMPLIFICATION_SPEC.md section 3.7 (Phase 7 cutover, 2026-07-16):
+    # role-based manage_db gate removed -- see index_path's identical
+    # comment for the full rationale (indexing isn't a leak; every tracked
+    # path was already admin/owner-created).
     _user_rf = _current_user(ctx)
-    _db_ok, _db_reason = _check_db_cap(_user_rf, "full")
-    if not _db_ok:
-        return f"⛔ reindex_file: {_db_reason}"
 
     try:
         from rag_preprocessor import (
@@ -13021,12 +13040,9 @@ def reindex_file(filepath: str, ctx: Context = None) -> str:
     if not Path(resolved).is_file():
         return f"❌ Not a file (or does not exist): {resolved}"
 
-    # Server mode: route through the SAME collection resolver index_path()
-    # uses, so re-indexing puts content back wherever it actually belongs
-    # (the caller's own private collection, an assigned scope, or shared)
-    # instead of always collapsing everything into the single shared
-    # "documents" collection regardless of where it originally lived.
-    _resolver_rf = _build_collection_resolver(_user_rf) if _user_rf else None
+    # No longer builds a collection_resolver -- there is only one physical
+    # collection now. Scope is carried entirely by build_scope_resolver()'s
+    # "scope" chunk-metadata tag (wired into index_file_list already).
     _indexer_user_rf = _user_rf
 
     # All ChromaDB writes run on the single dedicated db-writer thread to avoid
@@ -13035,25 +13051,16 @@ def reindex_file(filepath: str, ctx: Context = None) -> str:
     def _job():
         try:
             client, embedding_func = get_chroma_client()
-            # Purge stale chunks for this file from EVERY collection, not
-            # just the single default — the file may currently live in a
-            # scoped collection (user:<id>, scope:<name>) rather than
-            # "documents", especially in server mode.
-            for _col_info in client.list_collections():
-                try:
-                    _coll = client.get_collection(
-                        name=_col_info.name, embedding_function=embedding_func)
-                    _coll.delete(where={"filepath": resolved})
-                except Exception as _pe:
-                    _log.warning(
-                        "reindex_file: purge failed in collection %s for %s: %s",
-                        getattr(_col_info, "name", "?"), resolved, _pe)
+            # Single physical collection now -- purge just this one, not a
+            # sweep across every collection (there's only ever one to check).
+            _coll = client.get_or_create_collection(
+                name=COLLECTION_NAME, embedding_function=embedding_func)
+            _coll.delete(where={"filepath": resolved})
         except Exception as exc:
             _log.warning("reindex_file: purge failed for %s: %s", resolved, exc)
             # continue — index_file_list still adds fresh chunks
         return index_file_list([resolved], label="reindex_file",
                                root_directory=str(Path(resolved).parent),
-                               collection_resolver=_resolver_rf,
                                indexer_user=_indexer_user_rf)
 
     try:
@@ -13082,12 +13089,9 @@ def reindex_directory(directory: str, purge_first: bool = True,
     only processes changed files. Use this after chunk-size changes, suspected
     index corruption, or when you want a guaranteed clean slate.
 
-    Server mode: collection-aware. Stale chunks are purged from EVERY
-    collection (own private, assigned scopes, shared) — not just the
-    default — and each file is re-indexed back into the collection it
-    actually belongs to via the same resolver index_path() uses, so a
-    directory containing a mix of private and shared content doesn't get
-    collapsed into one collection on reindex.
+    Stale chunks are purged from the single index, then each file is
+    re-indexed and re-tagged with its current scope (see
+    SCOPE_SIMPLIFICATION_SPEC.md section 3.3b/3.7).
 
     Args:
         directory:   Absolute path to the tracked directory to reindex.
@@ -13107,11 +13111,11 @@ def reindex_directory(directory: str, purge_first: bool = True,
     """
     _telemetry_increment_tool_count("reindex_directory")
 
-    # v7.0.1 Q1: full DB management required.
+    # SCOPE_SIMPLIFICATION_SPEC.md section 3.7 (Phase 7 cutover, 2026-07-16):
+    # role-based manage_db gate removed -- see index_path's identical
+    # comment for the full rationale (indexing isn't a leak; every tracked
+    # path was already admin/owner-created).
     _user_rd = _current_user(ctx)
-    _db_ok, _db_reason = _check_db_cap(_user_rd, "full")
-    if not _db_ok:
-        return f"⛔ reindex_directory: {_db_reason}"
 
     if not _prewarm_event.wait(timeout=60):
         return "⏳ AI-Prowler is still initializing. Please wait and try again."
@@ -13124,11 +13128,9 @@ def reindex_directory(directory: str, purge_first: bool = True,
     if err:
         return f"❌ {err}"
 
-    # Server mode: route through the SAME collection resolver index_path()
-    # uses, so re-indexing puts each file back wherever it actually belongs
-    # (the caller's own private collection, an assigned scope, or shared)
-    # instead of always collapsing everything into "documents".
-    _resolver_rd = _build_collection_resolver(_user_rd) if _user_rd else None
+    # No longer builds a collection_resolver -- there is only one physical
+    # collection now. Scope is carried entirely by build_scope_resolver()'s
+    # "scope" chunk-metadata tag (wired into index_directory already).
     _indexer_user_rd = _user_rd
 
     try:
@@ -13140,43 +13142,29 @@ def reindex_directory(directory: str, purge_first: bool = True,
         def _job():
             if purge_first:
                 try:
-                    client = _engine.get_chroma_client()
-                    if isinstance(client, tuple):
-                        client = client[0]
+                    client, embedding_func = _engine.get_chroma_client()
                     norm_dir = _normalize_path_for_match(resolved)
-                    total_purged = 0
-                    # Purge stale chunks from EVERY collection, not just
-                    # "documents" — content under this directory may live
-                    # in scoped collections (user:<id>, scope:<name>,
-                    # shared) rather than the single default.
-                    for _col_info in client.list_collections():
-                        try:
-                            coll = client.get_collection(_col_info.name)
-                            existing = coll.get(where={"source": {"$regex": ".*"}},
-                                                include=["metadatas"])
-                            ids_to_del = [
-                                existing["ids"][i]
-                                for i, meta in enumerate(existing.get("metadatas") or [])
-                                if _normalize_path_for_match(
-                                       str(meta.get("source",""))).startswith(norm_dir)
-                            ]
-                            if ids_to_del:
-                                coll.delete(ids=ids_to_del)
-                                total_purged += len(ids_to_del)
-                        except Exception as _pe2:
-                            _log.warning(
-                                "reindex_directory: purge step warning in %s: %s",
-                                getattr(_col_info, "name", "?"), _pe2)
-                    if total_purged:
+                    # Single physical collection now -- purge just this one,
+                    # not a sweep across every collection.
+                    coll = client.get_or_create_collection(
+                        name=_engine.COLLECTION_NAME, embedding_function=embedding_func)
+                    existing = coll.get(where={"source": {"$regex": ".*"}},
+                                        include=["metadatas"])
+                    ids_to_del = [
+                        existing["ids"][i]
+                        for i, meta in enumerate(existing.get("metadatas") or [])
+                        if _normalize_path_for_match(
+                               str(meta.get("source",""))).startswith(norm_dir)
+                    ]
+                    if ids_to_del:
+                        coll.delete(ids=ids_to_del)
                         _log.info(
-                            "reindex_directory: purged %d chunks for %s across all collections",
-                            total_purged, resolved)
+                            "reindex_directory: purged %d chunks for %s",
+                            len(ids_to_del), resolved)
                 except Exception as _pe:
                     _log.warning("reindex_directory: purge step warning: %s", _pe)
             with _capture_stdout() as buf:
-                _r = index_directory(resolved,
-                                     collection_resolver=_resolver_rd,
-                                     indexer_user=_indexer_user_rd)
+                _r = index_directory(resolved, indexer_user=_indexer_user_rd)
             return _r, buf.getvalue()
 
         result, _out = _db_write(_job, timeout=1800.0)
@@ -13226,11 +13214,11 @@ def reindex_all(purge_first: bool = True, ctx: Context = None) -> str:
     """
     _telemetry_increment_tool_count("reindex_all")
 
-    # v7.0.1 Q1: full DB management required.
+    # SCOPE_SIMPLIFICATION_SPEC.md section 3.7 (Phase 7 cutover, 2026-07-16):
+    # role-based manage_db gate removed -- see index_path's identical
+    # comment for the full rationale (indexing isn't a leak; every tracked
+    # path was already admin/owner-created).
     _user_ra = _current_user(ctx)
-    _db_ok, _db_reason = _check_db_cap(_user_ra, "full")
-    if not _db_ok:
-        return f"⛔ reindex_all: {_db_reason}"
 
     if not _prewarm_event.wait(timeout=60):
         return "⏳ AI-Prowler is still initializing. Please wait and try again."
@@ -14104,55 +14092,33 @@ def _current_user(ctx) -> "dict | None":
         return None
 
 
-def _allowed_collections(user: "dict | None",
-                         all_role_collections: "list | tuple | None" = None) -> list:
-    """Compute the ordered list of ChromaDB collections this user may READ.
-    PURE. Implements §6.4 step 5 / §6.2.
+# SCOPE_SIMPLIFICATION_SPEC.md section 3.7 (Phase 7 cleanup, 2026-07-17):
+# _allowed_collections() (the multi-collection READ enforcement list this
+# module used before the single-collection cutover) has been removed --
+# its last caller was a request.state diagnostic field, now replaced with
+# _allowed_scopes() directly (see the /whoami handler). _allowed_scopes()
+# below is the sole remaining "what may this user search" function.
+def _allowed_scopes(user: "dict | None") -> set:
+    """Return the set of scope strings `user` may SEARCH, for the
+    single-collection design. Thin wrapper around
+    scope_lookup.allowed_scopes_for_user() -- kept here (rather than
+    calling scope_lookup directly from every read tool) so there is one
+    place in ai_prowler_mcp.py that owns "how do I get a user's allowed
+    scopes".
 
-    Args:
-        user: a resolved user dict (from _resolve_user), or None.
-        all_role_collections: the full set of existing 'role:<name>' collection
-            names on this server. Only consulted for owners (who read ALL
-            role-scoped collections regardless of their own scopes). For
-            non-owners, scopes alone decide.
+    SERVER MODE ONLY -- callers must not invoke this in personal mode
+    (no `user`); returns an empty set for user=None.
 
-    Returns a de-duplicated list:
-        - always 'shared'
-        - each 'role:<scope>' the user is entitled to
-        - 'user:<id>' iff private_collection_enabled
-    None user → [] (no token resolved → no access; the middleware 401s earlier).
+    Direct product decision (2026-07-16): NO role-based elevation, for
+    anyone, including owner. Every user's search visibility is exactly
+    {"shared"} union their own assigned scopes union their own private
+    scope if enabled -- computed identically regardless of role. See
+    SCOPE_SIMPLIFICATION_SPEC.md section 3.6 for the full rationale.
+    Role continues to gate the Admin tab (user management) only -- see
+    _role_caps()/is_admin -- never search visibility.
     """
-    if not user:
-        return []
-
-    cols = [_SHARED_COLLECTION]
-    caps = _role_caps(user.get("role"))
-
-    if caps["read_all_role_scopes"] and all_role_collections:
-        # Owner: every role collection on the server.
-        for c in all_role_collections:
-            if c and c not in cols:
-                cols.append(c)
-    else:
-        # Everyone else: only their assigned scopes (which are already
-        # 'role:<name>' strings per the users.json schema).
-        for scope in (user.get("scopes") or []):
-            s = str(scope).strip()
-            if not s:
-                continue
-            # Accept legacy 'role:sales', current 'scope:sales', or bare 'sales';
-            # all canonicalize to 'scope:sales' (same physical collection).
-            col = _canon_scope(s)
-            if col not in cols:
-                cols.append(col)
-
-    # Per-user private collection.
-    if user.get("private_collection_enabled"):
-        priv = f"user:{user.get('id')}"
-        if priv not in cols:
-            cols.append(priv)
-
-    return cols
+    import scope_lookup
+    return scope_lookup.allowed_scopes_for_user(user)
 
 
 def _can_index(user: "dict | None", target_collection: str,
@@ -14364,62 +14330,14 @@ def _company_collection_map(users_data: "dict | None" = None) -> dict:
     return cm if isinstance(cm, dict) else {}
 
 
-def _build_collection_resolver(user: "dict | None", users_data: "dict | None" = None):
-    """Build a collection_resolver(filepath)->logical_collection_name for the
-    given indexing user (v7.0.0 Phase B write-side activation). Returns None in
-    personal mode (no user) so the index pipeline keeps its single-'documents'
-    behavior untouched.
-
-    Resolution (via the tested _resolve_collection_for_path):
-      1. company path→scope rules (collection_map.rules) — longest-prefix match
-      2. else the user's own 'index_target' default scope (if set in users.json)
-      3. else the user's own private 'user:<id>' (safe fallback — never shared)
-
-    IMPORTANT: this only PROPOSES a target. The index tool MUST still gate the
-    proposed target with _can_index(user, target) before writing, so a path rule
-    can never let a user write somewhere they're not permitted. Routing decides
-    WHERE; _can_index decides WHETHER.
-    """
-    if user is None:
-        return None  # personal mode — no resolver, single 'documents' collection
-
-    company_map = _company_collection_map(users_data)
-    # Compose the mapping the resolver expects: company rules + this user's
-    # default scope as the mapping default (per-user override of the global one).
-    mapping = {"rules": list((company_map or {}).get("rules") or [])}
-    user_default = str(user.get("index_target", "")).strip()
-    if user_default:
-        mapping["default_collection"] = user_default
-    elif company_map.get("default_collection"):
-        mapping["default_collection"] = company_map["default_collection"]
-
-    def _resolver(filepath):
-        target = _resolve_collection_for_path(filepath, mapping, indexer_user=user)
-        # WHETHER-gate: the factory PROPOSES a target (WHERE); enforce _can_index
-        # (WHETHER) here so a path rule can never land a write in a collection the
-        # user isn't permitted to write to. On denial, degrade to the user's own
-        # private collection — the always-safe target (you may always write your
-        # own). This keeps indexing from silently leaking into a forbidden scope.
-        try:
-            allowed, _why = _can_index(user, target)
-        except Exception:
-            allowed = False
-        if allowed:
-            # Warn if the file matched no rule and fell to the default collection.
-            # In server mode, an unmatched file silently landing in 'shared' is a
-            # data-leakage risk — the operator should fix their collection_map rules.
-            if (target == mapping.get("default_collection")
-                    and mapping.get("rules")
-                    and target in ("shared", _SHARED_COLLECTION)):
-                _log.warning(
-                    "collection_map: no rule matched '%s' — fell to default '%s'. "
-                    "All users can read the shared collection. "
-                    "Add a matching prefix rule to prevent unintended exposure.",
-                    filepath, target)
-            return target
-        own_private = f"user:{user.get('id')}" if user.get("id") else "documents"
-        return own_private
-    return _resolver
+# SCOPE_SIMPLIFICATION_SPEC.md section 3.7 (Phase 7 cleanup, 2026-07-17):
+# _build_collection_resolver() (the per-user collection_map-based WHERE
+# router this module used before the single-collection cutover) has been
+# removed -- zero remaining callers across index_path, update_tracked_
+# directories, reindex_file, reindex_directory. There is only one physical
+# collection now; scope is carried entirely by build_scope_resolver()'s
+# chunk-metadata tag (rag_preprocessor.py), computed independently at
+# index time, not proposed by a per-request resolver here.
 
 
 # ── Admin role gate (§9.1 / spec item 9) ──────────────────────────────────────
@@ -15105,7 +15023,14 @@ def _run_server_mode(port: int, token: str,
             scope = dict(scope)
             state = dict(scope.get("state") or {})
             state["user"] = user
-            state["allowed_collections"] = _allowed_collections(user)
+            # SCOPE_SIMPLIFICATION_SPEC.md section 3.7 (Phase 7 cleanup,
+            # 2026-07-17): was state["allowed_collections"] = _allowed_collections
+            # (user) -- the multi-collection enforcement list this fed into
+            # (_scoped_collections_for_ctx) is gone; the single-collection
+            # where-filter is built fresh per read tool call now, not carried
+            # on request.state. Kept here only as a /whoami diagnostic,
+            # updated to report the actual new enforcement input.
+            state["allowed_scopes"] = sorted(_allowed_scopes(user))
             scope["state"] = state
             _log.debug("Authenticated user=%s role=%s", user.get("id"),
                        user.get("role"))
@@ -15116,7 +15041,7 @@ def _run_server_mode(port: int, token: str,
                     "user_id":              user.get("id"),
                     "name":                 user.get("name"),
                     "role":                 user.get("role"),
-                    "allowed_collections":  state["allowed_collections"],
+                    "allowed_scopes":       state["allowed_scopes"],
                     "scoping_active":       True,
                 })
                 return

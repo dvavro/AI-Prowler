@@ -47,6 +47,30 @@ def _weather(location: str) -> str:
     except Exception:
         return ""
 
+def _owner_name() -> str:
+    """v8.1.3 — the owner's display name now comes from Settings -> Owner
+    Name, not config['name'] (which used to default to the hardcoded
+    string "David" with no relationship to Settings at all)."""
+    try:
+        from ai_prowler_mcp import _get_personal_owner_name
+        return _get_personal_owner_name() or "there"
+    except Exception:
+        return "there"
+
+def _owner_location() -> str:
+    """v8.1.3 — the owner's weather-lookup location now comes from
+    Settings -> Owner Name -> Home address (City/State/ZIP), not
+    config['location'] (which used to default to a hardcoded town with
+    no GUI field to change it at all). Returns "" (not a hardcoded
+    fallback town) when nothing is configured — callers must handle
+    that explicitly rather than silently defaulting to any particular
+    person's real address."""
+    try:
+        from ai_prowler_mcp import _get_personal_owner_location_string
+        return _get_personal_owner_location_string()
+    except Exception:
+        return ""
+
 def _job_rows(sheet: str = "Jobs_Schedule") -> list[str]:
     try:
         from ai_prowler_mcp import read_job_spreadsheet
@@ -179,13 +203,19 @@ def job_morning_briefing(config: dict):
     field-service day's jobs are frequently scattered across several towns.
     Weather is fetched once per UNIQUE town among today's jobs (dedup), not
     once per job, to avoid redundant API calls when multiple jobs share a
-    town. Falls back to config['location'] only when a job has no City on
-    file, or when the spreadsheet can't be read at all (personal-mode-only
-    feature — see _todays_jobs_structured's docstring).
+    town. Falls back to the Settings-tab owner address only when a job has
+    no City on file, or when the spreadsheet can't be read at all
+    (personal-mode-only feature — see _todays_jobs_structured's docstring).
+
+    name/location no longer come from the config dict passed in (v8.1.3) —
+    see _owner_name()/_owner_location(). config is still accepted (and
+    still used for nothing else here) purely so the scheduler's uniform
+    fn(config) calling convention in JOB_REGISTRY doesn't need special-
+    casing for this one job.
     """
     try:
-        name = config.get("name", "David")
-        loc  = config.get("location", "New Smyrna Beach, Florida")
+        name = _owner_name()
+        loc  = _owner_location()
         dow  = datetime.date.today().strftime("%A, %B %d")
 
         parts = [f"<h2>☀️ Good morning, {name}!</h2><p><b>{dow}</b></p><hr>"]
@@ -220,10 +250,14 @@ def job_morning_briefing(config: dict):
             parts.append("<p>📋 No jobs scheduled today.</p>")
             # No per-job locations to check — fall back to the single
             # configured location so the briefing still shows something.
-            w = _weather(loc)
-            if w:
-                wl = [l for l in w.splitlines() if l.strip()][:4]
-                parts.append(f"<h3>🌤️ Weather — {loc}</h3><p>{'<br>'.join(wl)}</p>")
+            # Skip the lookup entirely (rather than calling _weather("")
+            # and relying on it to fail gracefully) when nothing is
+            # configured in Settings at all.
+            if loc:
+                w = _weather(loc)
+                if w:
+                    wl = [l for l in w.splitlines() if l.strip()][:4]
+                    parts.append(f"<h3>🌤️ Weather — {loc}</h3><p>{'<br>'.join(wl)}</p>")
 
         # Overdue invoices
         ar = _ar_aging()
@@ -314,9 +348,17 @@ def job_sms_reply_monitor(config: dict):
 
 
 def job_weather_watch(config: dict):
-    """Sunday: 5-day forecast."""
+    """Sunday: 5-day forecast.
+
+    location now comes from Settings -> Owner Name -> Home address
+    (v8.1.3), not config['location']. Returns None (no output, same as
+    the existing "no weather data" case) rather than showing a report
+    for a hardcoded default town when nothing is configured — silence,
+    not a guess."""
     try:
-        loc = config.get("location", "New Smyrna Beach, Florida")
+        loc = _owner_location()
+        if not loc:
+            return None
         w = _weather(loc)
         if not w:
             return None

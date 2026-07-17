@@ -1,28 +1,35 @@
 """
 tests/unit/test_command_update_scope_awareness.py
 ====================================================
-Tests for command_update()'s server-mode collection awareness fix
-(added 2026-07-13 after the Christina incident).
+Tests for command_update()'s collection behavior.
 
-Background: command_update() is the function behind FOUR real entry
-points — GUI "Update Selected", GUI "Update All", the MCP
-update_tracked_directories tool, and the Scheduled Task's standalone CLI
-"update" invocation (rag_auto_update.bat). The last of these has NO
-acting user/session at all and never passed collection_resolver —
-meaning in server mode it always silently indexed into the single
-default "documents" collection, exactly the bug that orphaned
-Christina's file. See file_watchdog.py's identical fix and
-tests/test_scope_resolver.py for the underlying pure-function coverage
-this all builds on.
+HISTORY: originally written 2026-07-13 after the "Christina incident" --
+under the old multi-collection architecture, the Scheduled Task's
+standalone CLI invocation (rag_auto_update.bat, which has no acting
+user/session) always silently indexed into the single default
+"documents" collection regardless of server-mode collection_map rules,
+orphaning an employee's file into the wrong collection. The original fix
+added an internal auto-detection block to command_update() that consulted
+collection_map (via _resolve_unattended_directory_scope) even with no
+caller-supplied resolver, blocking unmatched paths rather than guessing.
 
-Two kinds of coverage here:
-  - FAST tests that mock _resolve_unattended_directory_scope directly to
-    verify command_update's branching logic (skip / scoped / personal),
-    without touching real ChromaDB or disk scanning.
-  - ONE real end-to-end integration test (marked slow, mirroring
-    test_F_CODE_14's pattern in test_code_scan_truncation.py) that
-    exercises the actual Christina scenario against a real isolated
-    ChromaDB — proving the whole pipeline, not just the wiring.
+SUPERSEDED 2026-07-16 (SCOPE_SIMPLIFICATION_SPEC.md section 3.7, Phase 7
+cutover): that auto-detection block has been REMOVED from command_update.
+This is not a regression of the original fix -- it's the fix becoming
+unnecessary. The original bug was specifically "a file can land in the
+WRONG collection, one it doesn't belong in." Under the new single-
+collection design there is no wrong collection to land in -- every file,
+matched or not, goes into the one physical collection, tagged with a
+"scope" metadata field (via build_scope_resolver -> build_rich_metadata)
+that query-time filtering enforces instead. An unmatched path defaults to
+scope "shared" (direct product decision, section 3.4) rather than being
+blocked -- see scope_lookup.resolve_scope_for_path's own docstring.
+
+_resolve_unattended_directory_scope() itself is UNCHANGED and still
+correct -- only command_update's internal call to it was removed. The
+function's own tests (TestResolveUnattendedDirectoryScope below) are kept
+as-is; it may still be relevant to other unattended-indexing paths
+(file_watchdog.py) pending their own Phase 7 migration.
 
 Run:
     pytest tests/unit/test_command_update_scope_awareness.py -v
@@ -47,98 +54,68 @@ def rag():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Fast wiring tests — mock _resolve_unattended_directory_scope directly
+# command_update() no longer auto-builds a resolver, period -- confirms the
+# old wiring (TestCommandUpdateWiring, pre-2026-07-16) is genuinely gone,
+# not just coincidentally unused.
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TestCommandUpdateWiring:
+class TestCommandUpdateNeverAutoResolvesCollection:
 
-    def test_blocked_skips_entirely_before_any_scan(self, rag, monkeypatch, tmp_path):
-        """A 'blocked' resolution must abort BEFORE scan_directory_for_changes
-        is even called — no partial work, no risk of touching the wrong
-        collection for any file in this directory."""
-        monkeypatch.setattr(
-            rag, "_resolve_unattended_directory_scope",
-            lambda directory: ("blocked", None))
-        scan_called = []
-        monkeypatch.setattr(
-            rag, "scan_directory_for_changes",
-            lambda *a, **k: scan_called.append(True))
-
-        rag.command_update(str(tmp_path), auto_confirm=True)
-
-        assert scan_called == []
-
-    def test_personal_mode_leaves_resolver_none(self, rag, monkeypatch, tmp_path):
-        """'personal' -> collection_resolver must stay None, meaning
-        unchanged legacy behavior (single 'documents' collection)."""
-        monkeypatch.setattr(
-            rag, "_resolve_unattended_directory_scope",
-            lambda directory: ("personal", None))
-        monkeypatch.setattr(
-            rag, "scan_directory_for_changes", lambda *a, **k: None)
-
-        # scan_directory_for_changes returning None makes command_update
-        # return immediately after — just confirms it got PAST the
-        # blocked-check and reached the scan step at all.
-        result = rag.command_update(str(tmp_path), auto_confirm=True)
-        assert result is None  # no exception, reached the scan step
-
-    def test_scoped_builds_a_working_collection_resolver(self, rag, monkeypatch, tmp_path):
-        """'scoped' -> collection_resolver must be a callable that returns
-        the resolved collection name for ANY filepath passed to it."""
-        monkeypatch.setattr(
-            rag, "_resolve_unattended_directory_scope",
-            lambda directory: ("scoped", "user:christina01"))
-
-        captured = {}
-
-        def _fake_scan(*a, **k):
-            captured["called"] = True
-            return None  # short-circuit — we only care about the resolver by now
-
-        monkeypatch.setattr(rag, "scan_directory_for_changes", _fake_scan)
-        rag.command_update(str(tmp_path), auto_confirm=True)
-        assert captured.get("called") is True
-
-    def test_caller_supplied_resolver_is_never_overridden(self, rag, monkeypatch, tmp_path):
-        """If a caller (e.g. the MCP tool, which has a real acting user)
-        already supplied collection_resolver, _resolve_unattended_
-        directory_scope must NEVER be consulted at all — this fix must
-        not interfere with the existing live-session path."""
-        called = []
-        monkeypatch.setattr(
-            rag, "_resolve_unattended_directory_scope",
-            lambda directory: called.append(True))
-        monkeypatch.setattr(
-            rag, "scan_directory_for_changes", lambda *a, **k: None)
-
-        my_resolver = lambda fp: "role:sales"
-        rag.command_update(str(tmp_path), auto_confirm=True,
-                           collection_resolver=my_resolver)
-
-        assert called == []  # never consulted
-
-    def test_caller_supplied_indexer_user_also_skips_unattended_resolve(
+    def test_resolve_unattended_directory_scope_is_never_consulted(
             self, rag, monkeypatch, tmp_path):
-        """Same guarantee when indexer_user is supplied instead of/with
-        collection_resolver — either one present means 'this caller has
-        real session context, stay out of the way.'"""
+        """Regardless of what _resolve_unattended_directory_scope would
+        return -- blocked, scoped, or personal -- command_update must
+        never call it at all anymore. If this starts failing, the old
+        per-file collection-routing wiring has been reintroduced, which
+        the single-collection redesign deliberately removed."""
         called = []
         monkeypatch.setattr(
             rag, "_resolve_unattended_directory_scope",
-            lambda directory: called.append(True))
+            lambda directory: called.append(True) or ("blocked", None))
         monkeypatch.setattr(
             rag, "scan_directory_for_changes", lambda *a, **k: None)
 
-        rag.command_update(str(tmp_path), auto_confirm=True,
-                           indexer_user={"id": "david-owner"})
+        rag.command_update(str(tmp_path), auto_confirm=True)
 
         assert called == []
+
+    def test_directory_scan_is_always_reached_even_with_no_users_json(
+            self, rag, monkeypatch, tmp_path):
+        """The old 'blocked' skip-before-scan behavior is gone -- even a
+        path that would have had no collection_map rule now proceeds
+        straight to the normal scan/index flow."""
+        reached = []
+        monkeypatch.setattr(
+            rag, "scan_directory_for_changes",
+            lambda *a, **k: reached.append(True) or None)
+
+        rag.command_update(str(tmp_path), auto_confirm=True)
+
+        assert reached == [True]
+
+    def test_caller_supplied_resolver_still_passes_through_unaffected(
+            self, rag, monkeypatch, tmp_path):
+        """A caller that explicitly supplies collection_resolver (e.g. a
+        live MCP session) is unaffected by this change -- it was already
+        never touched by the removed block, and still isn't."""
+        received = {}
+
+        def _fake_scan(directory, recursive=True):
+            return None
+
+        monkeypatch.setattr(rag, "scan_directory_for_changes", _fake_scan)
+        my_resolver = lambda fp: "role:sales"
+        # Must not raise, must not be overridden -- no direct way to
+        # observe the resolver from outside once scan short-circuits, so
+        # this is a smoke test that the call shape still works cleanly.
+        rag.command_update(str(tmp_path), auto_confirm=True,
+                           collection_resolver=my_resolver)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # _resolve_unattended_directory_scope itself — the 3-state wrapper around
-# scope_resolver, specific to command_update's calling convention
+# scope_resolver, specific to command_update's calling convention. UNCHANGED
+# by the Phase 7 cutover -- command_update just doesn't call it anymore.
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestResolveUnattendedDirectoryScope:
@@ -155,7 +132,7 @@ class TestResolveUnattendedDirectoryScope:
             "collection_map": {"rules": [
                 {"prefix": "C:/CompanyDocs/Sales", "collection": "role:sales"},
             ]},
-            "users": {"tok": {"id": "david-owner", "role": "owner"}},
+            "users": {"tok-david": {"id": "david-owner", "role": "owner"}},
         }
         (users_dir / "users.json").write_text(json.dumps(data), encoding="utf-8")
 
@@ -170,7 +147,7 @@ class TestResolveUnattendedDirectoryScope:
             "collection_map": {"rules": [
                 {"prefix": "C:/CompanyDocs/Sales", "collection": "role:sales"},
             ]},
-            "users": {"tok": {"id": "david-owner", "role": "owner"}},
+            "users": {"tok-david": {"id": "david-owner", "role": "owner"}},
         }
         (users_dir / "users.json").write_text(json.dumps(data), encoding="utf-8")
 
@@ -185,7 +162,7 @@ class TestResolveUnattendedDirectoryScope:
             "collection_map": {"rules": [
                 {"prefix": "C:/Personal/Christina", "collection": "user:christina01"},
             ]},
-            "users": {"tok": {"id": "david-owner", "role": "owner"}},  # christina01 gone
+            "users": {"tok-david": {"id": "david-owner", "role": "owner"}},
         }
         (users_dir / "users.json").write_text(json.dumps(data), encoding="utf-8")
 
@@ -202,73 +179,66 @@ class TestResolveUnattendedDirectoryScope:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Real end-to-end integration — the actual Christina scenario, real ChromaDB
+# Real end-to-end integration — single-collection behavior, real ChromaDB
 # ─────────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.slow
-def test_real_scheduled_task_indexes_personal_file_into_owners_collection(
+def test_real_scheduled_task_indexes_into_the_single_collection_with_scope_tag(
         isolated_env, monkeypatch):
-    """The actual production scenario, end-to-end: a file sits in an
-    employee's personal directory, has a real collection_map rule
-    registered, and the Scheduled Task's exact call shape (no
-    collection_resolver, no indexer_user — precisely what
-    rag_auto_update.bat does) is used to index it. Must land in
-    'user:christina01', findable there, and must NOT appear in the
-    single default 'documents' collection at all (the actual bug)."""
+    """The real production scenario, end-to-end, under the new design: a
+    file sits in a scope_map-matched directory. The Scheduled Task's exact
+    call shape (no collection_resolver, no indexer_user -- precisely what
+    rag_auto_update.bat does) indexes it. Must land in the SINGLE default
+    collection (there is no other one), tagged with the matched scope in
+    its chunk metadata -- this is the direct successor to the old "must
+    land in Christina's own collection" assertion, updated for a world
+    where there's only one collection and scope is metadata, not routing."""
     rag = isolated_env.rag
     monkeypatch.setattr(Path, "home", lambda: isolated_env.tmp_path)
 
-    personal_dir = isolated_env.sample_root / "personal" / "christina"
-    personal_dir.mkdir(parents=True)
-    notes_file = personal_dir / "meeting_notes.txt"
+    sales_dir = isolated_env.sample_root / "companydocs" / "sales"
+    sales_dir.mkdir(parents=True)
+    notes_file = sales_dir / "q3_notes.txt"
     notes_file.write_text("Client renewal discussion — follow up Friday", encoding="utf-8")
 
     users_dir = isolated_env.tmp_path / ".ai-prowler"
     users_dir.mkdir(parents=True, exist_ok=True)
     data = {
-        "collection_map": {"rules": [
-            {"prefix": str(personal_dir).replace("\\", "/"),
-             "collection": "user:christina01"},
-        ]},
-        "users": {
-            "tok-christina": {"id": "christina01", "role": "staff"},
-            "tok-david": {"id": "david-owner", "role": "owner"},
+        "scope_map": {
+            str(sales_dir).replace("\\", "/"): "sales",
         },
+        "users": {"tok-david": {"id": "david-owner", "role": "owner"}},
     }
     (users_dir / "users.json").write_text(json.dumps(data), encoding="utf-8")
 
     # This is the EXACT call shape rag_auto_update.bat uses — no
     # collection_resolver, no indexer_user, auto_confirm=True (the --yes flag).
-    rag.command_update(str(personal_dir), recursive=True, auto_confirm=True)
+    rag.command_update(str(sales_dir), recursive=True, auto_confirm=True)
 
     client, ef = rag.get_chroma_client()
-
-    christina_coll = client.get_or_create_collection(
-        name=rag.chroma_collection_name("user:christina01"), embedding_function=ef)
-    results = christina_coll.get(
-        where={"filepath": rag.normalise_path(str(notes_file))},
-        include=["documents"])
-    assert len(results.get("documents") or []) >= 1, (
-        "the file must be indexed into Christina's own collection")
-
-    # And confirm it did NOT also land in the single default 'documents'
-    # collection — that's the actual historical bug this fix closes.
     default_coll = client.get_or_create_collection(
         name=rag.COLLECTION_NAME, embedding_function=ef)
-    stray = default_coll.get(
+    results = default_coll.get(
         where={"filepath": rag.normalise_path(str(notes_file))},
-        include=["documents"])
-    assert len(stray.get("documents") or []) == 0, (
-        "the file must NOT be present in the default 'documents' collection")
+        include=["documents", "metadatas"])
+    assert len(results.get("documents") or []) >= 1, (
+        "the file must be indexed into the single default collection")
+    metas = results.get("metadatas") or []
+    assert metas and metas[0].get("scope") == "sales", (
+        "the chunk's scope metadata must reflect the matched scope_map entry"
+    )
 
 
 @pytest.mark.slow
-def test_real_scheduled_task_unmatched_directory_indexes_nothing(
+def test_real_scheduled_task_unmatched_directory_still_indexes_with_shared_default(
         isolated_env, monkeypatch):
-    """The other half of the real scenario: server mode is active, but
-    THIS directory has no matching rule. Must index nothing at all —
-    not into 'documents', not anywhere — confirming the skip really
-    prevents the write rather than just logging a warning around it."""
+    """The other half of the real scenario, updated for the new design:
+    server mode is active, but this directory has no matching scope_map
+    entry. Direct product decision (SCOPE_SIMPLIFICATION_SPEC.md section
+    3.4): this must NOT be blocked/skipped the way the old collection-
+    routing design required -- it indexes normally, into the single
+    collection, defaulting to scope "shared". This is the intentional
+    opposite of the pre-2026-07-16 behavior tested here."""
     rag = isolated_env.rag
     monkeypatch.setattr(Path, "home", lambda: isolated_env.tmp_path)
 
@@ -280,9 +250,9 @@ def test_real_scheduled_task_unmatched_directory_indexes_nothing(
     users_dir = isolated_env.tmp_path / ".ai-prowler"
     users_dir.mkdir(parents=True, exist_ok=True)
     data = {
-        "collection_map": {"rules": [
-            {"prefix": "C:/CompanyDocs/Sales", "collection": "role:sales"},
-        ]},
+        "scope_map": {
+            "C:/CompanyDocs/Sales": "sales",
+        },
         "users": {"tok-david": {"id": "david-owner", "role": "owner"}},
     }
     (users_dir / "users.json").write_text(json.dumps(data), encoding="utf-8")
@@ -292,9 +262,13 @@ def test_real_scheduled_task_unmatched_directory_indexes_nothing(
     client, ef = rag.get_chroma_client()
     default_coll = client.get_or_create_collection(
         name=rag.COLLECTION_NAME, embedding_function=ef)
-    stray = default_coll.get(
+    results = default_coll.get(
         where={"filepath": rag.normalise_path(str(stray_file))},
-        include=["documents"])
-    assert len(stray.get("documents") or []) == 0, (
-        "an unmatched directory must index nothing at all, not fall back "
-        "to the default 'documents' collection")
+        include=["documents", "metadatas"])
+    assert len(results.get("documents") or []) >= 1, (
+        "an unmatched directory must still be indexed -- never blocked, "
+        "per the section 3.4 default-to-shared decision")
+    metas = results.get("metadatas") or []
+    assert metas and metas[0].get("scope") == "shared", (
+        "an unmatched path's chunks must default to scope 'shared'"
+    )

@@ -466,3 +466,21 @@ class TestAdminUpdatePrivateRule:
 # [ ] All-caps name → slug and folder both lowercase
 # [ ] Two users: both rules in collection_map, non-user rules untouched
 # [ ] User removed → their user:* rule gone from collection_map on next save
+#
+# SCOPE PICKER (SCOPE_SIMPLIFICATION_SPEC.md section 3.3a — added 2026-07-16)
+# [ ] Add User with empty scope catalog → listbox empty, gray "no scopes in
+#     the catalog yet" hint shown instead of the normal helper text
+# [ ] Admin tab → 🏷️ Manage Scopes → add "office", "sales" → Save/Close
+# [ ] Add User dialog now shows "office" and "sales" in the scope listbox
+# [ ] Ctrl-click selects both "office" and "sales" → Save → user's scopes
+#     saved as ["office", "sales"] in users.json
+# [ ] Edit an existing user with scopes=["office"] → dialog opens with
+#     "office" pre-selected in the listbox
+# [ ] Edit that user, Ctrl-click to also select "sales", Save → scopes
+#     becomes ["office", "sales"]
+# [ ] User has a scope ("legacy") that was later removed from the catalog
+#     → Edit dialog still shows "legacy" in the listbox (appended after
+#     catalog entries) and pre-selected — not silently dropped
+# [ ] Deselecting "legacy" and saving removes it from that user's scopes
+#     (catalog itself is untouched either way — removal only affects this
+#     one user's assignment)

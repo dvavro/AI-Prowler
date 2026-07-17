@@ -1,28 +1,31 @@
 """
 tests/mcp/test_index_path_private_only.py
 ============================================
-Tests for the "private-only indexing" grant in index_path().
+Tests for who is allowed to call index_path() via MCP.
 
-Background
-----------
-Previously, index_path() required manage_db capability at 'limited' or
-above (staff+) — field_crew (manage_db='none') could never index,
-regardless of whether they had a private collection configured.
+HISTORY: originally written for the "private-only indexing" grant —
+manage_db='none' roles (field_crew) could only index if they had a
+private collection configured, and only inside their own personal
+directory, with every chunk force-routed to their own user:<id>
+collection bypassing any company collection_map rule.
 
-Per an explicit design decision: any role with manage_db='none' but a
-WORKING private collection should still be able to index — but only:
-  1. Files/folders located inside their own personal directory
-     (same containment check as the write-scoping feature).
-  2. Content is force-routed to their own user:<id> collection, bypassing
-     any company collection_map path→scope rule entirely.
-
-A user with manage_db='none' and NO private collection configured still
-cannot index at all — this grant does not create a new capability out of
-nothing, it only extends an *existing* private collection to also accept
-indexing, not just search/read/write.
-
-Once indexed, content becomes semantically searchable via search_documents
-like anything else — that's the whole point of allowing this at all.
+SUPERSEDED 2026-07-16/17 (SCOPE_SIMPLIFICATION_SPEC.md section 3.7, Phase
+7 cutover): direct product decision — indexing is not a data leak (only
+search is), and every directory that can be indexed was already created
+and tracked by an admin/owner in the first place, so there's no
+arbitrary-path risk in letting any authenticated user trigger indexing.
+The role-based manage_db gate (_check_db_cap) is removed from index_path
+entirely, along with the narrower "private collection = indexing confined
+to own directory, force-routed to own collection" carve-out that
+depended on it. Any authenticated (or personal-mode) caller may now index
+any path. Content always lands in the single unified index;
+build_scope_resolver() (tested separately in
+tests/unit/test_build_scope_resolver.py) still automatically tags
+anything under a <slug>-private folder as "private:<their own id>" via
+path-convention detection, so a user's own private content stays exactly
+as private as before at SEARCH time (allowed_scopes()) — nothing here
+weakens that, since the write-time role gate was never the actual
+confidentiality boundary.
 """
 
 import sys
@@ -59,46 +62,29 @@ def _staff(uid="karen-s"):
     return {"id": uid, "name": "Karen S", "role": "staff", "status": "active"}
 
 
-class TestNoPrivateCollectionStillBlocked:
-    """The grant only EXTENDS an existing private collection — it must not
-    create indexing ability out of nothing."""
+class TestAnyRoleCanIndexAnyPath:
+    """The role-based gate is gone entirely -- field_crew, staff, whoever,
+    can all trigger indexing, on any path, with no confinement and no
+    forced collection routing. This is the direct replacement for the
+    old TestNoPrivateCollectionStillBlocked / TestPrivateOnlyGrant /
+    TestExistingTiersUnaffected classes."""
 
-    def test_field_crew_no_private_dir_still_denied(self, mcp_mod, monkeypatch, tmp_path):
+    def test_field_crew_with_no_private_dir_can_still_index(self, mcp_mod, monkeypatch, tmp_path):
+        """The old grant required a private collection to be configured at
+        all -- that requirement is gone too. field_crew can index even
+        with no private collection set up."""
         user = _field_crew()
         target_file = tmp_path / "notes.txt"
         target_file.write_text("hello")
-
-        monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: user)
-        monkeypatch.setattr(mcp_mod, "_check_db_cap", lambda u, level: (False, "role 'field_crew' (manage_db='none') cannot index documents."))
-        monkeypatch.setattr(mcp_mod, "_user_private_write_dir", lambda ctx: ("blocked", None))
-        monkeypatch.setattr(mcp_mod, "load_config", lambda: None)
-
-        result = mcp_mod.index_path(directory=str(target_file), ctx=_make_ctx(user))
-        assert "⛔" in result
-        assert "cannot index" in result.lower() or "no db-management" in result.lower()
-
-
-class TestPrivateOnlyGrant:
-
-    def test_field_crew_with_private_dir_inside_allowed(self, mcp_mod, monkeypatch, tmp_path):
-        """Core fix: field_crew WITH a private collection can index a file
-        that's inside their own personal directory."""
-        user = _field_crew()
-        private_dir = tmp_path / "jake-r-private"
-        private_dir.mkdir()
-        target_file = private_dir / "field_notes.txt"
-        target_file.write_text("job 1042 notes")
 
         captured = {}
 
         def _fake_index_file_list(paths, **kwargs):
             captured["paths"] = paths
-            captured["resolver"] = kwargs.get("collection_resolver")
-            return {"chunks": 3}
+            captured["kwargs"] = kwargs
+            return {"chunks": 1}
 
         monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: user)
-        monkeypatch.setattr(mcp_mod, "_check_db_cap", lambda u, level: (False, "manage_db=none"))
-        monkeypatch.setattr(mcp_mod, "_user_private_write_dir", lambda ctx: ("scoped", private_dir))
         monkeypatch.setattr(mcp_mod, "load_config", lambda: None)
         monkeypatch.setattr(mcp_mod, "add_to_auto_update_list", lambda p: True)
         import rag_preprocessor
@@ -107,57 +93,49 @@ class TestPrivateOnlyGrant:
         result = mcp_mod.index_path(directory=str(target_file), ctx=_make_ctx(user))
 
         assert "⛔" not in result
-        assert captured.get("resolver") is not None
-        # The forced resolver must route to the user's OWN collection,
-        # regardless of the actual filepath passed to it.
-        assert captured["resolver"]("C:/anything/at/all.txt") == "user:jake-r"
+        assert captured.get("paths")
 
-    def test_field_crew_with_private_dir_outside_denied(self, mcp_mod, monkeypatch, tmp_path):
-        """A private collection does NOT grant indexing rights to files
-        OUTSIDE that user's own personal directory."""
+    def test_field_crew_can_index_outside_any_personal_directory(self, mcp_mod, monkeypatch, tmp_path):
+        """The old grant explicitly denied indexing OUTSIDE the user's own
+        personal directory. That confinement is gone -- field_crew can
+        index a path with no relation to their own directory at all."""
         user = _field_crew()
-        private_dir = tmp_path / "jake-r-private"
-        private_dir.mkdir()
         shared_dir = tmp_path / "shared"
         shared_dir.mkdir()
         target_file = shared_dir / "company_manual.pdf"
         target_file.write_text("company-wide content")
 
+        captured = {}
+
+        def _fake_index_file_list(paths, **kwargs):
+            captured["kwargs"] = kwargs
+            return {"chunks": 1}
+
         monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: user)
-        monkeypatch.setattr(mcp_mod, "_check_db_cap", lambda u, level: (False, "manage_db=none"))
-        monkeypatch.setattr(mcp_mod, "_user_private_write_dir", lambda ctx: ("scoped", private_dir))
         monkeypatch.setattr(mcp_mod, "load_config", lambda: None)
+        monkeypatch.setattr(mcp_mod, "add_to_auto_update_list", lambda p: True)
+        import rag_preprocessor
+        monkeypatch.setattr(rag_preprocessor, "index_file_list", _fake_index_file_list)
 
         result = mcp_mod.index_path(directory=str(target_file), ctx=_make_ctx(user))
-        assert "⛔" in result
-        assert "personal directory" in result.lower()
 
-    def test_forced_resolver_bypasses_company_scope_rules(self, mcp_mod, monkeypatch, tmp_path):
-        """Even if a company collection_map rule WOULD route this exact path
-        to a shared/role scope, the private-only grant forces it to the
-        user's own private collection instead — never company-wide."""
+        assert "⛔" not in result
+
+    def test_no_collection_resolver_is_ever_built_or_passed(self, mcp_mod, monkeypatch, tmp_path):
+        """Regardless of role, index_file_list must never receive a
+        collection_resolver kwarg at all -- there is only one physical
+        collection now, and scope comes from chunk metadata instead."""
         user = _field_crew()
-        private_dir = tmp_path / "jake-r-private"
-        private_dir.mkdir()
-        target_file = private_dir / "notes.txt"
+        target_file = tmp_path / "notes.txt"
         target_file.write_text("x")
 
         captured = {}
 
         def _fake_index_file_list(paths, **kwargs):
-            captured["resolver"] = kwargs.get("collection_resolver")
+            captured["kwargs"] = kwargs
             return {"chunks": 1}
 
-        # A company rule that would normally route this path to a shared
-        # scope — must NEVER be consulted for the private-only grant.
-        def _company_resolver_that_should_not_be_used(fp):
-            return "scope:sales"
-
         monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: user)
-        monkeypatch.setattr(mcp_mod, "_check_db_cap", lambda u, level: (False, "manage_db=none"))
-        monkeypatch.setattr(mcp_mod, "_user_private_write_dir", lambda ctx: ("scoped", private_dir))
-        monkeypatch.setattr(mcp_mod, "_build_collection_resolver",
-                            lambda u: _company_resolver_that_should_not_be_used)
         monkeypatch.setattr(mcp_mod, "load_config", lambda: None)
         monkeypatch.setattr(mcp_mod, "add_to_auto_update_list", lambda p: True)
         import rag_preprocessor
@@ -165,42 +143,22 @@ class TestPrivateOnlyGrant:
 
         mcp_mod.index_path(directory=str(target_file), ctx=_make_ctx(user))
 
-        resolved = captured["resolver"](str(target_file))
-        assert resolved == "user:jake-r"
-        assert resolved != "scope:sales"
+        assert captured.get("kwargs", {}).get("collection_resolver") is None
 
-
-class TestExistingTiersUnaffected:
-
-    def test_staff_still_uses_normal_resolver_not_private_only_path(self, mcp_mod, monkeypatch, tmp_path):
-        """Staff (manage_db='limited') must take the EXISTING code path —
-        _check_db_cap succeeds directly, the private-only branch never
-        triggers, even if they happen to also have a private collection."""
+    def test_staff_indexing_unaffected_in_shape(self, mcp_mod, monkeypatch, tmp_path):
+        """Staff continue to be able to index, same as before -- just
+        without any resolver being built for them either now."""
         user = _staff()
         target_file = tmp_path / "doc.txt"
         target_file.write_text("x")
 
-        _build_resolver_called = {"count": 0}
-
-        def _normal_resolver(u):
-            _build_resolver_called["count"] += 1
-            return lambda fp: "scope:sales"
-
         captured = {}
 
         def _fake_index_file_list(paths, **kwargs):
-            captured["resolver"] = kwargs.get("collection_resolver")
+            captured["kwargs"] = kwargs
             return {"chunks": 1}
 
         monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: user)
-        monkeypatch.setattr(mcp_mod, "_check_db_cap", lambda u, level: (True, "role 'staff' may index"))
-        monkeypatch.setattr(mcp_mod, "_build_collection_resolver", _normal_resolver)
-        # If the private-only branch were mistakenly entered, this being
-        # called at all (staff already passed _check_db_cap) would be a bug —
-        # ensure it's simply never consulted.
-        monkeypatch.setattr(mcp_mod, "_user_private_write_dir",
-                            lambda ctx: (_ for _ in ()).throw(AssertionError(
-                                "should not be called when _check_db_cap already succeeded")))
         monkeypatch.setattr(mcp_mod, "load_config", lambda: None)
         monkeypatch.setattr(mcp_mod, "add_to_auto_update_list", lambda p: True)
         import rag_preprocessor
@@ -209,5 +167,27 @@ class TestExistingTiersUnaffected:
         result = mcp_mod.index_path(directory=str(target_file), ctx=_make_ctx(user))
 
         assert "⛔" not in result
-        assert _build_resolver_called["count"] == 1
-        assert captured["resolver"]("anything") == "scope:sales"
+        assert captured.get("kwargs", {}).get("collection_resolver") is None
+
+    def test_personal_mode_unaffected(self, mcp_mod, monkeypatch, tmp_path):
+        """No user at all (personal mode) -- always allowed, unchanged
+        from before this cutover; confirms the None-user path still works
+        with the gate removed."""
+        target_file = tmp_path / "doc.txt"
+        target_file.write_text("x")
+
+        captured = {}
+
+        def _fake_index_file_list(paths, **kwargs):
+            captured["kwargs"] = kwargs
+            return {"chunks": 1}
+
+        monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: None)
+        monkeypatch.setattr(mcp_mod, "load_config", lambda: None)
+        monkeypatch.setattr(mcp_mod, "add_to_auto_update_list", lambda p: True)
+        import rag_preprocessor
+        monkeypatch.setattr(rag_preprocessor, "index_file_list", _fake_index_file_list)
+
+        result = mcp_mod.index_path(directory=str(target_file), ctx=None)
+
+        assert "⛔" not in result

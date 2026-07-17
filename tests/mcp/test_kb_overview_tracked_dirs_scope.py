@@ -58,10 +58,15 @@ def _make_ctx(user):
 
 
 def _fake_collection(metadatas):
-    """A minimal stand-in for a ChromaDB collection object."""
+    """A minimal stand-in for the single ChromaDB collection object
+    (SCOPE_SIMPLIFICATION_SPEC.md section 3.7, Phase 7 cutover). Its
+    .get() is called twice by get_knowledge_base_overview -- once for an
+    id probe, once for the metadata sample -- and returns matching
+    ids/metadatas regardless of which call site hits it, since each call
+    site only reads the key it needs."""
     col = MagicMock()
-    col.count.return_value = len(metadatas)
-    col.get.return_value = {"metadatas": metadatas}
+    ids = [f"id-{i}" for i in range(len(metadatas))]
+    col.get.return_value = {"ids": ids, "metadatas": metadatas}
     return col
 
 
@@ -82,7 +87,7 @@ class TestTrackedDirsScoping:
         monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: None)
         monkeypatch.setattr(
             mcp_mod, "_scoped_collections_for_ctx",
-            lambda ctx: [_fake_collection([_meta("C:/docs/a.pdf")])]
+            lambda ctx: (_fake_collection([_meta("C:/docs/a.pdf")]), None)
         )
         _patch_tracked_dirs(monkeypatch, ["C:/docs", "C:/somewhere/else/entirely"])
         result = mcp_mod.get_knowledge_base_overview(ctx=None)
@@ -97,7 +102,8 @@ class TestTrackedDirsScoping:
         # Caller can only see one file, under C:/docs/customers/
         monkeypatch.setattr(
             mcp_mod, "_scoped_collections_for_ctx",
-            lambda ctx: [_fake_collection([_meta("C:/docs/customers/quote.pdf")])]
+            lambda ctx: (_fake_collection([_meta("C:/docs/customers/quote.pdf")]),
+                        {"scope": {"$in": ["shared"]}})
         )
         # But the GLOBAL tracked list includes an owner-private directory
         # this caller has no access to at all.
@@ -114,7 +120,8 @@ class TestTrackedDirsScoping:
         monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: user)
         monkeypatch.setattr(
             mcp_mod, "_scoped_collections_for_ctx",
-            lambda ctx: [_fake_collection([_meta("C:/shared/manual.pdf")])]
+            lambda ctx: (_fake_collection([_meta("C:/shared/manual.pdf")]),
+                        {"scope": {"$in": ["shared"]}})
         )
         _patch_tracked_dirs(monkeypatch, ["C:/shared"])
         result = mcp_mod.get_knowledge_base_overview(ctx=_make_ctx(user))
@@ -126,7 +133,8 @@ class TestTrackedDirsScoping:
         monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: user)
         monkeypatch.setattr(
             mcp_mod, "_scoped_collections_for_ctx",
-            lambda ctx: [_fake_collection([_meta("C:/shared/manual.pdf")])]
+            lambda ctx: (_fake_collection([_meta("C:/shared/manual.pdf")]),
+                        {"scope": {"$in": ["shared"]}})
         )
         _patch_tracked_dirs(monkeypatch, [])
         result = mcp_mod.get_knowledge_base_overview(ctx=_make_ctx(user))

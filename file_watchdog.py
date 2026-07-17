@@ -185,13 +185,6 @@ def _smart_scan_allows(filepath: str) -> bool:
 
 # ── Indexing functions ────────────────────────────────────────────────────────
 
-# Sentinel returned by _resolve_unattended_collection when this install is in
-# PERSONAL mode (no ~/.ai-prowler/users.json / no collection_map at all) —
-# meaning server-mode scoping doesn't apply and the watchdog should behave
-# exactly as it always has: single "documents" collection, unconditionally.
-_PERSONAL_MODE = object()
-
-
 def _load_users_data():
     """Load ~/.ai-prowler/users.json, or None if it doesn't exist / can't be
     parsed. A missing file is the normal, expected case for a personal-mode
@@ -227,46 +220,14 @@ def _log_scope_skip(path: str, reason: str) -> None:
         pass
 
 
-def _resolve_unattended_collection(filepath: str):
-    """Determine which ChromaDB collection `filepath` belongs to, with NO
-    acting user/session available (the watchdog is a background daemon).
-
-    Returns:
-      _PERSONAL_MODE  — this install has no users.json / collection_map at
-                         all; caller should use the unscoped single-
-                         collection behavior, unchanged from before this fix.
-      a collection name (str) — server mode, and a rule safely matched.
-      None                    — server mode, but NO rule safely matched
-                         (unmatched path, or a rule pointing at a user who
-                         no longer exists). Caller MUST skip this file and
-                         log a warning — never guess a destination. Per
-                         David's explicit design decision (2026-07-13):
-                         no default_collection fallback either — skip +
-                         log is the ONLY behavior for an unmatched path,
-                         deliberately not defaulting to "shared" (that
-                         would risk silently exposing content that was
-                         never meant to be company-wide). See
-                         scope_resolver.resolve_collection_for_unattended_
-                         path's docstring for the full rationale.
-    """
-    users_data = _load_users_data()
-    if not users_data:
-        return _PERSONAL_MODE
-
-    collection_map = users_data.get("collection_map")
-    if not isinstance(collection_map, dict) or not collection_map.get("rules"):
-        return _PERSONAL_MODE
-
-    try:
-        _ensure_on_path()
-        import scope_resolver as _sr
-    except Exception as exc:
-        log.error("Could not import scope_resolver — skipping %s: %s", filepath, exc)
-        return None
-
-    known_ids = _sr.known_user_ids(users_data)
-    return _sr.resolve_collection_for_unattended_path(
-        filepath, collection_map, known_ids=known_ids)
+# SCOPE_SIMPLIFICATION_SPEC.md section 3.7 (Phase 7 cleanup, 2026-07-17):
+# _resolve_unattended_collection() (and its _PERSONAL_MODE sentinel above)
+# have been removed -- zero remaining callers since _do_reindex_file/
+# _do_index_directory were migrated to the single-collection design (see
+# their own SCOPE_SIMPLIFICATION_SPEC.md comments below). There is no
+# "which collection does this belong to" question left to answer here;
+# scope is tagged at index time by build_scope_resolver() in
+# rag_preprocessor.py instead.
 
 
 def _do_reindex_file(filepath: str):
@@ -274,32 +235,19 @@ def _do_reindex_file(filepath: str):
     Index a single file using rag_preprocessor directly, respecting Smart Scan
     rules. Mirrors the Smart Scan ON path in index_worker.
 
-    Server-mode collection awareness (added after the 2026-07 Christina
-    incident — a file in an employee's personal directory was silently
-    landing in the single default "documents" collection, invisible to
-    everyone including its rightful owner): before indexing, resolve which
-    scoped collection this path actually belongs to. On a personal-mode
-    install this is a no-op (unchanged behavior). In server mode, if no
-    rule safely matches, the file is SKIPPED with a warning rather than
-    guessed into any collection — see _resolve_unattended_collection.
+    SCOPE_SIMPLIFICATION_SPEC.md section 3.7 (Phase 7 cutover, 2026-07-16):
+    the server-mode collection-routing/skip logic added after the 2026-07
+    Christina incident has been REMOVED -- there is only one physical
+    collection now, so there is no "wrong collection" for a file to land
+    in and nothing to skip. Every file is indexed into the single default
+    collection; index_file_list already tags each chunk's "scope" metadata
+    via build_scope_resolver() internally, with no collection_resolver
+    needed from this caller.
     """
     # Apply Smart Scan filter before doing any work
     if not _smart_scan_allows(filepath):
         log.debug("Smart Scan skip: %s", filepath)
         return
-
-    target_collection = _resolve_unattended_collection(filepath)
-    if target_collection is None:
-        _reason = ("no collection_map rule safely matches this path "
-                  "(or its rule points at a user who no longer exists)")
-        log.warning(
-            "Skipping %s — %s. Add a scope rule for this directory in the "
-            "Admin tab, or index it manually via index_path() to route it "
-            "correctly.", filepath, _reason)
-        _log_scope_skip(filepath, _reason)
-        return
-    scoped = target_collection is not _PERSONAL_MODE
-    coll_name = target_collection if scoped else None
 
     try:
         _ensure_on_path()
@@ -315,31 +263,22 @@ def _do_reindex_file(filepath: str):
             return
 
         # Purge stale chunks then re-index (mirrors reindex_file MCP tool)
-        purge_name = coll_name if scoped else rp.COLLECTION_NAME
         try:
             client, embedding_func = rp.get_chroma_client()
             coll = client.get_or_create_collection(
-                name=purge_name,
+                name=rp.COLLECTION_NAME,
                 embedding_function=embedding_func,
             )
             coll.delete(where={"filepath": fp})
         except Exception as exc:
-            log.warning("Purge failed for %s in %s: %s — continuing", fp, purge_name, exc)
-
-        index_kwargs = {}
-        if scoped:
-            index_kwargs["collection_resolver"] = lambda _fp, _c=coll_name: _c
+            log.warning("Purge failed for %s: %s — continuing", fp, exc)
 
         stats  = rp.index_file_list(
             [fp], label="watchdog",
             root_directory=str(Path(fp).parent),
-            **index_kwargs,
         )
         chunks = stats.get("chunks", 0) if stats else 0
-        if scoped:
-            log.info("Indexed: %s -> %s  (%d chunk(s))", Path(fp).name, coll_name, chunks)
-        else:
-            log.info("Indexed: %s  (%d chunk(s))", Path(fp).name, chunks)
+        log.info("Indexed: %s  (%d chunk(s))", Path(fp).name, chunks)
 
     except Exception as exc:
         log.error("Failed to index %s: %s", filepath, exc)
@@ -350,25 +289,10 @@ def _do_index_directory(dirpath: str):
     Index all Smart-Scan-allowed files in a newly-dropped directory.
     Mirrors the Smart Scan ON path in index_worker using scan_directory.
 
-    Server-mode collection awareness: resolves the collection ONCE for the
-    directory itself (not per-file) — every tracked directory has exactly
-    one registered scope by design, so every file found inside gets routed
-    to that same collection uniformly. See _do_reindex_file's docstring
-    for the full incident/rationale writeup; this mirrors the same fix.
+    SCOPE_SIMPLIFICATION_SPEC.md section 3.7 (Phase 7 cutover, 2026-07-16):
+    see _do_reindex_file's docstring -- the same collection-routing removal
+    applies here.
     """
-    target_collection = _resolve_unattended_collection(dirpath)
-    if target_collection is None:
-        _reason = ("no collection_map rule safely matches this path "
-                  "(or its rule points at a user who no longer exists)")
-        log.warning(
-            "Skipping directory %s — %s. Add a scope rule for this "
-            "directory in the Admin tab, or index it manually via "
-            "index_path() to route it correctly.", dirpath, _reason)
-        _log_scope_skip(dirpath, _reason)
-        return
-    scoped = target_collection is not _PERSONAL_MODE
-    coll_name = target_collection if scoped else None
-
     try:
         _ensure_on_path()
         global _rag_preprocessor
@@ -391,19 +315,11 @@ def _do_index_directory(dirpath: str):
             log.info("No Smart-Scan-allowed files in dir: %s", Path(dp).name)
             return
 
-        index_kwargs = {}
-        if scoped:
-            index_kwargs["collection_resolver"] = lambda _fp, _c=coll_name: _c
-
         stats  = rp.index_file_list(files, label="watchdog-dir",
-                                 root_directory=dp, **index_kwargs)
+                                 root_directory=dp)
         chunks = stats.get("chunks", 0) if stats else 0
-        if scoped:
-            log.info("Indexed dir: %s -> %s  (%d file(s), %d chunk(s))",
-                     Path(dp).name, coll_name, len(files), chunks)
-        else:
-            log.info("Indexed dir: %s  (%d file(s), %d chunk(s))",
-                     Path(dp).name, len(files), chunks)
+        log.info("Indexed dir: %s  (%d file(s), %d chunk(s))",
+                 Path(dp).name, len(files), chunks)
 
     except Exception as exc:
         log.error("Failed to index directory %s: %s", dirpath, exc)

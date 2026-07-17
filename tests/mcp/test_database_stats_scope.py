@@ -3,24 +3,25 @@ tests/mcp/test_database_stats_scope.py
 ========================================
 Tests for get_database_stats()'s server-mode scoping fix.
 
-Background
-----------
-get_database_stats() previously always enumerated EVERY ChromaDB collection
-via client.list_collections(), regardless of caller or mode — the one read
-tool that didn't respect per-user scoping at all. In server mode, any role
-(including field_crew) saw company-wide chunk/document totals covering
-every other employee's private collection and every scope combined.
+HISTORY: originally written when get_database_stats() always enumerated
+EVERY ChromaDB collection via client.list_collections(), regardless of
+caller or mode -- any role (including field_crew) saw company-wide
+totals covering every other employee's private collection and every
+scope combined. Fixed by routing server mode through
+_scoped_collections_for_ctx(ctx), which at the time returned a LIST of
+collection objects.
+
+SUPERSEDED 2026-07-16/17 (SCOPE_SIMPLIFICATION_SPEC.md section 3.7, Phase
+7 cutover): _scoped_collections_for_ctx now returns (collection,
+where_filter) -- a single collection plus a "scope" metadata where-filter
+-- instead of a list of collection objects. The underlying fix this file
+protects (server-mode totals must be scoped, never company-wide by
+default) is unchanged; only the mocking shape needed updating.
 
 Personal mode is untouched (see test_database_stats_collections.py) — it
-still enumerates ALL collections via client.list_collections(), which is
-required to match check_ai_prowler_status() exactly and catch orphaned
-scope collections left over from switching modes.
-
-Server mode now uses _scoped_collections_for_ctx(ctx) instead — the same
-function search_documents() and get_knowledge_base_overview() already use.
-Owners (and managers with read_all_role_scopes) still see the full
-company-wide total via their real entitlement inside that function;
-staff/field_crew see only their own private + assigned scopes + shared.
+still enumerates ALL collections via client.list_collections(), required
+to match check_ai_prowler_status() exactly and catch orphaned collections
+left over from switching modes or from before this cutover.
 """
 
 import sys
@@ -50,13 +51,14 @@ def _make_ctx(user):
 
 
 def _fake_collection(n_chunks, ext="pdf", filepath="C:/docs/a.pdf"):
+    """A fake single collection whose .get() (called twice by
+    get_database_stats -- once for an id probe, once for the metadata
+    sample) returns matching ids/metadatas regardless of which call site
+    hits it, since each call site only reads the key it needs."""
     col = MagicMock()
-    col.count.return_value = n_chunks
-    col.get.return_value = {
-        "metadatas": [
-            {"filepath": filepath, "extension": ext} for _ in range(n_chunks)
-        ]
-    }
+    metadatas = [{"filepath": filepath, "extension": ext} for _ in range(n_chunks)]
+    ids = [f"id-{i}" for i in range(n_chunks)]
+    col.get.return_value = {"ids": ids, "metadatas": metadatas}
     return col
 
 
@@ -70,7 +72,7 @@ class TestServerModeScoping:
 
         monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: user)
         monkeypatch.setattr(mcp_mod, "_scoped_collections_for_ctx",
-                            lambda ctx: [scoped_col])
+                            lambda ctx: (scoped_col, {"scope": {"$in": ["shared"]}}))
 
         # If get_database_stats still called client.list_collections()
         # under the hood, this fake client would be hit and the test would
@@ -92,9 +94,9 @@ class TestServerModeScoping:
         user = {"id": "jake-r", "name": "Jake R", "role": "field_crew"}
         monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: user)
         monkeypatch.setattr(mcp_mod, "_scoped_collections_for_ctx",
-                            lambda ctx: [_fake_collection(1)])
+                            lambda ctx: (_fake_collection(1), {"scope": {"$in": ["shared"]}}))
         result = mcp_mod.get_database_stats(ctx=_make_ctx(user))
-        assert "scoped to your accessible collections" in result
+        assert "scoped to your accessible scopes" in result
 
     def test_personal_mode_no_scoped_note(self, mcp_mod, monkeypatch):
         """Personal mode output must NOT carry the server-mode scoped
@@ -109,7 +111,7 @@ class TestServerModeScoping:
         monkeypatch.setattr(rag_preprocessor, "get_chroma_client",
                             lambda: (fake_client, MagicMock()))
         result = mcp_mod.get_database_stats(ctx=None)
-        assert "scoped to your accessible collections" not in result
+        assert "scoped to your accessible scopes" not in result
 
     def test_two_users_different_scopes_see_different_totals(self, mcp_mod, monkeypatch):
         """The actual leak this fix closes: two different server-mode users
@@ -121,8 +123,8 @@ class TestServerModeScoping:
         def _scoped(ctx):
             u = mcp_mod._current_user(ctx)
             if u["id"] == "jake-r":
-                return [_fake_collection(3)]
-            return [_fake_collection(9)]
+                return (_fake_collection(3), {"scope": {"$in": ["shared"]}})
+            return (_fake_collection(9), {"scope": {"$in": ["shared", "sales"]}})
 
         monkeypatch.setattr(mcp_mod, "_scoped_collections_for_ctx", _scoped)
 
@@ -137,10 +139,13 @@ class TestServerModeScoping:
         assert result_a != result_b
 
     def test_server_mode_empty_scope_returns_friendly_message(self, mcp_mod, monkeypatch):
-        """A user with no accessible collections at all (e.g. no private dir,
-        no assigned scopes) gets a clean empty message, not an error."""
+        """A user with no accessible chunks at all (e.g. no private dir,
+        no assigned scopes -- only the always-present "shared" scope,
+        which happens to be empty) gets a clean empty message, not an
+        error."""
         user = {"id": "new-hire", "name": "New Hire", "role": "field_crew"}
         monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: user)
-        monkeypatch.setattr(mcp_mod, "_scoped_collections_for_ctx", lambda ctx: [])
+        monkeypatch.setattr(mcp_mod, "_scoped_collections_for_ctx",
+                            lambda ctx: (_fake_collection(0), {"scope": {"$in": ["shared"]}}))
         result = mcp_mod.get_database_stats(ctx=_make_ctx(user))
         assert "📭" in result

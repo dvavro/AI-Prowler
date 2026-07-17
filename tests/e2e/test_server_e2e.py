@@ -299,6 +299,17 @@ def e2e_server(tmp_path_factory) -> Generator[_ServerHandle, None, None]:
     # scope_resolver does a full-path prefix match so rules must be absolute.
     # _run_server_mode() loads users.json ONCE at startup — this is our only
     # chance to get the paths in.
+    #
+    # SCOPE_SIMPLIFICATION_SPEC.md section 3.7 (2026-07-17): collection_map
+    # is legacy and no longer consulted by anything on the write path (see
+    # section 3.7's removal of build_collection_resolver) -- kept here only
+    # because nothing reads it anymore, harmless. The mechanism that
+    # actually matters now is scope_map, read by build_scope_resolver() to
+    # tag each indexed chunk's "scope" metadata field, which is what every
+    # search tool's where-filter actually enforces against. Found and fixed
+    # after e2e isolation tests revealed everything defaulting to "shared"
+    # (visible to everyone) because this fixture only ever populated the
+    # legacy collection_map, never scope_map.
     users_doc = json.loads(json.dumps(USERS_DOC))  # deep copy
     users_doc["collection_map"] = {
         "rules": [
@@ -307,6 +318,11 @@ def e2e_server(tmp_path_factory) -> Generator[_ServerHandle, None, None]:
             {"prefix": str(field_dir),  "collection": "role:field"},
         ],
         "default_collection": "shared",
+    }
+    users_doc["scope_map"] = {
+        str(shared_dir).replace("\\", "/").lower(): "shared",
+        str(sales_dir).replace("\\", "/").lower():  "sales",
+        str(field_dir).replace("\\", "/").lower():  "field",
     }
     (state_dir / "users.json").write_text(
         json.dumps(users_doc, indent=2), encoding="utf-8")
@@ -596,17 +612,24 @@ class TestStage2Isolation:
         assert SENTINEL_SHARED.lower() in txt or "shared_handbook" in txt, \
             f"Field manager could NOT find shared doc.\nResult: {txt[:400]}"
 
-    def test_E2E_ST2_05_owner_sees_all(self, seeded_server):
-        """E2E-ST2-05: Owner can retrieve documents from all scopes."""
+    def test_E2E_ST2_05_owner_sees_shared_not_others(self, seeded_server):
+        """E2E-ST2-05: SCOPE_SIMPLIFICATION_SPEC.md section 3.6 (2026-07-16)
+        — owner has no search-visibility exception anymore. TOK_OWNER has
+        no assigned scopes in this fixture, so the owner sees the shared
+        sentinel but NOT the sales/field sentinels — the exact same
+        formula as any other role with no scopes assigned. This replaces
+        the old "owner sees everything" assertion, which tested the
+        now-removed elevation carve-out."""
         broad_query = "sentinel confidential pricing routes handbook"
         txt = asyncio.run(self._search_as(
             seeded_server, TOK_OWNER, broad_query, n_results=20))
-        missing = []
-        for sentinel in (SENTINEL_SHARED, SENTINEL_SALES, SENTINEL_FIELD):
-            if sentinel.lower() not in txt and sentinel.split("_")[2].lower() not in txt:
-                missing.append(sentinel)
-        assert not missing, \
-            f"Owner MISSING sentinels: {missing}\nResult: {txt[:600]}"
+        assert SENTINEL_SHARED.lower() in txt, \
+            f"Owner cannot see shared sentinel.\nResult: {txt[:600]}"
+        for sentinel in (SENTINEL_SALES, SENTINEL_FIELD):
+            assert sentinel.lower() not in txt, (
+                f"⛔ Owner should no longer see scopes they weren't assigned "
+                f"(no role elevation) — found '{sentinel}'.\n{txt[:600]}"
+            )
 
     # ── Isolation (negative access) tests — these are the liability tests ─────
 
@@ -940,6 +963,7 @@ class TestStage5PrivateIsolation:
         }
 
         # Add collection_map rules routing each private dir to the right user: collection
+        # (legacy, no longer consulted -- see the scope_map comment below).
         rules = data.get("collection_map", {}).get("rules", [])
         rules += [
             {"prefix": str(user_a_dir),    "collection": "user:alice-staff"},
@@ -947,6 +971,20 @@ class TestStage5PrivateIsolation:
             {"prefix": str(owner_priv_dir), "collection": f"user:olive-owner"},
         ]
         data["collection_map"]["rules"] = rules
+
+        # SCOPE_SIMPLIFICATION_SPEC.md section 3.7 (2026-07-17): the mechanism
+        # that actually matters is scope_map, read by build_scope_resolver()
+        # to tag each indexed chunk's "scope" metadata field. Each private
+        # dir routes to "private:<slug>", matching the id each real user
+        # resolves to via _resolve_user()'s name-slug derivation (confirmed
+        # empirically: "Alice Staff" -> "alice-staff", "Olive Owner" ->
+        # "olive-owner" -- see the module docstring's "id" field convention).
+        scope_map = data.get("scope_map", {})
+        scope_map[str(user_a_dir).replace("\\", "/").lower()]    = "private:alice-staff"
+        scope_map[str(user_b_dir).replace("\\", "/").lower()]    = "private:bob-staff"
+        scope_map[str(owner_priv_dir).replace("\\", "/").lower()] = "private:olive-owner"
+        data["scope_map"] = scope_map
+
         users_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         time.sleep(0.2)
 
@@ -970,8 +1008,17 @@ class TestStage5PrivateIsolation:
         # several earlier stages have already pushed substantial indexing
         # load through the same shared server/ChromaDB instance.
         #
-        # Rather than a fixed sleep (which is fragile), we poll until all
-        # three sentinels are visible to the owner. Timeout was 15s — this
+        # SCOPE_SIMPLIFICATION_SPEC.md section 3.6 (2026-07-16): each
+        # sentinel is polled as the user who should actually be able to see
+        # it, not as the owner for all three — the owner no longer has a
+        # search-visibility exception (direct product decision, no role
+        # elevation for anyone). Polling everything through TOK_OWNER would
+        # never succeed for user_a/user_b's sentinels under the new model
+        # and would always exhaust the deadline, masking the real
+        # ChromaDB-compactor-lag race this loop exists to absorb.
+        #
+        # Rather than a fixed sleep (which is fragile), we poll until each
+        # sentinel is visible to its rightful owner. Timeout was 15s — this
         # was observed to be insufficient under full-suite load (a ~8 minute,
         # 1600+ test run), producing a flaky-looking "private isolation
         # broken" failure that was actually just "indexing hadn't finished
@@ -986,23 +1033,30 @@ class TestStage5PrivateIsolation:
         deadline = _time.time() + 45
         all_ready = False
         last_seen = {"a": False, "b": False, "owner": False}
+
+        async def _visible(token, sentinel):
+            hdrs = {"Authorization": f"Bearer {token}"}
+            async with streamablehttp_client(mcp_url_poll, headers=hdrs) as (r, w, _):
+                async with ClientSession(r, w) as s:
+                    await s.initialize()
+                    res = await s.call_tool("search_documents",
+                                            {"query": "private notes confidential eyes only",
+                                             "n_results": 20})
+                    txt = _tool_result_text(res).lower()
+                    return sentinel.lower() in txt
+
         while _time.time() < deadline:
             await asyncio.sleep(0.5)
-            hdrs = {"Authorization": f"Bearer {TOK_OWNER}"}
             try:
-                async with streamablehttp_client(mcp_url_poll, headers=hdrs) as (r, w, _):
-                    async with ClientSession(r, w) as s:
-                        await s.initialize()
-                        res = await s.call_tool("search_documents",
-                                               {"query": "private notes confidential eyes only",
-                                                "n_results": 20})
-                        txt = _tool_result_text(res).lower()
-                        last_seen["a"] = SENTINEL_PRIVATE_A.lower() in txt
-                        last_seen["b"] = SENTINEL_PRIVATE_B.lower() in txt
-                        last_seen["owner"] = SENTINEL_PRIVATE_OWNER.lower() in txt
-                        if all(last_seen.values()):
-                            all_ready = True
-                            break
+                if not last_seen["a"]:
+                    last_seen["a"] = await _visible(TOK_USER_A, SENTINEL_PRIVATE_A)
+                if not last_seen["b"]:
+                    last_seen["b"] = await _visible(TOK_USER_B, SENTINEL_PRIVATE_B)
+                if not last_seen["owner"]:
+                    last_seen["owner"] = await _visible(TOK_OWNER, SENTINEL_PRIVATE_OWNER)
+                if all(last_seen.values()):
+                    all_ready = True
+                    break
             except Exception:
                 pass  # server busy — keep polling
         # Fail FAST and CLEARLY here if indexing never settled, rather than
@@ -1062,17 +1116,26 @@ class TestStage5PrivateIsolation:
         assert SENTINEL_PRIVATE_B.lower() in txt or "notes_b" in txt, \
             f"User B cannot see their own private doc.\nResult: {txt[:400]}"
 
-    def test_E2E_ST5_03_owner_sees_all_private(self, private_seeded_server):
-        """E2E-ST5-03: Owner can read all private collections."""
+    def test_E2E_ST5_03_owner_sees_own_private_not_others(self, private_seeded_server):
+        """E2E-ST5-03: SCOPE_SIMPLIFICATION_SPEC.md section 3.6 (2026-07-16) —
+        owner has no search-visibility exception anymore. The owner sees
+        their OWN private sentinel, but NOT user_a's or user_b's — the
+        exact same rule as every other role. This replaces the old
+        "owner sees all private collections" assertion, which tested the
+        now-removed elevation carve-out."""
         broad = "private notes confidential eyes only"
         txt = asyncio.run(self._search(
             private_seeded_server, TOK_OWNER, broad, n=20))
-        missing = []
-        for s in (SENTINEL_PRIVATE_A, SENTINEL_PRIVATE_B, SENTINEL_PRIVATE_OWNER):
-            if s.lower() not in txt:
-                missing.append(s)
-        assert not missing, \
-            f"Owner missing private sentinels: {missing}\nResult: {txt[:600]}"
+        assert SENTINEL_PRIVATE_OWNER.lower() in txt, \
+            f"Owner cannot see their own private doc.\nResult: {txt[:600]}"
+        assert SENTINEL_PRIVATE_A.lower() not in txt, (
+            f"⛔ Owner should no longer see other users' private content "
+            f"(no role elevation) — found User A's sentinel.\n{txt[:600]}"
+        )
+        assert SENTINEL_PRIVATE_B.lower() not in txt, (
+            f"⛔ Owner should no longer see other users' private content "
+            f"(no role elevation) — found User B's sentinel.\n{txt[:600]}"
+        )
 
     # ── Isolation (the liability tests) ──────────────────────────────────────
 
@@ -1180,10 +1243,16 @@ class TestStage6WriteIsolation:
 
     # ── field_crew write tool denial ──────────────────────────────────────────
 
-    def test_E2E_ST6_01_field_crew_cannot_index_path(self, server_with_crew, tmp_path):
-        """E2E-ST6-01: field_crew calling index_path must be denied."""
-        dummy = tmp_path / "evil.txt"
-        dummy.write_text("should never be indexed", encoding="utf-8")
+    def test_E2E_ST6_01_field_crew_can_index_path(self, server_with_crew, tmp_path):
+        """E2E-ST6-01: SCOPE_SIMPLIFICATION_SPEC.md section 3.7 (2026-07-17)
+        — field_crew calling index_path must now succeed. Direct product
+        decision: indexing isn't a data leak (only search is), and every
+        directory that can be indexed was already admin/owner-created and
+        tracked in the first place, so the role gate on indexing tools was
+        removed entirely. This replaces the old "must be denied" assertion,
+        which tested the now-removed gate."""
+        dummy = tmp_path / "field_crew_doc.txt"
+        dummy.write_text("field crew document for indexing test", encoding="utf-8")
 
         txt = asyncio.run(self._call_tool(
             server_with_crew, TOK_FIELD_CREW,
@@ -1191,11 +1260,9 @@ class TestStage6WriteIsolation:
 
         assert "__auth_error__" not in txt, (
             f"field_crew token was 401 — apply patch_hotreload.py first.\n{txt[:300]}")
-        assert any(w in txt for w in ("denied", "not allowed", "cannot", "⛔", "error",
-                                       "permission", "forbidden", "blocked")), (
-            f"⚠️ field_crew was NOT denied index_path over HTTP!\n"
-            f"Response: {txt[:400]}\n"
-            f"This means Tier A suppression is not enforced at the handler level."
+        assert not any(w in txt for w in ("denied", "⛔", "permission", "forbidden")), (
+            f"⚠️ field_crew was incorrectly denied index_path over HTTP — "
+            f"indexing should be open to every role now.\nResponse: {txt[:400]}"
         )
 
     def test_E2E_ST6_02_field_crew_cannot_untrack_directory(self, server_with_crew):
@@ -1290,33 +1357,27 @@ class TestStage7CollectionMapWarning:
         assert "error" not in txt or "indexed" in txt or "chunk" in txt, \
             f"Unmatched file indexing failed unexpectedly: {txt[:400]}"
 
-    def test_E2E_ST7_02_server_log_contains_fallback_warning(self, e2e_server, tmp_path):
-        """E2E-ST7-02: Server log contains the collection_map fallback warning.
-        Reads the mcp_server.log from the sandboxed state dir to verify
-        the warning was emitted (the TH-02 fix in _build_collection_resolver).
+    def test_E2E_ST7_02_no_longer_logs_a_fallback_warning(self, e2e_server, tmp_path):
+        """E2E-ST7-02: RETIRED/INVERTED 2026-07-17 (SCOPE_SIMPLIFICATION_
+        SPEC.md section 3.7). The original TH-02 fix logged a warning when
+        an unmatched file fell through to the default "shared" collection,
+        on the theory that silent exposure into a company-wide collection
+        was a risk worth flagging. That whole mechanism -- collection_map
+        fallback detection inside _build_collection_resolver -- is gone:
+        there is only one collection now, defaulting an unmatched path to
+        scope "shared" is the explicit, intentional, documented behavior
+        (section 3.4), not an edge case needing a warning. This is now a
+        smoke test that indexing an unmatched path succeeds cleanly with
+        no warning-shaped noise in the response, rather than asserting a
+        log line that no longer gets written."""
+        unmatched_dir = tmp_path / "no_rule_matches_this_path_xyz2"
+        unmatched_dir.mkdir()
+        (unmatched_dir / "unmatched2.txt").write_text(
+            "E2E_UNMATCHED_NO_WARNING_SENTINEL content.", encoding="utf-8")
 
-        If this test fails: the warning was not added to the code, or the
-        file matched a rule and didn't fall through to the default.
-        """
-        log_path = e2e_server.state_dir / "mcp_server.log"
-        if not log_path.exists():
-            # Try the AppData location the server writes to
-            import os
-            appdata = os.environ.get("LOCALAPPDATA", "")
-            if appdata:
-                log_path = Path(appdata) / "AI-Prowler" / "mcp_server.log"
-
-        if not log_path.exists():
-            pytest.skip(
-                f"Log file not found at {log_path} — cannot verify warning. "
-                f"Check that the server writes logs to AIPROWLER_TEST_STATE_DIR.")
-
-        log_text = log_path.read_text(encoding="utf-8", errors="replace")
-        assert "collection_map: no rule matched" in log_text, (
-            f"⚠️ TH-02 WARNING NOT FOUND in server log.\n"
-            f"Expected: 'collection_map: no rule matched'\n"
-            f"Log tail (last 1000 chars):\n{log_text[-1000:]}"
-        )
+        txt = asyncio.run(self._index_unmatched(e2e_server, unmatched_dir))
+        assert "error" not in txt or "indexed" in txt or "chunk" in txt, \
+            f"Unmatched file indexing failed unexpectedly: {txt[:400]}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
