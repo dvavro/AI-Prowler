@@ -1055,3 +1055,57 @@ class TestSchedulerEmailDeliveryContract:
 
         assert "✅ Sent" in result
         assert "failed" not in result.lower()
+
+
+# ---------------------------------------------------------------------------
+# TC-SCHED-010  _read_default_to_email() username fallback (v8.1.5)
+# ---------------------------------------------------------------------------
+# Previously default_to was ONLY ever written when the user clicked Save
+# Config in Settings -> Email Configuration. An upgraded install (or a fresh
+# one where SMTP was configured before default_to existed) would have
+# username/password saved but no default_to key at all, and this function
+# returned "" forever until the user happened to re-open Settings and click
+# Save again with no changes — a confusing trap on upgrade. Fixed: fall back
+# to username when default_to is blank, since for personal-mode use the SMTP
+# login IS the recipient inbox in the overwhelming majority of cases.
+
+class TestDefaultToEmailFallback:
+
+    def test_TC_SCHED_010_falls_back_to_username_when_default_to_blank(self, tmp_path, monkeypatch):
+        import scheduler_engine as se
+        cfg_dir = tmp_path / ".ai-prowler"
+        cfg_dir.mkdir()
+        (cfg_dir / "email_config.json").write_text(
+            json.dumps({"smtp_host": "smtp.gmail.com", "username": "david@example.com"}),
+            encoding="utf-8")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        assert se._read_default_to_email() == "david@example.com"
+
+    def test_TC_SCHED_010_explicit_default_to_takes_priority(self, tmp_path, monkeypatch):
+        """If the user DID explicitly save a different default_to (e.g. they
+        want alerts sent to a different inbox than their SMTP login), that
+        explicit choice must win over the username fallback."""
+        import scheduler_engine as se
+        cfg_dir = tmp_path / ".ai-prowler"
+        cfg_dir.mkdir()
+        (cfg_dir / "email_config.json").write_text(
+            json.dumps({"smtp_host": "smtp.gmail.com",
+                        "username": "david@example.com",
+                        "default_to": "alerts@example.com"}),
+            encoding="utf-8")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        assert se._read_default_to_email() == "alerts@example.com"
+
+    def test_TC_SCHED_010_no_config_file_returns_empty(self, tmp_path, monkeypatch):
+        import scheduler_engine as se
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        assert se._read_default_to_email() == ""
+
+    def test_TC_SCHED_010_blank_username_and_default_to_returns_empty(self, tmp_path, monkeypatch):
+        import scheduler_engine as se
+        cfg_dir = tmp_path / ".ai-prowler"
+        cfg_dir.mkdir()
+        (cfg_dir / "email_config.json").write_text(
+            json.dumps({"smtp_host": "smtp.gmail.com"}), encoding="utf-8")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        assert se._read_default_to_email() == ""

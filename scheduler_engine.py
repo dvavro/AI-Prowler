@@ -265,13 +265,26 @@ def _read_default_to_email() -> str:
     where the "sent" recipient and the configured SMTP default_to could
     silently be two different addresses. Never raises; "" means not
     configured, which the caller must treat as "nowhere to send this,
-    skip the tick" rather than guessing an address."""
+    skip the tick" rather than guessing an address.
+
+    v8.1.5 fix: default_to was only ever WRITTEN by _save_smtp_cfg() when
+    the user clicks Save Config — so upgrades and fresh installs that
+    already had SMTP configured (username/password saved from a prior
+    version, before default_to existed) still read "" here forever unless
+    the user happened to re-open Settings and click Save again with no
+    changes. That's a confusing trap on upgrade. Fall back to username —
+    for personal-mode use, the SMTP login IS the recipient inbox in the
+    overwhelming majority of cases — so this resolves correctly the
+    moment SMTP is configured, with no extra click required."""
     try:
         p = Path.home() / ".ai-prowler" / "email_config.json"
         if not p.exists():
             return ""
         cfg = json.loads(p.read_text(encoding="utf-8-sig")) or {}
-        return (cfg.get("default_to") or "").strip()
+        to_addr = (cfg.get("default_to") or "").strip()
+        if to_addr:
+            return to_addr
+        return (cfg.get("username") or "").strip()
     except Exception:
         return ""
 

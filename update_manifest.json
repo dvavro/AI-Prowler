@@ -1,11 +1,11 @@
 {
-  "version": "8.1.4",
-  "generated": "2026-07-17T19:31:18",
+  "version": "8.1.5",
+  "generated": "2026-07-18T21:43:26",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "70b14fdd3321c2c494b1aa630be874b7977650d0901a2e7925bf043feb1d0cf7",
-      "bytes": 1082058
+      "sha256": "4fc442a4ce139bd2b405ec5e0b058ef9c3501ff0548aec0139432f101607f75c",
+      "bytes": 1091829
     },
     {
       "path": "rag_preprocessor.py",
@@ -14,8 +14,8 @@
     },
     {
       "path": "ai_prowler_mcp.py",
-      "sha256": "44817814ed882360f422b9d55785cff833f17f57f6ba6cc68ed327cce5bde758",
-      "bytes": 750480
+      "sha256": "928299493dd397e9fc3117de8199d11f2c5f6a073d0866f1057522373b364fdb",
+      "bytes": 757139
     },
     {
       "path": "mcp_diagnostics.py",
@@ -59,12 +59,12 @@
     },
     {
       "path": "COMPLETE_USER_GUIDE.md",
-      "sha256": "91cae62d9c9a21b66bd56913593152151d4d92e200212db38733df90450bc2b5",
-      "bytes": 149992
+      "sha256": "885b43fb34c81232fd4222c0c5a413a8b338ae309fd5f47165fca4299c7ecd0d",
+      "bytes": 151605
     },
     {
       "path": "VERSION",
-      "sha256": "f795e05b4a3a7a7ea168eb0711762c62db84c19803a564cc7a0631f1c61163f3",
+      "sha256": "57a3f46472aa2808e9f03c0f8232e40ae2324e3a55199dfbe0533432ac1ce8b9",
       "bytes": 6
     },
     {
@@ -109,8 +109,8 @@
     },
     {
       "path": "custom_tasks_manager.py",
-      "sha256": "0022fe4981cd997f7d216db0dc8a4f7f75c4b79d015162bdee72286219ea5986",
-      "bytes": 18266
+      "sha256": "0bc2bb0d5d9d4d89d082459e168a35e46d95cfc8ff04f02afbcb42291d2ed863",
+      "bytes": 19889
     },
     {
       "path": "scheduler_jobs.py",
@@ -119,8 +119,8 @@
     },
     {
       "path": "scheduler_engine.py",
-      "sha256": "fe4d1155dff8ec8771b73eef3126ea13474bd072f211810b0b2e0888e00f5fa8",
-      "bytes": 16175
+      "sha256": "a7526e7fe24b7b00371eeabfafa01c75b8e8d55545f2a6ac504ca613ab5b680b",
+      "bytes": 16916
     }
   ]
 }

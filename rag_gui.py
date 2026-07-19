@@ -92,7 +92,7 @@ if sys.stderr is None:
 # Single source of truth for the app version. Bump this one line when releasing
 # a new version; all UI labels, About dialogs, help text, and update checks
 # read from here.
-APP_VERSION = "8.1.4"
+APP_VERSION = "8.1.5"
 
 # ── UI feature flags ─────────────────────────────────────────────────────────
 # Toggle visibility of advanced/legacy GUI sections without removing any
@@ -1164,7 +1164,7 @@ then ask Claude questions from your desktop or phone.
 ─────────────────────────────────────────────────
  KNOWLEDGE BASE (RAG)
 ─────────────────────────────────────────────────
-• 83 MCP tools across 13 categories
+• 81 MCP tools across 12 categories
 • 65+ file types: PDF, Word, Excel, PowerPoint, HTML,
 • Automatic OCR for scanned PDFs and images
 • Incremental indexing — only changed files reprocessed
@@ -3042,12 +3042,12 @@ or from the Help menu."""
             'body': (
                 'Your Personal Agentic AI Knowledge Base for Claude.\n\n'
                 'AI-Prowler™ Home v8.0.0 for Windows 11 — index your local documents '
-                'and put 83 AI-powered tools at Claude\'s fingertips, on desktop, web, and mobile.\n\n'
+                'and put 81 AI-powered tools at Claude\'s fingertips, on desktop, web, and mobile.\n\n'
                 '★ Index local and OneDrive documents from any folder — 65+ file formats '
                 'supported including scanned PDFs and images with full OCR text extraction.\n\n'
                 '★ ChromaDB vector database with semantic search — Claude queries '
                 'intelligently across 10,000+ files with provenance-aware results.\n\n'
-                '★ 83 MCP tools across 12 categories: Agentic RAG, Code Tools, '
+                '★ 81 MCP tools across 12 categories: Agentic RAG, Code Tools, '
                 'Self-Learning, Action Tools, Email, SMS, Scheduling, Dev Tools, '
                 'Indexing, Job Tracking, Analysis, and Health checks.\n\n'
                 '★ Code Tools — Claude can create, edit, back up, and restore files '
@@ -6258,6 +6258,20 @@ or from the Help menu."""
                 self.root.clipboard_clear()
                 self.root.clipboard_append(_cmd)
                 self.root.update()
+
+                # v8.1.5 fix: this button queued tasks and copied the run
+                # command silently — the only feedback was a small status-bar
+                # line, easy to miss, leaving the user unsure what to do next.
+                # "Run Pending Analysis" already shows a popup for the same
+                # situation (see ~line 5199); bring this button in line with it.
+                from tkinter import messagebox as _mb_rdt
+                _mb_rdt.showinfo(
+                    "Due Tasks Queued",
+                    f"✅  {len(due)} due task{'s' if len(due) != 1 else ''} queued and "
+                    "the run command has been copied to your clipboard.\n\n"
+                    "👉  Open a new Claude chat and press  Ctrl+V  (or paste)\n"
+                    "    to run all due tasks in sequence."
+                )
                 self.status_var.set(
                   f"✅ {len(due)} due task{'s' if len(due) != 1 else ''} queued — paste into Claude to run ALL tasks")
                 self.root.after(3000, lambda: self.status_var.set("Ready"))
@@ -6403,7 +6417,16 @@ or from the Help menu."""
                     if not _cfg_p.exists():
                         return ""
                     _cfg_d = _al_json.loads(_cfg_p.read_text(encoding="utf-8-sig")) or {}
-                    return (_cfg_d.get("default_to") or "").strip()
+                    # v8.1.5 fix: fall back to username (the SMTP login) when
+                    # default_to is blank, matching scheduler_engine's
+                    # _read_default_to_email() — so this display and the
+                    # actual sender agree, and an upgraded/pre-existing SMTP
+                    # config shows a resolved recipient without needing an
+                    # extra Save Config click.
+                    _to_addr = (_cfg_d.get("default_to") or "").strip()
+                    if _to_addr:
+                        return _to_addr
+                    return (_cfg_d.get("username") or "").strip()
                 except Exception:
                     return ""
 
@@ -6452,6 +6475,32 @@ or from the Help menu."""
             # every job silently "succeeds" in the log but no mail ever
             # arrives — this was previously invisible in this panel. Surface
             # it here so an empty inbox has an obvious explanation.
+            # ── Proactive Alerts full-readiness LED (v8.1.5) ────────────────
+            # Previously this only checked SMTP host+username — so it could
+            # show green even when the recipient couldn't actually resolve
+            # (no default_to and, before this version, no username fallback
+            # either), the owner name was blank (greeting falls back to
+            # "Good morning, there!"), or no home address was set (weather
+            # jobs return "Could not geocode" silently). Expand into a real
+            # "fully capable" check covering every piece an alert needs to
+            # both REACH and correctly ADDRESS the recipient.
+            def _proactive_alerts_readiness() -> tuple:
+                missing = []
+                if not _smtp_is_configured():
+                    missing.append("SMTP host/username (Settings → Email Configuration)")
+                if not _read_default_to():
+                    missing.append("recipient email (Settings → Email Configuration)")
+                try:
+                    import ai_prowler_mcp as _apm_rdy
+                    _owner_nm = (_apm_rdy._get_personal_owner_name() or "").strip()
+                except Exception:
+                    _owner_nm = ""
+                if not _owner_nm:
+                    missing.append("owner name (Settings → Owner Name)")
+                if not _read_owner_location():
+                    missing.append("home address (Settings → Owner Name → Home Address)")
+                return (len(missing) == 0, missing)
+
             def _smtp_is_configured() -> bool:
                 try:
                     import json as _al_json
@@ -6480,11 +6529,14 @@ or from the Help menu."""
 
             def _refresh_smtp_status():
                 _smtp_led.delete("all")
-                if _smtp_is_configured():
+                _fully_ready, _missing = _proactive_alerts_readiness()
+                if _fully_ready:
                     _smtp_led.create_oval(1, 1, 9, 9, fill='#3fbf3f', outline='')
-                    _smtp_status_var.set("SMTP is set up — alerts can actually send.")
+                    _smtp_status_var.set(
+                        "Fully configured — alerts can send, and will correctly "
+                        "address the recipient by name with local weather.")
                     _smtp_status_lbl.config(fg='#8ab88a')
-                else:
+                elif not _smtp_is_configured():
                     _smtp_led.create_oval(1, 1, 9, 9, fill='#cc3333', outline='')
                     _smtp_status_var.set(
                         "SMTP not set up yet — alerts will NOT be delivered even "
@@ -6492,8 +6544,83 @@ or from the Help menu."""
                         "enter your SMTP host/username/password, Save, then "
                         "Send Test Email to confirm.")
                     _smtp_status_lbl.config(fg='#e08888')
+                else:
+                    # v8.1.5: SMTP can send, but something needed to correctly
+                    # ADDRESS the recipient (name/address) or resolve a
+                    # recipient at all is still missing — amber, not green.
+                    _smtp_led.create_oval(1, 1, 9, 9, fill='#cc9933', outline='')
+                    _smtp_status_var.set(
+                        "Partially configured — alerts CAN send, but will be "
+                        "incomplete until you also set: " + "; ".join(_missing) + ".")
+                    _smtp_status_lbl.config(fg='#ddbb77')
 
             _refresh_smtp_status()
+
+            # v8.1.5 fix: this panel's "Sends to:" / location / readiness LED
+            # were only ever computed ONCE, when this tab was first built.
+            # Settings tab saves (owner name, home address, email config)
+            # never told this panel to refresh — so a user who opens Links &
+            # Analysis, then goes and changes Settings, then comes back sees
+            # stale values until they restart the whole app. Store a combined
+            # refresher on self so Settings tab's save handlers (built later,
+            # in create_settings_tab) can call it directly after a successful
+            # save. Guarded with hasattr() there since tab build order could
+            # theoretically change.
+            def _refresh_proactive_alerts_display():
+                _refresh_recipient_and_location_display()
+                _refresh_smtp_status()
+
+            self._refresh_proactive_alerts_display = _refresh_proactive_alerts_display
+
+            # v8.1.5 — periodic auto-refresh, same self.root.after() polling
+            # pattern already used for the custom-tasks list a few hundred
+            # lines up (_poll_custom_tasks_file). The tab-changed hook above
+            # only fires on an actual tab switch; this catches the case the
+            # user asked about directly — sitting on this tab (or anywhere
+            # in the app) while a change lands in email_config.json or
+            # config.json (owner name/address) from ANY source: the three
+            # Settings Save buttons, configure_email() called from a Claude
+            # conversation, or a direct file edit. Runs unconditionally
+            # every 3s regardless of which tab is currently selected,
+            # matching the custom-tasks poll's behavior exactly. Diffs on
+            # mtime (not content) so it's cheap and only actually redraws
+            # when something changed.
+            _al_cfg_mtimes = {"email": None, "owner": None}
+
+            def _al_cfg_paths():
+                return (Path.home() / ".ai-prowler" / "email_config.json",
+                        Path.home() / ".ai-prowler" / "config.json")
+
+            def _sync_al_cfg_mtimes():
+                try:
+                    _email_p, _owner_p = _al_cfg_paths()
+                    _al_cfg_mtimes["email"] = (
+                        _email_p.stat().st_mtime if _email_p.exists() else None)
+                    _al_cfg_mtimes["owner"] = (
+                        _owner_p.stat().st_mtime if _owner_p.exists() else None)
+                except Exception:
+                    pass
+
+            def _poll_proactive_alerts_config():
+                try:
+                    _email_p, _owner_p = _al_cfg_paths()
+                    _email_mt = (_email_p.stat().st_mtime if _email_p.exists() else None)
+                    _owner_mt = (_owner_p.stat().st_mtime if _owner_p.exists() else None)
+                    if (_email_mt != _al_cfg_mtimes["email"]
+                            or _owner_mt != _al_cfg_mtimes["owner"]):
+                        _al_cfg_mtimes["email"] = _email_mt
+                        _al_cfg_mtimes["owner"] = _owner_mt
+                        _refresh_proactive_alerts_display()
+                except Exception:
+                    pass
+                finally:
+                    self.root.after(3000, _poll_proactive_alerts_config)
+
+            # Exposed for tests, same reasoning as _poll_custom_tasks_file.
+            self._poll_proactive_alerts_config = _poll_proactive_alerts_config
+
+            _sync_al_cfg_mtimes()
+            self.root.after(3000, _poll_proactive_alerts_config)
 
             def _refresh_engine_status():
                 if _sched_eng.is_running():
@@ -8205,6 +8332,14 @@ or from the Help menu."""
                 if RAG_AVAILABLE:
                     _rag_engine.OWNER_NAME = name
                     save_config(owner_name=name)
+                # v8.1.5 fix: tell the Proactive Alerts panel (Links &
+                # Analysis tab) to refresh its readiness LED so it doesn't
+                # keep showing a stale owner name until the app is restarted.
+                if hasattr(self, '_refresh_proactive_alerts_display'):
+                    try:
+                        self._refresh_proactive_alerts_display()
+                    except Exception:
+                        pass
                 self.status_var.set(
                     f"✅ Owner name saved: '{name}'" if name else "✅ Owner name cleared")
                 self.root.after(3000, lambda: self.status_var.set("Ready"))
@@ -8265,6 +8400,13 @@ or from the Help menu."""
                     _rag_engine.OWNER_ZIP    = zip_
                     save_config(owner_street=street, owner_city=city,
                                owner_state=state, owner_zip=zip_)
+                # v8.1.5 fix: same as _save_owner_name — refresh the
+                # Proactive Alerts panel's weather-location display live.
+                if hasattr(self, '_refresh_proactive_alerts_display'):
+                    try:
+                        self._refresh_proactive_alerts_display()
+                    except Exception:
+                        pass
                 self.status_var.set("✅ Address saved" if (street or city or state or zip_)
                                     else "✅ Address cleared")
                 self.root.after(3000, lambda: self.status_var.set("Ready"))
@@ -8791,6 +8933,14 @@ or from the Help menu."""
                 '_password_b64': _b.b64encode(pw.encode()).decode(),
                 'from_name':     _smtp_from_var.get().strip() or 'AI-Prowler',
                 'use_tls':       True,
+                # v8.1.5 fix: Proactive Alerts (scheduler_engine._read_default_to_email)
+                # and this panel's own _read_default_to() both read cfg['default_to'],
+                # but this dict never wrote that key — so Morning Briefing and every
+                # other alert always saw "no default recipient configured" even with
+                # SMTP fully set up. Default the recipient to the same address used
+                # for SMTP login, since for personal use they're normally the same
+                # inbox. (documented in COMPLETE_USER_GUIDE.md as settable here)
+                'default_to':    user,
             }
             p = Path.home() / '.ai-prowler' / 'email_config.json'
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -17242,6 +17392,20 @@ or from the Help menu."""
             selected = self.notebook.index(self.notebook.select())
             if selected == self._TAB_INDEX_QUERY:
                 self._trigger_prewarm()
+                # v8.1.5 fix: also refresh Proactive Alerts' "Sends to:" /
+                # weather location / readiness LED every time this tab
+                # becomes visible — not just after the three specific
+                # Settings-tab Save buttons. This is the general fix: it
+                # also catches changes made via configure_email() from a
+                # Claude conversation, direct edits to email_config.json /
+                # config.json, or any future settings path this GUI doesn't
+                # explicitly wire — anything the user does elsewhere, then
+                # switches back to this tab to check, is always current.
+                if hasattr(self, '_refresh_proactive_alerts_display'):
+                    try:
+                        self._refresh_proactive_alerts_display()
+                    except Exception:
+                        pass
             # Settings tab: no synchronous refresh — background poller keeps list current
         except Exception:
             pass

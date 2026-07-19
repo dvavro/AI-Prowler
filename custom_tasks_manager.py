@@ -142,6 +142,34 @@ def _advance_date(from_date_str: str, schedule: str) -> str:
     return (base + datetime.timedelta(days=days)).isoformat()
 
 
+def _advance_date_catchup(anchor: str, schedule: str, today_str: str = None) -> str:
+    """
+    Advance anchor by schedule intervals until the result is strictly after
+    today (or a supplied reference date) — rather than only one interval.
+
+    v8.1.5 fix: previously, completing a task only ever called _advance_date()
+    once, no matter how far behind it was. A task overdue by MULTIPLE
+    intervals (e.g. a daily check-in overdue 5 days) needed 5 separate
+    completions to fully catch up — each completion only closed one interval
+    of the gap, so it stayed partially overdue in between. A task that is
+    due/overdue by exactly one interval (the common case) behaves identically
+    to before: a single _advance_date() call already lands in the future, so
+    the loop below exits immediately. This only changes behavior once a task
+    has fallen behind by more than one interval, in which case a single
+    completion now fully resyncs it to the next occurrence after today,
+    instead of requiring one completion per missed interval.
+    """
+    today_str = today_str or _today()
+    new_date = _advance_date(anchor, schedule)
+    if new_date is None:
+        return None
+    guard = 0
+    while new_date <= today_str and guard < 10000:
+        new_date = _advance_date(new_date, schedule)
+        guard += 1
+    return new_date
+
+
 def _is_due(task: dict) -> bool:
     """Return True if the task is due today or overdue."""
     next_due = task.get("next_due")
@@ -384,9 +412,12 @@ def advance_next_due(tasks: list, task_id: str,
         return None
 
     # Anchor: advance from the CURRENT next_due (not from completed_date)
-    # This keeps the schedule anchored to its original cadence.
+    # This keeps the schedule anchored to its original cadence. If the task
+    # fell behind by more than one interval, _advance_date_catchup() (v8.1.5)
+    # skips past every already-missed occurrence in one call, so a single
+    # completion always makes the task current — see its docstring.
     anchor = task.get("next_due") or completed_date or _today()
-    new_next_due = _advance_date(anchor, schedule)
+    new_next_due = _advance_date_catchup(anchor, schedule, completed_date or _today())
 
     task["last_run"]    = completed_date or _today()
     task["last_status"] = "completed"

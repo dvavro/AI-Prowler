@@ -1,5 +1,5 @@
 # AI-Prowler — Complete User Guide
-## Version 8.1.4
+## Version 8.1.5
 
 ---
 
@@ -101,7 +101,7 @@ This produces dramatically better results — equivalent to having a skilled res
 
 - **One shared knowledge base instead of one collection per scope** — Business Server installs now index everything into a single ChromaDB database, with each chunk tagged by a `scope` label instead of being routed into a separate physical collection. Simpler under the hood, and removes an entire class of "which collection is this in" bugs. See **Section 4 → Server-Mode Scope Tagging** and **Section 9 → Scopes**.
 - **No more owner search-visibility exception** — every role, including the owner, now sees exactly `shared` + their own assigned scopes + their own private scope (if enabled) — no exceptions. If the owner needs to see a scope, it's assigned to them the same way as anyone else. See **Section 9 → Scopes**.
-- **Indexing opened up to every role** — `index_path`, `update_tracked_directories`, `reindex_file`, and `reindex_directory` no longer require owner/manager and are no longer confined to a field crew member's own personal directory. Indexing was never the actual confidentiality boundary — scope-based search access is, and that boundary is unchanged. `untrack_directory` and `list_tracked_directories` remain owner/manager-only. See **Section 6.3**.
+- **Indexing opened up to every role** — `index_path`, `update_tracked_directories`, `reindex_file`, and `reindex_directory` no longer require owner/manager and are no longer confined to a field crew member's own personal directory. Indexing was never the actual confidentiality boundary — scope-based search access is, and that boundary is unchanged. `untrack_directory` remains owner/manager-only. `list_tracked_directories` (v8.1.5) is now gated by **scope, not role** — every role may call it, and the result is filtered to only the paths within their own accessible scopes, matching what they can already search. See **Section 6.3**.
 - **Admin-managed scope catalog** — scopes are now picked from a shared, admin-managed list (🏷️ Manage Scopes in the Admin tab, up to 15 entries) instead of free-typed comma-separated text on each user. See **Section 9**.
 - **Multi-select scope picker on Add/Edit User** — replaces the old comma-separated text field. See **Section 9**.
 - **Editable scope column on the Update Index tab** — assign or change a tracked folder's scope directly from Update Index via **🔀 Change Scope for Selected**; the change is staged and takes effect the next time you run Update Selected/Update All. See **Section 9 → Assigning Scopes to Folders**.
@@ -324,9 +324,12 @@ This scoping applies independently of Tier B role gating (§6.3) — even an own
 | `send_email`, `send_alert` | ✅ | ✅ | ✅ | ✅ |
 | `send_learnings_report` | ✅ | ✅ | ✅ | ✅ |
 | `index_path`, `update_tracked_directories`, `reindex_file`, `reindex_directory` | ✅ | ✅ | ✅ | ✅ |
-| `list_tracked_directories`, `untrack_directory` | ✅ | ✅ | ❌ | ❌ |
+| `list_tracked_directories` | ✅ | ✅ | ✅ | ✅ |
+| `untrack_directory` | ✅ | ✅ | ⚠️ own dir only¹ | ⚠️ own dir only¹ |
 
-**Indexing is open to every role (v8.1.4).** Earlier versions gated `index_path`/`update_tracked_directories`/`reindex_*` down to owner/manager, with a narrower carve-out letting field_crew index only inside their own personal directory. That role gate is gone — indexing was never the actual confidentiality boundary, since every role's *search* results are already scoped independently (§9 — Scopes). Any authenticated user can trigger indexing on any already-tracked path; a path only becomes tracked in the first place through an owner/manager action in the Admin tab or Index Docs tab, so this doesn't open up arbitrary filesystem access. `list_tracked_directories` and `untrack_directory` remain owner/manager-only, since those reveal or remove company-wide tracking state rather than just adding to the shared index.
+¹ **v8.1.5 two-tier gate:** any role may untrack a path inside their OWN personal directory (no admin flag needed). Outside it — a shared scope, another user's private folder, or general company-wide tracked state — requires the owner, or a manager/staff member with delegated admin rights ("Can manage users" in the Admin tab). A plain manager or staff member without that flag is denied outside their own directory; the flag, not the role name, is what actually grants it.
+
+**Indexing is open to every role (v8.1.4).** Earlier versions gated `index_path`/`update_tracked_directories`/`reindex_*` down to owner/manager, with a narrower carve-out letting field_crew index only inside their own personal directory. That role gate is gone — indexing was never the actual confidentiality boundary, since every role's *search* results are already scoped independently (§9 — Scopes). Any authenticated user can trigger indexing on any already-tracked path; a path only becomes tracked in the first place through an owner/manager action in the Admin tab or Index Docs tab, so this doesn't open up arbitrary filesystem access. `untrack_directory` (v8.1.5) moved from a blanket owner/manager role gate to the two-tier gate described above — own personal directory (any role) vs. everywhere else (owner or delegated admin). `list_tracked_directories` (v8.1.5) is instead gated by **scope**, not role: it never revealed anything beyond shared + the caller's own assigned scopes + their own private folder in the first place, so the earlier owner/manager-only gate was hiding a subset of the caller's own accessible paths from them for no confidentiality reason — every role now sees the list, filtered to what they can already reach.
 
 **`reindex_file` / `reindex_directory` / `reindex_all` — single unified index (v8.1.4).** These purge and rebuild against the one shared ChromaDB collection every install uses now — there's no longer a separate physical collection per scope to sweep. Each chunk is retagged with its current scope during the rebuild (see §9), so a reindex always reflects whatever scope assignment is in effect at that moment. `reindex_all` calls `reindex_directory()` once per tracked directory and inherits this automatically. Personal mode is unaffected either way — always the single database, as it always has been.
 
@@ -358,7 +361,7 @@ This scoping applies independently of Tier B role gating (§6.3) — even an own
 |---|---|---|
 | `index_path` | Indexes all supported documents in a folder (or a single file) and optionally adds the path to the auto-update tracking list. | Personal + Server |
 | `update_tracked_directories` | Re-scans all tracked paths and re-indexes only new or changed files. | Personal + Server |
-| `list_tracked_directories` | Lists every path currently registered for auto-update tracking. | Personal + Server |
+| `list_tracked_directories` | Lists every path currently registered for auto-update tracking. **Server mode (v8.1.5):** gated by scope, not role — every role may call it; filtered to paths within the caller's own accessible scopes. | Personal + Server |
 | `untrack_directory` | Removes a path from the tracking list and deletes all its chunks from ChromaDB. Destructive — chunks are gone until re-indexed. | Personal + Server |
 | `get_database_stats` | Chunk count, unique document count, and file-type breakdown for the ChromaDB index. Personal mode always covers the whole database. **Server mode:** scoped to the caller's own accessible scopes — every role, including owner, sees only their own private, assigned scope, and shared totals (§9 — no role gets a company-wide-total exception). | Personal + Server |
 
@@ -509,7 +512,7 @@ Two different status tools — know which to call:
 
 | Tool | What It Does | Mode |
 |---|---|---|
-| `check_ai_prowler_status` | RAG engine health check. Verifies ChromaDB connectivity, embedding model status, and chunk count — always shown to every role, a basic health signal. The tracked-paths list (real folder/file names) is shown only to owner/manager in server mode, same gate as `list_tracked_directories`; staff/field_crew still get the health check, just without that section. | Personal + Server |
+| `check_ai_prowler_status` | RAG engine health check. Verifies ChromaDB connectivity, embedding model status, and chunk count — always shown to every role, a basic health signal. The tracked-paths list (real folder/file names) is still shown only to owner/manager in server mode; staff/field_crew still get the health check, just without that section. (Note: this is a role gate, unlike `list_tracked_directories`, which became scope-gated in v8.1.5 — the two tools' tracked-paths sections are no longer gated the same way.) | Personal + Server |
 | `how_to_use_ai_prowler` | Returns the recommended Agentic RAG workflow and tool-call sequence. Call at the start of any new research session. **The main guide is identical across every mode and role** — deliberate, so a conversation with two connectors attached (e.g. a personal install and a company server) can't have Claude conflate "not available on this connector" with "doesn't exist at all." Server-mode caveats (dev tools, code-aware retrieval, file-editing scoping, agentic analysis) are written inline in the guide text itself, present for every reader. Only the "THIS CONNECTION" footer varies — computed live per caller, including their personal-directory write status. | Personal + Server |
 
 ---
@@ -820,7 +823,7 @@ The Admin tab appears only when `edition = business` AND `mode = server`.
 | staff | Regular employee. | ❌ |
 | field_crew | Field employee. | ❌ |
 
-Role only ever gates two things: Admin tab access (owner, and manager if granted "Can manage users") and a couple of destructive/company-wide tools (`untrack_directory`, `list_tracked_directories` — see §6.3). It does **not** gate what a user can search, or whether they can index — those are controlled entirely by scopes, below. The role labels themselves are also useful just for the Admin tab's own bookkeeping — a quick visual read of who's who in the Active Users table.
+Role only ever gates two things: Admin tab access (owner, and manager if granted "Can manage users") and part of `untrack_directory` (see §6.3 — v8.1.5: own personal directory is open to every role; owner or delegated admin is required only outside it). It does **not** gate what a user can search, whether they can index, or (as of v8.1.5) whether they can list tracked paths (`list_tracked_directories` is scope-gated now, same visibility as search) — those are controlled entirely by scopes, below. The role labels themselves are also useful just for the Admin tab's own bookkeeping — a quick visual read of who's who in the Active Users table.
 
 ### Scopes — Controlling What Each User Can See (v8.1.4)
 

@@ -1305,15 +1305,61 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
             "     shared knowledge base. Indexing isn't a data leak — only",
             "     search results are scope-gated (see allowed_scopes above).",
             "",
-            "Tracking administration (untrack_directory,",
-            "list_tracked_directories) and write-zone grants",
-            "(grant_write_access, revoke_write_access):",
+            "Tracking administration (untrack_directory):",
         ]
-        manage_db = caps.get("manage_db", "none")
-        if manage_db == "full":
-            footer_lines.append("  ✅ Full access — your role may manage tracked paths and write grants.")
+        # v8.1.5: untrack_directory moved from a blanket owner/manager role
+        # gate to a two-tier gate — own personal directory (any role) vs.
+        # everywhere else (owner or delegated admin). Compute live rather
+        # than reusing the old manage_db=="full" check, which no longer
+        # matches what the tool actually enforces. _user_private_write_dir
+        # is called fresh here since the shared _htu_priv_status/_htu_priv_dir
+        # locals used by the later "File editing" section aren't computed yet
+        # at this point in the function.
+        _untr_priv_status, _untr_priv_dir = _user_private_write_dir(ctx)
+        _is_owner_ftr = (role == "owner")
+        _is_admin_ftr = bool(_user.get("can_manage_users")) if _user else False
+        if _untr_priv_status == "scoped":
+            footer_lines.append(
+                f"  ✅ Inside your own personal directory ({_untr_priv_dir}): "
+                "always allowed, any role.")
+            if _is_owner_ftr or _is_admin_ftr:
+                footer_lines.append("  ✅ Outside it too — you have owner/delegated admin rights.")
+            else:
+                footer_lines.append(
+                    "  ⛔ Outside it — requires the owner, or delegated admin "
+                    "rights (\"Can manage users\").")
         else:
-            footer_lines.append("  ⛔ Not available to your role — ask an owner or manager.")
+            if _is_owner_ftr or _is_admin_ftr:
+                footer_lines.append("  ✅ Full access — you have owner/delegated admin rights.")
+            else:
+                footer_lines.append(
+                    "  ⛔ Not available — you have no personal directory configured, "
+                    "and no delegated admin rights (\"Can manage users\").")
+
+        # v8.1.5 fix: list_tracked_directories is now gated by SCOPE, not
+        # role (every role may call it; the result is filtered to paths
+        # within the caller's own accessible scopes) — no longer tied to
+        # manage_db, so it gets its own line instead of sharing untrack_
+        # directory's role-gated message above.
+        footer_lines.append("")
+        footer_lines.append("list_tracked_directories:")
+        footer_lines.append("  ✅ Available to every role — filtered to paths within your own")
+        footer_lines.append("     accessible scopes (same visibility as search, not company-wide).")
+
+        # v8.1.5 fix: grant_write_access/revoke_write_access are in
+        # _TIER_A_SUPPRESSED — never registered with MCP in server mode,
+        # for ANY role, owner included (write-zone management doesn't fit
+        # the server-mode model, where the actual write boundary is each
+        # user's own personal directory — see _check_personal_write_scope).
+        # This footer used to claim "✅ Full access" for owner/manager based
+        # on manage_db, which was simply wrong: the tools aren't callable at
+        # all in server mode, regardless of role, so the previous
+        # role-conditional message was misleading rather than just imprecise.
+        footer_lines.append("")
+        footer_lines.append("Write-zone grants (grant_write_access, revoke_write_access):")
+        footer_lines.append("  ⛔ Not available in server mode, to any role — personal-install-only.")
+        footer_lines.append("     The write boundary in server mode is each user's own personal")
+        footer_lines.append("     directory (see File editing below), not an arbitrary write-zone list.")
 
         footer_lines.append("")
         footer_lines.append("File editing (create_file, write_file, str_replace_in_file,")
@@ -1754,28 +1800,51 @@ def list_tracked_directories(ctx: "Context | None" = None) -> str:
     Each entry is annotated with its type — 📁 for directories, 📄 for files —
     so it's clear which entries are watched as folders vs. as single files.
 
-    Server mode: owner or manager only — same gate as untrack_directory and
-    update_tracked_directories, the two other tools this list is meant to
-    support. The raw tracked-paths list is company-wide administrative
-    information (including paths belonging to other employees' private
-    collections), not something staff/field_crew need for their own work.
+    Server mode (v8.1.5 fix): gated by SCOPE, not role — any role may call
+    this, and the returned list is filtered to only the paths whose assigned
+    scope is one this caller may already SEARCH (_allowed_scopes: their own
+    private scope + assigned scopes + shared). This was previously an
+    owner/manager-only role gate that hid the list entirely from staff/
+    field_crew, on the reasoning that "the raw tracked-paths list is
+    company-wide administrative information." That reasoning didn't hold up:
+    every path in the list is either shared, one of the caller's own assigned
+    scopes, or their own private folder anyway (the ones they DON'T have
+    access to are simply filtered out, exactly like search results already
+    are) — so there's no separate confidentiality boundary being crossed by
+    showing someone the subset of tracked paths they can already reach.
+    untrack_directory (the destructive sibling of this tool) is NOT changed
+    by this fix and remains owner/manager-only — deleting indexed content is
+    a different, more consequential permission question than just listing
+    what's tracked.
 
     Returns:
         A formatted list of tracked paths, or a message if none are registered.
     """
-    # Owner/manager only — mirrors untrack_directory's gate exactly, since
-    # this tool exists to support that same tracking-administration workflow.
-    _ltd_user = _current_user(ctx)
-    _ltd_ok, _ltd_reason = _check_db_cap(_ltd_user, "full")
-    if not _ltd_ok:
-        return f"⛔ list_tracked_directories: {_ltd_reason}"
-
     dirs = load_auto_update_list()
     if not dirs:
         return (
             "ℹ️  No paths are currently tracked.\n"
             "Use index_path to index a folder or file and add it to tracking."
         )
+
+    # Server mode: filter to only paths within this caller's accessible
+    # scopes (see docstring above). Personal mode (_ltd_user is None): no
+    # filtering, unchanged from every prior version.
+    _ltd_user = _current_user(ctx)
+    if _IS_SERVER_MODE and _ltd_user:
+        _ltd_allowed = _allowed_scopes(_ltd_user)
+        _ltd_mapping = _company_collection_map()
+        dirs = [
+            d for d in dirs
+            if _resolve_collection_for_path(d, _ltd_mapping) in _ltd_allowed
+        ]
+        if not dirs:
+            return (
+                "ℹ️  No tracked paths fall within your accessible scopes.\n"
+                "(Paths outside your assigned scopes/private area are omitted, "
+                "not necessarily nonexistent.)"
+            )
+
     lines = ["📁 Tracked paths:"]
     for i, d in enumerate(dirs, 1):
         try:
@@ -1800,17 +1869,53 @@ def untrack_directory(directory: str, ctx: Context = None) -> str:
     This is a destructive operation — the documents from this path will no
     longer be searchable until you re-index them.
 
+    Server mode (v8.1.5) — two-tier gate, direct product decision:
+      • Anyone, any role, may untrack a path inside their OWN personal
+        directory — the same personal-directory model already used by
+        create_file/write_file/str_replace_in_file/line_replace_in_file
+        (_check_personal_write_scope). No admin flag needed for your own area.
+      • A path OUTSIDE the caller's own personal directory (a shared scope,
+        another user's private folder, or general company-wide tracked
+        state) requires the owner, or a manager/staff member with delegated
+        admin rights (can_manage_users — the Admin tab's "Can manage users"
+        checkbox). A plain manager or staff member without that flag is
+        denied for anything outside their own personal directory; a plain
+        role check alone ('manager' or 'staff') is no longer sufficient by
+        itself — the flag is what actually grants it, matching how the
+        Admin tab already delegates rights independent of role.
+      Replaces the earlier blanket owner/manager-only role gate
+      (_check_db_cap(user, 'full')).
+
     Args:
         directory:  Absolute path to the directory or file to remove.
 
     Returns:
         A summary of what was removed.
     """
-    # v7.0.1 Q1: full DB management required (owner or manager).
     _user = _current_user(ctx)
-    _db_ok, _db_reason = _check_db_cap(_user, "full")
-    if not _db_ok:
-        return f"⛔ untrack_directory: {_db_reason}"
+
+    try:
+        _resolved_dir = str(Path(directory).resolve())
+    except Exception:
+        _resolved_dir = directory
+
+    # Tier 1: own personal directory — always allowed, any role. Reuses the
+    # exact same check create_file/write_file/etc. already enforce, so this
+    # tool and the write tools always agree on what counts as "your own area."
+    _own_dir_denial = _check_personal_write_scope(ctx, _resolved_dir)
+    if _own_dir_denial is not None:
+        # Tier 2: outside the caller's own personal directory — owner, or
+        # delegated admin (can_manage_users), only.
+        _is_owner = bool(_user) and (_user.get("role") or "").strip().lower() == "owner"
+        _is_admin = bool(_user) and bool(_user.get("can_manage_users"))
+        if not (_is_owner or _is_admin):
+            return (
+                f"⛔ untrack_directory: '{directory}' is outside your personal "
+                "directory. Untracking anything outside your own personal "
+                "directory requires the owner, or a manager/staff member with "
+                "delegated admin rights (\"Can manage users\") — ask your owner "
+                "or an admin to untrack this path, or to grant you admin rights."
+            )
 
     with _capture_stdout() as buf:
         try:
@@ -12662,7 +12767,11 @@ def complete_analysis_task(task_id: str,
                 import datetime as _dt
                 import custom_tasks_manager as _ctm
                 anchor = task_next_due or _dt.date.today().isoformat()
-                new_next_due = _ctm._advance_date(anchor, task_schedule)
+                # v8.1.5 fix: use the catch-up variant so a task overdue by
+                # MULTIPLE intervals resyncs fully in one completion instead
+                # of needing one completion per missed interval.
+                new_next_due = _ctm._advance_date_catchup(
+                    anchor, task_schedule, _dt.date.today().isoformat())
                 if new_next_due:
                     # Stamp the new next_due on the completed task record
                     for t in tasks:

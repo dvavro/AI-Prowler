@@ -1113,19 +1113,62 @@ class TestBuiltInScheduleAdvancement:
         return result, saved
 
     def test_TC_CTASK_016_weekly_next_due_advanced(self):
+        """v8.1.5: use an anchor only mildly overdue (less than one full
+        interval) so a single _advance_date() step already lands after
+        today — this is the 'simple, single-overdue' case, which must
+        behave identically to the pre-catchup single-step advance. Anchor
+        and expected are both computed relative to real 'today' rather than
+        a hardcoded literal, so this test doesn't silently rot as time
+        passes (which is exactly what broke this test against the v8.1.5
+        catch-up change — it hardcoded "2026-06-24" -> "2026-07-01" with no
+        relationship to whatever "today" happens to be when the suite runs)."""
         import ai_prowler_mcp as mcp
-        entry = self._pending_builtin("t1", "weekly", "2026-06-24")
+        import datetime
+        import custom_tasks_manager as ctm
+        anchor = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()
+        expected = ctm._advance_date(anchor, "weekly")
+        entry = self._pending_builtin("t1", "weekly", anchor)
         result, saved = self._run_complete(mcp, [entry], "t1")
         done = next(t for t in saved["tasks"] if t["task_id"] == "t1")
         assert done["status"] == "completed"
-        assert done.get("next_due") == "2026-07-01"  # June 24 + 7 days
+        assert done.get("next_due") == expected
 
-    def test_TC_CTASK_016_monthly_next_due_advanced(self):
+    def test_TC_CTASK_016_weekly_catchup_when_severely_overdue(self):
+        """v8.1.5 NEW BEHAVIOR: a task overdue by MULTIPLE intervals (here,
+        weekly but last due ~30 days ago — 4+ missed weeks) must resync
+        fully to the next occurrence after today in a single completion,
+        not just advance by one week and remain overdue. Asserted as a
+        property (next_due is strictly in the future, and differs from the
+        naive single-step result) rather than a hardcoded date, since the
+        exact number of steps needed depends on when the suite runs."""
         import ai_prowler_mcp as mcp
-        entry = self._pending_builtin("t1", "monthly", "2026-06-01")
+        import datetime
+        import custom_tasks_manager as ctm
+        anchor = (datetime.date.today() - datetime.timedelta(days=30)).isoformat()
+        naive_single_step = ctm._advance_date(anchor, "weekly")
+        entry = self._pending_builtin("t1", "weekly", anchor)
         result, saved = self._run_complete(mcp, [entry], "t1")
         done = next(t for t in saved["tasks"] if t["task_id"] == "t1")
-        assert done.get("next_due") == "2026-07-01"
+        next_due = done.get("next_due")
+        today_str = datetime.date.today().isoformat()
+        assert next_due > today_str, (
+            f"next_due {next_due} should be strictly after today {today_str}")
+        assert next_due != naive_single_step, (
+            "expected catch-up to skip past the naive single-step result "
+            f"({naive_single_step}) since the task was overdue by several weeks")
+
+    def test_TC_CTASK_016_monthly_next_due_advanced(self):
+        """See test_TC_CTASK_016_weekly_next_due_advanced docstring — same
+        dynamic-date fix, single-overdue simple case."""
+        import ai_prowler_mcp as mcp
+        import datetime
+        import custom_tasks_manager as ctm
+        anchor = (datetime.date.today() - datetime.timedelta(days=3)).isoformat()
+        expected = ctm._advance_date(anchor, "monthly")
+        entry = self._pending_builtin("t1", "monthly", anchor)
+        result, saved = self._run_complete(mcp, [entry], "t1")
+        done = next(t for t in saved["tasks"] if t["task_id"] == "t1")
+        assert done.get("next_due") == expected
 
     def test_TC_CTASK_016_next_due_in_return_message(self):
         import ai_prowler_mcp as mcp

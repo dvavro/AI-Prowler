@@ -11,13 +11,18 @@ but had zero dedicated regression coverage for that gate.
 SUPERSEDED 2026-07-16/17 (SCOPE_SIMPLIFICATION_SPEC.md section 3.7, Phase
 7 cutover): direct product decision — indexing isn't a data leak, and
 every directory this tool touches was already admin/owner-created and
-tracked in the first place, so the role gate is removed here. This is a
-DELIBERATE divergence from list_tracked_directories/untrack_directory,
-which keep their gate (those are visibility/destructive-tracking-removal
-actions, not indexing itself) — see
-test_list_tracked_dirs_role_gate.py, still fully gated and unaffected by
-this change. Destructive purging of deleted files (this tool's real risk)
-remains protected separately by the ownership-based _purge_gate, which is
+tracked in the first place, so the role gate is removed here. This was
+originally a DELIBERATE divergence from list_tracked_directories/
+untrack_directory, which kept their role gate — but both of those have
+SINCE (v8.1.5) moved to their own non-role gates too: list_tracked_
+directories to a scope gate (test_list_tracked_dirs_role_gate.py) and
+untrack_directory to a two-tier own-directory-vs-owner/admin gate
+(test_untrack_directory_scope_gate.py). The class below is kept for
+historical continuity of the "staff blocked from X but allowed Y" contrast,
+but "blocked from untrack" is no longer universally true for staff — only
+outside their own personal directory, without delegated admin rights.
+Destructive purging of deleted files (this tool's real risk) remains
+protected separately by the ownership-based _purge_gate, which is
 untouched.
 """
 
