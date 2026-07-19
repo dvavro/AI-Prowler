@@ -1830,13 +1830,33 @@ def list_tracked_directories(ctx: "Context | None" = None) -> str:
     # Server mode: filter to only paths within this caller's accessible
     # scopes (see docstring above). Personal mode (_ltd_user is None): no
     # filtering, unchanged from every prior version.
+    #
+    # v8.1.5 BUG FIX (found via live testing on the Server after the
+    # original v8.1.5 scope-gating change): this originally resolved each
+    # path's scope via _company_collection_map()/_resolve_collection_for_
+    # path() -- the OLD collection_map-based resolver. Nothing has written
+    # business-scope changes (sales/ops/field/etc.) to collection_map since
+    # the scope_map/scope_lookup migration, so those rules were stale --
+    # directories whose CURRENT scope (in scope_map) the caller could
+    # legitimately search (confirmed: read_document/search_documents on
+    # that exact content succeeded) were being resolved to a DIFFERENT,
+    # stale scope via the dead collection_map data and incorrectly
+    # filtered out here. Switched to the same scope_lookup/scope_map path
+    # _allowed_scopes() itself and the real indexing pipeline
+    # (rag_preprocessor.py) already use, so this can't drift from actual
+    # access again -- exactly the same fix already applied to the GUI's
+    # _resolve_scope_for_path()/_display_scope().
     _ltd_user = _current_user(ctx)
     if _IS_SERVER_MODE and _ltd_user:
+        import scope_lookup as _sl_ltd
         _ltd_allowed = _allowed_scopes(_ltd_user)
-        _ltd_mapping = _company_collection_map()
+        _ltd_scope_map = _sl_ltd.get_scope_map(_load_users())
+        _ltd_privates_root = str(Path.home() / "Documents" / "AI-Prowler-Server-privates")
         dirs = [
             d for d in dirs
-            if _resolve_collection_for_path(d, _ltd_mapping) in _ltd_allowed
+            if _sl_ltd.resolve_scope_for_path(
+                d, _ltd_scope_map, privates_root=_ltd_privates_root
+            ) in _ltd_allowed
         ]
         if not dirs:
             return (

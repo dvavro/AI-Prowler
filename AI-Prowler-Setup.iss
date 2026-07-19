@@ -161,7 +161,7 @@
 
 [Setup]
 AppName=AI-Prowler
-AppVersion=8.1.5
+AppVersion=8.1.6
 ; AppId pins the upgrade identity so Inno reliably detects prior installations
 ; of any version and runs only OUR uninstaller — never a mismatched one.
 ; Must remain constant across all future releases (do NOT change this GUID).

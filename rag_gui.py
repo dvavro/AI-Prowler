@@ -92,7 +92,7 @@ if sys.stderr is None:
 # Single source of truth for the app version. Bump this one line when releasing
 # a new version; all UI labels, About dialogs, help text, and update checks
 # read from here.
-APP_VERSION = "8.1.5"
+APP_VERSION = "8.1.6"
 
 # ── UI feature flags ─────────────────────────────────────────────────────────
 # Toggle visibility of advanced/legacy GUI sections without removing any
@@ -7360,19 +7360,38 @@ or from the Help menu."""
         found.add("shared")
         return sorted(found)
 
-    def _resolve_scope_for_path(self, path, rules=None, default=None):
+    def _resolve_scope_for_path(self, path, scope_map=None, default=None):
         """Show what scope a folder maps to, via the SAME pure resolver the
-        engine uses (scope_resolver.resolve_collection_for_path), so the GUI can
-        never drift from what is enforced at query time. DISPLAY only."""
-        import scope_resolver
-        if rules is None:
+        engine uses (scope_lookup.resolve_scope_for_path over scope_map), so
+        the GUI can never drift from what is enforced at query time. DISPLAY
+        only.
+
+        v8.1.5 fix: this used to call the OLD scope_resolver module against
+        the OLD collection_map structure -- a structure nothing has written
+        business-scope changes to since the scope_map/scope_lookup
+        migration (collection_map is now auto-synced only for private-
+        folder rules). That meant this display could show a stale,
+        prefixed value (e.g. "scope:sales") indefinitely after an admin
+        changed a folder's scope via Manage Scopes + Update Selected/
+        Update All, even though the REAL indexing pipeline
+        (rag_preprocessor.py) and REAL query-time access control
+        (_allowed_scopes/scope_lookup.allowed_scopes_for_user) were already
+        correctly reading the new bare-name scope_map the whole time --
+        there was never an actual access-control bug, only a display one.
+        Now reads the exact same scope_map the real engine uses, so this
+        can't drift again. `default` is accepted for call-site backward
+        compatibility but is no longer meaningful: scope_lookup.
+        resolve_scope_for_path always falls back to DEFAULT_SCOPE
+        ("shared") when no rule matches, per the v8.1.4 "unscoped is
+        shared, never quarantined" decision -- there is no separate
+        default_collection concept to override anymore.
+        """
+        import scope_lookup as _sl
+        if scope_map is None:
             data = self._admin_load_users()
-            mapping = data.get("collection_map") or {}
-        else:
-            mapping = {"rules": rules or []}
-            if default is not None:
-                mapping["default_collection"] = default
-        return scope_resolver.resolve_collection_for_path(path, mapping)
+            scope_map = _sl.get_scope_map(data)
+        privates_root = str(Path.home() / "Documents" / "AI-Prowler-Server-privates")
+        return _sl.resolve_scope_for_path(path, scope_map, privates_root=privates_root)
 
     def _refresh_selected_scope_label(self):
         """Update the scope status line to reflect the selected folder."""
@@ -7384,16 +7403,14 @@ or from the Help menu."""
                 "Select a folder above to see or set its read scope.")
             return
         scope = self._resolve_scope_for_path(path)
-        if scope == "documents":
-            # No matching rule AND no default_collection: the engine routes an
-            # unclassified folder to the INDEXER'S OWN private collection, never
-            # to shared. Say so plainly instead of implying a shared scope.
-            self._scope_status_var.set(
-                f"\u201c{path}\u201d  \u2192  no scope rule "
-                f"(defaults to the indexer\u2019s private collection)")
-        else:
-            self._scope_status_var.set(
-                f"\u201c{path}\u201d  \u2192  read scope: {scope}")
+        # v8.1.5: scope_lookup.resolve_scope_for_path always falls back to
+        # the literal "shared" scope when no rule matches (per the v8.1.4
+        # "unscoped is shared, never quarantined to a private collection"
+        # decision) -- there is no more separate "documents"/no-rule
+        # sentinel to call out specially, unlike the old scope_resolver/
+        # collection_map system this replaced.
+        self._scope_status_var.set(
+            f"\u201c{path}\u201d  \u2192  read scope: {scope}")
 
     def _set_scope_for_selected(self):
         """Owner-only (server mode): STAGE a scope change for the selected
@@ -7417,17 +7434,15 @@ or from the Help menu."""
             return
 
         data = self._admin_load_users()
-        cm = data.get("collection_map")
-        if not isinstance(cm, dict):
-            cm = {"rules": [], "default_collection": "shared"}
-        rules = cm.get("rules")
-        if not isinstance(rules, list):
-            rules = []
+        # v8.1.5 fix: was loading the stale collection_map (nothing writes
+        # business-scope changes there anymore) to compute "current scope"
+        # for this dialog -- switched to scope_map, the same structure the
+        # real engine and _resolve_scope_for_path() now both use.
+        scope_map = _sl.get_scope_map(data)
 
         pending = self._get_pending_scope_changes()
         current_pending = pending.get(_sl.normalize_path_for_match(path))
-        current_persisted = self._resolve_scope_for_path(
-            path, rules, cm.get("default_collection", "shared"))
+        current_persisted = self._resolve_scope_for_path(path, scope_map)
         current = current_pending or current_persisted
 
         catalog = self._admin_get_scope_catalog(data)
@@ -19093,21 +19108,38 @@ or from the Help menu."""
         return dirs
 
     def _display_scope(self, scope):
-        """Render a logical collection name as a short, friendly scope tag for the
-        tracked-dirs listing (v7.0.1). 'role:'/'scope:' buckets show as
-        'scope:<name>'; 'shared' shows as 'shared'; a private 'user:<id>' or the
-        unclassified 'documents' fallback shows as '(private)'."""
+        """Render a resolved scope string as a short, friendly tag for the
+        tracked-dirs listing.
+
+        v8.1.5 fix: this used to unconditionally re-add a "scope:" prefix
+        for any business scope, even one already in the new bare format
+        (e.g. "sales" -> "scope:sales") -- a leftover from the pre-
+        scope_lookup convention where scopes were always stored/displayed
+        with that prefix. This was the SECOND half of the "still shows
+        scope:sales" bug: even after _resolve_scope_for_path() was fixed
+        to return the current, correct bare-format value from scope_map,
+        this function would cosmetically re-prefix it right back. Business
+        scopes now display exactly as configured (bare), matching the
+        Admin tab's scope catalog and the Add/Edit User dialog's scope
+        multi-select. 'private:<id>'/'user:<id>' still collapse to
+        '(private)' -- an admin doesn't need to see WHICH user's private
+        scope a folder matched, just that it's private and not
+        company-wide.
+        """
         s = (scope or "").strip()
         if not s or s.lower() == "documents":
             return "(private)"
         low = s.lower()
         if low == "shared":
             return "shared"
-        if low.startswith("user:"):
+        if low.startswith("user:") or low.startswith("private:"):
             return "(private)"
         if low.startswith("scope:") or low.startswith("role:"):
-            return "scope:" + s.split(":", 1)[1].strip()
-        return "scope:" + s
+            # A legacy-prefixed value somehow still in scope_map -- strip
+            # it rather than double-prefixing, so old and new data
+            # display identically.
+            return s.split(":", 1)[1].strip()
+        return s
 
     # ── Update Index tab: editable scope column (SCOPE_SIMPLIFICATION_SPEC.md
     # section 3.3b) ─────────────────────────────────────────────────────────
@@ -19128,13 +19160,13 @@ or from the Help menu."""
             self._pending_scope_changes_dict = {}
         return self._pending_scope_changes_dict
 
-    def _tracked_row_scope_text(self, directory, scope_rules, scope_default):
+    def _tracked_row_scope_text(self, directory, scope_map):
         """Text to show in a tracked-directory list row's scope column:
         the persisted scope, or a staged-but-not-yet-committed replacement
         if one exists for this path."""
         import scope_lookup as _sl
         resolved = self._display_scope(
-            self._resolve_scope_for_path(directory, scope_rules, scope_default))
+            self._resolve_scope_for_path(directory, scope_map))
         pending = self._get_pending_scope_changes().get(
             _sl.normalize_path_for_match(directory))
         return _sl.format_scope_display(resolved, pending)
@@ -19193,18 +19225,21 @@ or from the Help menu."""
             dirs = load_auto_update_list()
             writable_paths = self._load_writable_paths()
             # v7.0.1 (Q4): in Business server mode also show each folder's read
-            # SCOPE next to its write-permission prefix. Load the collection_map
-            # once here (not per-row) so the listing stays cheap. Personal/Home/
+            # SCOPE next to its write-permission prefix. Load scope_map once
+            # here (not per-row) so the listing stays cheap. Personal/Home/
             # Mobile installs have no scopes — the column is omitted entirely.
+            # v8.1.5 fix: was loading the stale collection_map here (nothing
+            # writes business-scope changes there anymore) — switched to
+            # scope_map, the same structure the real indexing/query engine
+            # uses, so this list can't show a stale "scope:X" value again.
             _server_scope = self._is_business_server_mode()
-            _scope_rules, _scope_default = [], None
+            _scope_map = {}
             if _server_scope:
                 try:
-                    _cm = (self._admin_load_users() or {}).get("collection_map") or {}
-                    _scope_rules = _cm.get("rules") or []
-                    _scope_default = _cm.get("default_collection")
+                    import scope_lookup as _sl2
+                    _scope_map = _sl2.get_scope_map(self._admin_load_users() or {})
                 except Exception:
-                    _scope_rules, _scope_default = [], None
+                    _scope_map = {}
             if dirs:
                 for directory in dirs:
                     state, _exact, _narrower = self._writable_state(
@@ -19222,7 +19257,7 @@ or from the Help menu."""
                         prefix = "[R] "
                     self.tracked_listbox.insert(  # v7.0.1 Q4: scope column in server mode
                         tk.END,
-                        (f"{prefix} {self._tracked_row_scope_text(directory, _scope_rules, _scope_default):<20} {directory}"
+                        (f"{prefix} {self._tracked_row_scope_text(directory, _scope_map):<20} {directory}"
                          if _server_scope else f"{prefix} {directory}"))
                     self._tracked_raw_paths.append(directory)
             else:

@@ -17,11 +17,25 @@ grants for search. So there was no separate confidentiality boundary being
 protected by the role gate; it just hid a subset of a user's own
 already-accessible information from them for no reason. The tool is now
 open to every role, filtered to only the paths within the caller's
-_allowed_scopes(), using the SAME pure resolver
-(_company_collection_map() + _resolve_collection_for_path()) the GUI's
-scope-display uses. untrack_directory is UNCHANGED — still owner/manager
-only, since deleting indexed content is a materially different,
-more destructive permission question than just listing what's tracked.
+_allowed_scopes().
+
+v8.1.5 BUG FIX (post-release, found via live testing on the Server): the
+first version of this fix resolved each path's scope via the OLD
+_company_collection_map()/_resolve_collection_for_path() pair (collection_
+map-based) — a structure nothing has written business-scope changes to
+since the scope_map/scope_lookup migration, so it was stale and produced
+wrong filtering results in production even though these mocked tests
+passed (the mocks patched the OLD functions directly, so they never
+exercised the real staleness). Switched to scope_lookup.get_scope_map() +
+scope_lookup.resolve_scope_for_path() — the SAME functions _allowed_
+scopes() and the real indexing pipeline (rag_preprocessor.py) already use
+— so this can't drift from actual access again. Tests below now mock
+scope_lookup's functions directly instead of the retired collection_map
+pair.
+
+untrack_directory is UNCHANGED — still owner/manager only, since deleting
+indexed content is a materially different, more destructive permission
+question than just listing what's tracked.
 
 Personal mode (ctx has no user, or _IS_SERVER_MODE is False) is completely
 unaffected — existing tests in test_mcp_tools.py call it with no ctx at all
@@ -58,6 +72,26 @@ def _user(role, uid="test-user"):
     return {"id": uid, "name": "Test User", "role": role, "status": "active"}
 
 
+def _patch_scope_resolution(monkeypatch, path_to_scope: dict, default_scope="shared"):
+    """Patch scope_lookup.get_scope_map/resolve_scope_for_path so
+    list_tracked_directories()'s `import scope_lookup as _sl_ltd` (done
+    fresh inside the function on every call) picks up these fakes.
+    `path_to_scope` maps a path substring -> the scope resolve_scope_for_path
+    should return for any path containing it; anything not matched falls
+    back to `default_scope`, mirroring scope_lookup's real "no rule ->
+    shared" fallback behavior.
+    """
+    import scope_lookup as _sl
+    monkeypatch.setattr(_sl, "get_scope_map", lambda data: {})
+
+    def _fake_resolve(path, scope_map, privates_root=None):
+        for needle, scope in path_to_scope.items():
+            if needle in path:
+                return scope
+        return default_scope
+    monkeypatch.setattr(_sl, "resolve_scope_for_path", _fake_resolve)
+
+
 class TestScopeGate:
 
     def test_personal_mode_unrestricted(self, mcp_mod, monkeypatch):
@@ -80,12 +114,8 @@ class TestScopeGate:
         monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: user)
         monkeypatch.setattr(mcp_mod, "load_auto_update_list",
                              lambda: ["C:/sales", "C:/ops"])
-        monkeypatch.setattr(mcp_mod, "_allowed_scopes", lambda u: {"scope:sales", "shared"})
-        monkeypatch.setattr(mcp_mod, "_company_collection_map", lambda: {})
-        monkeypatch.setattr(
-            mcp_mod, "_resolve_collection_for_path",
-            lambda path, mapping, indexer_user=None: (
-                "scope:sales" if "sales" in path else "scope:ops"))
+        monkeypatch.setattr(mcp_mod, "_allowed_scopes", lambda u: {"sales", "shared"})
+        _patch_scope_resolution(monkeypatch, {"sales": "sales", "ops": "ops"})
         result = mcp_mod.list_tracked_directories(ctx=_make_ctx(user))
         assert "⛔" not in result
         assert "C:/sales" in result
@@ -96,11 +126,8 @@ class TestScopeGate:
         monkeypatch.setattr(mcp_mod, "_IS_SERVER_MODE", True)
         monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: user)
         monkeypatch.setattr(mcp_mod, "load_auto_update_list", lambda: ["C:/ops"])
-        monkeypatch.setattr(mcp_mod, "_allowed_scopes", lambda u: {"scope:ops", "shared"})
-        monkeypatch.setattr(mcp_mod, "_company_collection_map", lambda: {})
-        monkeypatch.setattr(
-            mcp_mod, "_resolve_collection_for_path",
-            lambda path, mapping, indexer_user=None: "scope:ops")
+        monkeypatch.setattr(mcp_mod, "_allowed_scopes", lambda u: {"ops", "shared"})
+        _patch_scope_resolution(monkeypatch, {"ops": "ops"})
         result = mcp_mod.list_tracked_directories(ctx=_make_ctx(user))
         assert "⛔" not in result
         assert "C:/ops" in result
@@ -115,12 +142,10 @@ class TestScopeGate:
         monkeypatch.setattr(mcp_mod, "load_auto_update_list",
                              lambda: ["C:/field", "C:/staff-private"])
         monkeypatch.setattr(mcp_mod, "_allowed_scopes",
-                             lambda u: {"scope:field", "user:test-user", "shared"})
-        monkeypatch.setattr(mcp_mod, "_company_collection_map", lambda: {})
-        monkeypatch.setattr(
-            mcp_mod, "_resolve_collection_for_path",
-            lambda path, mapping, indexer_user=None: (
-                "scope:field" if "field" in path else "user:test-user"))
+                             lambda u: {"field", "private:test-user", "shared"})
+        _patch_scope_resolution(
+            monkeypatch,
+            {"field": "field", "staff-private": "private:test-user"})
         result = mcp_mod.list_tracked_directories(ctx=_make_ctx(user))
         assert "⛔" not in result
         assert "C:/field" in result
@@ -132,10 +157,7 @@ class TestScopeGate:
         monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: user)
         monkeypatch.setattr(mcp_mod, "load_auto_update_list", lambda: ["C:/shared-docs"])
         monkeypatch.setattr(mcp_mod, "_allowed_scopes", lambda u: {"shared"})
-        monkeypatch.setattr(mcp_mod, "_company_collection_map", lambda: {})
-        monkeypatch.setattr(
-            mcp_mod, "_resolve_collection_for_path",
-            lambda path, mapping, indexer_user=None: "shared")
+        _patch_scope_resolution(monkeypatch, {}, default_scope="shared")
         result = mcp_mod.list_tracked_directories(ctx=_make_ctx(user))
         assert "⛔" not in result
         assert "C:/shared-docs" in result
@@ -149,11 +171,8 @@ class TestScopeGate:
         monkeypatch.setattr(mcp_mod, "load_auto_update_list",
                              lambda: ["C:/vicki-private", "C:/shared-docs"])
         monkeypatch.setattr(mcp_mod, "_allowed_scopes", lambda u: {"shared"})
-        monkeypatch.setattr(mcp_mod, "_company_collection_map", lambda: {})
-        monkeypatch.setattr(
-            mcp_mod, "_resolve_collection_for_path",
-            lambda path, mapping, indexer_user=None: (
-                "user:vicki" if "vicki" in path else "shared"))
+        _patch_scope_resolution(
+            monkeypatch, {"vicki": "private:vicki"}, default_scope="shared")
         result = mcp_mod.list_tracked_directories(ctx=_make_ctx(user))
         assert "C:/vicki-private" not in result
         assert "C:/shared-docs" in result
@@ -167,18 +186,15 @@ class TestScopeGate:
         monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: user)
         monkeypatch.setattr(mcp_mod, "load_auto_update_list", lambda: ["C:/vicki-private"])
         monkeypatch.setattr(mcp_mod, "_allowed_scopes", lambda u: {"shared"})
-        monkeypatch.setattr(mcp_mod, "_company_collection_map", lambda: {})
-        monkeypatch.setattr(
-            mcp_mod, "_resolve_collection_for_path",
-            lambda path, mapping, indexer_user=None: "user:vicki")
+        _patch_scope_resolution(monkeypatch, {"vicki": "private:vicki"})
         result = mcp_mod.list_tracked_directories(ctx=_make_ctx(user))
         assert "⛔" not in result
         assert "no tracked paths" in result.lower()
 
     def test_uses_allowed_scopes_and_resolver_not_check_db_cap(self, mcp_mod, monkeypatch):
         """Locks in the mechanism: this now goes through _allowed_scopes() +
-        _resolve_collection_for_path(), NOT _check_db_cap('full') — the
-        role-based gate untrack_directory still uses. If a future edit
+        scope_lookup.resolve_scope_for_path(), NOT _check_db_cap('full') —
+        the role-based gate untrack_directory still uses. If a future edit
         silently reintroduced the old role gate here, this test would fail
         because _check_db_cap would need to be called for it to matter, and
         this test proves the scope path is what actually gates output."""
@@ -191,9 +207,6 @@ class TestScopeGate:
             lambda *a, **k: (_ for _ in ()).throw(
                 AssertionError("list_tracked_directories should not call _check_db_cap")))
         monkeypatch.setattr(mcp_mod, "_allowed_scopes", lambda u: {"shared"})
-        monkeypatch.setattr(mcp_mod, "_company_collection_map", lambda: {})
-        monkeypatch.setattr(
-            mcp_mod, "_resolve_collection_for_path",
-            lambda path, mapping, indexer_user=None: "shared")
+        _patch_scope_resolution(monkeypatch, {}, default_scope="shared")
         result = mcp_mod.list_tracked_directories(ctx=_make_ctx(user))
         assert "C:/docs" in result

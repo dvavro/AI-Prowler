@@ -100,38 +100,44 @@ class TestGetPendingScopeChanges:
 # ── _tracked_row_scope_text ───────────────────────────────────────────────
 
 class TestTrackedRowScopeText:
+    """v8.1.5: _tracked_row_scope_text/_resolve_scope_for_path now take a
+    single scope_map dict ({path: bare_scope}) instead of the old
+    collection_map-style rules list + default_collection pair. Expected
+    display output is now the BARE scope name (e.g. "sales"), not the
+    legacy "scope:sales" -- see _display_scope()'s v8.1.5 fix note for why
+    the old expectation of a "scope:" prefix was itself part of the bug."""
 
     def test_no_pending_shows_resolved_scope(self, fake_self):
-        rules = [{"prefix": "C:/CompanyDocs/Sales", "collection": "role:sales"}]
+        scope_map = {"C:/CompanyDocs/Sales": "sales"}
         text = fake_self._tracked_row_scope_text(
-            "C:/CompanyDocs/Sales", rules, "shared")
-        assert text == "scope:sales"
+            "C:/CompanyDocs/Sales", scope_map)
+        assert text == "sales"
 
     def test_pending_change_overrides_display(self, fake_self):
-        rules = [{"prefix": "C:/CompanyDocs/Sales", "collection": "role:sales"}]
+        scope_map = {"C:/CompanyDocs/Sales": "sales"}
         pending = fake_self._get_pending_scope_changes()
         pending["c:/companydocs/sales"] = "ops"
         text = fake_self._tracked_row_scope_text(
-            "C:/CompanyDocs/Sales", rules, "shared")
+            "C:/CompanyDocs/Sales", scope_map)
         assert text == "\u2192ops (pending)"
 
     def test_pending_lookup_is_path_normalized(self, fake_self):
         """Staged with backslashes, looked up with forward slashes (or vice
         versa) -- must still match, since the dialog and the tracked list
         may not always pass the path in identical raw form."""
-        rules = []
+        scope_map = {}
         pending = fake_self._get_pending_scope_changes()
         pending["c:/companydocs/sales"] = "ops"
         text = fake_self._tracked_row_scope_text(
-            r"C:\CompanyDocs\Sales", rules, "shared")
+            r"C:\CompanyDocs\Sales", scope_map)
         assert text == "\u2192ops (pending)"
 
     def test_unrelated_pending_change_does_not_leak_to_other_rows(self, fake_self):
-        rules = []
+        scope_map = {}
         pending = fake_self._get_pending_scope_changes()
         pending["c:/companydocs/office"] = "office"
         text = fake_self._tracked_row_scope_text(
-            "C:/CompanyDocs/Sales", rules, "shared")
+            "C:/CompanyDocs/Sales", scope_map)
         assert "pending" not in text
 
 
