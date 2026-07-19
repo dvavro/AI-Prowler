@@ -638,12 +638,12 @@ begin
   InstallTypePage.Add(
     'Personal / Individual  —  One person, one PC.' + #13#10 +
     'Standard home or solo-professional install. ' +
-    'Full 85-tool set. One-click Mobile Access subscription with automatic tunnel setup.');
+    'Full 81-tool set. One-click Mobile Access subscription with automatic tunnel setup.');
 
   InstallTypePage.Add(
     'Business Server / Multi-User  —  Shared company server.' + #13#10 +
     'Always-on PC that your whole team connects to via Claude.ai. ' +
-    'Server-mode tools with role-based access. Admin tab for managing employees and roles.');
+    'Server-mode tools with per-user scoped data access. Admin tab for managing employees, roles, and scopes.');
 
   // Default to Personal (index 0)
   InstallTypePage.Values[0] := True;
