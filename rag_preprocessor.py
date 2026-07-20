@@ -1194,12 +1194,27 @@ def safe_num_ctx_for_prompt(prompt: str, max_tokens: int, model_name: str) -> in
         return bumped
     return base_ctx
 
-# Load config at startup — then verify the saved model is actually available
-# in Ollama.  If not (e.g. fresh reinstall with stale config file) the model
-# is reset to the default 'llama3.2:1b' so the app is never stuck pointing
-# at a model that was installed in a previous session and then wiped.
+# Load config at startup.
+#
+# v8.1.5 fix: this used to ALSO call validate_model_config() here,
+# unconditionally, on every import of this module — including by
+# ai_prowler_mcp.py (the MCP server), which never calls query_ollama(),
+# rag_query(), prewarm_ollama(), or validate_model_config() itself, and
+# doesn't need a local LLM at all in the current MCP-only design (Claude
+# does all reasoning; AI-Prowler just serves indexed chunks). That import-
+# time call made every MCP server startup silently depend on Ollama being
+# installed and reachable at localhost:11434, purely as an unrequested
+# side effect of `import rag_preprocessor` — not because anything on the
+# MCP path actually needed the result.
+#
+# validate_model_config() itself is UNCHANGED and still fully callable —
+# this only stops it from running automatically as an import side effect.
+# The desktop GUI's local-LLM feature (gated behind SUPPORT_LOCAL_HW_LLM)
+# is the only caller that could ever need it; if/when that feature is
+# revisited, call validate_model_config() explicitly from rag_gui.py's own
+# SUPPORT_LOCAL_HW_LLM-gated startup path instead of relying on it firing
+# here for every process that imports this module.
 load_config()
-validate_model_config()
 
 # Supported file extensions — content-bearing files worth indexing
 SUPPORTED_EXTENSIONS = {

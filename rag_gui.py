@@ -92,7 +92,7 @@ if sys.stderr is None:
 # Single source of truth for the app version. Bump this one line when releasing
 # a new version; all UI labels, About dialogs, help text, and update checks
 # read from here.
-APP_VERSION = "8.1.6"
+APP_VERSION = "8.1.7"
 
 # ── UI feature flags ─────────────────────────────────────────────────────────
 # Toggle visibility of advanced/legacy GUI sections without removing any
@@ -11425,6 +11425,197 @@ or from the Help menu."""
         self._mark_server_running  = _mark_server_running
         self._stop_uptime_ticker   = _stop_uptime_ticker
 
+        # ── Real liveness check for the HTTP MCP server LED ─────────────────────
+        # The dot above was previously driven only by whether *this* GUI process
+        # remembers spawning the server (self._http_server_proc). That goes stale
+        # the moment the GUI restarts while the server keeps running, or the
+        # server was started outside this GUI session — the dot then shows
+        # "Stopped" forever even though the server is healthy.
+        #
+        # This adds a periodic /health check that OVERRIDES whatever the
+        # subprocess-tracking logic last set, so the dot always reflects reality.
+        # End users only ever see a plain green "Running" / red "Stopped" — all
+        # diagnostic detail goes to a debug log file for the developer, never
+        # into the UI, so it can't confuse a non-technical user.
+        _HTTP_LED_DEBUG_LOG = Path.home() / '.ai-prowler' / 'http_led_debug.log'
+
+        def _log_http_led_debug(msg):
+            """Developer-only trail of LED decisions. Never shown in the UI —
+            open %USERPROFILE%\\.ai-prowler\\http_led_debug.log to read it."""
+            try:
+                _HTTP_LED_DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
+                import datetime as _dtm
+                ts = _dtm.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                with open(_HTTP_LED_DEBUG_LOG, 'a', encoding='utf-8') as _f:
+                    _f.write(f"[{ts}] {msg}\n")
+            except Exception:
+                pass
+
+        def _http_health_check(port, timeout=2.5):
+            """Actual liveness probe against the server's own /health endpoint.
+            Returns (alive: bool, detail: str) — detail is debug-log-only."""
+            import urllib.request as _ur, time as _time
+            url = f"http://127.0.0.1:{port}/health"
+            t0 = _time.monotonic()
+            try:
+                with _ur.urlopen(url, timeout=timeout) as _resp:
+                    ms = int((_time.monotonic() - t0) * 1000)
+                    return True, f"GET /health -> {_resp.status} in {ms}ms"
+            except Exception as _e:
+                ms = int((_time.monotonic() - t0) * 1000)
+                return False, f"GET /health failed: {type(_e).__name__}: {_e} (after {ms}ms)"
+
+        # ── Shared PID discovery + verified-kill helpers ────────────────────────
+        # Used by both the Stop button (so it can act even when this GUI
+        # session never tracked the process) and Force Kill Port.
+        def _find_pid_on_port(port, netstat_timeout=20):
+            """Look up the PID listening on `port`. Checks the tracked subprocess
+            first (instant), then falls back to netstat, then a raw socket probe
+            as a last resort. Returns (pid_or_None, source_str)."""
+            if (self._http_server_proc is not None
+                    and self._http_server_proc.poll() is None):
+                return self._http_server_proc.pid, "tracked HTTP server process"
+            try:
+                result = subprocess.run(
+                    f'netstat -ano | findstr ":{port} "',
+                    shell=True, capture_output=True, text=True, timeout=netstat_timeout
+                )
+                for line in result.stdout.splitlines():
+                    if 'LISTENING' in line:
+                        parts = line.split()
+                        if parts:
+                            try:
+                                return int(parts[-1]), "found via netstat"
+                            except ValueError:
+                                pass
+            except subprocess.TimeoutExpired:
+                return None, "netstat timed out"
+            except Exception as _ne:
+                return None, f"netstat error: {_ne}"
+            # Last resort: is anything even answering on that port?
+            import socket as _sock
+            with _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM) as _s:
+                _s.settimeout(1)
+                in_use = _s.connect_ex(('127.0.0.1', port)) == 0
+            return None, ("port in use, PID unknown" if in_use else "port free")
+
+        def _kill_pid_verified(pid, port, kill_timeout=20, verify_timeout=10):
+            """taskkill /F with a generous timeout — large ML/embedding processes
+            can legitimately take a few seconds to unload on Windows, especially
+            with AV/EDR scanning involved. If our own wait times out, that does
+            NOT mean the kill failed: the terminate request was already issued
+            to the OS. So instead of trusting subprocess.run's timeout alone,
+            we poll the port afterward and treat "port actually freed up" as
+            the real source of truth. Returns (success: bool, detail: str)."""
+            import time as _time
+            t0 = _time.monotonic()
+            try:
+                result = subprocess.run(
+                    ['taskkill', '/PID', str(pid), '/F'],
+                    capture_output=True, text=True, timeout=kill_timeout
+                )
+                ms = int((_time.monotonic() - t0) * 1000)
+                if result.returncode == 0:
+                    _log_http_led_debug(f"taskkill PID {pid} succeeded in {ms}ms")
+                    return True, f"PID {pid} terminated in {ms}ms"
+                err = result.stderr.strip() or result.stdout.strip()
+                _log_http_led_debug(f"taskkill PID {pid} returned rc={result.returncode} "
+                                     f"after {ms}ms: {err}")
+                return False, err or f"taskkill returned {result.returncode}"
+            except subprocess.TimeoutExpired:
+                ms = int((_time.monotonic() - t0) * 1000)
+                _log_http_led_debug(
+                    f"taskkill PID {pid} did not return within {kill_timeout}s "
+                    f"(process is likely large — heavy memory/DLL teardown). "
+                    f"Verifying by polling port {port} for up to {verify_timeout}s "
+                    f"instead of assuming failure.")
+                # The terminate request already went to the OS — check whether
+                # it actually worked rather than assuming it didn't.
+                import socket as _sock
+                deadline = _time.monotonic() + verify_timeout
+                while _time.monotonic() < deadline:
+                    with _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM) as _s:
+                        _s.settimeout(1)
+                        still_up = _s.connect_ex(('127.0.0.1', port)) == 0
+                    if not still_up:
+                        total_ms = int((_time.monotonic() - t0) * 1000)
+                        _log_http_led_debug(
+                            f"taskkill PID {pid}: port {port} freed after "
+                            f"{total_ms}ms total (slow but succeeded)")
+                        return True, f"PID {pid} terminated (slow — {total_ms}ms total)"
+                    _time.sleep(1)
+                return False, (f"taskkill on PID {pid} did not return within "
+                                f"{kill_timeout}s, and port {port} is still occupied "
+                                f"after {verify_timeout}s of checking. This process may "
+                                f"be genuinely stuck.")
+            except Exception as _ke:
+                return False, str(_ke)
+
+        _led_fail_streak = [0]   # consecutive failed health checks; see debounce note below
+
+        def _reconcile_http_led():
+            """Runs every 5s. The health check is authoritative — it overrides
+            whatever the subprocess-tracking code (_start_http_server, _watch_http,
+            Force Kill, etc.) last set, so a false 'Stopped' or a stuck 'Killed…'
+            message can never persist past two ticks.
+
+            Debounced on the way DOWN only: a single failed health check does
+            NOT flip the LED to Stopped or reset the uptime counter — it takes
+            two consecutive failures (~10s) to do that. This protects the
+            uptime display from a one-off network blip being mistaken for a
+            real outage. Coming back UP is not debounced — one successful
+            check is enough to go green immediately, and _mark_server_running()
+            is itself idempotent (it only records a start time once), so
+            repeated 'alive' ticks never reset an in-progress uptime count."""
+            try:
+                port = int(_http_port_var.get().strip())
+            except ValueError:
+                self.root.after(5000, _reconcile_http_led)
+                return
+
+            def _do_check():
+                alive, detail = _http_health_check(port)
+                tracked = (self._http_server_proc is not None
+                           and self._http_server_proc.poll() is None)
+
+                def _apply():
+                    was_running   = (_http_status_var.get() == "⬤ Running")
+                    transitional  = _http_status_var.get() in ("⬤ Checking…", "⬤ Starting…")
+                    if alive:
+                        _led_fail_streak[0] = 0
+                        if not was_running:
+                            _log_http_led_debug(
+                                f"LED -> Running (override). {detail} | "
+                                f"gui-tracked-proc={'yes' if tracked else 'no'} | "
+                                f"previous displayed state={_http_status_var.get()!r}")
+                        _http_status_var.set("⬤ Running")
+                        _http_status_lbl.configure(foreground='#27ae60')
+                        _mark_server_running()
+                    elif not transitional:
+                        _led_fail_streak[0] += 1
+                        if _led_fail_streak[0] >= 2:
+                            if was_running:
+                                _log_http_led_debug(
+                                    f"LED -> Stopped (override, after "
+                                    f"{_led_fail_streak[0]} consecutive failed checks). "
+                                    f"{detail} | gui-tracked-proc={'yes' if tracked else 'no'}")
+                            _http_status_var.set("⬤ Stopped")
+                            _http_status_lbl.configure(foreground='#cc0000')
+                            _stop_uptime_ticker()
+                        else:
+                            _log_http_led_debug(
+                                f"Health check failed ({detail}) but not yet acting — "
+                                f"1 of 2 required consecutive failures. Uptime preserved.")
+                    self.root.after(5000, _reconcile_http_led)
+
+                self.root.after(0, _apply)
+
+            threading.Thread(target=_do_check, daemon=True).start()
+
+        # First check shortly after the tab is built, then re-schedules itself
+        # every 5s for as long as the GUI runs.
+        self.root.after(2000, _reconcile_http_led)
+
         def _start_http_server():
             tok = _remote_token_var.get().strip()
             # In Business server mode there is no single bearer token —
@@ -11602,25 +11793,61 @@ or from the Help menu."""
         self._start_http_server_fn = _start_http_server
 
         def _stop_http_server():
-            if self._http_server_proc is None or self._http_server_proc.poll() is not None:
+            # ── Case 1: this GUI session has a live handle on the process ──────
+            # Fast path — no netstat needed.
+            if self._http_server_proc is not None and self._http_server_proc.poll() is None:
+                try:
+                    self._http_server_proc.terminate()
+                    self._http_server_proc.wait(timeout=5)
+                except Exception:
+                    try:
+                        self._http_server_proc.kill()
+                    except Exception:
+                        pass
+                self._http_server_proc = None
                 _http_status_var.set("⬤ Stopped")
                 _http_status_lbl.configure(foreground='#cc0000')
-                _stop_uptime_ticker()               # ensure ticker is cancelled
-                self._set_sleep_prevention(False)   # ensure sleep is re-enabled
+                _stop_uptime_ticker()
+                self._set_sleep_prevention(False)
                 return
+
+            # ── Case 2: nothing tracked. Previously Stop just repainted the LED
+            # and left any real, untracked server running untouched — which is
+            # exactly what let a genuinely healthy server look "stopped" while
+            # still answering requests. Now: look for a real process on the
+            # port and offer to actually stop it, same as Force Kill Port. ──
+            port_str = _http_port_var.get().strip()
             try:
-                self._http_server_proc.terminate()
-                self._http_server_proc.wait(timeout=5)
-            except Exception:
-                try:
-                    self._http_server_proc.kill()
-                except Exception:
-                    pass
-            self._http_server_proc = None
+                port = int(port_str)
+            except ValueError:
+                messagebox.showerror("Bad Port", f"Port must be a number, got: {port_str}")
+                return
+
+            pid, source = _find_pid_on_port(port)
+            if pid is None:
+                # Genuinely nothing running — the old behavior was correct here.
+                _http_status_var.set("⬤ Stopped")
+                _http_status_lbl.configure(foreground='#cc0000')
+                _stop_uptime_ticker()
+                self._set_sleep_prevention(False)
+                return
+
+            if not messagebox.askyesno(
+                    "Stop HTTP Server",
+                    f"A server on port {port} is running but wasn't started by "
+                    f"this AI-Prowler window ({source}) — likely a previous "
+                    f"session that's still active.\n\n"
+                    f"Stop it anyway? (PID {pid})"):
+                return
+
+            ok, detail = _kill_pid_verified(pid, port)
+            _log_http_led_debug(f"Stop button killed untracked PID {pid}: ok={ok} | {detail}")
+            if not ok:
+                messagebox.showerror("Stop Failed", f"Could not stop PID {pid}.\n\n{detail}")
+                return  # leave LED as-is; the next health check will reflect reality
             _http_status_var.set("⬤ Stopped")
             _http_status_lbl.configure(foreground='#cc0000')
-            _stop_uptime_ticker()                   # clear uptime on manual stop
-            # Restore normal Windows sleep/power management
+            _stop_uptime_ticker()
             self._set_sleep_prevention(False)
 
         http_btn_row = ttk.Frame(remote_frame)
@@ -11633,19 +11860,9 @@ or from the Help menu."""
         def _force_kill_port():
             """Kill any process holding the configured HTTP port — useful when
             a crashed or interrupted server run leaves a zombie process on port
-            8000 that prevents a clean restart.
-
-            Priority 1: if this GUI session has a tracked subprocess for the
-            HTTP server (self._http_server_proc), kill that PID directly —
-            no netstat needed at all. This is the common case and is instant.
-
-            Priority 2 (fallback): if no tracked subprocess (e.g. a previous
-            GUI session was closed without stopping the server, or it was
-            started outside the GUI), fall back to netstat to find the PID.
-            netstat -ano can be slow while a server with a Cloudflare Tunnel
-            or many open connections is running, so this path has a longer
-            timeout and a clear message if it still doesn't return in time.
-            """
+            8000 that prevents a clean restart. PID discovery and the actual
+            kill+verify both go through the shared helpers above (also used by
+            the Stop button) so the two stay consistent."""
             port_str = _http_port_var.get().strip()
             try:
                 port = int(port_str)
@@ -11653,52 +11870,24 @@ or from the Help menu."""
                 messagebox.showerror("Bad Port", f"Port must be a number, got: {port_str}")
                 return
 
-            pid = None
-            via_tracked_proc = False
+            pid, source = _find_pid_on_port(port)
 
-            # ── Priority 1: use the PID we already know about ────────────────────
-            if (self._http_server_proc is not None
-                    and self._http_server_proc.poll() is None):
-                pid = self._http_server_proc.pid
-                via_tracked_proc = True
-
-            # ── Priority 2: netstat fallback (only if PID isn't already known) ───
-            if pid is None:
-                try:
-                    result = subprocess.run(
-                        f'netstat -ano | findstr ":{port} "',
-                        shell=True, capture_output=True, text=True, timeout=20
-                    )
-                    for line in result.stdout.splitlines():
-                        if 'LISTENING' in line:
-                            parts = line.split()
-                            if parts:
-                                try:
-                                    pid = int(parts[-1])
-                                    break
-                                except ValueError:
-                                    pass
-                except subprocess.TimeoutExpired:
-                    messagebox.showerror(
-                        "netstat Timed Out",
-                        f"netstat did not respond within 20 seconds.\n\n"
-                        f"This can happen while a server with a Cloudflare Tunnel\n"
-                        f"or many open connections is running.\n\n"
-                        f"Try manually in an Administrator command prompt:\n\n"
-                        f"  netstat -ano | findstr :{port}\n"
-                        f"  taskkill /PID <pid> /F")
-                    return
-                except Exception as _ne:
-                    messagebox.showerror("netstat Error", str(_ne))
-                    return
+            if source == "netstat timed out":
+                messagebox.showerror(
+                    "netstat Timed Out",
+                    f"netstat did not respond within 20 seconds.\n\n"
+                    f"This can happen while a server with a Cloudflare Tunnel\n"
+                    f"or many open connections is running.\n\n"
+                    f"Try manually in an Administrator command prompt:\n\n"
+                    f"  netstat -ano | findstr :{port}\n"
+                    f"  taskkill /PID <pid> /F")
+                return
+            if source and source.startswith("netstat error"):
+                messagebox.showerror("netstat Error", source)
+                return
 
             if pid is None:
-                # Double-check with a socket probe
-                import socket as _sock
-                with _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM) as _s:
-                    _s.settimeout(1)
-                    in_use = _s.connect_ex(('127.0.0.1', port)) == 0
-                if in_use:
+                if source == "port in use, PID unknown":
                     messagebox.showwarning(
                         "Port In Use",
                         f"Port {port} is in use but the PID could not be identified.\n\n"
@@ -11709,38 +11898,32 @@ or from the Help menu."""
                     messagebox.showinfo("Port Free", f"Port {port} is not in use — nothing to kill.")
                 return
 
-            source_note = ("tracked HTTP server process" if via_tracked_proc
-                            else "found via netstat")
+            via_tracked_proc = (source == "tracked HTTP server process")
             if not messagebox.askyesno(
                     "Force Kill Port",
                     f"Kill process PID {pid} holding port {port}?\n"
-                    f"({source_note})\n\n"
+                    f"({source})\n\n"
                     f"Use this when a crashed server is blocking a restart.\n"
+                    f"Large processes can take a few seconds to fully terminate — "
+                    f"this may take longer than a normal kill.\n"
                     + ("" if via_tracked_proc else
                        "This requires Administrator privileges.")):
                 return
 
-            try:
-                result = subprocess.run(
-                    ['taskkill', '/PID', str(pid), '/F'],
-                    capture_output=True, text=True, timeout=5
-                )
-                if result.returncode == 0:
-                    _http_status_var.set(f"⬤ Killed PID {pid} — port {port} free")
-                    _http_status_lbl.configure(foreground='#1a7a1a')
-                    messagebox.showinfo(
-                        "Process Killed",
-                        f"✅ PID {pid} terminated — port {port} is now free.\n\n"
-                        f"You can now click ▶ Start HTTP Server.")
-                else:
-                    err = result.stderr.strip() or result.stdout.strip()
-                    messagebox.showerror(
-                        "Kill Failed",
-                        f"Could not kill PID {pid}.\n\n"
-                        f"Error: {err}\n\n"
-                        f"Try running AI-Prowler as Administrator.")
-            except Exception as _ke:
-                messagebox.showerror("Kill Error", str(_ke))
+            ok, detail = _kill_pid_verified(pid, port)
+            if ok:
+                _http_status_var.set(f"⬤ Killed PID {pid} — port {port} free")
+                _http_status_lbl.configure(foreground='#1a7a1a')
+                messagebox.showinfo(
+                    "Process Killed",
+                    f"✅ {detail} — port {port} is now free.\n\n"
+                    f"You can now click ▶ Start HTTP Server.")
+            else:
+                messagebox.showerror(
+                    "Kill Failed",
+                    f"Could not kill PID {pid}.\n\n"
+                    f"{detail}\n\n"
+                    f"Try running AI-Prowler as Administrator, or check Task Manager.")
 
         ttk.Button(http_btn_row, text="🔨 Force Kill Port",
                    command=_force_kill_port).pack(side='left')
