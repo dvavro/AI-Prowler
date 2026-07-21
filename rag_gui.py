@@ -6225,7 +6225,26 @@ or from the Help menu."""
                   relief='flat', cursor='hand2',
                   command=lambda: _open_task_editor(None)).pack(side='left')
 
-        # Run Due Tasks button — auto-queues all overdue custom tasks
+        # Run Due Tasks button — auto-queues all overdue custom tasks, then
+        # either runs them immediately via Claude Code (if it's installed —
+        # see the 🤖 Autonomous Task Queue panel above) or falls back to the
+        # original copy-into-a-new-chat flow if it isn't. Button color/text
+        # reflects which mode is active, using the SAME claude_code_cli_
+        # installed() check the Autonomous Task Queue panel's own status
+        # light uses — one source of truth for "is this actually usable."
+        def _refresh_run_due_button_state():
+            try:
+                import task_queue_automation as _tqa_rdt_chk
+                ready = _tqa_rdt_chk.claude_code_cli_installed()
+            except ImportError:
+                ready = False
+            if ready:
+                _run_due_btn.configure(bg='#1a3a1a', fg='#7fdb7f',
+                                        text="🧠 Run Due Tasks")
+            else:
+                _run_due_btn.configure(bg='#3a1a1a', fg='#e08080',
+                                        text="🧠 Run Due Tasks (needs Claude Code)")
+
         def _run_due_tasks():
             try:
                 import custom_tasks_manager as _ctm
@@ -6249,44 +6268,100 @@ or from the Help menu."""
                         existing = []
                 existing.extend(entries)
                 p.write_text(_j.dumps(existing, indent=2), encoding="utf-8")
-                _cmd = (
-                    "Call get_pending_analysis_tasks() and for each pending "
-                    "task: execute the full analysis, save reports and record "
-                    "learnings as configured, then call "
-                    "complete_analysis_task(task_id, summary)."
-                )
-                self.root.clipboard_clear()
-                self.root.clipboard_append(_cmd)
-                self.root.update()
 
-                # v8.1.5 fix: this button queued tasks and copied the run
-                # command silently — the only feedback was a small status-bar
-                # line, easy to miss, leaving the user unsure what to do next.
-                # "Run Pending Analysis" already shows a popup for the same
-                # situation (see ~line 5199); bring this button in line with it.
-                from tkinter import messagebox as _mb_rdt
-                _mb_rdt.showinfo(
-                    "Due Tasks Queued",
-                    f"✅  {len(due)} due task{'s' if len(due) != 1 else ''} queued and "
-                    "the run command has been copied to your clipboard.\n\n"
-                    "👉  Open a new Claude chat and press  Ctrl+V  (or paste)\n"
-                    "    to run all due tasks in sequence."
-                )
-                self.status_var.set(
-                  f"✅ {len(due)} due task{'s' if len(due) != 1 else ''} queued — paste into Claude to run ALL tasks")
-                self.root.after(3000, lambda: self.status_var.set("Ready"))
-                _refresh_queue_count()
-                if _queue_expanded.get():
-                    _refresh_queue_list()
+                import task_queue_automation as _tqa_rdt
+                n_due = len(due)
+                plural = 's' if n_due != 1 else ''
+
+                if not _tqa_rdt.claude_code_cli_installed():
+                    # Fallback: original copy-into-a-new-chat flow. The
+                    # button stays usable either way — CLI status only
+                    # changes WHICH method actually runs the queue, never
+                    # blocks the button outright, since a hard-disabled
+                    # button could trap someone who installs Claude Code
+                    # in the panel above without restarting this tab.
+                    _cmd = (
+                        "Call get_pending_analysis_tasks() and for each pending "
+                        "task: execute the full analysis, save reports and record "
+                        "learnings as configured, then call "
+                        "complete_analysis_task(task_id, summary)."
+                    )
+                    self.root.clipboard_clear()
+                    self.root.clipboard_append(_cmd)
+                    self.root.update()
+                    from tkinter import messagebox as _mb_rdt
+                    _mb_rdt.showinfo(
+                        "Due Tasks Queued",
+                        f"✅  {n_due} due task{plural} queued and "
+                        "the run command has been copied to your clipboard.\n\n"
+                        "Claude Code CLI isn't installed, so this can't run "
+                        "automatically yet — install it from the 🤖 Autonomous "
+                        "Task Queue panel above to skip this step in future.\n\n"
+                        "👉  Open a new Claude chat and press  Ctrl+V  (or paste)\n"
+                        "    to run all due tasks in sequence."
+                    )
+                    self.status_var.set(
+                        f"✅ {n_due} due task{plural} queued — paste into Claude to run ALL tasks")
+                    self.root.after(3000, lambda: self.status_var.set("Ready"))
+                    _refresh_queue_count()
+                    if _queue_expanded.get():
+                        _refresh_queue_list()
+                    return
+
+                # Claude Code is installed — run directly, no copy/paste.
+                _run_due_btn.configure(state='disabled', text="⏳ Running…")
+                self.status_var.set(f"⏳ Running {n_due} due task{plural} via Claude Code…")
+
+                _tqa_cfg_rdt = _tqa_rdt.load_config()
+
+                def _do_run():
+                    ok, detail = _tqa_rdt.run_queue_now(
+                        _tqa_cfg_rdt.get("mcp_config_path", ""),
+                        _tqa_cfg_rdt.get("allowed_tools", "mcp__ai-prowler__*"),
+                        _tqa_cfg_rdt.get("use_api_key", False),
+                        _tqa_cfg_rdt.get("notify_on_complete", False),
+                        _tqa_cfg_rdt.get("notify_method", "sms"))
+
+                    def _finish():
+                        _refresh_run_due_button_state()
+                        _run_due_btn.configure(state='normal')
+                        from tkinter import messagebox as _mb_rdt2
+                        if ok:
+                            _mb_rdt2.showinfo(
+                                "Run Complete",
+                                f"✅  {n_due} due task{plural} processed via "
+                                f"Claude Code.\n\n{detail[:500]}")
+                            self.status_var.set(f"✅ {n_due} task{plural} completed")
+                        else:
+                            _mb_rdt2.showerror("Run Failed", detail[:800])
+                            self.status_var.set("❌ Task run failed")
+                        self.root.after(3000, lambda: self.status_var.set("Ready"))
+                        _refresh_queue_count()
+                        if _queue_expanded.get():
+                            _refresh_queue_list()
+
+                    self.root.after(0, _finish)
+
+                threading.Thread(target=_do_run, daemon=True).start()
             except Exception as _e:
                 self.status_var.set(f"Error: {_e}")
+                _refresh_run_due_button_state()
 
-        tk.Button(_new_btn_row,
+        _run_due_btn = tk.Button(_new_btn_row,
                   text="🧠 Run Due Tasks",
                   bg='#2a1a4a', fg='#9b88ee',
                   font=('Arial', 9, 'bold'),
                   relief='flat', cursor='hand2',
-                  command=_run_due_tasks).pack(side='right')
+                  command=_run_due_tasks)
+        _run_due_btn.pack(side='right')
+        _refresh_run_due_button_state()
+
+        # Exposed on self for tests/gui/test_task_queue_panel.py, same
+        # rationale as the _tqa_* exposure above — otherwise these are
+        # unreachable closures and this button would go untested again.
+        self._run_due_btn                    = _run_due_btn
+        self._run_due_tasks                  = _run_due_tasks
+        self._refresh_run_due_button_state   = _refresh_run_due_button_state
 
         # Initial render
         _refresh_custom_list()
@@ -6900,6 +6975,15 @@ or from the Help menu."""
                       "without opening a chat and pasting the run command yourself.",
                  bg='#1a1e2e', fg='#a0a8cc',
                  font=('Arial', 8),
+                 wraplength=680, justify='left').pack(anchor='w', pady=(0, 2))
+
+        tk.Label(_tqa_inner,
+                 text="ℹ️  Requires a Claude Pro subscription or higher to use Claude "
+                      "Code CLI — the free Claude tier does not include Claude Code "
+                      "access. (Not required if you use an API Key instead — see Auth "
+                      "below.)",
+                 bg='#1a1e2e', fg='#8899bb',
+                 font=('Arial', 8, 'italic'),
                  wraplength=680, justify='left').pack(anchor='w', pady=(0, 8))
 
         if not _tqa_available:
@@ -7239,6 +7323,16 @@ or from the Help menu."""
             self._tqa_generate_mcp_config    = _tqa_generate_mcp_config
 
             _tqa_refresh_status_display()
+
+        # Visually placed right after "Initial Connection Test" and before
+        # "Common Business AI Analysis" — moved here via pack_configure
+        # rather than physically relocating this whole block's code, which
+        # would have meant hand-copying ~380 lines of nested Tkinter with a
+        # real risk of a whitespace/syntax slip. _analysis_banner is always
+        # already created by this point (Personal mode only — server mode
+        # returns before either panel is built), so this is safe regardless
+        # of whether _tqa_available is True or False above.
+        _tqa_banner.pack_configure(before=_analysis_banner)
 
         # When SUPPORT_LOCAL_HW_LLM is False, all of the input/attachment/
         # provider/answer widgets below are constructed but never packed —

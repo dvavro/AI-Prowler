@@ -1327,6 +1327,7 @@ var
   PsFile, PsContents: String;
   WaitSeconds, TessElapsed, TessResultCode: Integer;
   ClaudeCodeCheckResult, ClaudeCodeInstallResult: Integer;
+  ClaudeCodeLocalBin, ClaudeCodeCurPath: String;
   MsgDummy: DWORD;
   PythonReady: Boolean;
 begin
@@ -2109,11 +2110,44 @@ begin
       end
       else
       begin
-        AppendInstallLog('[Claude Code] Install could not be verified  -  '
-          + 'claude is still not resolvable on PATH.');
-        AppendInstallLog('[Claude Code] Autonomous Task Queue automation will show '
-          + 'this as unavailable until installed manually from claude.ai/install.ps1.');
-        SetProgress(89, 'Claude Code CLI install failed  -  continuing...');
+        // Real-world finding (confirmed live, not theoretical): the
+        // native installer writes claude.exe to %USERPROFILE%\.local\bin
+        // but does NOT reliably add that folder to PATH itself — it can
+        // succeed completely while `where claude` still finds nothing.
+        // Check disk directly and fix PATH ourselves rather than
+        // reporting a false failure for an install that actually worked.
+        ClaudeCodeLocalBin := ExpandConstant('{userpf}') + '\.local\bin';
+        if FileExists(ClaudeCodeLocalBin + '\claude.exe') then
+        begin
+          AppendInstallLog('[Claude Code] claude.exe found on disk at '
+            + ClaudeCodeLocalBin + ' but not yet on PATH  -  fixing PATH directly.');
+          if RegQueryStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', ClaudeCodeCurPath) then
+          begin
+            if Pos(LowerCase(ClaudeCodeLocalBin), LowerCase(ClaudeCodeCurPath)) = 0 then
+              RegWriteExpandStringValue(HKEY_CURRENT_USER, 'Environment', 'Path',
+                ClaudeCodeCurPath + ';' + ClaudeCodeLocalBin);
+          end
+          else
+            RegWriteExpandStringValue(HKEY_CURRENT_USER, 'Environment', 'Path',
+              ClaudeCodeLocalBin);
+
+          SendMessageTimeoutA(HWND_BROADCAST, WM_SETTINGCHANGE, 0,
+            'Environment', SMTO_ABORTIFHUNG, 5000, MsgDummy);
+          AppendInstallLog('[Claude Code] PATH fixed and broadcast  -  '
+            + 'new terminals and the next AI-Prowler launch will see '
+            + 'claude immediately (this running Setup.exe process still '
+            + 'won''t, since it already inherited its own environment '
+            + 'block  -  that''s expected and harmless).');
+          SetProgress(89, 'Claude Code CLI installed (PATH fixed).');
+        end
+        else
+        begin
+          AppendInstallLog('[Claude Code] Install could not be verified  -  '
+            + 'claude.exe not found on disk either.');
+          AppendInstallLog('[Claude Code] Autonomous Task Queue automation will show '
+            + 'this as unavailable until installed manually from claude.ai/install.ps1.');
+          SetProgress(89, 'Claude Code CLI install failed  -  continuing...');
+        end;
       end;
     end;
 

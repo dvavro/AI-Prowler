@@ -27,6 +27,7 @@ never does).
 
 from __future__ import annotations
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -389,6 +390,113 @@ def claude_code_cli_installed() -> bool:
     return shutil.which("claude") is not None
 
 
+def _add_to_user_path(new_dir: Path) -> bool:
+    """Persistently adds new_dir to the current user's PATH via the
+    registry (HKCU\\Environment) if not already present, broadcasts
+    WM_SETTINGCHANGE so other processes eventually pick it up, AND
+    updates os.environ["PATH"] so THIS already-running process sees it
+    immediately — otherwise AI-Prowler would report the install as
+    failed until restarted, even though it just succeeded.
+    Returns True if PATH was actually changed (False if already present
+    or if anything went wrong — never raises)."""
+    new_dir_str = str(new_dir)
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0,
+                             winreg.KEY_READ | winreg.KEY_WRITE) as key:
+            try:
+                current, _ = winreg.QueryValueEx(key, "Path")
+            except FileNotFoundError:
+                current = ""
+            parts = [p for p in current.split(";") if p]
+            already_present = any(p.lower() == new_dir_str.lower() for p in parts)
+            if not already_present:
+                parts.append(new_dir_str)
+                winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, ";".join(parts))
+
+        # Broadcast so other already-open windows (e.g. a fresh terminal)
+        # see the change without a logoff/logon — same fix already used
+        # elsewhere in this codebase (AI-Prowler-Setup.iss's Tesseract
+        # and Claude Code CLI install steps).
+        try:
+            import ctypes
+            result = ctypes.c_long()
+            ctypes.windll.user32.SendMessageTimeoutW(
+                0xFFFF, 0x1A, 0, "Environment", 0x0002, 5000, ctypes.byref(result))
+        except Exception:
+            pass  # cosmetic — other windows just won't see it until restarted
+
+        # This process's own PATH — the one shutil.which() actually reads —
+        # doesn't refresh from the registry on its own. Without this, the
+        # very next claude_code_cli_installed() check in THIS same
+        # AI-Prowler session would still report "not found" even though
+        # the registry (and every future process) now has it correctly.
+        if new_dir_str.lower() not in os.environ.get("PATH", "").lower():
+            os.environ["PATH"] = os.environ.get("PATH", "") + os.pathsep + new_dir_str
+
+        return not already_present
+    except Exception:
+        return False
+
+
+def run_queue_now(mcp_config_path: str, allowed_tools: str,
+                   use_api_key: bool = False,
+                   notify_on_complete: bool = False,
+                   notify_method: str = "sms",
+                   timeout: int = 600) -> tuple[bool, str]:
+    """Runs the task queue right now via a real headless Claude Code
+    session — the exact same command the Scheduled Task runs, just
+    triggered immediately instead of waiting for the clock. This is
+    what "Run Due Tasks" / "Run Pending Analysis" call instead of the
+    old copy-into-a-new-chat flow, once Claude Code CLI is installed.
+
+    Blocking — a real analysis run can take anywhere from seconds to
+    several minutes. Callers MUST invoke this from a background thread,
+    never directly on the Tk main thread, or the whole GUI will freeze
+    for the duration of the run.
+
+    Reuses build_wrapper_script_content() / install_wrapper_script() so
+    the exact command that runs here is identical to what the Scheduled
+    Task uses — no behavior drift between "run now" and "run on
+    schedule." Written to a separate manual_run/ subfolder rather than
+    the Scheduled Task's own wrapper location, so a manual run never
+    collides with (or overwrites mid-execution) the scheduled one.
+
+    Returns (success, detail) — detail is either the tail of the
+    session's real output (truncated to keep dialog boxes reasonable)
+    or a plain-language reason it never ran."""
+    if not claude_code_cli_installed():
+        return False, ("Claude Code CLI is not installed. Install it from "
+                        "the 🤖 Autonomous Task Queue panel above, then try again.")
+    if not mcp_config_path:
+        return False, ("No MCP config is set up yet. Click 'Generate MCP "
+                        "Config' in the 🤖 Autonomous Task Queue panel above, "
+                        "then try again.")
+
+    wrapper_dir = AI_PROWLER_HOME / "manual_run"
+    wrapper_path = install_wrapper_script(
+        wrapper_dir, mcp_config_path, allowed_tools,
+        notify_on_complete, notify_method, use_api_key)
+
+    try:
+        r = subprocess.run([str(wrapper_path)], capture_output=True,
+                            text=True, timeout=timeout, shell=True)
+    except subprocess.TimeoutExpired:
+        _write_last_run("failure", f"Manual run timed out after {timeout}s")
+        return False, f"Run timed out after {timeout}s — check your internet connection."
+    except Exception as e:
+        _write_last_run("failure", f"Manual run error: {e}")
+        return False, str(e)
+
+    ok = (r.returncode == 0)
+    _write_last_run("success" if ok else "failure",
+                     f"Manual run — exit code {r.returncode}")
+    output = ((r.stdout or "") + (r.stderr or "")).strip()
+    if output:
+        return ok, output[-4000:]
+    return ok, ("Run completed." if ok else f"Run failed (exit code {r.returncode}), no output captured.")
+
+
 def install_claude_code_cli() -> tuple[bool, str]:
     """Runs Anthropic's official native installer — the same
     dependency-free command AI-Prowler-Setup.iss runs silently during a
@@ -413,6 +521,19 @@ def install_claude_code_cli() -> tuple[bool, str]:
 
     # Same philosophy as the installer: re-check that `claude` actually
     # resolves rather than trusting the subprocess return code alone.
+    #
+    # Real-world finding: the native installer writes to
+    # %USERPROFILE%\.local\bin but does NOT reliably add that folder to
+    # PATH itself — on some systems it just prints a manual instruction
+    # ("Add it by opening System Properties...") and leaves it there.
+    # Confirmed live: the install succeeds every time, but without this
+    # fallback, AI-Prowler would report "failed" forever afterward
+    # because it only checks PATH, and PATH was never actually updated.
+    if not claude_code_cli_installed():
+        default_install_dir = Path.home() / ".local" / "bin"
+        if (default_install_dir / "claude.exe").exists():
+            _add_to_user_path(default_install_dir)
+
     if claude_code_cli_installed():
         return True, "Installed successfully."
     detail = (r.stderr or r.stdout or "").strip()[:300]

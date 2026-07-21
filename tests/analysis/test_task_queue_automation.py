@@ -9,6 +9,7 @@ DISABLED state, assert on that, then uninstall in a finally block so a
 failed assertion still cleans up.
 """
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -638,3 +639,266 @@ def test_install_claude_code_cli_handles_timeout_gracefully(monkeypatch):
     ok, detail = tqa.install_claude_code_cli()
     assert ok is False
     assert "timed out" in detail.lower()
+
+
+# ── PATH fix fallback ───────────────────────────────────────────────────────
+# Real-world finding: the native installer writes claude.exe to
+# ~/.local/bin but does NOT reliably add that folder to PATH itself — it
+# can succeed completely while still leaving `claude` unresolvable via
+# shutil.which(). These tests cover the fallback that fixes PATH directly
+# instead of just reporting a false failure.
+
+class _FakeWinreg:
+    """Minimal stand-in for the winreg module, injected via sys.modules
+    so `import winreg` inside _add_to_user_path picks this up instead of
+    (on non-Windows test runners) failing, or (on Windows) touching the
+    real registry."""
+    HKEY_CURRENT_USER = "HKCU"
+    KEY_READ = 1
+    KEY_WRITE = 2
+    REG_EXPAND_SZ = 2
+
+    def __init__(self, existing_path=""):
+        self.existing_path = existing_path
+        self.set_calls = []
+
+    def OpenKey(self, hive, subkey, res, access):
+        return _FakeWinregKey(self)
+
+    def QueryValueEx(self, key, name):
+        if not self.existing_path:
+            raise FileNotFoundError()
+        return self.existing_path, self.REG_EXPAND_SZ
+
+    def SetValueEx(self, key, name, res, kind, value):
+        self.set_calls.append(value)
+
+
+class _FakeWinregKey:
+    def __init__(self, parent):
+        self._parent = parent
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+@pytest.fixture
+def fake_winreg(monkeypatch):
+    fw = _FakeWinreg()
+    monkeypatch.setitem(sys.modules, "winreg", fw)
+    # OpenKey/QueryValueEx/SetValueEx are looked up as module-level
+    # functions (winreg.OpenKey(...)), not FakeWinreg methods with self —
+    # patch them onto the fake module object directly.
+    fw.OpenKey = lambda hive, subkey, res, access: _FakeWinregKey(fw)
+    fw.QueryValueEx = lambda key, name: (
+        (fw.existing_path, fw.REG_EXPAND_SZ) if fw.existing_path
+        else (_ for _ in ()).throw(FileNotFoundError())
+    )
+    fw.SetValueEx = lambda key, name, res, kind, value: fw.set_calls.append(value)
+    yield fw
+    monkeypatch.delitem(sys.modules, "winreg", raising=False)
+
+
+def test_add_to_user_path_appends_when_not_present(fake_winreg, monkeypatch):
+    fake_winreg.existing_path = r"C:\Windows;C:\Windows\System32"
+    changed = tqa._add_to_user_path(Path(r"C:\Users\test\.local\bin"))
+    assert changed is True
+    assert len(fake_winreg.set_calls) == 1
+    assert r"C:\Users\test\.local\bin" in fake_winreg.set_calls[0]
+    # Also updates THIS process's own environ so an immediate re-check works.
+    assert r"C:\Users\test\.local\bin" in os.environ["PATH"]
+
+
+def test_add_to_user_path_skips_when_already_present(fake_winreg):
+    fake_winreg.existing_path = r"C:\Windows;C:\Users\test\.local\bin;C:\Windows\System32"
+    changed = tqa._add_to_user_path(Path(r"C:\Users\test\.local\bin"))
+    assert changed is False
+    assert len(fake_winreg.set_calls) == 0
+
+
+def test_add_to_user_path_handles_missing_registry_value(fake_winreg):
+    fake_winreg.existing_path = ""  # QueryValueEx raises FileNotFoundError
+    changed = tqa._add_to_user_path(Path(r"C:\Users\test\.local\bin"))
+    assert changed is True
+    assert len(fake_winreg.set_calls) == 1
+
+
+def test_add_to_user_path_never_raises_on_registry_error(monkeypatch):
+    class _BoomWinreg:
+        HKEY_CURRENT_USER = "HKCU"
+        KEY_READ = 1
+        KEY_WRITE = 2
+
+        def OpenKey(self, *a, **kw):
+            raise OSError("access denied")
+
+    monkeypatch.setitem(sys.modules, "winreg", _BoomWinreg())
+    changed = tqa._add_to_user_path(Path(r"C:\Users\test\.local\bin"))
+    assert changed is False  # never raises, just reports "nothing changed"
+
+
+def test_install_claude_code_cli_falls_back_to_path_fix(tmp_path, monkeypatch):
+    # Simulate: installer succeeds and drops claude.exe in ~/.local/bin,
+    # but shutil.which() never finds it (matches the real-world finding —
+    # the installer can succeed while leaving PATH untouched). Confirm
+    # the fallback actually gets invoked rather than just reporting failure.
+    fake_home = tmp_path
+    monkeypatch.setattr(tqa.Path, "home", lambda: fake_home)
+    install_dir = fake_home / ".local" / "bin"
+    install_dir.mkdir(parents=True)
+    (install_dir / "claude.exe").write_text("fake binary", encoding="utf-8")
+
+    monkeypatch.setattr(tqa.shutil, "which", lambda name: None)  # PATH never has it
+    monkeypatch.setattr(tqa.subprocess, "run",
+                         lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})())
+
+    fix_calls = []
+    monkeypatch.setattr(tqa, "_add_to_user_path", lambda d: fix_calls.append(d) or True)
+
+    ok, detail = tqa.install_claude_code_cli()
+    # shutil.which is still mocked to always return None, so even with the
+    # fallback "attempted," the final re-check still reports not-found here
+    # — this test's job is only to confirm the fallback was REACHED and
+    # given the right directory, not to fake a fully working shutil.which.
+    assert len(fix_calls) == 1
+    assert fix_calls[0] == install_dir
+
+
+def test_install_claude_code_cli_skips_path_fix_when_binary_not_on_disk(tmp_path, monkeypatch):
+    # If the installer genuinely failed (no claude.exe on disk at all),
+    # the PATH-fix fallback must not fire — there's nothing to point PATH
+    # at, and doing so would be misleading busywork.
+    fake_home = tmp_path
+    monkeypatch.setattr(tqa.Path, "home", lambda: fake_home)
+    # Deliberately do NOT create .local/bin/claude.exe.
+
+    monkeypatch.setattr(tqa.shutil, "which", lambda name: None)
+    monkeypatch.setattr(tqa.subprocess, "run",
+                         lambda *a, **kw: type("R", (), {"returncode": 1, "stdout": "", "stderr": "failed"})())
+
+    fix_calls = []
+    monkeypatch.setattr(tqa, "_add_to_user_path", lambda d: fix_calls.append(d) or True)
+
+    ok, detail = tqa.install_claude_code_cli()
+    assert len(fix_calls) == 0
+    assert ok is False
+
+
+# ── run_queue_now (the "Run Due Tasks" / "Run Pending Analysis" direct-run flow) ──
+
+def test_run_queue_now_fails_when_cli_not_installed(_isolated_home, monkeypatch):
+    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: False)
+
+    def _guard(*a, **kw):
+        raise AssertionError("Must not attempt a run when CLI isn't installed!")
+    monkeypatch.setattr(tqa, "install_wrapper_script", _guard)
+    monkeypatch.setattr(tqa.subprocess, "run", _guard)
+
+    ok, detail = tqa.run_queue_now("x.json", "mcp__ai-prowler__*")
+    assert ok is False
+    assert "not installed" in detail.lower()
+
+
+def test_run_queue_now_fails_when_no_mcp_config(_isolated_home, monkeypatch):
+    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: True)
+
+    def _guard(*a, **kw):
+        raise AssertionError("Must not attempt a run without an MCP config!")
+    monkeypatch.setattr(tqa, "install_wrapper_script", _guard)
+    monkeypatch.setattr(tqa.subprocess, "run", _guard)
+
+    ok, detail = tqa.run_queue_now("", "mcp__ai-prowler__*")
+    assert ok is False
+    assert "mcp config" in detail.lower() or "MCP Config" in detail
+
+
+def test_run_queue_now_success_reuses_wrapper_script(_isolated_home, monkeypatch):
+    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: True)
+
+    wrapper_calls = []
+    def _fake_install_wrapper(target_dir, mcp_config_path, allowed_tools,
+                               notify_on_complete=False, notify_method="sms",
+                               use_api_key=False):
+        wrapper_calls.append((target_dir, mcp_config_path, allowed_tools,
+                               notify_on_complete, notify_method, use_api_key))
+        return Path("fake_wrapper.bat")
+    monkeypatch.setattr(tqa, "install_wrapper_script", _fake_install_wrapper)
+    monkeypatch.setattr(tqa.subprocess, "run",
+                         lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": "3 tasks done", "stderr": ""})())
+
+    ok, detail = tqa.run_queue_now("real.json", "mcp__ai-prowler__*",
+                                    use_api_key=True, notify_on_complete=True,
+                                    notify_method="whatsapp")
+    assert ok is True
+    assert "3 tasks done" in detail
+    assert len(wrapper_calls) == 1
+    _, mcp_path, tools, notify, method, api_key = wrapper_calls[0]
+    assert mcp_path == "real.json"
+    assert tools == "mcp__ai-prowler__*"
+    assert notify is True
+    assert method == "whatsapp"
+    assert api_key is True
+
+    # Also updates the same "Last:" status the dry-run check uses, so the
+    # panel's status line reflects manual runs too, not just dry runs.
+    last = tqa.load_last_run()
+    assert last["status"] == "success"
+
+
+def test_run_queue_now_reports_failure_on_nonzero_exit(_isolated_home, monkeypatch):
+    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: True)
+    monkeypatch.setattr(tqa, "install_wrapper_script", lambda *a, **kw: Path("fake_wrapper.bat"))
+    monkeypatch.setattr(tqa.subprocess, "run",
+                         lambda *a, **kw: type("R", (), {"returncode": 1, "stdout": "", "stderr": "boom"})())
+
+    ok, detail = tqa.run_queue_now("real.json", "mcp__ai-prowler__*")
+    assert ok is False
+    assert "boom" in detail
+    last = tqa.load_last_run()
+    assert last["status"] == "failure"
+
+
+def test_run_queue_now_handles_timeout(_isolated_home, monkeypatch):
+    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: True)
+    monkeypatch.setattr(tqa, "install_wrapper_script", lambda *a, **kw: Path("fake_wrapper.bat"))
+
+    def _fake_run(*a, **kw):
+        raise tqa.subprocess.TimeoutExpired(cmd="wrapper.bat", timeout=600)
+    monkeypatch.setattr(tqa.subprocess, "run", _fake_run)
+
+    ok, detail = tqa.run_queue_now("real.json", "mcp__ai-prowler__*")
+    assert ok is False
+    assert "timed out" in detail.lower()
+
+
+def test_run_queue_now_truncates_long_output(_isolated_home, monkeypatch):
+    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: True)
+    monkeypatch.setattr(tqa, "install_wrapper_script", lambda *a, **kw: Path("fake_wrapper.bat"))
+    huge_output = "x" * 50000
+    monkeypatch.setattr(tqa.subprocess, "run",
+                         lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": huge_output, "stderr": ""})())
+
+    ok, detail = tqa.run_queue_now("real.json", "mcp__ai-prowler__*")
+    assert ok is True
+    assert len(detail) <= 4000
+
+
+def test_run_queue_now_uses_separate_wrapper_dir_from_scheduled_task(_isolated_home, monkeypatch):
+    # Confirms manual runs never share a wrapper file with the Scheduled
+    # Task's own — writing to the same path mid-schedule-run would be a
+    # real race condition.
+    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: True)
+    dirs_used = []
+    def _fake_install_wrapper(target_dir, *a, **kw):
+        dirs_used.append(target_dir)
+        return Path("fake_wrapper.bat")
+    monkeypatch.setattr(tqa, "install_wrapper_script", _fake_install_wrapper)
+    monkeypatch.setattr(tqa.subprocess, "run",
+                         lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})())
+
+    tqa.run_queue_now("real.json", "mcp__ai-prowler__*")
+    assert "manual_run" in str(dirs_used[0])
+    assert str(dirs_used[0]) != str(tqa.AI_PROWLER_HOME)

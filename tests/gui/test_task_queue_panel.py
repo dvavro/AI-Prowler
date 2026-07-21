@@ -213,3 +213,115 @@ def test_test_setup_updates_status_from_dry_run_report(gui, monkeypatch):
     # consumed, not that a specific color was set (that's an implementation
     # detail of _tqa_render_checklist, not part of the public contract).
     assert gui.app._tqa_status_var.get() in ("● Disabled", "● Enabled")
+
+
+# ── "Run Due Tasks" button (My Custom Analyses tab) ────────────────────────
+# This button pre-dates the Autonomous Task Queue panel — these tests cover
+# the NEW behavior added alongside it: direct execution via run_queue_now()
+# when Claude Code CLI is installed, falling back to the original
+# copy-into-a-new-chat flow when it isn't, with the button's own color/text
+# reflecting which mode is active.
+
+def test_run_due_button_shows_not_ready_when_cli_missing(gui, monkeypatch):
+    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: False)
+    gui.app._refresh_run_due_button_state()
+    _pump(gui)
+    assert "needs Claude Code" in gui.app._run_due_btn.cget("text")
+
+
+def test_run_due_button_shows_ready_when_cli_installed(gui, monkeypatch):
+    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: True)
+    gui.app._refresh_run_due_button_state()
+    _pump(gui)
+    assert "needs Claude Code" not in gui.app._run_due_btn.cget("text")
+
+
+def test_run_due_tasks_no_due_tasks_does_nothing(gui, monkeypatch):
+    import custom_tasks_manager as ctm
+    monkeypatch.setattr(ctm, "load_custom_tasks", lambda: [])
+    monkeypatch.setattr(ctm, "get_due_tasks", lambda tasks: [])
+    run_calls = []
+    monkeypatch.setattr(tqa, "run_queue_now", lambda *a, **kw: run_calls.append(1))
+    gui.app._run_due_tasks()
+    _pump(gui)
+    assert len(run_calls) == 0
+
+
+def test_run_due_tasks_falls_back_to_clipboard_when_cli_missing(gui, monkeypatch, dialogs):
+    import custom_tasks_manager as ctm
+    monkeypatch.setattr(ctm, "load_custom_tasks", lambda: [])
+    monkeypatch.setattr(ctm, "get_due_tasks", lambda tasks: [{"id": "t1"}])
+    monkeypatch.setattr(ctm, "tasks_to_queue_entries",
+                         lambda due: [{"task_id": "t1", "prompt": "x"}])
+    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: False)
+
+    run_calls = []
+    monkeypatch.setattr(tqa, "run_queue_now", lambda *a, **kw: run_calls.append(1))
+    dialogs.reset()
+    gui.app._run_due_tasks()
+    _pump(gui)
+
+    # Falls back to the original flow: no direct run attempted, and the
+    # informational dialog fires instead — button stays usable, it just
+    # can't run automatically without the CLI.
+    assert len(run_calls) == 0
+    assert dialogs.last_call("showinfo") is not None
+    assert "Claude Code CLI isn't installed" in dialogs.last_call("showinfo")["message"]
+
+
+def test_run_due_tasks_runs_directly_when_cli_installed(gui, monkeypatch, dialogs):
+    import custom_tasks_manager as ctm
+    monkeypatch.setattr(ctm, "load_custom_tasks", lambda: [])
+    monkeypatch.setattr(ctm, "get_due_tasks", lambda tasks: [{"id": "t1"}])
+    monkeypatch.setattr(ctm, "tasks_to_queue_entries",
+                         lambda due: [{"task_id": "t1", "prompt": "x"}])
+    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: True)
+
+    # Run the background thread synchronously so the test doesn't need to
+    # sleep/poll for completion — threading.Thread is the same stdlib
+    # singleton rag_gui.py itself imports, so this patch reaches it too.
+    import threading
+    monkeypatch.setattr(threading, "Thread",
+                         lambda target, daemon: type("T", (), {"start": lambda self: target()})())
+
+    run_calls = []
+    def _fake_run_queue_now(*a, **kw):
+        run_calls.append(a)
+        return True, "2 tasks processed successfully."
+    monkeypatch.setattr(tqa, "run_queue_now", _fake_run_queue_now)
+
+    dialogs.reset()
+    gui.app._run_due_tasks()
+    _pump(gui)
+
+    assert len(run_calls) == 1
+    info = dialogs.last_call("showinfo")
+    assert info is not None
+    assert "2 tasks processed successfully" in info["message"]
+    # Button must be re-enabled after the run finishes, not left disabled.
+    assert str(gui.app._run_due_btn.cget("state")) == "normal"
+
+
+def test_run_due_tasks_shows_error_dialog_on_failed_run(gui, monkeypatch, dialogs):
+    import custom_tasks_manager as ctm
+    monkeypatch.setattr(ctm, "load_custom_tasks", lambda: [])
+    monkeypatch.setattr(ctm, "get_due_tasks", lambda tasks: [{"id": "t1"}])
+    monkeypatch.setattr(ctm, "tasks_to_queue_entries",
+                         lambda due: [{"task_id": "t1", "prompt": "x"}])
+    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: True)
+
+    import threading
+    monkeypatch.setattr(threading, "Thread",
+                         lambda target, daemon: type("T", (), {"start": lambda self: target()})())
+
+    monkeypatch.setattr(tqa, "run_queue_now",
+                         lambda *a, **kw: (False, "MCP server unreachable"))
+
+    dialogs.reset()
+    gui.app._run_due_tasks()
+    _pump(gui)
+
+    err = dialogs.last_call("showerror")
+    assert err is not None
+    assert "MCP server unreachable" in err["message"]
+    assert str(gui.app._run_due_btn.cget("state")) == "normal"
