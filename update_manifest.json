@@ -1,11 +1,11 @@
 {
   "version": "8.1.8",
-  "generated": "2026-07-21T08:10:14",
+  "generated": "2026-07-21T09:42:53",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "b78a7e826bd26423ba62a5bd3981b514ba513ddf412b70a54edfa817b89ad635",
-      "bytes": 1124057
+      "sha256": "6eb940ed72459bf11f865d17541827c351b8089016289ffc16c830884a2812a2",
+      "bytes": 1125584
     },
     {
       "path": "rag_preprocessor.py",
@@ -124,8 +124,8 @@
     },
     {
       "path": "task_queue_automation.py",
-      "sha256": "f2bcdf544dffdef9434d5f05e1d0ed4c833a86bd958a7d4f340c4d430b42efdd",
-      "bytes": 23505
+      "sha256": "41190ebdf67c31b5e656d4c30211ac42bcfdff1d4008db4e57ed80bdfccb2c92",
+      "bytes": 24434
     },
     {
       "path": ".claude/settings.json",
