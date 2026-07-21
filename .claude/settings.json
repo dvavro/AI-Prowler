@@ -1,0 +1,19 @@
+{
+  "_comment": "Project-local Claude Code settings for the AI-Prowler autonomous task runner. Scoped to THIS project only — does not modify your global ~/.claude/settings.json.",
+
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "mcp__ai-prowler__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"${CLAUDE_PROJECT_DIR}/.claude/hooks/log_tool_call.py\""
+          }
+        ]
+      }
+    ]
+  },
+
+  "_permission_note": "The unattended runner passes --allowedTools 'mcp__ai-prowler__*' explicitly on the command line (see task_queue_automation.py build_wrapper_script_content) rather than relying on this file's permissions block, so scoping is visible and testable independent of local settings drift."
+}

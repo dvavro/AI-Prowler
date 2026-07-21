@@ -1,11 +1,11 @@
 {
-  "version": "8.1.7",
-  "generated": "2026-07-19T18:29:13",
+  "version": "8.1.8",
+  "generated": "2026-07-21T08:10:14",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "f4b448d42ad709eb9e560997774ececb8e7ef7ec7d837299e121f95cf9c6e475",
-      "bytes": 1104747
+      "sha256": "b78a7e826bd26423ba62a5bd3981b514ba513ddf412b70a54edfa817b89ad635",
+      "bytes": 1124057
     },
     {
       "path": "rag_preprocessor.py",
@@ -59,12 +59,12 @@
     },
     {
       "path": "COMPLETE_USER_GUIDE.md",
-      "sha256": "6533ff4ef7a58908768c5323864329298df3f9113d57a48bb2975c4d4433561e",
+      "sha256": "ae497ff74791c39ce3df9f566ff73b61d4c93d96976e6c48c85eb5051a252526",
       "bytes": 151605
     },
     {
       "path": "VERSION",
-      "sha256": "2dbaf0ad12d61e3feedaf093601bac7f10c4126ba4a030a25992ebb72583d977",
+      "sha256": "dc414cbcb8b38a60feb129bdba8e6df2018ea4edc32d0e793bced6aabeb7e510",
       "bytes": 6
     },
     {
@@ -121,6 +121,26 @@
       "path": "scheduler_engine.py",
       "sha256": "a7526e7fe24b7b00371eeabfafa01c75b8e8d55545f2a6ac504ca613ab5b680b",
       "bytes": 16916
+    },
+    {
+      "path": "task_queue_automation.py",
+      "sha256": "f2bcdf544dffdef9434d5f05e1d0ed4c833a86bd958a7d4f340c4d430b42efdd",
+      "bytes": 23505
+    },
+    {
+      "path": ".claude/settings.json",
+      "sha256": "a3ba3cba57dab651df6386560954fbfe2d2e554197d4828b27ef3c2e1e2fa6cc",
+      "bytes": 768
+    },
+    {
+      "path": ".claude/hooks/log_tool_call.py",
+      "sha256": "6148406abaa4aba9a03e61b532a232592754bcf18cfd38d27717cda1823193f1",
+      "bytes": 1646
+    },
+    {
+      "path": ".claude/skills/ai-prowler-tasks/SKILL.md",
+      "sha256": "76335116103bb76c9a249e0223fb402fd1cbb73541a368815316b1109005be03",
+      "bytes": 4005
     }
   ]
 }

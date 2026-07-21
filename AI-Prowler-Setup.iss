@@ -152,7 +152,8 @@
 ; NOTES:
 ;   - Installer requires admin privileges
 ;   - Installer is fully self-contained and does not require internet
-;     except for the optional Tesseract OCR download and Cloudflare Tunnel
+;     except for the optional Tesseract OCR download, Claude Code CLI
+;     native installer, and Cloudflare Tunnel
 ;   - No AI model download during install — Claude Desktop is the primary
 ;     AI engine; local Ollama models can be added later from within the app
 ; ============================================================
@@ -161,7 +162,7 @@
 
 [Setup]
 AppName=AI-Prowler
-AppVersion=8.1.7
+AppVersion=8.1.8
 ; AppId pins the upgrade identity so Inno reliably detects prior installations
 ; of any version and runs only OUR uninstaller — never a mismatched one.
 ; Must remain constant across all future releases (do NOT change this GUID).
@@ -253,6 +254,15 @@ Source: "custom_tasks_manager.py"; DestDir: "{app}"; Flags: ignoreversion
 ;                       Personal mode only — server mode GUI guard prevents loading.
 Source: "scheduler_jobs.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "scheduler_engine.py"; DestDir: "{app}"; Flags: ignoreversion
+; task_queue_automation.py + .claude\ — Autonomous Task Queue automation
+; (Settings/Quick Links panel). Runs AI-Prowler's pending analysis task
+; queue unattended via Claude Code headless CLI on a Windows Scheduled
+; Task. See task_queue_automation.py's own module docstring for the full
+; design reference (architecture spec in AI-Prowler-ADMIN).
+Source: "task_queue_automation.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: ".claude\settings.json"; DestDir: "{app}\.claude"; Flags: ignoreversion
+Source: ".claude\hooks\log_tool_call.py"; DestDir: "{app}\.claude\hooks"; Flags: ignoreversion
+Source: ".claude\skills\ai-prowler-tasks\SKILL.md"; DestDir: "{app}\.claude\skills\ai-prowler-tasks"; Flags: ignoreversion
 ; --- Full Python installer bundled into {app} so Exec() can find it ---
 Source: "python-3.11.8-amd64.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; NOTE: Ollama is downloaded from the internet at install time, not bundled here
@@ -1316,6 +1326,7 @@ var
   McpPythonPath, McpScriptPath, McpConfigJson, McpConfigFile: String;
   PsFile, PsContents: String;
   WaitSeconds, TessElapsed, TessResultCode: Integer;
+  ClaudeCodeCheckResult, ClaudeCodeInstallResult: Integer;
   MsgDummy: DWORD;
   PythonReady: Boolean;
 begin
@@ -2029,6 +2040,81 @@ begin
     begin
       AppendInstallLog('[Tesseract] Already installed  -  skipping.');
       SetProgress(86, 'Tesseract already installed  -  skipping...');
+    end;
+
+    // ----------------------------------------------------------
+    // CLAUDE CODE CLI  (progress 87 -> 89)
+    // Installs Anthropic's official native CLI installer — a single,
+    // dependency-free command as of the May 2026 install method (no
+    // Node.js/npm required, unlike the old npm-based install path).
+    // Powers the Autonomous Task Queue automation feature (Settings →
+    // Quick Links) — headless `claude -p` runs on a schedule. Most
+    // AI-Prowler users won't touch that feature, but installing this
+    // unconditionally (like Tesseract above) means it's just there and
+    // working if/when they do, with no separate manual install step.
+    //
+    // Best-effort, matching the Tesseract/Cloudflared pattern in this
+    // script: logs failures and continues the AI-Prowler install either
+    // way — this is never allowed to block installation of AI-Prowler
+    // itself. Skipped entirely if `claude` is already resolvable on
+    // PATH (e.g. a developer who already has it via npm).
+    //
+    // NOTE: this installs the CLI binary only. Authentication (either
+    // `claude setup-token` for a Pro/Max subscription, or an API key)
+    // still requires the user's own action — AI-Prowler's "Get / Renew
+    // Token" button in the Autonomous Task Queue panel handles pointing
+    // them at that step; see task_queue_automation.py.
+    // ----------------------------------------------------------
+    Exec('cmd.exe', '/C where claude >nul 2>nul', '', SW_HIDE,
+      ewWaitUntilTerminated, ClaudeCodeCheckResult);
+
+    if ClaudeCodeCheckResult = 0 then
+    begin
+      AppendInstallLog('[Claude Code] Already on PATH  -  skipping install.');
+      SetProgress(89, 'Claude Code CLI already installed  -  skipping...');
+    end
+    else
+    begin
+      SetProgress(87, 'Installing Claude Code CLI...');
+      AppendInstallLog('[Claude Code] Not found on PATH  -  running native installer...');
+
+      Exec('powershell.exe',
+        '-NoProfile -ExecutionPolicy Bypass -Command "' +
+          '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; ' +
+          'irm https://claude.ai/install.ps1 | iex"',
+        '', SW_HIDE, ewWaitUntilTerminated, ClaudeCodeInstallResult);
+      AppendInstallLog('[Claude Code] Installer exit code: '
+        + IntToStr(ClaudeCodeInstallResult));
+
+      // Re-check rather than trusting the exit code alone — the native
+      // installer's own exit-code reliability isn't something we've
+      // independently verified, so confirming `claude` actually resolves
+      // afterward is the real signal, same philosophy as everywhere else
+      // in this file that trusts observed state over a reported result.
+      Exec('cmd.exe', '/C where claude >nul 2>nul', '', SW_HIDE,
+        ewWaitUntilTerminated, ClaudeCodeCheckResult);
+
+      if ClaudeCodeCheckResult = 0 then
+      begin
+        AppendInstallLog('[Claude Code] Install verified  -  claude is on PATH.');
+        SetProgress(89, 'Claude Code CLI installed.');
+
+        // Same PATH-broadcast fix documented above for Tesseract — a
+        // freshly-opened terminal needs this to see the updated PATH
+        // without a logoff/logon.
+        SendMessageTimeoutA(HWND_BROADCAST, WM_SETTINGCHANGE, 0,
+          'Environment', SMTO_ABORTIFHUNG, 5000, MsgDummy);
+        AppendInstallLog('[Claude Code] Broadcast WM_SETTINGCHANGE - '
+          + 'new terminals will see it on PATH immediately.');
+      end
+      else
+      begin
+        AppendInstallLog('[Claude Code] Install could not be verified  -  '
+          + 'claude is still not resolvable on PATH.');
+        AppendInstallLog('[Claude Code] Autonomous Task Queue automation will show '
+          + 'this as unavailable until installed manually from claude.ai/install.ps1.');
+        SetProgress(89, 'Claude Code CLI install failed  -  continuing...');
+      end;
     end;
 
     // ----------------------------------------------------------

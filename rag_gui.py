@@ -92,7 +92,7 @@ if sys.stderr is None:
 # Single source of truth for the app version. Bump this one line when releasing
 # a new version; all UI labels, About dialogs, help text, and update checks
 # read from here.
-APP_VERSION = "8.1.7"
+APP_VERSION = "8.1.8"
 
 # ── UI feature flags ─────────────────────────────────────────────────────────
 # Toggle visibility of advanced/legacy GUI sections without removing any
@@ -6854,6 +6854,392 @@ or from the Help menu."""
                     and not _sched_eng.is_running():
                 _sched_eng.start()
             _refresh_engine_status()
+
+        # ── 🤖 Autonomous Task Queue ──────────────────────────────────────────
+        # Runs AI-Prowler's pending analysis task queue (Common Business AI
+        # Analysis / My Custom Analyses, above) unattended, via Claude Code
+        # headless mode on a Windows Scheduled Task — closing the "pull-based,
+        # not autonomous" gap documented for create_analysis_task. Design doc:
+        # AI-Prowler-ADMIN\autonomous-task-execution-architecture-spec.md
+        #
+        # Everything this panel writes lives under ~/.ai-prowler/ — it never
+        # touches the AI-Prowler install directory itself. The Scheduled Task
+        # is only created/enabled when the user explicitly clicks Enable;
+        # nothing here runs automatically just from opening this tab.
+        try:
+            import task_queue_automation as _tqa
+            _tqa_available = True
+        except ImportError:
+            _tqa_available = False
+
+        _tqa_banner = tk.Frame(query_frame, bg='#1a1e2e',
+                               highlightthickness=1,
+                               highlightbackground='#2e3a5a')
+        _tqa_banner.pack(fill='x', padx=20, pady=(0, 8))
+
+        _tqa_inner = tk.Frame(_tqa_banner, bg='#1a1e2e')
+        _tqa_inner.pack(fill='x', padx=14, pady=10)
+
+        _tqa_hdr = tk.Frame(_tqa_inner, bg='#1a1e2e')
+        _tqa_hdr.pack(fill='x', pady=(0, 6))
+
+        tk.Label(_tqa_hdr,
+                 text="🤖  Autonomous Task Queue",
+                 bg='#1a1e2e', fg='#ffffff',
+                 font=('Arial', 11, 'bold'),
+                 anchor='w').pack(side='left')
+
+        _tqa_status_var = tk.StringVar(value="● Disabled")
+        _tqa_status_lbl = tk.Label(_tqa_hdr, textvariable=_tqa_status_var,
+                                    bg='#1a1e2e', fg='#aa4444',
+                                    font=('Arial', 8), anchor='e')
+        _tqa_status_lbl.pack(side='right')
+
+        tk.Label(_tqa_inner,
+                 text="Runs your queued analysis tasks on a schedule via Claude Code, "
+                      "without opening a chat and pasting the run command yourself.",
+                 bg='#1a1e2e', fg='#a0a8cc',
+                 font=('Arial', 8),
+                 wraplength=680, justify='left').pack(anchor='w', pady=(0, 8))
+
+        if not _tqa_available:
+            self._tqa_available = False
+            tk.Label(_tqa_inner,
+                     text="⚠️  task_queue_automation.py not found — "
+                          "copy it to the AI-Prowler install directory.",
+                     bg='#1a1e2e', fg='#cc8800',
+                     font=('Arial', 8)).pack(anchor='w')
+        else:
+            _tqa_cfg = _tqa.load_config()
+
+            # ── Claude Code CLI presence row ─────────────────────────────────
+            # Shown first — nothing else in this panel works without this.
+            # Matters most for existing users who updated in-place rather than
+            # via a fresh installer run: AI-Prowler-Setup.iss installs this
+            # silently on a *fresh* install, but an in-app update never runs
+            # that installer logic, so this can genuinely be missing here even
+            # though the rest of the panel exists.
+            _tqa_cli_row = tk.Frame(_tqa_inner, bg='#1a1e2e')
+            _tqa_cli_row.pack(fill='x', pady=(0, 6))
+            _tqa_cli_var = tk.StringVar(value="⬤ Checking…")
+            _tqa_cli_lbl = tk.Label(_tqa_cli_row, textvariable=_tqa_cli_var,
+                                     bg='#1a1e2e', fg='#aaaaaa', font=('Arial', 9))
+            _tqa_cli_lbl.pack(side='left')
+
+            def _tqa_refresh_cli_status():
+                if _tqa.claude_code_cli_installed():
+                    _tqa_cli_var.set("⬤ Claude Code CLI: Installed")
+                    _tqa_cli_lbl.config(fg='#6ab86a')
+                else:
+                    _tqa_cli_var.set("⬤ Claude Code CLI: Not Installed")
+                    _tqa_cli_lbl.config(fg='#cc4444')
+
+            def _tqa_install_cli():
+                _tqa_cli_var.set("⬤ Installing… (may take a moment)")
+                _tqa_cli_lbl.config(fg='#cc8800')
+                self.root.update()
+                ok, detail = _tqa.install_claude_code_cli()
+                if ok:
+                    messagebox.showinfo("Claude Code CLI", detail)
+                else:
+                    messagebox.showerror("Install Failed", detail)
+                _tqa_refresh_cli_status()
+
+            ttk.Button(_tqa_cli_row, text="⬇ Install Claude Code CLI",
+                       command=_tqa_install_cli).pack(side='left', padx=(10, 0))
+            _tqa_refresh_cli_status()
+
+            _tqa_enabled_var  = tk.BooleanVar(value=_tqa_cfg.get("enabled", False))
+            _tqa_time_var     = tk.StringVar(value=_tqa_cfg.get("schedule_time", "06:00"))
+            _tqa_notify_var   = tk.BooleanVar(value=_tqa_cfg.get("notify_on_complete", False))
+            _tqa_method_var   = tk.StringVar(value=_tqa_cfg.get("notify_method", "sms"))
+
+            def _tqa_refresh_status_display():
+                if _tqa.scheduled_task_exists() and _tqa_cfg.get("enabled"):
+                    _tqa_status_var.set("● Enabled")
+                    _tqa_status_lbl.config(fg='#6ab86a')
+                else:
+                    _tqa_status_var.set("● Disabled")
+                    _tqa_status_lbl.config(fg='#aa4444')
+                _last = _tqa.load_last_run()
+                if _last:
+                    _tqa_last_run_var.set(
+                        f"Last: {_last.get('status', '?')} — {_last.get('detail', '')} "
+                        f"({_last.get('timestamp', '')[:19]})")
+                else:
+                    _tqa_last_run_var.set("Last: (never run)")
+
+                # Token/key status shown proactively, not just on Test Setup
+                # click — this is the "how does the user know" answer, not a
+                # hidden detail buried in a dry-run report only checked on
+                # demand. Branches on which auth method is active.
+                if _tqa_cfg.get("use_api_key"):
+                    if _tqa.has_api_key():
+                        _tqa_token_var.set("🔑 API key configured (metered billing)")
+                        _tqa_token_lbl.config(fg='#6ab86a')
+                    else:
+                        _tqa_token_var.set("🔑 No API key saved yet — enter one below and Save Key")
+                        _tqa_token_lbl.config(fg='#cc8800')
+                    return
+                _tok = _tqa.check_token_expiry()
+                if _tok["status"] == "no_credentials":
+                    _tqa_token_var.set("🔑 No Claude Code token yet — click Get / Renew Token")
+                    _tqa_token_lbl.config(fg='#cc8800')
+                elif _tok["status"] == "expired":
+                    _tqa_token_var.set(f"🔑 Token EXPIRED — {_tok['detail']}")
+                    _tqa_token_lbl.config(fg='#cc4444')
+                elif _tok["status"] == "expiring_soon":
+                    _tqa_token_var.set(f"🔑 Token expiring soon — {_tok['detail']}")
+                    _tqa_token_lbl.config(fg='#cc8800')
+                elif _tok["status"] == "unreadable":
+                    _tqa_token_var.set(f"🔑 Token status unknown — {_tok['detail']}")
+                    _tqa_token_lbl.config(fg='#aaaaaa')
+                else:
+                    _tqa_token_var.set(f"🔑 Token OK — {_tok['detail']}")
+                    _tqa_token_lbl.config(fg='#6ab86a')
+
+            _tqa_row1 = tk.Frame(_tqa_inner, bg='#1a1e2e')
+            _tqa_row1.pack(fill='x', pady=(0, 4))
+            tk.Checkbutton(_tqa_row1, text="Enable scheduled runs",
+                           variable=_tqa_enabled_var, bg='#1a1e2e', fg='#ffffff',
+                           selectcolor='#1a1e2e', activebackground='#1a1e2e',
+                           font=('Arial', 9)).pack(side='left')
+            tk.Label(_tqa_row1, text="  at", bg='#1a1e2e', fg='#a0a8cc',
+                     font=('Arial', 9)).pack(side='left')
+            tk.Entry(_tqa_row1, textvariable=_tqa_time_var, width=6,
+                     font=('Arial', 9)).pack(side='left', padx=(4, 2))
+            tk.Label(_tqa_row1, text="(24h HH:MM, daily)", bg='#1a1e2e', fg='#6a7a9a',
+                     font=('Arial', 8)).pack(side='left')
+
+            _tqa_row2 = tk.Frame(_tqa_inner, bg='#1a1e2e')
+            _tqa_row2.pack(fill='x', pady=(0, 6))
+            tk.Checkbutton(_tqa_row2, text="Text me when a run finishes",
+                           variable=_tqa_notify_var, bg='#1a1e2e', fg='#ffffff',
+                           selectcolor='#1a1e2e', activebackground='#1a1e2e',
+                           font=('Arial', 9)).pack(side='left')
+            ttk.Combobox(_tqa_row2, textvariable=_tqa_method_var,
+                        values=["sms", "whatsapp"], width=9,
+                        state='readonly').pack(side='left', padx=(6, 0))
+
+            # ── Auth method: OAuth subscription token vs. API key ────────────
+            # Same agentic/MCP tool access either way — this is purely a
+            # billing + reliability tradeoff (see spec §5.3). Radio buttons
+            # rather than a checkbox since exactly one must be active.
+            _tqa_auth_var = tk.StringVar(
+                value="api_key" if _tqa_cfg.get("use_api_key") else "oauth")
+
+            _tqa_row3 = tk.Frame(_tqa_inner, bg='#1a1e2e')
+            _tqa_row3.pack(fill='x', pady=(0, 4))
+            tk.Label(_tqa_row3, text="Auth:", bg='#1a1e2e', fg='#a0a8cc',
+                     font=('Arial', 9)).pack(side='left')
+            tk.Radiobutton(_tqa_row3, text="Subscription (OAuth)",
+                           variable=_tqa_auth_var, value="oauth",
+                           bg='#1a1e2e', fg='#ffffff', selectcolor='#1a1e2e',
+                           activebackground='#1a1e2e',
+                           font=('Arial', 9)).pack(side='left', padx=(4, 0))
+            tk.Radiobutton(_tqa_row3, text="API Key (metered billing)",
+                           variable=_tqa_auth_var, value="api_key",
+                           bg='#1a1e2e', fg='#ffffff', selectcolor='#1a1e2e',
+                           activebackground='#1a1e2e',
+                           font=('Arial', 9)).pack(side='left', padx=(4, 0))
+
+            _tqa_row4 = tk.Frame(_tqa_inner, bg='#1a1e2e')
+            _tqa_row4.pack(fill='x', pady=(0, 4))
+            tk.Label(_tqa_row4, text="API key:", bg='#1a1e2e', fg='#a0a8cc',
+                     font=('Arial', 9)).pack(side='left')
+            _tqa_apikey_var = tk.StringVar(
+                value="••••••••" if _tqa.has_api_key() else "")
+            _tqa_apikey_entry = tk.Entry(_tqa_row4, textvariable=_tqa_apikey_var,
+                                          width=40, show='•', font=('Arial', 9))
+            _tqa_apikey_entry.pack(side='left', padx=(4, 4))
+
+            def _tqa_save_api_key():
+                val = _tqa_apikey_var.get().strip()
+                if not val or val == "••••••••":
+                    messagebox.showwarning("No Key Entered",
+                                            "Type a key into the field first.")
+                    return
+                _tqa.save_api_key(val)
+                _tqa_apikey_var.set("••••••••")
+                messagebox.showinfo("Saved", "API key saved. It is never "
+                                     "displayed again or logged anywhere — "
+                                     "re-enter it if you need to change it.")
+                _tqa_refresh_status_display()
+
+            ttk.Button(_tqa_row4, text="Save Key",
+                       command=_tqa_save_api_key).pack(side='left', padx=(0, 6))
+
+            def _tqa_open_api_key_console():
+                import webbrowser
+                webbrowser.open("https://console.anthropic.com/settings/keys")
+
+            ttk.Button(_tqa_row4, text="🌐 Get an API Key",
+                       command=_tqa_open_api_key_console).pack(side='left')
+
+            _tqa_last_run_var = tk.StringVar(value="Last: (never run)")
+            tk.Label(_tqa_inner, textvariable=_tqa_last_run_var,
+                     bg='#1a1e2e', fg='#8a92b8', font=('Arial', 8),
+                     anchor='w').pack(fill='x', pady=(0, 2))
+
+            _tqa_token_var = tk.StringVar(value="🔑 Checking token…")
+            _tqa_token_lbl = tk.Label(_tqa_inner, textvariable=_tqa_token_var,
+                                       bg='#1a1e2e', fg='#8a92b8', font=('Arial', 8),
+                                       anchor='w')
+            _tqa_token_lbl.pack(fill='x', pady=(0, 6))
+
+            _tqa_checklist_frame = tk.Frame(_tqa_inner, bg='#0e0e1e', bd=1, relief='sunken')
+            # Not packed until a dry run has actually been requested.
+
+            def _tqa_render_checklist(report):
+                for w in _tqa_checklist_frame.winfo_children():
+                    w.destroy()
+                for c in report["checks"]:
+                    icon = "✅" if c["ok"] else "❌"
+                    tk.Label(_tqa_checklist_frame,
+                             text=f"{icon} {c['name']}: {c['detail']}",
+                             bg='#0e0e1e', fg=('#6ab86a' if c["ok"] else '#cc6666'),
+                             font=('Arial', 8), anchor='w',
+                             wraplength=650, justify='left').pack(anchor='w', padx=6, pady=1)
+                if not _tqa_checklist_frame.winfo_ismapped():
+                    _tqa_checklist_frame.pack(fill='x', pady=(0, 6))
+
+            def _tqa_test_setup():
+                _tqa_status_var.set("⏳ Testing…")
+                self.root.update()
+                report = _tqa.dry_run_check()
+                _tqa_render_checklist(report)
+                _tqa_refresh_status_display()
+
+            def _tqa_view_audit_log():
+                _log_win = tk.Toplevel(self.root)
+                _log_win.title("Autonomous Task Queue — Audit Log")
+                _log_win.geometry("700x450")
+                import tkinter.scrolledtext as _st
+                _lt = _st.ScrolledText(_log_win, font=('Courier', 8),
+                                       wrap='word', bg='#0e0e0e', fg='#cccccc')
+                _lt.pack(fill='both', expand=True, padx=8, pady=8)
+                _lt.insert('1.0', _tqa.read_audit_log_tail(200))
+                _lt.configure(state='disabled')
+
+            def _tqa_save_and_apply():
+                """Enable/disable is the one action here that actually touches
+                the Scheduled Task — everything else (checkboxes, time field)
+                is just config until this runs."""
+                cfg = dict(_tqa_cfg)
+                cfg["enabled"]            = _tqa_enabled_var.get()
+                cfg["schedule_time"]      = _tqa_time_var.get().strip() or "06:00"
+                cfg["notify_on_complete"] = _tqa_notify_var.get()
+                cfg["notify_method"]      = _tqa_method_var.get()
+                cfg["use_api_key"]        = (_tqa_auth_var.get() == "api_key")
+
+                if cfg["use_api_key"] and not _tqa.has_api_key():
+                    messagebox.showwarning(
+                        "API Key Needed",
+                        "API Key auth is selected but no key is saved yet. "
+                        "Enter one in the API key field and click Save Key "
+                        "first.\n\nSaving other settings now, but scheduled "
+                        "runs won't work until a key is added.")
+
+                if not cfg.get("mcp_config_path"):
+                    messagebox.showwarning(
+                        "MCP Config Needed",
+                        "No MCP config path is set yet for the headless runner. "
+                        "See the architecture spec (AI-Prowler-ADMIN) for how to "
+                        "generate one with `claude setup-token`.\n\n"
+                        "Saving settings, but scheduled runs won't start until "
+                        "that's configured.")
+
+                _tqa.save_config(cfg)
+                _tqa_cfg.update(cfg)
+
+                if cfg["enabled"] and cfg.get("mcp_config_path"):
+                    wrapper_dir = _tqa.AI_PROWLER_HOME
+                    wrapper = _tqa.install_wrapper_script(
+                        wrapper_dir, cfg["mcp_config_path"], cfg["allowed_tools"],
+                        cfg["notify_on_complete"], cfg["notify_method"],
+                        cfg["use_api_key"])
+                    ok, detail = _tqa.install_scheduled_task(
+                        wrapper, cfg["schedule_time"], enabled=True)
+                    if not ok:
+                        messagebox.showerror("Could Not Enable", detail)
+                        cfg["enabled"] = False
+                        _tqa.save_config(cfg)
+                        _tqa_cfg.update(cfg)
+                elif not cfg["enabled"]:
+                    _tqa.uninstall_scheduled_task()
+
+                _tqa_refresh_status_display()
+
+            _tqa_btn_row = tk.Frame(_tqa_inner, bg='#1a1e2e')
+            _tqa_btn_row.pack(fill='x', pady=(4, 0))
+            ttk.Button(_tqa_btn_row, text="💾 Save",
+                       command=_tqa_save_and_apply).pack(side='left', padx=(0, 6))
+            ttk.Button(_tqa_btn_row, text="🧪 Test Setup (Dry Run)",
+                       command=_tqa_test_setup).pack(side='left', padx=(0, 6))
+            ttk.Button(_tqa_btn_row, text="📄 View Audit Log",
+                       command=_tqa_view_audit_log).pack(side='left', padx=(0, 6))
+
+            def _tqa_get_token():
+                ok, detail = _tqa.open_setup_token_terminal()
+                if not ok:
+                    messagebox.showerror("Could Not Open Terminal", detail)
+                else:
+                    messagebox.showinfo(
+                        "Complete Sign-In",
+                        "A terminal window opened running `claude setup-token`.\n\n"
+                        "Complete the browser sign-in it prompts for, then come "
+                        "back here and click Test Setup (Dry Run) to confirm.")
+
+            ttk.Button(_tqa_btn_row, text="🔑 Get / Renew Token",
+                       command=_tqa_get_token).pack(side='left', padx=(0, 6))
+
+            def _tqa_generate_mcp_config():
+                ok, result = _tqa.generate_mcp_config()
+                if not ok:
+                    messagebox.showerror("Could Not Generate Config", result)
+                    return
+                cfg = dict(_tqa_cfg)
+                cfg["mcp_config_path"] = result
+                _tqa.save_config(cfg)
+                _tqa_cfg["mcp_config_path"] = result
+                messagebox.showinfo(
+                    "MCP Config Generated",
+                    f"Written to:\n{result}\n\n"
+                    f"Pulled from your saved Bearer Token and tunnel domain "
+                    f"(Settings → Remote Access) — same credentials the "
+                    f"Claude.ai connector uses.")
+                _tqa_refresh_status_display()
+
+            ttk.Button(_tqa_btn_row, text="🔧 Generate MCP Config",
+                       command=_tqa_generate_mcp_config).pack(side='left')
+
+            # Exposed on self so tests/gui/*.py can drive this panel the
+            # same way tests/gui/test_http_uptime.py drives the uptime
+            # feature — these were plain closures before, unreachable
+            # from outside this method, which is exactly why no GUI test
+            # existed for this panel until now.
+            self._tqa_available        = _tqa_available
+            self._tqa_cfg               = _tqa_cfg
+            self._tqa_enabled_var      = _tqa_enabled_var
+            self._tqa_time_var         = _tqa_time_var
+            self._tqa_notify_var       = _tqa_notify_var
+            self._tqa_method_var       = _tqa_method_var
+            self._tqa_auth_var         = _tqa_auth_var
+            self._tqa_apikey_var       = _tqa_apikey_var
+            self._tqa_status_var       = _tqa_status_var
+            self._tqa_token_var        = _tqa_token_var
+            self._tqa_cli_var          = _tqa_cli_var
+            self._tqa_last_run_var     = _tqa_last_run_var
+            self._tqa_refresh_status_display = _tqa_refresh_status_display
+            self._tqa_refresh_cli_status     = _tqa_refresh_cli_status
+            self._tqa_install_cli            = _tqa_install_cli
+            self._tqa_save_and_apply         = _tqa_save_and_apply
+            self._tqa_test_setup             = _tqa_test_setup
+            self._tqa_save_api_key           = _tqa_save_api_key
+            self._tqa_generate_mcp_config    = _tqa_generate_mcp_config
+
+            _tqa_refresh_status_display()
+
         # When SUPPORT_LOCAL_HW_LLM is False, all of the input/attachment/
         # provider/answer widgets below are constructed but never packed —
         # they live in an off-screen "hidden_root" Frame. Back-end code can

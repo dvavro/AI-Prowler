@@ -570,6 +570,14 @@ MANIFEST_FILES = [
     "custom_tasks_manager.py",
     "scheduler_jobs.py",
     "scheduler_engine.py",
+    # Added 2026-07-20: task_queue_automation.py + .claude/ — Autonomous Task
+    # Queue automation. Same class of bug as the 2026-07-09 fix above: these
+    # were added to AI-Prowler-Setup.iss's [Files] section but initially
+    # missed here too. Caught before a release shipped, this time.
+    "task_queue_automation.py",
+    ".claude/settings.json",
+    ".claude/hooks/log_tool_call.py",
+    ".claude/skills/ai-prowler-tasks/SKILL.md",
     # NOTE: rag_icon.ico and python-3.11.8-amd64.exe are intentionally excluded.
     # rag_icon.ico rarely changes and is large binary noise in the update.
     # python-3.11.8-amd64.exe is the bundled Python installer — it is never
