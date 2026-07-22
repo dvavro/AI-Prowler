@@ -28,10 +28,11 @@ never does).
 from __future__ import annotations
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 AI_PROWLER_HOME = Path.home() / ".ai-prowler"
@@ -144,6 +145,33 @@ if exist "{API_KEY_PATH}" (
     set /p ANTHROPIC_API_KEY=<"{API_KEY_PATH}"
 ) else (
     echo [ERROR] use_api_key is enabled but {API_KEY_PATH} was not found.
+    exit /b 1
+)
+
+"""
+    else:
+        # v8.1.6 second fix: `claude -p` in a Scheduled Task context has
+        # no interactive terminal and no guarantee of inheriting the same
+        # environment as an interactively-signed-in session, so it can't
+        # rely on ambient ~/.claude/.credentials.json the way a manual
+        # `claude` session would. CLAUDE_CODE_OAUTH_TOKEN is Claude Code's
+        # documented mechanism for exactly this — headless/CI auth via a
+        # setup-token-generated token. Read from OAUTH_TOKEN_PLAIN_PATH
+        # with a plain `set /p`, identical to the ANTHROPIC_API_KEY block
+        # above — the first attempt at this parsed JSON via a PowerShell
+        # one-liner invoked through `for /f` + backticks, which turned
+        # out to fail with cryptic "could not be parsed" errors despite
+        # valid JSON (nested-quoting fragility, same class of bug as the
+        # setup-token launch command itself — see
+        # build_setup_token_batch_content()'s docstring). Keeping the
+        # runtime read as simple as the already-proven API-key path
+        # avoids that whole category of problem.
+        api_key_block = f"""REM Use the Claude Code OAuth token captured from setup-token —
+REM see OAUTH_TOKEN_PLAIN_PATH / try_capture_setup_token() in task_queue_automation.py.
+if exist "{OAUTH_TOKEN_PLAIN_PATH}" (
+    set /p CLAUDE_CODE_OAUTH_TOKEN=<"{OAUTH_TOKEN_PLAIN_PATH}"
+) else (
+    echo [ERROR] No Claude Code OAuth token found — click Get / Renew Token in AI-Prowler first.
     exit /b 1
 )
 
@@ -378,6 +406,96 @@ def delete_api_key() -> None:
         API_KEY_PATH.unlink()
 
 
+# ── CLAUDE_CODE_OAUTH_TOKEN persistence (v8.1.6 fix) ──────────────────────
+# `claude setup-token` does NOT write ~/.claude/.credentials.json — that
+# file is only ever created by the interactive `claude login` flow. Per
+# Claude Code's own docs, setup-token instead PRINTS a one-year OAuth
+# token to the terminal and expects the caller to capture it and export
+# it as CLAUDE_CODE_OAUTH_TOKEN. The old check_token_expiry() checked
+# .credentials.json, so it failed unconditionally after every successful
+# setup-token sign-in — not a timing issue, the two mechanisms simply
+# never touch the same file. This section captures the printed token
+# from a redirected-output wrapper (see build_setup_token_launch_args)
+# and persists it the same way API_KEY_PATH already does, so the
+# headless wrapper .bat can `set CLAUDE_CODE_OAUTH_TOKEN=` from it at
+# runtime (see build_wrapper_script_content).
+
+OAUTH_TOKEN_PATH = AI_PROWLER_HOME / "claude_oauth_token.json"
+OAUTH_TOKEN_PLAIN_PATH = AI_PROWLER_HOME / "claude_oauth_token.txt"
+SETUP_TOKEN_OUTPUT_PATH = AI_PROWLER_HOME / "setup_token_output.txt"
+SETUP_TOKEN_BAT_PATH = AI_PROWLER_HOME / "run_setup_token.bat"
+OAUTH_TOKEN_LIFETIME_DAYS = 365  # per Claude Code docs: setup-token is one-year
+
+_OAUTH_TOKEN_PATTERN = re.compile(r"sk-ant-oat[A-Za-z0-9\-_]{10,}")
+
+
+def save_oauth_token(token: str, issued_at: datetime | None = None) -> None:
+    AI_PROWLER_HOME.mkdir(parents=True, exist_ok=True)
+    issued = issued_at or datetime.now(timezone.utc)
+    clean = token.strip()
+    OAUTH_TOKEN_PATH.write_text(json.dumps({
+        "token": clean,
+        "issued_at": issued.isoformat(),
+    }), encoding="utf-8")
+    # v8.1.6 second fix: build_wrapper_script_content() originally parsed
+    # this JSON at runtime via a PowerShell one-liner invoked through
+    # `for /f` + backticks — that combination of nested quoting turned
+    # out to be exactly as fragile as the setup-token launch command was
+    # (see build_setup_token_batch_content()'s docstring for the same
+    # class of bug), and failed with "the token could not be parsed"
+    # even though the JSON itself was completely valid. A plain-text
+    # mirror lets the .bat just `set /p` it, identical to how
+    # API_KEY_PATH already works — no external process, no quoting.
+    OAUTH_TOKEN_PLAIN_PATH.write_text(clean, encoding="utf-8")
+
+
+def load_oauth_token() -> str | None:
+    if not OAUTH_TOKEN_PATH.exists():
+        return None
+    try:
+        data = json.loads(OAUTH_TOKEN_PATH.read_text(encoding="utf-8"))
+        val = (data.get("token") or "").strip()
+        return val or None
+    except Exception:
+        return None
+
+
+def has_oauth_token() -> bool:
+    return load_oauth_token() is not None
+
+
+def delete_oauth_token() -> None:
+    if OAUTH_TOKEN_PATH.exists():
+        OAUTH_TOKEN_PATH.unlink()
+    if OAUTH_TOKEN_PLAIN_PATH.exists():
+        OAUTH_TOKEN_PLAIN_PATH.unlink()
+
+
+def try_capture_setup_token() -> bool:
+    """Opportunistically parses SETUP_TOKEN_OUTPUT_PATH (written by the
+    wrapper `cmd` launched from Get / Renew Token) for a printed OAuth
+    token. Called from check_token_expiry() so the very next Test Setup
+    (Dry Run) after sign-in picks it up automatically — no separate
+    'confirm' step needed. Deletes the output file once a token is
+    successfully captured, so a plaintext copy doesn't linger on disk
+    longer than necessary. Returns True if a new token was captured."""
+    if not SETUP_TOKEN_OUTPUT_PATH.exists():
+        return False
+    try:
+        text = SETUP_TOKEN_OUTPUT_PATH.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return False
+    match = _OAUTH_TOKEN_PATTERN.search(text)
+    if not match:
+        return False
+    save_oauth_token(match.group(0))
+    try:
+        SETUP_TOKEN_OUTPUT_PATH.unlink()
+    except Exception:
+        pass
+    return True
+
+
 # ── Claude Code CLI presence + install (for existing users who updated ──
 # in-place rather than via a fresh installer run — the installer's own
 # Pascal Script install step, see AI-Prowler-Setup.iss, only runs during
@@ -467,10 +585,10 @@ def run_queue_now(mcp_config_path: str, allowed_tools: str,
     or a plain-language reason it never ran."""
     if not claude_code_cli_installed():
         return False, ("Claude Code CLI is not installed. Install it from "
-                        "the 🤖 Autonomous Task Queue panel above, then try again.")
+                        "the 🤖 Autonomous AI Task Queue panel above, then try again.")
     if not mcp_config_path:
         return False, ("No MCP config is set up yet. Click 'Generate MCP "
-                        "Config' in the 🤖 Autonomous Task Queue panel above, "
+                        "Config' in the 🤖 Autonomous AI Task Queue panel above, "
                         "then try again.")
 
     wrapper_dir = AI_PROWLER_HOME / "manual_run"
@@ -491,6 +609,110 @@ def run_queue_now(mcp_config_path: str, allowed_tools: str,
     ok = (r.returncode == 0)
     _write_last_run("success" if ok else "failure",
                      f"Manual run — exit code {r.returncode}")
+    output = ((r.stdout or "") + (r.stderr or "")).strip()
+    if output:
+        return ok, output[-4000:]
+    return ok, ("Run completed." if ok else f"Run failed (exit code {r.returncode}), no output captured.")
+
+
+def build_single_prompt_wrapper_content(prompt: str, mcp_config_path: str,
+                                         allowed_tools: str,
+                                         use_api_key: bool = False) -> str:
+    """v8.1.6: like build_wrapper_script_content() but for an arbitrary
+    one-off PROMPT instead of the fixed queue-processing slash command —
+    backs the "▶ NOW" button on each Common Business AI Analysis item, so
+    a user can try one immediately without queuing it (no pending_tasks.json
+    entry at all — this never touches the queue).
+
+    Kept as a separate function rather than adding an optional prompt
+    parameter to build_wrapper_script_content(): the two wrappers do
+    genuinely different jobs (process the existing queue vs. run one
+    ad-hoc prompt right now) even though the auth-block plumbing is
+    identical — see that function's docstring for why each auth path
+    reads its credential from a file at runtime rather than embedding it.
+    Double-quotes in the prompt are escaped for the batch string.
+    """
+    api_key_block = ""
+    if use_api_key:
+        api_key_block = f"""REM Use ANTHROPIC_API_KEY — see build_wrapper_script_content()'s
+REM docstring for why this reads from a file at runtime.
+if exist "{API_KEY_PATH}" (
+    set /p ANTHROPIC_API_KEY=<"{API_KEY_PATH}"
+) else (
+    echo [ERROR] use_api_key is enabled but {API_KEY_PATH} was not found.
+    exit /b 1
+)
+
+"""
+    else:
+        api_key_block = f"""REM Use the Claude Code OAuth token — see build_wrapper_script_content()'s
+REM docstring for why this reads from a file at runtime.
+if exist "{OAUTH_TOKEN_PLAIN_PATH}" (
+    set /p CLAUDE_CODE_OAUTH_TOKEN=<"{OAUTH_TOKEN_PLAIN_PATH}"
+) else (
+    echo [ERROR] No Claude Code OAuth token found — click Get / Renew Token in AI-Prowler first.
+    exit /b 1
+)
+
+"""
+
+    escaped_prompt = prompt.replace('"', '""')
+    return f"""@echo off
+REM Auto-generated by task_queue_automation.py — do not edit by hand.
+REM Runs a single ad-hoc analysis prompt right now (the "▶ NOW" button) —
+REM never touches pending_tasks.json, unlike the scheduled queue wrapper.
+
+cd /d "%USERPROFILE%"
+
+{api_key_block}claude -p "{escaped_prompt}" ^
+  --mcp-config "{mcp_config_path}" ^
+  --allowedTools "{allowed_tools}" ^
+  --output-format json ^
+  --permission-mode acceptEdits > "%USERPROFILE%\\.ai-prowler\\last_single_run.json" 2>&1
+
+set RC=%ERRORLEVEL%
+exit /b %RC%
+"""
+
+
+def run_single_prompt_now(prompt: str, mcp_config_path: str, allowed_tools: str,
+                           use_api_key: bool = False,
+                           timeout: int = 600) -> tuple[bool, str]:
+    """v8.1.6: runs ONE ad-hoc prompt right now via a real headless Claude
+    Code session — backs the "▶ NOW" button on each Common Business AI
+    Analysis item so a user can try one before deciding whether to queue
+    it. Deliberately does NOT touch pending_tasks.json or
+    complete_analysis_task() bookkeeping — this is a trial run, not part
+    of the tracked queue. Written to its own single_run/ subfolder,
+    separate from both the Scheduled Task's wrapper and manual_run/ (see
+    run_queue_now()'s docstring), so none of the three ever collide.
+    Blocking — callers MUST invoke from a background thread, never
+    directly on the Tk main thread, same requirement as run_queue_now().
+    Returns (success, detail)."""
+    if not claude_code_cli_installed():
+        return False, ("Claude Code CLI is not installed. Install it from "
+                        "the 🤖 Autonomous AI Task Queue panel above, then try again.")
+    if not mcp_config_path:
+        return False, ("No MCP config is set up yet. See the 🤖 Autonomous "
+                        "AI Task Queue panel above (Test Setup (Dry Run) will "
+                        "show what's missing), then try again.")
+
+    wrapper_dir = AI_PROWLER_HOME / "single_run"
+    wrapper_dir.mkdir(parents=True, exist_ok=True)
+    script_path = wrapper_dir / "run_single_now.bat"
+    script_path.write_text(
+        build_single_prompt_wrapper_content(prompt, mcp_config_path, allowed_tools, use_api_key),
+        encoding="utf-8")
+
+    try:
+        r = subprocess.run([str(script_path)], capture_output=True,
+                            text=True, timeout=timeout, shell=True)
+    except subprocess.TimeoutExpired:
+        return False, f"Run timed out after {timeout}s — check your internet connection."
+    except Exception as e:
+        return False, str(e)
+
+    ok = (r.returncode == 0)
     output = ((r.stdout or "") + (r.stderr or "")).strip()
     if output:
         return ok, output[-4000:]
@@ -544,28 +766,58 @@ CLAUDE_CREDENTIALS_PATH = Path.home() / ".claude" / ".credentials.json"
 
 
 def check_token_expiry() -> dict:
-    """Reads ~/.claude/.credentials.json for the OAuth token's expiresAt
-    field. Does NOT guarantee the token is actually still valid — Claude
-    Code has multiple open bug reports where the silent refresh-token flow
-    fails and a token can stop working well before its stated expiry. This
-    is a best-effort early warning, not a guarantee; the reactive 401 check
+    """Checks CLAUDE_CODE_OAUTH_TOKEN status (see OAUTH_TOKEN_PATH above).
+
+    v8.1.6 fix: this used to read ~/.claude/.credentials.json, which is
+    only ever written by the interactive `claude login` flow. The
+    Get / Renew Token button runs `claude setup-token`, which per Claude
+    Code's own docs prints a one-year token to the terminal and does NOT
+    save it anywhere — so the old check failed unconditionally, every
+    time, regardless of whether sign-in actually succeeded. This now
+    checks the token AI-Prowler itself captured and persisted to
+    OAUTH_TOKEN_PATH (see try_capture_setup_token()).
+
+    Does NOT guarantee the token is actually still valid — a token can
+    be revoked server-side before its stated one-year expiry. This is a
+    best-effort early warning, not a guarantee; the reactive 401 check
     in a real run is the authoritative signal.
     Returns dict: {status, expires_at, days_remaining, detail}
     status is one of: "no_credentials", "unreadable", "expired",
     "expiring_soon" (<7 days), "ok"
     """
-    if not CLAUDE_CREDENTIALS_PATH.exists():
+    # Pick up a token that just appeared from a completed setup-token
+    # sign-in, if any, before checking status.
+    try_capture_setup_token()
+
+    if not OAUTH_TOKEN_PATH.exists():
         return {"status": "no_credentials", "expires_at": None,
                 "days_remaining": None,
-                "detail": "No Claude Code credentials found — run setup-token first."}
+                "detail": "No Claude Code token yet — click 🔑 Get / Renew Token, "
+                          "complete the browser sign-in, then come back and click "
+                          "Test Setup (Dry Run) again."}
     try:
-        data = json.loads(CLAUDE_CREDENTIALS_PATH.read_text(encoding="utf-8-sig"))
-        expires_at_ms = data.get("expiresAt")
-        if expires_at_ms is None:
+        data = json.loads(OAUTH_TOKEN_PATH.read_text(encoding="utf-8"))
+        if not data.get("token"):
             return {"status": "unreadable", "expires_at": None,
                      "days_remaining": None,
-                     "detail": "credentials.json found but has no expiresAt field."}
-        expires_dt = datetime.fromtimestamp(expires_at_ms / 1000, tz=timezone.utc)
+                     "detail": "claude_oauth_token.json found but has no token field."}
+        # v8.1.6 third fix / self-heal: OAUTH_TOKEN_PLAIN_PATH was added
+        # AFTER OAUTH_TOKEN_PATH already existed for anyone who signed in
+        # before this fix — save_oauth_token() only started writing the
+        # plain-text mirror going forward, so an already-saved (still
+        # perfectly valid, still not expired) token would otherwise leave
+        # the wrapper script's `set /p` with nothing to read from, even
+        # though check_token_expiry() itself reports everything is fine.
+        # Backfilling here, on every dry-run/status check, means an
+        # already-signed-in user never needs to redo the browser OAuth
+        # flow just because of an internal storage-format change.
+        if not OAUTH_TOKEN_PLAIN_PATH.exists():
+            try:
+                OAUTH_TOKEN_PLAIN_PATH.write_text(data["token"].strip(), encoding="utf-8")
+            except Exception:
+                pass  # best-effort; wrapper script will surface a clear error if this failed
+        issued_dt = datetime.fromisoformat(data["issued_at"])
+        expires_dt = issued_dt + timedelta(days=OAUTH_TOKEN_LIFETIME_DAYS)
         remaining = expires_dt - datetime.now(timezone.utc)
         days_remaining = remaining.total_seconds() / 86400
         if days_remaining <= 0:
@@ -584,19 +836,45 @@ def check_token_expiry() -> dict:
         }
     except Exception as e:
         return {"status": "unreadable", "expires_at": None,
-                 "days_remaining": None, "detail": f"Could not read credentials: {e}"}
+                 "days_remaining": None, "detail": f"Could not read saved token: {e}"}
+
+
+def build_setup_token_batch_content() -> str:
+    """Returns the .bat file content used to run `claude setup-token` and
+    capture its output. Kept as a pure function for testability, same
+    reasoning as build_setup_token_launch_args() below.
+
+    v8.1.6 second fix: the FIRST v8.1.6 fix (teeing output via a single
+    `cmd /k "claude setup-token > "...\\file" 2>&1 & type "...\\file""`
+    command-line string) is itself broken — Windows' list2cmdline()
+    quoting and cmd.exe's own command-line parser disagree about nested
+    quotes, and the combination reliably produces "The filename,
+    directory name, or volume label syntax is incorrect." This is a
+    well-known cmd.exe /k quoting failure mode, not something that can
+    be escaped around reliably. The fix is to never hand cmd.exe a
+    complex quoted command line at all: write the real commands to an
+    actual .bat file (plain text, no shell-quoting ambiguity) and launch
+    THAT with a single, simple, one-level-quoted path.
+    """
+    return (
+        "@echo off\r\n"
+        f'claude setup-token > "{SETUP_TOKEN_OUTPUT_PATH}" 2>&1\r\n'
+        f'type "{SETUP_TOKEN_OUTPUT_PATH}"\r\n'
+        "echo.\r\n"
+        "echo Press any key to close this window...\r\n"
+        "pause >nul\r\n"
+    )
 
 
 def build_setup_token_launch_args() -> list[str]:
-    """Returns the argv for launching an interactive terminal running
-    `claude setup-token`. Kept as a pure function (no subprocess.Popen
-    call) so the command construction is independently testable without
-    actually spawning a window during tests.
-    Windows-specific: `cmd /k` keeps the window open after the command
-    finishes so the user can see the result / any error, rather than the
-    window vanishing the instant setup-token exits.
+    """Returns the argv for launching an interactive terminal that runs
+    SETUP_TOKEN_BAT_PATH (see build_setup_token_batch_content). Kept as a
+    pure function (no subprocess.Popen call) so the command construction
+    is independently testable without actually spawning a window during
+    tests. `cmd /c` is sufficient — the .bat itself ends with `pause` so
+    the window stays open on its own; no need for `/k` here.
     """
-    return ["cmd", "/k", "claude setup-token"]
+    return ["cmd", "/c", str(SETUP_TOKEN_BAT_PATH)]
 
 
 def open_setup_token_terminal() -> tuple[bool, str]:
@@ -605,6 +883,12 @@ def open_setup_token_terminal() -> tuple[bool, str]:
     background. Requires a human to complete the browser OAuth step that
     follows; this function only gets them to that point."""
     try:
+        AI_PROWLER_HOME.mkdir(parents=True, exist_ok=True)
+        # Clear any stale output from a previous incomplete attempt so
+        # try_capture_setup_token() never picks up an old/partial file.
+        if SETUP_TOKEN_OUTPUT_PATH.exists():
+            SETUP_TOKEN_OUTPUT_PATH.unlink()
+        SETUP_TOKEN_BAT_PATH.write_text(build_setup_token_batch_content(), encoding="utf-8")
         subprocess.Popen(build_setup_token_launch_args(),
                           creationflags=subprocess.CREATE_NEW_CONSOLE)
         return True, "Terminal opened — complete the browser sign-in it prompts for."

@@ -1,11 +1,11 @@
 {
   "version": "8.1.8",
-  "generated": "2026-07-21T13:24:05",
+  "generated": "2026-07-22T14:04:21",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "d7400020b837fd725283eaa4d20a8d0be946c42bbc5c1aa75ba925de293e6ea5",
-      "bytes": 1130732
+      "sha256": "7a5c05321f1ff9df5f8e1754331e91cee0e471314e54e279faf718728ebdd901",
+      "bytes": 1139223
     },
     {
       "path": "rag_preprocessor.py",
@@ -59,8 +59,8 @@
     },
     {
       "path": "COMPLETE_USER_GUIDE.md",
-      "sha256": "ae497ff74791c39ce3df9f566ff73b61d4c93d96976e6c48c85eb5051a252526",
-      "bytes": 151605
+      "sha256": "298866b2e0f8ca4afb99f2b2239f7cee9d4084aaa2652ffd86f6ea45c153ed90",
+      "bytes": 154253
     },
     {
       "path": "VERSION",
@@ -109,8 +109,8 @@
     },
     {
       "path": "custom_tasks_manager.py",
-      "sha256": "0bc2bb0d5d9d4d89d082459e168a35e46d95cfc8ff04f02afbcb42291d2ed863",
-      "bytes": 19889
+      "sha256": "808733ab55407a8071691cadaf87e580d5a6b67c4c6426b5e960bda51cf2d397",
+      "bytes": 24702
     },
     {
       "path": "scheduler_jobs.py",
@@ -124,8 +124,8 @@
     },
     {
       "path": "task_queue_automation.py",
-      "sha256": "64247c9cd7ba5d2f1e4a217ab8e72a393cd05620989d1a6f422ea5bde475e6f8",
-      "bytes": 30504
+      "sha256": "a128eefa4e1291deb316a2be6a170acd1cb6a0abb9f71a259febff74f6ffb47c",
+      "bytes": 44090
     },
     {
       "path": ".claude/settings.json",

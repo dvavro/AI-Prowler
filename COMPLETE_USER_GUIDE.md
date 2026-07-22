@@ -278,7 +278,7 @@ The following tools are never registered when AI-Prowler runs in server mode:
 | Raw filesystem reads | `read_file_lines`, `grep_documents` |
 | Email operator tools | `configure_email`, `send_file` — use personal SMTP credentials, not appropriate for a shared server. `send_learnings_report` is **not** in this category — see the note below. |
 | Bulk index rebuild | `reindex_all` |
-| Agentic analysis task queue | `get_pending_analysis_tasks`, `complete_analysis_task`, `save_analysis_report`, `list_analysis_tasks` — the Quick Links tab's Common Business AI Analysis / My Custom Analyses panels are hidden in server mode's GUI, so the queue these tools drive has no server-mode caller |
+| Agentic analysis task queue | `get_pending_analysis_tasks`, `complete_analysis_task`, `save_analysis_report`, `list_analysis_tasks` — the Quick Links tab's Common Business AI Analysis / My Custom AI Analyses panels are hidden in server mode's GUI, so the queue these tools drive has no server-mode caller |
 | Raw/unscoped SMS inbox | `check_sms_inbox` — reads the local inbox with no per-user filtering (unlike `check_sms_replies`, which uses the per-user-scoped read path). In a multi-user server this would let any employee read every inbound SMS/WhatsApp message company-wide, not just their own. `check_sms_replies` is the server-mode equivalent. |
 
 > **Note:** `send_sms`, `send_email`, `send_alert`, `send_whatsapp`, `send_learnings_report` (user-facing) are **not** suppressed in server mode — they remain available to users via the Tier B role gate.
@@ -533,11 +533,11 @@ Two different status tools — know which to call:
 
 #### Agentic Analysis Tools (5 tools — Personal Only)
 
-These tools power the **Common Business AI Analysis** and **My Custom Analyses** sections in the Quick Links tab. Not available in server mode.
+These tools power the **Common Business AI Analysis** and **My Custom AI Analyses** sections in the Quick Links tab. Not available in server mode.
 
 | Tool | What It Does | Mode |
 |---|---|---|
-| `create_analysis_task` | Defines a new recurring or one-off custom task from a plain-language request — the same thing the "+ New Custom Analysis" GUI dialog builds. **Day-granularity scheduling only** — there's no time-of-day in this system, so "every Monday at 8am" is stored as "due every Monday"; the "8am" isn't representable. **Pull-based, not autonomous** — creating a task doesn't make anything run unattended; the task becomes visible next time `get_pending_analysis_tasks()` is called after it's due AND queued (GUI "Queue"/"Run Due Tasks" button, or a future conversation). Enforces the same 25-task cap as the GUI dialog (`MAX_CUSTOM_TASKS`, centralized inside `create_task()` itself). | Personal |
+| `create_analysis_task` | Defines a new recurring or one-off custom task from a plain-language request — the same thing the "+ New Custom Analysis" GUI dialog builds. **Day-granularity scheduling only** — there's no time-of-day in this system, so "every Monday at 8am" is stored as "due every Monday"; the "8am" isn't representable. **Pull-based, not autonomous** — creating a task doesn't make anything run unattended; the task becomes visible next time `get_pending_analysis_tasks()` is called after it's due AND queued (GUI **▶ Queue** button, the Autonomous AI Task Queue once enabled, or a future conversation). Enforces the same 25-task cap as the GUI dialog (`MAX_CUSTOM_TASKS`, centralized inside `create_task()` itself). | Personal |
 | `list_analysis_tasks` | **Recently added.** Lists the FULL custom-analysis task definition list (`custom_analysis_tasks.json`), up to 25, regardless of due date — with an `is_due` flag per task. Complements `get_pending_analysis_tasks`, which only shows tasks that have already been queued into the run queue (`pending_tasks.json`). Use this for "what's in my task queue" / "list everything I've scheduled" — those questions are about the full definition list, not just what's currently due. Strictly read-only; never modifies or queues anything. | Personal |
 | `get_pending_analysis_tasks` | Returns all pending tasks from `~/.ai-prowler/pending_tasks.json`. Claude calls this when you paste the run-queue command. Returns a JSON object with `pending_count`, `tasks` array (including `task_id`, `label`, `prompt`, `scope_dirs`, `schedule`, `next_due`, `queued_ago`), and execution instructions. Returns a plain informational message when the queue is empty. | Personal |
 | `complete_analysis_task` | Marks a pending task as completed after Claude finishes the analysis. Stamps `completed_at` and stores the optional `summary`. For scheduled tasks (both built-in and custom), auto-advances `next_due` anchored to the original due date — not the completion date. | Personal |
@@ -1288,13 +1288,41 @@ The **Initial Connection Test** banner provides a copy-to-clipboard command reco
 
 Click **📋 Copy Command**, paste into Claude, and press Enter. This verifies the MCP link is live and shows all 83+ available AI-Prowler tools.
 
+### 🤖 Autonomous AI Task Queue
+
+The **Autonomous AI Task Queue** runs your queued analysis tasks — both **Common Business AI Analysis** and **My Custom AI Analyses**, below — on a schedule via Claude Code, without you opening a chat and pasting the run command yourself.
+
+These are AI-assisted tasks that can be queued and stored for repeated and/or future execution. Claude AI has tools to manage, add, and run these task queues via AI-Prowler MCP tools remotely, in addition to the manual configuration described here.
+
+> **Not available in server mode.**
+
+> **Requires a Claude Pro subscription or higher** to use Claude Code CLI — the free Claude tier does not include Claude Code access. Not required if you use an API Key instead (see Auth, below).
+
+#### The On/Off toggle
+
+A single large button — reading **"Toggle On/Off"** with **"Autonomous AI Task Queue OFF"** beneath it in red, or **"Autonomous AI Task Queue ON"** in green — is the entire control for turning automation on and off. Click it and it flips color and state immediately: green/ON installs (or updates) a Windows Scheduled Task at the time you've set below; red/OFF removes it. There's no separate checkbox or status indicator to keep in sync — the button's color and text are always the real, currently-applied state.
+
+#### Setup
+
+| Field | Description |
+|---|---|
+| **Scheduled time** | 24-hour `HH:MM`, daily. |
+| **Text me when a run finishes** | Optional SMS/WhatsApp notification, sent to whichever method is selected. |
+| **Auth** | **Subscription (OAuth)** — uses your Claude Pro/Max plan; click **🔑 Get / Renew Token** to sign in. **API Key (metered billing)** — a separate pay-as-you-go account; paste a key from console.anthropic.com and click **Save Key** (and **Clear Key** to remove one). |
+| **🧪 Test Setup (Dry Run)** | Runs a checklist (Claude Code CLI installed, MCP config current, token/key valid) without actually running any tasks, so you can confirm everything is wired up before turning it on. |
+| **📄 View Audit Log** | Read-only history of past autonomous runs. |
+
+Turning automation on for the first time (off → on) automatically resyncs any overdue custom-task backlog to start from today, rather than firing every accumulated overdue occurrence at once.
+
+---
+
 ### 🧠 Common Business AI Analysis (v8.0.0)
 
 The **Common Business AI Analysis** section provides five one-click analysis commands that use Claude's full reasoning capability over your local data — no API key required, no cloud uploads.
 
-> **Not available in server mode.** This section and My Custom Analyses are hidden automatically when AI-Prowler detects `mode=server` in config.json.
+> **Not available in server mode.** This section and My Custom AI Analyses are hidden automatically when AI-Prowler detects `mode=server` in config.json.
 
-An explanatory **💡 How AI Analysis Tasks Work** info card is displayed directly below the section header. It explains the queue-and-paste workflow and directs users to My Custom Analyses for scheduling.
+An explanatory **💡 How AI Analysis Tasks Work** info card is displayed directly below the section header. It explains the queue-and-paste workflow and directs users to My Custom AI Analyses for scheduling.
 
 Hovering any button shows a one-line tooltip in the status bar describing what that analysis does.
 
@@ -1377,9 +1405,11 @@ The collapsible **▶ Show Queue** panel (below the analysis buttons) lets you s
 
 ---
 
-### 📋 My Custom Analyses (v8.0.0)
+### 📋 My Custom AI Analyses (v8.0.0, renamed)
 
-**My Custom Analyses** lets you define your own analysis tasks — with a custom name, prompt, optional directory scope, schedule, and output format. Up to 10 custom tasks are supported.
+**My Custom AI Analyses** lets you define your own analysis tasks — with a custom name, prompt, optional directory scope, schedule, and output format. Up to 10 custom tasks are supported.
+
+These user custom-defined tasks are AI-assisted tasks that can be queued and stored for repeated and/or future execution. In addition to manual configuration here, Claude can also create and add these via AI-Prowler MCP tools remotely.
 
 > **Not available in server mode.** Hidden automatically when `mode=server` is detected.
 
@@ -1400,7 +1430,7 @@ Click **+ New Custom Analysis** to open the task editor (scrollable, 806×884). 
 
 #### Save / Save & Queue
 
-- **Save** — saves the task definition. It appears in the My Custom Analyses list for future use.
+- **Save** — saves the task definition. It appears in the My Custom AI Analyses list for future use.
 - **Save & Queue** — saves the task AND immediately queues it in `pending_tasks.json` and copies the run-all command to clipboard. Paste into Claude to run it right away.
 
 #### Task Cards
@@ -1414,9 +1444,9 @@ Each saved task appears as a card in the list showing:
 - **✎ Edit** — opens the task editor pre-filled with the current settings
 - **🗑** — deletes the task (with confirmation dialog)
 
-#### 🧠 Run Due Tasks
+#### Automatic execution
 
-The **🧠 Run Due Tasks** button (top-right of the My Custom Analyses panel) is a batch shortcut: it finds all tasks that are overdue or due today, queues them all at once, and copies the run-all command to clipboard. Paste into Claude once to execute all due tasks in sequence.
+There is no longer a manual "Run Due Tasks" batch button in this panel — running the whole pending queue unattended on a schedule is now handled by the **🤖 Autonomous AI Task Queue** panel above once turned on, which supersedes it. Individual tasks can still be queued manually at any time via each card's **▶ Queue** button.
 
 #### Custom Task Prompt Example
 

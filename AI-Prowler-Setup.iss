@@ -254,7 +254,7 @@ Source: "custom_tasks_manager.py"; DestDir: "{app}"; Flags: ignoreversion
 ;                       Personal mode only — server mode GUI guard prevents loading.
 Source: "scheduler_jobs.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "scheduler_engine.py"; DestDir: "{app}"; Flags: ignoreversion
-; task_queue_automation.py + .claude\ — Autonomous Task Queue automation
+; task_queue_automation.py + .claude\ — Autonomous AI Task Queue automation
 ; (Settings/Quick Links panel). Runs AI-Prowler's pending analysis task
 ; queue unattended via Claude Code headless CLI on a Windows Scheduled
 ; Task. See task_queue_automation.py's own module docstring for the full
@@ -1557,6 +1557,42 @@ begin
         '-m pip install -r "' + ExpandConstant('{app}\requirements.txt') + '"');
 
       // ----------------------------------------------------------
+      // EMBEDDING MODEL WARM-UP  (progress 55 -> 60)
+      //
+      // v8.1.9 fix: the HUGGINGFACE CACHE CLEANUP step above deliberately
+      // deletes any existing cached embedding model (to dodge the Errno 22
+      // double-backslash bug on Windows) but, before this step, NOTHING
+      // ever re-downloaded it during install — every other setup action
+      // here (pip installs, PyTorch, Tesseract, Cloudflared) logs an
+      // explicit SUCCESS/FAILURE, but the ~90 MB embedding-model download
+      // was silently deferred entirely to the FIRST time the running app
+      // actually needed it (clicking Update All), with no verification
+      // and no visibility here in the install log if that first live
+      // attempt failed. A user could complete a "successful" install and
+      // still hit an immediate, confusing "Embedding Model Not Ready"
+      // wall on first use, with no way to tell from the install log
+      // whether that was expected or an actual problem.
+      //
+      // This step downloads and caches the same model
+      // (sentence-transformers/all-MiniLM-L6-v2) the app itself loads via
+      // rag_preprocessor.get_chroma_client(), using the exact same
+      // ExecPython helper (and therefore the same HF_HUB_CACHE env var)
+      // every other Python step here already uses — so a fresh install's
+      // very first "Update All" click finds the model already cached
+      // in under a second, instead of being the first live download
+      // attempt. Deliberately non-fatal: ExecPython logs SUCCESS/FAILURE
+      // like every other step but never aborts the installer on failure
+      // (a transient network hiccup here shouldn't block installation) —
+      // the app's own in-GUI retry (added alongside this fix) is the
+      // fallback if this step doesn't complete for any reason.
+      // ----------------------------------------------------------
+      SetProgress(55, 'Downloading embedding model (used for search)...');
+      ExecPython('[Embedding] Model warm-up', PyFolder,
+        '-c "from sentence_transformers import SentenceTransformer; ' +
+        'SentenceTransformer(''sentence-transformers/all-MiniLM-L6-v2''); ' +
+        'print(''Embedding model cached successfully'')"');
+
+      // ----------------------------------------------------------
       // PYTORCH  (progress 65 -> 75)
       // Detect NVIDIA GPU via registry  -  install CUDA build if found,
       // CPU-only build otherwise. This keeps the install lean on machines
@@ -2063,7 +2099,7 @@ begin
     // NOTE: this installs the CLI binary only. Authentication (either
     // `claude setup-token` for a Pro/Max subscription, or an API key)
     // still requires the user's own action — AI-Prowler's "Get / Renew
-    // Token" button in the Autonomous Task Queue panel handles pointing
+    // Token" button in the Autonomous AI Task Queue panel handles pointing
     // them at that step; see task_queue_automation.py.
     // ----------------------------------------------------------
     Exec('cmd.exe', '/C where claude >nul 2>nul', '', SW_HIDE,

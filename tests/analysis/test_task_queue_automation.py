@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,13 @@ def _isolated_home(tmp_path, monkeypatch):
     monkeypatch.setattr(tqa, "AI_PROWLER_CONFIG_PATH", tmp_path / ".ai-prowler" / "config.json")
     monkeypatch.setattr(tqa, "GENERATED_MCP_CONFIG_PATH", tmp_path / ".ai-prowler" / "claude_mcp_config.json")
     monkeypatch.setattr(tqa, "API_KEY_PATH", tmp_path / ".ai-prowler" / "claude_api_key.txt")
+    # v8.1.6: same isolation requirement for the new OAuth-token files —
+    # without this, tests would read/write the REAL
+    # ~/.ai-prowler/claude_oauth_token.json on the machine running them.
+    monkeypatch.setattr(tqa, "OAUTH_TOKEN_PATH", tmp_path / ".ai-prowler" / "claude_oauth_token.json")
+    monkeypatch.setattr(tqa, "OAUTH_TOKEN_PLAIN_PATH", tmp_path / ".ai-prowler" / "claude_oauth_token.txt")
+    monkeypatch.setattr(tqa, "SETUP_TOKEN_OUTPUT_PATH", tmp_path / ".ai-prowler" / "setup_token_output.txt")
+    monkeypatch.setattr(tqa, "SETUP_TOKEN_BAT_PATH", tmp_path / ".ai-prowler" / "run_setup_token.bat")
     yield tmp_path
 
 
@@ -297,55 +305,83 @@ def test_log_tool_call_hook_logs_ai_prowler_tools(tmp_path):
 
 
 # ── Claude Code auth token expiry ─────────────────────────────────────────
+# v8.1.6: rewritten against OAUTH_TOKEN_PATH (claude_oauth_token.json,
+# {token, issued_at}) instead of the old ~/.claude/.credentials.json
+# ({expiresAt} in epoch ms) — `claude setup-token` never wrote that file
+# in the first place; see check_token_expiry()'s docstring.
 
-def test_token_expiry_no_credentials_file(_isolated_home, monkeypatch):
-    monkeypatch.setattr(tqa, "CLAUDE_CREDENTIALS_PATH", _isolated_home / ".claude" / ".credentials.json")
+def test_token_expiry_no_credentials_file(_isolated_home):
     info = tqa.check_token_expiry()
     assert info["status"] == "no_credentials"
 
 
-def test_token_expiry_future_date_is_ok(_isolated_home, monkeypatch):
-    import time
-    cred_path = _isolated_home / ".claude" / ".credentials.json"
-    cred_path.parent.mkdir(parents=True, exist_ok=True)
-    future_ms = int((time.time() + 60 * 86400) * 1000)  # 60 days from now
-    cred_path.write_text(json.dumps({"expiresAt": future_ms}), encoding="utf-8")
-    monkeypatch.setattr(tqa, "CLAUDE_CREDENTIALS_PATH", cred_path)
+def test_token_expiry_future_date_is_ok(_isolated_home):
+    tqa.OAUTH_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    issued = datetime.now(timezone.utc) - timedelta(days=10)  # 355 days left
+    tqa.save_oauth_token("sk-ant-oat01-fake-token-value", issued_at=issued)
     info = tqa.check_token_expiry()
     assert info["status"] == "ok"
-    assert info["days_remaining"] > 50
+    assert info["days_remaining"] > 350
 
 
-def test_token_expiry_within_7_days_is_expiring_soon(_isolated_home, monkeypatch):
-    import time
-    cred_path = _isolated_home / ".claude" / ".credentials.json"
-    cred_path.parent.mkdir(parents=True, exist_ok=True)
-    soon_ms = int((time.time() + 3 * 86400) * 1000)  # 3 days from now
-    cred_path.write_text(json.dumps({"expiresAt": soon_ms}), encoding="utf-8")
-    monkeypatch.setattr(tqa, "CLAUDE_CREDENTIALS_PATH", cred_path)
+def test_token_expiry_within_7_days_is_expiring_soon(_isolated_home):
+    tqa.OAUTH_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    issued = datetime.now(timezone.utc) - timedelta(days=tqa.OAUTH_TOKEN_LIFETIME_DAYS - 3)
+    tqa.save_oauth_token("sk-ant-oat01-fake-token-value", issued_at=issued)
     info = tqa.check_token_expiry()
     assert info["status"] == "expiring_soon"
 
 
-def test_token_expiry_past_date_is_expired(_isolated_home, monkeypatch):
-    import time
-    cred_path = _isolated_home / ".claude" / ".credentials.json"
-    cred_path.parent.mkdir(parents=True, exist_ok=True)
-    past_ms = int((time.time() - 86400) * 1000)  # 1 day ago
-    cred_path.write_text(json.dumps({"expiresAt": past_ms}), encoding="utf-8")
-    monkeypatch.setattr(tqa, "CLAUDE_CREDENTIALS_PATH", cred_path)
+def test_token_expiry_past_date_is_expired(_isolated_home):
+    tqa.OAUTH_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    issued = datetime.now(timezone.utc) - timedelta(days=tqa.OAUTH_TOKEN_LIFETIME_DAYS + 1)
+    tqa.save_oauth_token("sk-ant-oat01-fake-token-value", issued_at=issued)
     info = tqa.check_token_expiry()
     assert info["status"] == "expired"
     assert info["days_remaining"] < 0
 
 
-def test_token_expiry_corrupt_file_is_unreadable_not_crash(_isolated_home, monkeypatch):
-    cred_path = _isolated_home / ".claude" / ".credentials.json"
-    cred_path.parent.mkdir(parents=True, exist_ok=True)
-    cred_path.write_text("{not valid json", encoding="utf-8")
-    monkeypatch.setattr(tqa, "CLAUDE_CREDENTIALS_PATH", cred_path)
+def test_token_expiry_corrupt_file_is_unreadable_not_crash(_isolated_home):
+    tqa.OAUTH_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tqa.OAUTH_TOKEN_PATH.write_text("{not valid json", encoding="utf-8")
     info = tqa.check_token_expiry()
     assert info["status"] == "unreadable"
+
+
+def test_token_expiry_captures_token_from_setup_token_output(_isolated_home):
+    """The core v8.1.6 regression test: a completed `claude setup-token`
+    run leaves its printed output in SETUP_TOKEN_OUTPUT_PATH, and
+    check_token_expiry() must pick it up on the very next call — no
+    separate 'confirm' step, and no dependency on .credentials.json."""
+    tqa.AI_PROWLER_HOME.mkdir(parents=True, exist_ok=True)
+    tqa.SETUP_TOKEN_OUTPUT_PATH.write_text(
+        "Login successful!\nYour OAuth token (valid for 1 year):\n"
+        "sk-ant-oat01-oCRdTGIKIRlwpPSpBiREYMW8oGSt-fake-suffix\n",
+        encoding="utf-8")
+    info = tqa.check_token_expiry()
+    assert info["status"] == "ok"
+    # Output file should be cleaned up once captured — no plaintext token
+    # left lying around longer than necessary.
+    assert not tqa.SETUP_TOKEN_OUTPUT_PATH.exists()
+    assert tqa.load_oauth_token() == "sk-ant-oat01-oCRdTGIKIRlwpPSpBiREYMW8oGSt-fake-suffix"
+
+
+def test_token_expiry_backfills_plain_mirror_for_pre_existing_json(_isolated_home):
+    """v8.1.6 third-fix regression test: a token saved under the OLD code
+    (JSON only, no .txt mirror) must get the .txt mirror backfilled the
+    next time check_token_expiry() runs — an already-valid, not-expired
+    token should never force the user through browser OAuth again just
+    because of an internal storage-format change."""
+    tqa.AI_PROWLER_HOME.mkdir(parents=True, exist_ok=True)
+    tqa.OAUTH_TOKEN_PATH.write_text(json.dumps({
+        "token": "sk-ant-oat01-pre-existing-token",
+        "issued_at": datetime.now(timezone.utc).isoformat(),
+    }), encoding="utf-8")
+    assert not tqa.OAUTH_TOKEN_PLAIN_PATH.exists()  # simulates a pre-fix install
+    info = tqa.check_token_expiry()
+    assert info["status"] == "ok"
+    assert tqa.OAUTH_TOKEN_PLAIN_PATH.exists()
+    assert tqa.OAUTH_TOKEN_PLAIN_PATH.read_text(encoding="utf-8") == "sk-ant-oat01-pre-existing-token"
 
 
 def test_dry_run_check_includes_token_expiry(_isolated_home, monkeypatch):
@@ -358,9 +394,26 @@ def test_dry_run_check_includes_token_expiry(_isolated_home, monkeypatch):
 
 # ── setup-token terminal launch ───────────────────────────────────────────
 
+def test_build_setup_token_batch_content_runs_correct_command():
+    content = tqa.build_setup_token_batch_content()
+    assert "claude setup-token" in content
+    # Must tee to SETUP_TOKEN_OUTPUT_PATH so try_capture_setup_token() can
+    # find the printed token afterward.
+    assert str(tqa.SETUP_TOKEN_OUTPUT_PATH) in content
+
+
 def test_build_setup_token_launch_args_runs_correct_command():
+    # v8.1.6: this now launches a plain .bat file via `cmd /c` rather
+    # than a single quoted command-line string — cmd.exe's own /k
+    # parsing of nested quotes + redirection + `&` reliably broke with
+    # "The filename, directory name, or volume label syntax is
+    # incorrect." A single, simply-quoted path avoids that class of bug
+    # entirely. See build_setup_token_batch_content() for the actual
+    # command being run.
     args = tqa.build_setup_token_launch_args()
-    assert "claude setup-token" in " ".join(args)
+    assert args[0] == "cmd"
+    assert args[1] == "/c"
+    assert args[2] == str(tqa.SETUP_TOKEN_BAT_PATH)
 
 
 def test_open_setup_token_terminal_never_blocks_or_hangs(monkeypatch):
@@ -497,6 +550,21 @@ def test_empty_api_key_file_counts_as_not_set(_isolated_home):
 def test_wrapper_script_no_api_key_block_by_default():
     content = tqa.build_wrapper_script_content("x.json", "mcp__ai-prowler__*")
     assert "ANTHROPIC_API_KEY" not in content
+
+
+def test_wrapper_script_oauth_block_by_default():
+    """v8.1.6 regression test: the default (use_api_key=False) branch must
+    read CLAUDE_CODE_OAUTH_TOKEN from OAUTH_TOKEN_PLAIN_PATH via a plain
+    `set /p`, matching the already-proven ANTHROPIC_API_KEY pattern — not
+    the earlier PowerShell/ConvertFrom-Json approach, which failed at
+    runtime with "the token could not be parsed" despite valid JSON."""
+    content = tqa.build_wrapper_script_content("x.json", "mcp__ai-prowler__*")
+    assert "CLAUDE_CODE_OAUTH_TOKEN" in content
+    assert "set /p CLAUDE_CODE_OAUTH_TOKEN=" in content
+    assert str(tqa.OAUTH_TOKEN_PLAIN_PATH) in content
+    # Must never reintroduce the fragile PowerShell/JSON parsing path.
+    assert "ConvertFrom-Json" not in content
+    assert "powershell" not in content.lower()
 
 
 def test_wrapper_script_includes_api_key_block_when_enabled():
@@ -902,3 +970,125 @@ def test_run_queue_now_uses_separate_wrapper_dir_from_scheduled_task(_isolated_h
     tqa.run_queue_now("real.json", "mcp__ai-prowler__*")
     assert "manual_run" in str(dirs_used[0])
     assert str(dirs_used[0]) != str(tqa.AI_PROWLER_HOME)
+
+
+# ── build_single_prompt_wrapper_content / run_single_prompt_now ────────────
+# v8.1.6: backs the "▶ NOW" button on each Common Business AI Analysis item
+# — runs ONE ad-hoc prompt immediately, without touching pending_tasks.json
+# or the complete_analysis_task() bookkeeping the queue-processing wrapper
+# uses. Mirrors build_wrapper_script_content()/run_queue_now()'s tests.
+
+def test_build_single_prompt_wrapper_embeds_the_prompt():
+    content = tqa.build_single_prompt_wrapper_content(
+        "Analyze my business.", "x.json", "mcp__ai-prowler__*")
+    assert 'claude -p "Analyze my business."' in content
+
+
+def test_build_single_prompt_wrapper_escapes_double_quotes():
+    # A prompt containing a literal double quote must not break the
+    # generated batch string.
+    content = tqa.build_single_prompt_wrapper_content(
+        'Say "hello" to the customer.', "x.json", "mcp__ai-prowler__*")
+    assert '""hello""' in content
+
+
+def test_build_single_prompt_wrapper_never_touches_pending_tasks_json():
+    content = tqa.build_single_prompt_wrapper_content(
+        "Analyze my business.", "x.json", "mcp__ai-prowler__*")
+    # Functional check: never calls the queue-processing tools — an
+    # explanatory REM comment mentioning pending_tasks.json by name is
+    # fine (and present, deliberately, to explain why); what matters is
+    # that the actual claude -p invocation never references the queue
+    # tools that would make this behave like the scheduled wrapper.
+    assert "get_pending_analysis_tasks" not in content
+    assert "complete_analysis_task" not in content
+
+
+def test_build_single_prompt_wrapper_oauth_block_by_default():
+    content = tqa.build_single_prompt_wrapper_content(
+        "Analyze my business.", "x.json", "mcp__ai-prowler__*")
+    assert "CLAUDE_CODE_OAUTH_TOKEN" in content
+    assert "set /p CLAUDE_CODE_OAUTH_TOKEN=" in content
+    assert str(tqa.OAUTH_TOKEN_PLAIN_PATH) in content
+
+
+def test_build_single_prompt_wrapper_api_key_block_when_enabled():
+    content = tqa.build_single_prompt_wrapper_content(
+        "Analyze my business.", "x.json", "mcp__ai-prowler__*", use_api_key=True)
+    assert "ANTHROPIC_API_KEY" in content
+    assert "set /p ANTHROPIC_API_KEY=" in content
+
+
+def test_run_single_prompt_now_fails_when_cli_not_installed(_isolated_home, monkeypatch):
+    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: False)
+
+    def _guard(*a, **kw):
+        raise AssertionError("Must not attempt a run when CLI isn't installed!")
+    monkeypatch.setattr(tqa.subprocess, "run", _guard)
+
+    ok, detail = tqa.run_single_prompt_now("Analyze my business.", "x.json", "mcp__ai-prowler__*")
+    assert ok is False
+    assert "not installed" in detail.lower()
+
+
+def test_run_single_prompt_now_fails_without_mcp_config(_isolated_home, monkeypatch):
+    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: True)
+
+    def _guard(*a, **kw):
+        raise AssertionError("Must not attempt a run without an MCP config!")
+    monkeypatch.setattr(tqa.subprocess, "run", _guard)
+
+    ok, detail = tqa.run_single_prompt_now("Analyze my business.", "", "mcp__ai-prowler__*")
+    assert ok is False
+    assert "mcp config" in detail.lower()
+
+
+def test_run_single_prompt_now_success(_isolated_home, monkeypatch):
+    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: True)
+    monkeypatch.setattr(tqa.subprocess, "run",
+                         lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": "Found 3 insights.", "stderr": ""})())
+
+    ok, detail = tqa.run_single_prompt_now("Analyze my business.", "real.json", "mcp__ai-prowler__*")
+    assert ok is True
+    assert "Found 3 insights." in detail
+
+
+def test_run_single_prompt_now_reports_failure_on_nonzero_exit(_isolated_home, monkeypatch):
+    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: True)
+    monkeypatch.setattr(tqa.subprocess, "run",
+                         lambda *a, **kw: type("R", (), {"returncode": 1, "stdout": "", "stderr": "boom"})())
+
+    ok, detail = tqa.run_single_prompt_now("Analyze my business.", "real.json", "mcp__ai-prowler__*")
+    assert ok is False
+    assert "boom" in detail
+
+
+def test_run_single_prompt_now_handles_timeout(_isolated_home, monkeypatch):
+    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: True)
+
+    def _fake_run(*a, **kw):
+        raise tqa.subprocess.TimeoutExpired(cmd="run_single_now.bat", timeout=600)
+    monkeypatch.setattr(tqa.subprocess, "run", _fake_run)
+
+    ok, detail = tqa.run_single_prompt_now("Analyze my business.", "real.json", "mcp__ai-prowler__*")
+    assert ok is False
+    assert "timed out" in detail.lower()
+
+
+def test_run_single_prompt_now_uses_own_subfolder_not_queue_wrappers(_isolated_home, monkeypatch):
+    # Confirms a NOW run never collides with the Scheduled Task's own
+    # wrapper or with a manual "run the whole queue" wrapper — same
+    # rationale as run_queue_now()'s own separate-subfolder test.
+    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: True)
+    written_paths = []
+    _orig_write_text = tqa.Path.write_text
+    def _spy_write_text(self, *a, **kw):
+        written_paths.append(self)
+        return _orig_write_text(self, *a, **kw)
+    monkeypatch.setattr(tqa.Path, "write_text", _spy_write_text)
+    monkeypatch.setattr(tqa.subprocess, "run",
+                         lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})())
+
+    tqa.run_single_prompt_now("Analyze my business.", "real.json", "mcp__ai-prowler__*")
+    assert any("single_run" in str(p) for p in written_paths)
+    assert not any("manual_run" in str(p) for p in written_paths)

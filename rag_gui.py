@@ -92,7 +92,7 @@ if sys.stderr is None:
 # Single source of truth for the app version. Bump this one line when releasing
 # a new version; all UI labels, About dialogs, help text, and update checks
 # read from here.
-APP_VERSION = "8.1.8"
+APP_VERSION = "8.1.6"
 
 # ── UI feature flags ─────────────────────────────────────────────────────────
 # Toggle visibility of advanced/legacy GUI sections without removing any
@@ -797,6 +797,13 @@ class RAGGui:
         self._index_running     = False
         self._index_cancelled   = False               # True = stop was a cancel, not a save
         self._embedding_ready    = False               # True once embedding model is loaded
+        # v8.1.9 fix: guards against firing a second prewarm attempt while
+        # one is already in flight (e.g. rapid double-click on Retry).
+        # Cleared by the main-thread queue handler on both success and
+        # failure, not the background worker itself, to stay consistent
+        # with how _embedding_ready is already updated from that same
+        # thread-safe location.
+        self._embedding_prewarm_in_progress = False
         # Resume state — where to continue after a stop
         self._index_resume_dirs  = []   # remaining dirs at time of stop
         self._index_resume_file  = 0    # file index within first remaining dir
@@ -1209,7 +1216,7 @@ then ask Claude questions from your desktop or phone.
 • 5 one-click analysis buttons (Quick Links tab)
 • Schedule recurring analyses — weekly, monthly, quarterly
 • QuickBooks-aware: uses QB if connected, Job Tracker if not
-• Queue multiple analyses, run all with one Ctrl+V paste
+• Queue for later, or ▶ NOW to run any analysis immediately
 
 ─────────────────────────────────────────────────
  PROACTIVE ALERTS SCHEDULER
@@ -4954,12 +4961,11 @@ or from the Help menu."""
                  font=('Arial', 11, 'bold'),
                  anchor='w').pack(side='left')
 
-        tk.Label(_an_hdr,
-                 text="Click a button → queues task & copies command  ·  Paste into Claude to run ALL queued tasks",
-                 bg='#1a2530', fg='#6a8fa8',
-                 font=('Arial', 8),
-                 wraplength=340, justify='right',
-                 anchor='e').pack(side='right')
+        # v8.1.6 fix: removed the "Click a button → queues task & copies
+        # command · Paste into Claude to run ALL queued tasks" hint here —
+        # stale leftover from the copy/paste workflow this panel no
+        # longer uses (see the bottom hint label below the button rows
+        # for the current, accurate explanation).
 
         # Analysis task definitions
         # Each entry includes a "description" shown in the popup so the user
@@ -4971,26 +4977,6 @@ or from the Help menu."""
         # Claude uses it as the primary financial data source; otherwise falls
         # back to read_job_spreadsheet() and get_ar_aging_report().
         _ANALYSIS_TASKS = [
-            {
-                "type":    "run_pending",
-                "label":   "🧠 Run Pending Analysis",
-                "color":   "#8e44ad",
-                "hover":   "#9b59b6",
-                "description": (
-                    "Runs every task currently sitting in the queue — in one shot.\n"
-                    "Each queued task has its own prompt, scope, and output settings.\n"
-                    "Use this after queueing one or more analyses below, or after\n"
-                    "clicking Save & Queue in My Custom Analyses."
-                ),
-                "prompt":  (
-                    "Call get_pending_analysis_tasks() and for each pending task: "
-                    "execute the full analysis described in the task's prompt field "
-                    "using all available AI-Prowler tools, record any significant "
-                    "findings as learnings via record_learning(), then call "
-                    "complete_analysis_task(task_id) with a one-sentence summary "
-                    "of what was found."
-                ),
-            },
             {
                 "type":    "analyze_business",
                 "label":   "📊 Analyze My Business",
@@ -5167,66 +5153,134 @@ or from the Help menu."""
             except Exception:
                 return []
 
-        # Helper — show full analysis options popup for ALL built-in analysis buttons
-        # EXCEPT run_pending, which just copies the queue command immediately.
-        # Name and Prompt are auto-filled (read-only); user configures scope,
-        # output format, and report folder before queuing.
-        def _queue_and_copy(task_def, btn_widget):
-            import json as _json
-            import datetime as _dt
-            from pathlib import Path as _Path
-            import custom_tasks_manager as _ctm_q
+        # v8.1.6 redesign: the built-in analyses now persist their own
+        # Queue/NOW settings (scope, output, schedule, report folder) via
+        # custom_tasks_manager.get/save_builtin_analysis_settings(),
+        # mirroring how custom tasks already work — a saved definition
+        # you can Queue/NOW directly from without reopening a popup every
+        # time, with Edit as the one place that changes those settings.
+        # _build_builtin_prompt() is the single place scope/output
+        # injection happens, shared by Queue, NOW, and Edit's own
+        # preview, so all three ways of running an analysis stay in sync.
 
-            # ── Run Pending: no popup — just copy the command ─────────────────
-            # Each queued task already has its own scope baked in when it was
-            # created. Run Pending simply executes the queue as-is.
-            if task_def.get("type") == "run_pending":
-                _cmd = (
-                    "Call get_pending_analysis_tasks() and for each pending task: "
-                    "execute the full analysis described in the task's prompt field "
-                    "using all available AI-Prowler tools, record any significant "
-                    "findings as learnings via record_learning(), then call "
-                    "complete_analysis_task(task_id) with a one-sentence summary "
-                    "of what was found."
+        def _build_builtin_prompt(task_def, settings):
+            prompt = task_def["prompt"].rstrip()
+            scope_dirs = settings.get("scope_dirs") or []
+            if scope_dirs:
+                prompt += (
+                    f"\n\nScope restriction: focus your analysis only on "
+                    f"these indexed directories: {', '.join(scope_dirs)}. "
+                    f"Use search_within_directory() for each scope directory "
+                    f"rather than search_documents() across the full index."
                 )
-                try:
-                    self.root.clipboard_clear()
-                    self.root.clipboard_append(_cmd)
-                    self.root.update()
-                except Exception:
-                    pass
+            out_learnings = settings.get("output_learnings", True)
+            out_report    = settings.get("output_report", False)
+            report_folder = settings.get("report_folder") or ""
+            if out_learnings and out_report:
+                prompt += (
+                    f"\n\nOutput: (1) Record key insights as learnings via "
+                    f"record_learning() with category 'business_insight'. "
+                    f"(2) Save the full analysis as a Word document via "
+                    f"save_analysis_report() to folder '{report_folder}'."
+                )
+            elif out_report:
+                prompt += (
+                    f"\n\nOutput: Save the full analysis as a Word document "
+                    f"via save_analysis_report() to folder '{report_folder}'."
+                )
+            elif out_learnings:
+                prompt += (
+                    "\n\nOutput: Record key insights as learnings via "
+                    "record_learning() with category 'business_insight'."
+                )
+            return prompt
 
-                # Show a brief info popup explaining what to do next
-                from tkinter import messagebox as _mb_rp
-                _mb_rp.showinfo(
-                    "Queue Command Copied",
-                    "✅  The Run Pending Analysis command has been copied to your clipboard.\n\n"
-                    "Each queued task already has its own scope and output settings\n"
-                    "from when it was originally created — no additional configuration needed.\n\n"
-                    "👉  Open a new Claude chat and press  Ctrl+V  (or paste)\n"
-                    "    to run all pending tasks in sequence."
-                )
-                orig_text  = btn_widget.cget("text")
-                orig_color = btn_widget.cget("bg")
-                btn_widget.configure(text="✓ Copied! Paste into Claude", bg='#1a7a4a')
-                self.status_var.set(
-                    "✅ Run Pending command copied — open Claude and press Ctrl+V to run all queued tasks")
-                self.root.after(3000, lambda: btn_widget.configure(
-                    text=orig_text, bg=orig_color))
-                self.root.after(5000, lambda: self.status_var.set("Ready"))
+        def _queue_builtin_task(task_def):
+            """Writes one queue entry using the CURRENTLY SAVED settings
+            for this built-in type — no popup, matches My Custom Analyses'
+            own ▶ Queue button. Returns (ok, error_or_None)."""
+            import custom_tasks_manager as _ctm_bq
+            import json as _json_bq
+            from pathlib import Path as _Path_bq
+            import datetime as _dt_bq
+
+            settings = _ctm_bq.get_builtin_analysis_settings(task_def["type"])
+            prompt = _build_builtin_prompt(task_def, settings)
+
+            tasks_path = _Path_bq.home() / ".ai-prowler" / "pending_tasks.json"
+            try:
+                existing = []
+                if tasks_path.exists():
+                    try:
+                        existing = _json_bq.loads(
+                            tasks_path.read_text(encoding="utf-8")) or []
+                        if not isinstance(existing, list):
+                            existing = []
+                    except Exception:
+                        existing = []
+
+                ts = _dt_bq.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                schedule_key  = settings.get("schedule", "none")
+                first_due_val = settings.get("first_due")
+                next_due_val  = (first_due_val or _dt_bq.date.today().isoformat()) \
+                                if schedule_key != "none" else None
+
+                task = {
+                    "task_id":          f"{task_def['type']}_{ts}",
+                    "type":             task_def["type"],
+                    "label":            task_def["label"],
+                    "prompt":           prompt,
+                    "scope_dirs":       settings.get("scope_dirs") or [],
+                    "output_learnings": settings.get("output_learnings", True),
+                    "output_report":    settings.get("output_report", False),
+                    "report_folder":    settings.get("report_folder") or _ctm_bq.DEFAULT_REPORT_FOLDER,
+                    "schedule":         schedule_key,
+                    "first_due":        first_due_val,
+                    "next_due":         next_due_val,
+                    "created_at":       _dt_bq.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "status":           "pending",
+                }
+                existing.append(task)
+                tasks_path.parent.mkdir(parents=True, exist_ok=True)
+                tasks_path.write_text(
+                    _json_bq.dumps(existing, indent=2, ensure_ascii=False),
+                    encoding="utf-8")
+                return True, None
+            except Exception as _e:
+                return False, str(_e)
+
+        def _queue_task_row(task_def):
+            ok, err = _queue_builtin_task(task_def)
+            if not ok:
+                self.status_var.set(f"Task queue error: {err}")
                 return
+            self.status_var.set(
+                f"✅ {task_def['label']} queued — will run on the next "
+                f"scheduled Autonomous AI Task Queue pass, or click ▶ NOW "
+                f"to try it immediately.")
+            self.root.after(4000, lambda: self.status_var.set("Ready"))
+            _refresh_queue_count()
+            if _queue_expanded.get():
+                _refresh_queue_list()
 
+        # Helper — Edit popup. Pre-fills every field from the currently
+        # saved settings for this analysis type; Save Settings persists
+        # them (via save_builtin_analysis_settings) WITHOUT queuing or
+        # running anything — that's what the row's own ▶ Queue / ▶ NOW
+        # buttons are for. Same 806x980 scrollable layout as before.
+        def _open_builtin_editor(task_def):
+            import custom_tasks_manager as _ctm_q
+            from pathlib import Path as _Path
             tracked_dirs = _load_tracked_dirs_for_scope()
+            saved = _ctm_q.get_builtin_analysis_settings(task_def["type"])
 
-            # ── Full options popup (806×754 = 620×580 +30%) ───────────────────
             _win = tk.Toplevel(self.root)
-            _win.title(f"Configure: {task_def['label']}")
+            _win.title(f"Edit: {task_def['label']}")
             _win.geometry("806x980")
             _win.resizable(True, True)
             _win.grab_set()
             _win.focus_set()
 
-            # Scrollable wrapper so all fields are always reachable
             _win_canvas = tk.Canvas(_win, highlightthickness=0)
             _win_vsb    = ttk.Scrollbar(_win, orient='vertical', command=_win_canvas.yview)
             _win_vsb.pack(side='right', fill='y')
@@ -5243,26 +5297,21 @@ or from the Help menu."""
             _win_canvas.bind('<MouseWheel>', _win_mw)
             _pad.bind('<MouseWheel>', _win_mw)
 
-            # ── Read-only Name ────────────────────────────────────────────────
             tk.Label(_pad, text="Analysis:", font=('Arial', 9, 'bold'),
                      anchor='w').pack(anchor='w')
             tk.Label(_pad, text=task_def['label'],
                      font=('Arial', 10), anchor='w').pack(anchor='w', pady=(0, 4))
 
-            # ── What this does (description) ──────────────────────────────────
             _desc_frame = tk.Frame(_pad, bg='#e8f4e8', bd=1, relief='solid')
             _desc_frame.pack(fill='x', pady=(0, 8))
-            tk.Label(_desc_frame,
-                     text="What this does:",
+            tk.Label(_desc_frame, text="What this does:",
                      font=('Arial', 8, 'bold'), bg='#e8f4e8', fg='#1a4a1a',
                      anchor='w').pack(anchor='w', padx=8, pady=(6, 2))
-            tk.Label(_desc_frame,
-                     text=task_def.get('description', ''),
+            tk.Label(_desc_frame, text=task_def.get('description', ''),
                      font=('Arial', 8), bg='#e8f4e8', fg='#1a3a1a',
                      anchor='w', justify='left',
                      wraplength=728).pack(anchor='w', padx=8, pady=(0, 6))
 
-            # ── Collapsible read-only Prompt ──────────────────────────────────
             _prompt_hdr = tk.Frame(_pad)
             _prompt_hdr.pack(fill='x')
             tk.Label(_prompt_hdr, text="Prompt (auto):",
@@ -5287,7 +5336,6 @@ or from the Help menu."""
                        command=_toggle_prompt,
                        width=14).pack(side='left', padx=(8, 0))
 
-            # ── Scope directories (scrollable) ────────────────────────────────────
             tk.Label(_pad, text="Scope directories (optional):",
                      font=('Arial', 9, 'bold'), anchor='w').pack(anchor='w', pady=(8, 0))
             tk.Label(_pad,
@@ -5296,7 +5344,6 @@ or from the Help menu."""
                      font=('Arial', 8), fg='gray',
                      wraplength=728, justify='left').pack(anchor='w')
 
-            # Scrollable canvas — capped at 150px, auto-sizes for short lists
             _scope_outer = tk.Frame(_pad, bd=1, relief='sunken')
             _scope_outer.pack(fill='x', pady=(2, 8))
             _scope_canvas = tk.Canvas(_scope_outer, highlightthickness=0, bg='white')
@@ -5321,15 +5368,15 @@ or from the Help menu."""
             _scope_canvas.bind('<MouseWheel>', _scope_mousewheel)
             _scope_inner.bind('<MouseWheel>', _scope_mousewheel)
 
+            _saved_scope_set = set(saved.get("scope_dirs") or [])
             _scope_vars = {}
             if tracked_dirs:
                 for _d in tracked_dirs:
-                    _sv = tk.BooleanVar(value=False)
+                    _sv = tk.BooleanVar(value=(_d in _saved_scope_set))
                     _scope_vars[_d] = _sv
                     _cb = ttk.Checkbutton(_scope_inner, text=_d, variable=_sv)
                     _cb.pack(anchor='w', padx=4, pady=1)
                     _cb.bind('<MouseWheel>', _scope_mousewheel)
-                # Height: fit content up to 150px max
                 _scope_canvas.update_idletasks()
                 _content_h = _scope_inner.winfo_reqheight()
                 _scope_canvas.configure(height=min(_content_h + 4, 150))
@@ -5339,14 +5386,13 @@ or from the Help menu."""
                          font=('Arial', 8), fg='gray', bg='white').pack(padx=4, pady=4)
                 _scope_canvas.configure(height=30)
 
-            # ── Output options ────────────────────────────────────────────────
             tk.Label(_pad, text="Output:", font=('Arial', 9, 'bold'),
                      anchor='w').pack(anchor='w')
             _out_row = tk.Frame(_pad)
             _out_row.pack(anchor='w', pady=(2, 4))
 
-            _learn_var  = tk.BooleanVar(value=True)
-            _report_var = tk.BooleanVar(value=False)
+            _learn_var  = tk.BooleanVar(value=saved.get("output_learnings", True))
+            _report_var = tk.BooleanVar(value=saved.get("output_report", False))
 
             ttk.Checkbutton(_out_row,
                             text="💡 Save key insights to Learnings",
@@ -5355,11 +5401,10 @@ or from the Help menu."""
                             text="📄 Save full analysis as Word document (.docx)",
                             variable=_report_var).pack(anchor='w')
 
-            # ── Schedule / Recurrence ─────────────────────────────────
             tk.Label(_pad, text='Schedule:', font=('Arial', 9, 'bold'),
                      anchor='w').pack(anchor='w', pady=(8, 0))
             tk.Label(_pad,
-                     text='One shot = run once now.  '
+                     text='One shot = run only via ▶ Queue / ▶ NOW.  '
                           'Choose a schedule to repeat automatically — '
                           'AI-Prowler detects when it is due and surfaces it.',
                      font=('Arial', 8), fg='gray',
@@ -5369,41 +5414,47 @@ or from the Help menu."""
             _sched_row.pack(fill='x', pady=(4, 2))
 
             _sched_lbl_to_key = {v: k for k, v in _ctm_q.SCHEDULE_LABELS.items()}
-            _sched_var = tk.StringVar(value='Manual only')
+            _sched_var = tk.StringVar(
+                value=_ctm_q.SCHEDULE_LABELS.get(saved.get("schedule", "none"), "Manual only"))
             _sched_combo = ttk.Combobox(
                 _sched_row, textvariable=_sched_var,
                 values=list(_ctm_q.SCHEDULE_LABELS.values()),
                 state='readonly', width=16)
-            _sched_combo.set('Manual only')
             _sched_combo.pack(side='left')
 
             tk.Label(_sched_row, text='  First due date:',
                      font=('Arial', 9, 'bold')).pack(side='left')
-            _due_var   = tk.StringVar(value='')
+            _due_var   = tk.StringVar(value=saved.get("first_due") or '')
             _due_entry = ttk.Entry(_sched_row, textvariable=_due_var, width=12)
             _due_entry.pack(side='left', padx=(4, 0))
             tk.Label(_sched_row, text='YYYY-MM-DD  (blank = today)',
                      font=('Arial', 7), fg='gray').pack(side='left', padx=(6, 0))
 
             def _on_sched_change(e=None):
-                  _k = _sched_lbl_to_key.get(_sched_var.get(), 'none')
-                  if _k == 'none':
-                        _due_entry.configure(state='disabled')
-                        _due_var.set('')
-                  else:
-                        _due_entry.configure(state='normal')
-                        if not _due_var.get():
-                              import datetime as _dt2
-                              _due_var.set(_dt2.date.today().isoformat())
+                _k = _sched_lbl_to_key.get(_sched_var.get(), 'none')
+                if _k == 'none':
+                    _due_entry.configure(state='disabled')
+                    _due_var.set('')
+                else:
+                    _due_entry.configure(state='normal')
+                    if not _due_var.get():
+                        import datetime as _dt2
+                        _due_var.set(_dt2.date.today().isoformat())
             _sched_combo.bind('<<ComboboxSelected>>', _on_sched_change)
-            _due_entry.configure(state='disabled')  # starts disabled
+            # Match the entry's enabled/disabled state to the PRE-FILLED
+            # schedule (not always-disabled like the old "always Manual
+            # only at open" popup) — otherwise re-opening Edit on an
+            # already-recurring analysis would show its due date in a
+            # disabled field with no way to tell it's actually active.
+            _due_entry.configure(state='disabled')
+            _on_sched_change()
 
-            # ── Report folder ─────────────────────────────────────────────────
             _folder_frame = tk.Frame(_pad)
             _folder_frame.pack(fill='x', pady=(0, 8))
             tk.Label(_folder_frame, text="Report folder:",
                      font=('Arial', 9, 'bold')).pack(side='left')
-            _folder_var = tk.StringVar(value=_ctm_q.DEFAULT_REPORT_FOLDER)
+            _folder_var = tk.StringVar(
+                value=saved.get("report_folder") or _ctm_q.DEFAULT_REPORT_FOLDER)
             ttk.Entry(_folder_frame, textvariable=_folder_var,
                       width=52).pack(side='left', padx=(6, 4))
 
@@ -5417,13 +5468,13 @@ or from the Help menu."""
             ttk.Button(_folder_frame, text="Browse…",
                        command=_browse_report_folder).pack(side='left')
 
-            # ── Paste reminder ────────────────────────────────────────────────
             tk.Label(_pad,
-                     text="After clicking Queue Analysis →  open a new Claude chat and press  Ctrl+V  to run all queued tasks.",
+                     text="Save Settings stores these for ▶ Queue and ▶ NOW to use — it "
+                          "doesn't queue or run anything by itself. Close this window and "
+                          "use the row's own ▶ Queue or ▶ NOW button for that.",
                      font=('Arial', 8, 'italic'), fg='#4a6a82',
                      wraplength=728, justify='left').pack(anchor='w', pady=(0, 4))
 
-            # ── Action buttons ────────────────────────────────────────────────
             _confirmed = tk.BooleanVar(value=False)
 
             def _confirm():
@@ -5434,7 +5485,7 @@ or from the Help menu."""
             _btn_row.pack(fill='x', pady=(8, 0))
             ttk.Button(_btn_row, text="Cancel",
                        command=_win.destroy).pack(side='left', padx=(0, 8))
-            ttk.Button(_btn_row, text="Queue Analysis →",
+            ttk.Button(_btn_row, text="Save Settings",
                        command=_confirm).pack(side='left')
 
             self.root.wait_window(_win)
@@ -5442,154 +5493,174 @@ or from the Help menu."""
             if not _confirmed.get():
                 return  # user cancelled
 
-            # ── Collect choices ───────────────────────────────────────────────
-            # ── Collect choices ──────────────────────────────────────────
             scope_dirs    = [d for d, v in _scope_vars.items() if v.get()]
-            out_learnings = _learn_var.get()
-            out_report    = _report_var.get()
-            report_folder = _folder_var.get().strip() or _ctm_q.DEFAULT_REPORT_FOLDER
             schedule_key  = _sched_lbl_to_key.get(_sched_var.get(), 'none')
             first_due_val = _due_var.get().strip() or None
-            import datetime as _dt3
-            next_due_val  = (first_due_val or _dt3.date.today().isoformat()) \
-                            if schedule_key != 'none' else None
+            new_settings = {
+                "scope_dirs":       scope_dirs,
+                "output_learnings": _learn_var.get(),
+                "output_report":    _report_var.get(),
+                "report_folder":    _folder_var.get().strip() or _ctm_q.DEFAULT_REPORT_FOLDER,
+                "schedule":         schedule_key,
+                "first_due":        first_due_val,
+            }
+            _ctm_q.save_builtin_analysis_settings(task_def["type"], new_settings)
+            self.status_var.set(f"✅ Settings saved for {task_def['label']}")
+            self.root.after(3000, lambda: self.status_var.set("Ready"))
 
-            # ── Write task to pending_tasks.json ──────────────────────────────
-            tasks_path = _Path.home() / ".ai-prowler" / "pending_tasks.json"
+        # v8.1.6: runs ONE analysis right now via Claude Code, without
+        # queuing it — see run_single_prompt_now()'s docstring. Uses the
+        # currently SAVED settings (scope/output/report folder), same as
+        # ▶ Queue, via _build_builtin_prompt() — previously used the raw
+        # unenriched task prompt, silently ignoring scope/output settings.
+        def _run_analysis_now(task_def, now_btn):
             try:
-                existing = []
-                if tasks_path.exists():
-                    try:
-                        existing = _json.loads(
-                            tasks_path.read_text(encoding="utf-8")) or []
-                        if not isinstance(existing, list):
-                            existing = []
-                    except Exception:
-                        existing = []
-
-                ts = _dt.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-
-                # Build prompt: scope + output instructions appended
-                prompt = task_def["prompt"].rstrip()
-
-                if scope_dirs:
-                    prompt += (
-                        f"\n\nScope restriction: focus your analysis only on "
-                        f"these indexed directories: {', '.join(scope_dirs)}. "
-                        f"Use search_within_directory() for each scope directory "
-                        f"rather than search_documents() across the full index."
-                    )
-
-                if out_learnings and out_report:
-                    prompt += (
-                        f"\n\nOutput: (1) Record key insights as learnings via "
-                        f"record_learning() with category 'business_insight'. "
-                        f"(2) Save the full analysis as a Word document via "
-                        f"save_analysis_report() to folder '{report_folder}'."
-                    )
-                elif out_report:
-                    prompt += (
-                        f"\n\nOutput: Save the full analysis as a Word document "
-                        f"via save_analysis_report() to folder '{report_folder}'."
-                    )
-                elif out_learnings:
-                    prompt += (
-                        "\n\nOutput: Record key insights as learnings via "
-                        "record_learning() with category 'business_insight'."
-                    )
-
-                task = {
-                    "task_id":          f"{task_def['type']}_{ts}",
-                    "type":             task_def["type"],
-                    "label":            task_def["label"],
-                    "prompt":           prompt,
-                    "scope_dirs":       scope_dirs,
-                    "output_learnings": out_learnings,
-                    "output_report":    out_report,
-                    "report_folder":    report_folder,
-                    "schedule":         schedule_key,
-                    "first_due":        first_due_val,
-                    "next_due":         next_due_val,
-                    "created_at":       _dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    "status":           "pending",
-                }
-                existing.append(task)
-                tasks_path.parent.mkdir(parents=True, exist_ok=True)
-                tasks_path.write_text(
-                    _json.dumps(existing, indent=2, ensure_ascii=False),
-                    encoding="utf-8")
-
-            except Exception as _e:
-                self.status_var.set(f"Task queue error: {_e}")
+                import task_queue_automation as _tqa_now
+                import custom_tasks_manager as _ctm_now
+            except ImportError:
+                messagebox.showerror("Not Available",
+                                      "Required module not found.")
+                return
+            if not _tqa_now.claude_code_cli_installed():
+                messagebox.showwarning(
+                    "Claude Code Needed",
+                    "Running an analysis right now requires Claude Code CLI, "
+                    "which isn't installed yet.\n\nInstall it from the 🤖 "
+                    "Autonomous AI Task Queue panel above, or click ▶ Queue to "
+                    "save this analysis for the next scheduled run instead.")
+                return
+            _cfg_now = _tqa_now.load_config()
+            if not _cfg_now.get("mcp_config_path"):
+                messagebox.showwarning(
+                    "Setup Needed",
+                    "No MCP config is set up yet — see the 🤖 Autonomous "
+                    "Task Queue panel above (🧪 Test Setup (Dry Run) will "
+                    "show what's missing), then try again.")
                 return
 
-            # ── Copy run-all-pending command to clipboard ─────────────────────
-            _cmd = (
-                "Call get_pending_analysis_tasks() and for each pending task: "
-                "execute the full analysis described in the task's prompt field "
-                "using all available AI-Prowler tools, record any significant "
-                "findings as learnings via record_learning(), then call "
-                "complete_analysis_task(task_id) with a one-sentence summary "
-                "of what was found."
-            )
-            try:
-                self.root.clipboard_clear()
-                self.root.clipboard_append(_cmd)
-                self.root.update()
-            except Exception:
-                pass
+            settings = _ctm_now.get_builtin_analysis_settings(task_def["type"])
+            enriched_prompt = _build_builtin_prompt(task_def, settings)
 
-            # Visual feedback
-            orig_text  = btn_widget.cget("text")
-            orig_color = btn_widget.cget("bg")
-            scope_note = (f" ({len(scope_dirs)} dir{'s' if len(scope_dirs) != 1 else ''})"
-                          if scope_dirs else "")
-            out_note   = " 💡" if out_learnings else ""
-            out_note  += " 📄" if out_report else ""
-            btn_widget.configure(text="✓ Queued & Copied!", bg='#1a7a4a')
-            self.status_var.set(
-                f"✅ {task_def['label']}{scope_note}{out_note} queued "
-                f"— paste into Claude to run ALL tasks")
-            self.root.after(2000, lambda: btn_widget.configure(
-                text=orig_text, bg=orig_color))
-            self.root.after(4000, lambda: self.status_var.set("Ready"))
+            orig_text = now_btn.cget("text")
+            now_btn.configure(state='disabled', text="⏳")
+            self.status_var.set(f"⏳ Running {task_def['label']} now via Claude Code…")
 
-        # Button grid — 2 columns
-        _btn_grid = tk.Frame(_an_inner, bg='#1a2530')
-        _btn_grid.pack(fill='x', pady=(4, 0))
+            def _do_run():
+                ok, detail = _tqa_now.run_single_prompt_now(
+                    enriched_prompt, _cfg_now.get("mcp_config_path", ""),
+                    _cfg_now.get("allowed_tools", "mcp__ai-prowler__*"),
+                    _cfg_now.get("use_api_key", False))
 
-        for _idx, _task in enumerate(_ANALYSIS_TASKS):
-            _col = _idx % 2
-            _row = _idx // 2
-            _f   = tk.Frame(_btn_grid, bg='#1a2530')
-            _f.grid(row=_row, column=_col, sticky='ew', padx=(0, 6 if _col == 0 else 0),
-                    pady=3)
-            _btn_grid.columnconfigure(_col, weight=1)
+                def _finish():
+                    now_btn.configure(state='normal', text=orig_text)
+                    if ok:
+                        messagebox.showinfo(
+                            "Run Complete",
+                            f"✅  {task_def['label']} finished.\n\n{detail[:500]}")
+                        self.status_var.set(f"✅ {task_def['label']} completed")
+                    else:
+                        messagebox.showerror("Run Failed", detail[:800])
+                        self.status_var.set("❌ Run failed")
+                    self.root.after(3000, lambda: self.status_var.set("Ready"))
 
-            _b = tk.Button(_f,
-                           text=_task["label"],
-                           bg=_task["color"],
-                           fg='white',
-                           activebackground=_task["hover"],
-                           activeforeground='white',
-                           font=('Arial', 9, 'bold'),
-                           relief='flat',
-                           padx=10, pady=6,
-                           cursor='hand2')
-            # Capture loop variable correctly
-            _b.configure(command=lambda _t=_task, _bw=_b: _queue_and_copy(_t, _bw))
-            _b.pack(fill='x')
-            # Hover tooltip — show first line of description in status bar
-            _tip = _task.get("description", "").split("\n")[0]
-            _b.bind("<Enter>", lambda e, _s=_tip: self.status_var.set(_s))
-            _b.bind("<Leave>", lambda e: self.status_var.set("Ready"))
+                self.root.after(0, _finish)
+
+            threading.Thread(target=_do_run, daemon=True).start()
+
+        # Full-width rows, matching My Custom Analyses' own layout — each
+        # analysis gets ▶ NOW / ▶ Queue / ✎ Edit on the right (no trash:
+        # these 5 are fixed, not user-deletable). Replaces the old 2-column
+        # grid of big colored buttons that opened a popup on every click.
+        _an_list_frame = tk.Frame(_an_inner, bg='#1a2530')
+        _an_list_frame.pack(fill='x', pady=(4, 0))
+
+        def _draw_builtin_row(task_def):
+            import custom_tasks_manager as _ctm_row
+            settings = _ctm_row.get_builtin_analysis_settings(task_def["type"])
+
+            row = tk.Frame(_an_list_frame, bg='#0d1a26',
+                           highlightthickness=1,
+                           highlightbackground=task_def.get("color", "#1e3a52"))
+            row.pack(fill='x', pady=2)
+
+            info = tk.Frame(row, bg='#0d1a26')
+            info.pack(side='left', fill='both', expand=True, padx=6, pady=4)
+
+            tk.Label(info, text=task_def["label"],
+                     bg='#0d1a26', fg='#d0e8ff',
+                     font=('Arial', 9, 'bold')).pack(anchor='w')
+
+            badges = []
+            if settings.get("output_learnings", True):
+                badges.append("💡 Learnings")
+            if settings.get("output_report", False):
+                badges.append("📄 Report")
+            if settings.get("scope_dirs"):
+                _n = len(settings["scope_dirs"])
+                badges.append(f"📁 {_n} dir{'s' if _n != 1 else ''}")
+            if settings.get("schedule", "none") != "none":
+                badges.append(_ctm_row.SCHEDULE_LABELS.get(
+                    settings["schedule"], settings["schedule"]))
+            if badges:
+                tk.Label(info, text="  ".join(badges),
+                         bg='#0d1a26', fg='#4a6a5a',
+                         font=('Arial', 7)).pack(anchor='w')
+
+            _desc_first = task_def.get("description", "").split("\n")[0]
+            tk.Label(info, text=_desc_first,
+                     bg='#0d1a26', fg='#5a7a8a', font=('Arial', 7),
+                     wraplength=560, justify='left', anchor='w').pack(anchor='w')
+
+            btn_col = tk.Frame(row, bg='#0d1a26')
+            btn_col.pack(side='right', padx=4, pady=4)
+
+            _now_b = tk.Button(btn_col, text="▶ NOW",
+                               bg='#2a2f45', fg='#e8ebf7',
+                               font=('Arial', 7, 'bold'),
+                               relief='flat', cursor='hand2')
+            _now_b.configure(command=lambda t=task_def, b=_now_b: _run_analysis_now(t, b))
+            _now_b.pack(fill='x', pady=1)
+
+            tk.Button(btn_col, text="▶ Queue",
+                      bg='#1a3a5a', fg='white',
+                      font=('Arial', 7, 'bold'),
+                      relief='flat', cursor='hand2',
+                      command=lambda t=task_def: _queue_task_row(t)).pack(fill='x', pady=1)
+
+            def _edit_click(t=task_def):
+                _open_builtin_editor(t)
+                _refresh_an_list()
+
+            tk.Button(btn_col, text="✎ Edit",
+                      bg='#1a2a1a', fg='#88cc88',
+                      font=('Arial', 7),
+                      relief='flat', cursor='hand2',
+                      command=_edit_click).pack(fill='x', pady=1)
+
+        def _refresh_an_list():
+            for w in _an_list_frame.winfo_children():
+                w.destroy()
+            for _task in _ANALYSIS_TASKS:
+                _draw_builtin_row(_task)
+
+        _refresh_an_list()
+        self._refresh_an_list      = _refresh_an_list  # exposed for tests
+        self._an_list_frame        = _an_list_frame
+        self._ANALYSIS_TASKS       = _ANALYSIS_TASKS
+        self._queue_task_row       = _queue_task_row
+        self._run_analysis_now     = _run_analysis_now
+        self._queue_builtin_task   = _queue_builtin_task
+        self._build_builtin_prompt = _build_builtin_prompt
+        self._open_builtin_editor  = _open_builtin_editor
 
         # Hint label
         tk.Label(_an_inner,
-                 text="Each button queues one task. The copied command runs ALL pending tasks when pasted into Claude.",
+                 text="▶ Queue saves for the next Autonomous AI Task Queue run.  "
+                      "▶ NOW runs it immediately instead (requires Claude Code CLI).  "
+                      "✎ Edit changes scope, output, schedule, and report folder.",
                  bg='#1a2530', fg='#4a6a82',
-                 font=('Arial', 7),
-                 anchor='w').pack(anchor='w', pady=(6, 0))
+                 font=('Arial', 7), wraplength=900,
+                 justify='left', anchor='w').pack(anchor='w', pady=(6, 0))
 
         # Divider after analysis section
         ttk.Separator(query_frame, orient='horizontal').pack(
@@ -5603,6 +5674,9 @@ or from the Help menu."""
                                 highlightthickness=1,
                                 highlightbackground='#2a3a4a')
         _queue_outer.pack(fill='x', padx=20, pady=(0, 6))
+        # v8.1.6: reordering happens later, right after _tqa_banner is
+        # created and positioned — see that pack_configure call for why
+        # (this widget doesn't exist yet at this point in the method).
 
         _queue_hdr = tk.Frame(_queue_outer, bg='#12181f')
         _queue_hdr.pack(fill='x', padx=10, pady=6)
@@ -5756,7 +5830,7 @@ or from the Help menu."""
         _custom_hdr_row.pack(fill='x', padx=12, pady=(8, 4))
 
         tk.Label(_custom_hdr_row,
-                 text="📋  My Custom Analyses",
+                 text="📋  My Custom AI Analyses",
                  bg='#0d1a26', fg='#ffffff',
                  font=('Arial', 10, 'bold')).pack(side='left')
 
@@ -5766,6 +5840,23 @@ or from the Help menu."""
                  textvariable=_custom_count_var,
                  bg='#0d1a26', fg='#4a6a82',
                  font=('Arial', 8)).pack(side='right')
+
+        # v8.2.0: explains what these are now that the section reads "AI
+        # Analyses" — these user-defined tasks are themselves AI-assisted:
+        # each one can be queued and stored for repeated and/or future
+        # execution. Also notes the MCP path explicitly, since everything
+        # below this note is the manual/GUI configuration path only —
+        # Claude can also create and add these tasks remotely via
+        # AI-Prowler MCP tools, without touching this panel at all.
+        tk.Label(_custom_outer,
+                 text="These user custom-defined tasks are AI-assisted tasks that "
+                      "can be queued and stored for repeated and/or future "
+                      "execution. In addition to manual configuration here, Claude "
+                      "can also create and add these via AI-Prowler MCP tools "
+                      "remotely.",
+                 bg='#0d1a26', fg='#7a92a8',
+                 font=('Arial', 8),
+                 wraplength=680, justify='left').pack(anchor='w', padx=12, pady=(0, 6))
 
         # Task list container
         _custom_list_frame = tk.Frame(_custom_outer, bg='#0d1a26')
@@ -6225,143 +6316,14 @@ or from the Help menu."""
                   relief='flat', cursor='hand2',
                   command=lambda: _open_task_editor(None)).pack(side='left')
 
-        # Run Due Tasks button — auto-queues all overdue custom tasks, then
-        # either runs them immediately via Claude Code (if it's installed —
-        # see the 🤖 Autonomous Task Queue panel above) or falls back to the
-        # original copy-into-a-new-chat flow if it isn't. Button color/text
-        # reflects which mode is active, using the SAME claude_code_cli_
-        # installed() check the Autonomous Task Queue panel's own status
-        # light uses — one source of truth for "is this actually usable."
-        def _refresh_run_due_button_state():
-            try:
-                import task_queue_automation as _tqa_rdt_chk
-                ready = _tqa_rdt_chk.claude_code_cli_installed()
-            except ImportError:
-                ready = False
-            if ready:
-                _run_due_btn.configure(bg='#1a3a1a', fg='#7fdb7f',
-                                        text="🧠 Run Due Tasks")
-            else:
-                _run_due_btn.configure(bg='#3a1a1a', fg='#e08080',
-                                        text="🧠 Run Due Tasks (needs Claude Code)")
-
-        def _run_due_tasks():
-            try:
-                import custom_tasks_manager as _ctm
-                import json as _j
-                from pathlib import Path as _P
-                tasks = _ctm.load_custom_tasks()
-                due   = _ctm.get_due_tasks(tasks)
-                if not due:
-                    self.status_var.set("No tasks due — nothing to queue")
-                    self.root.after(2500, lambda: self.status_var.set("Ready"))
-                    return
-                entries = _ctm.tasks_to_queue_entries(due)
-                p = _P.home() / ".ai-prowler" / "pending_tasks.json"
-                existing = []
-                if p.exists():
-                    try:
-                        existing = _j.loads(p.read_text(encoding="utf-8"))
-                        if not isinstance(existing, list):
-                            existing = []
-                    except Exception:
-                        existing = []
-                existing.extend(entries)
-                p.write_text(_j.dumps(existing, indent=2), encoding="utf-8")
-
-                import task_queue_automation as _tqa_rdt
-                n_due = len(due)
-                plural = 's' if n_due != 1 else ''
-
-                if not _tqa_rdt.claude_code_cli_installed():
-                    # Fallback: original copy-into-a-new-chat flow. The
-                    # button stays usable either way — CLI status only
-                    # changes WHICH method actually runs the queue, never
-                    # blocks the button outright, since a hard-disabled
-                    # button could trap someone who installs Claude Code
-                    # in the panel above without restarting this tab.
-                    _cmd = (
-                        "Call get_pending_analysis_tasks() and for each pending "
-                        "task: execute the full analysis, save reports and record "
-                        "learnings as configured, then call "
-                        "complete_analysis_task(task_id, summary)."
-                    )
-                    self.root.clipboard_clear()
-                    self.root.clipboard_append(_cmd)
-                    self.root.update()
-                    from tkinter import messagebox as _mb_rdt
-                    _mb_rdt.showinfo(
-                        "Due Tasks Queued",
-                        f"✅  {n_due} due task{plural} queued and "
-                        "the run command has been copied to your clipboard.\n\n"
-                        "Claude Code CLI isn't installed, so this can't run "
-                        "automatically yet — install it from the 🤖 Autonomous "
-                        "Task Queue panel above to skip this step in future.\n\n"
-                        "👉  Open a new Claude chat and press  Ctrl+V  (or paste)\n"
-                        "    to run all due tasks in sequence."
-                    )
-                    self.status_var.set(
-                        f"✅ {n_due} due task{plural} queued — paste into Claude to run ALL tasks")
-                    self.root.after(3000, lambda: self.status_var.set("Ready"))
-                    _refresh_queue_count()
-                    if _queue_expanded.get():
-                        _refresh_queue_list()
-                    return
-
-                # Claude Code is installed — run directly, no copy/paste.
-                _run_due_btn.configure(state='disabled', text="⏳ Running…")
-                self.status_var.set(f"⏳ Running {n_due} due task{plural} via Claude Code…")
-
-                _tqa_cfg_rdt = _tqa_rdt.load_config()
-
-                def _do_run():
-                    ok, detail = _tqa_rdt.run_queue_now(
-                        _tqa_cfg_rdt.get("mcp_config_path", ""),
-                        _tqa_cfg_rdt.get("allowed_tools", "mcp__ai-prowler__*"),
-                        _tqa_cfg_rdt.get("use_api_key", False),
-                        _tqa_cfg_rdt.get("notify_on_complete", False),
-                        _tqa_cfg_rdt.get("notify_method", "sms"))
-
-                    def _finish():
-                        _refresh_run_due_button_state()
-                        _run_due_btn.configure(state='normal')
-                        from tkinter import messagebox as _mb_rdt2
-                        if ok:
-                            _mb_rdt2.showinfo(
-                                "Run Complete",
-                                f"✅  {n_due} due task{plural} processed via "
-                                f"Claude Code.\n\n{detail[:500]}")
-                            self.status_var.set(f"✅ {n_due} task{plural} completed")
-                        else:
-                            _mb_rdt2.showerror("Run Failed", detail[:800])
-                            self.status_var.set("❌ Task run failed")
-                        self.root.after(3000, lambda: self.status_var.set("Ready"))
-                        _refresh_queue_count()
-                        if _queue_expanded.get():
-                            _refresh_queue_list()
-
-                    self.root.after(0, _finish)
-
-                threading.Thread(target=_do_run, daemon=True).start()
-            except Exception as _e:
-                self.status_var.set(f"Error: {_e}")
-                _refresh_run_due_button_state()
-
-        _run_due_btn = tk.Button(_new_btn_row,
-                  text="🧠 Run Due Tasks",
-                  bg='#2a1a4a', fg='#9b88ee',
-                  font=('Arial', 9, 'bold'),
-                  relief='flat', cursor='hand2',
-                  command=_run_due_tasks)
-        _run_due_btn.pack(side='right')
-        _refresh_run_due_button_state()
-
-        # Exposed on self for tests/gui/test_task_queue_panel.py, same
-        # rationale as the _tqa_* exposure above — otherwise these are
-        # unreachable closures and this button would go untested again.
-        self._run_due_btn                    = _run_due_btn
-        self._run_due_tasks                  = _run_due_tasks
-        self._refresh_run_due_button_state   = _refresh_run_due_button_state
+        # v8.1.6 fix: "Run Due Tasks" removed — redundant now that the
+        # Autonomous Task Queue (see panel above) runs the whole pending
+        # queue on its own schedule once enabled. catch_up_all_due_tasks()
+        # (called on enabling) keeps overdue backlog from all firing at
+        # once on day one; from there the daily scheduled run picks
+        # everything up automatically. A manual per-analysis test run is
+        # still available via the ▶ NOW button on each Common Business AI
+        # Analysis item above, for trying one out before queuing it.
 
         # Initial render
         _refresh_custom_list()
@@ -6941,6 +6903,13 @@ or from the Help menu."""
         # touches the AI-Prowler install directory itself. The Scheduled Task
         # is only created/enabled when the user explicitly clicks Enable;
         # nothing here runs automatically just from opening this tab.
+        #
+        # v8.1.9: this whole panel was accidentally reverted from the live
+        # file by a later, unrelated edit that overwrote it with an older
+        # snapshot — restored here from the last complete backup plus the
+        # final button-reorder/MCP-config-fold change that had only ever
+        # existed in the live file (see _tqa_generate_mcp_config()'s and
+        # the button-row's docstrings/comments below for that history).
         try:
             import task_queue_automation as _tqa
             _tqa_available = True
@@ -6955,11 +6924,25 @@ or from the Help menu."""
         _tqa_inner = tk.Frame(_tqa_banner, bg='#1a1e2e')
         _tqa_inner.pack(fill='x', padx=14, pady=10)
 
+        # v8.1.6 fix, then removed again same night: a hover-tooltip helper
+        # briefly lived here to explain what each button does. It caused a
+        # real production bug — a Toplevel popup positioned just below a
+        # button can trigger a spurious Leave/Enter cycle on the widget
+        # underneath it once the popup appears (the popup is now "under"
+        # the cursor instead of the button), which re-shows the tooltip,
+        # which re-triggers Leave, forever — a visible flicker loop that
+        # also pegged the UI thread busy enough to make scrolling choppy
+        # and made the whole app's embedded MCP server stop responding.
+        # Removed outright rather than patched: with the buttons already
+        # simplified and split into clearly-grouped rows (setup buttons
+        # vs. enable/history buttons), the explanatory value tooltips add
+        # is no longer worth carrying this class of risk.
+
         _tqa_hdr = tk.Frame(_tqa_inner, bg='#1a1e2e')
         _tqa_hdr.pack(fill='x', pady=(0, 6))
 
         tk.Label(_tqa_hdr,
-                 text="🤖  Autonomous Task Queue",
+                 text="🤖  Autonomous AI Task Queue",
                  bg='#1a1e2e', fg='#ffffff',
                  font=('Arial', 11, 'bold'),
                  anchor='w').pack(side='left')
@@ -6968,7 +6951,28 @@ or from the Help menu."""
         _tqa_status_lbl = tk.Label(_tqa_hdr, textvariable=_tqa_status_var,
                                     bg='#1a1e2e', fg='#aa4444',
                                     font=('Arial', 8), anchor='e')
-        _tqa_status_lbl.pack(side='right')
+        # v8.3: no longer packed/shown — the big red/green toggle button
+        # at the bottom of the panel now carries the ON/OFF state
+        # visually, so this separate "● Enabled/Disabled" dot next to the
+        # title was redundant with it. The widget and StringVar are kept
+        # alive (just unpacked) since _tqa_refresh_status_display() still
+        # updates them internally and existing code/tests read
+        # _tqa_status_var directly.
+
+        # v8.2.0: note added right after the section header/rename to
+        # "Autonomous AI Task Queue" — clarifies that everything queued
+        # here is itself AI-assisted, and that this panel isn't the only
+        # way to manage it: Claude has tools to add, manage, and run
+        # these task queues remotely via AI-Prowler MCP tools, in
+        # addition to the manual controls below.
+        tk.Label(_tqa_inner,
+                 text="These are AI-assisted tasks that can be queued and stored "
+                      "for repeated and/or future execution. Claude AI has tools to "
+                      "manage, add, and run these task queues via AI-Prowler MCP "
+                      "tools remotely.",
+                 bg='#1a1e2e', fg='#8899bb',
+                 font=('Arial', 8),
+                 wraplength=680, justify='left').pack(anchor='w', pady=(0, 4))
 
         tk.Label(_tqa_inner,
                  text="Runs your queued analysis tasks on a schedule via Claude Code, "
@@ -7067,7 +7071,11 @@ or from the Help menu."""
                     return
                 _tok = _tqa.check_token_expiry()
                 if _tok["status"] == "no_credentials":
-                    _tqa_token_var.set("🔑 No Claude Code token yet — click Get / Renew Token")
+                    _tqa_token_var.set(
+                        "🔑 No Claude Code token yet — click 🔑 Get / Renew Token "
+                        "(first button below), sign in, then come back here. "
+                        "This line updates on its own within a few seconds — "
+                        "no Save needed.")
                     _tqa_token_lbl.config(fg='#cc8800')
                 elif _tok["status"] == "expired":
                     _tqa_token_var.set(f"🔑 Token EXPIRED — {_tok['detail']}")
@@ -7084,11 +7092,11 @@ or from the Help menu."""
 
             _tqa_row1 = tk.Frame(_tqa_inner, bg='#1a1e2e')
             _tqa_row1.pack(fill='x', pady=(0, 4))
-            tk.Checkbutton(_tqa_row1, text="Enable scheduled runs",
-                           variable=_tqa_enabled_var, bg='#1a1e2e', fg='#ffffff',
-                           selectcolor='#1a1e2e', activebackground='#1a1e2e',
-                           font=('Arial', 9)).pack(side='left')
-            tk.Label(_tqa_row1, text="  at", bg='#1a1e2e', fg='#a0a8cc',
+            # v8.3: the "Enable scheduled runs" checkbox that used to live
+            # here is gone — the big color-coded toggle button at the
+            # bottom of the panel is now the single control for on/off.
+            # This row is just the schedule time input.
+            tk.Label(_tqa_row1, text="Scheduled time:", bg='#1a1e2e', fg='#a0a8cc',
                      font=('Arial', 9)).pack(side='left')
             tk.Entry(_tqa_row1, textvariable=_tqa_time_var, width=6,
                      font=('Arial', 9)).pack(side='left', padx=(4, 2))
@@ -7109,26 +7117,51 @@ or from the Help menu."""
             # Same agentic/MCP tool access either way — this is purely a
             # billing + reliability tradeoff (see spec §5.3). Radio buttons
             # rather than a checkbox since exactly one must be active.
+            #
+            # v8.1.5 fix: this used to be two unlabeled radio buttons with no
+            # indication of WHICH button/field below actually belongs to
+            # which option — a real user hit this exact confusion (pasted a
+            # `claude setup-token` value into the API key field while
+            # Subscription was selected, then couldn't tell why "No Claude
+            # Code token yet" kept showing). Added explicit labels stating
+            # which billing account each option draws from, plus a one-line
+            # "how to actually do this" pointer under each radio so the two
+            # credentials (a Claude Code OAuth sign-in vs. a pasted API key
+            # string) are never confused for each other again.
             _tqa_auth_var = tk.StringVar(
                 value="api_key" if _tqa_cfg.get("use_api_key") else "oauth")
 
             _tqa_row3 = tk.Frame(_tqa_inner, bg='#1a1e2e')
-            _tqa_row3.pack(fill='x', pady=(0, 4))
+            _tqa_row3.pack(fill='x', pady=(0, 2))
             tk.Label(_tqa_row3, text="Auth:", bg='#1a1e2e', fg='#a0a8cc',
                      font=('Arial', 9)).pack(side='left')
-            tk.Radiobutton(_tqa_row3, text="Subscription (OAuth)",
+            tk.Radiobutton(_tqa_row3, text="Subscription (OAuth) — uses your Claude Pro/Max plan",
                            variable=_tqa_auth_var, value="oauth",
                            bg='#1a1e2e', fg='#ffffff', selectcolor='#1a1e2e',
                            activebackground='#1a1e2e',
                            font=('Arial', 9)).pack(side='left', padx=(4, 0))
-            tk.Radiobutton(_tqa_row3, text="API Key (metered billing)",
+            tk.Radiobutton(_tqa_row3, text="API Key (metered billing) — separate pay-as-you-go account",
                            variable=_tqa_auth_var, value="api_key",
                            bg='#1a1e2e', fg='#ffffff', selectcolor='#1a1e2e',
                            activebackground='#1a1e2e',
                            font=('Arial', 9)).pack(side='left', padx=(4, 0))
 
+            # v8.1.6 fix: both the hint text and the API-key row used to be
+            # permanently visible regardless of which auth method was
+            # selected, which is exactly the kind of "which field goes with
+            # which option" confusion the v8.1.5 labels above were trying to
+            # reduce in the first place. Now only the fields relevant to the
+            # currently-selected radio button are shown at all — see
+            # _tqa_on_auth_change() below, which both swaps this hint's text
+            # and shows/hides the whole API-key row and its buttons.
+            _tqa_hint_var = tk.StringVar()
+            _tqa_hint_lbl = tk.Label(_tqa_inner, textvariable=_tqa_hint_var,
+                     bg='#1a1e2e', fg='#7a86ac',
+                     font=('Arial', 8, 'italic'),
+                     wraplength=680, justify='left')
+            _tqa_hint_lbl.pack(anchor='w', pady=(0, 6))
+
             _tqa_row4 = tk.Frame(_tqa_inner, bg='#1a1e2e')
-            _tqa_row4.pack(fill='x', pady=(0, 4))
             tk.Label(_tqa_row4, text="API key:", bg='#1a1e2e', fg='#a0a8cc',
                      font=('Arial', 9)).pack(side='left')
             _tqa_apikey_var = tk.StringVar(
@@ -7153,12 +7186,35 @@ or from the Help menu."""
             ttk.Button(_tqa_row4, text="Save Key",
                        command=_tqa_save_api_key).pack(side='left', padx=(0, 6))
 
+            def _tqa_clear_api_key():
+                """v8.1.6 fix: there was previously no way to actually remove a
+                saved API key from this machine -- _tqa_save_api_key() refuses
+                to save an empty value ("No Key Entered"), so a mistakenly
+                saved key (or one a user wants to retire when switching back
+                to Subscription) had no path to deletion; the masked Entry
+                field also isn't a live reflection of storage, so clearing
+                the on-screen text alone did nothing persistent."""
+                if not _tqa.has_api_key():
+                    messagebox.showinfo("Nothing to Clear",
+                                         "No API key is currently saved.")
+                    return
+                if not messagebox.askyesno(
+                        "Clear API Key",
+                        "Remove the saved API key from this machine?\n\n"
+                        "You can paste a new one later, or use Subscription "
+                        "(OAuth) instead."):
+                    return
+                _tqa.delete_api_key()
+                _tqa_apikey_var.set("")
+                messagebox.showinfo("Cleared", "The saved API key has been removed.")
+                _tqa_refresh_status_display()
+
+            ttk.Button(_tqa_row4, text="Clear Key",
+                       command=_tqa_clear_api_key).pack(side='left', padx=(0, 6))
+
             def _tqa_open_api_key_console():
                 import webbrowser
                 webbrowser.open("https://console.anthropic.com/settings/keys")
-
-            ttk.Button(_tqa_row4, text="🌐 Get an API Key",
-                       command=_tqa_open_api_key_console).pack(side='left')
 
             _tqa_last_run_var = tk.StringVar(value="Last: (never run)")
             tk.Label(_tqa_inner, textvariable=_tqa_last_run_var,
@@ -7187,16 +7243,59 @@ or from the Help menu."""
                 if not _tqa_checklist_frame.winfo_ismapped():
                     _tqa_checklist_frame.pack(fill='x', pady=(0, 6))
 
+            def _tqa_generate_mcp_config(silent=False):
+                """Write/refresh the MCP config file the headless Claude Code
+                wrapper script needs to reach AI-Prowler's HTTP server —
+                derived entirely from the already-saved Bearer Token and
+                tunnel domain (Settings → Remote Access), the same
+                credentials the Claude.ai connector itself uses. No new
+                user input required.
+
+                v8.1.5 fix: this used to be its own separate, unexplained
+                button most users had no reason to understand or click.
+                Folded into _tqa_test_setup() below instead — regenerating
+                it silently on every Test Setup run means it's always
+                current (including after a Bearer Token/tunnel domain
+                change) with zero extra steps. Kept callable standalone
+                (silent=False) for anyone who wants an explicit
+                confirmation dialog, but nothing in the normal flow
+                requires knowing this function/button exists.
+                """
+                ok, result = _tqa.generate_mcp_config()
+                if not ok:
+                    if not silent:
+                        messagebox.showerror("Could Not Generate Config", result)
+                    return False
+                cfg = dict(_tqa_cfg)
+                cfg["mcp_config_path"] = result
+                _tqa.save_config(cfg)
+                _tqa_cfg["mcp_config_path"] = result
+                if not silent:
+                    messagebox.showinfo(
+                        "MCP Config Generated",
+                        f"Written to:\n{result}\n\n"
+                        f"Pulled from your saved Bearer Token and tunnel domain "
+                        f"(Settings → Remote Access) — same credentials the "
+                        f"Claude.ai connector uses.")
+                _tqa_refresh_status_display()
+                return True
+
             def _tqa_test_setup():
                 _tqa_status_var.set("⏳ Testing…")
                 self.root.update()
+                # v8.1.5 fix: silently keep the MCP config current every time
+                # this runs — see _tqa_generate_mcp_config()'s docstring for
+                # why this replaced a separate, confusing button. A failure
+                # here surfaces naturally via the checklist's own "MCP
+                # config file" check, not a separate popup.
+                _tqa_generate_mcp_config(silent=True)
                 report = _tqa.dry_run_check()
                 _tqa_render_checklist(report)
                 _tqa_refresh_status_display()
 
             def _tqa_view_audit_log():
                 _log_win = tk.Toplevel(self.root)
-                _log_win.title("Autonomous Task Queue — Audit Log")
+                _log_win.title("Autonomous AI Task Queue — Audit Log")
                 _log_win.geometry("700x450")
                 import tkinter.scrolledtext as _st
                 _lt = _st.ScrolledText(_log_win, font=('Courier', 8),
@@ -7209,12 +7308,34 @@ or from the Help menu."""
                 """Enable/disable is the one action here that actually touches
                 the Scheduled Task — everything else (checkboxes, time field)
                 is just config until this runs."""
+                was_enabled = bool(_tqa_cfg.get("enabled", False))
                 cfg = dict(_tqa_cfg)
                 cfg["enabled"]            = _tqa_enabled_var.get()
                 cfg["schedule_time"]      = _tqa_time_var.get().strip() or "06:00"
                 cfg["notify_on_complete"] = _tqa_notify_var.get()
                 cfg["notify_method"]      = _tqa_method_var.get()
                 cfg["use_api_key"]        = (_tqa_auth_var.get() == "api_key")
+
+                # v8.1.6: on the OFF -> ON transition specifically (not on
+                # every save while already enabled — that would incorrectly
+                # skip a task that's legitimately due next week just because
+                # Save got clicked again), catch up any custom tasks that
+                # accumulated overdue occurrences while automation was off.
+                # Without this, turning automation on could immediately fire
+                # a backlog of tasks nobody explicitly asked to run right
+                # now, burning subscription/API usage on stale occurrences.
+                # See catch_up_all_due_tasks()'s docstring for the full
+                # rationale — this resyncs to the normal cadence starting
+                # today rather than actually running the backlog.
+                if cfg["enabled"] and not was_enabled:
+                    try:
+                        import custom_tasks_manager as _ctm_enable
+                        _custom_tasks = _ctm_enable.load_custom_tasks()
+                        _n_caught_up = _ctm_enable.catch_up_all_due_tasks(_custom_tasks)
+                        if _n_caught_up:
+                            _ctm_enable.save_custom_tasks(_custom_tasks)
+                    except Exception:
+                        pass  # best-effort — a catch-up failure shouldn't block enabling
 
                 if cfg["use_api_key"] and not _tqa.has_api_key():
                     messagebox.showwarning(
@@ -7254,15 +7375,6 @@ or from the Help menu."""
 
                 _tqa_refresh_status_display()
 
-            _tqa_btn_row = tk.Frame(_tqa_inner, bg='#1a1e2e')
-            _tqa_btn_row.pack(fill='x', pady=(4, 0))
-            ttk.Button(_tqa_btn_row, text="💾 Save",
-                       command=_tqa_save_and_apply).pack(side='left', padx=(0, 6))
-            ttk.Button(_tqa_btn_row, text="🧪 Test Setup (Dry Run)",
-                       command=_tqa_test_setup).pack(side='left', padx=(0, 6))
-            ttk.Button(_tqa_btn_row, text="📄 View Audit Log",
-                       command=_tqa_view_audit_log).pack(side='left', padx=(0, 6))
-
             def _tqa_get_token():
                 ok, detail = _tqa.open_setup_token_terminal()
                 if not ok:
@@ -7274,28 +7386,153 @@ or from the Help menu."""
                         "Complete the browser sign-in it prompts for, then come "
                         "back here and click Test Setup (Dry Run) to confirm.")
 
-            ttk.Button(_tqa_btn_row, text="🔑 Get / Renew Token",
-                       command=_tqa_get_token).pack(side='left', padx=(0, 6))
+            # v8.1.5 reorder, per direct product decision: the Subscription/
+            # OAuth path (Get / Renew Token) is the recommended default —
+            # it should be the FIRST, most prominent button, not buried
+            # after Save/Test Setup/View Audit Log. "Get an API Key" is the
+            # backup/last-resort path (separate metered account) and moves
+            # to the very end of the row for exactly that reason — it
+            # previously sat right next to the API key entry field, which
+            # made it look like the natural first step rather than a
+            # fallback. "Generate MCP Config" no longer has its own button
+            # at all — see _tqa_generate_mcp_config()'s docstring above.
+            #
+            # v8.1.6 fix: Get / Renew Token and Get an API Key (backup) are
+            # now conditionally shown/hidden by _tqa_relayout_buttons() below
+            # rather than always both being visible — captured as named
+            # widgets (rather than the previous fire-and-forget
+            # .pack(...) chains) so that function can pack_forget()/re-pack
+            # them. Save / Test Setup / View Audit Log stay visible always;
+            # they're relevant to both auth methods.
+            # v8.1.6 fix: Save and View Audit Log used to sit in this same
+            # row as the setup/config buttons (Get/Renew Token, Test Setup,
+            # Get an API Key) — but they're not part of key setup at all;
+            # Save applies the schedule/enable settings above and View
+            # Audit Log is read-only history. Split into a separate row at
+            # the very bottom of the panel (see _tqa_btn_row2 further
+            # down) so the setup-configuration buttons and the
+            # enable/history buttons are visually distinct groups. Save
+            # is also renamed to state what it actually does when clicked
+            # with the checkbox on — see its tooltip for the fuller
+            # explanation of the double duty it still does either way.
+            _tqa_btn_row = tk.Frame(_tqa_inner, bg='#1a1e2e')
+            _tqa_btn_row.pack(fill='x', pady=(4, 0))
+            _tqa_btn_get_token = ttk.Button(_tqa_btn_row, text="🔑 Get / Renew Token",
+                                             command=_tqa_get_token)
+            _tqa_btn_test = ttk.Button(_tqa_btn_row, text="🧪 Test Setup (Dry Run)",
+                                        command=_tqa_test_setup)
+            _tqa_btn_get_api_key = ttk.Button(_tqa_btn_row, text="🌐 Get an API Key (backup)",
+                                               command=_tqa_open_api_key_console)
 
-            def _tqa_generate_mcp_config():
-                ok, result = _tqa.generate_mcp_config()
-                if not ok:
-                    messagebox.showerror("Could Not Generate Config", result)
-                    return
-                cfg = dict(_tqa_cfg)
-                cfg["mcp_config_path"] = result
-                _tqa.save_config(cfg)
-                _tqa_cfg["mcp_config_path"] = result
-                messagebox.showinfo(
-                    "MCP Config Generated",
-                    f"Written to:\n{result}\n\n"
-                    f"Pulled from your saved Bearer Token and tunnel domain "
-                    f"(Settings → Remote Access) — same credentials the "
-                    f"Claude.ai connector uses.")
-                _tqa_refresh_status_display()
+            def _tqa_relayout_buttons():
+                """Re-packs the button row from scratch in the correct order
+                for whichever auth method is currently selected — forgetting
+                everything first (rather than toggling in place) avoids the
+                row silently reordering itself, since Tk's pack manager
+                positions a widget relative to whatever else is CURRENTLY
+                packed at the moment .pack() is called, not by any original
+                fixed index."""
+                for _b in (_tqa_btn_get_token, _tqa_btn_test, _tqa_btn_get_api_key):
+                    _b.pack_forget()
+                is_api_key = (_tqa_auth_var.get() == "api_key")
+                if not is_api_key:
+                    _tqa_btn_get_token.pack(side='left', padx=(0, 6))
+                _tqa_btn_test.pack(side='left', padx=(0, 6))
+                if is_api_key:
+                    _tqa_btn_get_api_key.pack(side='left')
 
-            ttk.Button(_tqa_btn_row, text="🔧 Generate MCP Config",
-                       command=_tqa_generate_mcp_config).pack(side='left')
+            def _tqa_on_auth_change(*_args):
+                """Swaps the hint text and shows/hides the API-key row +
+                its buttons based on which radio button is currently
+                selected — see the v8.1.6 comment above _tqa_hint_var for
+                why this replaced the old always-visible, always-both
+                layout. Called once immediately below to set correct
+                initial state, then again automatically via the trace
+                every time the user clicks a radio button."""
+                is_api_key = (_tqa_auth_var.get() == "api_key")
+                if is_api_key:
+                    _tqa_hint_var.set(
+                        "☝  API Key: paste a real key from console.anthropic.com "
+                        "into the field below, then click Save Key. This is a "
+                        "separate pay-as-you-go account — not your Claude "
+                        "Pro/Max subscription.")
+                    if not _tqa_row4.winfo_ismapped():
+                        _tqa_row4.pack(fill='x', pady=(0, 4), after=_tqa_hint_lbl)
+                else:
+                    _tqa_hint_var.set(
+                        "☝  Subscription: click 🔑 Get / Renew Token below to "
+                        "sign in — there is nothing to type in below for this "
+                        "option.")
+                    if _tqa_row4.winfo_ismapped():
+                        _tqa_row4.pack_forget()
+                _tqa_relayout_buttons()
+
+            _tqa_auth_var.trace_add('write', _tqa_on_auth_change)
+            _tqa_on_auth_change()
+
+            # ── Bottom row: Enable + View Audit Log ────────────────────────
+            # v8.1.6 fix: separated from the setup/config row above by a
+            # divider — these two aren't part of getting auth working,
+            # they're "turn the automation on" and "look at history",
+            # which is a meaningfully different kind of action from the
+            # rest of this panel and reads better as its own group at the
+            # bottom, after everything else has been configured.
+            ttk.Separator(_tqa_inner, orient='horizontal').pack(fill='x', pady=(8, 6))
+            _tqa_btn_row2 = tk.Frame(_tqa_inner, bg='#1a1e2e')
+            _tqa_btn_row2.pack(fill='x')
+            # v8.2.2 fix: replaces the v8.2.0 attempt, which was backwards.
+            # That version showed "✅ Enable..." (the button's own initial
+            # creation text) whenever _tqa_enabled_var was True/checked, and
+            # "🛑 Disable..." when False/unchecked — so on a fresh install,
+            # before the feature had EVER been turned on, the button already
+            # read "Disable" (nothing to disable yet), and checking the box
+            # flipped it right back to the same "Enable" text it started
+            # with. It looked like clicking did nothing.
+            #
+            # This version tracks the REAL applied state from _tqa_cfg
+            # (updated by _tqa_save_and_apply() below, not the raw pending
+            # checkbox value) and the button's own click now DIRECTLY
+            # toggles that real state, rather than just re-applying
+            # whatever the checkbox happened to already say. That removes
+            # the other half of the original bug: previously, clicking this
+            # button alone (without separately touching the checkbox above
+            # it) was a no-op if the checkbox hadn't changed — exactly what
+            # "I can select it but there's no way to stop it" described.
+            def _tqa_update_enable_btn_label():
+                if _tqa_cfg.get("enabled"):
+                    _tqa_btn_enable.config(
+                        text="Toggle On/Off\nAutonomous AI Task Queue ON",
+                        bg='#1f7a3d', fg='#ffffff',
+                        activebackground='#1f7a3d', activeforeground='#ffffff')
+                else:
+                    _tqa_btn_enable.config(
+                        text="Toggle On/Off\nAutonomous AI Task Queue OFF",
+                        bg='#7a1f1f', fg='#ffffff',
+                        activebackground='#7a1f1f', activeforeground='#ffffff')
+
+            def _tqa_toggle_enabled():
+                _tqa_enabled_var.set(not _tqa_cfg.get("enabled", False))
+                _tqa_save_and_apply()
+                _tqa_update_enable_btn_label()
+
+            # v8.3: replaces the checkbox + "● Enabled/Disabled" status dot
+            # with one big color-coded toggle button — red + "OFF" or
+            # green + "ON" — so the current state and the control that
+            # changes it are the same object instead of two separate
+            # widgets a user has to reconcile. tk.Button, not ttk.Button:
+            # ttk's themed buttons on Windows ignore bg/fg entirely, so
+            # plain tk.Button is required for the color to actually show.
+            _tqa_btn_enable = tk.Button(_tqa_btn_row2, command=_tqa_toggle_enabled,
+                                         font=('Arial', 10, 'bold'), relief='raised',
+                                         bd=2, padx=16, pady=8, justify='center',
+                                         cursor='hand2')
+            _tqa_btn_enable.pack(side='left', padx=(0, 6))
+            _tqa_update_enable_btn_label()
+
+
+            _tqa_btn_audit = ttk.Button(_tqa_btn_row2, text="📄 View Audit Log",
+                                         command=_tqa_view_audit_log)
+            _tqa_btn_audit.pack(side='left')
 
             # Exposed on self so tests/gui/*.py can drive this panel the
             # same way tests/gui/test_http_uptime.py drives the uptime
@@ -7310,7 +7547,17 @@ or from the Help menu."""
             self._tqa_method_var       = _tqa_method_var
             self._tqa_auth_var         = _tqa_auth_var
             self._tqa_apikey_var       = _tqa_apikey_var
+            self._tqa_hint_var         = _tqa_hint_var
+            self._tqa_row4             = _tqa_row4
+            self._tqa_clear_api_key    = _tqa_clear_api_key
+            self._tqa_on_auth_change   = _tqa_on_auth_change
+            self._tqa_relayout_buttons = _tqa_relayout_buttons
+            self._tqa_btn_get_token    = _tqa_btn_get_token
+            self._tqa_btn_get_api_key  = _tqa_btn_get_api_key
+            self._tqa_btn_enable       = _tqa_btn_enable
+            self._tqa_btn_audit        = _tqa_btn_audit
             self._tqa_status_var       = _tqa_status_var
+            self._tqa_status_lbl       = _tqa_status_lbl
             self._tqa_token_var        = _tqa_token_var
             self._tqa_cli_var          = _tqa_cli_var
             self._tqa_last_run_var     = _tqa_last_run_var
@@ -7321,10 +7568,22 @@ or from the Help menu."""
             self._tqa_test_setup             = _tqa_test_setup
             self._tqa_save_api_key           = _tqa_save_api_key
             self._tqa_generate_mcp_config    = _tqa_generate_mcp_config
+            self._tqa_toggle_enabled         = _tqa_toggle_enabled
+            self._tqa_update_enable_btn_label = _tqa_update_enable_btn_label
 
             _tqa_refresh_status_display()
 
-        # Visually placed right after "Initial Connection Test" and before
+            # v8.1.6 fix, then removed again same night: a self-rescheduling
+            # self.root.after(4000, ...) polling loop briefly lived here to
+            # auto-refresh the token status line every 4 seconds without
+            # requiring a click. Removed — it was firing at almost exactly
+            # the interval the user reported a popup-window flicker
+            # happening at, and status already refreshes on every action
+            # that actually matters (Test Setup, Save/Enable, Save Key,
+            # Clear Key). Not worth the risk of a second background timer
+            # in this panel after the tooltip timer already caused a real
+            # incident tonight — refresh-on-explicit-action only, as it
+            # was for most of this session before this loop was added.
         # "Common Business AI Analysis" — moved here via pack_configure
         # rather than physically relocating this whole block's code, which
         # would have meant hand-copying ~380 lines of nested Tkinter with a
@@ -7333,7 +7592,19 @@ or from the Help menu."""
         # returns before either panel is built), so this is safe regardless
         # of whether _tqa_available is True or False above.
         _tqa_banner.pack_configure(before=_analysis_banner)
-
+        # v8.1.6: "Show Queue" (_queue_outer, built earlier above) moved to
+        # sit directly between the Autonomous Task Queue panel and Common
+        # Business AI Analysis. Anchored with after=_tqa_banner rather than
+        # before=_analysis_banner — two widgets both requesting
+        # before=_analysis_banner has ambiguous/order-dependent results in
+        # Tk's pack manager, whereas after=_tqa_banner is unambiguous once
+        # _tqa_banner itself is already correctly positioned (immediately
+        # above), which the line just before this one guarantees.
+        _queue_outer.pack_configure(after=_tqa_banner)
+        # Exposed for tests/gui/*.py to verify pack order directly.
+        self._tqa_banner      = _tqa_banner
+        self._queue_outer     = _queue_outer
+        self._analysis_banner = _analysis_banner
         # When SUPPORT_LOCAL_HW_LLM is False, all of the input/attachment/
         # provider/answer widgets below are constructed but never packed —
         # they live in an off-screen "hidden_root" Frame. Back-end code can
@@ -11905,197 +12176,6 @@ or from the Help menu."""
         self._mark_server_running  = _mark_server_running
         self._stop_uptime_ticker   = _stop_uptime_ticker
 
-        # ── Real liveness check for the HTTP MCP server LED ─────────────────────
-        # The dot above was previously driven only by whether *this* GUI process
-        # remembers spawning the server (self._http_server_proc). That goes stale
-        # the moment the GUI restarts while the server keeps running, or the
-        # server was started outside this GUI session — the dot then shows
-        # "Stopped" forever even though the server is healthy.
-        #
-        # This adds a periodic /health check that OVERRIDES whatever the
-        # subprocess-tracking logic last set, so the dot always reflects reality.
-        # End users only ever see a plain green "Running" / red "Stopped" — all
-        # diagnostic detail goes to a debug log file for the developer, never
-        # into the UI, so it can't confuse a non-technical user.
-        _HTTP_LED_DEBUG_LOG = Path.home() / '.ai-prowler' / 'http_led_debug.log'
-
-        def _log_http_led_debug(msg):
-            """Developer-only trail of LED decisions. Never shown in the UI —
-            open %USERPROFILE%\\.ai-prowler\\http_led_debug.log to read it."""
-            try:
-                _HTTP_LED_DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
-                import datetime as _dtm
-                ts = _dtm.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                with open(_HTTP_LED_DEBUG_LOG, 'a', encoding='utf-8') as _f:
-                    _f.write(f"[{ts}] {msg}\n")
-            except Exception:
-                pass
-
-        def _http_health_check(port, timeout=2.5):
-            """Actual liveness probe against the server's own /health endpoint.
-            Returns (alive: bool, detail: str) — detail is debug-log-only."""
-            import urllib.request as _ur, time as _time
-            url = f"http://127.0.0.1:{port}/health"
-            t0 = _time.monotonic()
-            try:
-                with _ur.urlopen(url, timeout=timeout) as _resp:
-                    ms = int((_time.monotonic() - t0) * 1000)
-                    return True, f"GET /health -> {_resp.status} in {ms}ms"
-            except Exception as _e:
-                ms = int((_time.monotonic() - t0) * 1000)
-                return False, f"GET /health failed: {type(_e).__name__}: {_e} (after {ms}ms)"
-
-        # ── Shared PID discovery + verified-kill helpers ────────────────────────
-        # Used by both the Stop button (so it can act even when this GUI
-        # session never tracked the process) and Force Kill Port.
-        def _find_pid_on_port(port, netstat_timeout=20):
-            """Look up the PID listening on `port`. Checks the tracked subprocess
-            first (instant), then falls back to netstat, then a raw socket probe
-            as a last resort. Returns (pid_or_None, source_str)."""
-            if (self._http_server_proc is not None
-                    and self._http_server_proc.poll() is None):
-                return self._http_server_proc.pid, "tracked HTTP server process"
-            try:
-                result = subprocess.run(
-                    f'netstat -ano | findstr ":{port} "',
-                    shell=True, capture_output=True, text=True, timeout=netstat_timeout
-                )
-                for line in result.stdout.splitlines():
-                    if 'LISTENING' in line:
-                        parts = line.split()
-                        if parts:
-                            try:
-                                return int(parts[-1]), "found via netstat"
-                            except ValueError:
-                                pass
-            except subprocess.TimeoutExpired:
-                return None, "netstat timed out"
-            except Exception as _ne:
-                return None, f"netstat error: {_ne}"
-            # Last resort: is anything even answering on that port?
-            import socket as _sock
-            with _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM) as _s:
-                _s.settimeout(1)
-                in_use = _s.connect_ex(('127.0.0.1', port)) == 0
-            return None, ("port in use, PID unknown" if in_use else "port free")
-
-        def _kill_pid_verified(pid, port, kill_timeout=20, verify_timeout=10):
-            """taskkill /F with a generous timeout — large ML/embedding processes
-            can legitimately take a few seconds to unload on Windows, especially
-            with AV/EDR scanning involved. If our own wait times out, that does
-            NOT mean the kill failed: the terminate request was already issued
-            to the OS. So instead of trusting subprocess.run's timeout alone,
-            we poll the port afterward and treat "port actually freed up" as
-            the real source of truth. Returns (success: bool, detail: str)."""
-            import time as _time
-            t0 = _time.monotonic()
-            try:
-                result = subprocess.run(
-                    ['taskkill', '/PID', str(pid), '/F'],
-                    capture_output=True, text=True, timeout=kill_timeout
-                )
-                ms = int((_time.monotonic() - t0) * 1000)
-                if result.returncode == 0:
-                    _log_http_led_debug(f"taskkill PID {pid} succeeded in {ms}ms")
-                    return True, f"PID {pid} terminated in {ms}ms"
-                err = result.stderr.strip() or result.stdout.strip()
-                _log_http_led_debug(f"taskkill PID {pid} returned rc={result.returncode} "
-                                     f"after {ms}ms: {err}")
-                return False, err or f"taskkill returned {result.returncode}"
-            except subprocess.TimeoutExpired:
-                ms = int((_time.monotonic() - t0) * 1000)
-                _log_http_led_debug(
-                    f"taskkill PID {pid} did not return within {kill_timeout}s "
-                    f"(process is likely large — heavy memory/DLL teardown). "
-                    f"Verifying by polling port {port} for up to {verify_timeout}s "
-                    f"instead of assuming failure.")
-                # The terminate request already went to the OS — check whether
-                # it actually worked rather than assuming it didn't.
-                import socket as _sock
-                deadline = _time.monotonic() + verify_timeout
-                while _time.monotonic() < deadline:
-                    with _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM) as _s:
-                        _s.settimeout(1)
-                        still_up = _s.connect_ex(('127.0.0.1', port)) == 0
-                    if not still_up:
-                        total_ms = int((_time.monotonic() - t0) * 1000)
-                        _log_http_led_debug(
-                            f"taskkill PID {pid}: port {port} freed after "
-                            f"{total_ms}ms total (slow but succeeded)")
-                        return True, f"PID {pid} terminated (slow — {total_ms}ms total)"
-                    _time.sleep(1)
-                return False, (f"taskkill on PID {pid} did not return within "
-                                f"{kill_timeout}s, and port {port} is still occupied "
-                                f"after {verify_timeout}s of checking. This process may "
-                                f"be genuinely stuck.")
-            except Exception as _ke:
-                return False, str(_ke)
-
-        _led_fail_streak = [0]   # consecutive failed health checks; see debounce note below
-
-        def _reconcile_http_led():
-            """Runs every 5s. The health check is authoritative — it overrides
-            whatever the subprocess-tracking code (_start_http_server, _watch_http,
-            Force Kill, etc.) last set, so a false 'Stopped' or a stuck 'Killed…'
-            message can never persist past two ticks.
-
-            Debounced on the way DOWN only: a single failed health check does
-            NOT flip the LED to Stopped or reset the uptime counter — it takes
-            two consecutive failures (~10s) to do that. This protects the
-            uptime display from a one-off network blip being mistaken for a
-            real outage. Coming back UP is not debounced — one successful
-            check is enough to go green immediately, and _mark_server_running()
-            is itself idempotent (it only records a start time once), so
-            repeated 'alive' ticks never reset an in-progress uptime count."""
-            try:
-                port = int(_http_port_var.get().strip())
-            except ValueError:
-                self.root.after(5000, _reconcile_http_led)
-                return
-
-            def _do_check():
-                alive, detail = _http_health_check(port)
-                tracked = (self._http_server_proc is not None
-                           and self._http_server_proc.poll() is None)
-
-                def _apply():
-                    was_running   = (_http_status_var.get() == "⬤ Running")
-                    transitional  = _http_status_var.get() in ("⬤ Checking…", "⬤ Starting…")
-                    if alive:
-                        _led_fail_streak[0] = 0
-                        if not was_running:
-                            _log_http_led_debug(
-                                f"LED -> Running (override). {detail} | "
-                                f"gui-tracked-proc={'yes' if tracked else 'no'} | "
-                                f"previous displayed state={_http_status_var.get()!r}")
-                        _http_status_var.set("⬤ Running")
-                        _http_status_lbl.configure(foreground='#27ae60')
-                        _mark_server_running()
-                    elif not transitional:
-                        _led_fail_streak[0] += 1
-                        if _led_fail_streak[0] >= 2:
-                            if was_running:
-                                _log_http_led_debug(
-                                    f"LED -> Stopped (override, after "
-                                    f"{_led_fail_streak[0]} consecutive failed checks). "
-                                    f"{detail} | gui-tracked-proc={'yes' if tracked else 'no'}")
-                            _http_status_var.set("⬤ Stopped")
-                            _http_status_lbl.configure(foreground='#cc0000')
-                            _stop_uptime_ticker()
-                        else:
-                            _log_http_led_debug(
-                                f"Health check failed ({detail}) but not yet acting — "
-                                f"1 of 2 required consecutive failures. Uptime preserved.")
-                    self.root.after(5000, _reconcile_http_led)
-
-                self.root.after(0, _apply)
-
-            threading.Thread(target=_do_check, daemon=True).start()
-
-        # First check shortly after the tab is built, then re-schedules itself
-        # every 5s for as long as the GUI runs.
-        self.root.after(2000, _reconcile_http_led)
-
         def _start_http_server():
             tok = _remote_token_var.get().strip()
             # In Business server mode there is no single bearer token —
@@ -12273,61 +12353,25 @@ or from the Help menu."""
         self._start_http_server_fn = _start_http_server
 
         def _stop_http_server():
-            # ── Case 1: this GUI session has a live handle on the process ──────
-            # Fast path — no netstat needed.
-            if self._http_server_proc is not None and self._http_server_proc.poll() is None:
-                try:
-                    self._http_server_proc.terminate()
-                    self._http_server_proc.wait(timeout=5)
-                except Exception:
-                    try:
-                        self._http_server_proc.kill()
-                    except Exception:
-                        pass
-                self._http_server_proc = None
+            if self._http_server_proc is None or self._http_server_proc.poll() is not None:
                 _http_status_var.set("⬤ Stopped")
                 _http_status_lbl.configure(foreground='#cc0000')
-                _stop_uptime_ticker()
-                self._set_sleep_prevention(False)
+                _stop_uptime_ticker()               # ensure ticker is cancelled
+                self._set_sleep_prevention(False)   # ensure sleep is re-enabled
                 return
-
-            # ── Case 2: nothing tracked. Previously Stop just repainted the LED
-            # and left any real, untracked server running untouched — which is
-            # exactly what let a genuinely healthy server look "stopped" while
-            # still answering requests. Now: look for a real process on the
-            # port and offer to actually stop it, same as Force Kill Port. ──
-            port_str = _http_port_var.get().strip()
             try:
-                port = int(port_str)
-            except ValueError:
-                messagebox.showerror("Bad Port", f"Port must be a number, got: {port_str}")
-                return
-
-            pid, source = _find_pid_on_port(port)
-            if pid is None:
-                # Genuinely nothing running — the old behavior was correct here.
-                _http_status_var.set("⬤ Stopped")
-                _http_status_lbl.configure(foreground='#cc0000')
-                _stop_uptime_ticker()
-                self._set_sleep_prevention(False)
-                return
-
-            if not messagebox.askyesno(
-                    "Stop HTTP Server",
-                    f"A server on port {port} is running but wasn't started by "
-                    f"this AI-Prowler window ({source}) — likely a previous "
-                    f"session that's still active.\n\n"
-                    f"Stop it anyway? (PID {pid})"):
-                return
-
-            ok, detail = _kill_pid_verified(pid, port)
-            _log_http_led_debug(f"Stop button killed untracked PID {pid}: ok={ok} | {detail}")
-            if not ok:
-                messagebox.showerror("Stop Failed", f"Could not stop PID {pid}.\n\n{detail}")
-                return  # leave LED as-is; the next health check will reflect reality
+                self._http_server_proc.terminate()
+                self._http_server_proc.wait(timeout=5)
+            except Exception:
+                try:
+                    self._http_server_proc.kill()
+                except Exception:
+                    pass
+            self._http_server_proc = None
             _http_status_var.set("⬤ Stopped")
             _http_status_lbl.configure(foreground='#cc0000')
-            _stop_uptime_ticker()
+            _stop_uptime_ticker()                   # clear uptime on manual stop
+            # Restore normal Windows sleep/power management
             self._set_sleep_prevention(False)
 
         http_btn_row = ttk.Frame(remote_frame)
@@ -12340,9 +12384,19 @@ or from the Help menu."""
         def _force_kill_port():
             """Kill any process holding the configured HTTP port — useful when
             a crashed or interrupted server run leaves a zombie process on port
-            8000 that prevents a clean restart. PID discovery and the actual
-            kill+verify both go through the shared helpers above (also used by
-            the Stop button) so the two stay consistent."""
+            8000 that prevents a clean restart.
+
+            Priority 1: if this GUI session has a tracked subprocess for the
+            HTTP server (self._http_server_proc), kill that PID directly —
+            no netstat needed at all. This is the common case and is instant.
+
+            Priority 2 (fallback): if no tracked subprocess (e.g. a previous
+            GUI session was closed without stopping the server, or it was
+            started outside the GUI), fall back to netstat to find the PID.
+            netstat -ano can be slow while a server with a Cloudflare Tunnel
+            or many open connections is running, so this path has a longer
+            timeout and a clear message if it still doesn't return in time.
+            """
             port_str = _http_port_var.get().strip()
             try:
                 port = int(port_str)
@@ -12350,24 +12404,52 @@ or from the Help menu."""
                 messagebox.showerror("Bad Port", f"Port must be a number, got: {port_str}")
                 return
 
-            pid, source = _find_pid_on_port(port)
+            pid = None
+            via_tracked_proc = False
 
-            if source == "netstat timed out":
-                messagebox.showerror(
-                    "netstat Timed Out",
-                    f"netstat did not respond within 20 seconds.\n\n"
-                    f"This can happen while a server with a Cloudflare Tunnel\n"
-                    f"or many open connections is running.\n\n"
-                    f"Try manually in an Administrator command prompt:\n\n"
-                    f"  netstat -ano | findstr :{port}\n"
-                    f"  taskkill /PID <pid> /F")
-                return
-            if source and source.startswith("netstat error"):
-                messagebox.showerror("netstat Error", source)
-                return
+            # ── Priority 1: use the PID we already know about ────────────────────
+            if (self._http_server_proc is not None
+                    and self._http_server_proc.poll() is None):
+                pid = self._http_server_proc.pid
+                via_tracked_proc = True
+
+            # ── Priority 2: netstat fallback (only if PID isn't already known) ───
+            if pid is None:
+                try:
+                    result = subprocess.run(
+                        f'netstat -ano | findstr ":{port} "',
+                        shell=True, capture_output=True, text=True, timeout=20
+                    )
+                    for line in result.stdout.splitlines():
+                        if 'LISTENING' in line:
+                            parts = line.split()
+                            if parts:
+                                try:
+                                    pid = int(parts[-1])
+                                    break
+                                except ValueError:
+                                    pass
+                except subprocess.TimeoutExpired:
+                    messagebox.showerror(
+                        "netstat Timed Out",
+                        f"netstat did not respond within 20 seconds.\n\n"
+                        f"This can happen while a server with a Cloudflare Tunnel\n"
+                        f"or many open connections is running.\n\n"
+                        f"Try manually in an Administrator command prompt:\n\n"
+                        f"  netstat -ano | findstr :{port}\n"
+                        f"  taskkill /PID <pid> /F")
+                    return
+                except Exception as _ne:
+                    messagebox.showerror("netstat Error", str(_ne))
+                    return
 
             if pid is None:
-                if source == "port in use, PID unknown":
+                # Double-check with a socket probe
+                import socket as _sock
+                with _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM) as _s:
+                    _s.settimeout(1)
+                    in_use = _s.connect_ex(('127.0.0.1', port)) == 0
+                if in_use:
                     messagebox.showwarning(
                         "Port In Use",
                         f"Port {port} is in use but the PID could not be identified.\n\n"
@@ -12378,32 +12460,38 @@ or from the Help menu."""
                     messagebox.showinfo("Port Free", f"Port {port} is not in use — nothing to kill.")
                 return
 
-            via_tracked_proc = (source == "tracked HTTP server process")
+            source_note = ("tracked HTTP server process" if via_tracked_proc
+                            else "found via netstat")
             if not messagebox.askyesno(
                     "Force Kill Port",
                     f"Kill process PID {pid} holding port {port}?\n"
-                    f"({source})\n\n"
+                    f"({source_note})\n\n"
                     f"Use this when a crashed server is blocking a restart.\n"
-                    f"Large processes can take a few seconds to fully terminate — "
-                    f"this may take longer than a normal kill.\n"
                     + ("" if via_tracked_proc else
                        "This requires Administrator privileges.")):
                 return
 
-            ok, detail = _kill_pid_verified(pid, port)
-            if ok:
-                _http_status_var.set(f"⬤ Killed PID {pid} — port {port} free")
-                _http_status_lbl.configure(foreground='#1a7a1a')
-                messagebox.showinfo(
-                    "Process Killed",
-                    f"✅ {detail} — port {port} is now free.\n\n"
-                    f"You can now click ▶ Start HTTP Server.")
-            else:
-                messagebox.showerror(
-                    "Kill Failed",
-                    f"Could not kill PID {pid}.\n\n"
-                    f"{detail}\n\n"
-                    f"Try running AI-Prowler as Administrator, or check Task Manager.")
+            try:
+                result = subprocess.run(
+                    ['taskkill', '/PID', str(pid), '/F'],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0:
+                    _http_status_var.set(f"⬤ Killed PID {pid} — port {port} free")
+                    _http_status_lbl.configure(foreground='#1a7a1a')
+                    messagebox.showinfo(
+                        "Process Killed",
+                        f"✅ PID {pid} terminated — port {port} is now free.\n\n"
+                        f"You can now click ▶ Start HTTP Server.")
+                else:
+                    err = result.stderr.strip() or result.stdout.strip()
+                    messagebox.showerror(
+                        "Kill Failed",
+                        f"Could not kill PID {pid}.\n\n"
+                        f"Error: {err}\n\n"
+                        f"Try running AI-Prowler as Administrator.")
+            except Exception as _ke:
+                messagebox.showerror("Kill Error", str(_ke))
 
         ttk.Button(http_btn_row, text="🔨 Force Kill Port",
                    command=_force_kill_port).pack(side='left')
@@ -18736,9 +18824,24 @@ or from the Help menu."""
 
         On subsequent launches the model is already in the HuggingFace cache so
         get_chroma_client() returns in <1 s — the brief button-disable is invisible.
+
+        v8.1.9 fix: this used to be called EXACTLY ONCE, 4 seconds after
+        launch, with no retry path at all. If that one attempt failed (a
+        transient network hiccup, or a fresh install that had just wiped
+        the HuggingFace cache without repopulating it), _embedding_ready
+        stayed False for the entire rest of the session — permanently,
+        even if the underlying problem got fixed externally while the app
+        kept running (e.g. the user manually downloaded the model in a
+        separate terminal). The only recovery was a full app restart.
+        Now callable again from update_selected()/update_all()'s retry
+        dialog, guarded here against a second call stacking on top of one
+        already in flight.
         """
         if not RAG_AVAILABLE:
             return
+        if self._embedding_prewarm_in_progress:
+            return
+        self._embedding_prewarm_in_progress = True
 
         # Disable update buttons to prevent a hang if the user clicks before ready
         try:
@@ -20257,15 +20360,41 @@ or from the Help menu."""
         finally:
             sys.stdout = old_stdout
 
+    def _offer_embedding_retry(self):
+        """
+        v8.1.9 fix: replaces two copies of a static "please wait" dialog
+        that had no actual retry path — see _prewarm_embedding_model()'s
+        docstring for the full story (one-shot prewarm at launch, no retry,
+        a single transient failure permanently disabled indexing for the
+        whole session, recoverable only by fully restarting the app).
+
+        Offers to retry the prewarm right here instead. Returns nothing;
+        callers (update_selected/update_all) should return immediately
+        after calling this regardless of outcome — even a successful
+        retry needs the background thread to finish before _embedding_ready
+        flips True, so the original button click can't proceed synchronously
+        either way.
+        """
+        import tkinter.messagebox as _mb
+        if self._embedding_prewarm_in_progress:
+            _mb.showinfo(
+                "Embedding Model Loading",
+                "Still trying to load the embedding model — please wait a "
+                "moment and try again.")
+            return
+        retry = _mb.askyesno(
+            "Embedding Model Not Ready",
+            "The embedding model isn't loaded yet. This can happen after "
+            "a fresh install, or if the first attempt hit a network "
+            "hiccup.\n\n"
+            "Try loading it again now?")
+        if retry:
+            self.status_var.set("⬇ Retrying embedding model load…")
+            self._prewarm_embedding_model()
+
     def update_selected(self):
         if not self._embedding_ready:
-            import tkinter.messagebox as _mb
-            _mb.showwarning(
-                "Embedding Model Not Ready",
-                "The embedding model is still loading.\n\n"
-                "Please wait for the status bar to show\n"
-                "\u2705 Embedding model ready, then try again."
-            )
+            self._offer_embedding_retry()
             return
         """Update selected directory or file."""
         selection = self.tracked_listbox.curselection()
@@ -20295,14 +20424,7 @@ or from the Help menu."""
     def update_all(self):
         """Update all tracked directories and files."""
         if not self._embedding_ready:
-            import tkinter.messagebox as _mb
-            _mb.showwarning(
-                "Embedding Model Not Ready",
-                "The embedding model is still loading.\n\n"
-                "Please wait for the status bar to show\n"
-                "\u2705 Embedding model ready\n\n"
-                "then try Update All again."
-            )
+            self._offer_embedding_retry()
             return
         self.update_output.delete('1.0', tk.END)
         self.update_progress.start()
@@ -22288,6 +22410,7 @@ or from the Help menu."""
                     # Embedding model downloaded and cached — re-enable update
                     # buttons. Reconcile runs inside the prewarm worker thread.
                     self._embedding_ready = True
+                    self._embedding_prewarm_in_progress = False  # v8.1.9
                     try:
                         self.update_selected_btn.configure(state='normal')
                         self.update_all_btn.configure(state='normal')
@@ -22296,13 +22419,20 @@ or from the Help menu."""
                     self.status_var.set("\u2705 Embedding model ready")
 
                 elif msg_type == 'embedding_ready_error':
-                    # Model download failed — re-enable buttons so user can retry
+                    # Model download failed — re-enable buttons so user can
+                    # retry. v8.1.9: "so user can retry" was already the
+                    # intent here, but nothing actually implemented the
+                    # retry — update_selected()/update_all()'s guard just
+                    # showed the same dead-end dialog forever. That's fixed
+                    # now (see those two methods) — this branch just needs
+                    # to clear the in-progress flag so a retry can fire.
+                    self._embedding_prewarm_in_progress = False
                     try:
                         self.update_selected_btn.configure(state='normal')
                         self.update_all_btn.configure(state='normal')
                     except Exception:
                         pass
-                    self.status_var.set("⚠ Embedding model load failed — check internet connection")
+                    self.status_var.set(f"⚠ Embedding model load failed: {msg_data}")
 
                 elif msg_type == 'index_progress':
                     self.index_progress_var.set(msg_data)

@@ -46,6 +46,15 @@ CUSTOM_TASKS_PATH = Path.home() / ".ai-prowler" / "custom_analysis_tasks.json"
 DEFAULT_REPORT_FOLDER = str(Path.home() / "Documents" / "AI-Prowler_tasks_reports")
 MAX_CUSTOM_TASKS = 25
 
+# v8.1.6: settings for the 5 fixed Common Business AI Analysis buttons
+# (scope dirs, output options, report folder, schedule) — previously only
+# lived transiently inside the Configure popup's widgets each time it was
+# opened, with no persistence between sessions or between Queue/NOW clicks
+# and the popup. Mirrors the custom-task pattern (a saved definition you
+# can Queue/NOW directly from, or Edit to change) rather than re-asking
+# every time.
+BUILTIN_ANALYSIS_CONFIG_PATH = Path.home() / ".ai-prowler" / "builtin_analysis_config.json"
+
 # Module-level counter for guaranteed unique task IDs within the same process
 # (timestamps alone can collide at microsecond resolution on fast machines)
 _task_id_counter = 0
@@ -217,6 +226,66 @@ def save_custom_tasks(tasks: list) -> bool:
     except Exception as e:
         print(f"[custom_tasks_manager] save failed: {e}")
         return False
+
+
+# ---------------------------------------------------------------------------
+# Built-in (Common Business AI Analysis) settings — v8.1.6
+# ---------------------------------------------------------------------------
+# Separate storage from custom tasks: these 5 are fixed types (task_def
+# comes from _ANALYSIS_TASKS in rag_gui.py, not user-created), so there's
+# no task_id/label/prompt to persist — just the per-type Queue/NOW
+# settings a user configures via Edit. Keyed by task_def["type"]
+# (e.g. "analyze_business").
+
+def load_builtin_analysis_config() -> dict:
+    """Load all built-in analysis settings. Returns {} if absent/corrupt —
+    callers get sensible defaults via get_builtin_analysis_settings()."""
+    try:
+        if BUILTIN_ANALYSIS_CONFIG_PATH.exists():
+            data = json.loads(BUILTIN_ANALYSIS_CONFIG_PATH.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
+def save_builtin_analysis_config(cfg: dict) -> bool:
+    """Save all built-in analysis settings. Returns True on success."""
+    try:
+        BUILTIN_ANALYSIS_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        BUILTIN_ANALYSIS_CONFIG_PATH.write_text(
+            json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+        return True
+    except Exception as e:
+        print(f"[custom_tasks_manager] save_builtin_analysis_config failed: {e}")
+        return False
+
+
+def get_builtin_analysis_settings(task_type: str) -> dict:
+    """Returns the saved settings for one built-in analysis type, filled
+    in with defaults for anything never configured — safe to call before
+    the user has ever clicked Edit on that analysis."""
+    cfg = load_builtin_analysis_config()
+    saved = cfg.get(task_type, {})
+    if not isinstance(saved, dict):
+        saved = {}
+    return {
+        "scope_dirs":       saved.get("scope_dirs") or [],
+        "output_learnings": saved.get("output_learnings", True),
+        "output_report":    saved.get("output_report", False),
+        "report_folder":    saved.get("report_folder") or DEFAULT_REPORT_FOLDER,
+        "schedule":         saved.get("schedule", "none"),
+        "first_due":        saved.get("first_due"),
+    }
+
+
+def save_builtin_analysis_settings(task_type: str, settings: dict) -> bool:
+    """Persists settings for ONE built-in analysis type — called from the
+    Edit popup's Save button. Leaves every other type's saved settings
+    untouched."""
+    cfg = load_builtin_analysis_config()
+    cfg[task_type] = settings
+    return save_builtin_analysis_config(cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +494,43 @@ def advance_next_due(tasks: list, task_id: str,
     task["updated_at"]  = _now_iso()
 
     return new_next_due
+
+
+def catch_up_all_due_tasks(tasks: list) -> int:
+    """v8.1.6: called when the Autonomous Task Queue is enabled — advances
+    every currently due/overdue task's next_due to its next occurrence
+    after today, WITHOUT marking it as run/completed (unlike
+    advance_next_due(), which is for an actual completion Claude reports).
+
+    Rationale: enabling the daily scheduled automation shouldn't cause a
+    pile of backlog to all fire on day one just because they'd accumulated
+    while automation was off — that's surprising and burns API/subscription
+    usage on tasks whose specific overdue occurrences the user never asked
+    to run. This resyncs everyone to the schedule's normal cadence starting
+    from today, exactly like advance_next_due()'s catch-up logic, but
+    labeled "skipped_on_enable" (not "completed") so the history honestly
+    reflects that these specific occurrences were never actually analyzed.
+
+    Modifies tasks in-place. Returns the number of tasks advanced — caller
+    is responsible for calling save_custom_tasks(tasks) afterward.
+    """
+    today = _today()
+    advanced = 0
+    for task in tasks:
+        if not _is_due(task):
+            continue
+        schedule = task.get("schedule", "none")
+        if schedule == "none":
+            continue
+        anchor = task.get("next_due") or today
+        new_next_due = _advance_date_catchup(anchor, schedule, today)
+        if new_next_due is None:
+            continue
+        task["next_due"]    = new_next_due
+        task["last_status"] = "skipped_on_enable"
+        task["updated_at"]  = _now_iso()
+        advanced += 1
+    return advanced
 
 
 # ---------------------------------------------------------------------------
