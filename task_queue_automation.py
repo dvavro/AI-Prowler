@@ -309,20 +309,77 @@ def dry_run_check() -> dict:
 # setup-token or, if added later, ANTHROPIC_API_KEY). AI-Prowler's own MCP
 # server requires its own Bearer token regardless of how the calling Claude
 # session authenticates to Anthropic — see architecture spec §"two auth
-# layers" discussion. This function reads AI-Prowler's own saved config
-# (the same remote_token / tunnel_domain fields the existing Claude.ai
-# connector guide already surfaces) and writes the --mcp-config file
-# Claude Code needs, in the schema Anthropic's own docs specify for a
-# remote HTTP MCP server with a static auth header.
-
+# layers" discussion.
+#
+# v8.2.x fix (bug report: fresh install / fresh machine — Test Setup (Dry
+# Run) never produced a config file even after successfully getting a
+# Claude Code token): generate_mcp_config() used to ONLY write a remote
+# HTTP config, which requires a Bearer Token + Cloudflare tunnel domain to
+# already be saved under Settings → Remote Access. Those are a THIRD,
+# unrelated piece of setup — not the Claude Code OAuth token, not AI-
+# Prowler's install itself — so on a genuinely fresh machine (no tunnel
+# ever configured) this silently failed every time, regardless of the
+# Claude Code token being valid. Since the headless wrapper always runs ON
+# THIS SAME MACHINE (a local Windows Scheduled Task, not a remote mobile
+# client), a local stdio config — the exact same shape as the Claude
+# Desktop auto-config the installer already writes, see
+# claude_desktop_config_example.json — needs nothing but AI-Prowler's own
+# install path, which is always known. generate_mcp_config() now tries
+# that FIRST (zero setup required), and only falls back to the remote HTTP
+# path for users who've actually configured remote/mobile access.
 AI_PROWLER_CONFIG_PATH = Path.home() / ".ai-prowler" / "config.json"
 GENERATED_MCP_CONFIG_PATH = AI_PROWLER_HOME / "claude_mcp_config.json"
+# Resolved once at import time, same directory task_queue_automation.py and
+# ai_prowler_mcp.py always ship in together (see AI-Prowler-Setup.iss).
+# Exposed as a module-level constant (rather than computed inline) so tests
+# can monkeypatch it, matching the pattern already used for every other
+# path in this module.
+LOCAL_MCP_SCRIPT_PATH = Path(__file__).resolve().parent / "ai_prowler_mcp.py"
 
 
-def generate_mcp_config() -> tuple[bool, str]:
-    """Reads AI-Prowler's own config.json for remote_token + tunnel_domain
-    and writes a Claude Code-compatible --mcp-config JSON file. Returns
+def _generate_local_mcp_config() -> tuple[bool, str]:
+    """Writes a stdio --mcp-config pointing headless Claude Code directly
+    at AI-Prowler's own ai_prowler_mcp.py — identical in shape to the
+    Claude Desktop config the installer auto-writes. Requires no Bearer
+    Token, no tunnel, no remote setup of any kind: it's the same machine,
+    so a local subprocess is all that's needed. Returns
     (success, path_or_error_message)."""
+    if not LOCAL_MCP_SCRIPT_PATH.exists():
+        return False, (f"ai_prowler_mcp.py not found at {LOCAL_MCP_SCRIPT_PATH} "
+                        "— reinstall AI-Prowler.")
+
+    mcp_config = {
+        "mcpServers": {
+            "ai-prowler": {
+                "command": sys.executable,
+                "args": [str(LOCAL_MCP_SCRIPT_PATH)],
+                "env": {
+                    "PYTHONNOUSERSITE": "1",
+                    "PYTHONIOENCODING": "utf-8",
+                    "PYTHONUNBUFFERED": "1",
+                    "PYTHONWARNINGS": "ignore",
+                },
+            }
+        }
+    }
+
+    try:
+        AI_PROWLER_HOME.mkdir(parents=True, exist_ok=True)
+        GENERATED_MCP_CONFIG_PATH.write_text(
+            json.dumps(mcp_config, indent=2), encoding="utf-8")
+    except Exception as e:
+        return False, f"Could not write MCP config: {e}"
+
+    return True, str(GENERATED_MCP_CONFIG_PATH)
+
+
+def _generate_remote_mcp_config() -> tuple[bool, str]:
+    """Reads AI-Prowler's own config.json for remote_token + tunnel_domain
+    and writes a Claude Code-compatible --mcp-config JSON file, in the
+    schema Anthropic's own docs specify for a remote HTTP MCP server with
+    a static auth header. Only relevant for users who've actually set up
+    remote/mobile access — see generate_mcp_config() for why the local
+    stdio path is tried first. Returns (success, path_or_error_message)."""
     if not AI_PROWLER_CONFIG_PATH.exists():
         return False, ("AI-Prowler config.json not found — set up the HTTP "
                         "MCP server and Bearer Token in Settings first.")
@@ -362,6 +419,28 @@ def generate_mcp_config() -> tuple[bool, str]:
         return False, f"Could not write MCP config: {e}"
 
     return True, str(GENERATED_MCP_CONFIG_PATH)
+
+
+def generate_mcp_config(prefer_remote: bool = False) -> tuple[bool, str]:
+    """Writes/refreshes the --mcp-config file headless Claude Code needs to
+    reach AI-Prowler. Tries local stdio first (works out of the box on any
+    install, no user setup required); falls back to the remote HTTP config
+    if the local script can't be found. Pass prefer_remote=True to flip
+    that order — e.g. a Personal-mode user who's already set up remote/
+    mobile access and wants the scheduled task to exercise that same HTTP
+    path (matches what their mobile client actually uses, useful for
+    diagnosing remote-only issues). NOTE: this whole feature is Personal
+    mode only — server mode suppresses Task Queue automation entirely
+    (see dry_run_check() callers / the architecture spec), so there is no
+    server-mode case here at all. Either way, if the preferred path isn't
+    actually usable, the other one is tried automatically rather than
+    failing outright. Returns (success, path_or_error_message)."""
+    first, second = (_generate_remote_mcp_config, _generate_local_mcp_config) \
+        if prefer_remote else (_generate_local_mcp_config, _generate_remote_mcp_config)
+    ok, result = first()
+    if ok:
+        return ok, result
+    return second()
 
 
 

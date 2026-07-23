@@ -32,6 +32,13 @@ def _isolated_home(tmp_path, monkeypatch):
     monkeypatch.setattr(tqa, "AUDIT_LOG_PATH", tmp_path / ".ai-prowler" / "autonomous_run_audit.log")
     monkeypatch.setattr(tqa, "AI_PROWLER_CONFIG_PATH", tmp_path / ".ai-prowler" / "config.json")
     monkeypatch.setattr(tqa, "GENERATED_MCP_CONFIG_PATH", tmp_path / ".ai-prowler" / "claude_mcp_config.json")
+    # v8.2.x: generate_mcp_config() now tries a local stdio config first
+    # (see task_queue_automation.py's module comment above LOCAL_MCP_SCRIPT_PATH).
+    # Point it at a path that does NOT exist by default so existing
+    # remote-config tests keep exercising the remote path unchanged;
+    # individual local-path tests override this per-test.
+    monkeypatch.setattr(tqa, "LOCAL_MCP_SCRIPT_PATH",
+                         tmp_path / "_no_such_dir" / "ai_prowler_mcp.py")
     monkeypatch.setattr(tqa, "API_KEY_PATH", tmp_path / ".ai-prowler" / "claude_api_key.txt")
     # v8.1.6: same isolation requirement for the new OAuth-token files —
     # without this, tests would read/write the REAL
@@ -503,6 +510,134 @@ def test_generate_mcp_config_survives_corrupt_ai_prowler_config(_isolated_home):
     ok, detail = tqa.generate_mcp_config()
     assert ok is False
     assert "Could not read" in detail
+
+
+# ── v8.2.x: local stdio MCP config (fresh-install fix) ─────────────────────
+# Bug report: on a fresh install / fresh machine, clicking Test Setup (Dry
+# Run) never produced an MCP config file even after successfully getting a
+# Claude Code token. Root cause: generate_mcp_config() only ever wrote a
+# REMOTE config, gated on AI-Prowler's own Bearer Token + tunnel domain
+# (Settings -> Remote Access) -- a third, unrelated piece of setup that a
+# fresh machine simply doesn't have yet, regardless of the Claude Code
+# token being valid. These tests cover the local-first fix.
+
+def _make_fake_mcp_script(home) -> Path:
+    """Simulates ai_prowler_mcp.py sitting next to task_queue_automation.py
+    on a real install, without needing the real (large) file."""
+    script = home / "fake_ai_prowler_mcp.py"
+    script.write_text("# fake MCP script for tests\n", encoding="utf-8")
+    return script
+
+
+def test_generate_mcp_config_uses_local_on_fresh_machine(_isolated_home, monkeypatch):
+    """THE bug-report scenario: nothing configured at all -- no AI-Prowler
+    config.json, no Bearer Token, no tunnel -- just a fresh install with
+    the MCP script present. generate_mcp_config() must still succeed."""
+    fake_script = _make_fake_mcp_script(_isolated_home)
+    monkeypatch.setattr(tqa, "LOCAL_MCP_SCRIPT_PATH", fake_script)
+    # No AI-Prowler config.json written at all -- confirms this path does
+    # NOT depend on it, unlike the old behavior.
+    assert not tqa.AI_PROWLER_CONFIG_PATH.exists()
+
+    ok, path = tqa.generate_mcp_config()
+
+    assert ok is True, path
+    assert Path(path) == tqa.GENERATED_MCP_CONFIG_PATH
+    assert Path(path).exists()
+
+
+def test_generate_mcp_config_local_schema_is_stdio(_isolated_home, monkeypatch):
+    fake_script = _make_fake_mcp_script(_isolated_home)
+    monkeypatch.setattr(tqa, "LOCAL_MCP_SCRIPT_PATH", fake_script)
+
+    ok, path = tqa.generate_mcp_config()
+    assert ok is True
+
+    written = json.loads(Path(path).read_text(encoding="utf-8"))
+    server = written["mcpServers"]["ai-prowler"]
+    assert server["command"] == sys.executable
+    assert server["args"] == [str(fake_script)]
+    assert "type" not in server  # stdio, not http -- no "type": "http" key
+    assert server["env"]["PYTHONUNBUFFERED"] == "1"
+
+
+def test_generate_mcp_config_falls_back_to_remote_when_local_script_missing(_isolated_home):
+    # Default fixture already points LOCAL_MCP_SCRIPT_PATH at a
+    # nonexistent file. With a fully valid remote config present, the
+    # overall call must still succeed via the remote fallback.
+    _write_ai_prowler_config(_isolated_home)
+    ok, path = tqa.generate_mcp_config()
+    assert ok is True
+    written = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert written["mcpServers"]["ai-prowler"]["type"] == "http"
+
+
+def test_generate_mcp_config_fails_when_neither_local_nor_remote_available(_isolated_home):
+    # Nothing at all -- matches test_generate_mcp_config_missing_ai_prowler_config
+    # but explicit about covering the combined generate_mcp_config() entry
+    # point rather than the remote helper directly.
+    ok, detail = tqa.generate_mcp_config()
+    assert ok is False
+    assert "not found" in detail.lower()
+
+
+def test_generate_mcp_config_prefer_remote_true_uses_remote_when_both_available(_isolated_home, monkeypatch):
+    fake_script = _make_fake_mcp_script(_isolated_home)
+    monkeypatch.setattr(tqa, "LOCAL_MCP_SCRIPT_PATH", fake_script)
+    _write_ai_prowler_config(_isolated_home)
+
+    ok, path = tqa.generate_mcp_config(prefer_remote=True)
+    assert ok is True
+    written = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert written["mcpServers"]["ai-prowler"]["type"] == "http"
+
+
+def test_generate_mcp_config_prefer_remote_falls_back_to_local(_isolated_home, monkeypatch):
+    # prefer_remote=True but remote isn't actually configured -- must not
+    # just fail; local is still available and should be used.
+    fake_script = _make_fake_mcp_script(_isolated_home)
+    monkeypatch.setattr(tqa, "LOCAL_MCP_SCRIPT_PATH", fake_script)
+
+    ok, path = tqa.generate_mcp_config(prefer_remote=True)
+    assert ok is True
+    written = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert "type" not in written["mcpServers"]["ai-prowler"]
+
+
+def test_generate_mcp_config_default_prefers_local_over_remote(_isolated_home, monkeypatch):
+    # Both are fully available -- default (prefer_remote=False) must pick
+    # local, since that's the whole point of the fix (zero setup needed).
+    fake_script = _make_fake_mcp_script(_isolated_home)
+    monkeypatch.setattr(tqa, "LOCAL_MCP_SCRIPT_PATH", fake_script)
+    _write_ai_prowler_config(_isolated_home)
+
+    ok, path = tqa.generate_mcp_config()
+    assert ok is True
+    written = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert "type" not in written["mcpServers"]["ai-prowler"]
+
+
+def test_dry_run_check_mcp_config_check_passes_on_fresh_machine_after_local_generate(
+        _isolated_home, monkeypatch):
+    """End-to-end regression test for the exact reported bug: on a fresh
+    machine (nothing configured), call generate_mcp_config() the way the
+    GUI's Test Setup (Dry Run) button does, save the resulting path into
+    the automation config, then confirm dry_run_check()'s 'MCP config
+    file' check reports ok=True."""
+    fake_script = _make_fake_mcp_script(_isolated_home)
+    monkeypatch.setattr(tqa, "LOCAL_MCP_SCRIPT_PATH", fake_script)
+    monkeypatch.setattr(tqa.subprocess, "run",
+                         lambda *a, **kw: type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})())
+
+    ok, path = tqa.generate_mcp_config()
+    assert ok is True
+    cfg = tqa.load_config()
+    cfg["mcp_config_path"] = path
+    tqa.save_config(cfg)
+
+    report = tqa.dry_run_check()
+    mcp_check = next(c for c in report["checks"] if c["name"] == "MCP config file")
+    assert mcp_check["ok"] is True
 
 
 # ── ANTHROPIC_API_KEY fallback ─────────────────────────────────────────────

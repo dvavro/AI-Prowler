@@ -1,6 +1,6 @@
 ; ============================================================
 ; AI-Prowler Installer (Admin Mode, 64-bit Compatible)
-; Version 8.0.0
+; Version 8.1.8
 ;
 ; PURPOSE:
 ;   - Installs the AI-Prowler application into Program Files
@@ -888,6 +888,26 @@ begin
     AppendInstallLog(Tag + ' Folder NOT found after ' + IntToStr(MaxWaitMs) + 'ms wait: ' + Folder);
 end;
 
+procedure WaitForFileCreation(const FilePath: String; const Tag: String; MaxWaitMs: Integer);
+// Same as WaitForFolderCreation but for a single file — used after
+// launching a task-scheduler job to know when a per-user installer
+// (e.g. Claude Code CLI's native installer) has finished writing its
+// binary, rather than trusting the scheduled task's own exit code.
+var
+  Elapsed: Integer;
+begin
+  Elapsed := 0;
+  while not FileExists(FilePath) and (Elapsed < MaxWaitMs) do
+  begin
+    Sleep(500);
+    Elapsed := Elapsed + 500;
+  end;
+  if FileExists(FilePath) then
+    AppendInstallLog(Tag + ' File confirmed created after ~' + IntToStr(Elapsed) + 'ms.')
+  else
+    AppendInstallLog(Tag + ' File NOT found after ' + IntToStr(MaxWaitMs) + 'ms wait: ' + FilePath);
+end;
+
 
 // ============================================================
 // STARTUP TASK: Register AI-Prowler auto-launch on logon
@@ -1328,6 +1348,7 @@ var
   WaitSeconds, TessElapsed, TessResultCode: Integer;
   ClaudeCodeCheckResult, ClaudeCodeInstallResult: Integer;
   ClaudeCodeLocalBin, ClaudeCodeCurPath: String;
+  ClaudeCodeTask, ClaudeCodeBat: String;
   MsgDummy: DWORD;
   PythonReady: Boolean;
 begin
@@ -2101,6 +2122,20 @@ begin
     // still requires the user's own action — AI-Prowler's "Get / Renew
     // Token" button in the Autonomous AI Task Queue panel handles pointing
     // them at that step; see task_queue_automation.py.
+    //
+    // ROOT CAUSE FIX (confirmed via a live install log on a fresh
+    // machine, 2026-07-23): this used to Exec() the installer directly
+    // inside Setup.exe's own elevated process, reusing none of the
+    // Tesseract workaround above. Result: the installer reported exit
+    // code 0, but claude.exe never appeared under the real signed-in
+    // user's own %USERPROFILE%\.local\bin — same root cause as the
+    // Tesseract/NSIS issue documented above (an elevated parent process
+    // changes an installer's own behavior/destination in ways that
+    // aren't ours to control). Fixed the same way: run the installer via
+    // Task Scheduler under the real, non-elevated user token, so
+    // %USERPROFILE% and the install destination both resolve correctly.
+    // stdout/stderr are now captured to the AI-Prowler temp log folder
+    // so any future failure is diagnosable from install_log.txt directly.
     // ----------------------------------------------------------
     Exec('cmd.exe', '/C where claude >nul 2>nul', '', SW_HIDE,
       ewWaitUntilTerminated, ClaudeCodeCheckResult);
@@ -2113,15 +2148,51 @@ begin
     else
     begin
       SetProgress(87, 'Installing Claude Code CLI...');
-      AppendInstallLog('[Claude Code] Not found on PATH  -  running native installer...');
+      AppendInstallLog('[Claude Code] Not found on PATH  -  running native installer as current user...');
 
-      Exec('powershell.exe',
-        '-NoProfile -ExecutionPolicy Bypass -Command "' +
+      ClaudeCodeTask := 'AI-Prowler-ClaudeCodeInstall';
+      ClaudeCodeBat  := ExpandConstant('{tmp}') + '\claude_code_install.bat';
+
+      SaveStringToFile(ClaudeCodeBat,
+        '@echo off' + #13#10 +
+        'set __COMPAT_LAYER=RunAsInvoker' + #13#10 +
+        'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "' +
           '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; ' +
-          'irm https://claude.ai/install.ps1 | iex"',
+          'irm https://claude.ai/install.ps1 | iex" ' +
+        '>"' + ExpandConstant('{%LOCALAPPDATA}') + '\Temp\AI-Prowler\claude_code_install_stdout.log" ' +
+        '2>"' + ExpandConstant('{%LOCALAPPDATA}') + '\Temp\AI-Prowler\claude_code_install_stderr.log"' + #13#10,
+        False);
+      AppendInstallLog('[Claude Code] Wrote RunAsInvoker batch: ' + ClaudeCodeBat);
+
+      // Register a one-shot scheduled task to run the batch as the current
+      // user WITHOUT /RL HIGHEST  ->  non-elevated token. Same pattern as
+      // the Tesseract install above.
+      Exec(ExpandConstant('{sys}\schtasks.exe'),
+        '/Create /F /RU "' + GetEnv('USERNAME') + '"' +
+        ' /SC ONCE /TN "' + ClaudeCodeTask + '"' +
+        ' /ST 00:00' +
+        ' /TR "cmd /C \"' + ClaudeCodeBat + '\""',
         '', SW_HIDE, ewWaitUntilTerminated, ClaudeCodeInstallResult);
-      AppendInstallLog('[Claude Code] Installer exit code: '
-        + IntToStr(ClaudeCodeInstallResult));
+      AppendInstallLog('[Claude Code] schtasks /Create exit code: ' + IntToStr(ClaudeCodeInstallResult));
+
+      // Trigger immediately
+      Exec(ExpandConstant('{sys}\schtasks.exe'),
+        '/Run /TN "' + ClaudeCodeTask + '"',
+        '', SW_HIDE, ewWaitUntilTerminated, ClaudeCodeInstallResult);
+      AppendInstallLog('[Claude Code] schtasks /Run exit code: ' + IntToStr(ClaudeCodeInstallResult));
+
+      // Poll until claude.exe appears on disk (installer writes to
+      // %USERPROFILE%\.local\bin) rather than trusting the task's own
+      // exit code — same philosophy as WaitForFolderCreation for Tesseract.
+      ClaudeCodeLocalBin := ExpandConstant('{userpf}') + '\.local\bin';
+      WaitForFileCreation(ClaudeCodeLocalBin + '\claude.exe', '[Claude Code]', 60000);
+
+      // Clean up scheduled task and temp batch regardless of outcome.
+      Exec(ExpandConstant('{sys}\schtasks.exe'),
+        '/Delete /F /TN "' + ClaudeCodeTask + '"',
+        '', SW_HIDE, ewWaitUntilTerminated, ClaudeCodeInstallResult);
+      AppendInstallLog('[Claude Code] schtasks /Delete exit code: ' + IntToStr(ClaudeCodeInstallResult));
+      DeleteFile(ClaudeCodeBat);
 
       // Re-check rather than trusting the exit code alone — the native
       // installer's own exit-code reliability isn't something we've
@@ -2152,7 +2223,6 @@ begin
         // succeed completely while `where claude` still finds nothing.
         // Check disk directly and fix PATH ourselves rather than
         // reporting a false failure for an install that actually worked.
-        ClaudeCodeLocalBin := ExpandConstant('{userpf}') + '\.local\bin';
         if FileExists(ClaudeCodeLocalBin + '\claude.exe') then
         begin
           AppendInstallLog('[Claude Code] claude.exe found on disk at '
@@ -2179,7 +2249,9 @@ begin
         else
         begin
           AppendInstallLog('[Claude Code] Install could not be verified  -  '
-            + 'claude.exe not found on disk either.');
+            + 'claude.exe not found on disk either. See '
+            + 'claude_code_install_stdout.log / _stderr.log in the AI-Prowler '
+            + 'temp log folder for the installer''s own output.');
           AppendInstallLog('[Claude Code] Autonomous Task Queue automation will show '
             + 'this as unavailable until installed manually from claude.ai/install.ps1.');
           SetProgress(89, 'Claude Code CLI install failed  -  continuing...');
