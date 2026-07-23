@@ -12679,6 +12679,26 @@ or from the Help menu."""
         ttk.Button(http_btn_row, text="🔨 Force Kill Port",
                    command=_force_kill_port).pack(side='left')
 
+        # ── Test hooks (v8.1.7 restoration, v8.1.8): none of this HTTP MCP
+        # Server control/health-check code was exposed on self, which meant
+        # NO test anywhere in the suite could reach it — the entire block
+        # was silently deleted from the working tree at some point and the
+        # full 1980+-test release gate still passed 100% green, because
+        # nothing imported or called any of it. Exposing these closes that
+        # blind spot so a future regression here fails a test instead of
+        # shipping invisibly.
+        self._http_port_var        = _http_port_var
+        self._http_status_var      = _http_status_var
+        self._http_status_lbl      = _http_status_lbl
+        self._http_health_check    = _http_health_check
+        self._find_pid_on_port     = _find_pid_on_port
+        self._kill_pid_verified    = _kill_pid_verified
+        self._reconcile_http_led   = _reconcile_http_led
+        self._start_http_server    = _start_http_server
+        self._stop_http_server     = _stop_http_server
+        self._force_kill_port      = _force_kill_port
+        self._led_fail_streak      = _led_fail_streak
+
         ttk.Separator(remote_frame, orient='horizontal').pack(fill='x', pady=(0, 8))
 
         # ── cloudflared executable path helper ────────────────────────────────
