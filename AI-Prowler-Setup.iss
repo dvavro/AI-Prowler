@@ -2137,126 +2137,136 @@ begin
     // stdout/stderr are now captured to the AI-Prowler temp log folder
     // so any future failure is diagnosable from install_log.txt directly.
     // ----------------------------------------------------------
-    Exec('cmd.exe', '/C where claude >nul 2>nul', '', SW_HIDE,
-      ewWaitUntilTerminated, ClaudeCodeCheckResult);
-
-    if ClaudeCodeCheckResult = 0 then
+    if GInstallMode <> 'server' then
     begin
-      AppendInstallLog('[Claude Code] Already on PATH  -  skipping install.');
-      SetProgress(89, 'Claude Code CLI already installed  -  skipping...');
-    end
-    else
-    begin
-      SetProgress(87, 'Installing Claude Code CLI...');
-      AppendInstallLog('[Claude Code] Not found on PATH  -  running native installer as current user...');
-
-      ClaudeCodeTask := 'AI-Prowler-ClaudeCodeInstall';
-      ClaudeCodeBat  := ExpandConstant('{tmp}') + '\claude_code_install.bat';
-
-      SaveStringToFile(ClaudeCodeBat,
-        '@echo off' + #13#10 +
-        'set __COMPAT_LAYER=RunAsInvoker' + #13#10 +
-        'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "' +
-          '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; ' +
-          'irm https://claude.ai/install.ps1 | iex" ' +
-        '>"' + ExpandConstant('{%LOCALAPPDATA}') + '\Temp\AI-Prowler\claude_code_install_stdout.log" ' +
-        '2>"' + ExpandConstant('{%LOCALAPPDATA}') + '\Temp\AI-Prowler\claude_code_install_stderr.log"' + #13#10,
-        False);
-      AppendInstallLog('[Claude Code] Wrote RunAsInvoker batch: ' + ClaudeCodeBat);
-
-      // Register a one-shot scheduled task to run the batch as the current
-      // user WITHOUT /RL HIGHEST  ->  non-elevated token. Same pattern as
-      // the Tesseract install above.
-      Exec(ExpandConstant('{sys}\schtasks.exe'),
-        '/Create /F /RU "' + GetEnv('USERNAME') + '"' +
-        ' /SC ONCE /TN "' + ClaudeCodeTask + '"' +
-        ' /ST 00:00' +
-        ' /TR "cmd /C \"' + ClaudeCodeBat + '\""',
-        '', SW_HIDE, ewWaitUntilTerminated, ClaudeCodeInstallResult);
-      AppendInstallLog('[Claude Code] schtasks /Create exit code: ' + IntToStr(ClaudeCodeInstallResult));
-
-      // Trigger immediately
-      Exec(ExpandConstant('{sys}\schtasks.exe'),
-        '/Run /TN "' + ClaudeCodeTask + '"',
-        '', SW_HIDE, ewWaitUntilTerminated, ClaudeCodeInstallResult);
-      AppendInstallLog('[Claude Code] schtasks /Run exit code: ' + IntToStr(ClaudeCodeInstallResult));
-
-      // Poll until claude.exe appears on disk (installer writes to
-      // %USERPROFILE%\.local\bin) rather than trusting the task's own
-      // exit code — same philosophy as WaitForFolderCreation for Tesseract.
-      ClaudeCodeLocalBin := ExpandConstant('{userpf}') + '\.local\bin';
-      WaitForFileCreation(ClaudeCodeLocalBin + '\claude.exe', '[Claude Code]', 60000);
-
-      // Clean up scheduled task and temp batch regardless of outcome.
-      Exec(ExpandConstant('{sys}\schtasks.exe'),
-        '/Delete /F /TN "' + ClaudeCodeTask + '"',
-        '', SW_HIDE, ewWaitUntilTerminated, ClaudeCodeInstallResult);
-      AppendInstallLog('[Claude Code] schtasks /Delete exit code: ' + IntToStr(ClaudeCodeInstallResult));
-      DeleteFile(ClaudeCodeBat);
-
-      // Re-check rather than trusting the exit code alone — the native
-      // installer's own exit-code reliability isn't something we've
-      // independently verified, so confirming `claude` actually resolves
-      // afterward is the real signal, same philosophy as everywhere else
-      // in this file that trusts observed state over a reported result.
       Exec('cmd.exe', '/C where claude >nul 2>nul', '', SW_HIDE,
         ewWaitUntilTerminated, ClaudeCodeCheckResult);
 
       if ClaudeCodeCheckResult = 0 then
       begin
-        AppendInstallLog('[Claude Code] Install verified  -  claude is on PATH.');
-        SetProgress(89, 'Claude Code CLI installed.');
-
-        // Same PATH-broadcast fix documented above for Tesseract — a
-        // freshly-opened terminal needs this to see the updated PATH
-        // without a logoff/logon.
-        SendMessageTimeoutA(HWND_BROADCAST, WM_SETTINGCHANGE, 0,
-          'Environment', SMTO_ABORTIFHUNG, 5000, MsgDummy);
-        AppendInstallLog('[Claude Code] Broadcast WM_SETTINGCHANGE - '
-          + 'new terminals will see it on PATH immediately.');
+        AppendInstallLog('[Claude Code] Already on PATH  -  skipping install.');
+        SetProgress(89, 'Claude Code CLI already installed  -  skipping...');
       end
       else
       begin
-        // Real-world finding (confirmed live, not theoretical): the
-        // native installer writes claude.exe to %USERPROFILE%\.local\bin
-        // but does NOT reliably add that folder to PATH itself — it can
-        // succeed completely while `where claude` still finds nothing.
-        // Check disk directly and fix PATH ourselves rather than
-        // reporting a false failure for an install that actually worked.
-        if FileExists(ClaudeCodeLocalBin + '\claude.exe') then
-        begin
-          AppendInstallLog('[Claude Code] claude.exe found on disk at '
-            + ClaudeCodeLocalBin + ' but not yet on PATH  -  fixing PATH directly.');
-          if RegQueryStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', ClaudeCodeCurPath) then
-          begin
-            if Pos(LowerCase(ClaudeCodeLocalBin), LowerCase(ClaudeCodeCurPath)) = 0 then
-              RegWriteExpandStringValue(HKEY_CURRENT_USER, 'Environment', 'Path',
-                ClaudeCodeCurPath + ';' + ClaudeCodeLocalBin);
-          end
-          else
-            RegWriteExpandStringValue(HKEY_CURRENT_USER, 'Environment', 'Path',
-              ClaudeCodeLocalBin);
+        SetProgress(87, 'Installing Claude Code CLI...');
+        AppendInstallLog('[Claude Code] Not found on PATH  -  running native installer as current user...');
 
+        ClaudeCodeTask := 'AI-Prowler-ClaudeCodeInstall';
+        ClaudeCodeBat  := ExpandConstant('{tmp}') + '\claude_code_install.bat';
+
+        SaveStringToFile(ClaudeCodeBat,
+          '@echo off' + #13#10 +
+          'set __COMPAT_LAYER=RunAsInvoker' + #13#10 +
+          'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "' +
+            '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; ' +
+            'irm https://claude.ai/install.ps1 | iex" ' +
+          '>"' + ExpandConstant('{%LOCALAPPDATA}') + '\Temp\AI-Prowler\claude_code_install_stdout.log" ' +
+          '2>"' + ExpandConstant('{%LOCALAPPDATA}') + '\Temp\AI-Prowler\claude_code_install_stderr.log"' + #13#10,
+          False);
+        AppendInstallLog('[Claude Code] Wrote RunAsInvoker batch: ' + ClaudeCodeBat);
+
+        // Register a one-shot scheduled task to run the batch as the current
+        // user WITHOUT /RL HIGHEST  ->  non-elevated token. Same pattern as
+        // the Tesseract install above.
+        Exec(ExpandConstant('{sys}\schtasks.exe'),
+          '/Create /F /RU "' + GetEnv('USERNAME') + '"' +
+          ' /SC ONCE /TN "' + ClaudeCodeTask + '"' +
+          ' /ST 00:00' +
+          ' /TR "cmd /C \"' + ClaudeCodeBat + '\""',
+          '', SW_HIDE, ewWaitUntilTerminated, ClaudeCodeInstallResult);
+        AppendInstallLog('[Claude Code] schtasks /Create exit code: ' + IntToStr(ClaudeCodeInstallResult));
+
+        // Trigger immediately
+        Exec(ExpandConstant('{sys}\schtasks.exe'),
+          '/Run /TN "' + ClaudeCodeTask + '"',
+          '', SW_HIDE, ewWaitUntilTerminated, ClaudeCodeInstallResult);
+        AppendInstallLog('[Claude Code] schtasks /Run exit code: ' + IntToStr(ClaudeCodeInstallResult));
+
+        // Poll until claude.exe appears on disk (installer writes to
+        // %USERPROFILE%\.local\bin) rather than trusting the task's own
+        // exit code — same philosophy as WaitForFolderCreation for Tesseract.
+        ClaudeCodeLocalBin := ExpandConstant('{userpf}') + '\.local\bin';
+        WaitForFileCreation(ClaudeCodeLocalBin + '\claude.exe', '[Claude Code]', 60000);
+
+        // Clean up scheduled task and temp batch regardless of outcome.
+        Exec(ExpandConstant('{sys}\schtasks.exe'),
+          '/Delete /F /TN "' + ClaudeCodeTask + '"',
+          '', SW_HIDE, ewWaitUntilTerminated, ClaudeCodeInstallResult);
+        AppendInstallLog('[Claude Code] schtasks /Delete exit code: ' + IntToStr(ClaudeCodeInstallResult));
+        DeleteFile(ClaudeCodeBat);
+
+        // Re-check rather than trusting the exit code alone — the native
+        // installer's own exit-code reliability isn't something we've
+        // independently verified, so confirming `claude` actually resolves
+        // afterward is the real signal, same philosophy as everywhere else
+        // in this file that trusts observed state over a reported result.
+        Exec('cmd.exe', '/C where claude >nul 2>nul', '', SW_HIDE,
+          ewWaitUntilTerminated, ClaudeCodeCheckResult);
+
+        if ClaudeCodeCheckResult = 0 then
+        begin
+          AppendInstallLog('[Claude Code] Install verified  -  claude is on PATH.');
+          SetProgress(89, 'Claude Code CLI installed.');
+
+          // Same PATH-broadcast fix documented above for Tesseract — a
+          // freshly-opened terminal needs this to see the updated PATH
+          // without a logoff/logon.
           SendMessageTimeoutA(HWND_BROADCAST, WM_SETTINGCHANGE, 0,
             'Environment', SMTO_ABORTIFHUNG, 5000, MsgDummy);
-          AppendInstallLog('[Claude Code] PATH fixed and broadcast  -  '
-            + 'new terminals and the next AI-Prowler launch will see '
-            + 'claude immediately (this running Setup.exe process still '
-            + 'won''t, since it already inherited its own environment '
-            + 'block  -  that''s expected and harmless).');
-          SetProgress(89, 'Claude Code CLI installed (PATH fixed).');
+          AppendInstallLog('[Claude Code] Broadcast WM_SETTINGCHANGE - '
+            + 'new terminals will see it on PATH immediately.');
         end
         else
         begin
-          AppendInstallLog('[Claude Code] Install could not be verified  -  '
-            + 'claude.exe not found on disk either. See '
-            + 'claude_code_install_stdout.log / _stderr.log in the AI-Prowler '
-            + 'temp log folder for the installer''s own output.');
-          AppendInstallLog('[Claude Code] Autonomous Task Queue automation will show '
-            + 'this as unavailable until installed manually from claude.ai/install.ps1.');
-          SetProgress(89, 'Claude Code CLI install failed  -  continuing...');
+          // Real-world finding (confirmed live, not theoretical): the
+          // native installer writes claude.exe to %USERPROFILE%\.local\bin
+          // but does NOT reliably add that folder to PATH itself — it can
+          // succeed completely while `where claude` still finds nothing.
+          // Check disk directly and fix PATH ourselves rather than
+          // reporting a false failure for an install that actually worked.
+          if FileExists(ClaudeCodeLocalBin + '\claude.exe') then
+          begin
+            AppendInstallLog('[Claude Code] claude.exe found on disk at '
+              + ClaudeCodeLocalBin + ' but not yet on PATH  -  fixing PATH directly.');
+            if RegQueryStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', ClaudeCodeCurPath) then
+            begin
+              if Pos(LowerCase(ClaudeCodeLocalBin), LowerCase(ClaudeCodeCurPath)) = 0 then
+                RegWriteExpandStringValue(HKEY_CURRENT_USER, 'Environment', 'Path',
+                  ClaudeCodeCurPath + ';' + ClaudeCodeLocalBin);
+            end
+            else
+              RegWriteExpandStringValue(HKEY_CURRENT_USER, 'Environment', 'Path',
+                ClaudeCodeLocalBin);
+
+            SendMessageTimeoutA(HWND_BROADCAST, WM_SETTINGCHANGE, 0,
+              'Environment', SMTO_ABORTIFHUNG, 5000, MsgDummy);
+            AppendInstallLog('[Claude Code] PATH fixed and broadcast  -  '
+              + 'new terminals and the next AI-Prowler launch will see '
+              + 'claude immediately (this running Setup.exe process still '
+              + 'won''t, since it already inherited its own environment '
+              + 'block  -  that''s expected and harmless).');
+            SetProgress(89, 'Claude Code CLI installed (PATH fixed).');
+          end
+          else
+          begin
+            AppendInstallLog('[Claude Code] Install could not be verified  -  '
+              + 'claude.exe not found on disk either. See '
+              + 'claude_code_install_stdout.log / _stderr.log in the AI-Prowler '
+              + 'temp log folder for the installer''s own output.');
+            AppendInstallLog('[Claude Code] Autonomous Task Queue automation will show '
+              + 'this as unavailable until installed manually from claude.ai/install.ps1.');
+            SetProgress(89, 'Claude Code CLI install failed  -  continuing...');
+          end;
         end;
       end;
+    end
+    else
+    begin
+      AppendInstallLog('[Claude Code] Server mode  -  skipping install entirely '
+        + '(Autonomous AI Task Queue / Claude Code headless automation is '
+        + 'personal-mode only; see COMPLETE_USER_GUIDE.md).');
+      SetProgress(89, 'Server mode - skipping Claude Code CLI...');
     end;
 
     // ----------------------------------------------------------
