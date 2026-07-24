@@ -178,6 +178,64 @@ def test_save_enabled_with_mcp_config_installs_scheduled_task(gui, monkeypatch, 
     assert saved["enabled"] is True
 
 
+# ── v8.1.9: Apply-time-without-toggle button ───────────────────────────────
+
+def test_apply_button_reinstalls_task_with_new_time_while_already_enabled(gui, monkeypatch):
+    """Regression test for the exact bug reported: automation already ON,
+    user edits the Scheduled Time field, and NOTHING happens to the real
+    Scheduled Task until this button (or a full OFF->ON toggle cycle) is
+    used. Confirms the new 'Apply' button reinstalls with the updated
+    time without touching the enabled/disabled state at all."""
+    install_calls = []
+    monkeypatch.setattr(tqa, "install_scheduled_task",
+                         lambda *a, **kw: (install_calls.append(a), (True, "ok"))[1])
+    monkeypatch.setattr(tqa, "install_wrapper_script",
+                         lambda *a, **kw: Path("fake_wrapper.bat"))
+
+    # Get into the "already enabled" state first, exactly like turning the
+    # toggle ON once earlier in a real session.
+    gui.app._tqa_cfg["mcp_config_path"] = str(tqa.GENERATED_MCP_CONFIG_PATH)
+    gui.app._tqa_enabled_var.set(True)
+    gui.app._tqa_time_var.set("06:00")
+    gui.app._tqa_save_and_apply()
+    _pump(gui)
+    assert len(install_calls) == 1
+
+    # Now simulate the reported scenario: change ONLY the time field and
+    # click Apply — enabled state is untouched throughout.
+    gui.app._tqa_time_var.set("06:15")
+    gui.app._tqa_apply_time_only()
+    _pump(gui)
+
+    # install_scheduled_task must have been called AGAIN with the new time,
+    # without any toggle of _tqa_enabled_var.
+    assert len(install_calls) == 2
+    assert gui.app._tqa_enabled_var.get() is True
+    saved = tqa.load_config()
+    assert saved["schedule_time"] == "06:15"
+    assert saved["enabled"] is True
+
+
+def test_apply_button_while_disabled_just_saves_time_no_install(gui, monkeypatch):
+    install_calls = []
+    uninstall_calls = []
+    monkeypatch.setattr(tqa, "install_scheduled_task",
+                         lambda *a, **kw: (install_calls.append(a), (True, "ok"))[1])
+    monkeypatch.setattr(tqa, "uninstall_scheduled_task",
+                         lambda: (uninstall_calls.append(1), (True, "not present"))[1])
+
+    gui.app._tqa_enabled_var.set(False)
+    gui.app._tqa_time_var.set("09:45")
+    gui.app._tqa_apply_time_only()
+    _pump(gui)
+
+    assert len(install_calls) == 0
+    assert len(uninstall_calls) == 1
+    saved = tqa.load_config()
+    assert saved["schedule_time"] == "09:45"
+    assert saved["enabled"] is False
+
+
 # ── Auth method switching ──────────────────────────────────────────────────
 
 def test_switching_to_api_key_persists_on_save(gui, monkeypatch):
@@ -384,6 +442,113 @@ def test_queue_task_row_writes_pending_entry_with_saved_settings(gui):
     assert "record_learning" in matching[0]["prompt"]
     assert "save_analysis_report" in matching[0]["prompt"]
     assert matching[0]["status"] == "pending"
+
+
+# ── v8.1.9: Show Queue due-badge + live refresh ─────────────────────────────
+
+def _write_pending_tasks(entries):
+    p = tqa.AI_PROWLER_HOME / "pending_tasks.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(entries, indent=2), encoding="utf-8")
+
+
+def _row_label_texts(gui):
+    """Collect all Label widget text from the expanded queue list frame,
+    across every row Frame it contains."""
+    texts = []
+    for child in gui.app._queue_list_frame.winfo_children():
+        if isinstance(child, tk.Frame):
+            for w in child.winfo_children():
+                if isinstance(w, tk.Label):
+                    texts.append(w.cget("text"))
+        elif isinstance(child, tk.Label):
+            texts.append(child.cget("text"))
+    return texts
+
+
+def test_due_badge_shows_due_now_for_ready_recurring_entry(gui):
+    import datetime
+    yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    _write_pending_tasks([{
+        "task_id": "t1", "label": "Weekly Biz Check", "status": "pending",
+        "schedule": "weekly", "next_due": yesterday,
+        "created_at": "2026-07-24T00:00:00Z",
+    }])
+    gui.app._queue_expanded.set(True)
+    gui.app._refresh_queue_list()
+    _pump(gui)
+
+    texts = _row_label_texts(gui)
+    assert any("Weekly Biz Check" in t for t in texts)
+    assert any("Due now" in t for t in texts)
+
+
+def test_due_badge_shows_future_date_for_not_yet_due_entry(gui):
+    import datetime
+    tomorrow = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+    _write_pending_tasks([{
+        "task_id": "t1", "label": "Future Task", "status": "pending",
+        "schedule": "weekly", "next_due": tomorrow,
+        "created_at": "2026-07-24T00:00:00Z",
+    }])
+    gui.app._queue_expanded.set(True)
+    gui.app._refresh_queue_list()
+    _pump(gui)
+
+    texts = _row_label_texts(gui)
+    assert any("Future Task" in t for t in texts)
+    assert any(tomorrow in t for t in texts)
+    assert not any("Due now" in t for t in texts)
+
+
+def test_due_badge_omitted_for_one_shot_entry(gui):
+    _write_pending_tasks([{
+        "task_id": "t1", "label": "One Shot Task", "status": "pending",
+        "schedule": "none",
+        "created_at": "2026-07-24T00:00:00Z",
+    }])
+    gui.app._queue_expanded.set(True)
+    gui.app._refresh_queue_list()
+    _pump(gui)
+
+    texts = _row_label_texts(gui)
+    assert any("One Shot Task" in t for t in texts)
+    assert not any("Due" in t for t in texts)
+
+
+def test_save_and_queue_refreshes_visible_list_when_already_expanded(gui, monkeypatch):
+    """Regression test: this Save & Queue path used to only refresh the
+    badge COUNT, not the visible list, when the panel was already
+    expanded — the new entry wouldn't appear until manually collapsed
+    and re-expanded."""
+    # Start with an empty, expanded queue panel.
+    _write_pending_tasks([])
+    gui.app._queue_expanded.set(True)
+    gui.app._refresh_queue_list()
+    _pump(gui)
+    assert not any("MyNewCustomTask" in t for t in _row_label_texts(gui))
+
+    import custom_tasks_manager as ctm
+    task = ctm.create_task(
+        label="MyNewCustomTask", prompt="Do the thing.",
+        schedule="none",
+    )
+    tasks = ctm.load_custom_tasks()
+    tasks.append(task)
+    ctm.save_custom_tasks(tasks)
+    entries = ctm.tasks_to_queue_entries([task])
+    existing = json.loads((tqa.AI_PROWLER_HOME / "pending_tasks.json").read_text(encoding="utf-8"))
+    existing.extend(entries)
+    _write_pending_tasks(existing)
+
+    # This is exactly what the Save & Queue button handler does: bump the
+    # count, then (since the panel is expanded) also refresh the list.
+    gui.app._refresh_queue_count()
+    if gui.app._queue_expanded.get():
+        gui.app._refresh_queue_list()
+    _pump(gui)
+
+    assert any("MyNewCustomTask" in t for t in _row_label_texts(gui))
 
 
 def test_queue_task_row_uses_defaults_when_never_configured(gui):

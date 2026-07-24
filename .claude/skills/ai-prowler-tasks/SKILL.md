@@ -14,10 +14,18 @@ of relying on tool descriptions alone to infer the right order.
 
 ## Sequence — follow exactly, in order
 
-1. Call `get_pending_analysis_tasks()`.
-   - If the queue is empty, report that plainly and stop. Do not treat an
-     empty queue as an error.
-2. For each task returned, in the order given:
+1. Call `sync_due_tasks_to_queue()` first (v8.1.9). This pushes any due
+   custom task definitions into the run queue that aren't already sitting
+   there — without this step, a custom task's schedule alone never gets
+   it into the queue for an unattended run to find. Safe to call every
+   time; it's idempotent and won't duplicate an already-queued entry.
+2. Call `get_pending_analysis_tasks()`.
+   - v8.1.9: this only returns entries that are actually DUE right now
+     (`is_queue_entry_ready()`) — it will NOT return a recurring task
+     that's queued but not yet due. That's expected, not a bug.
+   - If nothing is returned, report that plainly and stop. Do not treat
+     an empty/not-yet-due result as an error.
+3. For each task returned, in the order given:
    a. Read the task's `prompt`, `scope_dirs`, and `label`.
    b. Perform the actual analysis using AI-Prowler's own MCP tools —
       search tools scoped to `scope_dirs` if provided, otherwise the
@@ -27,12 +35,14 @@ of relying on tool descriptions alone to infer the right order.
       — same as the documented manual flow.
    d. Call `complete_analysis_task(task_id, summary)` with a real,
       specific summary of what was found — not a placeholder. If the task
-      had a schedule, `next_due` auto-advances based on the *original*
-      due date, not today's date; this is handled by AI-Prowler itself,
-      not something to compute here.
+      has a schedule, `next_due` auto-advances based on the *original*
+      due date, not today's date, and the entry RE-ARMS (status resets to
+      "pending" rather than closing) so it will surface again on its own
+      next cycle — this is handled by AI-Prowler itself, not something to
+      compute here. A one-shot task (no schedule) closes permanently.
    e. If the task's configuration requested a saved report, call
       `save_analysis_report()` after `complete_analysis_task()`.
-3. After all tasks are processed, produce a final one-paragraph summary:
+4. After all tasks are processed, produce a final one-paragraph summary:
    how many tasks ran, one line per task on what was found, and any tasks
    that failed partway (see Failure handling below).
 
@@ -69,8 +79,9 @@ it.
 
 ## What this Skill does NOT do
 
-- Does not create new tasks (`create_analysis_task`) — this Skill only
-  processes what's already queued.
+- Does not create new task DEFINITIONS (`create_analysis_task`) — it only
+  queues (via `sync_due_tasks_to_queue()`) and processes tasks that
+  already exist as definitions or are already sitting in the queue.
 - Does not decide scheduling or triggers — that's the Windows Scheduled
   Task (or whatever invoked this headless run) calling this Skill on a
   timer. This Skill has no opinion about when it's run.

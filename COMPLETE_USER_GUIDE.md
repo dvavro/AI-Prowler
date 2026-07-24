@@ -1,5 +1,5 @@
 # AI-Prowler — Complete User Guide
-## Version 8.1.8
+## Version 8.1.9
 
 ---
 
@@ -263,9 +263,9 @@ AI-Prowler exposes **83 tools** total to Claude across thirteen categories (this
 
 | Install type | Mode | Tools visible | Notes |
 |---|---|---|---|
-| Personal / Home | personal | 82 | All 83 tools minus `check_sms_replies` (§6.2b — meaningless with a single user) |
-| Business — employee personal install | personal | 82 | Same as above — personal mode is personal mode regardless of edition |
-| Business — company server | server | 54 | All 83 tools minus the 29 in `_TIER_A_SUPPRESSED` (§6.2) — remaining 54 are further gated per-role/per-call inside the tool itself, not by registration |
+| Personal / Home | personal | 84 | All 85 tools minus `check_sms_replies` (§6.2b — meaningless with a single user) |
+| Business — employee personal install | personal | 84 | Same as above — personal mode is personal mode regardless of edition |
+| Business — company server | server | 53 | All 85 tools minus the 32 in `_TIER_A_SUPPRESSED` (§6.2, +3 in v8.1.9: `sync_due_tasks_to_queue`, `delete_analysis_task`, `update_analysis_task`) — remaining 53 are further gated per-role/per-call inside the tool itself, not by registration |
 
 ### 6.2 Tier A Tool Suppression (Server Mode Only)
 
@@ -278,7 +278,7 @@ The following tools are never registered when AI-Prowler runs in server mode:
 | Raw filesystem reads | `read_file_lines`, `grep_documents` |
 | Email operator tools | `configure_email`, `send_file` — use personal SMTP credentials, not appropriate for a shared server. `send_learnings_report` is **not** in this category — see the note below. |
 | Bulk index rebuild | `reindex_all` |
-| Agentic analysis task queue | `get_pending_analysis_tasks`, `complete_analysis_task`, `save_analysis_report`, `list_analysis_tasks` — the Quick Links tab's Common Business AI Analysis / My Custom AI Analyses panels are hidden in server mode's GUI, so the queue these tools drive has no server-mode caller |
+| Agentic analysis task queue | `get_pending_analysis_tasks`, `complete_analysis_task`, `save_analysis_report`, `create_analysis_task`, `list_analysis_tasks`, `sync_due_tasks_to_queue`, `delete_analysis_task`, `update_analysis_task` (last 3 added v8.1.9) — the Quick Links tab's Common Business AI Analysis / My Custom AI Analyses panels are hidden in server mode's GUI, so the queue these tools drive has no server-mode caller |
 | Raw/unscoped SMS inbox | `check_sms_inbox` — reads the local inbox with no per-user filtering (unlike `check_sms_replies`, which uses the per-user-scoped read path). In a multi-user server this would let any employee read every inbound SMS/WhatsApp message company-wide, not just their own. `check_sms_replies` is the server-mode equivalent. |
 
 > **Note:** `send_sms`, `send_email`, `send_alert`, `send_whatsapp`, `send_learnings_report` (user-facing) are **not** suppressed in server mode — they remain available to users via the Tier B role gate.
@@ -531,17 +531,22 @@ Two different status tools — know which to call:
 
 ---
 
-#### Agentic Analysis Tools (5 tools — Personal Only)
+#### Agentic Analysis Tools (8 tools — Personal Only)
 
 These tools power the **Common Business AI Analysis** and **My Custom AI Analyses** sections in the Quick Links tab. Not available in server mode.
 
 | Tool | What It Does | Mode |
 |---|---|---|
-| `create_analysis_task` | Defines a new recurring or one-off custom task from a plain-language request — the same thing the "+ New Custom Analysis" GUI dialog builds. **Day-granularity scheduling only** — there's no time-of-day in this system, so "every Monday at 8am" is stored as "due every Monday"; the "8am" isn't representable. **Pull-based, not autonomous** — creating a task doesn't make anything run unattended; the task becomes visible next time `get_pending_analysis_tasks()` is called after it's due AND queued (GUI **▶ Queue** button, the Autonomous AI Task Queue once enabled, or a future conversation). Enforces the same 25-task cap as the GUI dialog (`MAX_CUSTOM_TASKS`, centralized inside `create_task()` itself). | Personal |
-| `list_analysis_tasks` | **Recently added.** Lists the FULL custom-analysis task definition list (`custom_analysis_tasks.json`), up to 25, regardless of due date — with an `is_due` flag per task. Complements `get_pending_analysis_tasks`, which only shows tasks that have already been queued into the run queue (`pending_tasks.json`). Use this for "what's in my task queue" / "list everything I've scheduled" — those questions are about the full definition list, not just what's currently due. Strictly read-only; never modifies or queues anything. | Personal |
-| `get_pending_analysis_tasks` | Returns all pending tasks from `~/.ai-prowler/pending_tasks.json`. Claude calls this when you paste the run-queue command. Returns a JSON object with `pending_count`, `tasks` array (including `task_id`, `label`, `prompt`, `scope_dirs`, `schedule`, `next_due`, `queued_ago`), and execution instructions. Returns a plain informational message when the queue is empty. | Personal |
-| `complete_analysis_task` | Marks a pending task as completed after Claude finishes the analysis. Stamps `completed_at` and stores the optional `summary`. For scheduled tasks (both built-in and custom), auto-advances `next_due` anchored to the original due date — not the completion date. | Personal |
+| `create_analysis_task` | Defines a new recurring or one-off custom task from a plain-language request — the same thing the "+ New Custom Analysis" GUI dialog builds. **Day-granularity scheduling only** — there's no time-of-day in this system, so "every Monday at 8am" is stored as "due every Monday"; the "8am" isn't representable. Enforces the same 25-task cap as the GUI dialog (`MAX_CUSTOM_TASKS`, centralized inside `create_task()` itself). | Personal |
+| `list_analysis_tasks` | Lists the FULL custom-analysis task definition list (`custom_analysis_tasks.json`), up to 25, regardless of due date — with an `is_due` flag per task. Complements `get_pending_analysis_tasks`, which only shows tasks that have already been queued into the run queue (`pending_tasks.json`). Strictly read-only; never modifies or queues anything. | Personal |
+| `sync_due_tasks_to_queue` | **New in v8.1.9.** Pushes any DUE custom task definitions into the run queue that aren't already sitting there — the missing link that makes "the queue gets checked and runs whatever's due" actually true without a manual GUI Queue click. Idempotent (safe to call repeatedly; won't duplicate). Call this before `get_pending_analysis_tasks()` for a fully autonomous "check and run" pass. Does not touch Common Business Analysis (built-in) tasks — those have no separate definition to sync from. | Personal |
+| `get_pending_analysis_tasks` | Returns tasks from `~/.ai-prowler/pending_tasks.json` that are **due right now** — `status == "pending"` AND `is_queue_entry_ready()`. **v8.1.9: now due-filtered** — a recurring task queued ahead of its `next_due` date stays hidden until that date arrives (it remains in the queue, it just isn't "ready" yet). One-shot entries (`schedule: "none"`) are always ready once queued. Returns a JSON object with `pending_count`, `tasks` array (including `task_id`, `label`, `prompt`, `scope_dirs`, `schedule`, `next_due`, `queued_ago`), and execution instructions. If the queue has items but none are due yet, says so explicitly rather than implying the queue is empty. | Personal |
+| `complete_analysis_task` | Marks a queued task as done for this run. **v8.1.9 unified re-arm:** one-shot entries (`schedule: "none"`, built-in or custom) complete permanently. Recurring entries — **built-in and custom now behave identically by design** — instead have `next_due` advanced and `status` reset back to `"pending"`, so the SAME queue entry re-arms itself and resurfaces automatically once next_due arrives, rather than requiring a manual re-queue. Anchors to the original due date, not the completion date; for custom tasks the source definition in `custom_analysis_tasks.json` is kept in sync. | Personal |
+| `delete_analysis_task` | **New in v8.1.9.** Removes a task from chat. Accepts either a custom definition's `task_id` (deletes the definition AND any linked queue entries) or a single queue entry's `task_id` (removes just that instance, leaving a recurring definition intact). | Personal |
+| `update_analysis_task` | **New in v8.1.9.** Edits an existing custom task's label, prompt, schedule, first_due, output options, or scope_dirs from chat — only the fields you pass are changed. Uses the same `update_task()` logic as the GUI editor, including the v8.1.9 fix for `next_due` correctly recomputing when schedule or first_due actually change (previously silently had no effect — see Known Issues history). Built-in tasks aren't editable this way; they have no standalone definition. | Personal |
 | `save_analysis_report` | Saves a full analysis as a Word document (`.docx`) to the configured report folder. Default: `~/Documents/AI-Prowler_tasks_reports`. | Personal |
+
+
 
 
 ### 6.5 Email Tool Setup
@@ -1306,7 +1311,7 @@ A single large button — reading **"Toggle On/Off"** with **"Autonomous AI Task
 
 | Field | Description |
 |---|---|
-| **Scheduled time** | 24-hour `HH:MM`, daily. |
+| **Scheduled time** | 24-hour `HH:MM`, daily. **v8.1.9:** click **💾 Apply** right next to the field to push a time change to the real Windows Scheduled Task immediately — previously, editing this field while automation was already ON had no effect until you toggled it OFF then ON again. Apply works either way (enabled or disabled) without touching the on/off state. |
 | **Text me when a run finishes** | Optional SMS/WhatsApp notification, sent to whichever method is selected. |
 | **Auth** | **Subscription (OAuth)** — uses your Claude Pro/Max plan; click **🔑 Get / Renew Token** to sign in. **API Key (metered billing)** — a separate pay-as-you-go account; paste a key from console.anthropic.com and click **Save Key** (and **Clear Key** to remove one). |
 | **🧪 Test Setup (Dry Run)** | Runs a checklist (Claude Code CLI installed, MCP config current, token/key valid) without actually running any tasks, so you can confirm everything is wired up before turning it on. |
@@ -1367,7 +1372,7 @@ When you click any button except 🧠 Run Pending Analysis, a scrollable **Confi
 | **Report folder** | Where `.docx` reports are saved. Defaults to `~/Documents/AI-Prowler_tasks_reports`. Click **Browse…** to change. |
 | **Ctrl+V reminder** | Italic reminder: *"After clicking Queue Analysis → open a new Claude chat and press Ctrl+V to run all queued tasks."* |
 
-> **Scheduling built-in tasks:** When you set a schedule on a Common Business button, `complete_analysis_task()` automatically advances `next_due` after Claude finishes — anchored to the original due date (not the completion date). The next due date is stamped on the completed task record and reported back to Claude as `Next scheduled run: YYYY-MM-DD`.
+> **Scheduling built-in tasks:** When you set a schedule on a Common Business button, `complete_analysis_task()` automatically advances `next_due` after Claude finishes — anchored to the original due date (not the completion date). **v8.1.9: the entry re-arms** — `status` resets to `"pending"` and it stays in the queue permanently, resurfacing in `get_pending_analysis_tasks()` on its own once the new `next_due` arrives. You don't need to re-queue it manually each cycle; only one-shot (`schedule: none`) buttons complete permanently. The next due date is reported back to Claude as `Next scheduled run: YYYY-MM-DD`.
 
 #### Task queue JSON schema
 
@@ -1391,9 +1396,9 @@ Tasks are stored in `~/.ai-prowler/pending_tasks.json`. The full schema (v8.0.0)
 }
 ```
 
-When Claude completes the task, `status` changes to `"completed"`, `completed_at` and `completion_summary` are added, and `next_due` is advanced if a schedule was set. Completed tasks remain for audit — they are not deleted.
+When Claude completes the task, a one-shot entry (`schedule: "none"`) has `status` change to `"completed"` permanently — `completed_at` and `completion_summary` are added, and it's kept for audit rather than deleted. A recurring entry instead has `next_due` advanced and `status` reset back to `"pending"` (v8.1.9 re-arm) — it stays live in the queue and resurfaces on its own next cycle rather than needing to be re-queued manually.
 
-The collapsible **▶ Show Queue** panel (below the analysis buttons) lets you see what's waiting, remove individual items (✕), or clear everything (🗑 Clear Queue).
+The collapsible **▶ Show Queue** panel (below the analysis buttons) lets you see what's waiting, remove individual items (✕), or clear everything (🗑 Clear Queue). **v8.1.9:** each recurring item now shows a due badge — 🟢 **Due now** if it's actually ready to run, or ⏳ **Due YYYY-MM-DD** if it's queued but the date hasn't arrived yet — so you can tell at a glance whether something sitting in the queue is about to fire or just waiting. The list also now refreshes live the moment a new task is saved & queued while the panel is already expanded, instead of requiring a manual collapse/re-expand.
 
 #### Tips
 
@@ -1457,17 +1462,20 @@ Here is a well-formed custom prompt for a monthly customer review:
 #### Custom Task Lifecycle
 
 1. Task created → saved in `~/.ai-prowler/custom_analysis_tasks.json`
-2. Task queued via **▶ Queue** or **🧠 Run Due Tasks** → written to `pending_tasks.json` with `status: pending`
-3. Claude picks it up via `get_pending_analysis_tasks()` and executes the prompt
-4. Claude calls `complete_analysis_task(task_id, summary)` → status becomes `completed`
-5. Next scheduled run date is auto-advanced from the original anchor date (e.g. Monthly June 24 → July 24, not "30 days from completion")
+2. Task queued via **▶ Queue**, or automatically by `sync_due_tasks_to_queue()` once due — written to `pending_tasks.json` with `status: pending` and its own `schedule`/`next_due` (v8.1.9: self-describing, no longer requires a separate lookup)
+3. `get_pending_analysis_tasks()` returns it once `next_due` is today or earlier (`is_queue_entry_ready()`) — a task queued ahead of time stays hidden until then
+4. Claude picks it up and executes the prompt
+5. Claude calls `complete_analysis_task(task_id, summary)` → for a recurring task, `next_due` advances and `status` resets back to `pending` (re-armed, not closed) — same entry surfaces again automatically next cycle. A one-shot (`schedule: none`) task closes permanently instead.
+6. Next scheduled run date is auto-advanced from the original anchor date (e.g. Monthly June 24 → July 24, not "30 days from completion")
+7. `update_analysis_task()` and `delete_analysis_task()` let Claude edit or remove a task from chat without opening the GUI
 
 #### Shared Scheduling Behaviour (Common Business + Custom)
 
 Both Common Business buttons and Custom Analyses share the same scheduling engine:
 
 - **Anchor-based advancement** — `next_due` advances from the previous `next_due`, not from the completion date. A weekly task due Monday stays on Mondays even if Claude runs it on Wednesday.
-- **`complete_analysis_task()`** handles both: custom tasks update `custom_analysis_tasks.json`; built-in tasks update `next_due` directly on the completed task record in `pending_tasks.json`.
+- **`complete_analysis_task()` unified re-arm (v8.1.9)** — built-in and custom recurring tasks are now handled by the exact same code path and behave identically: `next_due` advances and `status` resets to `pending`, so the queue entry stays alive and resurfaces on its own next cycle. Custom tasks additionally sync the advanced `next_due` back to `custom_analysis_tasks.json` so the GUI's task list stays accurate. Only one-shot (`schedule: none`) tasks — built-in or custom — close permanently.
+- **`sync_due_tasks_to_queue()`** pushes due custom definitions into the run queue automatically; built-in tasks have no separate definition, so their first queueing is still a GUI action.
 - **Schedules available:** Manual only, Daily, Weekly, Every 2 weeks, Monthly, Quarterly, Yearly.
 - **Default report folder** for all outputs: `~/Documents/AI-Prowler_tasks_reports` (created automatically if it doesn't exist)
 

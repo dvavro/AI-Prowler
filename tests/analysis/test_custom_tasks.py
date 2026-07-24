@@ -1130,7 +1130,11 @@ class TestBuiltInScheduleAdvancement:
         entry = self._pending_builtin("t1", "weekly", anchor)
         result, saved = self._run_complete(mcp, [entry], "t1")
         done = next(t for t in saved["tasks"] if t["task_id"] == "t1")
-        assert done["status"] == "completed"
+        # v8.1.9: recurring built-in entries now re-arm to "pending"
+        # (identical treatment to recurring custom tasks) instead of
+        # closing permanently — see TestUnifiedReArmBehavior below for
+        # dedicated coverage of this design decision.
+        assert done["status"] == "pending"
         assert done.get("next_due") == expected
 
     def test_TC_CTASK_016_weekly_catchup_when_severely_overdue(self):

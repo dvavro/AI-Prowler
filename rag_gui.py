@@ -92,7 +92,7 @@ if sys.stderr is None:
 # Single source of truth for the app version. Bump this one line when releasing
 # a new version; all UI labels, About dialogs, help text, and update checks
 # read from here.
-APP_VERSION = "8.1.8"
+APP_VERSION = "8.1.9"
 
 # ── UI feature flags ─────────────────────────────────────────────────────────
 # Toggle visibility of advanced/legacy GUI sections without removing any
@@ -5704,6 +5704,7 @@ or from the Help menu."""
             import json as _json
             import datetime as _dt
             from pathlib import Path as _Path
+            import custom_tasks_manager as _ctm_qlist
             # Clear existing widgets
             for w in _queue_list_frame.winfo_children():
                 w.destroy()
@@ -5736,6 +5737,23 @@ or from the Help menu."""
                 except Exception:
                     age = ""
 
+                # v8.1.9: show whether this entry is actually due right now
+                # (what get_pending_analysis_tasks() will pick up) versus
+                # sitting queued-but-not-yet-due — previously the panel gave
+                # no way to visually distinguish these, so a task that
+                # looked "in the queue" could silently not run yet.
+                try:
+                    is_ready = _ctm_qlist.is_queue_entry_ready(t)
+                except Exception:
+                    is_ready = True
+                if t.get("schedule", "none") == "none":
+                    due_badge, due_color = "", ''
+                elif is_ready:
+                    due_badge, due_color = "🟢 Due now", '#6ab86a'
+                else:
+                    _nd = t.get("next_due", "?")
+                    due_badge, due_color = f"⏳ Due {_nd}", '#8a92b8'
+
                 row = tk.Frame(_queue_list_frame, bg='#12181f')
                 row.pack(fill='x', padx=8, pady=1)
 
@@ -5748,6 +5766,11 @@ or from the Help menu."""
                          text=age,
                          bg='#12181f', fg='#4a6a82',
                          font=('Arial', 7)).pack(side='left', padx=(6, 0))
+                if due_badge:
+                    tk.Label(row,
+                             text=due_badge,
+                             bg='#12181f', fg=due_color,
+                             font=('Arial', 7)).pack(side='left', padx=(6, 0))
 
                 def _remove(tid=t.get("task_id")):
                     try:
@@ -5817,6 +5840,14 @@ or from the Help menu."""
 
         # Initial count
         _refresh_queue_count()
+
+        # v8.1.9: exposed for tests — lets test code drive/inspect the
+        # queue-list refresh and due-badge behavior directly, the same
+        # pattern used for the Custom Analyses panel above.
+        self._refresh_queue_list  = _refresh_queue_list
+        self._refresh_queue_count = _refresh_queue_count
+        self._queue_expanded      = _queue_expanded
+        self._queue_list_frame    = _queue_list_frame
 
         # ── My Custom Analyses ────────────────────────────────────────────────
         # User-defined analysis tasks with schedule, scope, and output config.
@@ -6289,6 +6320,13 @@ or from the Help menu."""
                             self.root.after(3000,
                                 lambda: self.status_var.set("Ready"))
                             _refresh_queue_count()
+                            # v8.1.9 fix: this was the one Save & Queue path
+                            # that didn't also refresh the visible list when
+                            # the queue panel was already expanded — the
+                            # badge count updated but the new entry wouldn't
+                            # appear until manually collapsed/re-expanded.
+                            if _queue_expanded.get():
+                                _refresh_queue_list()
 
                     win.destroy()
                     self.status_var.set(f"✅ Task '{label}' saved")
@@ -7101,7 +7139,23 @@ or from the Help menu."""
             tk.Entry(_tqa_row1, textvariable=_tqa_time_var, width=6,
                      font=('Arial', 9)).pack(side='left', padx=(4, 2))
             tk.Label(_tqa_row1, text="(24h HH:MM, daily)", bg='#1a1e2e', fg='#6a7a9a',
-                     font=('Arial', 8)).pack(side='left')
+                     font=('Arial', 8)).pack(side='left', padx=(0, 8))
+            # v8.1.9 fix: _tqa_save_and_apply() reinstalls the Windows
+            # Scheduled Task with whatever's currently in the time field
+            # every time it runs while automation is enabled — but it was
+            # previously only ever called from the ON/OFF toggle button.
+            # That meant editing this field while already ON had NO
+            # effect on the real Scheduled Task until you toggled OFF
+            # then ON again (a confusing "I set 6:15 and it didn't work"
+            # bug). This button calls the exact same apply function
+            # directly, without touching the enabled/disabled state, so
+            # a time-only change takes effect immediately either way.
+            def _tqa_apply_time_only():
+                _tqa_save_and_apply()
+                _tqa_update_enable_btn_label()
+            _tqa_btn_apply_time = ttk.Button(
+                _tqa_row1, text="💾 Apply", command=_tqa_apply_time_only)
+            _tqa_btn_apply_time.pack(side='left')
 
             _tqa_row2 = tk.Frame(_tqa_inner, bg='#1a1e2e')
             _tqa_row2.pack(fill='x', pady=(0, 6))
@@ -7570,6 +7624,8 @@ or from the Help menu."""
             self._tqa_generate_mcp_config    = _tqa_generate_mcp_config
             self._tqa_toggle_enabled         = _tqa_toggle_enabled
             self._tqa_update_enable_btn_label = _tqa_update_enable_btn_label
+            self._tqa_apply_time_only        = _tqa_apply_time_only
+            self._tqa_btn_apply_time         = _tqa_btn_apply_time
 
             _tqa_refresh_status_display()
 

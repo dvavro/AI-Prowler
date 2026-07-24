@@ -180,7 +180,14 @@ def _advance_date_catchup(anchor: str, schedule: str, today_str: str = None) -> 
 
 
 def _is_due(task: dict) -> bool:
-    """Return True if the task is due today or overdue."""
+    """Return True if the task is due today or overdue.
+
+    This is for task DEFINITIONS in custom_analysis_tasks.json — used to
+    decide whether a recurring definition should get a fresh entry pushed
+    into the run queue (pending_tasks.json). A manual-only definition
+    (schedule="none") is never "due" in this sense — it only gets queued
+    when the user explicitly clicks Queue/Save & Queue.
+    """
     next_due = task.get("next_due")
     if not next_due:
         return False
@@ -191,6 +198,41 @@ def _is_due(task: dict) -> bool:
         return _parse_date(next_due) <= datetime.date.today()
     except (ValueError, TypeError):
         return False
+
+
+def is_queue_entry_ready(entry: dict) -> bool:
+    """Return True if a pending_tasks.json QUEUE ENTRY is ready to execute
+    right now. This is deliberately a different question from _is_due()
+    above, and has different semantics for schedule="none":
+
+      - schedule == "none" (a one-shot entry, whether from a Common
+        Business Analysis button or a manual-only custom task): once it's
+        sitting in the queue, it's always ready — there's no recurrence
+        concept, the act of queueing it IS the "due" signal.
+      - schedule != "none" (a recurring entry — either a built-in button
+        with its own schedule, or a materialized custom-task instance):
+        ready only if next_due is today or in the past. A recurring entry
+        that was queued ahead of its next_due date (e.g. queued once,
+        then re-armed by complete_analysis_task for a date still in the
+        future) should NOT re-execute until that date arrives.
+
+    Used by get_pending_analysis_tasks() to filter the run queue down to
+    only what should actually execute on this pass — both built-in and
+    custom-derived entries are treated identically here, per the v8.1.9
+    queue-unification design (see complete_analysis_task's re-arm logic).
+    """
+    schedule = entry.get("schedule", "none")
+    if schedule == "none":
+        return True
+    next_due = entry.get("next_due")
+    if not next_due:
+        # Defensive: a recurring entry somehow missing next_due shouldn't
+        # get stuck in limbo forever — treat as ready rather than dead.
+        return True
+    try:
+        return _parse_date(next_due) <= datetime.date.today()
+    except (ValueError, TypeError):
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -386,6 +428,20 @@ def update_task(tasks: list, task_id: str, **kwargs) -> bool:
     Update fields on an existing task in-place.
     Recalculates next_due if schedule or first_due changes.
     Returns True if found and updated, False if not found.
+
+    v8.1.9 fix: the previous version only ever moved next_due FORWARD
+    (only updated it if the incoming first_due was later than the
+    already-stored next_due). Since the edit dialog pre-fills first_due
+    with the task's existing value, that comparison was almost always
+    False — so editing a task's schedule (e.g. Weekly -> Daily) or its
+    first_due date silently had no effect on when it would actually next
+    run. The fix: explicitly detect whether the CALLER changed schedule or
+    first_due (compared to what was stored before this update), and if so,
+    reset next_due to the new first_due — identical to how create_task()
+    seeds a brand-new task. Edits that don't touch schedule/first_due
+    (prompt, scope, output options, etc.) leave next_due untouched, so a
+    task that has already advanced past its original first_due isn't
+    regressed just because the user tweaked something unrelated.
     """
     for t in tasks:
         if t.get("task_id") != task_id:
@@ -395,27 +451,36 @@ def update_task(tasks: list, task_id: str, **kwargs) -> bool:
             "label", "prompt", "scope_dirs", "schedule",
             "first_due", "output_learnings", "output_report", "report_folder"
         ]
+
+        old_schedule  = t.get("schedule", "none")
+        old_first_due = t.get("first_due")
+        schedule_changed = (
+            "schedule" in kwargs and kwargs["schedule"] != old_schedule
+        )
+        first_due_changed = (
+            "first_due" in kwargs and kwargs["first_due"] != old_first_due
+        )
+
         for key in updatable:
             if key in kwargs:
                 t[key] = kwargs[key]
 
-        # Recompute next_due if schedule or first_due changed
         schedule  = t.get("schedule", "none")
         first_due = t.get("first_due")
-        if schedule != "none" and first_due:
-            # Keep next_due as whichever is later: original first_due or
-            # already-stored next_due (don't regress a future due date)
-            existing_next = t.get("next_due")
-            if not existing_next:
-                t["next_due"] = first_due
-            else:
-                try:
-                    if _parse_date(first_due) > _parse_date(existing_next):
-                        t["next_due"] = first_due
-                except (ValueError, TypeError):
-                    t["next_due"] = first_due
-        elif schedule == "none":
+
+        if schedule == "none":
+            # Manual-only tasks never carry a next_due.
             t["next_due"] = None
+        elif schedule_changed or first_due_changed or not t.get("next_due"):
+            # Genuine cadence/anchor edit (or a task that never had a
+            # next_due yet, e.g. switching from "none" to a real
+            # schedule) — reset to the new anchor. This can legitimately
+            # move next_due EARLIER than before (Weekly -> Daily should
+            # make it due sooner), not just later.
+            if first_due:
+                t["next_due"] = first_due
+        # else: neither schedule nor first_due changed — next_due is left
+        # exactly as it was.
 
         t["updated_at"] = _now_iso()
         return True
@@ -596,7 +661,18 @@ def build_task_prompt(task: dict) -> str:
 def tasks_to_queue_entries(custom_tasks: list) -> list:
     """
     Convert custom task definitions to pending_tasks.json queue entries.
-    Used when the user clicks 'Queue' or 'Run Due Tasks'.
+    Used when the user clicks 'Queue' or 'Save & Queue', and by
+    sync_due_tasks_to_queue() (MCP tool) for chat-driven queueing.
+
+    v8.1.7: entries now carry their own "schedule" and "next_due",
+    mirroring what built-in Common Business Analysis entries have always
+    carried directly. This makes queue entries self-describing — the
+    is_queue_entry_ready() / re-arm logic in complete_analysis_task() no
+    longer needs to special-case "custom vs built-in"; both look the same
+    once they're in the queue. source_id is kept as a back-reference so
+    completion can also write the advanced next_due back to the
+    definition in custom_analysis_tasks.json, keeping the GUI's task list
+    display in sync with the queue.
     """
     import datetime as _dt
     entries = []
@@ -616,6 +692,8 @@ def tasks_to_queue_entries(custom_tasks: list) -> list:
             "output_report":    t.get("output_report", False),
             "report_folder":    t.get("report_folder", DEFAULT_REPORT_FOLDER),
             "scope_dirs":       t.get("scope_dirs", []),
+            "schedule":         t.get("schedule", "none"),
+            "next_due":         t.get("next_due"),
         })
     return entries
 

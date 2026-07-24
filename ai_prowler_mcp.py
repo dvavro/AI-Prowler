@@ -674,6 +674,11 @@ _TIER_A_SUPPRESSED: frozenset = frozenset({
     # server mode's GUI, so the queue they drive has no server-mode caller).
     "get_pending_analysis_tasks", "complete_analysis_task", "save_analysis_report",
     "create_analysis_task", "list_analysis_tasks",
+    # v8.1.9: the three queue-management tools added alongside the due-aware
+    # filtering / unified re-arm redesign — same personal-install-only
+    # rationale as the rest of this group above; there is no server-mode
+    # caller for any of them either.
+    "sync_due_tasks_to_queue", "delete_analysis_task", "update_analysis_task",
     # Raw/unscoped SMS inbox — personal-install-only. sms_inbox_read() has no
     # per-user filtering (unlike sms_inbox_read_for_user()), so in a
     # multi-user server it would let any employee read every inbound
@@ -936,7 +941,10 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "      reindex_file, reindex_directory, reindex_all,\n"
         "      list_writable_directories, grant_write_access, revoke_write_access\n\n"
 
-        "  • Agentic analysis tasks (personal mode only):\n"
+        "  • Agentic analysis tasks (personal mode only — this entire\n"
+        "    group is Tier A suppressed and invisible to any server-mode\n"
+        "    client, no role exempted; the Quick Links tab GUI that\n"
+        "    drives this queue is itself hidden in server mode):\n"
         "      create_analysis_task — defines a new recurring or one-off\n"
         "        custom analysis task from a plain-language request. Day-\n"
         "        granularity scheduling only; pull-based, not autonomous —\n"
@@ -946,12 +954,33 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "        per task. Use for 'what's in my task queue' — different from\n"
         "        get_pending_analysis_tasks below, which only shows tasks\n"
         "        already queued into the run queue. Read-only.\n"
-        "      get_pending_analysis_tasks — returns all pending tasks from\n"
-        "        pending_tasks.json; call when the user pastes the run-queue\n"
-        "        command from the Quick Links tab.\n"
+        "      sync_due_tasks_to_queue — pushes any DUE custom task\n"
+        "        definitions into the run queue that aren't already sitting\n"
+        "        there. Call this FIRST, before get_pending_analysis_tasks,\n"
+        "        for a fully autonomous 'check and run whatever's due' pass\n"
+        "        — without it, a scheduled custom task never enters the run\n"
+        "        queue on its own. Idempotent; safe to call every time.\n"
+        "      get_pending_analysis_tasks — returns tasks from\n"
+        "        pending_tasks.json that are DUE right now (queued but not\n"
+        "        yet due stays hidden). Call when the user pastes the\n"
+        "        run-queue command from the Quick Links tab.\n"
         "      complete_analysis_task(task_id, summary) — marks a task done\n"
-        "        and auto-advances next_due for scheduled tasks (anchor-based,\n"
-        "        not completion-date-based). Call after finishing each analysis.\n"
+        "        for this run. One-shot tasks (no schedule) close\n"
+        "        permanently. Recurring tasks — built-in and custom treated\n"
+        "        identically — have next_due advanced (anchor-based, not\n"
+        "        completion-date-based) and status reset back to pending, so\n"
+        "        the same entry re-arms and resurfaces on its own next cycle\n"
+        "        instead of needing to be re-queued. Call after finishing\n"
+        "        each analysis.\n"
+        "      update_analysis_task(task_id, ...) — edits an existing custom\n"
+        "        task's label, prompt, schedule, first_due, output options,\n"
+        "        or scope_dirs from chat; only the fields passed are changed.\n"
+        "        Built-in tasks aren't editable this way — no standalone\n"
+        "        definition to edit.\n"
+        "      delete_analysis_task(task_id) — removes a task from chat.\n"
+        "        Accepts either a custom definition's task_id (deletes the\n"
+        "        definition AND any linked queue entries) or a single queue\n"
+        "        entry's task_id (removes just that instance).\n"
         "      save_analysis_report(content, title, task_id, report_folder) —\n"
         "        saves the full analysis as a .docx Word document.\n\n"
 
@@ -1227,9 +1256,11 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "    are in your available tool list. If yes, use QuickBooks as the\n"
         "    primary financial source. If no, use AI-Prowler Job Tracker tools.\n\n"
         "  Server mode: get_pending_analysis_tasks, complete_analysis_task,\n"
-        "  save_analysis_report, and create_analysis_task are NOT available\n"
-        "  to any role — the Quick Links tab that queues this workflow is a\n"
-        "  personal-install-only GUI feature.\n\n"
+        "  save_analysis_report, create_analysis_task, list_analysis_tasks,\n"
+        "  sync_due_tasks_to_queue, delete_analysis_task, and\n"
+        "  update_analysis_task are NOT available to any role — the Quick\n"
+        "  Links tab that queues this workflow is a personal-install-only\n"
+        "  GUI feature.\n\n"
 
 
         "PROACTIVE ALERTS (background scheduler — no Claude needed)\n"
@@ -7705,7 +7736,7 @@ _WRITE_APPROVAL_QUEUE_FILE = Path.home() / ".rag_writable_pending.json"
 
 # Hard caps
 _WRITE_MAX_BYTES                  = 50 * 1024 * 1024   # 50 MB per write
-_WRITES_PER_SESSION_LIMIT         = 20                 # circuit breaker
+_WRITES_PER_SESSION_LIMIT         = 50                 # circuit breaker (v8.1.9: was 20 — too low for a legitimate multi-file dev session, causing frequent unnecessary interruptions)
 _BACKUP_MAX_FILES_PER_PARENT      = 10_000             # sanity cap on .bak<N> scanning
 _STR_REPLACE_MAX_OLD_STR_LEN      = 500_000            # 500K char hard cap on old_str
 
@@ -8182,8 +8213,12 @@ def _check_and_increment_write_counter() -> tuple[bool, str]:
             return (False,
                     f"🛑 Write circuit-breaker tripped: "
                     f"{_WRITES_PER_SESSION_LIMIT} writes already this session. "
-                    f"This protects against runaway loops. Restart AI-Prowler "
-                    f"or call reset_write_counter from the GUI to continue.")
+                    f"This protects against runaway loops — it's a safety net for "
+                    f"the calling agent, not a permission gate requiring the user. "
+                    f"Call the reset_write_counter MCP tool yourself to continue "
+                    f"a legitimate large editing session (no GUI action needed, "
+                    f"no need to ask the user first). Restarting AI-Prowler also "
+                    f"resets it.")
         _write_counter["count"] += 1
         return (True, "")
 
@@ -9640,10 +9675,12 @@ def reset_write_counter() -> str:
     """
     CODE TOOLS — Reset the per-session write circuit-breaker counter.
 
-    The circuit breaker limits AI-Prowler to 20 write operations per process
+    The circuit breaker limits AI-Prowler to 50 write operations per process
     lifetime to protect against runaway loops. This tool resets the count so
     legitimate large editing sessions can continue without restarting the
-    server.
+    server. Claude can call this directly the moment the breaker trips —
+    it's a self-serve safety net for the calling agent, not a gate that
+    requires the user's permission or a GUI click first.
 
     Returns:
         Confirmation with the count that was reset.
@@ -12523,11 +12560,18 @@ def save_analysis_report(task_id: str,
 @mcp.tool()
 def get_pending_analysis_tasks(ctx: Context = None) -> str:
     """
-    AGENTIC ANALYSIS — Return all pending analysis tasks queued by the user
-    from the AI-Prowler Quick Links tab.
+    AGENTIC ANALYSIS — Return analysis tasks from the run queue that are
+    DUE right now (status=="pending" AND is_queue_entry_ready()).
+
+    v8.1.9: this is now due-filtered. A recurring task sitting in the
+    queue ahead of its next_due date will NOT appear here — it stays
+    queued (persistent) and only surfaces once actually due. Call
+    sync_due_tasks_to_queue() first if you want any due custom-task
+    definitions that haven't been individually queued yet to be picked up
+    too — this tool only reads what's already in the queue.
 
     Call this tool at the start of any session where the user says they have
-    analysis to run, or whenever instructed to check for pending tasks.
+    analysis to run, or whenever instructed to check for pending/due tasks.
 
     For each pending task returned, Claude should:
       1. Execute the analysis described in the task's 'prompt' field using
@@ -12554,10 +12598,34 @@ def get_pending_analysis_tasks(ctx: Context = None) -> str:
     _telemetry_increment_tool_count("get_pending_analysis_tasks")
 
     try:
+        import custom_tasks_manager as _ctm_gp
         tasks = _load_pending_tasks()
-        pending = [t for t in tasks if t.get("status") == "pending"]
+        # v8.1.9: filter to READY entries only (status=="pending" AND
+        # is_queue_entry_ready()). Previously this returned every
+        # status=="pending" entry regardless of its next_due date, so a
+        # recurring task queued ahead of time (or re-armed by
+        # complete_analysis_task for a future date) would incorrectly
+        # fire on every run instead of only on its actual due date. See
+        # is_queue_entry_ready()'s docstring for the schedule="none"
+        # one-shot exception.
+        pending = [t for t in tasks
+                   if t.get("status") == "pending"
+                   and _ctm_gp.is_queue_entry_ready(t)]
 
         if not pending:
+            total_queued = len([t for t in tasks if t.get("status") == "pending"])
+            if total_queued:
+                # v8.1.9: distinguish "nothing queued at all" from "things
+                # are queued but none are due yet" — the old message was
+                # misleading in the latter case (it implied the queue was
+                # empty and needed items added, when really it just needs
+                # to wait for a due date).
+                return (
+                    f"✅ No tasks are due right now. "
+                    f"{total_queued} task(s) are queued but not yet due — "
+                    f"they'll surface here automatically once their next_due "
+                    f"date arrives."
+                )
             return (
                 "✅ No pending analysis tasks. "
                 "Use the AI Analysis buttons in the Links & Analysis tab to queue analysis."
@@ -12674,12 +12742,250 @@ def list_analysis_tasks(ctx: Context = None) -> str:
         "note": (
             "This is the full definition list (custom_analysis_tasks.json), "
             "not the run queue. A task with is_due=true is not automatically "
-            "running — it still needs to be queued (Run Due Tasks in the GUI, "
-            "or check get_pending_analysis_tasks() in a future session) or "
-            "run directly right now if the user asks for that."
+            "running — call sync_due_tasks_to_queue() to push it into the run "
+            "queue, then get_pending_analysis_tasks() to pick it up, or run "
+            "it directly right now if the user asks for that."
         ),
     }
     return json.dumps(result, indent=2, ensure_ascii=False)
+
+
+@mcp.tool()
+def sync_due_tasks_to_queue(ctx: Context = None) -> str:
+    """
+    AGENTIC ANALYSIS — Push any DUE custom task definitions into the run
+    queue (pending_tasks.json) that aren't already sitting there.
+
+    v8.1.9. This is the missing link that makes "the queue gets checked at
+    the scheduled time" actually true: without this, a custom task with a
+    schedule only ever entered the run queue if the user manually clicked
+    Queue/Save & Queue in the GUI at some point. Call this FIRST — before
+    get_pending_analysis_tasks() — any time you want a fully autonomous
+    "check and run whatever's due" pass (e.g. at the start of a headless
+    scheduled run, or when the user says something like "check the queue"
+    or "run anything that's due").
+
+    Idempotent / safe to call repeatedly: a due definition already
+    represented by a pending, ready queue entry (matched via source_id)
+    is skipped rather than duplicated. A definition that's due again after
+    being re-armed by complete_analysis_task() will already have a live
+    queue entry too (since re-arming keeps the SAME entry rather than
+    removing it), so this only actually adds anything for definitions that
+    have never been queued before, or whose only queue entry was a
+    permanently-completed one-shot.
+
+    Does NOT touch Common Business Analysis (built-in) tasks — those live
+    directly as queue entries with no separate definition, so there's
+    nothing to "sync" for them; queueing one for the first time is still a
+    GUI action (Configure popup → Queue Analysis).
+
+    Returns:
+        Summary of how many due tasks were newly queued (and their
+        labels), or a plain message if none were due / all were already
+        queued.
+    """
+    _telemetry_increment_tool_count("sync_due_tasks_to_queue")
+
+    try:
+        import custom_tasks_manager as _ctm
+    except Exception as _ie:
+        return f"❌ custom_tasks_manager module not available: {_ie}"
+
+    try:
+        custom_tasks = _ctm.load_custom_tasks()
+        due = _ctm.get_due_tasks(custom_tasks)
+        if not due:
+            return "✅ No custom task definitions are due right now."
+
+        existing = _load_pending_tasks()
+        # A definition already has a live queue presence if any entry
+        # linking back to it (via source_id) is still status=="pending" —
+        # covers both "never yet run" and "re-armed, waiting for next_due".
+        already_queued_source_ids = {
+            t.get("source_id") for t in existing
+            if t.get("status") == "pending" and t.get("source_id")
+        }
+
+        to_queue = [t for t in due
+                    if t.get("task_id") not in already_queued_source_ids]
+
+        if not to_queue:
+            return (
+                f"✅ {len(due)} task(s) due, but all already have a live "
+                f"queue entry — nothing new to add."
+            )
+
+        new_entries = _ctm.tasks_to_queue_entries(to_queue)
+        existing.extend(new_entries)
+        _save_pending_tasks(existing)
+
+        labels = ", ".join(t.get("label", t.get("task_id")) for t in to_queue)
+        return (
+            f"✅ Queued {len(to_queue)} due task(s): {labels}\n"
+            f"Call get_pending_analysis_tasks() next to process them."
+        )
+    except Exception as _e:
+        return f"❌ Could not sync due tasks to queue: {_e}"
+
+
+@mcp.tool()
+def delete_analysis_task(task_id: str, ctx: Context = None) -> str:
+    """
+    AGENTIC ANALYSIS — Remove an analysis task, from chat.
+
+    Accepts EITHER kind of ID and figures out what to do:
+      • A custom task definition's task_id (from list_analysis_tasks) —
+        deletes the definition from custom_analysis_tasks.json AND removes
+        any of its queue entries still sitting in pending_tasks.json
+        (matched via source_id), pending or not. This is almost always
+        what "remove the earnings watch task" means.
+      • A single queue entry's task_id (from get_pending_analysis_tasks)
+        — removes just that one entry from pending_tasks.json, leaving
+        the source definition (if any) untouched. Use this if the user
+        specifically wants to drop one queued instance without deleting
+        the recurring task itself.
+
+    Args:
+        task_id: Either a custom task definition ID or a queue entry ID.
+
+    Returns:
+        Confirmation of what was removed, or an error if the ID matched
+        neither a definition nor a queue entry.
+    """
+    _telemetry_increment_tool_count("delete_analysis_task")
+
+    if not task_id or not task_id.strip():
+        return "❌ task_id is required."
+    task_id = task_id.strip()
+
+    try:
+        import custom_tasks_manager as _ctm
+    except Exception as _ie:
+        return f"❌ custom_tasks_manager module not available: {_ie}"
+
+    try:
+        custom_tasks = _ctm.load_custom_tasks()
+        definition = _ctm.get_task(custom_tasks, task_id)
+
+        if definition is not None:
+            label = definition.get("label", task_id)
+            _ctm.delete_task(custom_tasks, task_id)
+            _ctm.save_custom_tasks(custom_tasks)
+
+            pending = _load_pending_tasks()
+            before = len(pending)
+            pending = [t for t in pending if t.get("source_id") != task_id]
+            removed_entries = before - len(pending)
+            _save_pending_tasks(pending)
+
+            extra = (f" and removed {removed_entries} queued instance(s)"
+                     if removed_entries else "")
+            return f"✅ Deleted custom task '{label}'{extra}."
+
+        # Not a definition — try it as a single queue entry instead.
+        pending = _load_pending_tasks()
+        match = next((t for t in pending if t.get("task_id") == task_id), None)
+        if match is not None:
+            label = match.get("label", task_id)
+            pending = [t for t in pending if t.get("task_id") != task_id]
+            _save_pending_tasks(pending)
+            return f"✅ Removed queued task '{label}' from the run queue."
+
+        return (
+            f"⚠️ '{task_id}' didn't match any custom task definition or "
+            f"queue entry. Use list_analysis_tasks() or "
+            f"get_pending_analysis_tasks() to find the correct task_id."
+        )
+    except Exception as _e:
+        return f"❌ Could not delete task: {_e}"
+
+
+@mcp.tool()
+def update_analysis_task(
+    task_id: str,
+    label: str = None,
+    prompt: str = None,
+    schedule: str = None,
+    first_due: str = None,
+    output_learnings: bool = None,
+    output_report: bool = None,
+    report_folder: str = None,
+    scope_dirs: list = None,
+    ctx: Context = None,
+) -> str:
+    """
+    AGENTIC ANALYSIS — Edit an existing CUSTOM task definition from chat.
+
+    Only fields you actually pass are changed — everything else on the
+    task is left as-is. Uses the same update_task() logic as the GUI's
+    task editor (including the v8.1.9 fix for next_due correctly
+    recomputing when schedule or first_due actually change).
+
+    Built-in Common Business Analysis tasks aren't editable through this
+    tool — they don't have a standalone definition file; their schedule is
+    set per-queue-entry via the GUI's Configure popup.
+
+    Args:
+        task_id:           The custom task's task_id (from list_analysis_tasks).
+        label:              New name, if changing.
+        prompt:             New analysis prompt, if changing.
+        schedule:           New schedule key — one of: none, daily, weekly,
+                            biweekly, monthly, quarterly, yearly.
+        first_due:          New first-due date, YYYY-MM-DD.
+        output_learnings:   Whether to record findings as learnings.
+        output_report:      Whether to save a .docx report.
+        report_folder:      Output folder for .docx reports.
+        scope_dirs:         List of directory paths to restrict the analysis to.
+
+    Returns:
+        Confirmation with the updated next_due, or an error if the
+        task_id wasn't found or a value was invalid.
+    """
+    _telemetry_increment_tool_count("update_analysis_task")
+
+    if not task_id or not task_id.strip():
+        return "❌ task_id is required."
+    task_id = task_id.strip()
+
+    if schedule is not None:
+        schedule = schedule.strip().lower()
+
+    try:
+        import custom_tasks_manager as _ctm
+    except Exception as _ie:
+        return f"❌ custom_tasks_manager module not available: {_ie}"
+
+    if schedule is not None and schedule not in _ctm.SCHEDULES:
+        return (f"❌ Invalid schedule '{schedule}'. Valid options: "
+                f"{', '.join(_ctm.SCHEDULES.keys())}")
+
+    kwargs = {}
+    for key, val in (
+        ("label", label), ("prompt", prompt), ("schedule", schedule),
+        ("first_due", first_due), ("output_learnings", output_learnings),
+        ("output_report", output_report), ("report_folder", report_folder),
+        ("scope_dirs", scope_dirs),
+    ):
+        if val is not None:
+            kwargs[key] = val
+
+    if not kwargs:
+        return "❌ No fields provided to update."
+
+    try:
+        custom_tasks = _ctm.load_custom_tasks()
+        ok = _ctm.update_task(custom_tasks, task_id, **kwargs)
+        if not ok:
+            return (f"⚠️ Task '{task_id}' not found. Use list_analysis_tasks() "
+                     f"to find the correct task_id.")
+        _ctm.save_custom_tasks(custom_tasks)
+
+        updated = _ctm.get_task(custom_tasks, task_id)
+        next_due_msg = (f"\nNext due: {updated.get('next_due')}"
+                         if updated.get("next_due") else "")
+        return f"✅ Updated task '{updated.get('label', task_id)}'.{next_due_msg}"
+    except Exception as _e:
+        return f"❌ Could not update task: {_e}"
 
 
 @mcp.tool()
@@ -12687,11 +12993,20 @@ def complete_analysis_task(task_id: str,
                            summary: str = "",
                            ctx: Context = None) -> str:
     """
-    AGENTIC ANALYSIS — Mark a pending analysis task as completed.
+    AGENTIC ANALYSIS — Mark a queued analysis task as done for this run.
+
+    v8.1.9 unified re-arm behavior: a ONE-SHOT entry (schedule=="none",
+    whether from a Common Business Analysis button or a manual-only
+    custom task) completes permanently — it won't appear in
+    get_pending_analysis_tasks() again. A RECURRING entry (any real
+    schedule) instead has its next_due advanced and status reset back to
+    "pending" — it stays in the queue and will surface again
+    automatically once that new next_due date arrives. Built-in and
+    custom-derived entries behave identically here by design.
 
     Call this after finishing each analysis task returned by
-    get_pending_analysis_tasks(). This prevents the same task from
-    running again in future sessions.
+    get_pending_analysis_tasks(). For one-shot tasks this prevents it from
+    running again; for recurring tasks it re-arms it for next time.
 
     Args:
         task_id: The task_id from get_pending_analysis_tasks() output.
@@ -12716,92 +13031,114 @@ def complete_analysis_task(task_id: str,
     task_id = task_id.strip()
 
     try:
-        tasks = _load_pending_tasks()
-        matched = False
-        label = task_id
+        import datetime as _dt
+        import custom_tasks_manager as _ctm
 
+        tasks = _load_pending_tasks()
+        target = None
         for t in tasks:
             if t.get("task_id") == task_id:
-                t["status"] = "completed"
-                # Use inline datetime to avoid dependency on _utc_now_iso
-                # which is only defined inside the server startup closure.
-                try:
-                    import datetime as _dt
-                    t["completed_at"] = _dt.datetime.utcnow().strftime(
-                        "%Y-%m-%dT%H:%M:%SZ")
-                except Exception:
-                    t["completed_at"] = ""
-                if summary:
-                    t["completion_summary"] = summary.strip()
-                label = t.get("label", task_id)
-                matched = True
+                target = t
                 break
 
-        if not matched:
+        if target is None:
             return (
                 f"⚠️ Task '{task_id}' not found in pending_tasks.json. "
                 "It may have already been completed or was never queued."
             )
 
-        _save_pending_tasks(tasks)
+        label     = target.get("label", task_id)
+        source_id = target.get("source_id")
+        now_iso   = _dt.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        today_str = _dt.date.today().isoformat()
 
-        # ── Schedule advancement ──────────────────────────────────────────────
-        # For custom tasks (source_id present): advance next_due in
-        # custom_analysis_tasks.json.
-        # For built-in tasks with a schedule (schedule != "none"): advance
-        # next_due directly in the completed task record so the Queue Panel
-        # and get_pending_analysis_tasks() can surface when it's next due.
+        # Determine schedule/anchor. For a custom-derived entry (source_id
+        # present), the DEFINITION in custom_analysis_tasks.json is the
+        # authoritative source — this keeps backward compatibility with
+        # queue entries created before v8.1.9 (which didn't carry
+        # schedule/next_due on the entry itself, only via source_id
+        # lookup), and stays correct even if the two ever drift. The
+        # entry's own fields are only used as a fallback, or directly for
+        # built-in entries which have no definition to look up.
+        source_def = None
+        if source_id:
+            try:
+                source_def = _ctm.get_task(_ctm.load_custom_tasks(), source_id)
+            except Exception:
+                source_def = None
 
-        source_id    = None
-        task_schedule = None
-        task_next_due = None
+        if source_def:
+            task_schedule = source_def.get("schedule", "none")
+            task_next_due = source_def.get("next_due") or target.get("next_due")
+        else:
+            task_schedule = target.get("schedule", "none")
+            task_next_due = target.get("next_due")
 
-        for t in tasks:
-            if t.get("task_id") == task_id:
-                source_id     = t.get("source_id")
-                task_schedule = t.get("schedule", "none")
-                task_next_due = t.get("next_due")
-                break
+        # ── Record this run's history (applies regardless of schedule) ────
+        target["last_run"]    = today_str
+        target["last_status"] = "completed"
+        target["completed_at"] = now_iso
+        if summary:
+            target["completion_summary"] = summary.strip()
 
         next_due_msg = ""
 
-        if source_id:
-            # Custom task — advance next_due in custom_analysis_tasks.json
-            try:
-                import datetime as _dt
-                import custom_tasks_manager as _ctm
-                custom_tasks = _ctm.load_custom_tasks()
-                new_next_due = _ctm.advance_next_due(
-                    custom_tasks, source_id,
-                    completed_date=_dt.date.today().isoformat()
-                )
-                _ctm.save_custom_tasks(custom_tasks)
-                if new_next_due:
-                    next_due_msg = f"\nNext scheduled run: {new_next_due}"
-            except Exception as _cte:
-                print(f"[complete_analysis_task] custom next_due advance failed: {_cte}")
+        # ── v8.1.9 unified re-arm logic ────────────────────────────────────
+        # One-shot entries (schedule == "none") — whether from a Common
+        # Business Analysis button or a manual-only custom task — complete
+        # permanently, exactly as before: status flips to "completed" and
+        # get_pending_analysis_tasks() will never surface it again.
+        #
+        # Recurring entries (schedule != "none") — whether built-in or
+        # custom-derived — now behave IDENTICALLY per David's explicit
+        # design decision (v8.1.9): status is reset back to "pending" and
+        # next_due is advanced, so the SAME queue entry re-arms itself for
+        # its next occurrence instead of requiring the user (or GUI) to
+        # re-queue it. is_queue_entry_ready() then keeps it hidden from
+        # get_pending_analysis_tasks() until that new next_due arrives.
+        if task_schedule == "none":
+            target["status"] = "completed"
+        else:
+            anchor = task_next_due or today_str
+            # Catch-up variant so a task overdue by multiple intervals
+            # resyncs fully in one completion instead of needing one
+            # completion per missed interval.
+            new_next_due = _ctm._advance_date_catchup(
+                anchor, task_schedule, today_str)
+            if new_next_due:
+                # Stamp schedule + next_due directly onto the entry too
+                # (not just the source definition) so it's self-describing
+                # for is_queue_entry_ready() going forward, even if it
+                # started out as a legacy entry without these fields.
+                target["schedule"] = task_schedule
+                target["next_due"] = new_next_due
+                target["status"]   = "pending"   # re-arm, not "completed"
+                next_due_msg = f"\nNext scheduled run: {new_next_due}"
+            else:
+                # Defensive: unknown schedule key or bad date — don't
+                # leave the entry stuck cycling forever; close it out.
+                target["status"] = "completed"
 
-        elif task_schedule and task_schedule != "none":
-            # Built-in scheduled task — advance next_due in pending_tasks.json
-            try:
-                import datetime as _dt
-                import custom_tasks_manager as _ctm
-                anchor = task_next_due or _dt.date.today().isoformat()
-                # v8.1.5 fix: use the catch-up variant so a task overdue by
-                # MULTIPLE intervals resyncs fully in one completion instead
-                # of needing one completion per missed interval.
-                new_next_due = _ctm._advance_date_catchup(
-                    anchor, task_schedule, _dt.date.today().isoformat())
-                if new_next_due:
-                    # Stamp the new next_due on the completed task record
-                    for t in tasks:
-                        if t.get("task_id") == task_id:
-                            t["next_due"] = new_next_due
-                            break
-                    _save_pending_tasks(tasks)
-                    next_due_msg = f"\nNext scheduled run: {new_next_due}"
-            except Exception as _cte:
-                print(f"[complete_analysis_task] builtin next_due advance failed: {_cte}")
+            # Custom-derived entry: also write the same advanced next_due
+            # back to the source definition in custom_analysis_tasks.json,
+            # so the My Custom AI Analyses list stays in sync with what
+            # the queue entry itself now shows.
+            if source_id:
+                try:
+                    custom_tasks = _ctm.load_custom_tasks()
+                    src = _ctm.get_task(custom_tasks, source_id)
+                    if src:
+                        src["last_run"]    = today_str
+                        src["last_status"] = "completed"
+                        if new_next_due:
+                            src["next_due"] = new_next_due
+                        src["updated_at"] = _ctm._now_iso()
+                        _ctm.save_custom_tasks(custom_tasks)
+                except Exception as _cte:
+                    print(f"[complete_analysis_task] source definition "
+                          f"sync failed: {_cte}")
+
+        _save_pending_tasks(tasks)
 
         msg = f"✅ Analysis task completed: {label}"
         if summary:
