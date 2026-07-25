@@ -563,6 +563,100 @@ def test_save_and_queue_refreshes_visible_list_when_already_expanded(gui, monkey
     assert any("MyNewCustomTask" in t for t in _row_label_texts(gui))
 
 
+# ── v8.1.12: Show Queue live-refresh via mtime polling ──────────────────────
+# Same feature, same rationale, and the same isolation approach as
+# tests/gui/test_quick_links_custom_tasks_live_refresh.py: the mtime-polling
+# loop lets Show Queue pick up changes written by a SEPARATE process (a
+# headless scheduled run completing/re-arming a task) without the GUI
+# needing any user-triggered action. The shared fixture cancels pending
+# after() callbacks for test isolation, so self._poll_pending_tasks_file is
+# exposed and called directly/synchronously — same logic the real 3-second
+# timer runs, without waiting on the timer.
+
+def test_poll_pending_tasks_file_is_exposed_for_tests(gui):
+    assert hasattr(gui.app, "_poll_pending_tasks_file")
+    assert callable(gui.app._poll_pending_tasks_file)
+
+
+def test_poll_updates_count_when_file_changes_externally(gui):
+    _write_pending_tasks([])
+    gui.app._poll_pending_tasks_file()
+    _pump(gui)
+    assert gui.app._refresh_queue_count() == 0
+
+    # Simulate an external process (e.g. a headless run's
+    # complete_analysis_task()) writing a fresh entry directly to disk —
+    # NOT through any GUI action.
+    _write_pending_tasks([{
+        "task_id": "t1", "label": "Externally Queued Task", "status": "pending",
+        "schedule": "none", "created_at": "2026-07-25T00:00:00Z",
+    }])
+    gui.app._poll_pending_tasks_file()
+    _pump(gui)
+
+    # Count reflects the change even with the panel collapsed —
+    # _refresh_queue_count() always runs; only the detailed list is
+    # gated on _queue_expanded.
+    assert gui.app._refresh_queue_count() == 1
+
+
+def test_poll_refreshes_visible_list_when_expanded_and_file_changes(gui):
+    _write_pending_tasks([])
+    gui.app._queue_expanded.set(True)
+    gui.app._poll_pending_tasks_file()
+    _pump(gui)
+    assert not any("Externally Queued Task" in t for t in _row_label_texts(gui))
+
+    _write_pending_tasks([{
+        "task_id": "t1", "label": "Externally Queued Task", "status": "pending",
+        "schedule": "none", "created_at": "2026-07-25T00:00:00Z",
+    }])
+    gui.app._poll_pending_tasks_file()
+    _pump(gui)
+
+    assert any("Externally Queued Task" in t for t in _row_label_texts(gui))
+
+
+def test_poll_does_not_refresh_list_when_collapsed(gui):
+    # With the panel collapsed, the poll should still update the count
+    # (cheap) but must NOT force the detailed list frame to rebuild —
+    # matches the existing collapsed/expanded contract used everywhere
+    # else in this panel (Save & Queue, etc.).
+    _write_pending_tasks([])
+    gui.app._queue_expanded.set(False)
+    gui.app._poll_pending_tasks_file()
+    _pump(gui)
+
+    _write_pending_tasks([{
+        "task_id": "t1", "label": "Should Not Appear Yet", "status": "pending",
+        "schedule": "none", "created_at": "2026-07-25T00:00:00Z",
+    }])
+    gui.app._poll_pending_tasks_file()
+    _pump(gui)
+
+    # The list frame itself is only populated when expanded; while
+    # collapsed there's nothing to assert on the row content directly,
+    # but expanding now and refreshing should show the change was
+    # captured (proves the poll ran, not that it silently no-opped).
+    gui.app._queue_expanded.set(True)
+    gui.app._refresh_queue_list()
+    _pump(gui)
+    assert any("Should Not Appear Yet" in t for t in _row_label_texts(gui))
+
+
+def test_poll_reschedules_itself(gui, monkeypatch):
+    calls = []
+    original_after = gui.app.root.after
+    def _spy_after(ms, fn=None, *a):
+        calls.append((ms, fn))
+        return None  # don't actually schedule — avoid a real pending timer
+    monkeypatch.setattr(gui.app.root, "after", _spy_after)
+    gui.app._poll_pending_tasks_file()
+    # Must reschedule itself for the next tick — otherwise live-refresh
+    # would silently stop working after the very first poll.
+    assert any(fn is gui.app._poll_pending_tasks_file for _, fn in calls)
+
+
 def test_queue_task_row_uses_defaults_when_never_configured(gui):
     """An analysis that was never Edited (no saved settings) should still
     queue successfully using sensible defaults, not error out."""

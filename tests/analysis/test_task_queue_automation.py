@@ -139,6 +139,65 @@ def test_install_wrapper_script_forwards_install_dir(tmp_path):
     assert 'cd /d "C:\\Program Files\\AI-Prowler"' in content
 
 
+# ── v8.1.11 fix: embedded prompt, not a slash command ───────────────────────
+# Regression coverage for a second, deeper bug found AFTER the v8.1.10
+# cd-directory fix: two real scheduled runs on 2026-07-25 both fired
+# correctly, in the correct directory, and BOTH still got
+# "Unknown command: /ai-prowler-run-queue" — because Skills and slash
+# commands are different Claude Code mechanisms, and this project never had
+# a .claude/commands/ directory. The fix removes the slash-command
+# invocation entirely in favor of embedding the actual instructions as the
+# prompt text, so headless runs have no dependency on Claude Code's
+# project-file discovery working at all.
+
+def test_wrapper_prompt_does_not_use_slash_command():
+    # Note: the file's own explanatory comments legitimately still mention
+    # "/ai-prowler-run-queue" as historical context for why the cd-directory
+    # fix was needed — check the actual claude -p invocation line itself,
+    # not the whole file, so this test isn't fooled by that documentation.
+    content = tqa.build_wrapper_script_content("x.json", "mcp__ai-prowler__*")
+    prompt_line = next(l for l in content.splitlines() if l.strip().startswith('claude -p "'))
+    assert "/ai-prowler-run-queue" not in prompt_line
+
+
+def test_wrapper_prompt_embeds_full_sequence_instructions():
+    content = tqa.build_wrapper_script_content("x.json", "mcp__ai-prowler__*")
+    # Spot-check a few distinctive phrases from each step of the sequence,
+    # not just tool names — confirms the actual instructions made it in,
+    # not just a truncated fragment.
+    assert "sync_due_tasks_to_queue" in content
+    assert "get_pending_analysis_tasks" in content
+    assert "complete_analysis_task" in content
+    assert "save_analysis_report" in content
+    assert "record_learning" in content
+    assert "do not retry silently in a loop" in content
+
+
+def test_wrapper_prompt_has_no_batch_unsafe_characters():
+    # The embedded prompt is passed as a quoted argument on a single .bat
+    # line — it must not contain characters cmd.exe treats specially
+    # (unescaped double quotes, or batch metacharacters like %, ^, &, |)
+    # which could break the command line or truncate the prompt silently.
+    content = tqa.QUEUE_RUNNER_PROMPT
+    for bad_char in ['"', '%', '^', '&', '|', '<', '>']:
+        assert bad_char not in content, (
+            f"QUEUE_RUNNER_PROMPT contains batch-unsafe character {bad_char!r}"
+        )
+
+
+def test_wrapper_prompt_plus_notify_clause_still_batch_safe():
+    content = tqa.build_wrapper_script_content(
+        "x.json", "mcp__ai-prowler__*", notify_on_complete=True,
+        notify_method="sms")
+    assert "send_sms" in content
+    # The notify clause is appended to the same prompt string — confirm
+    # the combined result still contains no stray unescaped quotes that
+    # would prematurely close the -p "..." argument.
+    prompt_line = next(l for l in content.splitlines() if l.strip().startswith('claude -p "'))
+    # Exactly two double-quotes on this line: opening and closing the -p arg.
+    assert prompt_line.count('"') == 2
+
+
 def test_wrapper_script_no_notify_clause_by_default():
     content = tqa.build_wrapper_script_content("x.json", "mcp__ai-prowler__*")
     assert "send_sms" not in content

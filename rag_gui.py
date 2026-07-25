@@ -5893,6 +5893,46 @@ or from the Help menu."""
         self._queue_expanded      = _queue_expanded
         self._queue_list_frame    = _queue_list_frame
 
+        # v8.1.12: live-refresh Show Queue when pending_tasks.json changes
+        # externally — e.g. a headless scheduled run completing a task and
+        # re-arming it while the GUI is already open. Mirrors the exact
+        # same mtime-polling pattern already used for the My Custom AI
+        # Analyses list below (_poll_custom_tasks_file /
+        # _custom_tasks_mtime) — cheap (a single stat() call every 3s),
+        # no new dependency, only refreshes when the file actually
+        # changed rather than unconditionally rebuilding on a timer.
+        _pending_tasks_mtime = {"last": None}
+
+        def _sync_pending_tasks_mtime():
+            try:
+                _p = Path.home() / ".ai-prowler" / "pending_tasks.json"
+                _pending_tasks_mtime["last"] = (
+                    _p.stat().st_mtime if _p.exists() else None)
+            except Exception:
+                pass
+
+        def _poll_pending_tasks_file():
+            try:
+                _p = Path.home() / ".ai-prowler" / "pending_tasks.json"
+                mtime = _p.stat().st_mtime if _p.exists() else None
+                if mtime != _pending_tasks_mtime["last"]:
+                    _pending_tasks_mtime["last"] = mtime
+                    _refresh_queue_count()
+                    if _queue_expanded.get():
+                        _refresh_queue_list()
+            except Exception:
+                pass
+            finally:
+                self.root.after(3000, _poll_pending_tasks_file)
+
+        # Exposed for tests, same rationale as _poll_custom_tasks_file —
+        # lets a test harness that cancels pending after() callbacks still
+        # exercise this logic synchronously.
+        self._poll_pending_tasks_file = _poll_pending_tasks_file
+
+        _sync_pending_tasks_mtime()
+        self.root.after(3000, _poll_pending_tasks_file)
+
         # ── My Custom Analyses ────────────────────────────────────────────────
         # User-defined analysis tasks with schedule, scope, and output config.
 
@@ -6243,6 +6283,29 @@ or from the Help menu."""
                 values=list(_ctm.SCHEDULE_LABELS.values()),
                 state='readonly', width=16)
             sched_combo.pack(side='left', padx=(8, 16))
+
+            # v8.1.9 fix (4th attempt): a diagnostic (round 2, 2026-07-25)
+            # caught this in the act — sched_combo.get() was 'Weekly'
+            # immediately after creation, but had become '' by the time
+            # the window was mapped. The cause was MY OWN previous fix
+            # attempt: calling sched_combo.current(idx) synchronously
+            # during construction, while winfo_ismapped() was still 0.
+            # Calling ttk.Combobox.current() on a not-yet-mapped widget
+            # doesn't just fail to apply — it appears to actively clear
+            # the value. The fix: defer that same call to fire on the
+            # window's own <Map> event, so it only runs once the window
+            # is actually mapped/visible, exactly the state it needs.
+            _sched_values_list = list(_ctm.SCHEDULE_LABELS.values())
+
+            def _apply_sched_current_on_map(event=None):
+                try:
+                    if _initial_sched_label in _sched_values_list:
+                        sched_combo.current(
+                            _sched_values_list.index(_initial_sched_label))
+                except Exception:
+                    pass
+
+            win.bind('<Map>', _apply_sched_current_on_map, add='+')
 
             tk.Label(sched_row, text="First due date:",
                      font=('Arial', 9, 'bold')).pack(side='left')

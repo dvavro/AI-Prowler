@@ -5,6 +5,20 @@ description: Run AI-Prowler's pending analysis task queue unattended. Use when i
 
 # AI-Prowler Analysis Task Queue Runner
 
+> **v8.1.11 note:** the Windows Scheduled Task wrapper no longer invokes
+> this file via `/ai-prowler-run-queue` — Skills and slash commands turned
+> out to be two different Claude Code mechanisms, and this project never
+> had a `.claude/commands/` directory, so that invocation always silently
+> failed with "Unknown command" even after the directory it runs from was
+> fixed. The headless wrapper now embeds the same instructions below
+> directly as its prompt text (see `QUEUE_RUNNER_PROMPT` in
+> `task_queue_automation.py`) instead of relying on this file being
+> discovered at all. This file is kept as human-facing documentation of
+> the sequence, and is still genuinely useful if you're running these
+> steps manually or interactively in a Claude Code session — just know
+> that editing this file alone will NOT change what the scheduled/headless
+> run actually does; `QUEUE_RUNNER_PROMPT` is the source of truth for that.
+
 This Skill runs AI-Prowler's queued analysis tasks the same way a human
 would when pasting the run-queue command into a new Claude chat — the
 exact sequence documented in AI-Prowler's COMPLETE_USER_GUIDE.md, Section
@@ -59,12 +73,19 @@ of relying on tool descriptions alone to infer the right order.
 ## Scope discipline (headless-mode specific)
 
 This Skill may be invoked in Claude Code's headless mode with
-`--allowedTools` scoped to `mcp__ai-prowler__*` only. Stay within that
-scope even if a task's prompt seems to ask for something broader (e.g., a
-custom task prompt that references running arbitrary shell commands or
-browsing the web) — decline that part of the prompt, note it in the
-task's completion summary, and continue with what's actually achievable
-using AI-Prowler's own tools.
+`--allowedTools` scoped to `mcp__ai-prowler__*`, `WebSearch`, and
+`WebFetch`. Use AI-Prowler's own tools as the first choice for anything
+they can answer. When AI-Prowler itself has no tool or data for something
+a task's prompt asks for — current weather details its own weather tool
+omits, sunrise/sunset times, local event listings, and similar — fall
+back to your own general knowledge where that's enough, and to WebSearch
+or WebFetch for anything current or specific that needs looking up. Use
+these rather than declining that part of a task and noting it as
+unavailable. Do not use any other tool outside this scope, even if a
+task's prompt seems to ask for something broader (e.g., running arbitrary
+shell commands) — decline only that part, note it in the completion
+summary, and continue with what's achievable using AI-Prowler's own
+tools plus web search/knowledge.
 
 ## Notification (optional, only if the invoking prompt asks for it)
 

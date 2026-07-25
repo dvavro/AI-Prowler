@@ -1,11 +1,11 @@
 {
   "version": "8.1.9",
-  "generated": "2026-07-25T07:25:49",
+  "generated": "2026-07-25T12:36:51",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "85193214a81470bee9adec4a1a9ec49edf5295732d5cd886671c4837f8d5b2a1",
-      "bytes": 1159860
+      "sha256": "c2f3e3443845ff5a046d937704d2d2b5a2caa9eb5dad5b038daf04c50cb39c82",
+      "bytes": 1162957
     },
     {
       "path": "rag_preprocessor.py",
@@ -124,8 +124,8 @@
     },
     {
       "path": "task_queue_automation.py",
-      "sha256": "cf1327332a16405b0d44535fff34a7ed19d0ec726bcae7d0cc807c95e462f51a",
-      "bytes": 50311
+      "sha256": "6f396c4906c667316f28b9f9c7e2c624c5fe6f337abc267abab38887a06f82a5",
+      "bytes": 54474
     },
     {
       "path": ".claude/settings.json",
@@ -139,8 +139,8 @@
     },
     {
       "path": ".claude/skills/ai-prowler-tasks/SKILL.md",
-      "sha256": "4a3f8de13ad6678ea0b8eddce4af4d639fc281edf4d45196c44fa83c3e4b2789",
-      "bytes": 4875
+      "sha256": "de495421f5329dc88428639cc241da8532e34a96d6a160a853ee38039263fb00",
+      "bytes": 6304
     }
   ]
 }

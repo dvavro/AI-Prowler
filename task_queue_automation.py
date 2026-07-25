@@ -42,10 +42,74 @@ AUDIT_LOG_PATH = AI_PROWLER_HOME / "autonomous_run_audit.log"
 WRAPPER_SCRIPT_NAME = "run_ai_prowler_queue.bat"
 SCHEDULED_TASK_NAME = "AI-Prowler-QueueRunner"
 
+# v8.1.11 fix: the wrapper used to invoke `claude -p "/ai-prowler-run-queue"`,
+# relying on Claude Code discovering .claude/skills/ai-prowler-tasks/SKILL.md
+# as a slash command from the current working directory. Confirmed via two
+# real scheduled runs (2026-07-25, exact same "Unknown command:
+# /ai-prowler-run-queue" result both times, despite the v8.1.10 cd-directory
+# fix being correctly in place and verified working) that this never worked
+# at all: Skills and slash commands are two DIFFERENT Claude Code mechanisms
+# — Skills are meant to be auto-discovered contextually, not invoked via
+# literal /name syntax, which specifically requires files under
+# .claude/commands/ (which this project never had). The cd-directory fix
+# was still necessary and correct — it's just not sufficient on its own.
+# The fix here is to sidestep the whole commands-vs-skills question
+# entirely: embed the actual task-runner instructions directly as the
+# prompt text, rather than a slash-command invocation string. This has no
+# dependency on Claude Code's project-file discovery working correctly in
+# headless mode at all. Keep this in sync with the human-facing version at
+# .claude/skills/ai-prowler-tasks/SKILL.md if the sequence ever changes —
+# that file is still useful as in-repo documentation and for anyone running
+# the same steps manually or interactively, it's just no longer what the
+# headless wrapper actually relies on.
+QUEUE_RUNNER_PROMPT = (
+    "Run AI-Prowler's pending analysis task queue. Follow this sequence "
+    "exactly, in order. "
+    "1. Call sync_due_tasks_to_queue first. This pushes any due custom "
+    "task definitions into the run queue that aren't already sitting "
+    "there. Safe to call every time; it is idempotent and will not "
+    "duplicate an already-queued entry. "
+    "2. Call get_pending_analysis_tasks. This only returns entries that "
+    "are actually due right now. If nothing is returned, report that "
+    "plainly and stop; do not treat an empty or not-yet-due result as an "
+    "error. "
+    "3. For each task returned, in the order given: read the task's "
+    "prompt, scope_dirs, and label; perform the actual analysis using "
+    "AI-Prowler's own MCP tools only, scoped to scope_dirs if provided, "
+    "otherwise the task's default scope; call record_learning for any "
+    "concrete findings worth persisting; call complete_analysis_task with "
+    "the task_id and a real, specific summary of what was found, not a "
+    "placeholder; next_due advancement and re-arming are handled "
+    "automatically by AI-Prowler, do not compute this yourself; if the "
+    "task's configuration requested a saved report, call "
+    "save_analysis_report after complete_analysis_task. "
+    "4. After all tasks are processed, produce a final one-paragraph "
+    "summary: how many tasks ran, one line per task on what was found, "
+    "and any tasks that failed partway. "
+    "If a single task's analysis fails partway through, still call "
+    "complete_analysis_task for it with a summary that says it failed and "
+    "why; do not leave it silently stuck in the queue, and do not let one "
+    "failed task stop the rest of the queue from processing. If "
+    "get_pending_analysis_tasks itself fails, stop immediately and report "
+    "that clearly; do not retry silently in a loop. "
+    "Use AI-Prowler's own MCP tools, mcp__ai-prowler__ prefixed, as the "
+    "first choice for anything they can answer. When AI-Prowler itself has "
+    "no tool or data for something a task's prompt asks for, such as "
+    "current weather details AI-Prowler's own weather tool omits, sunrise "
+    "or sunset times, or local event listings, fall back to your own "
+    "general knowledge where that is enough, and to WebSearch or WebFetch "
+    "for anything current or specific that requires looking up; use these "
+    "rather than declining that part of a task and noting it as "
+    "unavailable. Do not use any other tool outside AI-Prowler's own MCP "
+    "tools plus WebSearch and WebFetch. "
+    "Do not create new task definitions; only process what is already "
+    "due or queued."
+)
+
 DEFAULT_CONFIG = {
     "enabled": False,
     "schedule_time": "06:00",     # 24h HH:MM, daily trigger
-    "allowed_tools": "mcp__ai-prowler__*",
+    "allowed_tools": "mcp__ai-prowler__*,WebSearch,WebFetch",
     "mcp_config_path": "",         # filled in by the GUI at Enable time
     "install_dir": "",             # filled in by the GUI at Enable time
     "notify_on_complete": False,   # Phase 6 — see build_wrapper_script_content
@@ -149,7 +213,7 @@ def build_wrapper_script_content(mcp_config_path: str, allowed_tools: str,
             f"than treating it as a task failure."
         )
 
-    prompt = "/ai-prowler-run-queue" + notify_clause
+    prompt = QUEUE_RUNNER_PROMPT + notify_clause
 
     api_key_block = ""
     if use_api_key:
