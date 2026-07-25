@@ -56,6 +56,18 @@ def _isolate_tqa_paths(tmp_path, monkeypatch):
     import custom_tasks_manager as _ctm_isolate
     monkeypatch.setattr(_ctm_isolate, "BUILTIN_ANALYSIS_CONFIG_PATH",
                          tmp_path / ".ai-prowler" / "builtin_analysis_config.json")
+    # v8.1.10 fix: CUSTOM_TASKS_PATH — the "My Custom AI Analyses" data
+    # file — was NEVER isolated here, despite every OTHER custom_tasks_
+    # manager path in this fixture being covered. Any test that calls
+    # create_task()/load_custom_tasks()/save_custom_tasks() directly
+    # (rather than through unittest.mock.patch, like most tests in this
+    # file do) was silently reading/writing the REAL
+    # ~/.ai-prowler/custom_analysis_tasks.json on whatever machine ran the
+    # tests — confirmed: this is exactly what polluted David's real
+    # Custom Analyses list with repeated "MyNewCustomTask" entries, once
+    # per test run, across multiple release-gate runs tonight.
+    monkeypatch.setattr(_ctm_isolate, "CUSTOM_TASKS_PATH",
+                         tmp_path / ".ai-prowler" / "custom_analysis_tasks.json")
     yield tmp_path
 
 
