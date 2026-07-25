@@ -179,6 +179,15 @@ PrivilegesRequired=admin
 UninstallDisplayIcon={app}\rag_icon.ico
 LicenseFile=AI-Prowler Setup License.txt
 
+; Azure Artifact Signing (Individual identity: David Vavro) — signs the
+; compiled installer as the final build step so Windows SmartScreen/Defender
+; sees a valid Authenticode signature instead of an unsigned executable.
+; Requires the "azuresign" tool to be configured in Tools > Configure Sign
+; Tools in the Inno Setup IDE on this machine (points to signtool.exe with
+; Azure.CodeSigning.Dlib.dll + metadata.json referencing the
+; aiprowlerdvsigning account / AIProwlerIndividualProfile certificate profile).
+SignTool=azuresign
+
 ; UsedUserAreasWarning=no — INTENTIONAL, kept for Inno Setup compatibility.
 ;
 ; NOTE (v8.0.0 OneDrive fix): All file destinations previously using {userdocs}
