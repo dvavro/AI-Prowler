@@ -99,6 +99,46 @@ def test_wrapper_script_scopes_tools_not_wildcard_bash():
     assert "--dangerously-skip-permissions" not in content
 
 
+# ── v8.1.10 fix: cd into install_dir, not %USERPROFILE% ────────────────────
+# Regression coverage for the real bug David hit: a genuinely-enabled,
+# genuinely-existing Windows Scheduled Task fired at its scheduled time,
+# exited 0 ("successful" per Task Scheduler), and did NOTHING — because
+# `claude -p "/ai-prowler-run-queue"` was invoked from %USERPROFILE%, which
+# has no .claude/skills of its own, so Claude Code resolved the slash
+# command as "Unknown command" in ~100ms, 0 turns, $0 cost. The only trace
+# was the raw last_headless_run.json transcript; the Task Scheduler status,
+# the GUI's "Last: ..." line, and the audit log all looked fine or silent.
+
+def test_wrapper_script_cds_into_provided_install_dir():
+    content = tqa.build_wrapper_script_content(
+        "x.json", "mcp__ai-prowler__*",
+        install_dir=r"C:\Program Files\AI-Prowler")
+    assert 'cd /d "C:\\Program Files\\AI-Prowler"' in content
+    assert 'cd /d "%USERPROFILE%"' not in content
+
+
+def test_wrapper_script_falls_back_to_userprofile_when_install_dir_omitted():
+    # Old callers that haven't been updated yet must not break or crash —
+    # they get the prior (broken, but not worse-than-before) behavior.
+    content = tqa.build_wrapper_script_content("x.json", "mcp__ai-prowler__*")
+    assert 'cd /d "%USERPROFILE%"' in content
+
+
+def test_wrapper_script_falls_back_when_install_dir_is_blank_string():
+    content = tqa.build_wrapper_script_content(
+        "x.json", "mcp__ai-prowler__*", install_dir="   ")
+    assert 'cd /d "%USERPROFILE%"' in content
+
+
+def test_install_wrapper_script_forwards_install_dir(tmp_path):
+    target = tmp_path / "wrapper_dir"
+    path = tqa.install_wrapper_script(
+        target, "x.json", "mcp__ai-prowler__*",
+        install_dir=r"C:\Program Files\AI-Prowler")
+    content = path.read_text(encoding="utf-8")
+    assert 'cd /d "C:\\Program Files\\AI-Prowler"' in content
+
+
 def test_wrapper_script_no_notify_clause_by_default():
     content = tqa.build_wrapper_script_content("x.json", "mcp__ai-prowler__*")
     assert "send_sms" not in content

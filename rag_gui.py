@@ -5175,24 +5175,50 @@ or from the Help menu."""
                 )
             out_learnings = settings.get("output_learnings", True)
             out_report    = settings.get("output_report", False)
+            out_email     = settings.get("output_email", False)
             report_folder = settings.get("report_folder") or ""
-            if out_learnings and out_report:
-                prompt += (
-                    f"\n\nOutput: (1) Record key insights as learnings via "
-                    f"record_learning() with category 'business_insight'. "
-                    f"(2) Save the full analysis as a Word document via "
-                    f"save_analysis_report() to folder '{report_folder}'."
+
+            # v8.1.10: added Email as a third output option — mirrors
+            # custom_tasks_manager.build_task_prompt()'s generic action-list
+            # approach rather than hand-enumerating combinations.
+            actions = []
+            if out_learnings:
+                actions.append(
+                    "record key insights as learnings via record_learning() "
+                    "with category 'business_insight'"
                 )
-            elif out_report:
-                prompt += (
-                    f"\n\nOutput: Save the full analysis as a Word document "
-                    f"via save_analysis_report() to folder '{report_folder}'."
+            if out_report:
+                actions.append(
+                    f"save the full analysis as a Word document via "
+                    f"save_analysis_report() to folder '{report_folder}'"
                 )
-            elif out_learnings:
-                prompt += (
-                    "\n\nOutput: Record key insights as learnings via "
-                    "record_learning() with category 'business_insight'."
-                )
+            if out_email:
+                if out_report:
+                    actions.append(
+                        "email the full analysis via send_email() — leave "
+                        "'to' blank to use the configured default "
+                        "recipient, use a clear subject line naming the "
+                        "analysis, and attach the report saved above via "
+                        "attachment_path"
+                    )
+                else:
+                    actions.append(
+                        "email the full analysis via send_email() — leave "
+                        "'to' blank to use the configured default "
+                        "recipient, and use a clear subject line naming "
+                        "the analysis"
+                    )
+            if actions:
+                # v8.1.10 fix: NOT .capitalize() — that lowercases every
+                # character after the first, which corrupted embedded
+                # mixed-case content like report_folder paths (e.g.
+                # "C:\Reports" became "c:\reports"). Just uppercase the
+                # first letter, leave everything else untouched.
+                def _cap_first(s):
+                    return s[0].upper() + s[1:] if s else s
+                numbered = " ".join(f"({i + 1}) {_cap_first(a)}."
+                                     for i, a in enumerate(actions))
+                prompt += f"\n\nOutput: {numbered}"
             return prompt
 
         def _queue_builtin_task(task_def):
@@ -5233,6 +5259,7 @@ or from the Help menu."""
                     "scope_dirs":       settings.get("scope_dirs") or [],
                     "output_learnings": settings.get("output_learnings", True),
                     "output_report":    settings.get("output_report", False),
+                    "output_email":     settings.get("output_email", False),
                     "report_folder":    settings.get("report_folder") or _ctm_bq.DEFAULT_REPORT_FOLDER,
                     "schedule":         schedule_key,
                     "first_due":        first_due_val,
@@ -5393,6 +5420,7 @@ or from the Help menu."""
 
             _learn_var  = tk.BooleanVar(value=saved.get("output_learnings", True))
             _report_var = tk.BooleanVar(value=saved.get("output_report", False))
+            _email_var  = tk.BooleanVar(value=saved.get("output_email", False))
 
             ttk.Checkbutton(_out_row,
                             text="💡 Save key insights to Learnings",
@@ -5400,6 +5428,10 @@ or from the Help menu."""
             ttk.Checkbutton(_out_row,
                             text="📄 Save full analysis as Word document (.docx)",
                             variable=_report_var).pack(anchor='w')
+            # v8.1.10: third output option, same as the custom-task editor.
+            ttk.Checkbutton(_out_row,
+                            text="✉️ Email the analysis",
+                            variable=_email_var).pack(anchor='w')
 
             tk.Label(_pad, text='Schedule:', font=('Arial', 9, 'bold'),
                      anchor='w').pack(anchor='w', pady=(8, 0))
@@ -5496,10 +5528,22 @@ or from the Help menu."""
             scope_dirs    = [d for d, v in _scope_vars.items() if v.get()]
             schedule_key  = _sched_lbl_to_key.get(_sched_var.get(), 'none')
             first_due_val = _due_var.get().strip() or None
+
+            # v8.1.10: at least one output required — same rule as custom
+            # tasks (create_task()/update_task() enforce it there; this
+            # built-in path has no such backend function to enforce it
+            # centrally, so it's checked here instead).
+            if not (_learn_var.get() or _report_var.get() or _email_var.get()):
+                messagebox.showwarning(
+                    "Validation Error",
+                    "At least one output must be selected: Learnings, Document, or Email.")
+                return
+
             new_settings = {
                 "scope_dirs":       scope_dirs,
                 "output_learnings": _learn_var.get(),
                 "output_report":    _report_var.get(),
+                "output_email":     _email_var.get(),
                 "report_folder":    _folder_var.get().strip() or _ctm_q.DEFAULT_REPORT_FOLDER,
                 "schedule":         schedule_key,
                 "first_due":        first_due_val,
@@ -6174,21 +6218,30 @@ or from the Help menu."""
             sched_row.pack(fill='x', pady=(0, 8))
             tk.Label(sched_row, text="Schedule:",
                      font=('Arial', 9, 'bold')).pack(side='left')
-            sched_var = tk.StringVar(
-                value=existing_task.get("schedule", "none") if existing_task else "none")
+            # Map display labels to keys
+            _sched_label_to_key = {v: k for k, v in _ctm.SCHEDULE_LABELS.items()}
+            # v8.1.10 fix: the StringVar used to be seeded with the raw
+            # schedule KEY (e.g. "weekly") — a value that is NOT one of the
+            # combobox's own `values` (which are the display LABELS, e.g.
+            # "Weekly") — and only corrected a moment later via a separate
+            # sched_combo.set(...) call. That intermediate invalid-value
+            # state on a readonly ttk.Combobox is exactly the kind of thing
+            # that can leave the widget showing blank instead of the
+            # corrected value on some Tk/Windows redraw timings. Compute the
+            # correct LABEL up front and seed the StringVar with that
+            # directly — no invalid intermediate state, no separate .set()
+            # call needed at all.
+            _initial_sched_label = (
+                _ctm.SCHEDULE_LABELS.get(existing_task.get("schedule", "none"),
+                                          "Manual only")
+                if existing_task else "Manual only"
+            )
+            sched_var = tk.StringVar(value=_initial_sched_label)
             sched_combo = ttk.Combobox(
                 sched_row,
                 textvariable=sched_var,
                 values=list(_ctm.SCHEDULE_LABELS.values()),
                 state='readonly', width=16)
-            # Map display labels to keys
-            _sched_label_to_key = {v: k for k, v in _ctm.SCHEDULE_LABELS.items()}
-            if existing_task:
-                sched_combo.set(
-                    _ctm.SCHEDULE_LABELS.get(existing_task.get("schedule", "none"),
-                                              "Manual only"))
-            else:
-                sched_combo.set("Manual only")
             sched_combo.pack(side='left', padx=(8, 16))
 
             tk.Label(sched_row, text="First due date:",
@@ -6210,11 +6263,18 @@ or from the Help menu."""
                 value=existing_task.get("output_learnings", True) if existing_task else True)
             report_var = tk.BooleanVar(
                 value=existing_task.get("output_report", False) if existing_task else False)
+            email_var = tk.BooleanVar(
+                value=existing_task.get("output_email", False) if existing_task else False)
 
             ttk.Checkbutton(out_row, text="💡 Save key insights to Learnings",
                             variable=learn_var).pack(anchor='w')
             ttk.Checkbutton(out_row, text="📄 Save full analysis as Word document (.docx)",
                             variable=report_var).pack(anchor='w')
+            # v8.1.10: third output option. At least one of the three is
+            # required — see _save()'s validation below and
+            # create_task()/update_task()'s matching backend validation.
+            ttk.Checkbutton(out_row, text="✉️ Email the analysis",
+                            variable=email_var).pack(anchor='w')
 
             # Report folder
             folder_frame = tk.Frame(pad)
@@ -6262,6 +6322,7 @@ or from the Help menu."""
                             first_due=first_due,
                             output_learnings=learn_var.get(),
                             output_report=report_var.get(),
+                            output_email=email_var.get(),
                             report_folder=folder_var.get().strip()
                         )
                     else:
@@ -6270,7 +6331,8 @@ or from the Help menu."""
                         # checked here, so the GUI and any MCP tool that
                         # calls create_task() share one single source of
                         # truth for the limit instead of two checks that
-                        # could drift out of sync.
+                        # could drift out of sync. Same applies to the
+                        # v8.1.10 "at least one output" requirement.
                         new_task = _ctm2.create_task(
                             label=label, prompt=prompt,
                             scope_dirs=scope,
@@ -6278,6 +6340,7 @@ or from the Help menu."""
                             first_due=first_due,
                             output_learnings=learn_var.get(),
                             output_report=report_var.get(),
+                            output_email=email_var.get(),
                             report_folder=folder_var.get().strip()
                         )
                         tasks.append(new_task)
@@ -7084,9 +7147,11 @@ or from the Help menu."""
                 if _tqa.scheduled_task_exists() and _tqa_cfg.get("enabled"):
                     _tqa_status_var.set("● Enabled")
                     _tqa_status_lbl.config(fg='#6ab86a')
+                    _tqa_status_lbl2.config(fg='#6ab86a')
                 else:
                     _tqa_status_var.set("● Disabled")
                     _tqa_status_lbl.config(fg='#aa4444')
+                    _tqa_status_lbl2.config(fg='#aa4444')
                 _last = _tqa.load_last_run()
                 if _last:
                     _tqa_last_run_var.set(
@@ -7153,9 +7218,28 @@ or from the Help menu."""
             def _tqa_apply_time_only():
                 _tqa_save_and_apply()
                 _tqa_update_enable_btn_label()
+                _tqa_refresh_status_display()
             _tqa_btn_apply_time = ttk.Button(
                 _tqa_row1, text="💾 Apply", command=_tqa_apply_time_only)
             _tqa_btn_apply_time.pack(side='left')
+
+            # v8.1.10 fix: a real, OS-verified status indicator
+            # (scheduled_task_exists() + config "enabled" flag) already
+            # existed as _tqa_status_lbl, but was explicitly unpacked/
+            # hidden in v8.3 on the assumption the on/off toggle button
+            # already showed this visually. It doesn't — the toggle button
+            # only reflects the LOCAL config flag, not whether a real
+            # Windows Scheduled Task actually exists and matches it.
+            # _tqa_status_lbl's actual Tk parent is _tqa_hdr (created much
+            # earlier), a sibling frame of this row — re-parenting it here
+            # via pack(in_=...) across sibling frames is fragile, so this
+            # is a second label sharing the same _tqa_status_var, placed
+            # correctly in this row. _tqa_refresh_status_display() (below)
+            # drives both labels' color together.
+            _tqa_status_lbl2 = tk.Label(_tqa_row1, textvariable=_tqa_status_var,
+                                         bg='#1a1e2e', fg='#aa4444',
+                                         font=('Arial', 9, 'bold'))
+            _tqa_status_lbl2.pack(side='left', padx=(12, 0))
 
             _tqa_row2 = tk.Frame(_tqa_inner, bg='#1a1e2e')
             _tqa_row2.pack(fill='x', pady=(0, 6))
@@ -7413,10 +7497,18 @@ or from the Help menu."""
 
                 if cfg["enabled"] and cfg.get("mcp_config_path"):
                     wrapper_dir = _tqa.AI_PROWLER_HOME
+                    # v8.1.10 fix: pass the directory THIS rag_gui.py is
+                    # actually running from — that's where .claude/skills/
+                    # ai-prowler-tasks/SKILL.md lives, and the generated
+                    # wrapper .bat needs to `cd` there before invoking
+                    # `claude -p`, or the /ai-prowler-run-queue slash
+                    # command silently resolves to "Unknown command" every
+                    # time (see build_wrapper_script_content()'s docstring).
+                    _install_dir = str(Path(__file__).resolve().parent)
                     wrapper = _tqa.install_wrapper_script(
                         wrapper_dir, cfg["mcp_config_path"], cfg["allowed_tools"],
                         cfg["notify_on_complete"], cfg["notify_method"],
-                        cfg["use_api_key"])
+                        cfg["use_api_key"], _install_dir)
                     ok, detail = _tqa.install_scheduled_task(
                         wrapper, cfg["schedule_time"], enabled=True)
                     if not ok:

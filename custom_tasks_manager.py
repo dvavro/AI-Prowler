@@ -315,6 +315,7 @@ def get_builtin_analysis_settings(task_type: str) -> dict:
         "scope_dirs":       saved.get("scope_dirs") or [],
         "output_learnings": saved.get("output_learnings", True),
         "output_report":    saved.get("output_report", False),
+        "output_email":     saved.get("output_email", False),
         "report_folder":    saved.get("report_folder") or DEFAULT_REPORT_FOLDER,
         "schedule":         saved.get("schedule", "none"),
         "first_due":        saved.get("first_due"),
@@ -341,6 +342,7 @@ def create_task(label: str,
                 first_due: str = None,
                 output_learnings: bool = True,
                 output_report: bool = False,
+                output_email: bool = False,
                 report_folder: str = None) -> dict:
     """
     Create a new custom task definition.
@@ -353,6 +355,8 @@ def create_task(label: str,
         first_due:        YYYY-MM-DD first due date (AI-Prowler sets this).
         output_learnings: Record key insights as learnings.
         output_report:    Save full analysis as .docx report.
+        output_email:     Email the full analysis via AI-Prowler's own
+                          configured SMTP account (send_email tool) — v8.1.10.
         report_folder:    Output folder for .docx reports.
 
     Returns:
@@ -363,6 +367,14 @@ def create_task(label: str,
         reached. The cap is checked here (not by callers) so every caller —
         the GUI's Add dialog and any MCP tool alike — enforces the exact
         same limit with no way to accidentally bypass it.
+
+        v8.1.10: also raises if NONE of output_learnings/output_report/
+        output_email is set — a task with zero outputs selected produces
+        results nowhere retrievable when run via the Autonomous AI Task
+        Queue (no chat window exists in a headless run to "display" to;
+        see the audit-trail investigation this same version fixed). At
+        least one output must be selected so every task's results land
+        somewhere durable.
     """
     existing_count = len(load_custom_tasks())
     if existing_count >= MAX_CUSTOM_TASKS:
@@ -382,6 +394,11 @@ def create_task(label: str,
         raise ValueError("Task prompt is required.")
     if len(prompt) > 4000:
         raise ValueError("Task prompt must be 4000 characters or fewer.")
+
+    if not (output_learnings or output_report or output_email):
+        raise ValueError(
+            "At least one output must be selected: Learnings, Document, or Email."
+        )
 
     schedule = (schedule or "none").strip().lower()
     if schedule not in SCHEDULES:
@@ -417,6 +434,7 @@ def create_task(label: str,
         "last_status":      None,
         "output_learnings": bool(output_learnings),
         "output_report":    bool(output_report),
+        "output_email":     bool(output_email),
         "report_folder":    report_folder or DEFAULT_REPORT_FOLDER,
         "created_at":       now,
         "updated_at":       now,
@@ -449,7 +467,8 @@ def update_task(tasks: list, task_id: str, **kwargs) -> bool:
 
         updatable = [
             "label", "prompt", "scope_dirs", "schedule",
-            "first_due", "output_learnings", "output_report", "report_folder"
+            "first_due", "output_learnings", "output_report",
+            "output_email", "report_folder"
         ]
 
         old_schedule  = t.get("schedule", "none")
@@ -460,6 +479,18 @@ def update_task(tasks: list, task_id: str, **kwargs) -> bool:
         first_due_changed = (
             "first_due" in kwargs and kwargs["first_due"] != old_first_due
         )
+
+        # v8.1.10: validate the RESULTING output-flag state before applying
+        # anything — an edit that would leave all three outputs off is
+        # rejected the same way create_task() rejects it up front, rather
+        # than silently producing a task whose results go nowhere.
+        _would_learnings = kwargs.get("output_learnings", t.get("output_learnings", False))
+        _would_report    = kwargs.get("output_report",    t.get("output_report", False))
+        _would_email     = kwargs.get("output_email",     t.get("output_email", False))
+        if not (_would_learnings or _would_report or _would_email):
+            raise ValueError(
+                "At least one output must be selected: Learnings, Document, or Email."
+            )
 
         for key in updatable:
             if key in kwargs:
@@ -622,33 +653,61 @@ def build_task_prompt(task: dict) -> str:
     lines.append("")
 
     # Output instructions
+    # v8.1.10: added a third output option (Email), and rewrote this as a
+    # generic action list rather than enumerating combinations by hand —
+    # there are now 2^3 combinations instead of 2^2. At least one of the
+    # three is guaranteed by create_task()/update_task() validation, but
+    # the "no outputs" fallback is kept for defensiveness against any
+    # legacy task saved before that validation existed.
     out_learnings = task.get("output_learnings", True)
     out_report    = task.get("output_report", False)
+    out_email     = task.get("output_email", False)
     report_folder = task.get("report_folder", DEFAULT_REPORT_FOLDER)
 
-    if out_learnings and out_report:
-        lines.append(
-            f"Output: (1) Record key insights as learnings via record_learning() "
-            f"with category 'business_insight'. "
-            f"(2) Save the full analysis as a Word document via save_analysis_report() "
-            f"to folder '{report_folder}'. "
-            f"(3) Record a completion learning via record_learning() with title "
-            f"'[task label] — report completed' and category 'analysis_report' "
-            f"noting the report path and next scheduled run date."
+    actions = []
+    if out_learnings:
+        actions.append(
+            "record key insights as learnings via record_learning() "
+            "with category 'business_insight'"
         )
-    elif out_report:
-        lines.append(
-            f"Output: Save the full analysis as a Word document via "
-            f"save_analysis_report() to folder '{report_folder}'. "
-            f"Then record a completion learning via record_learning() with title "
-            f"'[task label] — report completed' and category 'analysis_report'."
+    if out_report:
+        actions.append(
+            f"save the full analysis as a Word document via "
+            f"save_analysis_report() to folder '{report_folder}'"
         )
-    elif out_learnings:
-        lines.append(
-            "Output: Record key insights as learnings via record_learning() "
-            "with category 'business_insight'. Keep each learning concise "
-            "(1-3 sentences)."
-        )
+    if out_email:
+        if out_report:
+            actions.append(
+                "email the full analysis via send_email() — leave 'to' "
+                "blank to use the configured default recipient, use a "
+                "clear subject line naming the task, and attach the "
+                "report saved above via attachment_path"
+            )
+        else:
+            actions.append(
+                "email the full analysis via send_email() — leave 'to' "
+                "blank to use the configured default recipient, and use "
+                "a clear subject line naming the task"
+            )
+
+    if actions:
+        # v8.1.10 fix: NOT .capitalize() — that lowercases every character
+        # after the first, which corrupted embedded mixed-case content
+        # like report_folder paths (e.g. "C:\Reports" became "c:\reports").
+        # Just uppercase the first letter, leave everything else alone.
+        def _cap_first(s):
+            return s[0].upper() + s[1:] if s else s
+        numbered = " ".join(f"({i + 1}) {_cap_first(a)}."
+                             for i, a in enumerate(actions))
+        lines.append(f"Output: {numbered}")
+        if out_report or out_email:
+            lines.append(
+                "After completing the above, record a completion learning "
+                "via record_learning() with title '[task label] — report "
+                "completed' and category 'analysis_report', noting where "
+                "the output went (report path and/or recipient email) and "
+                "the next scheduled run date."
+            )
     else:
         lines.append(
             "Output: Display the analysis in the conversation. "
@@ -690,6 +749,7 @@ def tasks_to_queue_entries(custom_tasks: list) -> list:
             "status":     "pending",
             "output_learnings": t.get("output_learnings", True),
             "output_report":    t.get("output_report", False),
+            "output_email":     t.get("output_email", False),
             "report_folder":    t.get("report_folder", DEFAULT_REPORT_FOLDER),
             "scope_dirs":       t.get("scope_dirs", []),
             "schedule":         t.get("schedule", "none"),

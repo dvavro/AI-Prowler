@@ -122,10 +122,23 @@ class TestCreateTask:
         assert t["output_learnings"] is True
         assert t["output_report"] is True
 
-    def test_TC_CTASK_001_both_outputs_can_be_false(self):
+    def test_TC_CTASK_001_all_outputs_false_now_rejected(self):
+        # v8.1.10: superseded — a task with zero outputs selected produces
+        # results nowhere retrievable when run via the Autonomous AI Task
+        # Queue (no chat window exists in a headless run). create_task()
+        # now requires at least one of Learnings/Document/Email.
         import custom_tasks_manager as ctm
-        t = ctm.create_task(label="Neither", prompt="Display only.",
-                            output_learnings=False, output_report=False)
+        with pytest.raises(ValueError, match="At least one output"):
+            ctm.create_task(label="Neither", prompt="Display only.",
+                             output_learnings=False, output_report=False,
+                             output_email=False)
+
+    def test_TC_CTASK_001b_email_alone_satisfies_output_requirement(self):
+        import custom_tasks_manager as ctm
+        t = ctm.create_task(label="Email Only", prompt="Email it.",
+                             output_learnings=False, output_report=False,
+                             output_email=True)
+        assert t["output_email"] is True
         assert t["output_learnings"] is False
         assert t["output_report"] is False
 
@@ -410,12 +423,36 @@ class TestBuildTaskPrompt:
         assert "save_analysis_report" in prompt
 
     def test_TC_CTASK_006_no_output_prompt(self):
+        # v8.1.10: create_task() now rejects all-outputs-false, so this
+        # defensive fallback in build_task_prompt() can only be reached by
+        # a legacy task dict (created before that validation existed) —
+        # construct the dict directly rather than via create_task().
+        import custom_tasks_manager as ctm
+        task = {
+            "task_id": "legacy_1", "label": "T", "prompt": "Analyze.",
+            "output_learnings": False, "output_report": False,
+            "output_email": False, "scope_dirs": [],
+        }
+        prompt = ctm.build_task_prompt(task)
+        assert "conversation" in prompt.lower() or "display" in prompt.lower()
+
+    def test_TC_CTASK_006b_email_only_prompt(self):
         import custom_tasks_manager as ctm
         task = ctm.create_task(
             label="T", prompt="Analyze.",
-            output_learnings=False, output_report=False)
+            output_learnings=False, output_report=False, output_email=True)
         prompt = ctm.build_task_prompt(task)
-        assert "conversation" in prompt.lower() or "display" in prompt.lower()
+        assert "send_email" in prompt
+
+    def test_TC_CTASK_006c_email_plus_report_prompt_mentions_attachment(self):
+        import custom_tasks_manager as ctm
+        task = ctm.create_task(
+            label="T", prompt="Analyze.",
+            output_learnings=False, output_report=True, output_email=True)
+        prompt = ctm.build_task_prompt(task)
+        assert "send_email" in prompt
+        assert "save_analysis_report" in prompt
+        assert "attachment_path" in prompt
 
 
 # ---------------------------------------------------------------------------

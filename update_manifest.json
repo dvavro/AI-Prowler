@@ -1,11 +1,11 @@
 {
   "version": "8.1.9",
-  "generated": "2026-07-24T11:42:11",
+  "generated": "2026-07-25T07:25:49",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "781e1fcb3cb4d172987ce24707e99a1a79738d98a10eae476f224a8a7e49bc3f",
-      "bytes": 1154195
+      "sha256": "85193214a81470bee9adec4a1a9ec49edf5295732d5cd886671c4837f8d5b2a1",
+      "bytes": 1159860
     },
     {
       "path": "rag_preprocessor.py",
@@ -14,8 +14,8 @@
     },
     {
       "path": "ai_prowler_mcp.py",
-      "sha256": "ff85ecda83c3b009afbbcdb50904d548f26899fa119bc72235e5e5f107ead9b2",
-      "bytes": 774738
+      "sha256": "d2b26b7c9e0f54cbc8232ab8e1770f12b5598b42c3fc9912d02cbdffe9e47d2a",
+      "bytes": 775698
     },
     {
       "path": "mcp_diagnostics.py",
@@ -109,8 +109,8 @@
     },
     {
       "path": "custom_tasks_manager.py",
-      "sha256": "d6e54fc08e31137036f6784e7d477fb73aa61f6ea5d44f0c256b6ec4f1bfb1e9",
-      "bytes": 28805
+      "sha256": "a00708c84e42acd08f7374f20ed72b94eab8f233029844d1672d73c61ef81e7f",
+      "bytes": 31882
     },
     {
       "path": "scheduler_jobs.py",
@@ -124,8 +124,8 @@
     },
     {
       "path": "task_queue_automation.py",
-      "sha256": "27244ce9232c41037658ae162fa0c08186dc227b9887b6dcc8f9008dec6c8568",
-      "bytes": 48218
+      "sha256": "cf1327332a16405b0d44535fff34a7ed19d0ec726bcae7d0cc807c95e462f51a",
+      "bytes": 50311
     },
     {
       "path": ".claude/settings.json",

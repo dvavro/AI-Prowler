@@ -12298,6 +12298,7 @@ def create_analysis_task(
     scope_dirs: "list | None" = None,
     output_learnings: bool = True,
     output_report: bool = False,
+    output_email: bool = False,
     report_folder: str = "",
 ) -> str:
     """
@@ -12330,6 +12331,10 @@ def create_analysis_task(
       • Maximum 25 custom tasks at once (enforced inside create_task() —
         the same limit the GUI dialog respects). If the user is at the cap,
         tell them to delete an existing task first (Links & Analysis tab).
+      • At least one of output_learnings/output_report/output_email must be
+        True (v8.1.10) — a task with none selected produces results nowhere
+        retrievable if it ever runs via the Autonomous AI Task Queue,
+        since there's no chat window in a headless run to "display" to.
 
     Args:
         label:            Short name for the task, max 60 characters.
@@ -12345,12 +12350,16 @@ def create_analysis_task(
                           runs (default True).
         output_report:    Save the full analysis as a .docx report when
                           this task runs (default False).
+        output_email:     Email the full analysis via AI-Prowler's own
+                          configured SMTP account when this task runs
+                          (default False) — v8.1.10.
         report_folder:    Output folder for .docx reports, if output_report
                           is True. Uses the default reports folder if omitted.
 
     Returns:
         Confirmation with the new task_id and its next due date, or a
-        clear validation error (including hitting the 25-task cap).
+        clear validation error (including hitting the 25-task cap, or all
+        three outputs being off).
 
     Voice examples:
         "Set up a task to check for unread invoice emails every Monday"
@@ -12375,6 +12384,7 @@ def create_analysis_task(
             first_due=(first_due.strip() or None),
             output_learnings=output_learnings,
             output_report=output_report,
+            output_email=output_email,
             report_folder=(report_folder.strip() or None),
         )
         tasks.append(new_task)
@@ -12909,6 +12919,7 @@ def update_analysis_task(
     first_due: str = None,
     output_learnings: bool = None,
     output_report: bool = None,
+    output_email: bool = None,
     report_folder: str = None,
     scope_dirs: list = None,
     ctx: Context = None,
@@ -12934,12 +12945,15 @@ def update_analysis_task(
         first_due:          New first-due date, YYYY-MM-DD.
         output_learnings:   Whether to record findings as learnings.
         output_report:      Whether to save a .docx report.
+        output_email:       Whether to email the analysis (v8.1.10) — via
+                            AI-Prowler's own configured SMTP account.
         report_folder:      Output folder for .docx reports.
         scope_dirs:         List of directory paths to restrict the analysis to.
 
     Returns:
         Confirmation with the updated next_due, or an error if the
-        task_id wasn't found or a value was invalid.
+        task_id wasn't found, a value was invalid, or the edit would leave
+        all three outputs (learnings/report/email) off (v8.1.10).
     """
     _telemetry_increment_tool_count("update_analysis_task")
 
@@ -12963,8 +12977,8 @@ def update_analysis_task(
     for key, val in (
         ("label", label), ("prompt", prompt), ("schedule", schedule),
         ("first_due", first_due), ("output_learnings", output_learnings),
-        ("output_report", output_report), ("report_folder", report_folder),
-        ("scope_dirs", scope_dirs),
+        ("output_report", output_report), ("output_email", output_email),
+        ("report_folder", report_folder), ("scope_dirs", scope_dirs),
     ):
         if val is not None:
             kwargs[key] = val
@@ -12984,6 +12998,8 @@ def update_analysis_task(
         next_due_msg = (f"\nNext due: {updated.get('next_due')}"
                          if updated.get("next_due") else "")
         return f"✅ Updated task '{updated.get('label', task_id)}'.{next_due_msg}"
+    except ValueError as _ve:
+        return f"❌ {_ve}"
     except Exception as _e:
         return f"❌ Could not update task: {_e}"
 

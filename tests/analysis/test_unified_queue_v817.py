@@ -379,6 +379,7 @@ class TestUpdateAnalysisTask:
         custom_tasks = [{
             "task_id": "c1", "label": "T", "schedule": "weekly",
             "first_due": "2026-06-23", "next_due": "2026-08-04",
+            "output_learnings": True,
         }]
         ctx, saved = self._patch(custom_tasks)
         with ctx[0], ctx[1]:

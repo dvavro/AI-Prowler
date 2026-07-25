@@ -44,6 +44,7 @@ class TestScheduleChangeRecomputesNextDue:
         tasks = [{
             "task_id": "t1", "schedule": "weekly",
             "first_due": "2026-06-23", "next_due": "2026-08-04",
+            "output_learnings": True,
         }]
         ok = ctm.update_task(tasks, "t1", schedule="daily",
                               first_due="2026-06-23")
@@ -57,6 +58,7 @@ class TestScheduleChangeRecomputesNextDue:
         tasks = [{
             "task_id": "t2", "schedule": "monthly",
             "first_due": "2026-07-01", "next_due": "2026-08-01",
+            "output_learnings": True,
         }]
         ok = ctm.update_task(tasks, "t2", schedule="monthly",
                               first_due="2026-07-15")
@@ -67,6 +69,7 @@ class TestScheduleChangeRecomputesNextDue:
         tasks = [{
             "task_id": "t3", "schedule": "none",
             "first_due": None, "next_due": None,
+            "output_learnings": True,
         }]
         ok = ctm.update_task(tasks, "t3", schedule="weekly",
                               first_due="2026-08-01")
@@ -77,6 +80,7 @@ class TestScheduleChangeRecomputesNextDue:
         tasks = [{
             "task_id": "t4", "schedule": "weekly",
             "first_due": "2026-06-23", "next_due": "2026-08-04",
+            "output_learnings": True,
         }]
         ok = ctm.update_task(tasks, "t4", schedule="none")
         assert ok is True
@@ -89,7 +93,7 @@ class TestUnrelatedEditsDoNotResetNextDue:
         tasks = [{
             "task_id": "t5", "schedule": "weekly",
             "first_due": "2026-06-23", "next_due": "2026-08-04",
-            "prompt": "old prompt",
+            "prompt": "old prompt", "output_learnings": True,
         }]
         ok = ctm.update_task(tasks, "t5", prompt="new prompt")
         assert ok is True
@@ -114,6 +118,7 @@ class TestUnrelatedEditsDoNotResetNextDue:
         tasks = [{
             "task_id": "t7", "schedule": "weekly",
             "first_due": "2026-06-23", "next_due": "2026-08-04",
+            "output_learnings": True,
         }]
         ok = ctm.update_task(tasks, "t7", schedule="weekly",
                               first_due="2026-06-23", label="renamed")
@@ -130,6 +135,7 @@ class TestEdgeCases:
         tasks = [{
             "task_id": "t8", "schedule": "weekly",
             "first_due": "2026-06-23", "next_due": None,
+            "output_learnings": True,
         }]
         ok = ctm.update_task(tasks, "t8", label="renamed only")
         assert ok is True
