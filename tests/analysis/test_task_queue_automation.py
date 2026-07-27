@@ -204,6 +204,301 @@ def test_wrapper_script_no_notify_clause_by_default():
     assert "send_whatsapp" not in content
 
 
+# ── v8.1.13: independently configurable check frequency + active window ────
+# The checker's own frequency (daily vs. interval) and active window
+# (days-of-week, time-of-day) are DELIBERATELY decoupled from any
+# individual custom task's own schedule — this covers that layer:
+# install_scheduled_task()'s trigger construction, and
+# build_wrapper_script_content()'s embedded self-gate logic.
+
+class TestCheckModeDefaultConfig:
+
+    def test_default_check_mode_is_daily(self):
+        assert tqa.DEFAULT_CONFIG["check_mode"] == "daily"
+
+    def test_default_active_days_is_all_seven(self):
+        assert set(tqa.DEFAULT_CONFIG["active_days"]) == tqa.VALID_DAY_CODES
+        assert len(tqa.DEFAULT_CONFIG["active_days"]) == 7
+
+    def test_default_active_window_is_unrestricted(self):
+        assert tqa.DEFAULT_CONFIG["active_start_time"] == "00:00"
+        assert tqa.DEFAULT_CONFIG["active_end_time"] == "23:59"
+
+    def test_existing_saved_config_without_new_keys_gets_defaults(self, tmp_path, monkeypatch):
+        # Simulates a config saved BEFORE v8.1.13 existed — must merge in
+        # the new keys with defaults, reproducing prior behavior exactly,
+        # not crash or silently omit them.
+        monkeypatch.setattr(tqa, "CONFIG_PATH", tmp_path / "old_config.json")
+        tqa.CONFIG_PATH.write_text(json.dumps({
+            "enabled": True, "schedule_time": "07:30",
+        }), encoding="utf-8")
+        cfg = tqa.load_config()
+        assert cfg["schedule_time"] == "07:30"  # existing value preserved
+        assert cfg["check_mode"] == "daily"       # new key, default applied
+        assert set(cfg["active_days"]) == tqa.VALID_DAY_CODES
+
+
+class TestInstallScheduledTaskTriggerMode:
+
+    def test_daily_mode_uses_sc_daily_with_schedule_time(self, monkeypatch):
+        calls = []
+        def _fake_run(args, **kw):
+            calls.append(args)
+            class _R:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return _R()
+        monkeypatch.setattr(tqa.subprocess, "run", _fake_run)
+        tqa.install_scheduled_task(Path("fake.bat"), "07:30", check_mode="daily")
+        create_call = calls[0]
+        assert "/sc" in create_call and "daily" in create_call
+        assert "/st" in create_call and "07:30" in create_call
+        assert "/mo" not in create_call
+
+    def test_interval_mode_uses_sc_hourly_with_mo(self, monkeypatch):
+        calls = []
+        def _fake_run(args, **kw):
+            calls.append(args)
+            class _R:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return _R()
+        monkeypatch.setattr(tqa.subprocess, "run", _fake_run)
+        tqa.install_scheduled_task(Path("fake.bat"), "07:30",
+                                    check_mode="interval", check_interval_hours=3)
+        create_call = calls[0]
+        assert "/sc" in create_call and "hourly" in create_call
+        assert "/mo" in create_call and "3" in create_call
+        assert "/st" not in create_call
+
+    def test_interval_mode_clamps_zero_or_negative_hours_to_one(self, monkeypatch):
+        calls = []
+        def _fake_run(args, **kw):
+            calls.append(args)
+            class _R:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return _R()
+        monkeypatch.setattr(tqa.subprocess, "run", _fake_run)
+        tqa.install_scheduled_task(Path("fake.bat"), "07:30",
+                                    check_mode="interval", check_interval_hours=0)
+        create_call = calls[0]
+        mo_index = create_call.index("/mo")
+        assert create_call[mo_index + 1] == "1"
+
+
+# ── v8.1.14 fix: /RU so the task runs even when locked/screensaver-active ──
+# Real-world bug report: the checker worked fine while actively logged in,
+# but never fired while the screensaver was active / screen locked, even
+# with sleep/hibernate already disabled. Root cause: without an explicit
+# /RU, schtasks.exe defaults to the "Run only when user is logged on"
+# logon type (INTERACTIVE_TOKEN), which requires an active interactive
+# desktop session — a locked screen/screensaver doesn't reliably provide
+# one. /RU <username> WITHOUT /RP switches the task to S4U logon ("Run
+# whether user is logged on or not"), which runs in a batch logon session
+# regardless of lock state.
+
+class TestInstallScheduledTaskRunAsUser:
+
+    def _capture_create_call(self, monkeypatch):
+        calls = []
+        def _fake_run(args, **kw):
+            calls.append(args)
+            class _R:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return _R()
+        monkeypatch.setattr(tqa.subprocess, "run", _fake_run)
+        return calls
+
+    def test_ru_flag_present_by_default(self, monkeypatch):
+        calls = self._capture_create_call(monkeypatch)
+        tqa.install_scheduled_task(Path("fake.bat"), "07:30")
+        create_call = calls[0]
+        assert "/ru" in create_call
+
+    def test_ru_defaults_to_current_username_env_var(self, monkeypatch):
+        calls = self._capture_create_call(monkeypatch)
+        monkeypatch.setenv("USERNAME", "david")
+        tqa.install_scheduled_task(Path("fake.bat"), "07:30")
+        create_call = calls[0]
+        ru_index = create_call.index("/ru")
+        assert create_call[ru_index + 1] == "david"
+
+    def test_ru_falls_back_to_getpass_when_username_env_missing(self, monkeypatch):
+        calls = self._capture_create_call(monkeypatch)
+        monkeypatch.delenv("USERNAME", raising=False)
+        monkeypatch.setattr(tqa.getpass, "getuser", lambda: "fallback_user")
+        tqa.install_scheduled_task(Path("fake.bat"), "07:30")
+        create_call = calls[0]
+        ru_index = create_call.index("/ru")
+        assert create_call[ru_index + 1] == "fallback_user"
+
+    def test_explicit_run_as_user_overrides_default(self, monkeypatch):
+        calls = self._capture_create_call(monkeypatch)
+        monkeypatch.setenv("USERNAME", "david")
+        tqa.install_scheduled_task(Path("fake.bat"), "07:30", run_as_user="someone_else")
+        create_call = calls[0]
+        ru_index = create_call.index("/ru")
+        assert create_call[ru_index + 1] == "someone_else"
+
+    def test_no_rp_password_flag_present(self, monkeypatch):
+        # Confirming S4U specifically -- /RU without /RP, never a stored
+        # password. Storing a plaintext password would be a real security
+        # regression and isn't what S4U logon needs anyway.
+        calls = self._capture_create_call(monkeypatch)
+        tqa.install_scheduled_task(Path("fake.bat"), "07:30")
+        create_call = calls[0]
+        assert "/rp" not in create_call
+
+    def test_ru_present_in_both_daily_and_interval_modes(self, monkeypatch):
+        calls = self._capture_create_call(monkeypatch)
+        tqa.install_scheduled_task(Path("fake.bat"), "07:30", check_mode="daily")
+        tqa.install_scheduled_task(Path("fake.bat"), "07:30", check_mode="interval",
+                                    check_interval_hours=2)
+        assert "/ru" in calls[0]
+        assert "/ru" in calls[1]
+
+
+# ── v8.1.14: real OS-level armed-schedule display info ──────────────────────
+# David asked for the Autonomous AI Task Queue panel to show what's
+# ACTUALLY armed in Windows Task Scheduler, not just echo back the config
+# file / text field values -- so Toggle Off can be visually confirmed as
+# genuinely having disarmed the real task, and Apply's effect is visible.
+
+class TestGetScheduledTaskDisplayInfo:
+
+    def _mock_query(self, monkeypatch, stdout, returncode=0):
+        def _fake_run(args, **kw):
+            class _R:
+                pass
+            r = _R()
+            r.returncode = returncode
+            r.stdout = stdout
+            r.stderr = ""
+            return r
+        monkeypatch.setattr(tqa.subprocess, "run", _fake_run)
+
+    def test_task_does_not_exist(self, monkeypatch):
+        self._mock_query(monkeypatch, "", returncode=1)
+        info = tqa.get_scheduled_task_display_info()
+        assert info["exists"] is False
+        assert info["enabled"] is None
+        assert info["display"] == "🔴 Not armed"
+
+    def test_enabled_daily_task_shows_armed_with_time(self, monkeypatch):
+        self._mock_query(monkeypatch,
+            "Scheduled Task State:    Enabled\r\n"
+            "Schedule Type:           Daily\r\n"
+            "Start Time:              06:00:00\r\n"
+            "Next Run Time:           7/27/2026 6:00:00 AM\r\n")
+        info = tqa.get_scheduled_task_display_info()
+        assert info["exists"] is True
+        assert info["enabled"] is True
+        assert "🟢 Armed" in info["display"]
+        assert "06:00:00" in info["display"]
+        assert "7/27/2026" in info["display"]
+
+    def test_enabled_interval_task_shows_repeat_cadence(self, monkeypatch):
+        self._mock_query(monkeypatch,
+            "Scheduled Task State:    Enabled\r\n"
+            "Schedule Type:           Hourly\r\n"
+            "Start Time:              00:00:00\r\n"
+            "Repeat: Every:           2 Hour(s), 0 Minute(s)\r\n"
+            "Next Run Time:           7/27/2026 2:00:00 PM\r\n")
+        info = tqa.get_scheduled_task_display_info()
+        assert info["enabled"] is True
+        assert "🟢 Armed" in info["display"]
+        assert "2 Hour(s), 0 Minute(s)" in info["display"]
+
+    def test_disabled_task_shows_not_armed(self, monkeypatch):
+        self._mock_query(monkeypatch,
+            "Scheduled Task State:    Disabled\r\n"
+            "Schedule Type:           Daily\r\n"
+            "Start Time:              06:00:00\r\n")
+        info = tqa.get_scheduled_task_display_info()
+        assert info["exists"] is True
+        assert info["enabled"] is False
+        assert "🔴 Not armed" in info["display"]
+        assert "disabled" in info["display"].lower()
+
+    def test_display_string_never_crashes_on_missing_fields(self, monkeypatch):
+        # Minimal/malformed output -- shouldn't raise, even with almost
+        # nothing parseable.
+        self._mock_query(monkeypatch, "Scheduled Task State:    Enabled\r\n")
+        info = tqa.get_scheduled_task_display_info()
+        assert isinstance(info["display"], str)
+        assert info["display"]  # non-empty
+
+
+class TestWrapperActiveWindowSelfGate:
+
+    def test_daily_mode_checks_active_days_only(self):
+        content = tqa.build_wrapper_script_content(
+            "x.json", "mcp__ai-prowler__*", check_mode="daily",
+            active_days=["mon", "tue", "wed", "thu", "fri"])
+        assert "active-days self-gate" in content
+        assert "'mon','tue','wed','thu','fri'" in content.replace(" ", "")
+        # Daily mode must NOT embed a time-window comparison — schedule_time
+        # (the /st on the OS trigger) already IS the single trigger point.
+        assert "active-window self-gate" not in content
+
+    def test_interval_mode_checks_days_and_time_window(self):
+        content = tqa.build_wrapper_script_content(
+            "x.json", "mcp__ai-prowler__*", check_mode="interval",
+            active_days=["sat", "sun"],
+            active_start_time="07:00", active_end_time="22:00")
+        assert "active-window self-gate" in content
+        assert "'sat','sun'" in content.replace(" ", "")
+        assert "07:00" in content
+        assert "22:00" in content
+
+    def test_default_all_days_all_hours_reproduces_unrestricted_behavior(self):
+        # No active_days passed at all — must fall back to DEFAULT_CONFIG's
+        # all-7-days list, not crash or default to an empty/restrictive set.
+        content = tqa.build_wrapper_script_content("x.json", "mcp__ai-prowler__*")
+        for day in tqa.VALID_DAY_CODES:
+            assert f"'{day}'" in content
+
+    def test_skip_writes_a_result_message_not_silent(self):
+        # A skipped check should still leave SOMETHING readable in
+        # last_headless_run.json — "silently doing nothing with zero
+        # trace" was the exact class of bug this whole session's earlier
+        # fixes (v8.1.10, v8.1.11) were about avoiding.
+        content = tqa.build_wrapper_script_content(
+            "x.json", "mcp__ai-prowler__*", check_mode="interval")
+        assert "Skipped" in content
+
+    def test_exits_before_claude_dash_p_when_outside_window(self):
+        content = tqa.build_wrapper_script_content(
+            "x.json", "mcp__ai-prowler__*", check_mode="interval")
+        skip_idx = content.index("exit /b 0")
+        claude_idx = content.index('claude -p "')
+        assert skip_idx < claude_idx, (
+            "the active-window skip-exit must appear BEFORE the claude -p "
+            "invocation in the generated script — otherwise a skipped "
+            "check wouldn't actually save any cost at all"
+        )
+
+
+class TestInstallWrapperScriptForwardsWindowParams:
+
+    def test_forwards_check_mode_and_window_to_content(self, tmp_path):
+        target = tmp_path / "wrapper_dir"
+        path = tqa.install_wrapper_script(
+            target, "x.json", "mcp__ai-prowler__*",
+            check_mode="interval", active_days=["mon", "wed", "fri"],
+            active_start_time="08:00", active_end_time="18:00")
+        content = path.read_text(encoding="utf-8")
+        assert "active-window self-gate" in content
+        assert "08:00" in content and "18:00" in content
+        assert "'mon','wed','fri'" in content.replace(" ", "")
+
+
 def test_wrapper_script_includes_sms_notify_instruction_when_enabled():
     content = tqa.build_wrapper_script_content(
         "x.json", "mcp__ai-prowler__*", notify_on_complete=True, notify_method="sms")

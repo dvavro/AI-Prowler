@@ -455,6 +455,96 @@ class TestBuildTaskPrompt:
         assert "attachment_path" in prompt
 
 
+class TestOutputSelectionCombinations:
+    """v8.1.12: covers every valid combination of the three output
+    selections (Learnings / Document / Email — at least one required, so
+    all-False is excluded and covered separately by
+    TestOutputRequiredValidation) and specifically verifies the
+    'completion learning' instruction only appears when output_learnings
+    is True. Regression coverage for a real bug: that instruction used to
+    fire whenever output_report or output_email was True, REGARDLESS of
+    output_learnings — so unchecking 'Save key insights to Learnings'
+    didn't actually stop a learning from being recorded, confirmed to have
+    happened in practice on a real task."""
+
+    COMPLETION_PHRASE = "record a completion learning"
+    INSIGHTS_PHRASE = "record key insights as learnings"
+
+    def _prompt_for(self, learnings, report, email):
+        import custom_tasks_manager as ctm
+        task = ctm.create_task(
+            label="T", prompt="Analyze.",
+            output_learnings=learnings, output_report=report,
+            output_email=email)
+        return ctm.build_task_prompt(task).lower()
+
+    # ── Learnings ON: completion learning should fire whenever there's
+    # something else (report/email) to note the location of ──────────────
+
+    def test_learnings_only(self):
+        p = self._prompt_for(True, False, False)
+        assert self.INSIGHTS_PHRASE in p
+        assert self.COMPLETION_PHRASE not in p  # nothing else to "note"
+
+    def test_learnings_and_report(self):
+        p = self._prompt_for(True, True, False)
+        assert self.INSIGHTS_PHRASE in p
+        assert self.COMPLETION_PHRASE in p
+
+    def test_learnings_and_email(self):
+        p = self._prompt_for(True, False, True)
+        assert self.INSIGHTS_PHRASE in p
+        assert self.COMPLETION_PHRASE in p
+
+    def test_learnings_and_report_and_email(self):
+        p = self._prompt_for(True, True, True)
+        assert self.INSIGHTS_PHRASE in p
+        assert self.COMPLETION_PHRASE in p
+
+    # ── Learnings OFF: no learning of any kind should ever be requested,
+    # regardless of what else is selected — this is the actual bug fix ────
+
+    def test_report_only_no_learnings_requested(self):
+        p = self._prompt_for(False, True, False)
+        assert self.INSIGHTS_PHRASE not in p
+        assert self.COMPLETION_PHRASE not in p
+        assert "record_learning" not in p
+
+    def test_email_only_no_learnings_requested(self):
+        p = self._prompt_for(False, False, True)
+        assert self.INSIGHTS_PHRASE not in p
+        assert self.COMPLETION_PHRASE not in p
+        assert "record_learning" not in p
+
+    def test_report_and_email_no_learnings_requested(self):
+        # This is the exact combination ("Check NSB": Document + Email,
+        # Learnings unchecked) that triggered the real bug.
+        p = self._prompt_for(False, True, True)
+        assert self.INSIGHTS_PHRASE not in p
+        assert self.COMPLETION_PHRASE not in p
+        assert "record_learning" not in p
+        # The actual deliverables must still be requested correctly —
+        # fixing the learnings leak shouldn't have broken these.
+        assert "save_analysis_report" in p
+        assert "send_email" in p
+        assert "attachment_path" in p
+
+
+class TestOutputRequiredValidation:
+    """The all-outputs-False case is rejected by create_task() itself
+    (see TestScheduleChangeRecomputesNextDue-adjacent validation tests
+    elsewhere), so it's not reachable through build_task_prompt() via the
+    normal create_task() path — covered here for completeness against a
+    hand-built legacy-style dict, matching test_TC_CTASK_006's approach."""
+
+    def test_all_three_false_rejected_by_create_task(self):
+        import custom_tasks_manager as ctm
+        with pytest.raises(ValueError, match="At least one output"):
+            ctm.create_task(label="T", prompt="Analyze.",
+                             output_learnings=False, output_report=False,
+                             output_email=False)
+
+
 # ---------------------------------------------------------------------------
 # TC-CTASK-007  tasks_to_queue_entries
 # ---------------------------------------------------------------------------

@@ -50,7 +50,11 @@ class TestScheduleChangeRecomputesNextDue:
                               first_due="2026-06-23")
         assert ok is True
         assert tasks[0]["schedule"] == "daily"
-        assert tasks[0]["next_due"] == "2026-06-23"
+        # v8.1.13: "daily" now produces a datetime next_due (date + the
+        # default daily_start_time, since none was passed here) rather
+        # than a bare date — this fixture has no daily_start_time key, so
+        # it falls back to the documented default of "09:00".
+        assert tasks[0]["next_due"] == "2026-06-23T09:00:00"
 
     def test_changing_first_due_to_earlier_date_takes_effect(self, ctm):
         # Old bug: a first_due EARLIER than the stored next_due was

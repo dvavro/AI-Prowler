@@ -28,6 +28,7 @@ never does).
 from __future__ import annotations
 import json
 import os
+import getpass
 import re
 import shutil
 import subprocess
@@ -108,7 +109,7 @@ QUEUE_RUNNER_PROMPT = (
 
 DEFAULT_CONFIG = {
     "enabled": False,
-    "schedule_time": "06:00",     # 24h HH:MM, daily trigger
+    "schedule_time": "06:00",     # 24h HH:MM, used when check_mode == "daily"
     "allowed_tools": "mcp__ai-prowler__*,WebSearch,WebFetch",
     "mcp_config_path": "",         # filled in by the GUI at Enable time
     "install_dir": "",             # filled in by the GUI at Enable time
@@ -119,7 +120,25 @@ DEFAULT_CONFIG = {
                                     # metered billing, no expiry/refresh risk). See
                                     # spec §5.3 for the tradeoff — this does NOT affect
                                     # agentic tool access, only billing + reliability.
+
+    # v8.1.13: independently configurable check frequency + active window.
+    # This is DELIBERATELY decoupled from any individual custom task's own
+    # schedule (daily/weekly/hourly/etc.) — a task's schedule only decides
+    # WHETHER it's due; these fields decide how often the checker itself
+    # wakes up to look, and when during the day/week it's allowed to.
+    # Default reproduces prior behavior exactly: daily, at schedule_time,
+    # every day of the week, no time-of-day restriction — existing saved
+    # configs (which predate these keys) get these via the load_config()
+    # merge and see zero behavior change until explicitly customized.
+    "check_mode": "daily",          # "daily" or "interval"
+    "check_interval_hours": 1,      # only used when check_mode == "interval"
+    "active_days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+    "active_start_time": "00:00",   # only enforced when check_mode == "interval"
+    "active_end_time": "23:59",     # only enforced when check_mode == "interval"
 }
+
+VALID_CHECK_MODES = frozenset({"daily", "interval"})
+VALID_DAY_CODES = frozenset({"mon", "tue", "wed", "thu", "fri", "sat", "sun"})
 
 
 # ── Config I/O ───────────────────────────────────────────────────────────
@@ -168,7 +187,11 @@ def build_wrapper_script_content(mcp_config_path: str, allowed_tools: str,
                                   notify_on_complete: bool = False,
                                   notify_method: str = "sms",
                                   use_api_key: bool = False,
-                                  install_dir: str = "") -> str:
+                                  install_dir: str = "",
+                                  check_mode: str = "daily",
+                                  active_days: list | None = None,
+                                  active_start_time: str = "00:00",
+                                  active_end_time: str = "23:59") -> str:
     """Returns the .bat content. Kept as a pure function (no file I/O) so
     it's independently unit-testable — see test_task_queue_automation.py.
 
@@ -201,7 +224,71 @@ def build_wrapper_script_content(mcp_config_path: str, allowed_tools: str,
     install_dir is not provided (e.g. an old caller not yet updated),
     falls back to %USERPROFILE% to preserve prior (broken) behavior rather
     than guessing wrong.
+
+    check_mode/active_days/active_start_time/active_end_time (v8.1.13):
+    the checker's own frequency (set via check_mode + the OS trigger
+    install_scheduled_task() creates) and active window are DELIBERATELY
+    independent of any individual custom task's own schedule — this is
+    about when the CHECKER wakes up at all, not whether any given task is
+    due. active_days always applies (both modes); active_start_time/
+    active_end_time are only enforced in "interval" mode — in "daily"
+    mode, schedule_time itself already IS the single trigger point, so an
+    additional time-window check would be redundant (and could only ever
+    contradict schedule_time, never usefully narrow it). If the check
+    lands outside the active window, the script exits immediately, before
+    ever invoking `claude -p` — zero cost for a skipped check, not just a
+    fast failure.
     """
+    active_days = active_days if active_days is not None else list(DEFAULT_CONFIG["active_days"])
+    _days_py_list = "{" + ",".join(f"'{d}'" for d in active_days) + "}"
+
+    if check_mode == "interval":
+        # Single Python one-liner does the whole window check and prints
+        # RUN or SKIP — far more robust than parsing %DATE%/%TIME% in batch,
+        # which is locale-dependent and has bitten this project before.
+        _window_check_py = (
+            "import datetime as _d; "
+            "_n = _d.datetime.now(); "
+            "_day = _n.strftime('%a').lower()[:3]; "
+            "_t = _n.strftime('%H:%M'); "
+            f"_days = {_days_py_list}; "
+            f"print('RUN' if (_day in _days and '{active_start_time}' <= _t <= '{active_end_time}') else 'SKIP')"
+        )
+        window_check_block = f"""REM v8.1.13: active-window self-gate. The OS-level trigger (installed by
+REM install_scheduled_task()) just fires every check_interval_hours hours,
+REM around the clock — day-of-week and time-of-day filtering happen HERE
+REM instead, so a check outside the configured window exits before ever
+REM invoking claude -p (zero cost), rather than the OS trigger trying to
+REM express "every N hours, but only Mon-Fri, only 7am-10pm" directly,
+REM which schtasks.exe's simple CLI can't cleanly do.
+for /f "delims=" %%R in ('python -c "{_window_check_py}"') do set AIP_WINDOW_CHECK=%%R
+if not "%AIP_WINDOW_CHECK%"=="RUN" (
+    echo {{"result": "Skipped — outside configured active window (day/time restriction)."}} > "%USERPROFILE%\\.ai-prowler\\last_headless_run.json"
+    exit /b 0
+)
+
+"""
+    else:
+        # Daily mode: schedule_time IS the single trigger point (set via
+        # /st on the OS trigger) — only active_days needs checking here,
+        # never a time window, which would only ever contradict it.
+        _window_check_py = (
+            "import datetime as _d; "
+            "_day = _d.datetime.now().strftime('%a').lower()[:3]; "
+            f"_days = {_days_py_list}; "
+            "print('RUN' if _day in _days else 'SKIP')"
+        )
+        window_check_block = f"""REM v8.1.13: active-days self-gate (daily mode). schedule_time already
+REM pins the single time-of-day this fires (via the OS trigger) — only
+REM day-of-week needs checking here, e.g. for a "weekdays only" setup.
+for /f "delims=" %%R in ('python -c "{_window_check_py}"') do set AIP_WINDOW_CHECK=%%R
+if not "%AIP_WINDOW_CHECK%"=="RUN" (
+    echo {{"result": "Skipped — today is not in the configured active days."}} > "%USERPROFILE%\\.ai-prowler\\last_headless_run.json"
+    exit /b 0
+)
+
+"""
+
     notify_clause = ""
     if notify_on_complete:
         tool = "send_whatsapp" if notify_method == "whatsapp" else "send_sms"
@@ -264,7 +351,7 @@ REM Auto-generated by task_queue_automation.py — do not edit by hand.
 REM Runs AI-Prowler's pending analysis task queue unattended via Claude
 REM Code headless mode. See the architecture spec for design rationale.
 
-REM v8.1.10 fix: MUST cd into the AI-Prowler app directory, not
+{window_check_block}REM v8.1.10 fix: MUST cd into the AI-Prowler app directory, not
 REM %USERPROFILE% — the /ai-prowler-run-queue slash command is defined by
 REM .claude/skills/ai-prowler-tasks/SKILL.md, and Claude Code only
 REM discovers project-level skills/commands from the current working
@@ -289,7 +376,11 @@ def install_wrapper_script(target_dir: Path, mcp_config_path: str, allowed_tools
                             notify_on_complete: bool = False,
                             notify_method: str = "sms",
                             use_api_key: bool = False,
-                            install_dir: str = "") -> Path:
+                            install_dir: str = "",
+                            check_mode: str = "daily",
+                            active_days: list | None = None,
+                            active_start_time: str = "00:00",
+                            active_end_time: str = "23:59") -> Path:
     """Writes the wrapper script into target_dir. Caller decides target_dir —
     the GUI passes ~/.ai-prowler/ (NOT the install directory) so this never
     needs write access to C:\\Program Files\\AI-Prowler.
@@ -298,13 +389,19 @@ def install_wrapper_script(target_dir: Path, mcp_config_path: str, allowed_tools
     — the directory the generated .bat should `cd` into before invoking
     `claude -p`, i.e. wherever THIS AI-Prowler is actually running from
     (contains .claude/skills/ai-prowler-tasks/SKILL.md). See that
-    function's docstring for why this is required (v8.1.10 fix)."""
+    function's docstring for why this is required (v8.1.10 fix).
+
+    check_mode/active_days/active_start_time/active_end_time (v8.1.13):
+    forwarded straight through to build_wrapper_script_content() — see
+    that function's docstring for the full rationale."""
     target_dir.mkdir(parents=True, exist_ok=True)
     script_path = target_dir / WRAPPER_SCRIPT_NAME
     script_path.write_text(
         build_wrapper_script_content(mcp_config_path, allowed_tools,
                                       notify_on_complete, notify_method,
-                                      use_api_key, install_dir),
+                                      use_api_key, install_dir,
+                                      check_mode, active_days,
+                                      active_start_time, active_end_time),
         encoding="utf-8")
     return script_path
 
@@ -1075,6 +1172,90 @@ def open_setup_token_terminal() -> tuple[bool, str]:
 
 
 
+def get_scheduled_task_display_info() -> dict:
+    """v8.1.14: real, OS-level truth about the actual armed Windows
+    Scheduled Task — not what the GUI's config file says should be true,
+    but what schtasks itself reports right now. Built specifically so the
+    Autonomous AI Task Queue panel can show David what's actually armed
+    rather than just echoing back the text field he typed into, and so
+    Toggle Off can be visually confirmed as genuinely having disarmed the
+    real task, not just flipped a local config flag.
+
+    Returns a dict:
+        exists:   bool
+        enabled:  bool | None (None if it doesn't exist)
+        schedule_type: str | None  ("Daily", "Hourly", etc. as schtasks
+                       itself reports it)
+        start_time: str | None    ("Start Time" field, HH:MM:SS as
+                       schtasks reports it)
+        repeat_every: str | None  ("Repeat: Every" field, when present —
+                       only set for interval/hourly-mode tasks)
+        next_run_time: str | None ("Next Run Time" field)
+        display: str               a single human-readable summary line,
+                       ready to drop straight into the GUI, e.g.
+                       "🟢 Armed — Daily at 6:00 AM (next: 7/27/2026 6:00 AM)"
+                       or "🔴 Not armed" if disabled/missing.
+    """
+    info = {
+        "exists": False, "enabled": None, "schedule_type": None,
+        "start_time": None, "repeat_every": None, "next_run_time": None,
+        "display": "🔴 Not armed",
+    }
+    r = subprocess.run(
+        ["schtasks", "/query", "/tn", SCHEDULED_TASK_NAME, "/v", "/fo", "list"],
+        capture_output=True, text=True)
+    if r.returncode != 0:
+        return info
+
+    info["exists"] = True
+    field_map = {
+        "scheduled task state": "enabled",
+        "schedule type": "schedule_type",
+        "start time": "start_time",
+        "next run time": "next_run_time",
+    }
+    for raw_line in r.stdout.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        # "Repeat: Every:" is a genuine schtasks.exe output quirk — the
+        # field NAME itself contains a colon, so a naive single-split on
+        # ":" would incorrectly parse "Repeat" as the key and "Every:  2
+        # Hour(s)..." as the value. Handle this one field explicitly.
+        if line.lower().startswith("repeat: every:"):
+            value = line.split(":", 2)[2].strip()
+            if value:
+                info["repeat_every"] = value
+            continue
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key = key.strip().lower()
+        value = value.strip()
+        if key not in field_map or not value:
+            continue
+        dest = field_map[key]
+        if dest == "enabled":
+            info["enabled"] = (value.lower() == "enabled")
+        else:
+            info[dest] = value
+
+    if not info["enabled"]:
+        info["display"] = "🔴 Not armed" + (" (disabled)" if info["enabled"] is False else "")
+        return info
+
+    if info["repeat_every"] and info["repeat_every"] not in ("Disabled", ""):
+        cadence = f"every {info['repeat_every']}"
+    elif info["start_time"]:
+        cadence = f"{info['schedule_type'] or 'Daily'} at {info['start_time']}"
+    else:
+        cadence = info["schedule_type"] or "scheduled"
+
+    next_run = f" (next: {info['next_run_time']})" if info["next_run_time"] else ""
+    info["display"] = f"🟢 Armed — {cadence}{next_run}"
+    return info
+
+
 def scheduled_task_exists() -> bool:
     r = subprocess.run(["schtasks", "/query", "/tn", SCHEDULED_TASK_NAME],
                         capture_output=True, text=True)
@@ -1102,15 +1283,60 @@ def scheduled_task_enabled() -> bool | None:
 
 
 def install_scheduled_task(wrapper_script_path: Path, schedule_time: str,
-                            enabled: bool = True) -> tuple[bool, str]:
+                            enabled: bool = True,
+                            check_mode: str = "daily",
+                            check_interval_hours: int = 1,
+                            run_as_user: str = None) -> tuple[bool, str]:
     """Creates (or replaces) the Scheduled Task. `enabled=False` creates it
     DISABLED — used by the test harness below to prove the mechanism works
-    without leaving anything live."""
+    without leaving anything live.
+
+    v8.1.13: check_mode/check_interval_hours control the OS-level trigger
+    type. "daily" (default, matches all prior behavior) fires once a day
+    at schedule_time. "interval" fires every check_interval_hours hours,
+    around the clock — day-of-week and time-of-day restrictions for
+    interval mode are DELIBERATELY NOT expressed here as OS trigger
+    constraints (schtasks.exe's simple CLI can't cleanly combine an hourly
+    repetition with day-of-week + time-window filtering — that requires a
+    full XML task definition). Instead, that filtering happens inside the
+    generated wrapper script itself (see build_wrapper_script_content()'s
+    active-window self-check) — simpler to build correctly and far easier
+    to unit-test as plain string content than to validate real Task
+    Scheduler XML/state.
+
+    v8.1.14 fix: real-world bug report — the checker worked fine while the
+    user was actively logged in, but silently never fired while the
+    screensaver was active / screen locked, even with sleep/hibernate
+    already disabled per the "Keep It Running" guide. Root cause: without
+    an explicit /RU, schtasks.exe creates the task with the "Run only when
+    user is logged on" logon type (INTERACTIVE_TOKEN) — this genuinely can
+    fail to launch its process without an active interactive desktop
+    session, which a locked screen / screensaver doesn't reliably provide,
+    even though the user is technically still logged on. The documented
+    fix is /RU <username> WITHOUT /RP (no stored password) — this switches
+    the task to the S4U logon type ("Run whether user is logged on or
+    not"), which runs in a batch logon session instead of requiring an
+    interactive desktop, and works correctly whether the session is
+    active, locked, or the screensaver is running. run_as_user defaults to
+    the current Windows username (os.environ["USERNAME"]) — the same user
+    whose %USERPROFILE%\\.ai-prowler\\ paths the rest of this module
+    already assumes throughout; S4U still runs as that same user account
+    (just a different logon session type), so every existing path
+    assumption keeps working unchanged.
+    """
+    if run_as_user is None:
+        run_as_user = os.environ.get("USERNAME") or getpass.getuser()
+
+    if check_mode == "interval":
+        sc_args = ["/sc", "hourly", "/mo", str(max(1, int(check_interval_hours)))]
+    else:
+        sc_args = ["/sc", "daily", "/st", schedule_time]
+
     args = [
         "schtasks", "/create", "/tn", SCHEDULED_TASK_NAME,
         "/tr", f'"{wrapper_script_path}"',
-        "/sc", "daily",
-        "/st", schedule_time,
+        *sc_args,
+        "/ru", run_as_user,
         "/f",  # overwrite if it already exists
     ]
     r = subprocess.run(args, capture_output=True, text=True)

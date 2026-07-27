@@ -387,7 +387,28 @@ class TestUpdateAnalysisTask:
                 "c1", schedule="daily", first_due="2026-06-23")
         assert "Updated task" in result
         assert saved["custom"][0]["schedule"] == "daily"
-        assert saved["custom"][0]["next_due"] == "2026-06-23"
+        # v8.1.13: "daily" now produces a datetime next_due (date + the
+        # default daily_start_time of "09:00", since none was passed here).
+        assert saved["custom"][0]["next_due"] == "2026-06-23T09:00:00"
+
+    def test_updates_daily_time_of_day_params(self, mcp):
+        custom_tasks = [{
+            "task_id": "c1", "label": "T", "schedule": "daily",
+            "first_due": "2026-07-26", "next_due": "2026-07-26T09:00:00",
+            "daily_start_time": "09:00", "daily_end_time": "17:00",
+            "daily_times_per_day": 1, "output_learnings": True,
+        }]
+        ctx, saved = self._patch(custom_tasks)
+        with ctx[0], ctx[1]:
+            result = mcp.update_analysis_task(
+                "c1", daily_start_time="08:00", daily_end_time="20:00",
+                daily_times_per_day=3)
+        assert "Updated task" in result
+        assert saved["custom"][0]["daily_start_time"] == "08:00"
+        assert saved["custom"][0]["daily_end_time"] == "20:00"
+        assert saved["custom"][0]["daily_times_per_day"] == 3
+        # Changing daily_* fields resets next_due, same as schedule/first_due.
+        assert saved["custom"][0]["next_due"] == "2026-07-26T08:00:00"
 
     def test_invalid_schedule_rejected(self, mcp):
         ctx, saved = self._patch([{"task_id": "c1", "schedule": "none"}])

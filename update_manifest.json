@@ -1,11 +1,11 @@
 {
-  "version": "8.1.9",
-  "generated": "2026-07-25T12:36:51",
+  "version": "8.1.10",
+  "generated": "2026-07-27T14:41:01",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "c2f3e3443845ff5a046d937704d2d2b5a2caa9eb5dad5b038daf04c50cb39c82",
-      "bytes": 1162957
+      "sha256": "4df682387cc5af6223cbf0b69cb07b9d0852d7f09cf21983a9e8f61324a385df",
+      "bytes": 1184018
     },
     {
       "path": "rag_preprocessor.py",
@@ -14,8 +14,8 @@
     },
     {
       "path": "ai_prowler_mcp.py",
-      "sha256": "d2b26b7c9e0f54cbc8232ab8e1770f12b5598b42c3fc9912d02cbdffe9e47d2a",
-      "bytes": 775698
+      "sha256": "968241af742f6f82f10481226593dcc7c859cd8ae9d504317045bd7b54106939",
+      "bytes": 783728
     },
     {
       "path": "mcp_diagnostics.py",
@@ -59,13 +59,13 @@
     },
     {
       "path": "COMPLETE_USER_GUIDE.md",
-      "sha256": "074081ddc32a61125b86c41f4e5d5915ce3c33bf878fc8c6fa66cd4f27d44f24",
-      "bytes": 158288
+      "sha256": "dfa5bff7d236cdf091d70311c30869e66d2d1ab406d45630a708bd6bf1d81788",
+      "bytes": 162543
     },
     {
       "path": "VERSION",
-      "sha256": "8aee8c43674181a06f337e00b88c0ff959e487f9f5faafad21b8515d2c288f06",
-      "bytes": 6
+      "sha256": "033795d1c138bc887cf1d1780526a5e328aabaf730fbc562f33e3bc3fa01e034",
+      "bytes": 7
     },
     {
       "path": "scope_resolver.py",
@@ -109,8 +109,8 @@
     },
     {
       "path": "custom_tasks_manager.py",
-      "sha256": "a00708c84e42acd08f7374f20ed72b94eab8f233029844d1672d73c61ef81e7f",
-      "bytes": 31882
+      "sha256": "39554d4f0aa2955122b0e625b87eb02abc6e23ebd40fa0458f1968c2138ae90c",
+      "bytes": 46735
     },
     {
       "path": "scheduler_jobs.py",
@@ -124,8 +124,8 @@
     },
     {
       "path": "task_queue_automation.py",
-      "sha256": "6f396c4906c667316f28b9f9c7e2c624c5fe6f337abc267abab38887a06f82a5",
-      "bytes": 54474
+      "sha256": "7cd60b6fbb5b5b9e534e728c0506c04ca1e4cd9b47be1c6a8595581358ef74c9",
+      "bytes": 66197
     },
     {
       "path": ".claude/settings.json",

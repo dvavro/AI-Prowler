@@ -92,7 +92,7 @@ if sys.stderr is None:
 # Single source of truth for the app version. Bump this one line when releasing
 # a new version; all UI labels, About dialogs, help text, and update checks
 # read from here.
-APP_VERSION = "8.1.9"
+APP_VERSION = "8.1.10"
 
 # ── UI feature flags ─────────────────────────────────────────────────────────
 # Toggle visibility of advanced/legacy GUI sections without removing any
@@ -5248,8 +5248,20 @@ or from the Help menu."""
                 ts = _dt_bq.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
                 schedule_key  = settings.get("schedule", "none")
                 first_due_val = settings.get("first_due")
-                next_due_val  = (first_due_val or _dt_bq.date.today().isoformat()) \
-                                if schedule_key != "none" else None
+                _due_anchor   = first_due_val or _dt_bq.date.today().isoformat()
+                # v8.1.14: daily tasks now need a datetime next_due (date +
+                # first run-time slot), same as My Custom AI Analyses —
+                # matches _first_daily_datetime()'s logic exactly.
+                if schedule_key == "daily":
+                    next_due_val = _ctm_bq._first_daily_datetime(
+                        _due_anchor,
+                        settings.get("daily_start_time", "09:00"),
+                        settings.get("daily_end_time", "17:00"),
+                        settings.get("daily_times_per_day", 1))
+                elif schedule_key != "none":
+                    next_due_val = _due_anchor
+                else:
+                    next_due_val = None
 
                 task = {
                     "task_id":          f"{task_def['type']}_{ts}",
@@ -5264,6 +5276,9 @@ or from the Help menu."""
                     "schedule":         schedule_key,
                     "first_due":        first_due_val,
                     "next_due":         next_due_val,
+                    "daily_start_time":    settings.get("daily_start_time", "09:00"),
+                    "daily_end_time":      settings.get("daily_end_time", "17:00"),
+                    "daily_times_per_day": settings.get("daily_times_per_day", 1),
                     "created_at":       _dt_bq.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
                     "status":           "pending",
                 }
@@ -5462,6 +5477,83 @@ or from the Help menu."""
             tk.Label(_sched_row, text='YYYY-MM-DD  (blank = today)',
                      font=('Arial', 7), fg='gray').pack(side='left', padx=(6, 0))
 
+            # v8.1.14: Daily-only time-of-day fields — Start time, End
+            # time (only meaningful/used when Times/day > 1), and Times
+            # per day (1-24, "24 times/day 00:00-23:00" is how Hourly
+            # ends up expressed — no separate Hourly schedule). Extended
+            # here to match My Custom AI Analyses exactly — previously
+            # Common Business Analysis tasks had no time-of-day
+            # granularity at all when Daily was selected. Both dialogs
+            # call custom_tasks_manager.format_daily_run_times_preview()
+            # for the live "Runs at: ..." line so they can never drift
+            # out of sync with each other.
+            _daily_row = tk.Frame(_pad)
+            tk.Label(_daily_row, text="Start time:",
+                     font=('Arial', 9, 'bold')).pack(side='left')
+            _daily_start_var = tk.StringVar(value=saved.get("daily_start_time", "09:00"))
+            ttk.Entry(_daily_row, textvariable=_daily_start_var, width=6).pack(
+                side='left', padx=(4, 16))
+            tk.Label(_daily_row, text="End time:",
+                     font=('Arial', 9, 'bold')).pack(side='left')
+            _daily_end_var = tk.StringVar(value=saved.get("daily_end_time", "17:00"))
+            ttk.Entry(_daily_row, textvariable=_daily_end_var, width=6).pack(
+                side='left', padx=(4, 16))
+            tk.Label(_daily_row, text="Times per day:",
+                     font=('Arial', 9, 'bold')).pack(side='left')
+            _daily_times_var = tk.StringVar(value=str(saved.get("daily_times_per_day", 1)))
+            ttk.Entry(_daily_row, textvariable=_daily_times_var, width=4).pack(
+                side='left', padx=(4, 0))
+            tk.Label(_daily_row, text="HH:MM, max 24/day",
+                     font=('Arial', 7), fg='gray').pack(side='left', padx=(6, 0))
+
+            _daily_preview_var = tk.StringVar(value="")
+            _daily_preview_lbl = tk.Label(_pad, textvariable=_daily_preview_var,
+                                           font=('Arial', 8), fg='#5a7a9a')
+
+            def _update_daily_preview_builtin(*_a):
+                _daily_preview_var.set(_ctm_q.format_daily_run_times_preview(
+                    _daily_start_var.get().strip(), _daily_end_var.get().strip(),
+                    _daily_times_var.get().strip() or "1"))
+            _daily_start_var.trace_add('write', _update_daily_preview_builtin)
+            _daily_end_var.trace_add('write', _update_daily_preview_builtin)
+            _daily_times_var.trace_add('write', _update_daily_preview_builtin)
+            _update_daily_preview_builtin()
+
+            # v8.1.14: the credit-usage note only matters when there's
+            # actually more than one run/day to warn about — a once-daily
+            # or weekly task barely costs anything, so showing this
+            # unconditionally overstated the concern. Now only visible
+            # when schedule == "daily" AND times/day > 1, matching the
+            # My Custom AI Analyses editor exactly. Static GUI text, not
+            # something Claude says in chat.
+            _credit_warn_lbl = tk.Label(
+                _pad,
+                text='⚠️ If the Autonomous AI Task Queue is enabled, '
+                     'each automatic check uses Claude subscription '
+                     'usage credits.',
+                font=('Arial', 8), fg='#b8860b',
+                wraplength=728, justify='left')
+
+            def _update_daily_row_visibility_builtin():
+                _k = _sched_lbl_to_key.get(_sched_var.get(), 'none')
+                if _k == 'daily':
+                    _daily_row.pack(fill='x', pady=(2, 2), after=_sched_row)
+                    _daily_preview_lbl.pack(anchor='w', pady=(0, 4), after=_daily_row)
+                    try:
+                        _times = int(_daily_times_var.get().strip() or 1)
+                    except ValueError:
+                        _times = 1
+                    if _times > 1:
+                        _credit_warn_lbl.pack(anchor='w', pady=(0, 4), after=_daily_preview_lbl)
+                    else:
+                        _credit_warn_lbl.pack_forget()
+                else:
+                    _daily_row.pack_forget()
+                    _daily_preview_lbl.pack_forget()
+                    _credit_warn_lbl.pack_forget()
+            _daily_times_var.trace_add('write',
+                                        lambda *a: _update_daily_row_visibility_builtin())
+
             def _on_sched_change(e=None):
                 _k = _sched_lbl_to_key.get(_sched_var.get(), 'none')
                 if _k == 'none':
@@ -5472,6 +5564,7 @@ or from the Help menu."""
                     if not _due_var.get():
                         import datetime as _dt2
                         _due_var.set(_dt2.date.today().isoformat())
+                _update_daily_row_visibility_builtin()
             _sched_combo.bind('<<ComboboxSelected>>', _on_sched_change)
             # Match the entry's enabled/disabled state to the PRE-FILLED
             # schedule (not always-disabled like the old "always Manual
@@ -5539,6 +5632,30 @@ or from the Help menu."""
                     "At least one output must be selected: Learnings, Document, or Email.")
                 return
 
+            # v8.1.14: same daily time-of-day validation custom tasks get
+            # from create_task()/update_task() — this built-in path has no
+            # equivalent backend function, so it's checked here too.
+            daily_start_val = _daily_start_var.get().strip() or "09:00"
+            daily_end_val   = _daily_end_var.get().strip() or "17:00"
+            try:
+                daily_times_val = max(1, int(_daily_times_var.get().strip() or 1))
+            except ValueError:
+                messagebox.showwarning(
+                    "Validation Error", "Times per day must be a whole number.")
+                return
+            if schedule_key == "daily":
+                if not (1 <= daily_times_val <= _ctm_q.MAX_DAILY_TIMES_PER_DAY):
+                    messagebox.showwarning(
+                        "Validation Error",
+                        f"Times per day must be between 1 and "
+                        f"{_ctm_q.MAX_DAILY_TIMES_PER_DAY}.")
+                    return
+                if daily_times_val > 1 and daily_end_val <= daily_start_val:
+                    messagebox.showwarning(
+                        "Validation Error",
+                        "End time must be after start time when times per day > 1.")
+                    return
+
             new_settings = {
                 "scope_dirs":       scope_dirs,
                 "output_learnings": _learn_var.get(),
@@ -5547,6 +5664,9 @@ or from the Help menu."""
                 "report_folder":    _folder_var.get().strip() or _ctm_q.DEFAULT_REPORT_FOLDER,
                 "schedule":         schedule_key,
                 "first_due":        first_due_val,
+                "daily_start_time":    daily_start_val,
+                "daily_end_time":      daily_end_val,
+                "daily_times_per_day": daily_times_val,
             }
             _ctm_q.save_builtin_analysis_settings(task_def["type"], new_settings)
             self.status_var.set(f"✅ Settings saved for {task_def['label']}")
@@ -5639,6 +5759,8 @@ or from the Help menu."""
                 badges.append("💡 Learnings")
             if settings.get("output_report", False):
                 badges.append("📄 Report")
+            if settings.get("output_email", False):
+                badges.append("✉️ Email")
             if settings.get("scope_dirs"):
                 _n = len(settings["scope_dirs"])
                 badges.append(f"📁 {_n} dir{'s' if _n != 1 else ''}")
@@ -6057,6 +6179,8 @@ or from the Help menu."""
                 out_txt.append("💡 Learnings")
             if task.get("output_report", False):
                 out_txt.append("📄 Report")
+            if task.get("output_email", False):
+                out_txt.append("✉️ Email")
             if out_txt:
                 tk.Label(info,
                          text="  ".join(out_txt),
@@ -6316,6 +6440,94 @@ or from the Help menu."""
             tk.Label(sched_row, text="YYYY-MM-DD",
                      font=('Arial', 7), fg='gray').pack(side='left', padx=(4, 0))
 
+            # v8.1.13: Daily-only time-of-day fields — Start time, End
+            # time (only meaningful/used when Times/day > 1), and Times
+            # per day (1-24, "24 times/day 00:00-23:00" is how Hourly
+            # ends up expressed — no separate Hourly schedule).
+            # v8.1.14: extended to the Common Business Analysis Configure
+            # dialog too, using the exact same fields/behavior — no longer
+            # Custom-only. Both dialogs call
+            # custom_tasks_manager.format_daily_run_times_preview() for
+            # the live "Runs at: ..." line so they can never drift out of
+            # sync with each other on what a given combination produces.
+            daily_row = tk.Frame(pad)
+            tk.Label(daily_row, text="Start time:",
+                     font=('Arial', 9, 'bold')).pack(side='left')
+            daily_start_var = tk.StringVar(
+                value=existing_task.get("daily_start_time", "09:00")
+                if existing_task else "09:00")
+            ttk.Entry(daily_row, textvariable=daily_start_var, width=6).pack(
+                side='left', padx=(4, 16))
+            tk.Label(daily_row, text="End time:",
+                     font=('Arial', 9, 'bold')).pack(side='left')
+            daily_end_var = tk.StringVar(
+                value=existing_task.get("daily_end_time", "17:00")
+                if existing_task else "17:00")
+            ttk.Entry(daily_row, textvariable=daily_end_var, width=6).pack(
+                side='left', padx=(4, 16))
+            tk.Label(daily_row, text="Times per day:",
+                     font=('Arial', 9, 'bold')).pack(side='left')
+            daily_times_var = tk.StringVar(
+                value=str(existing_task.get("daily_times_per_day", 1))
+                if existing_task else "1")
+            ttk.Entry(daily_row, textvariable=daily_times_var, width=4).pack(
+                side='left', padx=(4, 0))
+            tk.Label(daily_row, text="HH:MM, max 24/day",
+                     font=('Arial', 7), fg='gray').pack(side='left', padx=(6, 0))
+
+            # v8.1.14: live "what does this actually produce" preview —
+            # updates on every keystroke in any of the three fields above,
+            # so the user sees the real computed result, not just the raw
+            # inputs. Empty string (nothing shown) for invalid/mid-typing
+            # input rather than an error.
+            daily_preview_var = tk.StringVar(value="")
+            daily_preview_lbl = tk.Label(pad, textvariable=daily_preview_var,
+                                          font=('Arial', 8), fg='#5a7a9a')
+
+            def _update_daily_preview(*_a):
+                daily_preview_var.set(_ctm.format_daily_run_times_preview(
+                    daily_start_var.get().strip(), daily_end_var.get().strip(),
+                    daily_times_var.get().strip() or "1"))
+            daily_start_var.trace_add('write', _update_daily_preview)
+            daily_end_var.trace_add('write', _update_daily_preview)
+            daily_times_var.trace_add('write', _update_daily_preview)
+            _update_daily_preview()
+
+            # v8.1.14: the credit-usage note only matters when there's
+            # actually more than one run/day to warn about — a once-daily
+            # or weekly task barely costs anything, so showing this
+            # unconditionally overstated the concern. Now only visible
+            # when schedule == "daily" AND times/day > 1. Static GUI text,
+            # not something Claude says in chat.
+            credit_warn_lbl = tk.Label(
+                pad,
+                text='⚠️ If the Autonomous AI Task Queue is enabled, '
+                     'each automatic check uses Claude subscription '
+                     'usage credits.',
+                font=('Arial', 8), fg='#b8860b',
+                wraplength=728, justify='left')
+
+            def _update_daily_row_visibility(event=None):
+                _k = _sched_label_to_key.get(sched_combo.get(), 'none')
+                if _k == 'daily':
+                    daily_row.pack(fill='x', pady=(0, 2), after=sched_row)
+                    daily_preview_lbl.pack(anchor='w', pady=(0, 8), after=daily_row)
+                    try:
+                        _times = int(daily_times_var.get().strip() or 1)
+                    except ValueError:
+                        _times = 1
+                    if _times > 1:
+                        credit_warn_lbl.pack(anchor='w', pady=(0, 8), after=daily_preview_lbl)
+                    else:
+                        credit_warn_lbl.pack_forget()
+                else:
+                    daily_row.pack_forget()
+                    daily_preview_lbl.pack_forget()
+                    credit_warn_lbl.pack_forget()
+            sched_combo.bind('<<ComboboxSelected>>', _update_daily_row_visibility, add='+')
+            daily_times_var.trace_add('write', _update_daily_row_visibility)
+            _update_daily_row_visibility()
+
             # Output options
             tk.Label(pad, text="Output:", font=('Arial', 9, 'bold'),
                      anchor='w').pack(anchor='w')
@@ -6386,7 +6598,10 @@ or from the Help menu."""
                             output_learnings=learn_var.get(),
                             output_report=report_var.get(),
                             output_email=email_var.get(),
-                            report_folder=folder_var.get().strip()
+                            report_folder=folder_var.get().strip(),
+                            daily_start_time=daily_start_var.get().strip(),
+                            daily_end_time=daily_end_var.get().strip(),
+                            daily_times_per_day=int(daily_times_var.get().strip() or 1),
                         )
                     else:
                         # MAX_CUSTOM_TASKS is enforced inside create_task()
@@ -6404,7 +6619,10 @@ or from the Help menu."""
                             output_learnings=learn_var.get(),
                             output_report=report_var.get(),
                             output_email=email_var.get(),
-                            report_folder=folder_var.get().strip()
+                            report_folder=folder_var.get().strip(),
+                            daily_start_time=daily_start_var.get().strip(),
+                            daily_end_time=daily_end_var.get().strip(),
+                            daily_times_per_day=int(daily_times_var.get().strip() or 1),
                         )
                         tasks.append(new_task)
 
@@ -7205,9 +7423,24 @@ or from the Help menu."""
             _tqa_time_var     = tk.StringVar(value=_tqa_cfg.get("schedule_time", "06:00"))
             _tqa_notify_var   = tk.BooleanVar(value=_tqa_cfg.get("notify_on_complete", False))
             _tqa_method_var   = tk.StringVar(value=_tqa_cfg.get("notify_method", "sms"))
+            # v8.1.14: real OS-level "what's actually armed right now"
+            # display — see _tqa_refresh_status_display() below for why
+            # this exists (config file / GUI fields can drift from what
+            # Windows Task Scheduler genuinely has armed).
+            _tqa_armed_var    = tk.StringVar(value="")
 
             def _tqa_refresh_status_display():
-                if _tqa.scheduled_task_exists() and _tqa_cfg.get("enabled"):
+                # v8.1.14 fix: this used to check scheduled_task_exists()
+                # (presence only) plus the LOCAL config's "enabled" flag —
+                # neither of those is the real Windows-reported enabled/
+                # disabled state, so a mismatch between config and reality
+                # (e.g. the real task somehow got disabled outside the
+                # GUI) would silently show the wrong status. Now reads
+                # get_scheduled_task_display_info(), which parses the
+                # actual `schtasks /query /v` output — genuine OS truth,
+                # not an assumption from the config file.
+                _armed_info = _tqa.get_scheduled_task_display_info()
+                if _armed_info["enabled"]:
                     _tqa_status_var.set("● Enabled")
                     _tqa_status_lbl.config(fg='#6ab86a')
                     _tqa_status_lbl2.config(fg='#6ab86a')
@@ -7215,6 +7448,14 @@ or from the Help menu."""
                     _tqa_status_var.set("● Disabled")
                     _tqa_status_lbl.config(fg='#aa4444')
                     _tqa_status_lbl2.config(fg='#aa4444')
+                # v8.1.14: the actual currently-armed Windows Scheduled
+                # Task cadence, in plain language — "🟢 Armed — Daily at
+                # 06:00:00 (next: ...)" or "🔴 Not armed" — so it's
+                # visually obvious whether real MS auto-runs are actually
+                # scheduled, not just what the GUI's own fields say.
+                _tqa_armed_var.set(_armed_info["display"])
+                _tqa_armed_lbl.config(
+                    fg='#6ab86a' if _armed_info["enabled"] else '#aa4444')
                 _last = _tqa.load_last_run()
                 if _last:
                     _tqa_last_run_var.set(
@@ -7268,6 +7509,56 @@ or from the Help menu."""
                      font=('Arial', 9)).pack(side='left', padx=(4, 2))
             tk.Label(_tqa_row1, text="(24h HH:MM, daily)", bg='#1a1e2e', fg='#6a7a9a',
                      font=('Arial', 8)).pack(side='left', padx=(0, 8))
+
+            # v8.1.13: independently-configurable checker frequency — how
+            # often the Autonomous AI Task Queue itself wakes up to look
+            # for due work, DECOUPLED from any individual task's own
+            # schedule. 1 = classic once-daily at Scheduled time above
+            # (unchanged default). >1 switches the underlying Windows
+            # trigger to an hourly-interval one (check_mode="interval",
+            # check_interval_hours = round(24 / times_per_day)) — Scheduled
+            # time above is then only used as history, the interval trigger
+            # runs around the clock. Static GUI warning, not something
+            # Claude says in chat — same "if they set it for 10 times per
+            # day" scenario David asked to have flagged right here.
+            def _tqa_times_per_day_to_interval_hours(n):
+                n = max(1, int(n))
+                return max(1, round(24 / n))
+
+            _initial_check_mode = _tqa_cfg.get("check_mode", "daily")
+            _initial_interval_hrs = _tqa_cfg.get("check_interval_hours", 1)
+            _initial_times_per_day = (
+                1 if _initial_check_mode != "interval"
+                else max(1, round(24 / max(1, int(_initial_interval_hrs))))
+            )
+            _tqa_times_per_day_var = tk.StringVar(value=str(_initial_times_per_day))
+
+            tk.Label(_tqa_row1, text="Check queue:", bg='#1a1e2e', fg='#a0a8cc',
+                     font=('Arial', 9)).pack(side='left', padx=(8, 0))
+            tk.Entry(_tqa_row1, textvariable=_tqa_times_per_day_var, width=3,
+                     font=('Arial', 9)).pack(side='left', padx=(4, 2))
+            tk.Label(_tqa_row1, text="times/day", bg='#1a1e2e', fg='#6a7a9a',
+                     font=('Arial', 8)).pack(side='left', padx=(0, 4))
+
+            _tqa_credit_warn_var = tk.StringVar(value="")
+            _tqa_credit_warn_lbl = tk.Label(
+                _tqa_row1, textvariable=_tqa_credit_warn_var, bg='#1a1e2e',
+                fg='#cc8800', font=('Arial', 8, 'bold'))
+            _tqa_credit_warn_lbl.pack(side='left', padx=(4, 8))
+
+            def _tqa_update_credit_warning(*_a):
+                try:
+                    n = max(1, int(_tqa_times_per_day_var.get().strip() or 1))
+                except ValueError:
+                    n = 1
+                if n > 1:
+                    _tqa_credit_warn_var.set(
+                        f"⚠️ {n}x/day uses Claude subscription usage credits "
+                        f"each check")
+                else:
+                    _tqa_credit_warn_var.set("")
+            _tqa_times_per_day_var.trace_add('write', _tqa_update_credit_warning)
+            _tqa_update_credit_warning()
             # v8.1.9 fix: _tqa_save_and_apply() reinstalls the Windows
             # Scheduled Task with whatever's currently in the time field
             # every time it runs while automation is enabled — but it was
@@ -7278,10 +7569,30 @@ or from the Help menu."""
             # bug). This button calls the exact same apply function
             # directly, without touching the enabled/disabled state, so
             # a time-only change takes effect immediately either way.
+            # v8.1.14: give visible confirmation that clicking Apply
+            # actually did something — briefly flash the button green,
+            # then restore its normal appearance. Purely cosmetic
+            # feedback; the actual effect is _tqa_refresh_status_display()
+            # updating the armed-schedule line right below it.
+            def _tqa_flash_apply_success(btn):
+                try:
+                    _orig_style = btn.cget('style') or 'TButton'
+                except Exception:
+                    _orig_style = 'TButton'
+                _flash_style = 'AppliedFlash.TButton'
+                try:
+                    ttk.Style().configure(_flash_style, background='#2e7d32',
+                                           foreground='white')
+                    btn.configure(style=_flash_style)
+                    self.root.after(900, lambda: btn.configure(style=_orig_style))
+                except Exception:
+                    pass
+
             def _tqa_apply_time_only():
                 _tqa_save_and_apply()
                 _tqa_update_enable_btn_label()
                 _tqa_refresh_status_display()
+                _tqa_flash_apply_success(_tqa_btn_apply_time)
             _tqa_btn_apply_time = ttk.Button(
                 _tqa_row1, text="💾 Apply", command=_tqa_apply_time_only)
             _tqa_btn_apply_time.pack(side='left')
@@ -7303,6 +7614,21 @@ or from the Help menu."""
                                          bg='#1a1e2e', fg='#aa4444',
                                          font=('Arial', 9, 'bold'))
             _tqa_status_lbl2.pack(side='left', padx=(12, 0))
+
+            # v8.1.14: dedicated row showing the real, OS-level armed
+            # schedule — "🟢 Armed — Daily at 06:00:00 (next: 7/27/2026
+            # 6:00:00 AM)" or "🔴 Not armed". This is what David asked
+            # for: visual confirmation of what Windows Task Scheduler
+            # itself currently has armed, refreshed by
+            # _tqa_refresh_status_display() after every Apply and every
+            # Toggle On/Off, not just what the GUI's own fields say.
+            _tqa_armed_row = tk.Frame(_tqa_inner, bg='#1a1e2e')
+            _tqa_armed_row.pack(fill='x', pady=(0, 6))
+            _tqa_armed_lbl = tk.Label(_tqa_armed_row, textvariable=_tqa_armed_var,
+                                       bg='#1a1e2e', fg='#aa4444',
+                                       font=('Arial', 9))
+            _tqa_armed_lbl.pack(side='left')
+
 
             _tqa_row2 = tk.Frame(_tqa_inner, bg='#1a1e2e')
             _tqa_row2.pack(fill='x', pady=(0, 6))
@@ -7517,6 +7843,21 @@ or from the Help menu."""
                 cfg["notify_method"]      = _tqa_method_var.get()
                 cfg["use_api_key"]        = (_tqa_auth_var.get() == "api_key")
 
+                # v8.1.13: derive check_mode/check_interval_hours from the
+                # "times/day" field — 1 keeps the classic once-daily
+                # behavior at schedule_time above (check_mode stays
+                # "daily"); >1 switches to an hourly-interval trigger.
+                try:
+                    _times_per_day = max(1, int(_tqa_times_per_day_var.get().strip() or 1))
+                except ValueError:
+                    _times_per_day = 1
+                if _times_per_day > 1:
+                    cfg["check_mode"] = "interval"
+                    cfg["check_interval_hours"] = _tqa_times_per_day_to_interval_hours(_times_per_day)
+                else:
+                    cfg["check_mode"] = "daily"
+                    cfg["check_interval_hours"] = 1
+
                 # v8.1.6: on the OFF -> ON transition specifically (not on
                 # every save while already enabled — that would incorrectly
                 # skip a task that's legitimately due next week just because
@@ -7571,9 +7912,15 @@ or from the Help menu."""
                     wrapper = _tqa.install_wrapper_script(
                         wrapper_dir, cfg["mcp_config_path"], cfg["allowed_tools"],
                         cfg["notify_on_complete"], cfg["notify_method"],
-                        cfg["use_api_key"], _install_dir)
+                        cfg["use_api_key"], _install_dir,
+                        check_mode=cfg["check_mode"],
+                        active_days=cfg.get("active_days"),
+                        active_start_time=cfg.get("active_start_time", "00:00"),
+                        active_end_time=cfg.get("active_end_time", "23:59"))
                     ok, detail = _tqa.install_scheduled_task(
-                        wrapper, cfg["schedule_time"], enabled=True)
+                        wrapper, cfg["schedule_time"], enabled=True,
+                        check_mode=cfg["check_mode"],
+                        check_interval_hours=cfg["check_interval_hours"])
                     if not ok:
                         messagebox.showerror("Could Not Enable", detail)
                         cfg["enabled"] = False
@@ -7781,6 +8128,12 @@ or from the Help menu."""
             self._tqa_update_enable_btn_label = _tqa_update_enable_btn_label
             self._tqa_apply_time_only        = _tqa_apply_time_only
             self._tqa_btn_apply_time         = _tqa_btn_apply_time
+            self._tqa_times_per_day_var      = _tqa_times_per_day_var
+            self._tqa_credit_warn_var        = _tqa_credit_warn_var
+            self._tqa_update_credit_warning  = _tqa_update_credit_warning
+            self._tqa_armed_var              = _tqa_armed_var
+            self._tqa_refresh_status_display = _tqa_refresh_status_display
+            self._tqa_times_per_day_to_interval_hours = _tqa_times_per_day_to_interval_hours
 
             _tqa_refresh_status_display()
 
@@ -8767,11 +9120,22 @@ or from the Help menu."""
             script_path = Path.home() / "AI-Prowler" / "rag_auto_update.bat"
             all_days    = {'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'}
             days_str    = ",".join(days)
+            # v8.1.14 fix: same real-world bug as the Autonomous AI Task
+            # Queue's scheduler — without an explicit /RU, schtasks.exe
+            # defaults to the "Run only when user is logged on" logon type
+            # (INTERACTIVE_TOKEN), which requires an active interactive
+            # desktop session and can silently fail to launch while the
+            # screen is locked or the screensaver is active, even though
+            # the user is technically still logged on. /RU <username>
+            # WITHOUT /RP switches to S4U logon ("Run whether user is
+            # logged on or not"), which works regardless of lock state.
+            run_as_user = os.environ.get("USERNAME", "")
+            ru_clause = f' /RU "{run_as_user}"' if run_as_user else ""
             if set(days) == all_days:
-                cmd = f'schtasks /create /tn "AI Prowler Auto-Update" /tr "{script_path}" /sc daily /st {time_str} /f'
+                cmd = f'schtasks /create /tn "AI Prowler Auto-Update" /tr "{script_path}" /sc daily /st {time_str}{ru_clause} /f'
                 day_label = "every day"
             else:
-                cmd = f'schtasks /create /tn "AI Prowler Auto-Update" /tr "{script_path}" /sc weekly /d {days_str} /st {time_str} /f'
+                cmd = f'schtasks /create /tn "AI Prowler Auto-Update" /tr "{script_path}" /sc weekly /d {days_str} /st {time_str}{ru_clause} /f'
                 day_label = days_str
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
             if result.returncode == 0:

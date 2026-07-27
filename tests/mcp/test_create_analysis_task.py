@@ -113,6 +113,85 @@ class TestSuccessfulCreation:
         assert "weekly" in result
 
 
+class TestDailyTimeOfDayParams:
+    """v8.1.13: daily_start_time/daily_end_time/daily_times_per_day
+    forwarded straight through to custom_tasks_manager.create_task()."""
+
+    def test_daily_params_forwarded_to_create_task(self, mcp_mod, monkeypatch):
+        captured = {}
+
+        class _FakeCTM:
+            @staticmethod
+            def load_custom_tasks():
+                return []
+            @staticmethod
+            def create_task(**kwargs):
+                captured.update(kwargs)
+                return {
+                    "task_id": "custom_20260726_0001",
+                    "label": kwargs["label"],
+                    "next_due": "2026-07-26T08:00:00",
+                }
+            @staticmethod
+            def save_custom_tasks(tasks):
+                return True
+
+        import sys as _sys
+        monkeypatch.setitem(_sys.modules, "custom_tasks_manager", _FakeCTM)
+
+        result = mcp_mod.create_analysis_task(
+            label="Weather check", prompt="Check the weather.",
+            schedule="daily", first_due="2026-07-26",
+            daily_start_time="08:00", daily_end_time="20:00",
+            daily_times_per_day=3,
+        )
+        assert "✅" in result
+        assert captured["daily_start_time"] == "08:00"
+        assert captured["daily_end_time"] == "20:00"
+        assert captured["daily_times_per_day"] == 3
+
+    def test_daily_param_defaults_when_omitted(self, mcp_mod, monkeypatch):
+        captured = {}
+
+        class _FakeCTM:
+            @staticmethod
+            def load_custom_tasks():
+                return []
+            @staticmethod
+            def create_task(**kwargs):
+                captured.update(kwargs)
+                return {"task_id": "t1", "label": kwargs["label"], "next_due": None}
+            @staticmethod
+            def save_custom_tasks(tasks):
+                return True
+
+        import sys as _sys
+        monkeypatch.setitem(_sys.modules, "custom_tasks_manager", _FakeCTM)
+
+        mcp_mod.create_analysis_task(label="T", prompt="x")
+        assert captured["daily_start_time"] == "09:00"
+        assert captured["daily_end_time"] == "17:00"
+        assert captured["daily_times_per_day"] == 1
+
+    def test_times_per_day_validation_error_propagates(self, mcp_mod, monkeypatch):
+        class _FakeCTM:
+            @staticmethod
+            def load_custom_tasks():
+                return []
+            @staticmethod
+            def create_task(**kwargs):
+                raise ValueError("Times per day must be between 1 and 24.")
+
+        import sys as _sys
+        monkeypatch.setitem(_sys.modules, "custom_tasks_manager", _FakeCTM)
+
+        result = mcp_mod.create_analysis_task(
+            label="T", prompt="x", schedule="daily", first_due="2026-07-26",
+            daily_times_per_day=30)
+        assert "❌" in result
+        assert "between 1 and 24" in result
+
+
 class TestValidationErrorsPropagate:
 
     def test_empty_label_returns_error(self, mcp_mod, monkeypatch):

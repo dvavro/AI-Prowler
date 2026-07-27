@@ -162,7 +162,7 @@
 
 [Setup]
 AppName=AI-Prowler
-AppVersion=8.1.9
+AppVersion=8.1.10
 ; AppId pins the upgrade identity so Inno reliably detects prior installations
 ; of any version and runs only OUR uninstaller — never a mismatched one.
 ; Must remain constant across all future releases (do NOT change this GUID).
@@ -2195,7 +2195,12 @@ begin
         // Poll until claude.exe appears on disk (installer writes to
         // %USERPROFILE%\.local\bin) rather than trusting the task's own
         // exit code — same philosophy as WaitForFolderCreation for Tesseract.
-        ClaudeCodeLocalBin := ExpandConstant('{userpf}') + '\.local\bin';
+        // NOTE: {userpf} is Inno's PER-USER PROGRAM FILES constant
+        // (AppData\Local\Programs) — NOT the user's home directory. Using
+        // it here produced AppData\Local\Programs\.local\bin, which never
+        // exists, causing a false-negative timeout even when the native
+        // installer succeeded. Use USERPROFILE directly instead.
+        ClaudeCodeLocalBin := GetEnv('USERPROFILE') + '\.local\bin';
         WaitForFileCreation(ClaudeCodeLocalBin + '\claude.exe', '[Claude Code]', 60000);
 
         // Clean up scheduled task and temp batch regardless of outcome.

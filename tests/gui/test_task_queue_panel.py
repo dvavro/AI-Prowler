@@ -190,6 +190,88 @@ def test_save_enabled_with_mcp_config_installs_scheduled_task(gui, monkeypatch, 
     assert saved["enabled"] is True
 
 
+# ── v8.1.13: "times/day" checker-frequency field + credit warning ──────────
+# The checker's own frequency is DELIBERATELY decoupled from any individual
+# task's own schedule — this is the GUI control + static (non-conversational)
+# credit-usage warning David asked to have shown right next to Scheduled
+# time, not something Claude says out loud.
+
+class TestTimesPerDayCheckerFrequency:
+
+    def test_default_times_per_day_is_one_no_warning_shown(self, gui):
+        assert gui.app._tqa_times_per_day_var.get() == "1"
+        assert gui.app._tqa_credit_warn_var.get() == ""
+
+    def test_setting_above_one_shows_credit_warning(self, gui):
+        gui.app._tqa_times_per_day_var.set("10")
+        _pump(gui)
+        warning = gui.app._tqa_credit_warn_var.get()
+        assert "10" in warning
+        assert "credit" in warning.lower()
+
+    def test_setting_back_to_one_clears_warning(self, gui):
+        gui.app._tqa_times_per_day_var.set("6")
+        _pump(gui)
+        assert gui.app._tqa_credit_warn_var.get() != ""
+        gui.app._tqa_times_per_day_var.set("1")
+        _pump(gui)
+        assert gui.app._tqa_credit_warn_var.get() == ""
+
+    def test_invalid_input_treated_as_one_no_crash(self, gui):
+        gui.app._tqa_times_per_day_var.set("abc")
+        _pump(gui)
+        assert gui.app._tqa_credit_warn_var.get() == ""
+
+    def test_times_per_day_one_saves_daily_check_mode(self, gui, monkeypatch):
+        install_calls = []
+        monkeypatch.setattr(tqa, "install_scheduled_task",
+                             lambda *a, **kw: (install_calls.append(kw), (True, "ok"))[1])
+        monkeypatch.setattr(tqa, "install_wrapper_script",
+                             lambda *a, **kw: Path("fake_wrapper.bat"))
+        gui.app._tqa_cfg["mcp_config_path"] = str(tqa.GENERATED_MCP_CONFIG_PATH)
+        gui.app._tqa_enabled_var.set(True)
+        gui.app._tqa_times_per_day_var.set("1")
+        gui.app._tqa_save_and_apply()
+        _pump(gui)
+
+        assert install_calls[0]["check_mode"] == "daily"
+        saved = tqa.load_config()
+        assert saved["check_mode"] == "daily"
+
+    def test_times_per_day_ten_saves_interval_check_mode(self, gui, monkeypatch):
+        install_calls = []
+        monkeypatch.setattr(tqa, "install_scheduled_task",
+                             lambda *a, **kw: (install_calls.append(kw), (True, "ok"))[1])
+        monkeypatch.setattr(tqa, "install_wrapper_script",
+                             lambda *a, **kw: Path("fake_wrapper.bat"))
+        gui.app._tqa_cfg["mcp_config_path"] = str(tqa.GENERATED_MCP_CONFIG_PATH)
+        gui.app._tqa_enabled_var.set(True)
+        gui.app._tqa_times_per_day_var.set("10")
+        gui.app._tqa_save_and_apply()
+        _pump(gui)
+
+        assert install_calls[0]["check_mode"] == "interval"
+        # 24/10 rounds to 2 hours
+        assert install_calls[0]["check_interval_hours"] == 2
+        saved = tqa.load_config()
+        assert saved["check_mode"] == "interval"
+        assert saved["check_interval_hours"] == 2
+
+    def test_times_per_day_24_yields_hourly_interval(self, gui, monkeypatch):
+        install_calls = []
+        monkeypatch.setattr(tqa, "install_scheduled_task",
+                             lambda *a, **kw: (install_calls.append(kw), (True, "ok"))[1])
+        monkeypatch.setattr(tqa, "install_wrapper_script",
+                             lambda *a, **kw: Path("fake_wrapper.bat"))
+        gui.app._tqa_cfg["mcp_config_path"] = str(tqa.GENERATED_MCP_CONFIG_PATH)
+        gui.app._tqa_enabled_var.set(True)
+        gui.app._tqa_times_per_day_var.set("24")
+        gui.app._tqa_save_and_apply()
+        _pump(gui)
+
+        assert install_calls[0]["check_interval_hours"] == 1
+
+
 # ── v8.1.9: Apply-time-without-toggle button ───────────────────────────────
 
 def test_apply_button_reinstalls_task_with_new_time_while_already_enabled(gui, monkeypatch):

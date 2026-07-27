@@ -1,5 +1,5 @@
 # AI-Prowler — Complete User Guide
-## Version 8.1.9
+## Version 8.1.10
 
 ---
 
@@ -263,9 +263,9 @@ AI-Prowler exposes **83 tools** total to Claude across thirteen categories (this
 
 | Install type | Mode | Tools visible | Notes |
 |---|---|---|---|
-| Personal / Home | personal | 84 | All 85 tools minus `check_sms_replies` (§6.2b — meaningless with a single user) |
-| Business — employee personal install | personal | 84 | Same as above — personal mode is personal mode regardless of edition |
-| Business — company server | server | 53 | All 85 tools minus the 32 in `_TIER_A_SUPPRESSED` (§6.2, +3 in v8.1.9: `sync_due_tasks_to_queue`, `delete_analysis_task`, `update_analysis_task`) — remaining 53 are further gated per-role/per-call inside the tool itself, not by registration |
+| Personal / Home | personal | 85 | All 86 tools minus `check_sms_replies` (§6.2b — meaningless with a single user) |
+| Business — employee personal install | personal | 85 | Same as above — personal mode is personal mode regardless of edition |
+| Business — company server | server | 53 | All 86 tools minus the 33 in `_TIER_A_SUPPRESSED` (§6.2, +3 in v8.1.9: `sync_due_tasks_to_queue`, `delete_analysis_task`, `update_analysis_task`; +1 in v8.1.13: `get_home_address`) — remaining 53 are further gated per-role/per-call inside the tool itself, not by registration |
 
 ### 6.2 Tier A Tool Suppression (Server Mode Only)
 
@@ -1305,13 +1305,17 @@ These are AI-assisted tasks that can be queued and stored for repeated and/or fu
 
 #### The On/Off toggle
 
-A single large button — reading **"Toggle On/Off"** with **"Autonomous AI Task Queue OFF"** beneath it in red, or **"Autonomous AI Task Queue ON"** in green — is the entire control for turning automation on and off. Click it and it flips color and state immediately: green/ON installs (or updates) a Windows Scheduled Task at the time you've set below; red/OFF removes it. There's no separate checkbox or status indicator to keep in sync — the button's color and text are always the real, currently-applied state.
+A single large button — reading **"Toggle On/Off"** with **"Autonomous AI Task Queue OFF"** beneath it in red, or **"Autonomous AI Task Queue ON"** in green — is the entire control for turning automation on and off. Click it and it flips color and state immediately: green/ON installs (or updates) a Windows Scheduled Task at the time and frequency you've set below; red/OFF genuinely removes the real Windows Scheduled Task (`schtasks /delete`), not just a soft disable. There's no separate checkbox to keep in sync — the button's color and text are always the real, currently-applied state.
+
+**v8.1.14:** below the toggle, a live status line shows the *actual* Windows-reported state — e.g. **🟢 Armed — Daily at 06:00:00 (next: 7/27/2026 6:00:00 AM)** or **🔴 Not armed** — read directly from `schtasks /query`, not just echoed back from what's typed into the fields above it. This closes a real gap where the GUI's own fields could silently drift from what Windows actually had scheduled; now you can always tell at a glance whether real automated runs are currently armed.
 
 #### Setup
 
 | Field | Description |
 |---|---|
-| **Scheduled time** | 24-hour `HH:MM`, daily. **v8.1.9:** click **💾 Apply** right next to the field to push a time change to the real Windows Scheduled Task immediately — previously, editing this field while automation was already ON had no effect until you toggled it OFF then ON again. Apply works either way (enabled or disabled) without touching the on/off state. |
+| **Scheduled time** | 24-hour `HH:MM` — the time of the single daily run when **Check queue** (below) is set to 1×/day. Click **💾 Apply** right next to the field to push a change to the real Windows Scheduled Task immediately — editing the field alone has no effect until Apply is clicked or the toggle is cycled. Apply works whether automation is currently on or off, and **flashes green** on click as visual confirmation it took effect (v8.1.14). |
+| **Check queue: N times/day** (v8.1.13) | How often the queue itself gets checked for due work — independent of any individual task's own schedule. **1** (default) keeps the classic once-a-day check at Scheduled time above. **>1** switches to an hourly-interval Windows trigger instead (e.g. 10×/day ≈ every 2 hours), checking around the clock. A task still only actually *runs* when it's due per its own schedule — this field only controls how often AI-Prowler looks. |
+| **Credit-usage warning** | Appears automatically next to the times/day field once it's set above 1 — a reminder that each automatic check draws from your Claude subscription's usage pool (or metered API billing, if configured that way). Not shown at 1×/day, since a single daily check barely costs anything. |
 | **Text me when a run finishes** | Optional SMS/WhatsApp notification, sent to whichever method is selected. |
 | **Auth** | **Subscription (OAuth)** — uses your Claude Pro/Max plan; click **🔑 Get / Renew Token** to sign in. **API Key (metered billing)** — a separate pay-as-you-go account; paste a key from console.anthropic.com and click **Save Key** (and **Clear Key** to remove one). |
 | **🧪 Test Setup (Dry Run)** | Runs a checklist (Claude Code CLI installed, MCP config current, token/key valid) without actually running any tasks, so you can confirm everything is wired up before turning it on. |
@@ -1367,12 +1371,16 @@ When you click any button except 🧠 Run Pending Analysis, a scrollable **Confi
 | **Scope directories** | Scrollable checklist of all indexed directories. Check one or more to restrict the analysis. Leave all unchecked to search everything. |
 | **Output — 💡 Save key insights to Learnings** | Default ✅. Appends `record_learning()` instruction to the prompt. |
 | **Output — 📄 Save full analysis as Word document (.docx)** | Default ☐. Appends `save_analysis_report()` instruction with the report folder path. |
+| **Output — ✉️ Email the analysis** (v8.1.10) | Default ☐. Sends the finished analysis via AI-Prowler's own configured SMTP account (`send_email`) — if a Word document is also checked, the report is attached automatically. **At least one of the three outputs must be selected** — a task with none checked has nowhere for its results to go when run unattended, since there's no chat window in a headless run to display them in. |
 | **Schedule** | **Manual only** (default) = one-shot, runs once. Choose Daily / Weekly / Every 2 weeks / Monthly / Quarterly / Yearly to make this a recurring task. AI-Prowler tracks when it's next due and surfaces it automatically. |
+| **Start time / End time / Times per day** (v8.1.14, Daily only) | Shown only when **Daily** is selected. Times per day = 1 (default) runs once, at Start time. Greater than 1 spreads that many runs evenly across the day, landing exactly on Start time and exactly on End time (e.g. Start 08:00, End 20:00, 3×/day → 08:00, 14:00, 20:00). Max 24/day — "24× between 00:00–23:00" is how an hourly cadence is expressed; there's no separate Hourly option. A live **"Runs at: ..."** preview below the fields shows exactly what your settings produce, and the credit-usage warning (below) appears automatically once times/day is set above 1. |
 | **First due date** | YYYY-MM-DD. Enabled when a schedule is selected. Defaults to today if left blank. The anchor date for schedule advancement — e.g. a "Weekly" task due June 24 will next be due July 1, then July 8, etc. |
 | **Report folder** | Where `.docx` reports are saved. Defaults to `~/Documents/AI-Prowler_tasks_reports`. Click **Browse…** to change. |
 | **Ctrl+V reminder** | Italic reminder: *"After clicking Queue Analysis → open a new Claude chat and press Ctrl+V to run all queued tasks."* |
 
-> **Scheduling built-in tasks:** When you set a schedule on a Common Business button, `complete_analysis_task()` automatically advances `next_due` after Claude finishes — anchored to the original due date (not the completion date). **v8.1.9: the entry re-arms** — `status` resets to `"pending"` and it stays in the queue permanently, resurfacing in `get_pending_analysis_tasks()` on its own once the new `next_due` arrives. You don't need to re-queue it manually each cycle; only one-shot (`schedule: none`) buttons complete permanently. The next due date is reported back to Claude as `Next scheduled run: YYYY-MM-DD`.
+> **Autonomous AI Task Queue usage note:** a static reminder appears in this popup — *"If the Autonomous AI Task Queue is enabled, each automatic check uses Claude subscription usage credits."* This is plain GUI text, not something Claude says in conversation.
+
+> **Scheduling built-in tasks:** When you set a schedule on a Common Business button, `complete_analysis_task()` automatically advances `next_due` after Claude finishes — anchored to the original due date (not the completion date). The entry re-arms — `status` resets to `"pending"` and it stays in the queue permanently, resurfacing in `get_pending_analysis_tasks()` on its own once the new `next_due` arrives. You don't need to re-queue it manually each cycle; only one-shot (`schedule: none`) buttons complete permanently. The next due date is reported back to Claude as `Next scheduled run: YYYY-MM-DD`.
 
 #### Task queue JSON schema
 
@@ -1387,14 +1395,20 @@ Tasks are stored in `~/.ai-prowler/pending_tasks.json`. The full schema (v8.0.0)
   "scope_dirs":       ["C:\\Users\\david\\OneDrive\\Documents\\Invoices"],
   "output_learnings": true,
   "output_report":    false,
+  "output_email":     false,
   "report_folder":    "C:\\Users\\david\\Documents\\AI-Prowler_tasks_reports",
-  "schedule":         "weekly",
+  "schedule":         "daily",
   "first_due":        "2026-06-24",
-  "next_due":         "2026-06-24",
+  "next_due":         "2026-06-25T09:00:00",
+  "daily_start_time":    "09:00",
+  "daily_end_time":      "17:00",
+  "daily_times_per_day": 1,
   "created_at":       "2026-06-24T14:30:22Z",
   "status":           "pending"
 }
 ```
+
+`next_due` is a full date+time (`YYYY-MM-DDTHH:MM:SS`) for `"daily"` schedule entries — it carries the actual next run time, not just the date — and stays a plain date (`YYYY-MM-DD`) for every other schedule (weekly, monthly, etc.), which have no time-of-day granularity.
 
 When Claude completes the task, a one-shot entry (`schedule: "none"`) has `status` change to `"completed"` permanently — `completed_at` and `completion_summary` are added, and it's kept for audit rather than deleted. A recurring entry instead has `next_due` advanced and `status` reset back to `"pending"` (v8.1.9 re-arm) — it stays live in the queue and resurfaces on its own next cycle rather than needing to be re-queued manually.
 
@@ -1412,7 +1426,7 @@ The collapsible **▶ Show Queue** panel (below the analysis buttons) lets you s
 
 ### 📋 My Custom AI Analyses (v8.0.0, renamed)
 
-**My Custom AI Analyses** lets you define your own analysis tasks — with a custom name, prompt, optional directory scope, schedule, and output format. Up to 10 custom tasks are supported.
+**My Custom AI Analyses** lets you define your own analysis tasks — with a custom name, prompt, optional directory scope, schedule, and output format. Up to **25** custom tasks are supported.
 
 These user custom-defined tasks are AI-assisted tasks that can be queued and stored for repeated and/or future execution. In addition to manual configuration here, Claude can also create and add these via AI-Prowler MCP tools remotely.
 
@@ -1428,10 +1442,14 @@ Click **+ New Custom Analysis** to open the task editor (scrollable, 806×884). 
 | **Prompt** | Full instruction for Claude — describe what to analyze and what to produce. Be specific: mention which tools to use, which learning categories to record under, and any report preferences. |
 | **Scope directories** | Scrollable checklist. Only absolute directory paths shown — metadata fields filtered out automatically. Leave all unchecked to search everything. |
 | **Schedule** | Manual only / Daily / Weekly / Every 2 weeks / Monthly / Quarterly / Yearly |
+| **Start time / End time / Times per day** (v8.1.13/v8.1.14, Daily only) | Shown only when **Daily** is selected. Times per day = 1 (default) runs once, at Start time. Greater than 1 spreads that many runs evenly across the day, landing exactly on Start time and exactly on End time (e.g. Start 08:00, End 20:00, 3×/day → 08:00, 14:00, 20:00). Max 24/day — "24× between 00:00–23:00" is how an hourly cadence is expressed; there's no separate Hourly option. A live **"Runs at: ..."** preview shows exactly what your settings produce. |
 | **First due date** | YYYY-MM-DD. When the first scheduled run should occur. Leave blank for manual-only tasks. Auto-populates with today when you select a schedule. |
 | **Output — 💡 Save key insights to Learnings** | Claude's prompt instructs it to call `record_learning()` with key findings |
 | **Output — 📄 Save full analysis as Word document (.docx)** | Claude's prompt instructs it to call `save_analysis_report()` and save a `.docx` report |
+| **Output — ✉️ Email the analysis** (v8.1.10) | Sends the finished analysis via AI-Prowler's own configured SMTP account — attaches the Word document automatically if that output is also checked. **At least one of the three outputs must be selected.** |
 | **Report folder** | Defaults to `~/Documents/AI-Prowler_tasks_reports`. Click **Browse…** to change. |
+
+A static reminder — *"If the Autonomous AI Task Queue is enabled, each automatic check uses Claude subscription usage credits"* — appears in this dialog too, matching the Common Business Configure popup.
 
 #### Save / Save & Queue
 

@@ -686,6 +686,12 @@ _TIER_A_SUPPRESSED: frozenset = frozenset({
     # check_sms_replies (which IS per-user isolated) is the server-mode
     # equivalent — see _PERSONAL_MODE_SUPPRESSED below for the reverse gate.
     "check_sms_inbox",
+    # Home address (v8.1.13) — personal-install-only. Settings tab's Home
+    # address field is a single-owner concept (one street/city/state/zip,
+    # same source the weather Proactive Alerts already used) with no
+    # per-user equivalent in a multi-user server — there's no meaningful
+    # "whose home address" to resolve for a shared company install.
+    "get_home_address",
 })
 
 _log.info(
@@ -912,7 +918,9 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "  • Field service actions (free public APIs, no key needed):\n"
         "      geocode_address, get_weather, optimize_route,\n"
         "      build_maps_url, read_job_spreadsheet, update_job_spreadsheet,\n"
-        "      check_tools_status\n\n"
+        "      check_tools_status\n"
+        "      get_home_address (personal mode only — Settings tab's Home\n"
+        "      address is a single-owner concept with no server-mode caller)\n\n"
 
         "  • Contractor / business workflow:\n"
         "      email_invoice, schedule_next_recurring_job, log_time_entry,\n"
@@ -3302,6 +3310,60 @@ def get_weather(location: str, days: int = 3) -> str:
         )
 
     return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 1.5 — get_home_address
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def get_home_address() -> str:
+    """
+    Return the owner's configured home/business address (Street, City,
+    State, ZIP), set via Settings tab → Home address.
+
+    v8.1.13. Before this tool existed, that address was only ever read by
+    a private, non-tool internal helper used exclusively for weather
+    lookups (Proactive Alerts' Morning Briefing fallback and Weekly
+    Weather Watch) — there was no way for Claude to retrieve it directly
+    for anything else, including routing. Confirmed real-world gap: asked
+    to plan a route "from my address," Claude had no tool that could
+    resolve what that address actually was, despite it being fully
+    configured in Settings.
+
+    Call this whenever a request references "my address," "my house,"
+    "home," "the shop," or similar, and an actual address is needed —
+    most commonly right before optimize_route() or geocode_address(),
+    passing the returned address string straight through as the origin.
+
+    Returns:
+        The formatted address as a single string (e.g.
+        "123 Main St, New Smyrna Beach, FL 32168"), or a clear message
+        if no address has been configured yet in Settings.
+    """
+    _telemetry_increment_tool_count("get_home_address")
+
+    try:
+        addr = _get_personal_owner_address()
+    except Exception as _e:
+        return f"❌ Could not read the configured home address: {_e}"
+
+    street, city, state, zip_ = (addr.get("street", ""), addr.get("city", ""),
+                                  addr.get("state", ""), addr.get("zip", ""))
+
+    if not any([street, city, state, zip_]):
+        return (
+            "⚠️ No home address is configured yet. Set one under "
+            "Settings tab → Home address, or ask the user for the "
+            "address to use directly for this request."
+        )
+
+    city_state_zip = " ".join(p for p in (city, state) if p)
+    if zip_:
+        city_state_zip = f"{city_state_zip} {zip_}".strip()
+
+    parts = [p for p in (street, city_state_zip) if p]
+    return ", ".join(parts)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -12300,6 +12362,9 @@ def create_analysis_task(
     output_report: bool = False,
     output_email: bool = False,
     report_folder: str = "",
+    daily_start_time: str = "09:00",
+    daily_end_time: str = "17:00",
+    daily_times_per_day: int = 1,
 ) -> str:
     """
     AGENTIC ANALYSIS — Define a new recurring (or one-off) custom analysis
@@ -12308,20 +12373,33 @@ def create_analysis_task(
     now callable directly from a conversation.
 
     IMPORTANT — how this actually behaves (set expectations honestly):
-      • Day-granularity only. There is no time-of-day in this system — a
-        request like "every Monday at 8am" can only be stored as "due every
-        Monday" (schedule="weekly", first_due=<that Monday's date>). The
-        "8am" part cannot be represented; do not imply it will be.
-      • Pull-based, not autonomous. Creating a task does NOT make AI-Prowler
-        wake up and run it unattended at the due time. A task becoming due
-        just means it's waiting — the NEXT time the user is in a Claude
-        conversation and either asks, or Claude calls
-        get_pending_analysis_tasks() at session start, the due task shows up
-        and can be run then. If the user's phrasing implies full automation
-        ("check my email every Monday morning without me doing anything"),
-        say so plainly rather than letting the wording stand uncorrected —
-        that requires a Claude session to actually happen after the due
-        date, not a background process.
+      • Time-of-day granularity, but ONLY for schedule="daily" (v8.1.13).
+        Daily supports daily_start_time, daily_end_time, and
+        daily_times_per_day — N evenly-spaced runs per day, the first
+        exactly at daily_start_time and the last exactly at daily_end_time
+        when N > 1 (times_per_day=1 is classic once-daily, end_time
+        irrelevant). There is no separate "Hourly" schedule — 24 times/day
+        from 00:00 to 23:00 IS hourly. Weekly/biweekly/monthly/quarterly/
+        yearly remain day-granularity only — no time-of-day for those; a
+        request like "every Monday at 8am" still can't be represented for
+        anything but Daily, so for weekly say so plainly rather than
+        implying it will happen at a specific time.
+      • Pull-based, not autonomous, UNLESS the Autonomous AI Task Queue is
+        separately enabled and running. Creating a task alone does NOT
+        make AI-Prowler wake up and run it unattended — that requires the
+        Autonomous AI Task Queue toggle to be ON (see Links & Analysis
+        tab). A task becoming due just means it's waiting for the next
+        check, whether that's a human asking in a Claude conversation or
+        the automated checker's own schedule (which is independently
+        configurable and may be daily or hourly-interval — see
+        task_queue_automation.py's check_mode).
+      • times_per_day > 1 has a real cost implication worth mentioning to
+        the user: each check the Autonomous AI Task Queue makes draws from
+        the Claude subscription's usage pool (or metered API billing, if
+        configured that way) — more frequent daily runs means more of
+        that usage gets consumed. Mention this if the user is setting up
+        a task with a high times_per_day and hasn't brought up cost
+        themselves.
       • schedule must be one of: none, daily, weekly, biweekly, monthly,
         quarterly, yearly. If schedule is anything but "none", first_due is
         REQUIRED (YYYY-MM-DD) — compute the correct date yourself (e.g. the
@@ -12355,17 +12433,28 @@ def create_analysis_task(
                           (default False) — v8.1.10.
         report_folder:    Output folder for .docx reports, if output_report
                           is True. Uses the default reports folder if omitted.
+        daily_start_time: HH:MM, first run of the day — only used when
+                          schedule == "daily" (v8.1.13). Default "09:00".
+        daily_end_time:   HH:MM, last run of the day — only used when
+                          schedule == "daily" AND daily_times_per_day > 1.
+                          Default "17:00".
+        daily_times_per_day: How many evenly-spaced runs per day when
+                          schedule == "daily" (v8.1.13). 1 = classic
+                          once-daily (default). Max 24 — mention the usage
+                          cost note above if the user asks for anything
+                          above 1.
 
     Returns:
         Confirmation with the new task_id and its next due date, or a
-        clear validation error (including hitting the 25-task cap, or all
-        three outputs being off).
+        clear validation error (including hitting the 25-task cap, all
+        three outputs being off, or daily_times_per_day outside 1-24).
 
     Voice examples:
         "Set up a task to check for unread invoice emails every Monday"
         "Remind me — er, set up a recurring task — to review the AR aging
          report monthly"
         "Create a one-off task to summarize last quarter's contracts"
+        "Check my weather every 3 hours between 6am and 9pm"
     """
     _telemetry_increment_tool_count("create_analysis_task")
 
@@ -12386,6 +12475,9 @@ def create_analysis_task(
             output_report=output_report,
             output_email=output_email,
             report_folder=(report_folder.strip() or None),
+            daily_start_time=daily_start_time,
+            daily_end_time=daily_end_time,
+            daily_times_per_day=daily_times_per_day,
         )
         tasks.append(new_task)
         if not _ctm.save_custom_tasks(tasks):
@@ -12922,6 +13014,9 @@ def update_analysis_task(
     output_email: bool = None,
     report_folder: str = None,
     scope_dirs: list = None,
+    daily_start_time: str = None,
+    daily_end_time: str = None,
+    daily_times_per_day: int = None,
     ctx: Context = None,
 ) -> str:
     """
@@ -12930,7 +13025,10 @@ def update_analysis_task(
     Only fields you actually pass are changed — everything else on the
     task is left as-is. Uses the same update_task() logic as the GUI's
     task editor (including the v8.1.9 fix for next_due correctly
-    recomputing when schedule or first_due actually change).
+    recomputing when schedule or first_due actually change, and the
+    v8.1.13 extension of that same fix to daily_start_time/daily_end_time/
+    daily_times_per_day — changing any of those for a "daily" task resets
+    next_due too, same as changing schedule/first_due does).
 
     Built-in Common Business Analysis tasks aren't editable through this
     tool — they don't have a standalone definition file; their schedule is
@@ -12949,11 +13047,24 @@ def update_analysis_task(
                             AI-Prowler's own configured SMTP account.
         report_folder:      Output folder for .docx reports.
         scope_dirs:         List of directory paths to restrict the analysis to.
+        daily_start_time:   HH:MM, first run of the day — only meaningful
+                            when the task's schedule is (or is being
+                            changed to) "daily" (v8.1.13).
+        daily_end_time:     HH:MM, last run of the day — only used when
+                            daily_times_per_day > 1 (v8.1.13).
+        daily_times_per_day: How many evenly-spaced runs per day when
+                            schedule == "daily" (v8.1.13). Max 24 — if the
+                            user is raising this above 1, mention the real
+                            usage-cost implication (each check the
+                            Autonomous AI Task Queue makes draws from the
+                            Claude subscription's usage pool, or metered
+                            API billing if configured that way).
 
     Returns:
         Confirmation with the updated next_due, or an error if the
-        task_id wasn't found, a value was invalid, or the edit would leave
-        all three outputs (learnings/report/email) off (v8.1.10).
+        task_id wasn't found, a value was invalid, the edit would leave
+        all three outputs (learnings/report/email) off (v8.1.10), or
+        daily_times_per_day would end up outside 1-24 (v8.1.13).
     """
     _telemetry_increment_tool_count("update_analysis_task")
 
@@ -12979,6 +13090,9 @@ def update_analysis_task(
         ("first_due", first_due), ("output_learnings", output_learnings),
         ("output_report", output_report), ("output_email", output_email),
         ("report_folder", report_folder), ("scope_dirs", scope_dirs),
+        ("daily_start_time", daily_start_time),
+        ("daily_end_time", daily_end_time),
+        ("daily_times_per_day", daily_times_per_day),
     ):
         if val is not None:
             kwargs[key] = val
@@ -13118,16 +13232,39 @@ def complete_analysis_task(task_id: str,
             anchor = task_next_due or today_str
             # Catch-up variant so a task overdue by multiple intervals
             # resyncs fully in one completion instead of needing one
-            # completion per missed interval.
-            new_next_due = _ctm._advance_date_catchup(
-                anchor, task_schedule, today_str)
+            # completion per missed interval. v8.1.13: routed through the
+            # unified advance_next_due_for_task() rather than calling
+            # _advance_date_catchup() directly — it dispatches to the
+            # datetime-aware daily-slot advancement when schedule=="daily",
+            # or the classic date-only catchup for every other schedule,
+            # without complete_analysis_task() needing to know the
+            # difference. The daily_* fields come from whichever source is
+            # authoritative for this entry (source_def for custom tasks,
+            # target itself for built-in ones) — same source already used
+            # for task_schedule/task_next_due just above.
+            _daily_source = source_def if source_def else target
+            new_next_due = _ctm.advance_next_due_for_task({
+                "schedule": task_schedule,
+                "next_due": anchor,
+                "daily_start_time": _daily_source.get("daily_start_time", "09:00"),
+                "daily_end_time": _daily_source.get("daily_end_time", "17:00"),
+                "daily_times_per_day": _daily_source.get("daily_times_per_day", 1),
+            }, today_str)
             if new_next_due:
                 # Stamp schedule + next_due directly onto the entry too
                 # (not just the source definition) so it's self-describing
                 # for is_queue_entry_ready() going forward, even if it
                 # started out as a legacy entry without these fields.
+                # v8.1.13: same for the daily_* fields, when applicable —
+                # a legacy daily entry created before this feature existed
+                # picks up correct values on its first completion, rather
+                # than staying frozen on the (irrelevant) defaults forever.
                 target["schedule"] = task_schedule
                 target["next_due"] = new_next_due
+                if task_schedule == "daily":
+                    target["daily_start_time"]    = _daily_source.get("daily_start_time", "09:00")
+                    target["daily_end_time"]      = _daily_source.get("daily_end_time", "17:00")
+                    target["daily_times_per_day"] = _daily_source.get("daily_times_per_day", 1)
                 target["status"]   = "pending"   # re-arm, not "completed"
                 next_due_msg = f"\nNext scheduled run: {new_next_due}"
             else:
