@@ -20,6 +20,13 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import task_queue_automation as tqa
 
+# Captured before the _isolated_home autouse fixture (below) monkeypatches
+# grant_batch_logon_right to a safe no-op for every other test in this
+# file — TestGrantBatchLogonRight explicitly restores this real reference
+# to test the actual function's own logic.
+_REAL_GRANT_BATCH_LOGON_RIGHT = tqa.grant_batch_logon_right
+_REAL_REGISTER_QUEUE_TASK_ELEVATED = tqa._register_queue_task_elevated
+
 
 @pytest.fixture(autouse=True)
 def _isolated_home(tmp_path, monkeypatch):
@@ -27,6 +34,8 @@ def _isolated_home(tmp_path, monkeypatch):
     ~/.ai-prowler/. This is the single most important fixture in this file."""
     monkeypatch.setattr(tqa.Path, "home", lambda: tmp_path)
     monkeypatch.setattr(tqa, "AI_PROWLER_HOME", tmp_path / ".ai-prowler")
+    monkeypatch.setattr(tqa, "BATCH_LOGON_MARKER_PATH",
+                         tmp_path / ".ai-prowler" / "batch_logon_granted.marker")
     monkeypatch.setattr(tqa, "CONFIG_PATH", tmp_path / ".ai-prowler" / "task_automation_config.json")
     monkeypatch.setattr(tqa, "STATUS_PATH", tmp_path / ".ai-prowler" / "task_automation_last_run.json")
     monkeypatch.setattr(tqa, "AUDIT_LOG_PATH", tmp_path / ".ai-prowler" / "autonomous_run_audit.log")
@@ -47,6 +56,37 @@ def _isolated_home(tmp_path, monkeypatch):
     monkeypatch.setattr(tqa, "OAUTH_TOKEN_PLAIN_PATH", tmp_path / ".ai-prowler" / "claude_oauth_token.txt")
     monkeypatch.setattr(tqa, "SETUP_TOKEN_OUTPUT_PATH", tmp_path / ".ai-prowler" / "setup_token_output.txt")
     monkeypatch.setattr(tqa, "SETUP_TOKEN_BAT_PATH", tmp_path / ".ai-prowler" / "run_setup_token.bat")
+    # v8.1.11: CRITICAL SAFETY — install_scheduled_task() now also calls
+    # grant_batch_logon_right(), which creates a REAL, temporary, elevated
+    # Windows Scheduled Task and attempts to actually modify Windows
+    # security policy (SeBatchLogonRight via LsaAddAccountRights) as a
+    # side effect. That must NEVER happen automatically just from running
+    # the test suite — mocked here by default for every test in this
+    # file, same rationale as the fake-HOME isolation above. The function
+    # itself gets its own dedicated, properly-isolated tests further down
+    # (mocking subprocess.run directly, never actually invoking schtasks
+    # or PowerShell), rather than relying on this default ever being
+    # overridden to exercise the real path.
+    monkeypatch.setattr(tqa, "grant_batch_logon_right",
+                         lambda *a, **kw: (True, "mocked — see _isolated_home fixture"))
+    # v8.1.11: SAME safety rationale as the grant mock above —
+    # _register_queue_task_elevated() also creates a real elevated
+    # PowerShell process (via Start-Process -Verb RunAs -Wait) and would
+    # genuinely register/modify the real AI-Prowler-QueueRunner Scheduled
+    # Task on whatever machine runs the test suite. Must never happen
+    # automatically just from running pytest. Its own dedicated,
+    # properly-isolated tests further down restore the real function and
+    # mock subprocess.run directly instead.
+    monkeypatch.setattr(tqa, "_register_queue_task_elevated",
+                         lambda *a, **kw: (True, "mocked — see _isolated_home fixture"))
+    # v8.1.16: same rationale — _unregister_queue_task_elevated() (the
+    # uninstall_scheduled_task() fallback added for the "toggle off doesn't
+    # actually disarm the real Scheduled Task" bug) also launches a real
+    # elevated PowerShell process via Start-Process -Verb RunAs -Wait.
+    # Dedicated, properly-isolated tests for it live further down and
+    # mock subprocess.run directly instead of relying on this default.
+    monkeypatch.setattr(tqa, "_unregister_queue_task_elevated",
+                         lambda *a, **kw: (True, "mocked — see _isolated_home fixture"))
     yield tmp_path
 
 
@@ -204,7 +244,7 @@ def test_wrapper_script_no_notify_clause_by_default():
     assert "send_whatsapp" not in content
 
 
-# ── v8.1.13: independently configurable check frequency + active window ────
+# ── v8.1.11: independently configurable check frequency + active window ────
 # The checker's own frequency (daily vs. interval) and active window
 # (days-of-week, time-of-day) are DELIBERATELY decoupled from any
 # individual custom task's own schedule — this covers that layer:
@@ -225,7 +265,7 @@ class TestCheckModeDefaultConfig:
         assert tqa.DEFAULT_CONFIG["active_end_time"] == "23:59"
 
     def test_existing_saved_config_without_new_keys_gets_defaults(self, tmp_path, monkeypatch):
-        # Simulates a config saved BEFORE v8.1.13 existed — must merge in
+        # Simulates a config saved BEFORE v8.1.11 existed — must merge in
         # the new keys with defaults, reproducing prior behavior exactly,
         # not crash or silently omit them.
         monkeypatch.setattr(tqa, "CONFIG_PATH", tmp_path / "old_config.json")
@@ -239,132 +279,93 @@ class TestCheckModeDefaultConfig:
 
 
 class TestInstallScheduledTaskTriggerMode:
+    """v8.1.11: install_scheduled_task() no longer calls schtasks /create
+    directly — it delegates to _register_queue_task_elevated(), which
+    generates a PowerShell script (_build_register_queue_task_ps1) and
+    runs it elevated. Tests the PS1-generation logic directly (pure
+    string content, no subprocess involved) rather than trying to
+    intercept schtasks args that no longer exist."""
 
-    def test_daily_mode_uses_sc_daily_with_schedule_time(self, monkeypatch):
-        calls = []
-        def _fake_run(args, **kw):
-            calls.append(args)
-            class _R:
-                returncode = 0
-                stdout = ""
-                stderr = ""
-            return _R()
-        monkeypatch.setattr(tqa.subprocess, "run", _fake_run)
-        tqa.install_scheduled_task(Path("fake.bat"), "07:30", check_mode="daily")
-        create_call = calls[0]
-        assert "/sc" in create_call and "daily" in create_call
-        assert "/st" in create_call and "07:30" in create_call
-        assert "/mo" not in create_call
+    def test_daily_mode_uses_new_scheduledtasktrigger_daily(self):
+        script = tqa._build_register_queue_task_ps1(
+            "fake.bat", "07:30", "daily", 1, "david", True, "result.txt")
+        assert "New-ScheduledTaskTrigger -Daily -At '07:30'" in script
+        assert "RepetitionInterval" not in script
 
-    def test_interval_mode_uses_sc_hourly_with_mo(self, monkeypatch):
-        calls = []
-        def _fake_run(args, **kw):
-            calls.append(args)
-            class _R:
-                returncode = 0
-                stdout = ""
-                stderr = ""
-            return _R()
-        monkeypatch.setattr(tqa.subprocess, "run", _fake_run)
-        tqa.install_scheduled_task(Path("fake.bat"), "07:30",
-                                    check_mode="interval", check_interval_hours=3)
-        create_call = calls[0]
-        assert "/sc" in create_call and "hourly" in create_call
-        assert "/mo" in create_call and "3" in create_call
-        assert "/st" not in create_call
+    def test_interval_mode_uses_repetition_interval(self):
+        script = tqa._build_register_queue_task_ps1(
+            "fake.bat", "07:30", "interval", 3, "david", True, "result.txt")
+        assert "RepetitionInterval (New-TimeSpan -Hours 3)" in script
+        assert "-Daily" not in script
 
-    def test_interval_mode_clamps_zero_or_negative_hours_to_one(self, monkeypatch):
-        calls = []
-        def _fake_run(args, **kw):
-            calls.append(args)
-            class _R:
-                returncode = 0
-                stdout = ""
-                stderr = ""
-            return _R()
-        monkeypatch.setattr(tqa.subprocess, "run", _fake_run)
-        tqa.install_scheduled_task(Path("fake.bat"), "07:30",
-                                    check_mode="interval", check_interval_hours=0)
-        create_call = calls[0]
-        mo_index = create_call.index("/mo")
-        assert create_call[mo_index + 1] == "1"
+    def test_interval_mode_clamps_zero_or_negative_hours_to_one(self):
+        script = tqa._build_register_queue_task_ps1(
+            "fake.bat", "07:30", "interval", 0, "david", True, "result.txt")
+        assert "RepetitionInterval (New-TimeSpan -Hours 1)" in script
 
 
-# ── v8.1.14 fix: /RU so the task runs even when locked/screensaver-active ──
+# ── v8.1.11: run whether logged on or not, even during a full logoff ──
 # Real-world bug report: the checker worked fine while actively logged in,
 # but never fired while the screensaver was active / screen locked, even
-# with sleep/hibernate already disabled. Root cause: without an explicit
-# /RU, schtasks.exe defaults to the "Run only when user is logged on"
-# logon type (INTERACTIVE_TOKEN), which requires an active interactive
-# desktop session — a locked screen/screensaver doesn't reliably provide
-# one. /RU <username> WITHOUT /RP switches the task to S4U logon ("Run
-# whether user is logged on or not"), which runs in a batch logon session
-# regardless of lock state.
+# with sleep/hibernate already disabled. Root cause #1 (v8.1.11): without
+# an explicit /RU, schtasks.exe defaults to "Run only when user is logged
+# on" (INTERACTIVE_TOKEN). Root cause #2, found via live testing after #1
+# alone still didn't fix it (v8.1.11): schtasks.exe's /RU <user> (without
+# /RP) does NOT actually produce S4U logon type through its simple CLI,
+# REGARDLESS of holding SeBatchLogonRight — confirmed via direct
+# side-by-side testing. PowerShell's ScheduledTasks module
+# (New-ScheduledTaskPrincipal -LogonType S4U) DOES produce a genuine S4U
+# task — confirmed live: "Logon Mode: Interactive/Background" instead of
+# "Interactive only". install_scheduled_task() now delegates entirely to
+# the PowerShell-based path.
 
-class TestInstallScheduledTaskRunAsUser:
+class TestRegisterQueueTaskPs1UserPrincipal:
 
-    def _capture_create_call(self, monkeypatch):
-        calls = []
-        def _fake_run(args, **kw):
-            calls.append(args)
-            class _R:
-                returncode = 0
-                stdout = ""
-                stderr = ""
-            return _R()
-        monkeypatch.setattr(tqa.subprocess, "run", _fake_run)
-        return calls
+    def test_userid_matches_run_as_user(self):
+        script = tqa._build_register_queue_task_ps1(
+            "fake.bat", "07:30", "daily", 1, "david", True, "result.txt")
+        assert "-UserId 'david'" in script
 
-    def test_ru_flag_present_by_default(self, monkeypatch):
-        calls = self._capture_create_call(monkeypatch)
-        tqa.install_scheduled_task(Path("fake.bat"), "07:30")
-        create_call = calls[0]
-        assert "/ru" in create_call
+    def test_logontype_is_s4u_not_password_based(self):
+        # Confirming S4U specifically -- never a stored password. Storing
+        # a plaintext Windows login password would be a real security
+        # regression and isn't what this mechanism needs.
+        script = tqa._build_register_queue_task_ps1(
+            "fake.bat", "07:30", "daily", 1, "david", True, "result.txt")
+        assert "-LogonType S4U" in script
+        assert "Password" not in script
 
-    def test_ru_defaults_to_current_username_env_var(self, monkeypatch):
-        calls = self._capture_create_call(monkeypatch)
-        monkeypatch.setenv("USERNAME", "david")
-        tqa.install_scheduled_task(Path("fake.bat"), "07:30")
-        create_call = calls[0]
-        ru_index = create_call.index("/ru")
-        assert create_call[ru_index + 1] == "david"
+    def test_different_username_reflected_in_principal(self):
+        script = tqa._build_register_queue_task_ps1(
+            "fake.bat", "07:30", "daily", 1, "someone_else", True, "result.txt")
+        assert "-UserId 'someone_else'" in script
 
-    def test_ru_falls_back_to_getpass_when_username_env_missing(self, monkeypatch):
-        calls = self._capture_create_call(monkeypatch)
-        monkeypatch.delenv("USERNAME", raising=False)
-        monkeypatch.setattr(tqa.getpass, "getuser", lambda: "fallback_user")
-        tqa.install_scheduled_task(Path("fake.bat"), "07:30")
-        create_call = calls[0]
-        ru_index = create_call.index("/ru")
-        assert create_call[ru_index + 1] == "fallback_user"
+    def test_s4u_principal_present_in_both_daily_and_interval_modes(self):
+        daily_script = tqa._build_register_queue_task_ps1(
+            "fake.bat", "07:30", "daily", 1, "david", True, "result.txt")
+        interval_script = tqa._build_register_queue_task_ps1(
+            "fake.bat", "07:30", "interval", 2, "david", True, "result.txt")
+        assert "-LogonType S4U" in daily_script
+        assert "-LogonType S4U" in interval_script
 
-    def test_explicit_run_as_user_overrides_default(self, monkeypatch):
-        calls = self._capture_create_call(monkeypatch)
-        monkeypatch.setenv("USERNAME", "david")
-        tqa.install_scheduled_task(Path("fake.bat"), "07:30", run_as_user="someone_else")
-        create_call = calls[0]
-        ru_index = create_call.index("/ru")
-        assert create_call[ru_index + 1] == "someone_else"
+    def test_disabled_state_adds_disable_scheduledtask_call(self):
+        enabled_script = tqa._build_register_queue_task_ps1(
+            "fake.bat", "07:30", "daily", 1, "david", True, "result.txt")
+        disabled_script = tqa._build_register_queue_task_ps1(
+            "fake.bat", "07:30", "daily", 1, "david", False, "result.txt")
+        assert "Disable-ScheduledTask" not in enabled_script
+        assert "Disable-ScheduledTask" in disabled_script
 
-    def test_no_rp_password_flag_present(self, monkeypatch):
-        # Confirming S4U specifically -- /RU without /RP, never a stored
-        # password. Storing a plaintext password would be a real security
-        # regression and isn't what S4U logon needs anyway.
-        calls = self._capture_create_call(monkeypatch)
-        tqa.install_scheduled_task(Path("fake.bat"), "07:30")
-        create_call = calls[0]
-        assert "/rp" not in create_call
-
-    def test_ru_present_in_both_daily_and_interval_modes(self, monkeypatch):
-        calls = self._capture_create_call(monkeypatch)
-        tqa.install_scheduled_task(Path("fake.bat"), "07:30", check_mode="daily")
-        tqa.install_scheduled_task(Path("fake.bat"), "07:30", check_mode="interval",
-                                    check_interval_hours=2)
-        assert "/ru" in calls[0]
-        assert "/ru" in calls[1]
+    def test_single_quotes_in_wrapper_path_must_be_pre_escaped(self):
+        # Documents the calling contract: _register_queue_task_elevated()
+        # is responsible for doubling single quotes before calling this
+        # builder -- this function does not do it itself.
+        script = tqa._build_register_queue_task_ps1(
+            "fake''bat", "07:30", "daily", 1, "david", True, "result.txt")
+        assert "fake''bat" in script
 
 
-# ── v8.1.14: real OS-level armed-schedule display info ──────────────────────
+# ── v8.1.11: real OS-level armed-schedule display info ──────────────────────
 # David asked for the Autonomous AI Task Queue panel to show what's
 # ACTUALLY armed in Windows Task Scheduler, not just echo back the config
 # file / text field values -- so Toggle Off can be visually confirmed as
@@ -583,69 +584,444 @@ def test_dry_run_check_reports_missing_claude_cli(_isolated_home, monkeypatch):
 
 
 # ── Scheduled Task management ────────────────────────────────────────────
-# These tests actually call schtasks.exe, but ALWAYS in disabled mode, and
-# ALWAYS clean up in a finally block — even on assertion failure.
+# v8.1.11: install_scheduled_task() now delegates task creation entirely to
+# _register_queue_task_elevated() (a real elevated PowerShell call, mocked
+# to a safe no-op by the module-wide _isolated_home fixture) — these can no
+# longer be real schtasks.exe integration tests the way they were before
+# that change (would hang waiting for a UAC prompt in an automated run).
+# Rewritten to verify install_scheduled_task()'s own delegation/
+# result-interpretation logic instead.
 
-def test_scheduled_task_install_disabled_then_uninstall(tmp_path):
+def test_install_scheduled_task_delegates_enabled_flag(monkeypatch, tmp_path):
+    captured = {}
+    def _fake_register(wrapper_script_path, schedule_time, check_mode,
+                        check_interval_hours, enabled, username, **kw):
+        captured["enabled"] = enabled
+        return True, "ok"
+    monkeypatch.setattr(tqa, "_register_queue_task_elevated", _fake_register)
+
     wrapper = tmp_path / "run_ai_prowler_queue.bat"
-    wrapper.write_text("@echo off\r\necho test\r\n", encoding="utf-8")
-    try:
-        ok, detail = tqa.install_scheduled_task(wrapper, "23:59", enabled=False)
-        assert ok, detail
-        assert tqa.scheduled_task_exists() is True
-        # The real fix: scheduled_task_exists() alone can't prove the task
-        # is actually OFF — it returns True for an enabled task just as
-        # readily. scheduled_task_enabled() checks the real state.
-        assert tqa.scheduled_task_enabled() is False
-    finally:
-        uninstalled_ok, uninstall_detail = tqa.uninstall_scheduled_task()
-        assert uninstalled_ok, uninstall_detail
-        assert tqa.scheduled_task_exists() is False
+    ok, detail = tqa.install_scheduled_task(wrapper, "23:59", enabled=False)
+    assert ok, detail
+    assert captured["enabled"] is False
+
+    ok, detail = tqa.install_scheduled_task(wrapper, "23:59", enabled=True)
+    assert ok, detail
+    assert captured["enabled"] is True
 
 
-def test_scheduled_task_install_enabled_reports_enabled_state(tmp_path):
-    # Complements the disabled-path test above — proves enabled=True
-    # actually results in an enabled task, not just "didn't error."
-    # Uninstalled immediately in the finally block; the window where a
-    # real enabled task exists on this machine is the few milliseconds
-    # between install and the immediate state-check + uninstall below.
+def test_install_scheduled_task_reports_registration_failure(monkeypatch, tmp_path):
+    monkeypatch.setattr(tqa, "_register_queue_task_elevated",
+                         lambda *a, **kw: (False, "elevation was declined"))
     wrapper = tmp_path / "run_ai_prowler_queue.bat"
-    wrapper.write_text("@echo off\r\necho test\r\n", encoding="utf-8")
-    try:
-        ok, detail = tqa.install_scheduled_task(wrapper, "23:59", enabled=True)
-        assert ok, detail
-        assert tqa.scheduled_task_enabled() is True
-    finally:
-        tqa.uninstall_scheduled_task()
-        assert tqa.scheduled_task_exists() is False
+    ok, detail = tqa.install_scheduled_task(wrapper, "07:30")
+    assert ok is False
+    assert "declined" in detail
 
 
-def test_scheduled_task_enabled_none_when_not_present(tmp_path):
-    # Ensure a clean slate — if a prior failed test somehow left a task
-    # behind, this would otherwise false-fail.
-    tqa.uninstall_scheduled_task()
+def test_install_scheduled_task_reports_success_when_registration_succeeds(monkeypatch, tmp_path):
+    monkeypatch.setattr(tqa, "_register_queue_task_elevated",
+                         lambda *a, **kw: (True, "ok"))
+    monkeypatch.setattr(tqa, "grant_batch_logon_right",
+                         lambda *a, **kw: (True, "granted"))
+    wrapper = tmp_path / "run_ai_prowler_queue.bat"
+    ok, detail = tqa.install_scheduled_task(wrapper, "07:30")
+    assert ok is True
+    assert detail == "ok"
+
+
+def test_install_scheduled_task_notes_grant_failure_but_still_succeeds(monkeypatch, tmp_path):
+    # Even if the batch-logon-right grant specifically failed, task
+    # creation should still proceed and report overall success (with a
+    # note) -- an Interactive-only task is still better than none.
+    monkeypatch.setattr(tqa, "_register_queue_task_elevated",
+                         lambda *a, **kw: (True, "ok"))
+    monkeypatch.setattr(tqa, "grant_batch_logon_right",
+                         lambda *a, **kw: (False, "access denied"))
+    wrapper = tmp_path / "run_ai_prowler_queue.bat"
+    ok, detail = tqa.install_scheduled_task(wrapper, "07:30")
+    assert ok is True
+    assert "note" in detail.lower()
+    assert "access denied" in detail
+
+
+def test_scheduled_task_enabled_none_when_not_present(monkeypatch, tmp_path):
+    # v8.1.16 fix: these two "when not present" tests used to call the
+    # REAL, unmocked scheduled_task_exists()/scheduled_task_enabled() —
+    # i.e. they depended on there being no real AI-Prowler-QueueRunner task
+    # on whatever machine runs the suite, "ensuring" that via a plain
+    # tqa.uninstall_scheduled_task() cleanup call. That assumption breaks
+    # the moment the Task Queue feature is legitimately armed on the dev
+    # machine (a real, currently-enabled use case, not a leftover from a
+    # failed test) — and once uninstall_scheduled_task() gained its
+    # elevated-fallback retry, whose real implementation is mocked to a
+    # no-op success by the module-wide _isolated_home fixture, that
+    # "cleanup" call could report success without actually touching the
+    # real task, making the false assumption harder to notice. Mock the
+    # underlying subprocess.run() directly instead — this test is about
+    # the "not present" code path (schtasks /query exiting non-zero), not
+    # about whatever's really on this machine. Note scheduled_task_enabled()
+    # makes its own independent subprocess.run() call — it does NOT call
+    # scheduled_task_exists() internally — so that's what has to be mocked
+    # here, not scheduled_task_exists() itself.
+    class _FakeNotPresent:
+        returncode = 1
+        stdout = "ERROR: The system cannot find the file specified.\n"
+        stderr = ""
+
+    monkeypatch.setattr(tqa.subprocess, "run", lambda *a, **kw: _FakeNotPresent())
     assert tqa.scheduled_task_enabled() is None
 
 
-def test_install_scheduled_task_reports_failure_on_bad_time_format(tmp_path):
-    # schtasks itself rejects malformed /st values — confirm we surface
-    # that as a real failure rather than silently reporting success, and
-    # confirm no task gets left behind when creation fails.
-    wrapper = tmp_path / "run_ai_prowler_queue.bat"
-    wrapper.write_text("@echo off\r\necho test\r\n", encoding="utf-8")
-    try:
-        ok, detail = tqa.install_scheduled_task(wrapper, "99:99", enabled=False)
-        assert ok is False
-        assert detail  # some real error text, not empty
-    finally:
-        tqa.uninstall_scheduled_task()
-        assert tqa.scheduled_task_exists() is False
-
-
-def test_uninstall_when_never_installed_is_safe(tmp_path):
+def test_uninstall_when_never_installed_is_safe(monkeypatch, tmp_path):
+    # Same fix as above — mock presence directly rather than depending on
+    # real system state. uninstall_scheduled_task() DOES call
+    # scheduled_task_exists() internally (unlike scheduled_task_enabled()
+    # above), so mocking that one function is sufficient here.
+    monkeypatch.setattr(tqa, "scheduled_task_exists", lambda: False)
     ok, detail = tqa.uninstall_scheduled_task()
     assert ok
     assert "not present" in detail
+
+
+# ── v8.1.16: uninstall_scheduled_task() elevated fallback ──────────────────
+# Real-world bug: a task registered via _register_queue_task_elevated()'s
+# S4U principal requires elevation to modify — confirmed live, a plain
+# non-elevated `schtasks /delete` against it returns exit code 1 /
+# "ERROR: Access is denied." The GUI's disable path used to call
+# uninstall_scheduled_task() and discard the (ok, detail) result entirely,
+# so this failure was completely invisible: config said disabled, the
+# button showed OFF, but the real Windows Scheduled Task stayed armed.
+# These mock subprocess.run and _unregister_queue_task_elevated directly —
+# no real schtasks/PowerShell call happens here.
+
+def test_uninstall_succeeds_on_plain_delete_first_try(monkeypatch):
+    monkeypatch.setattr(tqa, "scheduled_task_exists", lambda: True)
+    calls = {"elevated": 0}
+
+    class _FakeCompletedProcess:
+        returncode = 0
+        stdout = "SUCCESS: The scheduled task was deleted.\n"
+        stderr = ""
+
+    monkeypatch.setattr(tqa.subprocess, "run", lambda *a, **kw: _FakeCompletedProcess())
+    monkeypatch.setattr(tqa, "_unregister_queue_task_elevated",
+                         lambda *a, **kw: (calls.__setitem__("elevated", calls["elevated"] + 1), (True, "ok"))[1])
+
+    ok, detail = tqa.uninstall_scheduled_task()
+    assert ok
+    assert detail == "ok"
+    assert calls["elevated"] == 0  # elevated fallback must NOT fire when the plain delete already worked
+
+
+def test_uninstall_falls_back_to_elevated_when_plain_delete_denied(monkeypatch):
+    monkeypatch.setattr(tqa, "scheduled_task_exists", lambda: True)
+
+    class _FakeCompletedProcess:
+        returncode = 1
+        stdout = ""
+        stderr = "ERROR: Access is denied.\n"
+
+    monkeypatch.setattr(tqa.subprocess, "run", lambda *a, **kw: _FakeCompletedProcess())
+    monkeypatch.setattr(tqa, "_unregister_queue_task_elevated",
+                         lambda *a, **kw: (True, "ok"))
+
+    ok, detail = tqa.uninstall_scheduled_task()
+    assert ok
+    assert "elevation" in detail
+
+
+def test_uninstall_reports_failure_when_elevated_fallback_also_fails(monkeypatch):
+    monkeypatch.setattr(tqa, "scheduled_task_exists", lambda: True)
+
+    class _FakeCompletedProcess:
+        returncode = 1
+        stdout = ""
+        stderr = "ERROR: Access is denied.\n"
+
+    monkeypatch.setattr(tqa.subprocess, "run", lambda *a, **kw: _FakeCompletedProcess())
+    monkeypatch.setattr(tqa, "_unregister_queue_task_elevated",
+                         lambda *a, **kw: (False, "UAC prompt declined"))
+
+    ok, detail = tqa.uninstall_scheduled_task()
+    assert ok is False
+    assert "Access is denied" in detail
+    assert "UAC prompt declined" in detail
+
+
+# ── v8.1.11: grant_batch_logon_right() — properly isolated, never invokes
+# real schtasks/PowerShell. Real-world root cause: schtasks /RU <username>
+# (without /RP) silently degrades to Interactive-only logon type when the
+# account lacks SeBatchLogonRight ("Log on as a batch job") — confirmed
+# live via `whoami /priv | findstr batch` returning nothing for the
+# affected account, and Task Scheduler's own Properties dialog showing
+# "Run only when user is logged on" selected despite /RU having been
+# correctly passed. LsaAddAccountRights (called via a generated PowerShell
+# script, run through a temporary elevated Scheduled Task) is the
+# documented, tool-free way to grant this.
+
+class TestGrantBatchLogonRight:
+
+    @pytest.fixture(autouse=True)
+    def _restore_real_function(self, monkeypatch):
+        """This whole class exists specifically to test
+        grant_batch_logon_right()'s own logic — undo the module-wide
+        _isolated_home fixture's safety mock of it, just for these tests."""
+        monkeypatch.setattr(tqa, "grant_batch_logon_right", _REAL_GRANT_BATCH_LOGON_RIGHT)
+
+    def _mock_uac_success_with_result(self, monkeypatch, result_content):
+        """Mocks subprocess.run for the Start-Process -Verb RunAs launcher
+        call succeeding, and writes result_content to whatever result
+        file path the real code computes -- simulating the elevated PS1
+        having already run and reported its outcome, without ever
+        actually triggering a real UAC prompt or invoking PowerShell."""
+        calls = []
+        def _fake_run(args, **kw):
+            calls.append(args)
+            if args[0] == "powershell.exe":
+                ps1_files = list(tqa.AI_PROWLER_HOME.glob("_grant_batch_logon_*.ps1"))
+                if ps1_files:
+                    content = ps1_files[0].read_text(encoding="utf-8")
+                    for line in content.splitlines():
+                        if "Set-Content -Path '" in line and "OK" in line:
+                            path_str = line.split("'")[1]
+                            Path(path_str).write_text(result_content, encoding="utf-8")
+                            break
+            class _R:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return _R()
+        monkeypatch.setattr(tqa.subprocess, "run", _fake_run)
+        return calls
+
+    def test_marker_present_skips_entirely_no_prompt(self, monkeypatch):
+        tqa.AI_PROWLER_HOME.mkdir(parents=True, exist_ok=True)
+        tqa.BATCH_LOGON_MARKER_PATH.write_text("already granted", encoding="utf-8")
+        calls = []
+        monkeypatch.setattr(tqa.subprocess, "run",
+                             lambda *a, **kw: calls.append(a) or (_ for _ in ()).throw(
+                                 AssertionError("should never call subprocess.run when marker exists")))
+        ok, detail = tqa.grant_batch_logon_right("david", timeout_sec=5)
+        assert ok is True
+        assert "already granted" in detail.lower()
+        assert calls == []
+
+    def test_success_path_writes_marker_and_returns_true(self, monkeypatch):
+        self._mock_uac_success_with_result(
+            monkeypatch, f"{tqa._GRANT_BATCH_LOGON_MARKER}OK")
+        ok, detail = tqa.grant_batch_logon_right("david", timeout_sec=5)
+        assert ok is True
+        assert "david" in detail
+        assert tqa.BATCH_LOGON_MARKER_PATH.exists()
+
+    def test_second_call_after_success_skips_via_marker(self, monkeypatch):
+        calls = self._mock_uac_success_with_result(
+            monkeypatch, f"{tqa._GRANT_BATCH_LOGON_MARKER}OK")
+        tqa.grant_batch_logon_right("david", timeout_sec=5)
+        calls.clear()
+        ok, detail = tqa.grant_batch_logon_right("david", timeout_sec=5)
+        assert ok is True
+        assert calls == []  # no second UAC prompt
+
+    def test_failure_reported_by_ps1_returns_false_no_marker_written(self, monkeypatch):
+        self._mock_uac_success_with_result(
+            monkeypatch, f"{tqa._GRANT_BATCH_LOGON_MARKER}FAIL: access denied")
+        ok, detail = tqa.grant_batch_logon_right("david", timeout_sec=5)
+        assert ok is False
+        assert "access denied" in detail
+        assert not tqa.BATCH_LOGON_MARKER_PATH.exists()
+
+    def test_timeout_when_result_file_never_appears(self, monkeypatch):
+        def _fake_run(args, **kw):
+            class _R:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return _R()
+        monkeypatch.setattr(tqa.subprocess, "run", _fake_run)
+        # Short timeout so this test itself stays fast.
+        ok, detail = tqa.grant_batch_logon_right("david", timeout_sec=1)
+        assert ok is False
+        assert "timed out" in detail.lower()
+
+    def test_defaults_to_current_username_when_omitted(self, monkeypatch):
+        monkeypatch.setenv("USERNAME", "david")
+        self._mock_uac_success_with_result(
+            monkeypatch, f"{tqa._GRANT_BATCH_LOGON_MARKER}OK")
+        ok, detail = tqa.grant_batch_logon_right(timeout_sec=5)
+        assert ok is True
+        assert "david" in detail
+
+    def test_cleanup_removes_temp_ps1_and_result_files(self, monkeypatch):
+        self._mock_uac_success_with_result(
+            monkeypatch, f"{tqa._GRANT_BATCH_LOGON_MARKER}OK")
+        tqa.grant_batch_logon_right("david", timeout_sec=5)
+        leftover = list(tqa.AI_PROWLER_HOME.glob("_grant_batch_logon_*"))
+        assert leftover == []
+
+    def test_success_recognized_despite_powershell_bom(self, monkeypatch):
+        # Real-world bug: Windows PowerShell 5.1's Set-Content -Encoding
+        # UTF8 writes a BOM by default (PowerShell 7+ does not). A live
+        # test showed the grant genuinely succeeding (the result file's
+        # visible text was correct) but still being reported as a
+        # failure, because the leading BOM byte broke a plain
+        # content.startswith(...) check. This test writes the result file
+        # with a real UTF-8 BOM prefix, exactly reproducing that scenario.
+        calls = []
+        def _fake_run(args, **kw):
+            calls.append(args)
+            if args[0] == "powershell.exe":
+                ps1_files = list(tqa.AI_PROWLER_HOME.glob("_grant_batch_logon_*.ps1"))
+                if ps1_files:
+                    content = ps1_files[0].read_text(encoding="utf-8")
+                    for line in content.splitlines():
+                        if "Set-Content -Path '" in line and "OK" in line:
+                            path_str = line.split("'")[1]
+                            # Write with an actual UTF-8 BOM, matching what
+                            # PowerShell 5.1's Set-Content -Encoding UTF8
+                            # really produces.
+                            Path(path_str).write_bytes(
+                                b'\xef\xbb\xbf' +
+                                f"{tqa._GRANT_BATCH_LOGON_MARKER}OK".encode("utf-8"))
+                            break
+            class _R:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return _R()
+        monkeypatch.setattr(tqa.subprocess, "run", _fake_run)
+
+        ok, detail = tqa.grant_batch_logon_right("david", timeout_sec=5)
+        assert ok is True
+        assert "AI_PROWLER_GRANT_RESULT" not in detail  # the raw marker text
+        # must never leak into a user-facing success message
+
+
+class TestBuildGrantBatchLogonPs1:
+
+    def test_embeds_username_and_result_file(self):
+        script = tqa._build_grant_batch_logon_ps1("david", r"C:\fake\result.txt")
+        assert "david" in script
+        assert r"C:\fake\result.txt" in script
+
+    def test_references_correct_privilege_constant(self):
+        script = tqa._build_grant_batch_logon_ps1("david", r"C:\fake\result.txt")
+        assert "SeBatchLogonRight" in script
+
+    def test_has_try_catch_for_failure_reporting(self):
+        script = tqa._build_grant_batch_logon_ps1("david", r"C:\fake\result.txt")
+        assert "try {" in script
+        assert "catch {" in script
+        assert tqa._GRANT_BATCH_LOGON_MARKER in script
+
+
+# ── v8.1.11: _register_queue_task_elevated() — properly isolated ──────────
+# Same pattern and rationale as TestGrantBatchLogonRight above: restores
+# the real function (undoing the module-wide safety mock), and mocks
+# subprocess.run directly so no real UAC prompt or PowerShell process is
+# ever triggered by running the test suite.
+
+class TestRegisterQueueTaskElevated:
+
+    @pytest.fixture(autouse=True)
+    def _restore_real_function(self, monkeypatch):
+        monkeypatch.setattr(tqa, "_register_queue_task_elevated",
+                             _REAL_REGISTER_QUEUE_TASK_ELEVATED)
+
+    def _mock_uac_success_with_result(self, monkeypatch, result_content):
+        def _fake_run(args, **kw):
+            if args[0] == "powershell.exe":
+                ps1_files = list(tqa.AI_PROWLER_HOME.glob("_register_queue_task_*.ps1"))
+                if ps1_files:
+                    content = ps1_files[0].read_text(encoding="utf-8")
+                    for line in content.splitlines():
+                        if "Set-Content -Path '" in line and "OK" in line:
+                            path_str = line.split("'")[1]
+                            Path(path_str).write_text(result_content, encoding="utf-8")
+                            break
+            class _R:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return _R()
+        monkeypatch.setattr(tqa.subprocess, "run", _fake_run)
+
+    def test_success_path_returns_true(self, monkeypatch):
+        self._mock_uac_success_with_result(monkeypatch, "OK")
+        ok, detail = tqa._register_queue_task_elevated(
+            Path("fake.bat"), "07:30", "daily", 1, True, "david", timeout_sec=5)
+        assert ok is True
+
+    def test_failure_reported_by_ps1_returns_false_with_message(self, monkeypatch):
+        self._mock_uac_success_with_result(monkeypatch, "FAIL: access denied")
+        ok, detail = tqa._register_queue_task_elevated(
+            Path("fake.bat"), "07:30", "daily", 1, True, "david", timeout_sec=5)
+        assert ok is False
+        assert "access denied" in detail
+
+    def test_timeout_when_result_file_never_appears(self, monkeypatch):
+        def _fake_run(args, **kw):
+            class _R:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return _R()
+        monkeypatch.setattr(tqa.subprocess, "run", _fake_run)
+        ok, detail = tqa._register_queue_task_elevated(
+            Path("fake.bat"), "07:30", "daily", 1, True, "david", timeout_sec=1)
+        assert ok is False
+        assert "timed out" in detail.lower()
+
+    def test_cleanup_removes_temp_ps1_and_result_files(self, monkeypatch):
+        self._mock_uac_success_with_result(monkeypatch, "OK")
+        tqa._register_queue_task_elevated(
+            Path("fake.bat"), "07:30", "daily", 1, True, "david", timeout_sec=5)
+        leftover = list(tqa.AI_PROWLER_HOME.glob("_register_queue_task_*"))
+        assert leftover == []
+
+    def test_success_recognized_despite_powershell_bom(self, monkeypatch):
+        # Same real-world bug as grant_batch_logon_right() — Windows
+        # PowerShell 5.1's Set-Content -Encoding UTF8 writes a BOM by
+        # default, which must not break the success check here either.
+        def _fake_run(args, **kw):
+            if args[0] == "powershell.exe":
+                ps1_files = list(tqa.AI_PROWLER_HOME.glob("_register_queue_task_*.ps1"))
+                if ps1_files:
+                    content = ps1_files[0].read_text(encoding="utf-8")
+                    for line in content.splitlines():
+                        if "Set-Content -Path '" in line and "OK" in line:
+                            path_str = line.split("'")[1]
+                            Path(path_str).write_bytes(b'\xef\xbb\xbfOK')
+                            break
+            class _R:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return _R()
+        monkeypatch.setattr(tqa.subprocess, "run", _fake_run)
+        ok, detail = tqa._register_queue_task_elevated(
+            Path("fake.bat"), "07:30", "daily", 1, True, "david", timeout_sec=5)
+        assert ok is True
+
+    def test_wrapper_path_single_quotes_are_escaped_before_ps1_generation(self, monkeypatch):
+        captured_scripts = []
+        def _fake_run(args, **kw):
+            if args[0] == "powershell.exe":
+                ps1_files = list(tqa.AI_PROWLER_HOME.glob("_register_queue_task_*.ps1"))
+                if ps1_files:
+                    captured_scripts.append(ps1_files[0].read_text(encoding="utf-8"))
+            class _R:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return _R()
+        monkeypatch.setattr(tqa.subprocess, "run", _fake_run)
+        tqa._register_queue_task_elevated(
+            Path("C:/fake's/path.bat"), "07:30", "daily", 1, True, "david", timeout_sec=1)
+        # Path() normalizes to backslashes on Windows -- check for the
+        # doubled single quote specifically, not an exact path string.
+        assert "fake''s" in captured_scripts[0]
 
 
 # ── Audit log read ────────────────────────────────────────────────────────
@@ -1164,6 +1540,29 @@ def test_dry_run_check_api_key_detail_never_shows_value(_isolated_home, monkeypa
     assert "sk-ant-api03-super-secret-value" not in key_check["detail"]
 
 
+# ── v8.1.11 fix: dry_run_check() Skill-file path is cwd-independent ────────
+# Real-world bug: a fresh install auto-launched via the AI-Prowler-AutoStart
+# Scheduled Task inherited Windows' default working directory
+# (C:\Windows\System32) all the way into rag_gui.py, and this check
+# reported the Skill file "missing" there instead of the real install
+# directory, even though it was genuinely installed correctly.
+
+def test_dry_run_skill_check_ignores_current_working_directory(tmp_path, monkeypatch):
+    # Simulate exactly the real-world failure mode: change the PROCESS's
+    # cwd to somewhere completely unrelated to the install directory
+    # (standing in for C:\Windows\System32) and confirm the Skill file
+    # check still resolves to the real module location, not this fake cwd.
+    monkeypatch.chdir(tmp_path)
+    report = tqa.dry_run_check()
+    skill_check = next(c for c in report["checks"] if c["name"] == "AI-Prowler Skill file")
+    assert str(tmp_path) not in skill_check["detail"]
+    # The detail path must be anchored to wherever task_queue_automation.py
+    # itself actually lives, not the (deliberately wrong) cwd above.
+    expected_dir = tqa.Path(tqa.__file__).resolve().parent
+    assert skill_check["detail"] == str(
+        expected_dir / ".claude" / "skills" / "ai-prowler-tasks" / "SKILL.md")
+
+
 # ── Claude Code CLI presence + install ────────────────────────────────────
 
 def test_claude_code_cli_installed_true_when_on_path(monkeypatch):
@@ -1171,9 +1570,49 @@ def test_claude_code_cli_installed_true_when_on_path(monkeypatch):
     assert tqa.claude_code_cli_installed() is True
 
 
-def test_claude_code_cli_installed_false_when_absent(monkeypatch):
+def test_claude_code_cli_installed_false_when_absent(tmp_path, monkeypatch):
+    # v8.1.11: must also isolate the disk-fallback check (Path.home()) --
+    # without this, the test's result silently depends on whether THIS
+    # machine happens to have ~/.local/bin/claude.exe, rather than testing
+    # the function's logic in isolation.
     monkeypatch.setattr(tqa.shutil, "which", lambda name: None)
+    monkeypatch.setattr(tqa.Path, "home", lambda: tmp_path)
     assert tqa.claude_code_cli_installed() is False
+
+
+# ── v8.1.11 fix: disk-fallback for claude_code_cli_installed() ─────────────
+# Real-world bug: Setup.exe's own install log confirmed Claude Code CLI was
+# genuinely present ("Already on PATH — skipping install"), but AI-Prowler
+# reported "Not Installed" after being reopened -- shutil.which() only
+# reflects the CURRENT PROCESS's inherited PATH snapshot, which can be
+# stale immediately after a PATH registry write, especially for a process
+# spawned via the AI-Prowler-AutoStart Scheduled Task (ONLOGON trigger).
+
+class TestClaudeCodeCliDiskFallback:
+
+    def test_found_via_disk_fallback_when_path_stale(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(tqa.shutil, "which", lambda name: None)  # PATH stale
+        monkeypatch.setattr(tqa.Path, "home", lambda: tmp_path)
+        install_dir = tmp_path / ".local" / "bin"
+        install_dir.mkdir(parents=True)
+        (install_dir / "claude.exe").write_text("fake binary", encoding="utf-8")
+
+        assert tqa.claude_code_cli_installed() is True
+
+    def test_false_when_neither_path_nor_disk_has_it(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(tqa.shutil, "which", lambda name: None)
+        monkeypatch.setattr(tqa.Path, "home", lambda: tmp_path)
+        # Deliberately do NOT create .local/bin/claude.exe.
+        assert tqa.claude_code_cli_installed() is False
+
+    def test_path_takes_priority_no_disk_check_needed(self, monkeypatch):
+        # If PATH already resolves it, the function should short-circuit
+        # True without even touching the filesystem for the fallback check
+        # -- confirmed indirectly: Path.home() is deliberately left
+        # unmocked/untouched here and the test still passes regardless of
+        # this machine's real home directory contents.
+        monkeypatch.setattr(tqa.shutil, "which", lambda name: r"C:\real\claude.exe")
+        assert tqa.claude_code_cli_installed() is True
 
 
 def test_install_claude_code_cli_skips_when_already_installed(monkeypatch):
@@ -1342,15 +1781,27 @@ def test_install_claude_code_cli_falls_back_to_path_fix(tmp_path, monkeypatch):
     # but shutil.which() never finds it (matches the real-world finding —
     # the installer can succeed while leaving PATH untouched). Confirm
     # the fallback actually gets invoked rather than just reporting failure.
+    #
+    # v8.1.11: claude.exe must NOT exist on disk until the mocked
+    # subprocess.run() "installer" call actually runs — claude_code_cli_
+    # installed() now also checks this same disk location directly, so if
+    # the file were pre-seeded before calling install_claude_code_cli(),
+    # its own early "already installed" guard would correctly short-circuit
+    # before ever reaching the subprocess call or the fallback logic this
+    # test is actually trying to exercise.
     fake_home = tmp_path
     monkeypatch.setattr(tqa.Path, "home", lambda: fake_home)
     install_dir = fake_home / ".local" / "bin"
-    install_dir.mkdir(parents=True)
-    (install_dir / "claude.exe").write_text("fake binary", encoding="utf-8")
 
     monkeypatch.setattr(tqa.shutil, "which", lambda name: None)  # PATH never has it
-    monkeypatch.setattr(tqa.subprocess, "run",
-                         lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})())
+
+    def _fake_installer_run(*a, **kw):
+        # The real installer writes claude.exe as a side effect of running
+        # -- simulate that here, at call time, not before.
+        install_dir.mkdir(parents=True, exist_ok=True)
+        (install_dir / "claude.exe").write_text("fake binary", encoding="utf-8")
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+    monkeypatch.setattr(tqa.subprocess, "run", _fake_installer_run)
 
     fix_calls = []
     monkeypatch.setattr(tqa, "_add_to_user_path", lambda d: fix_calls.append(d) or True)

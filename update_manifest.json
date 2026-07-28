@@ -1,11 +1,11 @@
 {
-  "version": "8.1.10",
-  "generated": "2026-07-27T14:41:01",
+  "version": "8.1.11",
+  "generated": "2026-07-28T09:27:34",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "4df682387cc5af6223cbf0b69cb07b9d0852d7f09cf21983a9e8f61324a385df",
-      "bytes": 1184018
+      "sha256": "73c106fe82abc9fec8a782407e872b184d6ea3cf1a7c9abfa95adb8142b29de7",
+      "bytes": 1188624
     },
     {
       "path": "rag_preprocessor.py",
@@ -14,7 +14,7 @@
     },
     {
       "path": "ai_prowler_mcp.py",
-      "sha256": "968241af742f6f82f10481226593dcc7c859cd8ae9d504317045bd7b54106939",
+      "sha256": "fae3309b1b1506c61ef6871a93e15ca009189be24a82ac410966b677f57ffa4f",
       "bytes": 783728
     },
     {
@@ -29,8 +29,8 @@
     },
     {
       "path": "RAG_RUN.bat",
-      "sha256": "7657fb0bced4a117c1dbd657411845869c369aac8a52da45d33bfec7852def9d",
-      "bytes": 6312
+      "sha256": "479e96efc44a12106cf56ccb1fc1ab80e93d2b68dac323c6ecb7cfa49e7a325b",
+      "bytes": 7551
     },
     {
       "path": "create_shortcut.py",
@@ -59,12 +59,12 @@
     },
     {
       "path": "COMPLETE_USER_GUIDE.md",
-      "sha256": "dfa5bff7d236cdf091d70311c30869e66d2d1ab406d45630a708bd6bf1d81788",
-      "bytes": 162543
+      "sha256": "abf964672a2173cf769531289f81c5e5533579df97c8daf42e2151bf9f223910",
+      "bytes": 162535
     },
     {
       "path": "VERSION",
-      "sha256": "033795d1c138bc887cf1d1780526a5e328aabaf730fbc562f33e3bc3fa01e034",
+      "sha256": "a66fac69b16b0e061f6628edde1864917489a70dc4518e337a4fa49ca988cd03",
       "bytes": 7
     },
     {
@@ -109,7 +109,7 @@
     },
     {
       "path": "custom_tasks_manager.py",
-      "sha256": "39554d4f0aa2955122b0e625b87eb02abc6e23ebd40fa0458f1968c2138ae90c",
+      "sha256": "498292f3e6d34a07dbabb396ae083a047487fe53a970f2c825279a8475ff876c",
       "bytes": 46735
     },
     {
@@ -124,8 +124,8 @@
     },
     {
       "path": "task_queue_automation.py",
-      "sha256": "7cd60b6fbb5b5b9e534e728c0506c04ca1e4cd9b47be1c6a8595581358ef74c9",
-      "bytes": 66197
+      "sha256": "5f81f357a311e38ea628453c4afa9b9c1034da6fb82f7765b0f329fa6c2c7606",
+      "bytes": 90451
     },
     {
       "path": ".claude/settings.json",

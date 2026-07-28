@@ -114,7 +114,7 @@ class TestSuccessfulCreation:
 
 
 class TestDailyTimeOfDayParams:
-    """v8.1.13: daily_start_time/daily_end_time/daily_times_per_day
+    """v8.1.11: daily_start_time/daily_end_time/daily_times_per_day
     forwarded straight through to custom_tasks_manager.create_task()."""
 
     def test_daily_params_forwarded_to_create_task(self, mcp_mod, monkeypatch):

@@ -387,7 +387,7 @@ class TestUpdateAnalysisTask:
                 "c1", schedule="daily", first_due="2026-06-23")
         assert "Updated task" in result
         assert saved["custom"][0]["schedule"] == "daily"
-        # v8.1.13: "daily" now produces a datetime next_due (date + the
+        # v8.1.11: "daily" now produces a datetime next_due (date + the
         # default daily_start_time of "09:00", since none was passed here).
         assert saved["custom"][0]["next_due"] == "2026-06-23T09:00:00"
 

@@ -33,6 +33,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -42,6 +43,14 @@ STATUS_PATH = AI_PROWLER_HOME / "task_automation_last_run.json"
 AUDIT_LOG_PATH = AI_PROWLER_HOME / "autonomous_run_audit.log"
 WRAPPER_SCRIPT_NAME = "run_ai_prowler_queue.bat"
 SCHEDULED_TASK_NAME = "AI-Prowler-QueueRunner"
+# v8.1.11: written by AI-Prowler-Setup.iss's GrantBatchLogonRight procedure
+# on a successful install-time grant of "Log on as a batch job", and by
+# grant_batch_logon_right()'s own TEMPORARY fallback below on a successful
+# runtime (UAC-prompted) grant. Same path constant on both sides —
+# {%USERPROFILE}\.ai-prowler\batch_logon_granted.marker in the installer's
+# Pascal, this in Python. Its presence means the current user never needs
+# to be re-prompted.
+BATCH_LOGON_MARKER_PATH = AI_PROWLER_HOME / "batch_logon_granted.marker"
 
 # v8.1.11 fix: the wrapper used to invoke `claude -p "/ai-prowler-run-queue"`,
 # relying on Claude Code discovering .claude/skills/ai-prowler-tasks/SKILL.md
@@ -121,7 +130,7 @@ DEFAULT_CONFIG = {
                                     # spec §5.3 for the tradeoff — this does NOT affect
                                     # agentic tool access, only billing + reliability.
 
-    # v8.1.13: independently configurable check frequency + active window.
+    # v8.1.11: independently configurable check frequency + active window.
     # This is DELIBERATELY decoupled from any individual custom task's own
     # schedule (daily/weekly/hourly/etc.) — a task's schedule only decides
     # WHETHER it's due; these fields decide how often the checker itself
@@ -225,7 +234,7 @@ def build_wrapper_script_content(mcp_config_path: str, allowed_tools: str,
     falls back to %USERPROFILE% to preserve prior (broken) behavior rather
     than guessing wrong.
 
-    check_mode/active_days/active_start_time/active_end_time (v8.1.13):
+    check_mode/active_days/active_start_time/active_end_time (v8.1.11):
     the checker's own frequency (set via check_mode + the OS trigger
     install_scheduled_task() creates) and active window are DELIBERATELY
     independent of any individual custom task's own schedule — this is
@@ -254,7 +263,7 @@ def build_wrapper_script_content(mcp_config_path: str, allowed_tools: str,
             f"_days = {_days_py_list}; "
             f"print('RUN' if (_day in _days and '{active_start_time}' <= _t <= '{active_end_time}') else 'SKIP')"
         )
-        window_check_block = f"""REM v8.1.13: active-window self-gate. The OS-level trigger (installed by
+        window_check_block = f"""REM v8.1.11: active-window self-gate. The OS-level trigger (installed by
 REM install_scheduled_task()) just fires every check_interval_hours hours,
 REM around the clock — day-of-week and time-of-day filtering happen HERE
 REM instead, so a check outside the configured window exits before ever
@@ -278,7 +287,7 @@ if not "%AIP_WINDOW_CHECK%"=="RUN" (
             f"_days = {_days_py_list}; "
             "print('RUN' if _day in _days else 'SKIP')"
         )
-        window_check_block = f"""REM v8.1.13: active-days self-gate (daily mode). schedule_time already
+        window_check_block = f"""REM v8.1.11: active-days self-gate (daily mode). schedule_time already
 REM pins the single time-of-day this fires (via the OS trigger) — only
 REM day-of-week needs checking here, e.g. for a "weekdays only" setup.
 for /f "delims=" %%R in ('python -c "{_window_check_py}"') do set AIP_WINDOW_CHECK=%%R
@@ -391,7 +400,7 @@ def install_wrapper_script(target_dir: Path, mcp_config_path: str, allowed_tools
     (contains .claude/skills/ai-prowler-tasks/SKILL.md). See that
     function's docstring for why this is required (v8.1.10 fix).
 
-    check_mode/active_days/active_start_time/active_end_time (v8.1.13):
+    check_mode/active_days/active_start_time/active_end_time (v8.1.11):
     forwarded straight through to build_wrapper_script_content() — see
     that function's docstring for the full rationale."""
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -458,7 +467,26 @@ def dry_run_check() -> dict:
         })
 
     # 4. Does the Skill file exist?
-    skill_path = Path.cwd() / ".claude" / "skills" / "ai-prowler-tasks" / "SKILL.md"
+    # v8.1.11 fix: real-world bug — Path.cwd() reflects whatever the
+    # CALLING process's current working directory happens to be, which is
+    # only correct by accident (e.g. a desktop shortcut's "Start in"
+    # field). Confirmed live: a fresh install auto-launched via the
+    # AI-Prowler-AutoStart Scheduled Task (no explicit working directory)
+    # inherited Windows' default of C:\Windows\System32, and this check
+    # reported the Skill file "missing" at
+    # C:\Windows\System32\.claude\skills\..., even though it was correctly
+    # installed at the real AI-Prowler directory. __file__ always
+    # resolves to where THIS module itself is actually running from
+    # (task_queue_automation.py is deployed alongside .claude\ in every
+    # install), independent of the calling process's cwd — the same
+    # robust pattern already used elsewhere (e.g. rag_gui.py's own
+    # install_dir computation for the wrapper script). RAG_RUN.bat now
+    # also sets a correct working directory explicitly as the real root
+    # fix; this is defense-in-depth for any other launch path that
+    # doesn't go through RAG_RUN.bat at all (e.g. a raw `python
+    # rag_gui.py` invocation from an arbitrary directory).
+    _this_module_dir = Path(__file__).resolve().parent
+    skill_path = _this_module_dir / ".claude" / "skills" / "ai-prowler-tasks" / "SKILL.md"
     checks.append({
         "name": "AI-Prowler Skill file",
         "ok": skill_path.exists(),
@@ -776,10 +804,36 @@ def try_capture_setup_token() -> bool:
 # an actual Setup.exe run, never during an in-app file-sync update).
 
 def claude_code_cli_installed() -> bool:
-    """Cheap presence check — does `claude` resolve on PATH at all.
-    Does not verify auth/token status; see check_token_expiry /
-    has_api_key for that."""
-    return shutil.which("claude") is not None
+    """Presence check — does `claude` resolve on PATH, OR does it exist at
+    the well-known default install location even if PATH doesn't
+    currently resolve it? Does not verify auth/token status; see
+    check_token_expiry / has_api_key for that.
+
+    v8.1.11 fix: real-world bug report — Claude Code CLI was genuinely
+    installed and working (confirmed by the Setup.exe install log showing
+    "[Claude Code] Already on PATH — skipping install"), but AI-Prowler's
+    OWN status check reported "Not Installed" after being reopened. Root
+    cause: shutil.which() only reflects the CURRENT PROCESS's inherited
+    PATH environment snapshot — if AI-Prowler is relaunched via the
+    AI-Prowler-AutoStart Scheduled Task (ONLOGON trigger, registered by
+    the installer) shortly after Claude Code CLI's PATH entry was
+    registry-written by some OTHER process, the newly-spawned AI-Prowler
+    process can inherit a stale environment block from before that PATH
+    update, even though the registry itself is already correct — a
+    well-documented Windows environment-propagation quirk, not something
+    unique to this codebase. install_claude_code_cli() already had a
+    disk-fallback for exactly this class of problem, but only as part of
+    its OWN post-install verification — it never helped a status check
+    for a Claude Code CLI that was installed by something OTHER than
+    that button (e.g. a prior separate install, as in this report). This
+    same disk-fallback is now applied to the plain status check too, so
+    the GUI's live indicator and Dry Run checklist are accurate even when
+    PATH itself hasn't propagated to this particular process yet.
+    """
+    if shutil.which("claude") is not None:
+        return True
+    default_install_dir = Path.home() / ".local" / "bin"
+    return (default_install_dir / "claude.exe").exists()
 
 
 def _add_to_user_path(new_dir: Path) -> bool:
@@ -1025,7 +1079,16 @@ def install_claude_code_cli() -> tuple[bool, str]:
     # Confirmed live: the install succeeds every time, but without this
     # fallback, AI-Prowler would report "failed" forever afterward
     # because it only checks PATH, and PATH was never actually updated.
-    if not claude_code_cli_installed():
+    #
+    # v8.1.11: checks shutil.which() directly here, NOT
+    # claude_code_cli_installed() — that function now also checks the
+    # disk fallback location itself, which would make THIS guard always
+    # see "already usable" once claude.exe exists on disk, even before
+    # PATH has actually been persistently registered. That would silently
+    # skip the one-time PATH registration below on every future call,
+    # leaving PATH broken for any OTHER process (a fresh terminal, a
+    # scheduled task) that doesn't get the disk-fallback's benefit.
+    if shutil.which("claude") is None:
         default_install_dir = Path.home() / ".local" / "bin"
         if (default_install_dir / "claude.exe").exists():
             _add_to_user_path(default_install_dir)
@@ -1173,7 +1236,7 @@ def open_setup_token_terminal() -> tuple[bool, str]:
 
 
 def get_scheduled_task_display_info() -> dict:
-    """v8.1.14: real, OS-level truth about the actual armed Windows
+    """v8.1.11: real, OS-level truth about the actual armed Windows
     Scheduled Task — not what the GUI's config file says should be true,
     but what schtasks itself reports right now. Built specifically so the
     Autonomous AI Task Queue panel can show David what's actually armed
@@ -1256,6 +1319,209 @@ def get_scheduled_task_display_info() -> dict:
     return info
 
 
+# ── v8.1.11: "Log on as a batch job" right (SeBatchLogonRight) ─────────────
+# Real-world root cause finding: schtasks /RU <username> (without /RP) is
+# SUPPOSED to produce an S4U logon type ("Run whether user is logged on or
+# not") — but this silently degrades to Interactive-only if the account
+# doesn't already hold SeBatchLogonRight. Standard Windows accounts don't
+# have this right by default, and schtasks gives no error when it's
+# missing — it just quietly creates a weaker task than requested, which is
+# exactly what caused the QueueRunner task to fail during a full logoff
+# despite the /RU fix being correctly applied in code. Confirmed live via
+# `whoami /priv | findstr batch` returning nothing for the affected account.
+
+_GRANT_BATCH_LOGON_MARKER = "AI_PROWLER_GRANT_RESULT:"
+
+
+def _build_grant_batch_logon_ps1(username: str, result_file: str) -> str:
+    """Returns a PowerShell script that grants SeBatchLogonRight to
+    `username` via the documented Win32 LSA policy API (LsaAddAccountRights)
+    — the standard, tool-free way to script this; no ntrights.exe or
+    third-party utility needed. Writes a one-line result to result_file
+    so the (elevated, detached) process's outcome can be observed by the
+    calling (non-elevated) Python process afterward."""
+    return f"""$ErrorActionPreference = 'Stop'
+try {{
+    Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+
+public class AiProwlerLsa {{
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LSA_UNICODE_STRING {{
+        public ushort Length;
+        public ushort MaximumLength;
+        public IntPtr Buffer;
+    }}
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LSA_OBJECT_ATTRIBUTES {{
+        public int Length;
+        public IntPtr RootDirectory;
+        public IntPtr ObjectName;
+        public int Attributes;
+        public IntPtr SecurityDescriptor;
+        public IntPtr SecurityQualityOfService;
+    }}
+
+    [DllImport("advapi32.dll", PreserveSig = true)]
+    private static extern uint LsaOpenPolicy(ref LSA_UNICODE_STRING SystemName, ref LSA_OBJECT_ATTRIBUTES ObjectAttributes, int AccessMask, out IntPtr PolicyHandle);
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
+    private static extern uint LsaAddAccountRights(IntPtr PolicyHandle, IntPtr AccountSid, LSA_UNICODE_STRING[] UserRights, int CountOfRights);
+
+    [DllImport("advapi32.dll")]
+    private static extern uint LsaClose(IntPtr ObjectHandle);
+
+    public static void AddPrivilege(string accountName, string privilege) {{
+        var sid = (System.Security.Principal.SecurityIdentifier)
+            new System.Security.Principal.NTAccount(accountName)
+                .Translate(typeof(System.Security.Principal.SecurityIdentifier));
+        byte[] sidBytes = new byte[sid.BinaryLength];
+        sid.GetBinaryForm(sidBytes, 0);
+        IntPtr sidPtr = Marshal.AllocHGlobal(sidBytes.Length);
+        Marshal.Copy(sidBytes, 0, sidPtr, sidBytes.Length);
+
+        var oa = new LSA_OBJECT_ATTRIBUTES();
+        var system = new LSA_UNICODE_STRING();
+        IntPtr policyHandle;
+
+        // POLICY_CREATE_ACCOUNT (0x0010) | POLICY_LOOKUP_NAMES (0x0800)
+        uint openResult = LsaOpenPolicy(ref system, ref oa, 0x0810, out policyHandle);
+        if (openResult != 0) {{
+            Marshal.FreeHGlobal(sidPtr);
+            throw new Exception("LsaOpenPolicy failed, NTSTATUS 0x" + openResult.ToString("X"));
+        }}
+
+        var rights = new LSA_UNICODE_STRING[1];
+        rights[0] = new LSA_UNICODE_STRING();
+        rights[0].Buffer = Marshal.StringToHGlobalUni(privilege);
+        rights[0].Length = (ushort)(privilege.Length * 2);
+        rights[0].MaximumLength = (ushort)((privilege.Length + 1) * 2);
+
+        uint addResult = LsaAddAccountRights(policyHandle, sidPtr, rights, 1);
+        Marshal.FreeHGlobal(rights[0].Buffer);
+        Marshal.FreeHGlobal(sidPtr);
+        LsaClose(policyHandle);
+
+        if (addResult != 0) {{
+            throw new Exception("LsaAddAccountRights failed, NTSTATUS 0x" + addResult.ToString("X"));
+        }}
+    }}
+}}
+'@
+    [AiProwlerLsa]::AddPrivilege('{username}', 'SeBatchLogonRight')
+    Set-Content -Path '{result_file}' -Value '{_GRANT_BATCH_LOGON_MARKER}OK' -Encoding UTF8
+}} catch {{
+    $msg = $_.Exception.Message -replace "[\\r\\n]+", " "
+    Set-Content -Path '{result_file}' -Value "{_GRANT_BATCH_LOGON_MARKER}FAIL: $msg" -Encoding UTF8
+}}
+"""
+
+
+def grant_batch_logon_right(username: str = None, timeout_sec: int = 30) -> tuple[bool, str]:
+    """Grants 'Log on as a batch job' (SeBatchLogonRight) to `username`
+    (defaults to the current user), so that schtasks /RU <username>
+    (without /RP) actually produces the S4U logon type it's meant to,
+    instead of silently degrading to Interactive-only.
+
+    v8.1.11 TEMPORARY FALLBACK — remove once it's safe to assume every
+    live install has the installer-side grant (AI-Prowler-Setup.iss's
+    GrantBatchLogonRight procedure, which runs this same LSA call while
+    the installer is already elevated, no UAC prompt needed). This
+    function exists only to fix installs that predate that installer
+    change without requiring a full reinstall.
+
+    First checks BATCH_LOGON_MARKER_PATH — if the installer already
+    granted this (or a previous call to this same function already did),
+    skip entirely and return success immediately, no prompt.
+
+    If the marker is absent, this REQUIRES a one-time UAC consent prompt
+    — confirmed via direct testing that the originally-planned silent
+    approach (a temporary /RL HIGHEST Scheduled Task, no prompt) does NOT
+    work: AI-Prowler's GUI deliberately runs non-elevated (see
+    RAG_RUN.bat), and Windows UAC's split-token model means even an
+    administrator account's non-elevated processes can't silently create
+    a highest-privilege task — real result from a live test: "ERROR:
+    Access is denied." A genuine UAC prompt, via the same Start-Process
+    -Verb RunAs pattern RAG_RUN.bat already uses for its own update-apply
+    step, is the only reliable way to get the elevation this needs. On
+    success, writes the SAME marker file the installer would have, so
+    this only ever prompts once per machine, not once per Enable/Apply
+    click.
+
+    Returns (success, detail).
+    """
+    if username is None:
+        username = os.environ.get("USERNAME") or getpass.getuser()
+
+    if BATCH_LOGON_MARKER_PATH.exists():
+        return True, f"'Log on as a batch job' already granted for {username} (marker found)."
+
+    result_file = AI_PROWLER_HOME / f"_grant_batch_logon_result_{os.getpid()}.txt"
+    ps1_path = AI_PROWLER_HOME / f"_grant_batch_logon_{os.getpid()}.ps1"
+    AI_PROWLER_HOME.mkdir(parents=True, exist_ok=True)
+    try:
+        ps1_path.write_text(
+            _build_grant_batch_logon_ps1(username, str(result_file)),
+            encoding="utf-8")
+    except Exception as e:
+        return False, f"Could not write grant script: {e}"
+
+    try:
+        # Launches an ELEVATED powershell.exe to run the inner grant
+        # script, showing exactly one UAC consent prompt. -Wait blocks
+        # this (non-elevated) call until the elevated process exits.
+        launcher = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command",
+             f'Start-Process -FilePath "powershell.exe" -ArgumentList '
+             f'\'-NoProfile -ExecutionPolicy Bypass -File "{ps1_path}"\' '
+             f'-Verb RunAs -Wait'],
+            capture_output=True, text=True, timeout=timeout_sec)
+
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline:
+            if result_file.exists():
+                break
+            time.sleep(0.5)
+        else:
+            return False, (
+                "Timed out waiting for the elevated grant to complete "
+                "— if a UAC prompt appeared, it may have been declined "
+                "or is still waiting for a response.")
+
+        # v8.1.11 fix: real-world bug — Windows PowerShell 5.1's
+        # `Set-Content -Encoding UTF8` writes a BOM (Byte Order Mark) by
+        # default (PowerShell 7+ does not). Reading that back with plain
+        # "utf-8" leaves an invisible leading U+FEFF character, which made
+        # content.startswith(...) fail even when the file's actual text
+        # was correct — confirmed live: the detail message shown to the
+        # user literally contained "AI_PROWLER_GRANT_RESULT:OK" (the
+        # success marker!) while still being treated as a failure.
+        # "utf-8-sig" strips a BOM if present and is a safe no-op if not.
+        content = result_file.read_text(encoding="utf-8-sig", errors="replace").strip()
+        if content.startswith(f"{_GRANT_BATCH_LOGON_MARKER}OK"):
+            try:
+                BATCH_LOGON_MARKER_PATH.write_text(
+                    f"Granted at runtime via one-time UAC prompt for {username}.",
+                    encoding="utf-8")
+            except Exception:
+                pass  # non-fatal — worst case, prompts again next time
+            return True, f"'Log on as a batch job' granted to {username}."
+        detail = content[len(_GRANT_BATCH_LOGON_MARKER):] if content.startswith(_GRANT_BATCH_LOGON_MARKER) else content
+        return False, detail or "Unknown failure — no result written."
+    except subprocess.TimeoutExpired:
+        return False, "Timed out."
+    except Exception as e:
+        return False, str(e)
+    finally:
+        for p in (ps1_path, result_file):
+            try:
+                p.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
 def scheduled_task_exists() -> bool:
     r = subprocess.run(["schtasks", "/query", "/tn", SCHEDULED_TASK_NAME],
                         capture_output=True, text=True)
@@ -1282,6 +1548,108 @@ def scheduled_task_enabled() -> bool | None:
     return None
 
 
+def _build_register_queue_task_ps1(wrapper_script_path: str, schedule_time: str,
+                                    check_mode: str, check_interval_hours: int,
+                                    username: str, enabled: bool,
+                                    result_file: str) -> str:
+    """Returns a PowerShell script that (re)registers SCHEDULED_TASK_NAME
+    with a genuine S4U principal via the ScheduledTasks module — the
+    mechanism confirmed live to actually work, unlike schtasks.exe's /RU
+    (see install_scheduled_task()'s docstring for the full story). Single
+    quotes in wrapper_script_path must already be doubled by the caller
+    (PowerShell's own escaping convention) — Windows paths essentially
+    never contain them, but this is defensive correctness, not a fix for
+    an observed problem.
+    """
+    if check_mode == "interval":
+        trigger_block = (
+            "$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) "
+            f"-RepetitionInterval (New-TimeSpan -Hours {max(1, int(check_interval_hours))}) "
+            "-RepetitionDuration (New-TimeSpan -Days 3650)"
+        )
+    else:
+        trigger_block = f"$trigger = New-ScheduledTaskTrigger -Daily -At '{schedule_time}'"
+
+    disable_line = ""
+    if not enabled:
+        disable_line = (
+            f"\n    Disable-ScheduledTask -TaskName '{SCHEDULED_TASK_NAME}' | Out-Null"
+        )
+
+    return f"""$ErrorActionPreference = 'Stop'
+try {{
+    $action = New-ScheduledTaskAction -Execute '{wrapper_script_path}'
+    {trigger_block}
+    $principal = New-ScheduledTaskPrincipal -UserId '{username}' -LogonType S4U -RunLevel Limited
+    Register-ScheduledTask -TaskName '{SCHEDULED_TASK_NAME}' -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null{disable_line}
+    Set-Content -Path '{result_file}' -Value 'OK' -Encoding UTF8
+}} catch {{
+    $msg = $_.Exception.Message -replace "[\\r\\n]+", " "
+    Set-Content -Path '{result_file}' -Value "FAIL: $msg" -Encoding UTF8
+}}
+"""
+
+
+def _register_queue_task_elevated(wrapper_script_path: Path, schedule_time: str,
+                                   check_mode: str, check_interval_hours: int,
+                                   enabled: bool, username: str,
+                                   timeout_sec: int = 30) -> tuple[bool, str]:
+    """Runs _build_register_queue_task_ps1()'s script through the same
+    one-time-UAC-prompt elevation pattern as grant_batch_logon_right() —
+    Register-ScheduledTask with an explicit S4U principal requires
+    elevation just like the rights grant does (confirmed live: fails
+    "Access is denied" non-elevated, even with -RunLevel Limited)."""
+    result_file = AI_PROWLER_HOME / f"_register_queue_task_result_{os.getpid()}.txt"
+    ps1_path = AI_PROWLER_HOME / f"_register_queue_task_{os.getpid()}.ps1"
+    AI_PROWLER_HOME.mkdir(parents=True, exist_ok=True)
+    try:
+        ps1_path.write_text(
+            _build_register_queue_task_ps1(
+                str(wrapper_script_path).replace("'", "''"), schedule_time,
+                check_mode, check_interval_hours, username, enabled,
+                str(result_file)),
+            encoding="utf-8")
+    except Exception as e:
+        return False, f"Could not write task registration script: {e}"
+
+    try:
+        subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command",
+             f'Start-Process -FilePath "powershell.exe" -ArgumentList '
+             f'\'-NoProfile -ExecutionPolicy Bypass -File "{ps1_path}"\' '
+             f'-Verb RunAs -Wait'],
+            capture_output=True, text=True, timeout=timeout_sec)
+
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline:
+            if result_file.exists():
+                break
+            time.sleep(0.5)
+        else:
+            return False, (
+                "Timed out waiting for the elevated task registration to "
+                "complete — if a UAC prompt appeared, it may have been "
+                "declined or is still waiting for a response.")
+
+        # v8.1.11: same BOM defensive fix as grant_batch_logon_right() —
+        # Windows PowerShell 5.1's Set-Content -Encoding UTF8 writes a
+        # BOM by default, which broke a plain startswith() check there.
+        content = result_file.read_text(encoding="utf-8-sig", errors="replace").strip()
+        if content.startswith("OK"):
+            return True, "ok"
+        return False, content[len("FAIL: "):] if content.startswith("FAIL:") else content
+    except subprocess.TimeoutExpired:
+        return False, "Timed out."
+    except Exception as e:
+        return False, str(e)
+    finally:
+        for p in (ps1_path, result_file):
+            try:
+                p.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
 def install_scheduled_task(wrapper_script_path: Path, schedule_time: str,
                             enabled: bool = True,
                             check_mode: str = "daily",
@@ -1291,7 +1659,7 @@ def install_scheduled_task(wrapper_script_path: Path, schedule_time: str,
     DISABLED — used by the test harness below to prove the mechanism works
     without leaving anything live.
 
-    v8.1.13: check_mode/check_interval_hours control the OS-level trigger
+    v8.1.11: check_mode/check_interval_hours control the OS-level trigger
     type. "daily" (default, matches all prior behavior) fires once a day
     at schedule_time. "interval" fires every check_interval_hours hours,
     around the clock — day-of-week and time-of-day restrictions for
@@ -1304,7 +1672,7 @@ def install_scheduled_task(wrapper_script_path: Path, schedule_time: str,
     to unit-test as plain string content than to validate real Task
     Scheduler XML/state.
 
-    v8.1.14 fix: real-world bug report — the checker worked fine while the
+    v8.1.11 fix: real-world bug report — the checker worked fine while the
     user was actively logged in, but silently never fired while the
     screensaver was active / screen locked, even with sleep/hibernate
     already disabled per the "Keep It Running" guide. Root cause: without
@@ -1327,29 +1695,120 @@ def install_scheduled_task(wrapper_script_path: Path, schedule_time: str,
     if run_as_user is None:
         run_as_user = os.environ.get("USERNAME") or getpass.getuser()
 
-    if check_mode == "interval":
-        sc_args = ["/sc", "hourly", "/mo", str(max(1, int(check_interval_hours)))]
-    else:
-        sc_args = ["/sc", "daily", "/st", schedule_time]
+    # v8.1.11 fix: /RU alone doesn't guarantee the S4U logon type it's
+    # meant to produce — it silently degrades to Interactive-only if the
+    # account lacks SeBatchLogonRight ("Log on as a batch job"), which
+    # standard Windows accounts don't have by default. Confirmed live:
+    # this exact silent degradation is what caused the QueueRunner task
+    # to still fail during a full logoff even after the /RU fix above was
+    # correctly deployed. Grant the right proactively here, every time —
+    # LsaAddAccountRights is idempotent (granting an already-held right is
+    # a harmless no-op), so there's no cost to attempting this on every
+    # Enable/Apply rather than trying to detect whether it's already
+    # present first. If the grant fails (e.g. a genuinely non-admin
+    # account, where the elevation-via-Scheduled-Task trick itself can't
+    # succeed), task creation still proceeds — an Interactive-only task is
+    # still better than none, and grant_detail is folded into the
+    # returned message so the caller can surface it rather than silently
+    # losing the information.
+    _grant_ok, _grant_detail = grant_batch_logon_right(run_as_user)
 
-    args = [
-        "schtasks", "/create", "/tn", SCHEDULED_TASK_NAME,
-        "/tr", f'"{wrapper_script_path}"',
-        *sc_args,
-        "/ru", run_as_user,
-        "/f",  # overwrite if it already exists
-    ]
-    r = subprocess.run(args, capture_output=True, text=True)
-    if r.returncode != 0:
-        return False, (r.stderr or r.stdout).strip()
+    # v8.1.11 SECOND fix, found via live testing after the grant above
+    # still didn't produce a working task: schtasks.exe's /RU <user>
+    # (without /RP) does NOT actually set S4U logon type through its
+    # simple CLI, REGARDLESS of SeBatchLogonRight — confirmed via direct
+    # side-by-side testing (schtasks-created task: "Logon Mode:
+    # Interactive only" even with the right freshly confirmed present in
+    # secedit's own USER_RIGHTS export). PowerShell's ScheduledTasks
+    # module (New-ScheduledTaskPrincipal -LogonType S4U +
+    # Register-ScheduledTask) DOES produce a genuine S4U task — confirmed
+    # live: "Logon Mode: Interactive/Background". That registration call
+    # ALSO requires elevation (confirmed: fails "Access is denied" from a
+    # non-elevated process even with -RunLevel Limited), so this reuses
+    # the exact same one-time-UAC-prompt elevation pattern as the grant
+    # above. Deliberate design choice (Option 1, by direct instruction):
+    # always take the fully-proven elevated path rather than trying to
+    # cleverly avoid re-prompting for simple schedule tweaks via
+    # non-elevated schtasks /change — that fallback hasn't been verified
+    # to actually work, and this session already burned real effort on
+    # two unverified assumptions. The real cost: Apply/Toggle-On shows one
+    # UAC consent click each time the schedule is actually (re)created,
+    # not just once ever like the rights grant.
+    reg_ok, reg_detail = _register_queue_task_elevated(
+        wrapper_script_path, schedule_time, check_mode, check_interval_hours,
+        enabled, run_as_user)
+    if not reg_ok:
+        return False, reg_detail
 
-    if not enabled:
-        r2 = subprocess.run(["schtasks", "/change", "/tn", SCHEDULED_TASK_NAME, "/disable"],
-                             capture_output=True, text=True)
-        if r2.returncode != 0:
-            return False, f"created but failed to disable: {(r2.stderr or r2.stdout).strip()}"
+    if _grant_ok:
+        return True, "ok"
+    return True, (
+        f"ok (note: could not confirm 'Log on as a batch job' for "
+        f"{run_as_user} — {_grant_detail}. The task may still fall back "
+        f"to running only while logged on.)")
 
-    return True, "ok"
+
+def _unregister_queue_task_elevated(timeout_sec: int = 30) -> tuple[bool, str]:
+    """Elevated fallback for uninstall_scheduled_task(). A task registered
+    via _register_queue_task_elevated()'s S4U principal requires elevation
+    to modify — confirmed there (see its docstring) to fail "Access is
+    denied" non-elevated even with -RunLevel Limited. Deletion hits the
+    same wall (confirmed live: a plain, non-elevated `schtasks /delete`
+    against this task returns exit code 1 / "ERROR: Access is denied.").
+    Uses the identical one-time-UAC-prompt + result-file handshake as
+    _register_queue_task_elevated(), rather than trying to capture stdout
+    from the elevated child directly (which Start-Process -Verb RunAs
+    doesn't expose to the launcher)."""
+    result_file = AI_PROWLER_HOME / f"_unregister_queue_task_result_{os.getpid()}.txt"
+    ps1_path = AI_PROWLER_HOME / f"_unregister_queue_task_{os.getpid()}.ps1"
+    AI_PROWLER_HOME.mkdir(parents=True, exist_ok=True)
+    ps1_content = f"""$ErrorActionPreference = 'Stop'
+try {{
+    Unregister-ScheduledTask -TaskName '{SCHEDULED_TASK_NAME}' -Confirm:$false -ErrorAction Stop
+    Set-Content -Path '{result_file}' -Value 'OK' -Encoding UTF8
+}} catch {{
+    $msg = $_.Exception.Message -replace "[\\r\\n]+", " "
+    Set-Content -Path '{result_file}' -Value "FAIL: $msg" -Encoding UTF8
+}}
+"""
+    try:
+        ps1_path.write_text(ps1_content, encoding="utf-8")
+    except Exception as e:
+        return False, f"Could not write task removal script: {e}"
+
+    try:
+        subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command",
+             f'Start-Process -FilePath "powershell.exe" -ArgumentList '
+             f'\'-NoProfile -ExecutionPolicy Bypass -File "{ps1_path}"\' '
+             f'-Verb RunAs -Wait'],
+            capture_output=True, text=True, timeout=timeout_sec)
+
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline:
+            if result_file.exists():
+                break
+            time.sleep(0.5)
+        else:
+            return False, (
+                "Timed out waiting for the elevated task removal to "
+                "complete — if a UAC prompt appeared, it may have been "
+                "declined or is still waiting for a response.")
+
+        content = result_file.read_text(encoding="utf-8-sig", errors="replace").strip()
+        if content.startswith("OK"):
+            return True, "ok"
+        return False, content[len("FAIL: "):] if content.startswith("FAIL:") else content
+    except subprocess.TimeoutExpired:
+        return False, "Timed out."
+    except Exception as e:
+        return False, str(e)
+    finally:
+        for p in (ps1_path, result_file):
+            try:
+                p.unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 def uninstall_scheduled_task() -> tuple[bool, str]:
@@ -1357,7 +1816,20 @@ def uninstall_scheduled_task() -> tuple[bool, str]:
         return True, "not present"
     r = subprocess.run(["schtasks", "/delete", "/tn", SCHEDULED_TASK_NAME, "/f"],
                         capture_output=True, text=True)
-    return (r.returncode == 0), (r.stderr or r.stdout).strip()
+    if r.returncode == 0:
+        return True, "ok"
+    # v8.1.16 fix: the plain non-elevated delete above used to be the only
+    # attempt — its result was even discarded entirely by the GUI's disable
+    # path, so a task registered via the elevated S4U principal (see
+    # _register_queue_task_elevated()) silently stayed armed: the button
+    # flipped to OFF and config was rewritten as disabled while the real
+    # Windows Scheduled Task kept running on schedule. Retry once, elevated,
+    # before reporting failure.
+    plain_detail = (r.stderr or r.stdout).strip()
+    ok, elevated_detail = _unregister_queue_task_elevated()
+    if ok:
+        return True, "ok (required elevation)"
+    return False, f"{plain_detail} | elevated retry also failed: {elevated_detail}"
 
 
 # ── Audit log read (for the GUI's "View Audit Log" button) ──────────────

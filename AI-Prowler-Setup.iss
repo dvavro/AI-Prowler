@@ -162,7 +162,7 @@
 
 [Setup]
 AppName=AI-Prowler
-AppVersion=8.1.10
+AppVersion=8.1.11
 ; AppId pins the upgrade identity so Inno reliably detects prior installations
 ; of any version and runs only OUR uninstaller — never a mismatched one.
 ; Must remain constant across all future releases (do NOT change this GUID).
@@ -1236,6 +1236,149 @@ begin
     '-NoProfile -ExecutionPolicy Bypass -File "' + PsFile + '"');
   DeleteFileIfExists(PsFile);
   AppendInstallLog('[UserGuide] === User guide tracking seed complete ===');
+end;
+
+// v8.1.11: grants "Log on as a batch job" (SeBatchLogonRight) to the
+// installing user, so schtasks /RU <username> (without /RP) actually
+// produces the S4U logon type it's meant to ("Run whether user is logged
+// on or not") rather than silently degrading to Interactive-only —
+// real-world confirmed root cause of the Autonomous AI Task Queue's
+// QueueRunner task failing to fire during a full logoff even after the
+// /RU fix itself was correctly applied. Standard Windows accounts don't
+// hold this right by default. The installer already runs elevated, so —
+// unlike the equivalent in-app fix in task_queue_automation.py, which has
+// to work around AI-Prowler's GUI deliberately running non-elevated via a
+// one-time UAC prompt — this can just call the LSA API directly, no
+// elevation trickery needed. Writes a marker file on success so the
+// in-app fallback (for installs that predate this fix) can detect it was
+// already granted here and skip its own UAC prompt entirely.
+procedure GrantBatchLogonRight();
+var
+  PsFile, ResultFile, PsContents, ResultContent, Username: String;
+  MarkerFile: String;
+  ResultContentAnsi: AnsiString;   // LoadStringFromFile requires AnsiString
+begin
+  AppendInstallLog('[BatchLogonRight] === Granting Log on as a batch job ===');
+  Username := GetEnv('USERNAME');
+  PsFile := MakeTempFile('grant_batch_logon');
+  PsFile := Copy(PsFile, 1, Length(PsFile) - 4) + '.ps1';
+  ResultFile := MakeTempFile('grant_batch_logon_result');
+  ResultFile := Copy(ResultFile, 1, Length(ResultFile) - 4) + '.txt';
+
+  // Same LSA policy API approach (LsaAddAccountRights) as the in-app
+  // fallback in task_queue_automation.py — kept in sync manually, same
+  // rationale as the Skill file / QUEUE_RUNNER_PROMPT relationship
+  // elsewhere in this codebase.
+  PsContents :=
+    '$ErrorActionPreference = ''Stop''' + #13#10 +
+    'try {' + #13#10 +
+    '  Add-Type @''' + #13#10 +
+    'using System;' + #13#10 +
+    'using System.Runtime.InteropServices;' + #13#10 +
+    '' + #13#10 +
+    'public class AiProwlerLsaInstaller {' + #13#10 +
+    '    [StructLayout(LayoutKind.Sequential)]' + #13#10 +
+    '    private struct LSA_UNICODE_STRING {' + #13#10 +
+    '        public ushort Length;' + #13#10 +
+    '        public ushort MaximumLength;' + #13#10 +
+    '        public IntPtr Buffer;' + #13#10 +
+    '    }' + #13#10 +
+    '' + #13#10 +
+    '    [StructLayout(LayoutKind.Sequential)]' + #13#10 +
+    '    private struct LSA_OBJECT_ATTRIBUTES {' + #13#10 +
+    '        public int Length;' + #13#10 +
+    '        public IntPtr RootDirectory;' + #13#10 +
+    '        public IntPtr ObjectName;' + #13#10 +
+    '        public int Attributes;' + #13#10 +
+    '        public IntPtr SecurityDescriptor;' + #13#10 +
+    '        public IntPtr SecurityQualityOfService;' + #13#10 +
+    '    }' + #13#10 +
+    '' + #13#10 +
+    '    [DllImport("advapi32.dll", PreserveSig = true)]' + #13#10 +
+    '    private static extern uint LsaOpenPolicy(ref LSA_UNICODE_STRING SystemName, ref LSA_OBJECT_ATTRIBUTES ObjectAttributes, int AccessMask, out IntPtr PolicyHandle);' + #13#10 +
+    '' + #13#10 +
+    '    [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]' + #13#10 +
+    '    private static extern uint LsaAddAccountRights(IntPtr PolicyHandle, IntPtr AccountSid, LSA_UNICODE_STRING[] UserRights, int CountOfRights);' + #13#10 +
+    '' + #13#10 +
+    '    [DllImport("advapi32.dll")]' + #13#10 +
+    '    private static extern uint LsaClose(IntPtr ObjectHandle);' + #13#10 +
+    '' + #13#10 +
+    '    public static void AddPrivilege(string accountName, string privilege) {' + #13#10 +
+    '        var sid = (System.Security.Principal.SecurityIdentifier)' + #13#10 +
+    '            new System.Security.Principal.NTAccount(accountName)' + #13#10 +
+    '                .Translate(typeof(System.Security.Principal.SecurityIdentifier));' + #13#10 +
+    '        byte[] sidBytes = new byte[sid.BinaryLength];' + #13#10 +
+    '        sid.GetBinaryForm(sidBytes, 0);' + #13#10 +
+    '        IntPtr sidPtr = Marshal.AllocHGlobal(sidBytes.Length);' + #13#10 +
+    '        Marshal.Copy(sidBytes, 0, sidPtr, sidBytes.Length);' + #13#10 +
+    '' + #13#10 +
+    '        var oa = new LSA_OBJECT_ATTRIBUTES();' + #13#10 +
+    '        var system = new LSA_UNICODE_STRING();' + #13#10 +
+    '        IntPtr policyHandle;' + #13#10 +
+    '' + #13#10 +
+    '        uint openResult = LsaOpenPolicy(ref system, ref oa, 0x0810, out policyHandle);' + #13#10 +
+    '        if (openResult != 0) {' + #13#10 +
+    '            Marshal.FreeHGlobal(sidPtr);' + #13#10 +
+    '            throw new Exception("LsaOpenPolicy failed, NTSTATUS 0x" + openResult.ToString("X"));' + #13#10 +
+    '        }' + #13#10 +
+    '' + #13#10 +
+    '        var rights = new LSA_UNICODE_STRING[1];' + #13#10 +
+    '        rights[0] = new LSA_UNICODE_STRING();' + #13#10 +
+    '        rights[0].Buffer = Marshal.StringToHGlobalUni(privilege);' + #13#10 +
+    '        rights[0].Length = (ushort)(privilege.Length * 2);' + #13#10 +
+    '        rights[0].MaximumLength = (ushort)((privilege.Length + 1) * 2);' + #13#10 +
+    '' + #13#10 +
+    '        uint addResult = LsaAddAccountRights(policyHandle, sidPtr, rights, 1);' + #13#10 +
+    '        Marshal.FreeHGlobal(rights[0].Buffer);' + #13#10 +
+    '        Marshal.FreeHGlobal(sidPtr);' + #13#10 +
+    '        LsaClose(policyHandle);' + #13#10 +
+    '' + #13#10 +
+    '        if (addResult != 0) {' + #13#10 +
+    '            throw new Exception("LsaAddAccountRights failed, NTSTATUS 0x" + addResult.ToString("X"));' + #13#10 +
+    '        }' + #13#10 +
+    '    }' + #13#10 +
+    '}' + #13#10 +
+    '''@' + #13#10 +
+    '  [AiProwlerLsaInstaller]::AddPrivilege(''' + Username + ''', ''SeBatchLogonRight'')' + #13#10 +
+    '  Set-Content -Path ''' + ResultFile + ''' -Value ''OK'' -Encoding UTF8' + #13#10 +
+    '} catch {' + #13#10 +
+    '  $msg = $_.Exception.Message -replace "[\r\n]+", " "' + #13#10 +
+    '  Set-Content -Path ''' + ResultFile + ''' -Value "FAIL: $msg" -Encoding UTF8' + #13#10 +
+    '}' + #13#10;
+
+  SaveStringToFile(PsFile, PsContents, False);
+  AppendInstallLog('[BatchLogonRight] Temp script: ' + PsFile);
+  ExecWithLogging(True, '[BatchLogonRight]', 'powershell.exe',
+    '-NoProfile -ExecutionPolicy Bypass -File "' + PsFile + '"');
+  DeleteFileIfExists(PsFile);
+
+  if LoadStringFromFile(ResultFile, ResultContentAnsi) then
+  begin
+    ResultContent := ResultContentAnsi;   // widen AnsiString → String safely
+    AppendInstallLog('[BatchLogonRight] Result: ' + ResultContent);
+    // v8.1.11 defensive fix: Windows PowerShell 5.1's Set-Content
+    // -Encoding UTF8 writes a BOM by default (PowerShell 7+ does not) —
+    // confirmed live on the Python side of this same mechanism that a
+    // leading BOM byte made a strict "starts at position 1" check fail
+    // even though the visible text was correct. Pos(...) > 0 (found
+    // anywhere) rather than = 1 (found at the very start) is safe here
+    // since 'OK' and 'FAIL' are the only two possible outputs and
+    // neither could coincidentally appear elsewhere in a short result.
+    if Pos('OK', ResultContent) > 0 then
+    begin
+      MarkerFile := ExpandConstant('{%USERPROFILE}\.ai-prowler\batch_logon_granted.marker');
+      ForceDirectories(ExtractFileDir(MarkerFile));
+      SaveStringToFile(MarkerFile,
+        'Granted during install for ' + Username + ' — see task_queue_automation.py grant_batch_logon_right() for the in-app fallback this marker lets be skipped.',
+        False);
+      AppendInstallLog('[BatchLogonRight] Marker written: ' + MarkerFile);
+    end;
+  end
+  else
+    AppendInstallLog('[BatchLogonRight] WARNING: no result file — grant may have silently failed.');
+
+  DeleteFileIfExists(ResultFile);
+  AppendInstallLog('[BatchLogonRight] === Grant step complete ===');
 end;
 
 procedure RegisterStartupTask(const AppDir: String);
@@ -2347,6 +2490,17 @@ begin
     // ----------------------------------------------------------
     SetProgress(98, 'Registering startup task (auto-launch after reboot)...');
     RegisterStartupTask(ExpandConstant('{app}'));
+
+    // ----------------------------------------------------------
+    // BATCH LOGON RIGHT  (progress 98.5)
+    // Grants "Log on as a batch job" so the Autonomous AI Task Queue's
+    // Scheduled Task (created later, when the user first enables it in
+    // the GUI) can actually run whether logged on or not, rather than
+    // silently falling back to Interactive-only. See GrantBatchLogonRight
+    // procedure for the real-world bug this fixes.
+    // ----------------------------------------------------------
+    SetProgress(98, 'Granting task scheduler permissions...');
+    GrantBatchLogonRight();
 
     SetProgress(99, 'AI-Prowler ready.');
 

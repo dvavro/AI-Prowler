@@ -92,7 +92,7 @@ if sys.stderr is None:
 # Single source of truth for the app version. Bump this one line when releasing
 # a new version; all UI labels, About dialogs, help text, and update checks
 # read from here.
-APP_VERSION = "8.1.10"
+APP_VERSION = "8.1.11"
 
 # ── UI feature flags ─────────────────────────────────────────────────────────
 # Toggle visibility of advanced/legacy GUI sections without removing any
@@ -5249,7 +5249,7 @@ or from the Help menu."""
                 schedule_key  = settings.get("schedule", "none")
                 first_due_val = settings.get("first_due")
                 _due_anchor   = first_due_val or _dt_bq.date.today().isoformat()
-                # v8.1.14: daily tasks now need a datetime next_due (date +
+                # v8.1.11: daily tasks now need a datetime next_due (date +
                 # first run-time slot), same as My Custom AI Analyses —
                 # matches _first_daily_datetime()'s logic exactly.
                 if schedule_key == "daily":
@@ -5477,7 +5477,7 @@ or from the Help menu."""
             tk.Label(_sched_row, text='YYYY-MM-DD  (blank = today)',
                      font=('Arial', 7), fg='gray').pack(side='left', padx=(6, 0))
 
-            # v8.1.14: Daily-only time-of-day fields — Start time, End
+            # v8.1.11: Daily-only time-of-day fields — Start time, End
             # time (only meaningful/used when Times/day > 1), and Times
             # per day (1-24, "24 times/day 00:00-23:00" is how Hourly
             # ends up expressed — no separate Hourly schedule). Extended
@@ -5519,7 +5519,7 @@ or from the Help menu."""
             _daily_times_var.trace_add('write', _update_daily_preview_builtin)
             _update_daily_preview_builtin()
 
-            # v8.1.14: the credit-usage note only matters when there's
+            # v8.1.11: the credit-usage note only matters when there's
             # actually more than one run/day to warn about — a once-daily
             # or weekly task barely costs anything, so showing this
             # unconditionally overstated the concern. Now only visible
@@ -5632,7 +5632,7 @@ or from the Help menu."""
                     "At least one output must be selected: Learnings, Document, or Email.")
                 return
 
-            # v8.1.14: same daily time-of-day validation custom tasks get
+            # v8.1.11: same daily time-of-day validation custom tasks get
             # from create_task()/update_task() — this built-in path has no
             # equivalent backend function, so it's checked here too.
             daily_start_val = _daily_start_var.get().strip() or "09:00"
@@ -6440,11 +6440,11 @@ or from the Help menu."""
             tk.Label(sched_row, text="YYYY-MM-DD",
                      font=('Arial', 7), fg='gray').pack(side='left', padx=(4, 0))
 
-            # v8.1.13: Daily-only time-of-day fields — Start time, End
+            # v8.1.11: Daily-only time-of-day fields — Start time, End
             # time (only meaningful/used when Times/day > 1), and Times
             # per day (1-24, "24 times/day 00:00-23:00" is how Hourly
             # ends up expressed — no separate Hourly schedule).
-            # v8.1.14: extended to the Common Business Analysis Configure
+            # v8.1.11: extended to the Common Business Analysis Configure
             # dialog too, using the exact same fields/behavior — no longer
             # Custom-only. Both dialogs call
             # custom_tasks_manager.format_daily_run_times_preview() for
@@ -6475,7 +6475,7 @@ or from the Help menu."""
             tk.Label(daily_row, text="HH:MM, max 24/day",
                      font=('Arial', 7), fg='gray').pack(side='left', padx=(6, 0))
 
-            # v8.1.14: live "what does this actually produce" preview —
+            # v8.1.11: live "what does this actually produce" preview —
             # updates on every keystroke in any of the three fields above,
             # so the user sees the real computed result, not just the raw
             # inputs. Empty string (nothing shown) for invalid/mid-typing
@@ -6493,7 +6493,7 @@ or from the Help menu."""
             daily_times_var.trace_add('write', _update_daily_preview)
             _update_daily_preview()
 
-            # v8.1.14: the credit-usage note only matters when there's
+            # v8.1.11: the credit-usage note only matters when there's
             # actually more than one run/day to warn about — a once-daily
             # or weekly task barely costs anything, so showing this
             # unconditionally overstated the concern. Now only visible
@@ -7397,6 +7397,22 @@ or from the Help menu."""
             _tqa_cli_lbl.pack(side='left')
 
             def _tqa_refresh_cli_status():
+                # v8.1.11: opportunistic self-heal — if claude.exe exists
+                # on disk at the known default location but doesn't
+                # currently resolve via PATH for THIS process (the exact
+                # real-world scenario that caused a false "Not Installed"
+                # report after AI-Prowler was relaunched via the
+                # AI-Prowler-AutoStart Scheduled Task), persist the PATH
+                # fix now rather than requiring the user to notice and
+                # click "Install" again on something that's technically
+                # already installed. _add_to_user_path() is idempotent
+                # (checks already_present before writing), so calling it
+                # here on every status refresh is safe, not just a
+                # one-time fix.
+                if (_tqa.shutil.which("claude") is None):
+                    _default_cli_dir = _tqa.Path.home() / ".local" / "bin"
+                    if (_default_cli_dir / "claude.exe").exists():
+                        _tqa._add_to_user_path(_default_cli_dir)
                 if _tqa.claude_code_cli_installed():
                     _tqa_cli_var.set("⬤ Claude Code CLI: Installed")
                     _tqa_cli_lbl.config(fg='#6ab86a')
@@ -7423,14 +7439,14 @@ or from the Help menu."""
             _tqa_time_var     = tk.StringVar(value=_tqa_cfg.get("schedule_time", "06:00"))
             _tqa_notify_var   = tk.BooleanVar(value=_tqa_cfg.get("notify_on_complete", False))
             _tqa_method_var   = tk.StringVar(value=_tqa_cfg.get("notify_method", "sms"))
-            # v8.1.14: real OS-level "what's actually armed right now"
+            # v8.1.11: real OS-level "what's actually armed right now"
             # display — see _tqa_refresh_status_display() below for why
             # this exists (config file / GUI fields can drift from what
             # Windows Task Scheduler genuinely has armed).
             _tqa_armed_var    = tk.StringVar(value="")
 
             def _tqa_refresh_status_display():
-                # v8.1.14 fix: this used to check scheduled_task_exists()
+                # v8.1.11 fix: this used to check scheduled_task_exists()
                 # (presence only) plus the LOCAL config's "enabled" flag —
                 # neither of those is the real Windows-reported enabled/
                 # disabled state, so a mismatch between config and reality
@@ -7448,7 +7464,7 @@ or from the Help menu."""
                     _tqa_status_var.set("● Disabled")
                     _tqa_status_lbl.config(fg='#aa4444')
                     _tqa_status_lbl2.config(fg='#aa4444')
-                # v8.1.14: the actual currently-armed Windows Scheduled
+                # v8.1.11: the actual currently-armed Windows Scheduled
                 # Task cadence, in plain language — "🟢 Armed — Daily at
                 # 06:00:00 (next: ...)" or "🔴 Not armed" — so it's
                 # visually obvious whether real MS auto-runs are actually
@@ -7510,7 +7526,7 @@ or from the Help menu."""
             tk.Label(_tqa_row1, text="(24h HH:MM, daily)", bg='#1a1e2e', fg='#6a7a9a',
                      font=('Arial', 8)).pack(side='left', padx=(0, 8))
 
-            # v8.1.13: independently-configurable checker frequency — how
+            # v8.1.11: independently-configurable checker frequency — how
             # often the Autonomous AI Task Queue itself wakes up to look
             # for due work, DECOUPLED from any individual task's own
             # schedule. 1 = classic once-daily at Scheduled time above
@@ -7569,7 +7585,7 @@ or from the Help menu."""
             # bug). This button calls the exact same apply function
             # directly, without touching the enabled/disabled state, so
             # a time-only change takes effect immediately either way.
-            # v8.1.14: give visible confirmation that clicking Apply
+            # v8.1.11: give visible confirmation that clicking Apply
             # actually did something — briefly flash the button green,
             # then restore its normal appearance. Purely cosmetic
             # feedback; the actual effect is _tqa_refresh_status_display()
@@ -7615,7 +7631,7 @@ or from the Help menu."""
                                          font=('Arial', 9, 'bold'))
             _tqa_status_lbl2.pack(side='left', padx=(12, 0))
 
-            # v8.1.14: dedicated row showing the real, OS-level armed
+            # v8.1.11: dedicated row showing the real, OS-level armed
             # schedule — "🟢 Armed — Daily at 06:00:00 (next: 7/27/2026
             # 6:00:00 AM)" or "🔴 Not armed". This is what David asked
             # for: visual confirmation of what Windows Task Scheduler
@@ -7843,7 +7859,7 @@ or from the Help menu."""
                 cfg["notify_method"]      = _tqa_method_var.get()
                 cfg["use_api_key"]        = (_tqa_auth_var.get() == "api_key")
 
-                # v8.1.13: derive check_mode/check_interval_hours from the
+                # v8.1.11: derive check_mode/check_interval_hours from the
                 # "times/day" field — 1 keeps the classic once-daily
                 # behavior at schedule_time above (check_mode stays
                 # "daily"); >1 switches to an hourly-interval trigger.
@@ -7926,8 +7942,39 @@ or from the Help menu."""
                         cfg["enabled"] = False
                         _tqa.save_config(cfg)
                         _tqa_cfg.update(cfg)
+                    elif "note:" in detail:
+                        # v8.1.11: install_scheduled_task() always returns
+                        # ok=True even when the "Log on as a batch job"
+                        # grant specifically failed — deliberately, so a
+                        # failed grant doesn't block the task from being
+                        # created at all (Interactive-only is still better
+                        # than nothing). But that means this detail was
+                        # PREVIOUSLY discarded silently on the success
+                        # path, with no way for the user to ever know the
+                        # grant didn't take — surface it now.
+                        messagebox.showwarning("Enabled — with a caveat", detail)
                 elif not cfg["enabled"]:
-                    _tqa.uninstall_scheduled_task()
+                    # v8.1.16 fix: this used to call uninstall_scheduled_task()
+                    # and discard the (ok, detail) result entirely — a failed
+                    # delete (e.g. "Access is denied" against a task
+                    # registered via the elevated S4U principal) went
+                    # completely unnoticed. Config still said disabled and
+                    # the button still flipped to OFF, but the real Windows
+                    # Scheduled Task stayed armed and kept running on
+                    # schedule. uninstall_scheduled_task() now retries
+                    # elevated internally, so this only fires for a genuine,
+                    # unrecoverable failure — surface it instead of hiding it.
+                    _uninstall_ok, _uninstall_detail = _tqa.uninstall_scheduled_task()
+                    if not _uninstall_ok:
+                        messagebox.showerror(
+                            "Could Not Fully Disable",
+                            "The Autonomous AI Task Queue setting is now OFF, "
+                            "but the real Windows Scheduled Task could not be "
+                            "removed, so it may still run on its old "
+                            f"schedule:\n\n{_uninstall_detail}\n\n"
+                            "You can remove it manually via Task Scheduler "
+                            "(task name: AI-Prowler-QueueRunner) or try "
+                            "toggling again.")
 
                 _tqa_refresh_status_display()
 
@@ -8070,6 +8117,7 @@ or from the Help menu."""
                 _tqa_enabled_var.set(not _tqa_cfg.get("enabled", False))
                 _tqa_save_and_apply()
                 _tqa_update_enable_btn_label()
+                _tqa_refresh_status_display()
 
             # v8.3: replaces the checkbox + "● Enabled/Disabled" status dot
             # with one big color-coded toggle button — red + "OFF" or
@@ -9120,7 +9168,7 @@ or from the Help menu."""
             script_path = Path.home() / "AI-Prowler" / "rag_auto_update.bat"
             all_days    = {'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'}
             days_str    = ",".join(days)
-            # v8.1.14 fix: same real-world bug as the Autonomous AI Task
+            # v8.1.11 fix: same real-world bug as the Autonomous AI Task
             # Queue's scheduler — without an explicit /RU, schtasks.exe
             # defaults to the "Run only when user is logged on" logon type
             # (INTERACTIVE_TOKEN), which requires an active interactive
@@ -19930,7 +19978,25 @@ or from the Help menu."""
                     print()
 
                     if not file_paths:
-                        print(f"   ⚠️  No supported files found — skipping\n")
+                        if is_file:
+                            print(f"   ⚠️  No supported files found — skipping\n")
+                            continue
+                        # v8.1.16 fix: an empty (or fully smart-scan-filtered)
+                        # directory used to be skipped entirely here — which
+                        # meant it never got added to the auto-update
+                        # tracking list at all. Any files dropped into it
+                        # afterward were invisible to both "Update All" and
+                        # the scheduled autonomous re-index, since nothing
+                        # was tracking that path in the first place. Still
+                        # register it for tracking (same helper used for a
+                        # populated directory just below) even though
+                        # there's nothing to index yet — an empty baseline
+                        # is enough for future files to be picked up as NEW
+                        # on the next scan.
+                        print(f"   ⚠️  No supported files found — registering "
+                              f"the directory for tracking anyway, so files "
+                              f"added to it later get picked up automatically\n")
+                        self._register_directory_for_tracking(directory, recursive)
                         continue
 
                     # In Business server mode pass a collection_resolver so

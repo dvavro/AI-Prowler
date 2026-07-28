@@ -1,7 +1,7 @@
 """
 tests/unit/test_daily_time_of_day_schedule.py
 ================================================
-Tests for the v8.1.13 "Daily with start/end time-of-day and N times per
+Tests for the v8.1.11 "Daily with start/end time-of-day and N times per
 day" feature — the core date/time engine in custom_tasks_manager.py.
 
 Design: Daily gains an optional start time, end time, and times-per-day
@@ -83,7 +83,7 @@ class TestComputeDailyRunTimes:
 
 
 class TestFormatDailyRunTimesPreview:
-    """v8.1.14: shared by both the Custom and Common Business dialogs, so
+    """v8.1.11: shared by both the Custom and Common Business dialogs, so
     they can never drift out of sync with each other on what a given
     Start/End/Times-per-day combination actually produces."""
 

@@ -1,7 +1,7 @@
 """
 tests/gui/test_auto_update_schedule_ru.py
 ============================================
-v8.1.14 fix: the "AI Prowler Auto-Update" scheduled task (Update Index
+v8.1.11 fix: the "AI Prowler Auto-Update" scheduled task (Update Index
 tab's set_schedule()) had the exact same bug just fixed in
 task_queue_automation.py's Autonomous AI Task Queue scheduler — no
 explicit /RU on the schtasks /create call, which defaults schtasks.exe to

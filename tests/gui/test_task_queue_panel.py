@@ -190,7 +190,7 @@ def test_save_enabled_with_mcp_config_installs_scheduled_task(gui, monkeypatch, 
     assert saved["enabled"] is True
 
 
-# ── v8.1.13: "times/day" checker-frequency field + credit warning ──────────
+# ── v8.1.11: "times/day" checker-frequency field + credit warning ──────────
 # The checker's own frequency is DELIBERATELY decoupled from any individual
 # task's own schedule — this is the GUI control + static (non-conversational)
 # credit-usage warning David asked to have shown right next to Scheduled

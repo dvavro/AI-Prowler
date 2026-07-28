@@ -686,7 +686,7 @@ _TIER_A_SUPPRESSED: frozenset = frozenset({
     # check_sms_replies (which IS per-user isolated) is the server-mode
     # equivalent — see _PERSONAL_MODE_SUPPRESSED below for the reverse gate.
     "check_sms_inbox",
-    # Home address (v8.1.13) — personal-install-only. Settings tab's Home
+    # Home address (v8.1.11) — personal-install-only. Settings tab's Home
     # address field is a single-owner concept (one street/city/state/zip,
     # same source the weather Proactive Alerts already used) with no
     # per-user equivalent in a multi-user server — there's no meaningful
@@ -3322,7 +3322,7 @@ def get_home_address() -> str:
     Return the owner's configured home/business address (Street, City,
     State, ZIP), set via Settings tab → Home address.
 
-    v8.1.13. Before this tool existed, that address was only ever read by
+    v8.1.11. Before this tool existed, that address was only ever read by
     a private, non-tool internal helper used exclusively for weather
     lookups (Proactive Alerts' Morning Briefing fallback and Weekly
     Weather Watch) — there was no way for Claude to retrieve it directly
@@ -12373,7 +12373,7 @@ def create_analysis_task(
     now callable directly from a conversation.
 
     IMPORTANT — how this actually behaves (set expectations honestly):
-      • Time-of-day granularity, but ONLY for schedule="daily" (v8.1.13).
+      • Time-of-day granularity, but ONLY for schedule="daily" (v8.1.11).
         Daily supports daily_start_time, daily_end_time, and
         daily_times_per_day — N evenly-spaced runs per day, the first
         exactly at daily_start_time and the last exactly at daily_end_time
@@ -12434,12 +12434,12 @@ def create_analysis_task(
         report_folder:    Output folder for .docx reports, if output_report
                           is True. Uses the default reports folder if omitted.
         daily_start_time: HH:MM, first run of the day — only used when
-                          schedule == "daily" (v8.1.13). Default "09:00".
+                          schedule == "daily" (v8.1.11). Default "09:00".
         daily_end_time:   HH:MM, last run of the day — only used when
                           schedule == "daily" AND daily_times_per_day > 1.
                           Default "17:00".
         daily_times_per_day: How many evenly-spaced runs per day when
-                          schedule == "daily" (v8.1.13). 1 = classic
+                          schedule == "daily" (v8.1.11). 1 = classic
                           once-daily (default). Max 24 — mention the usage
                           cost note above if the user asks for anything
                           above 1.
@@ -13026,7 +13026,7 @@ def update_analysis_task(
     task is left as-is. Uses the same update_task() logic as the GUI's
     task editor (including the v8.1.9 fix for next_due correctly
     recomputing when schedule or first_due actually change, and the
-    v8.1.13 extension of that same fix to daily_start_time/daily_end_time/
+    v8.1.11 extension of that same fix to daily_start_time/daily_end_time/
     daily_times_per_day — changing any of those for a "daily" task resets
     next_due too, same as changing schedule/first_due does).
 
@@ -13049,11 +13049,11 @@ def update_analysis_task(
         scope_dirs:         List of directory paths to restrict the analysis to.
         daily_start_time:   HH:MM, first run of the day — only meaningful
                             when the task's schedule is (or is being
-                            changed to) "daily" (v8.1.13).
+                            changed to) "daily" (v8.1.11).
         daily_end_time:     HH:MM, last run of the day — only used when
-                            daily_times_per_day > 1 (v8.1.13).
+                            daily_times_per_day > 1 (v8.1.11).
         daily_times_per_day: How many evenly-spaced runs per day when
-                            schedule == "daily" (v8.1.13). Max 24 — if the
+                            schedule == "daily" (v8.1.11). Max 24 — if the
                             user is raising this above 1, mention the real
                             usage-cost implication (each check the
                             Autonomous AI Task Queue makes draws from the
@@ -13064,7 +13064,7 @@ def update_analysis_task(
         Confirmation with the updated next_due, or an error if the
         task_id wasn't found, a value was invalid, the edit would leave
         all three outputs (learnings/report/email) off (v8.1.10), or
-        daily_times_per_day would end up outside 1-24 (v8.1.13).
+        daily_times_per_day would end up outside 1-24 (v8.1.11).
     """
     _telemetry_increment_tool_count("update_analysis_task")
 
@@ -13232,7 +13232,7 @@ def complete_analysis_task(task_id: str,
             anchor = task_next_due or today_str
             # Catch-up variant so a task overdue by multiple intervals
             # resyncs fully in one completion instead of needing one
-            # completion per missed interval. v8.1.13: routed through the
+            # completion per missed interval. v8.1.11: routed through the
             # unified advance_next_due_for_task() rather than calling
             # _advance_date_catchup() directly — it dispatches to the
             # datetime-aware daily-slot advancement when schedule=="daily",
@@ -13255,7 +13255,7 @@ def complete_analysis_task(task_id: str,
                 # (not just the source definition) so it's self-describing
                 # for is_queue_entry_ready() going forward, even if it
                 # started out as a legacy entry without these fields.
-                # v8.1.13: same for the daily_* fields, when applicable —
+                # v8.1.11: same for the daily_* fields, when applicable —
                 # a legacy daily entry created before this feature existed
                 # picks up correct values on its first completion, rather
                 # than staying frozen on the (irrelevant) defaults forever.

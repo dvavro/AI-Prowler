@@ -145,3 +145,35 @@ def test_G_CRO_index_then_update_tab_sees_tracked(gui, isolated_env):
     assert any("cross_tab_test" in i for i in items), (
         f"Update tab doesn't see folder added via Index tab. Listbox: {items}"
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# v8.1.16: empty directories must still get tracked
+# ──────────────────────────────────────────────────────────────────────────────
+@pytest.mark.slow
+def test_G_CRO_empty_directory_still_gets_tracked(gui, isolated_env):
+    """Real-world bug: index_worker()'s smart-scan branch used to `continue`
+    (skip entirely, no tracking) the moment scan_directory() found zero
+    indexable files in a queued directory — which meant a brand-new, still-
+    empty folder never made it onto the auto-update tracking list at all.
+    Any files dropped into it afterward were invisible to both "Update All"
+    and the scheduled autonomous re-index, since nothing was tracking that
+    path in the first place. index_worker() now falls back to
+    _register_directory_for_tracking() (same helper the populated-directory
+    path already uses) instead of skipping. This test exercises that
+    fallback directly — same "skip the heavyweight worker-thread path"
+    convention as test_G_CRO_index_then_update_tab_sees_tracked above."""
+    folder = isolated_env.sample_root / "empty_dir_test"
+    folder.mkdir(parents=True, exist_ok=True)
+    assert list(folder.iterdir()) == [], "fixture setup should be a genuinely empty dir"
+
+    gui.app._register_directory_for_tracking(str(folder), recursive=True)
+    gui.pump()
+
+    gui.app.refresh_tracked_dirs()
+    gui.pump()
+
+    items = list(gui.app.tracked_listbox.get(0, "end"))
+    assert any("empty_dir_test" in i for i in items), (
+        f"Empty directory wasn't added to the tracked list. Listbox: {items}"
+    )

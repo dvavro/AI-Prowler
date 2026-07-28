@@ -46,7 +46,7 @@ CUSTOM_TASKS_PATH = Path.home() / ".ai-prowler" / "custom_analysis_tasks.json"
 DEFAULT_REPORT_FOLDER = str(Path.home() / "Documents" / "AI-Prowler_tasks_reports")
 MAX_CUSTOM_TASKS = 25
 
-# v8.1.13: practical ceiling for Daily's times-per-day option. 24 already
+# v8.1.11: practical ceiling for Daily's times-per-day option. 24 already
 # means "up to hourly" (e.g. 00:00-23:00, 24 times/day = exactly every
 # hour) — there's no real use case past that, and it keeps the generated
 # per-day slot list, and the cost of running the checker that often (see
@@ -115,7 +115,7 @@ def _parse_date(date_str: str) -> datetime.date:
 
 
 def _parse_due_datetime(value: str) -> datetime.datetime:
-    """v8.1.13: parse a next_due value that may be either a plain date
+    """v8.1.11: parse a next_due value that may be either a plain date
     (YYYY-MM-DD, used by weekly/biweekly/monthly/quarterly/yearly — those
     schedules remain date-granularity only, unchanged) or a full datetime
     (YYYY-MM-DDTHH:MM:SS, used by "daily" now that it supports a start/end
@@ -127,7 +127,7 @@ def _parse_due_datetime(value: str) -> datetime.datetime:
 
 
 def compute_daily_run_times(start_time: str, end_time: str, times_per_day: int) -> list:
-    """v8.1.13: return `times_per_day` "HH:MM" strings, evenly spaced across
+    """v8.1.11: return `times_per_day` "HH:MM" strings, evenly spaced across
     [start_time, end_time] INCLUSIVE of both endpoints — e.g.
     start=08:00, end=20:00, times_per_day=3 -> ["08:00", "14:00", "20:00"].
 
@@ -158,7 +158,7 @@ def compute_daily_run_times(start_time: str, end_time: str, times_per_day: int) 
 
 def format_daily_run_times_preview(start_time: str, end_time: str,
                                     times_per_day) -> str:
-    """v8.1.14: a single ready-to-display string showing exactly what a
+    """v8.1.11: a single ready-to-display string showing exactly what a
     Daily schedule's Start time / End time / Times per day settings
     actually produce — e.g. "Runs at: 08:00, 14:00, 20:00" — so the user
     sees the real computed result of their settings, not just the raw
@@ -180,7 +180,7 @@ def format_daily_run_times_preview(start_time: str, end_time: str,
 
 def _first_daily_datetime(first_due: str, daily_start_time: str, daily_end_time: str,
                            daily_times_per_day: int) -> str:
-    """v8.1.13: the first next_due for a newly-created/edited daily task —
+    """v8.1.11: the first next_due for a newly-created/edited daily task —
     always the FIRST slot (daily_start_time) on first_due's date. If that
     moment has already passed by the time it's actually checked, the usual
     is_queue_entry_ready()/is_due() overdue handling takes it from there —
@@ -193,7 +193,7 @@ def _first_daily_datetime(first_due: str, daily_start_time: str, daily_end_time:
 def _advance_daily_datetime_catchup(anchor_iso: str, daily_start_time: str,
                                      daily_end_time: str, daily_times_per_day: int,
                                      now: datetime.datetime = None) -> str:
-    """v8.1.13: the daily equivalent of _advance_date_catchup() — finds the
+    """v8.1.11: the daily equivalent of _advance_date_catchup() — finds the
     NEXT run-time slot strictly after `now` (defaults to the real current
     moment), among the day's N evenly-spaced slots, rolling into
     subsequent days as needed. Mirrors _advance_date_catchup()'s
@@ -221,7 +221,7 @@ def _advance_daily_datetime_catchup(anchor_iso: str, daily_start_time: str,
 
 
 def advance_next_due_for_task(task: dict, today_str: str = None) -> str:
-    """v8.1.13: unified advancement entry point — figures out which
+    """v8.1.11: unified advancement entry point — figures out which
     algorithm applies based on the task/entry's own schedule, so callers
     (complete_analysis_task) don't need to know the difference between
     "daily" (datetime-granular, N slots/day) and every other schedule
@@ -324,7 +324,7 @@ def _is_due(task: dict) -> bool:
     (schedule="none") is never "due" in this sense — it only gets queued
     when the user explicitly clicks Queue/Save & Queue.
 
-    v8.1.13: uses _parse_due_datetime() + datetime.now(), same reasoning
+    v8.1.11: uses _parse_due_datetime() + datetime.now(), same reasoning
     as is_queue_entry_ready() above — handles daily tasks' time-of-day
     next_due correctly, without changing behavior for date-only schedules.
     """
@@ -361,7 +361,7 @@ def is_queue_entry_ready(entry: dict) -> bool:
     custom-derived entries are treated identically here, per the v8.1.9
     queue-unification design (see complete_analysis_task's re-arm logic).
 
-    v8.1.13: uses _parse_due_datetime() + datetime.now() rather than
+    v8.1.11: uses _parse_due_datetime() + datetime.now() rather than
     _parse_date() + date.today(), so this correctly handles BOTH plain
     dates (weekly/monthly/etc — treated as midnight, same effective
     behavior as the old date-only comparison) AND full datetimes (daily
@@ -465,7 +465,7 @@ def get_builtin_analysis_settings(task_type: str) -> dict:
         "report_folder":    saved.get("report_folder") or DEFAULT_REPORT_FOLDER,
         "schedule":         saved.get("schedule", "none"),
         "first_due":        saved.get("first_due"),
-        # v8.1.14: extended to Common Business Analysis tasks too, matching
+        # v8.1.11: extended to Common Business Analysis tasks too, matching
         # My Custom AI Analyses — Start time, End time, and Times per day
         # only apply when schedule == "daily".
         "daily_start_time":    saved.get("daily_start_time", "09:00"),
@@ -514,12 +514,12 @@ def create_task(label: str,
                           configured SMTP account (send_email tool) — v8.1.10.
         report_folder:    Output folder for .docx reports.
         daily_start_time: HH:MM, first run of the day — only meaningful
-                          when schedule == "daily" (v8.1.13).
+                          when schedule == "daily" (v8.1.11).
         daily_end_time:   HH:MM, last run of the day — only used when
-                          daily_times_per_day > 1 (v8.1.13).
+                          daily_times_per_day > 1 (v8.1.11).
         daily_times_per_day: how many evenly-spaced runs per day, first
                           exactly at daily_start_time and last exactly at
-                          daily_end_time when > 1 (v8.1.13). 1 = classic
+                          daily_end_time when > 1 (v8.1.11). 1 = classic
                           once-daily at daily_start_time; up to
                           MAX_DAILY_TIMES_PER_DAY (24 — e.g. 00:00-23:00
                           at 24/day is exactly hourly; there's no separate
@@ -542,7 +542,7 @@ def create_task(label: str,
         least one output must be selected so every task's results land
         somewhere durable.
 
-        v8.1.13: also raises if schedule == "daily" and daily_times_per_day
+        v8.1.11: also raises if schedule == "daily" and daily_times_per_day
         is outside [1, MAX_DAILY_TIMES_PER_DAY], or (when > 1) if
         daily_end_time is not strictly after daily_start_time.
     """
@@ -658,7 +658,7 @@ def update_task(tasks: list, task_id: str, **kwargs) -> bool:
     task that has already advanced past its original first_due isn't
     regressed just because the user tweaked something unrelated.
 
-    v8.1.13: same reasoning extended to daily_start_time/daily_end_time/
+    v8.1.11: same reasoning extended to daily_start_time/daily_end_time/
     daily_times_per_day — changing any of those for a "daily" task is
     just as much a genuine cadence edit as changing schedule/first_due,
     and must reset next_due the same way, not leave it stuck reflecting
@@ -705,7 +705,7 @@ def update_task(tasks: list, task_id: str, **kwargs) -> bool:
                 "At least one output must be selected: Learnings, Document, or Email."
             )
 
-        # v8.1.13: validate the RESULTING daily time-of-day state too, same
+        # v8.1.11: validate the RESULTING daily time-of-day state too, same
         # pattern — check what schedule/daily_* WOULD be after this update,
         # before actually applying anything.
         _would_schedule = kwargs.get("schedule", old_schedule)
@@ -1026,7 +1026,7 @@ def due_status_label(task: dict) -> str:
     Return a human-readable due status string for display in the GUI.
     Examples: 'Due today', 'Overdue 3 days', 'Due Jun 30', 'Manual only'
 
-    v8.1.13 fix: this used _parse_date() (bare YYYY-MM-DD only), which
+    v8.1.11 fix: this used _parse_date() (bare YYYY-MM-DD only), which
     raises on the full datetime next_due values ("daily" schedule now
     produces, e.g. "2026-07-26T14:00:00") — silently falling back to
     'Unknown' for every daily task, including ones genuinely due right

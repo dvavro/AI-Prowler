@@ -7,6 +7,25 @@ set "INSTALL_DIR=C:\Program Files\AI-Prowler"
 set "LOCAL_PYTHON_EXE=%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
 set "LOCAL_PYTHONW_EXE=%LOCALAPPDATA%\Programs\Python\Python311\pythonw.exe"
 
+REM v8.1.11 fix: real-world bug — a fresh install auto-launched via the
+REM AI-Prowler-AutoStart Scheduled Task (ONLOGON trigger, no explicit
+REM "Start In" set) inherited Windows' default working directory for a
+REM scheduled task, C:\Windows\System32, all the way down into rag_gui.py
+REM itself — confirmed by a real user's Dry Run check reporting the Skill
+REM file missing at C:\Windows\System32\.claude\skills\..., instead of the
+REM real AI-Prowler install directory, even though the file was correctly
+REM installed at C:\Program Files\AI-Prowler\.claude\skills\... A desktop
+REM shortcut's own "Start in" field masks this (works fine when launched
+REM that way), but nothing here ever explicitly set a working directory,
+REM so any launch path without that field set inherits whatever the
+REM CALLER's cwd happened to be. `start` (used below to launch Python)
+REM does not set a working directory of its own — it inherits this
+REM script's cwd. Setting it explicitly here means rag_gui.py's own
+REM Path.cwd() is always correct and consistent, regardless of how
+REM RAG_RUN.bat itself was invoked (shortcut, scheduled task, or a plain
+REM double-click from Explorer with a different starting folder).
+cd /d "%INSTALL_DIR%"
+
 REM ── Roaming site-packages fix ─────────────────────────────────────────────────
 set PYTHONNOUSERSITE=1
 

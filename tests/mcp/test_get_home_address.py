@@ -146,7 +146,7 @@ class TestGetHomeAddressReadOnly:
 
 
 class TestGetHomeAddressTierASuppression:
-    """v8.1.13: personal-install-only — Settings tab's Home address is a
+    """v8.1.11: personal-install-only — Settings tab's Home address is a
     single-owner concept with no per-user equivalent in a multi-user
     server, so there's no meaningful "whose home address" to resolve for
     a shared company install."""

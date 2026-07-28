@@ -50,7 +50,7 @@ class TestScheduleChangeRecomputesNextDue:
                               first_due="2026-06-23")
         assert ok is True
         assert tasks[0]["schedule"] == "daily"
-        # v8.1.13: "daily" now produces a datetime next_due (date + the
+        # v8.1.11: "daily" now produces a datetime next_due (date + the
         # default daily_start_time, since none was passed here) rather
         # than a bare date — this fixture has no daily_start_time key, so
         # it falls back to the documented default of "09:00".
