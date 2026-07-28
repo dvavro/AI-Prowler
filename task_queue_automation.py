@@ -43,6 +43,67 @@ STATUS_PATH = AI_PROWLER_HOME / "task_automation_last_run.json"
 AUDIT_LOG_PATH = AI_PROWLER_HOME / "autonomous_run_audit.log"
 WRAPPER_SCRIPT_NAME = "run_ai_prowler_queue.bat"
 SCHEDULED_TASK_NAME = "AI-Prowler-QueueRunner"
+# v8.1.13 fix: NEVER rely on bare `python` resolving via PATH inside the
+# generated wrapper's self-gate check. Confirmed live (2026-07-28, David's
+# machine) that Python's own install directory is present on the
+# INTERACTIVE user PATH but silently absent from the PATH inherited by
+# non-interactive process launches — Windows Task Scheduler's S4U logon,
+# and even this AI-Prowler background process's own environment. This is a
+# known Windows quirk: the python.org installer's "Add to PATH" option
+# updates the User environment registry key, but processes spawned outside
+# an interactive logon session don't reliably pick that up without a
+# reboot/relog. Live evidence: `where python` failed and
+# `python -c "print(1)"` produced ZERO output in that context — `for /f`
+# then captures nothing, AIP_WINDOW_CHECK stays unset, and the self-gate
+# falls through to its generic SKIP branch. Same exact "clean 0x0 exit,
+# zero actual work" shape as the v8.1.10 (%USERPROFILE% cd) and v8.1.12
+# (%a escaping) bugs — a THIRD, fully independent cause producing an
+# identical-looking symptom, discovered only because the v8.1.12 fix was
+# deployed and verified correct, yet the real-world SKIP persisted
+# unchanged. Embedding the ABSOLUTE path to the interpreter already
+# running THIS module (sys.executable) sidesteps PATH lookup entirely —
+# this is always correct by construction, since it's literally the same
+# interpreter generating the wrapper. Quoted in the .bat to tolerate
+# spaces in the path (e.g. "C:\Program Files\Python311\python.exe" on
+# other machines, even though David's own path happens not to have any).
+_SELF_GATE_PYTHON = sys.executable or "python"
+
+
+def _self_gate_python_invocation() -> str:
+    """Formats _SELF_GATE_PYTHON for safe use as the first token of a
+    `for /f ('...')` subshell command in the generated wrapper.
+
+    v8.1.13 follow-up fix: naively wrapping the path in quotes (i.e.
+    '"{_SELF_GATE_PYTHON}" -c "..."') looks correct but breaks in
+    practice. cmd.exe's /C quote-handling has a documented quirk: quotes
+    on the command line are preserved ONLY if there are EXACTLY TWO quote
+    characters total, with no special characters (one of &<>()@^|)
+    between them. Our embedded python one-liner always contains
+    parentheses (`print(...)`), so adding a quoted path introduces a
+    THIRD and FOURTH quote character and disqualifies that fast path.
+    cmd then falls back to its "old" behavior: if the first character of
+    the whole command is a quote, strip just that one character, and
+    likewise for the last character — regardless of whether they're
+    actually a matching pair. Since our command starts with a quoted path
+    and ends with the closing quote of the python -c argument, this
+    strips the OPENING quote before the path and the FINAL closing quote,
+    leaving a stray, mismatched quote sitting right after ".exe" —
+    confirmed live: cmd.exe reported
+    'C:\\...\\python.exe" -c "import' as an unrecognized command, exactly
+    matching this corruption. The original bare `python -c "..."` never
+    hit this because the command didn't start with a quote character at
+    all. Fix: only quote the path when it actually contains a space (the
+    only reason quoting would be needed), and even then, prefix with
+    `call` — a plain word, not a quote character — so the command no
+    longer starts with `"` and cmd's flanking-quote heuristic never
+    triggers. See TestWrapperActiveWindowSelfGateUsesExplicitPythonPath
+    and the *ExecutesCorrectly real .bat-file tests for the regression
+    coverage that caught this on the very same day as the fix it was
+    following up on.
+    """
+    if " " not in _SELF_GATE_PYTHON:
+        return _SELF_GATE_PYTHON
+    return f'call "{_SELF_GATE_PYTHON}"'
 # v8.1.11: written by AI-Prowler-Setup.iss's GrantBatchLogonRight procedure
 # on a successful install-time grant of "Log on as a batch job", and by
 # grant_batch_logon_right()'s own TEMPORARY fallback below on a successful
@@ -258,8 +319,25 @@ def build_wrapper_script_content(mcp_config_path: str, allowed_tools: str,
         _window_check_py = (
             "import datetime as _d; "
             "_n = _d.datetime.now(); "
-            "_day = _n.strftime('%a').lower()[:3]; "
-            "_t = _n.strftime('%H:%M'); "
+            # v8.1.12 fix: %a and %H:%M MUST be escaped as %%a / %%H:%%M here —
+            # this string is embedded inside a `for /f ... in ('python -c "..."')`
+            # construct in a .bat file (see window_check_block below), and cmd.exe
+            # parses a bare % as the start of ITS OWN variable substitution before
+            # python ever runs. With no variable named `a`, `%a` silently resolved
+            # to an empty string, so strftime('') always returned '' — which never
+            # matched any entry in the active-days set, so this printed SKIP
+            # unconditionally, every single day, regardless of active_days or the
+            # actual weekday, while the wrapper still exited 0 ("success"). Same
+            # root cause, same silent-0x0-with-zero-actual-work shape as the
+            # v8.1.10 %USERPROFILE% cd bug above — just one layer deeper, inside
+            # the self-gate meant to run BEFORE that code even executes. See
+            # TestWrapperActiveWindowSelfGateExecutesCorrectly in
+            # test_task_queue_automation.py, which actually runs the generated
+            # command through cmd.exe rather than only asserting on source text —
+            # the string-only assertions in TestWrapperActiveWindowSelfGate above
+            # passed throughout even while this was broken.
+            "_day = _n.strftime('%%a').lower()[:3]; "
+            "_t = _n.strftime('%%H:%%M'); "
             f"_days = {_days_py_list}; "
             f"print('RUN' if (_day in _days and '{active_start_time}' <= _t <= '{active_end_time}') else 'SKIP')"
         )
@@ -270,7 +348,7 @@ REM instead, so a check outside the configured window exits before ever
 REM invoking claude -p (zero cost), rather than the OS trigger trying to
 REM express "every N hours, but only Mon-Fri, only 7am-10pm" directly,
 REM which schtasks.exe's simple CLI can't cleanly do.
-for /f "delims=" %%R in ('python -c "{_window_check_py}"') do set AIP_WINDOW_CHECK=%%R
+for /f "delims=" %%R in ('{_self_gate_python_invocation()} -c "{_window_check_py}"') do set AIP_WINDOW_CHECK=%%R
 if not "%AIP_WINDOW_CHECK%"=="RUN" (
     echo {{"result": "Skipped — outside configured active window (day/time restriction)."}} > "%USERPROFILE%\\.ai-prowler\\last_headless_run.json"
     exit /b 0
@@ -283,14 +361,19 @@ if not "%AIP_WINDOW_CHECK%"=="RUN" (
         # never a time window, which would only ever contradict it.
         _window_check_py = (
             "import datetime as _d; "
-            "_day = _d.datetime.now().strftime('%a').lower()[:3]; "
+            # v8.1.12 fix: same %a-escaping bug as the interval-mode branch above
+            # (see the detailed comment there) — %a here MUST be %%a for the same
+            # reason: this string is embedded inside a `for /f ... in ('python -c
+            # "..."')` construct in a .bat file, and a bare % is consumed by
+            # cmd.exe's own variable substitution before python ever sees it.
+            "_day = _d.datetime.now().strftime('%%a').lower()[:3]; "
             f"_days = {_days_py_list}; "
             "print('RUN' if _day in _days else 'SKIP')"
         )
         window_check_block = f"""REM v8.1.11: active-days self-gate (daily mode). schedule_time already
 REM pins the single time-of-day this fires (via the OS trigger) — only
 REM day-of-week needs checking here, e.g. for a "weekdays only" setup.
-for /f "delims=" %%R in ('python -c "{_window_check_py}"') do set AIP_WINDOW_CHECK=%%R
+for /f "delims=" %%R in ('{_self_gate_python_invocation()} -c "{_window_check_py}"') do set AIP_WINDOW_CHECK=%%R
 if not "%AIP_WINDOW_CHECK%"=="RUN" (
     echo {{"result": "Skipped — today is not in the configured active days."}} > "%USERPROFILE%\\.ai-prowler\\last_headless_run.json"
     exit /b 0

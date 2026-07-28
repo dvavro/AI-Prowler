@@ -1,6 +1,23 @@
 # AI-Prowler v8.0.0 - Python Dependencies
 # Install with: pip install -r requirements.txt
 
+# ── Pinning policy (added after the 2026-07-28 `mcp` incident) ───────────────
+# EVERY package below is pinned with == to the exact version installed and
+# verified working, not just the packages that had already burned us once
+# (chromadb / huggingface-hub / sentence-transformers / transformers, see
+# their own comments below). `mcp>=1.0.0` had no upper bound; a same-day mcp
+# release introduced a breaking change and every fresh install started
+# crashing on startup with no obvious cause — about an hour to trace back to
+# an unpinned floor allowing an unvetted new major/minor version through.
+# `>=` on a fast-moving dependency isn't a safety margin, it's an open door
+# for a future release to break installs with zero warning and zero ability
+# to reproduce "which version actually broke this" after the fact.
+#
+# To intentionally upgrade a package in the future: bump its pin here,
+# reinstall in a throwaway venv, run the full test suite (run_tests.bat),
+# and manually verify the install flow end-to-end before committing the
+# change — never let a bump happen silently via an unbounded range.
+
 # ── Core RAG / indexing ────────────────────────────────────────────────────────
 # FIXED: Upgraded from 0.6.3 to 1.0.12.
 # chromadb 0.6.3 had a runtime incompatibility with sentence-transformers 3.3.1:
@@ -35,28 +52,28 @@ sentence-transformers==3.3.1
 transformers==4.44.2
 
 # ── Document parsing ───────────────────────────────────────────────────────────
-pdfplumber>=0.10.3
-python-docx>=1.1.0
-pypdf>=3.17.4
+pdfplumber==0.11.10
+python-docx==1.2.0
+pypdf==6.14.2
 # openpyxl: reads modern .xlsx files (XML-based, Excel 2007+).
 # xlrd: reads legacy .xls files (BIFF8 binary format, Excel 97-2003).
 # Both are required for proper Excel indexing in rag_preprocessor.py.
 # Without these, Excel files fall back to raw-binary ingestion which
 # produces unreadable garbage and cannot be searched semantically.
-openpyxl>=3.1.0
-xlrd>=2.0.1
+openpyxl==3.1.5
+xlrd==2.0.2
 # python-pptx: reads modern .pptx PowerPoint files (ZIP-of-XML format).
 # Without this, .pptx files cannot be indexed (binary ZIP garbage).
-python-pptx>=0.6.21
+python-pptx==1.0.2
 # beautifulsoup4: strips HTML tags from .html/.htm/.xhtml files.
 # Without this, HTML files are indexed with all tag/JS/CSS noise included.
-beautifulsoup4>=4.12.0
+beautifulsoup4==4.15.0
 # striprtf: removes RTF control codes from .rtf files.
 # Without this, .rtf files are indexed with \rtf1\ansi\deff0 noise.
-striprtf>=0.0.26
+striprtf==0.0.32
 # odfpy: extracts text from OpenDocument .odt files (also a ZIP of XML).
 # Without this, .odt files produce binary garbage identical to the xls problem.
-odfpy>=1.4.1
+odfpy==1.4.1
 
 # ── OCR — scanned PDFs and image files ────────────────────────────────────────
 # pytesseract: Python wrapper for the Tesseract OCR engine.
@@ -67,10 +84,10 @@ odfpy>=1.4.1
 # pillow-heif: adds HEIC/HEIF read support to Pillow so iPhone photos (.heic)
 #   can be OCR-indexed without conversion. Registers itself as a Pillow plugin
 #   via pillow_heif.register_heif_opener() — no API changes required.
-pytesseract>=0.3.10
-pypdfium2>=4.0.0
-pillow>=10.0.0
-pillow-heif>=0.13.0
+pytesseract==0.3.13
+pypdfium2==5.12.1
+pillow==12.3.0
+pillow-heif==1.5.0
 
 # ── SMS notifications (Action Tool: send_sms) ─────────────────────────────────
 # twilio: official Twilio SDK — sends SMS for on-my-way texts, appointment
@@ -84,31 +101,36 @@ pillow-heif>=0.13.0
 # twilio>=8.0.0  # optional — uncomment if you prefer the SDK over raw requests
 
 # ── Email parsing ──────────────────────────────────────────────────────────────
-extract-msg>=0.45.0
+extract-msg==0.56.0
 
 # ── File system watching (watchdog daemon for real-time auto-indexing) ────────
 # watchdog: cross-platform filesystem event library used by file_watchdog.py.
 # Monitors all tracked directories and triggers reindex_file whenever a file
 # is created, modified, or moved in — zero-touch auto-indexing.
 # Default-on feature controlled via the ⏰ Schedule tab in the GUI.
-watchdog>=4.0.0
+watchdog==6.0.0
 
 # ── HTTP / API ──────────────────────────────────────────────────────────────────────────────
-requests>=2.31.0
+requests==2.34.2
 
 # ── HTTP MCP server (Remote Access / Cloudflare Tunnel) ──────────────────────
 # mcp: official Anthropic MCP Python SDK — provides FastMCP, the tool decorator,
 # and both stdio and streamable-http transports used by ai_prowler_mcp.py.
 # CRITICAL: without this package the MCP server will not start.
-mcp>=1.0.0
+# PINNED (2026-07-28 incident): this was `mcp>=1.0.0` with no upper bound. A
+# same-day mcp release broke every fresh install with a startup crash and no
+# obvious cause — about an hour to trace back to this exact line. See the
+# pinning-policy note at the top of this file before ever loosening this pin
+# again.
+mcp==1.28.1
 # uvicorn: ASGI server used by ai_prowler_mcp.py --transport http.
 # Required to serve the streamable-http MCP endpoint that Cloudflare Tunnel exposes.
-uvicorn>=0.29.0
+uvicorn==0.51.0
 
 # ── Numeric / array support ────────────────────────────────────────────────────
 # numpy: required by chromadb and sentence-transformers. Listed explicitly to
 # ensure a compatible version is installed before those packages pull it in.
-numpy>=1.24.0
+numpy==2.4.6
 
 # ── GPU acceleration (auto-installed by INSTALL.bat) ──────────────────────────
 # torch is intentionally NOT listed here. The installer detects whether an

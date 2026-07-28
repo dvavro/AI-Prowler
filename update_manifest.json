@@ -1,10 +1,10 @@
 {
-  "version": "8.1.11",
-  "generated": "2026-07-28T09:27:34",
+  "version": "8.1.12",
+  "generated": "2026-07-28T13:47:30",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "73c106fe82abc9fec8a782407e872b184d6ea3cf1a7c9abfa95adb8142b29de7",
+      "sha256": "44c70e6e91caeec564e85589f6f1c7bd2c526e6c76ad27bad3808b4a62330b1c",
       "bytes": 1188624
     },
     {
@@ -39,8 +39,8 @@
     },
     {
       "path": "requirements.txt",
-      "sha256": "692dccf78304b153b82a261a35e1a9eb42923b62e02b4a895542afd8a9548d49",
-      "bytes": 7419
+      "sha256": "6a16c4badf8953a981e0fc524f1d0224f40c311a2721e3537c0d420a6e404588",
+      "bytes": 8882
     },
     {
       "path": "claude_desktop_config_example.json",
@@ -59,12 +59,12 @@
     },
     {
       "path": "COMPLETE_USER_GUIDE.md",
-      "sha256": "abf964672a2173cf769531289f81c5e5533579df97c8daf42e2151bf9f223910",
+      "sha256": "f70d98cbe6cc8eb0d3c5daedf3ca7180133bc5045a71ae704ec09bad779823df",
       "bytes": 162535
     },
     {
       "path": "VERSION",
-      "sha256": "a66fac69b16b0e061f6628edde1864917489a70dc4518e337a4fa49ca988cd03",
+      "sha256": "199be1eb67e5983526774c4196f70f1ac2f1fb5f176f7a95ac7546b1d09cb119",
       "bytes": 7
     },
     {
@@ -124,8 +124,8 @@
     },
     {
       "path": "task_queue_automation.py",
-      "sha256": "5f81f357a311e38ea628453c4afa9b9c1034da6fb82f7765b0f329fa6c2c7606",
-      "bytes": 90451
+      "sha256": "ca527727ec71726b3c77dddda1a4d308c8de3e0369e3df44aaf1ece48abd55ce",
+      "bytes": 96058
     },
     {
       "path": ".claude/settings.json",

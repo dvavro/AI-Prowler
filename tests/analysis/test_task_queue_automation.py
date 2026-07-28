@@ -10,6 +10,7 @@ failed assertion still cleans up.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone, timedelta
@@ -483,6 +484,306 @@ class TestWrapperActiveWindowSelfGate:
             "the active-window skip-exit must appear BEFORE the claude -p "
             "invocation in the generated script — otherwise a skipped "
             "check wouldn't actually save any cost at all"
+        )
+
+
+class TestWrapperActiveWindowSelfGatePercentEscaping:
+    """Regression coverage for the v8.1.12 %a/%H/%M-escaping bug.
+
+    build_wrapper_script_content() embeds a `python -c "..."` one-liner
+    inside a `for /f "delims=" %%R in ('...')` construct written into a
+    .bat file. A bare %a (or %H, %M) in that embedded command is consumed
+    by cmd.exe's OWN batch-variable substitution before python ever runs
+    it — cmd.exe treats %a as a reference to an undefined variable, which
+    silently resolves to an empty string. strftime('') then always
+    returns '', which never matches any entry in the active-days set, so
+    the self-gate printed SKIP unconditionally — every single day,
+    regardless of the actual weekday, the configured active_days, or the
+    configured time window — while the wrapper still exited 0 ("success").
+    Same silent-0x0-zero-actual-work shape as the v8.1.10 %USERPROFILE%
+    cd bug already documented above, just one layer earlier: inside the
+    self-gate meant to run BEFORE that fix's code ever executes.
+
+    TestWrapperActiveWindowSelfGate above never caught this because it
+    only asserts on the SOURCE TEXT (day codes, "active-days self-gate",
+    etc.) — never actually runs the generated command through cmd.exe,
+    which is exactly where the escaping bug lived. Two layers of coverage
+    here: a fast, platform-independent string check that the fix is
+    present at all, plus real cmd.exe execution tests (Windows-only) that
+    would have caught the original bug outright.
+    """
+
+    def test_daily_mode_escapes_percent_a(self):
+        content = tqa.build_wrapper_script_content(
+            "x.json", "mcp__ai-prowler__*", check_mode="daily",
+            active_days=["mon", "tue", "wed", "thu", "fri"])
+        assert "%%a" in content
+        # No bare, unescaped %a anywhere in the embedded python command —
+        # every %a must be part of %%a (i.e. preceded by another %).
+        assert not re.search(r"(?<!%)%a\b", content), (
+            "found an unescaped %a — cmd.exe will silently eat this as an "
+            "undefined-variable reference before python ever sees it"
+        )
+
+    def test_interval_mode_escapes_percent_a_and_time_codes(self):
+        content = tqa.build_wrapper_script_content(
+            "x.json", "mcp__ai-prowler__*", check_mode="interval",
+            active_days=["sat", "sun"],
+            active_start_time="07:00", active_end_time="22:00")
+        assert "%%a" in content
+        assert "%%H" in content
+        assert "%%M" in content
+        assert not re.search(r"(?<!%)%a\b", content)
+        assert not re.search(r"(?<!%)%H\b", content)
+        assert not re.search(r"(?<!%)%M\b", content)
+
+
+class TestWrapperActiveWindowSelfGateUsesExplicitPythonPath:
+    """Regression coverage for the v8.1.13 bare-`python`-on-PATH bug.
+
+    Confirmed live (2026-07-28, David's machine) AFTER the v8.1.12 %a fix
+    was deployed and verified correct in the generated wrapper content:
+    the real-world scheduled run still silently did nothing. Root cause
+    was a third, independent bug in the exact same self-gate: the
+    embedded `for /f ('python -c "..."')` relies on bare `python`
+    resolving via PATH, but Python's install directory is present on the
+    INTERACTIVE user PATH and silently absent from the PATH inherited by
+    non-interactive process launches (Windows Task Scheduler's S4U logon,
+    and even this AI-Prowler background process's own environment) —
+    `where python` failed and `python -c "print(1)"` produced zero output
+    in that context. `for /f` then captures nothing, AIP_WINDOW_CHECK
+    stays unset, and the self-gate falls through to the exact same
+    generic SKIP branch as the %a bug — an identical-looking symptom from
+    a completely different cause, which is exactly why fixing %a alone
+    did not resolve the real-world problem. The fix embeds the ABSOLUTE
+    path to the interpreter already running task_queue_automation.py
+    (sys.executable) instead of relying on PATH lookup at all.
+    """
+
+    def test_daily_mode_embeds_python_path_not_bare_python(self, monkeypatch):
+        monkeypatch.setattr(tqa, "_SELF_GATE_PYTHON", r"C:\fake\python.exe")
+        content = tqa.build_wrapper_script_content(
+            "x.json", "mcp__ai-prowler__*", check_mode="daily")
+        assert "C:\\fake\\python.exe -c \"" in content
+        # No bare, unqualified `python -c` invocation should remain —
+        # every python invocation in the self-gate must go through the
+        # explicit interpreter path.
+        assert "('python -c" not in content
+
+    def test_interval_mode_embeds_python_path_not_bare_python(self, monkeypatch):
+        monkeypatch.setattr(tqa, "_SELF_GATE_PYTHON", r"C:\fake\python.exe")
+        content = tqa.build_wrapper_script_content(
+            "x.json", "mcp__ai-prowler__*", check_mode="interval")
+        assert "C:\\fake\\python.exe -c \"" in content
+        assert "('python -c" not in content
+
+    def test_self_gate_python_defaults_to_sys_executable(self):
+        # Sanity check on the module-level constant itself, not a
+        # monkeypatched value — confirms it's actually wired to
+        # sys.executable in normal operation, not just a name that
+        # happens to exist.
+        assert tqa._SELF_GATE_PYTHON == (sys.executable or "python")
+
+    def test_spaceless_path_is_used_unquoted(self, monkeypatch):
+        # The common case (and David's actual machine): no spaces in the
+        # interpreter path, so no quoting is needed or used. Quoting an
+        # unnecessary-to-quote path is what caused the v8.1.13 follow-up
+        # cmd.exe quote-corruption bug (see
+        # _self_gate_python_invocation()'s docstring) — this pins the
+        # correct, simpler unquoted behavior for the common case.
+        monkeypatch.setattr(tqa, "_SELF_GATE_PYTHON", r"C:\fake\python.exe")
+        assert tqa._self_gate_python_invocation() == r"C:\fake\python.exe"
+
+    def test_path_with_space_is_quoted_and_prefixed_with_call(self, monkeypatch):
+        # A path containing a space DOES need quoting to survive as a
+        # single token — but naively wrapping it in bare quotes re-creates
+        # the exact cmd.exe flanking-quote corruption bug (the command
+        # would then start with a `"` character again). `call` sidesteps
+        # this: it's a plain word, not a quote character, so cmd's
+        # "strip first/last char if both are quotes" heuristic never
+        # triggers.
+        monkeypatch.setattr(tqa, "_SELF_GATE_PYTHON", r"C:\Program Files\Python311\python.exe")
+        result = tqa._self_gate_python_invocation()
+        assert result == 'call "C:\\Program Files\\Python311\\python.exe"'
+        # Must not start with a bare quote character — that's precisely
+        # the condition that triggers cmd's corrupting heuristic.
+        assert not result.startswith('"')
+
+
+@pytest.mark.skipif(sys.platform != "win32",
+                     reason="cmd.exe .bat-file percent-substitution semantics are Windows-specific")
+class TestWrapperActiveWindowSelfGateExecutesCorrectly:
+    """Actually EXECUTES the generated window-check block as a real .bat
+    FILE through cmd.exe — not via `cmd /c "<command>"` on a raw command
+    line. That distinction is the whole point: cmd.exe's %-substitution
+    rules differ between a command handed to `cmd /c` directly and a
+    command read line-by-line out of an actual .bat file (the latter is
+    where the v8.1.12 bug lived — a `cmd /c "python -c ...%a..."` one-liner
+    does NOT reproduce it, since a bare %a with no closing %% is generally
+    left alone on a raw /c command line). Only writing the real generated
+    content out to a .bat file and running THAT reproduces production
+    faithfully. TestWrapperActiveWindowSelfGate's string-only assertions
+    passed throughout while the real .bat-file runtime behavior was broken.
+    """
+
+    @staticmethod
+    def _write_and_run_window_check(content: str, tmp_path) -> str:
+        # Truncate the generated content to just the window-check block —
+        # everything up to (not including) the v8.1.10 cd-fix comment —
+        # then append a marker echo so a RUN result is observable on
+        # stdout. A SKIP result never reaches that marker: the generated
+        # block's own `exit /b 0` inside the if-block terminates the
+        # script first, so SKIP is instead confirmed via the
+        # last_headless_run.json it writes on the way out.
+        marker = "REM v8.1.10 fix: MUST cd"
+        truncated = content[:content.index(marker)]
+        truncated += "\necho WINDOW_CHECK_RESULT=%AIP_WINDOW_CHECK%\n"
+
+        bat_path = tmp_path / "window_check.bat"
+        bat_path.write_text(truncated, encoding="utf-8")
+
+        # The generated block writes its SKIP result to
+        # "%USERPROFILE%\.ai-prowler\last_headless_run.json" — point
+        # USERPROFILE at an isolated temp dir so this never touches the
+        # real machine's ~/.ai-prowler/, same isolation principle as the
+        # _isolated_home fixture above (which patches tqa.Path.home()
+        # in-process; this needs the actual OS env var instead, since
+        # we're now shelling out to a real subprocess).
+        fake_home = tmp_path / "fake_home"
+        (fake_home / ".ai-prowler").mkdir(parents=True)
+        env = dict(os.environ)
+        env["USERPROFILE"] = str(fake_home)
+        # The generated command invokes bare `python -c ...`, resolved via
+        # PATH at runtime — guarantee it resolves here regardless of the
+        # ambient environment's PATH by prepending the interpreter this
+        # very test is running under (sys.executable is always valid;
+        # relying on whatever PATH happens to be inherited is what made
+        # this flaky across different invocation contexts in the first
+        # place, e.g. run_tests.bat vs. a bare pytest invocation vs. an
+        # automation sandbox with a minimal PATH).
+        env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
+
+        result = subprocess.run(
+            ["cmd.exe", "/c", str(bat_path)],
+            capture_output=True, text=True, timeout=30,
+            cwd=str(tmp_path), env=env,
+        )
+        assert result.returncode == 0, (
+            f"window-check .bat itself failed (rc={result.returncode}): "
+            f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+
+        if "WINDOW_CHECK_RESULT=RUN" in result.stdout:
+            return "RUN"
+
+        status_file = fake_home / ".ai-prowler" / "last_headless_run.json"
+        assert status_file.exists(), (
+            "expected either a RUN marker on stdout or a written "
+            f"last_headless_run.json on SKIP, got neither. "
+            f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert "Skipped" in status_file.read_text(encoding="utf-8")
+        return "SKIP"
+
+    def test_daily_mode_runs_when_today_is_active(self, tmp_path):
+        content = tqa.build_wrapper_script_content(
+            "x.json", "mcp__ai-prowler__*", check_mode="daily",
+            active_days=list(tqa.VALID_DAY_CODES))  # every day active
+        assert self._write_and_run_window_check(content, tmp_path) == "RUN", (
+            "expected RUN with every day active — SKIP here means %a is "
+            "being eaten by cmd.exe's .bat-file percent substitution "
+            "before python ever sees it (the exact v8.1.12 regression "
+            "this test exists to catch)"
+        )
+
+    def test_daily_mode_skips_when_today_is_not_active(self, tmp_path):
+        today = datetime.now().strftime("%a").lower()[:3]
+        other_days = [d for d in tqa.VALID_DAY_CODES if d != today]
+        content = tqa.build_wrapper_script_content(
+            "x.json", "mcp__ai-prowler__*", check_mode="daily",
+            active_days=other_days)
+        assert self._write_and_run_window_check(content, tmp_path) == "SKIP"
+
+    def test_interval_mode_runs_when_today_and_time_in_window(self, tmp_path):
+        content = tqa.build_wrapper_script_content(
+            "x.json", "mcp__ai-prowler__*", check_mode="interval",
+            active_days=list(tqa.VALID_DAY_CODES),
+            active_start_time="00:00", active_end_time="23:59")
+        assert self._write_and_run_window_check(content, tmp_path) == "RUN"
+
+    def test_interval_mode_skips_when_today_not_in_active_days(self, tmp_path):
+        today = datetime.now().strftime("%a").lower()[:3]
+        other_days = [d for d in tqa.VALID_DAY_CODES if d != today]
+        content = tqa.build_wrapper_script_content(
+            "x.json", "mcp__ai-prowler__*", check_mode="interval",
+            active_days=other_days,
+            active_start_time="00:00", active_end_time="23:59")
+        assert self._write_and_run_window_check(content, tmp_path) == "SKIP"
+
+    def test_interval_mode_skips_when_outside_time_window(self, tmp_path):
+        # 1-minute window at midnight — essentially guaranteed not to be
+        # the current time, regardless of when this test runs.
+        content = tqa.build_wrapper_script_content(
+            "x.json", "mcp__ai-prowler__*", check_mode="interval",
+            active_days=list(tqa.VALID_DAY_CODES),
+            active_start_time="00:00", active_end_time="00:01")
+        assert self._write_and_run_window_check(content, tmp_path) == "SKIP"
+
+    def test_runs_correctly_even_when_pythons_own_directory_is_stripped_from_path(self, tmp_path):
+        """THE regression test for the v8.1.13 real-world bug: David's
+        machine has Python's install directory present on his interactive
+        PATH but absent from the PATH that Task Scheduler / background
+        processes actually inherit — `where python` failed there even
+        though the file genuinely exists. This test reproduces that exact
+        condition directly: build the wrapper, then run it with Python's
+        own directory deliberately removed from PATH, and confirm the
+        self-gate still correctly returns RUN. If this test used bare
+        `python -c` (the pre-fix behavior) it would silently return SKIP
+        here instead, for the wrong reason — proving the fix actually
+        removes the PATH dependency rather than merely working by
+        accident on machines where PATH happens to be configured right.
+        """
+        content = tqa.build_wrapper_script_content(
+            "x.json", "mcp__ai-prowler__*", check_mode="daily",
+            active_days=list(tqa.VALID_DAY_CODES))
+
+        marker = "REM v8.1.10 fix: MUST cd"
+        truncated = content[:content.index(marker)]
+        truncated += "\necho WINDOW_CHECK_RESULT=%AIP_WINDOW_CHECK%\n"
+        bat_path = tmp_path / "window_check.bat"
+        bat_path.write_text(truncated, encoding="utf-8")
+
+        fake_home = tmp_path / "fake_home"
+        (fake_home / ".ai-prowler").mkdir(parents=True)
+
+        # Build a PATH that deliberately excludes the directory containing
+        # sys.executable — the opposite of what _write_and_run_window_check
+        # does above. Keep everything else (cmd.exe, System32, etc.) so
+        # the .bat file itself can still launch.
+        python_dir = str(Path(sys.executable).parent)
+        stripped_path = os.pathsep.join(
+            p for p in os.environ.get("PATH", "").split(os.pathsep)
+            if p and os.path.normcase(os.path.normpath(p)) != os.path.normcase(os.path.normpath(python_dir))
+        )
+        env = dict(os.environ)
+        env["USERPROFILE"] = str(fake_home)
+        env["PATH"] = stripped_path
+
+        result = subprocess.run(
+            ["cmd.exe", "/c", str(bat_path)],
+            capture_output=True, text=True, timeout=30,
+            cwd=str(tmp_path), env=env,
+        )
+        assert result.returncode == 0, (
+            f"window-check .bat itself failed (rc={result.returncode}): "
+            f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+        assert "WINDOW_CHECK_RESULT=RUN" in result.stdout, (
+            "expected RUN even with Python's directory stripped from "
+            "PATH — a SKIP here means the wrapper is still depending on "
+            "bare `python` resolving via PATH somewhere, which is exactly "
+            "the v8.1.13 regression this test exists to catch. "
+            f"stdout={result.stdout!r} stderr={result.stderr!r}"
         )
 
 
