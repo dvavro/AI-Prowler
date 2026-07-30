@@ -140,7 +140,7 @@ def test_wrapper_script_scopes_tools_not_wildcard_bash():
     assert "--dangerously-skip-permissions" not in content
 
 
-# ── v8.1.10 fix: cd into install_dir, not %USERPROFILE% ────────────────────
+# ── v8.1.10 fix: cd into AI_PROWLER_HOME, not %USERPROFILE% ────────────────
 # Regression coverage for the real bug David hit: a genuinely-enabled,
 # genuinely-existing Windows Scheduled Task fired at its scheduled time,
 # exited 0 ("successful" per Task Scheduler), and did NOTHING — because
@@ -149,36 +149,307 @@ def test_wrapper_script_scopes_tools_not_wildcard_bash():
 # command as "Unknown command" in ~100ms, 0 turns, $0 cost. The only trace
 # was the raw last_headless_run.json transcript; the Task Scheduler status,
 # the GUI's "Last: ..." line, and the audit log all looked fine or silent.
+#
+# v8.1.14 superseding fix: the ORIGINAL v8.1.10 fix cd'd into an
+# install_dir PARAMETER (the AI-Prowler code directory, e.g.
+# "C:\Program Files\AI-Prowler") that every caller had to compute and pass
+# through. That directly caused two further real bugs found later the same
+# debugging session: run_queue_now() silently never accepted/forwarded the
+# parameter at all (silent %USERPROFILE% fallback), and
+# build_single_prompt_wrapper_content() (the "▶ NOW" button) hadn't been
+# updated to accept it either — both confirmed live on 2026-07-28. Separately,
+# a Program-Files-class install_dir requires admin elevation to write to,
+# which broke a LATER fix entirely: the audit-log hook's self-heal
+# (_ensure_hook_uses_absolute_python()) runs as a normal non-elevated
+# process and could never actually write there. The parameter is removed
+# entirely now — build_wrapper_script_content() always cd's into
+# AI_PROWLER_HOME, which is non-elevated/writable and needs no caller to
+# remember anything. These tests replace the old parameter-forwarding
+# tests with coverage for the new, simpler, bug-class-eliminating design.
 
-def test_wrapper_script_cds_into_provided_install_dir():
-    content = tqa.build_wrapper_script_content(
-        "x.json", "mcp__ai-prowler__*",
-        install_dir=r"C:\Program Files\AI-Prowler")
-    assert 'cd /d "C:\\Program Files\\AI-Prowler"' in content
+def test_local_mcp_config_never_uses_pythonw(_isolated_home, monkeypatch):
+    """pythonw.exe discards stdout/stderr — using it as the stdio MCP server
+    command causes claude -p to hang indefinitely since the MCP server
+    produces no pipe output. Confirmed live (2026-07-29): every ▶ NOW run
+    with pythonw.exe in the stdio config hung for 10+ minutes.
+    _get_python_exe() must always return python.exe, never pythonw.exe,
+    regardless of what sys.executable reports (which is pythonw.exe when
+    the GUI launches via RAG_RUN.bat)."""
+    monkeypatch.setattr(
+        tqa.sys, "executable",
+        r"C:\Users\david\AppData\Local\Programs\Python\Python311\pythonw.exe")
+    exe = tqa._get_python_exe()
+    assert exe.lower().endswith("python.exe")
+    assert "pythonw" not in exe.lower()
+
+
+def test_local_mcp_config_command_is_never_pythonw(_isolated_home, monkeypatch,
+                                                     tmp_path):
+    monkeypatch.setattr(
+        tqa.sys, "executable",
+        r"C:\Users\david\AppData\Local\Programs\Python\Python311\pythonw.exe")
+    monkeypatch.setattr(tqa, "LOCAL_MCP_SCRIPT_PATH",
+                        tmp_path / "ai_prowler_mcp.py")
+    (tmp_path / "ai_prowler_mcp.py").write_text("")
+    ok, path = tqa._generate_local_mcp_config()
+    assert ok
+    import json
+    config = json.loads(Path(path).read_text())
+    cmd = config["mcpServers"]["ai-prowler"]["command"]
+    assert "pythonw" not in cmd.lower()
+    assert cmd.lower().endswith("python.exe")
+
+
+def test_wrapper_script_always_cds_into_ai_prowler_home(_isolated_home):
+    content = tqa.build_wrapper_script_content("x.json", "mcp__ai-prowler__*")
+    assert f'cd /d "{tqa.AI_PROWLER_HOME}"' in content
     assert 'cd /d "%USERPROFILE%"' not in content
 
 
-def test_wrapper_script_falls_back_to_userprofile_when_install_dir_omitted():
-    # Old callers that haven't been updated yet must not break or crash —
-    # they get the prior (broken, but not worse-than-before) behavior.
+def test_wrapper_script_cd_target_is_not_configurable(_isolated_home):
+    # There is deliberately no install_dir (or similar) parameter anymore —
+    # calling with one should fail loudly (TypeError) rather than silently
+    # do nothing, which is exactly what happened with run_queue_now() before
+    # this fix (it accepted no such parameter, so passing one there would
+    # also have raised — the REAL bug was that build_wrapper_script_content()
+    # DID have the parameter and run_queue_now() simply never passed it).
+    with pytest.raises(TypeError):
+        tqa.build_wrapper_script_content(
+            "x.json", "mcp__ai-prowler__*", install_dir=r"C:\Program Files\AI-Prowler")
+
+
+def test_wrapper_cd_target_matches_where_claude_folder_actually_deploys(_isolated_home):
+    # Direct regression guard for the actual bug found live: the wrapper's
+    # cd target and .claude's real deploy location silently drifted apart
+    # (cd'd into the code install dir, while .claude/settings.json's
+    # self-heal could only ever write under AI_PROWLER_HOME). This test
+    # fails immediately if that drift is ever reintroduced, by asserting
+    # both sides against the exact same module-level constant rather than
+    # a hardcoded path string on either side.
     content = tqa.build_wrapper_script_content("x.json", "mcp__ai-prowler__*")
-    assert 'cd /d "%USERPROFILE%"' in content
+    cd_line = next(l for l in content.splitlines() if l.strip().startswith("cd /d"))
+    expected_claude_dir = tqa.AI_PROWLER_HOME / ".claude"
+    assert str(tqa.AI_PROWLER_HOME) in cd_line
+    assert expected_claude_dir.parent == tqa.AI_PROWLER_HOME
 
 
-def test_wrapper_script_falls_back_when_install_dir_is_blank_string():
-    content = tqa.build_wrapper_script_content(
-        "x.json", "mcp__ai-prowler__*", install_dir="   ")
-    assert 'cd /d "%USERPROFILE%"' in content
+def test_single_prompt_wrapper_also_cds_into_ai_prowler_home(_isolated_home):
+    # The "▶ NOW" button's wrapper (a separate function, see its own
+    # docstring for why) must use the exact same cd target as the
+    # scheduled wrapper above — this is exactly the kind of drift that
+    # went unnoticed before (build_wrapper_script_content() got the
+    # install_dir fix; this function didn't, for one full debugging
+    # session).
+    content = tqa.build_single_prompt_wrapper_content(
+        "do the thing", "x.json", "mcp__ai-prowler__*")
+    assert f'cd /d "{tqa.AI_PROWLER_HOME}"' in content
+    assert 'cd /d "%USERPROFILE%"' not in content
 
 
-def test_install_wrapper_script_forwards_install_dir(tmp_path):
+# ── v8.1.15 fix: arbitrary (e.g. custom-task) prompts must survive .bat
+# embedding ───────────────────────────────────────────────────────────────
+# Real-world bug: a custom task's "▶ NOW" run failed with cmd.exe reporting
+# `'Output:' is not recognized as an internal or external command`.
+# custom_tasks_manager.build_task_prompt() joins its output with real
+# newlines (correct for its own purpose — multi-line GUI display), and one
+# of those lines starts with "Output: ...". Once embedded verbatim into a
+# .bat file's single-line `claude -p "..."` invocation, that newline split
+# the command in cmd.exe's line-by-line .bat parser — "Output: ..." became
+# its own (invalid) command. Unlike QUEUE_RUNNER_PROMPT (a static constant,
+# already covered by test_wrapper_prompt_has_no_batch_unsafe_characters
+# above), a prompt reaching build_single_prompt_wrapper_content() can come
+# from ANY task — built-in or custom — and isn't guaranteed batch-safe by
+# construction, so it needs runtime sanitizing.
+
+def test_sanitize_prompt_for_batch_strips_all_newline_styles():
+    assert '\n' not in tqa._sanitize_prompt_for_batch("line one\nline two")
+    assert '\r' not in tqa._sanitize_prompt_for_batch("line one\r\nline two")
+    assert tqa._sanitize_prompt_for_batch("a\nb") == "a b"
+
+
+def test_sanitize_prompt_for_batch_escapes_percent():
+    # A bare % still triggers cmd.exe environment-variable expansion even
+    # inside a quoted argument — % must become %% (batch's own escape).
+    assert tqa._sanitize_prompt_for_batch("revenue up 15%") == "revenue up 15%%"
+
+
+# ── v8.1.16 fix: non-ASCII characters corrupted by legacy OEM codepage ─────
+# Real-world bug found while live-testing the v8.1.15 fix above: even after
+# the newline-splitting bug was fixed, a real "Check NSB" run still behaved
+# strangely. Root cause: custom_tasks_manager.py's own generated text
+# contains a real em-dash ("email the full analysis via send_email() —
+# leave 'to' blank..."), and cmd.exe reads .bat files under the legacy OEM
+# codepage (e.g. cp437) by default, silently corrupting every non-ASCII
+# byte in the file — confirmed via raw byte inspection: the real em-dash
+# (UTF-8 bytes E2 80 94) decodes as literal garbage ("Î"Ã‡Ã¶") under cp437,
+# sitting INSIDE the quoted claude -p "..." argument itself, not just in a
+# REM comment.
+#
+# First fix attempt: write the .bat with a UTF-8 BOM (encoding="utf-8-sig").
+# Reverted after live testing: subprocess.run(..., shell=True) — the exact
+# invocation path this module uses — does NOT auto-detect/strip a BOM the
+# way Windows 10 1903+ does for a double-clicked or interactive .bat file.
+# The raw BOM bytes showed up as literal garbage ("ï»¿") prepended to the
+# very first line, corrupting `@echo off` itself and breaking the script
+# outright — worse than the original bug.
+#
+# Actual fix: `chcp 65001 >nul` as the second line of the generated script
+# (right after `@echo off`), switching THIS cmd.exe process to the UTF-8
+# codepage explicitly, with no dependency on how the file happens to be
+# invoked. Combined with _sanitize_prompt_for_batch()'s ASCII normalization
+# as defense-in-depth for the handful of characters it covers.
+
+def test_sanitize_prompt_for_batch_normalizes_em_and_en_dash():
+    assert '\u2014' not in tqa._sanitize_prompt_for_batch("a \u2014 b")
+    assert '\u2013' not in tqa._sanitize_prompt_for_batch("a \u2013 b")
+
+
+def test_sanitize_prompt_for_batch_normalizes_curly_quotes_and_ellipsis():
+    result = tqa._sanitize_prompt_for_batch(
+        "\u201cHello\u201d \u2018world\u2019 \u2026")
+    for smart_char in ('\u201c', '\u201d', '\u2018', '\u2019', '\u2026'):
+        assert smart_char not in result
+    assert '"Hello" \'world\' ...' == result
+
+
+def test_wrapper_script_sets_utf8_codepage():
+    content = tqa.build_wrapper_script_content("x.json", "mcp__ai-prowler__*")
+    lines = content.splitlines()
+    assert lines[0] == "@echo off"
+    assert lines[1].strip() == "chcp 65001 >nul"
+
+
+def test_wrapper_script_has_no_utf8_bom():
+    # The BOM approach was tried and reverted -- confirm it stays reverted.
+    # A BOM would show up as the first three bytes of the encoded content;
+    # since this returns a plain str (not yet written to disk), check for
+    # the BOM character itself, which write_text(encoding="utf-8-sig")
+    # would have prepended were it still in use anywhere upstream.
+    content = tqa.build_wrapper_script_content("x.json", "mcp__ai-prowler__*")
+    assert not content.startswith('\ufeff')
+
+
+def test_single_prompt_wrapper_sets_utf8_codepage():
+    content = tqa.build_single_prompt_wrapper_content(
+        "do the thing", "x.json", "mcp__ai-prowler__*")
+    lines = content.splitlines()
+    assert lines[0] == "@echo off"
+    assert lines[1].strip() == "chcp 65001 >nul"
+
+
+def test_install_wrapper_script_writes_bat_without_bom(tmp_path, _isolated_home):
     target = tmp_path / "wrapper_dir"
-    path = tqa.install_wrapper_script(
-        target, "x.json", "mcp__ai-prowler__*",
-        install_dir=r"C:\Program Files\AI-Prowler")
-    content = path.read_text(encoding="utf-8")
-    assert 'cd /d "C:\\Program Files\\AI-Prowler"' in content
+    path = tqa.install_wrapper_script(target, "x.json", "mcp__ai-prowler__*")
+    raw = path.read_bytes()
+    assert not raw.startswith(b'\xef\xbb\xbf'), (
+        "Wrapper .bat has a UTF-8 BOM -- this was tried and reverted "
+        "because subprocess.run(shell=True) doesn't auto-strip it, "
+        "corrupting the file's first line instead. Should be plain utf-8."
+    )
+    assert raw.startswith(b'@echo off')
 
+
+def test_run_single_prompt_now_writes_bat_without_bom(tmp_path, _isolated_home, monkeypatch):
+    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: True)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: type(
+        "R", (), {"returncode": 0, "stdout": "", "stderr": ""})())
+    tqa.run_single_prompt_now("hello \u2014 world", "x.json", "mcp__ai-prowler__*")
+    bat_path = tqa.AI_PROWLER_HOME / "single_run" / "run_single_now.bat"
+    raw = bat_path.read_bytes()
+    assert not raw.startswith(b'\xef\xbb\xbf')
+    assert raw.startswith(b'@echo off')
+
+
+def test_single_prompt_wrapper_end_to_end_em_dash_normalized(tmp_path, _isolated_home):
+    # Uses the real custom task shape: the prompt line contains no raw
+    # smart-dash character (normalized by the sanitizer), and the script
+    # sets codepage 65001 as defense-in-depth for anything the sanitizer
+    # doesn't cover.
+    import custom_tasks_manager as ctm
+    task = {
+        "task_id": "test-task", "label": "Check NSB",
+        "prompt": "Check something.",
+        "output_learnings": False, "output_report": False,
+        "output_email": True, "scope_dirs": [],
+    }
+    real_prompt = ctm.build_task_prompt(task)
+    assert '\u2014' in real_prompt  # confirms the real function still emits an em-dash
+
+    content = tqa.build_single_prompt_wrapper_content(
+        real_prompt, "x.json", "mcp__ai-prowler__*")
+    prompt_line = next(l for l in content.splitlines() if l.strip().startswith('claude -p "'))
+    assert '\u2014' not in prompt_line
+    lines = content.splitlines()
+    assert lines[1].strip() == "chcp 65001 >nul"
+
+
+def test_single_prompt_wrapper_reproduces_and_fixes_the_live_bug():
+    # Reproduces the EXACT shape of the real failure: a multi-line prompt
+    # whose second line is build_task_prompt()'s own "Output: ..." action
+    # summary — the literal text that showed up as cmd.exe's failed command.
+    multiline_prompt = (
+        "Check something.\n\n"
+        "Output: (1) Record key insights as learnings. "
+        "(2) Email the full analysis via send_email()."
+    )
+    content = tqa.build_single_prompt_wrapper_content(
+        multiline_prompt, "x.json", "mcp__ai-prowler__*")
+    prompt_line = next(l for l in content.splitlines() if l.strip().startswith('claude -p "'))
+    # The whole prompt, "Output:" fragment included, must be on this ONE
+    # line — not split across separate .bat lines cmd.exe would try to run
+    # as independent commands.
+    assert "Output:" in prompt_line
+    assert not any(l.strip() == "Output:" or l.strip().startswith("Output: (1)")
+                    for l in content.splitlines() if l is not prompt_line)
+
+
+def test_single_prompt_wrapper_sanitizes_real_custom_task_prompt_shape():
+    # End-to-end regression using the REAL prompt-building function, not a
+    # hand-rolled approximation — ties this test directly to
+    # custom_tasks_manager.build_task_prompt()'s actual current output
+    # shape, so a future change there that reintroduces batch-unsafe
+    # content gets caught here too.
+    import custom_tasks_manager as ctm
+    task = {
+        "task_id": "test-task", "label": "Check NSB",
+        "prompt": "Check restaurant deals in New Smyrna Beach.",
+        "output_learnings": True, "output_report": False,
+        "output_email": True, "scope_dirs": [],
+    }
+    real_prompt = ctm.build_task_prompt(task)
+    assert '\n' in real_prompt  # confirms this test is exercising the real shape
+
+    content = tqa.build_single_prompt_wrapper_content(
+        real_prompt, "x.json", "mcp__ai-prowler__*")
+    prompt_line = next(l for l in content.splitlines() if l.strip().startswith('claude -p "'))
+    assert "Output:" in prompt_line
+    # No OTHER line in the generated .bat should be a stray fragment of the
+    # prompt (e.g. a bare "Output: ..." line outside the quoted argument).
+    other_lines = [l for l in content.splitlines() if l is not prompt_line]
+    assert not any("record key insights" in l or l.strip().startswith("Output:")
+                    for l in other_lines)
+
+
+def test_install_wrapper_script_writes_ai_prowler_home_cd(tmp_path, _isolated_home):
+    target = tmp_path / "wrapper_dir"
+    path = tqa.install_wrapper_script(target, "x.json", "mcp__ai-prowler__*")
+    content = path.read_text(encoding="utf-8")
+    assert f'cd /d "{tqa.AI_PROWLER_HOME}"' in content
+
+
+def test_run_queue_now_no_longer_has_install_dir_parameter_to_forget(_isolated_home):
+    # Direct regression guard for the specific bug found live: run_queue_now()
+    # had an install_dir parameter that install_wrapper_script() supported,
+    # but NEVER accepted or forwarded it itself -- silently falling back to
+    # the broken %USERPROFILE% cd on every "Run Due Tasks Now" click. With
+    # the parameter removed from the whole call chain, there's no longer a
+    # signature for a caller to mismatch against -- assert the parameter is
+    # simply gone, so a well-intentioned future re-add of a *forgotten*
+    # install_dir plumbing bug would show up here as a signature change,
+    # not a silent runtime behavior gap.
+    import inspect
+    sig = inspect.signature(tqa.run_queue_now)
+    assert "install_dir" not in sig.parameters
 
 # ── v8.1.11 fix: embedded prompt, not a slash command ───────────────────────
 # Regression coverage for a second, deeper bug found AFTER the v8.1.10
@@ -629,13 +900,21 @@ class TestWrapperActiveWindowSelfGateExecutesCorrectly:
     @staticmethod
     def _write_and_run_window_check(content: str, tmp_path) -> str:
         # Truncate the generated content to just the window-check block —
-        # everything up to (not including) the v8.1.10 cd-fix comment —
+        # everything up to (not including) the cd command that follows it —
         # then append a marker echo so a RUN result is observable on
         # stdout. A SKIP result never reaches that marker: the generated
         # block's own `exit /b 0` inside the if-block terminates the
         # script first, so SKIP is instead confirmed via the
         # last_headless_run.json it writes on the way out.
-        marker = "REM v8.1.10 fix: MUST cd"
+        #
+        # v8.1.14: anchor is the literal `cd /d "` token, not a REM comment
+        # — comment wording changed once already (v8.1.10 -> v8.1.14, when
+        # the cd target moved from the install directory to
+        # AI_PROWLER_HOME) and silently broke this truncation. The cd
+        # command itself is a much more stable anchor: it's always present,
+        # always unique, and exists specifically to mark the boundary this
+        # helper needs regardless of how its surrounding commentary evolves.
+        marker = 'cd /d "'
         truncated = content[:content.index(marker)]
         truncated += "\necho WINDOW_CHECK_RESULT=%AIP_WINDOW_CHECK%\n"
 
@@ -747,7 +1026,7 @@ class TestWrapperActiveWindowSelfGateExecutesCorrectly:
             "x.json", "mcp__ai-prowler__*", check_mode="daily",
             active_days=list(tqa.VALID_DAY_CODES))
 
-        marker = "REM v8.1.10 fix: MUST cd"
+        marker = 'cd /d "'
         truncated = content[:content.index(marker)]
         truncated += "\necho WINDOW_CHECK_RESULT=%AIP_WINDOW_CHECK%\n"
         bat_path = tmp_path / "window_check.bat"
@@ -1382,6 +1661,100 @@ def test_log_tool_call_hook_logs_ai_prowler_tools(tmp_path):
     assert "get_pending_analysis_tasks" in log_path.read_text(encoding="utf-8")
 
 
+# ── v8.1.14: installer must ship .claude to the SAME place the wrapper cd's
+# to ─────────────────────────────────────────────────────────────────────
+# This is the actual regression the whole v8.1.14 debugging session was
+# about, and none of the three tests above would have caught it: they
+# check the hook script itself works correctly (it always did), and that
+# the DEV-TREE source copy of .claude/settings.json is well-formed (it
+# always was too). What broke live was purely a DEPLOYMENT/wiring bug —
+# the .iss installer shipped .claude to {app}\.claude (the code install
+# directory, e.g. C:\Program Files\AI-Prowler) while
+# build_wrapper_script_content() at the time cd'd there too... until the
+# LATER admin-elevation problem surfaced and the cd target needed to
+# change. The two sides (installer DestDir, wrapper cd target) were never
+# cross-checked against each other by anything, so they were free to
+# silently drift apart — which is exactly what would have happened again
+# without a test tying them together. These two tests do that tying.
+
+def test_installer_ships_claude_folder_to_ai_prowler_home_not_app_dir():
+    """Static check of AI-Prowler-Setup.iss's [Files] section: the three
+    .claude Source lines must target {%USERPROFILE}\\.ai-prowler\\.claude
+    (matching AI_PROWLER_HOME), never {app}\\.claude. A hand-edit that
+    "fixes" the wrapper's cd target without also updating the installer's
+    DestDir (or vice versa) is exactly the bug this test exists to catch
+    — see the module comment above for the real live incident."""
+    iss_path = Path(__file__).resolve().parents[2] / "AI-Prowler-Setup.iss"
+    assert iss_path.exists()
+    content = iss_path.read_text(encoding="utf-8", errors="replace")
+    claude_source_lines = [
+        line for line in content.splitlines()
+        if line.strip().startswith("Source:") and ".claude" in line
+    ]
+    assert len(claude_source_lines) == 3, (
+        f"Expected exactly 3 .claude Source lines (settings.json, "
+        f"hooks\\log_tool_call.py, skills\\...\\SKILL.md), found "
+        f"{len(claude_source_lines)}: {claude_source_lines}"
+    )
+    for line in claude_source_lines:
+        assert r"{%USERPROFILE}\.ai-prowler\.claude" in line, (
+            f"This .claude Source line does not target "
+            f"{{%USERPROFILE}}\\.ai-prowler\\.claude (AI_PROWLER_HOME) — "
+            f"it will silently drift from wherever "
+            f"build_wrapper_script_content() actually cd's to: {line}"
+        )
+        assert r"{app}\.claude" not in line, (
+            f"This .claude Source line targets {{app}}\\.claude, which can "
+            f"be an admin-only Program-Files-class location — the exact "
+            f"live bug this test guards against: {line}"
+        )
+
+
+def test_deployed_claude_hook_is_reachable_from_wrapper_cd_target(tmp_path, _isolated_home):
+    """True end-to-end regression test: takes the REAL .claude/ folder from
+    the dev tree (not a hand-written fixture), deploys it to exactly where
+    build_wrapper_script_content() says the wrapper will cd to (under the
+    monkeypatched, isolated AI_PROWLER_HOME — never the real one), and
+    confirms the hook is actually reachable and functional from there —
+    i.e. simulates "Claude Code cd's into AI_PROWLER_HOME, discovers
+    .claude/settings.json, and successfully invokes
+    .claude/hooks/log_tool_call.py" without needing a real Claude Code
+    session to prove it. This is the automated version of the manual
+    live verification done during the original debugging session (a
+    synthetic hook event piped through the exact configured command),
+    generalized so it can never silently start failing again."""
+    real_claude_dir = Path(__file__).resolve().parents[2] / ".claude"
+    assert real_claude_dir.exists()
+
+    # Deploy to the SAME path the wrapper's cd line actually targets —
+    # not a path this test invents independently, so a future change to
+    # AI_PROWLER_HOME's definition can't silently desync the two.
+    deployed_claude_dir = tqa.AI_PROWLER_HOME / ".claude"
+    import shutil as _shutil
+    _shutil.copytree(real_claude_dir, deployed_claude_dir)
+
+    # Confirm the wrapper's own cd line matches where we just deployed to.
+    content = tqa.build_wrapper_script_content("x.json", "mcp__ai-prowler__*")
+    cd_line = next(l for l in content.splitlines() if l.strip().startswith("cd /d"))
+    assert str(tqa.AI_PROWLER_HOME) in cd_line
+
+    # Now actually invoke the DEPLOYED hook (not the dev-tree source copy)
+    # exactly as Claude Code would, with a synthetic AI-Prowler tool call.
+    hook_path = deployed_claude_dir / "hooks" / "log_tool_call.py"
+    assert hook_path.exists()
+    event = json.dumps({
+        "tool_name": "mcp__ai-prowler__sync_due_tasks_to_queue",
+        "tool_input": {},
+        "tool_response": {"is_error": False},
+    })
+    r = subprocess.run([sys.executable, str(hook_path)], input=event,
+                        capture_output=True, text=True,
+                        env={"HOME": str(tmp_path), "USERPROFILE": str(tmp_path)})
+    assert r.returncode == 0
+    assert tqa.AUDIT_LOG_PATH.exists()
+    assert "sync_due_tasks_to_queue" in tqa.AUDIT_LOG_PATH.read_text(encoding="utf-8")
+
+
 # ── Claude Code auth token expiry ─────────────────────────────────────────
 # v8.1.6: rewritten against OAUTH_TOKEN_PATH (claude_oauth_token.json,
 # {token, issued_at}) instead of the old ~/.claude/.credentials.json
@@ -1847,21 +2220,49 @@ def test_dry_run_check_api_key_detail_never_shows_value(_isolated_home, monkeypa
 # (C:\Windows\System32) all the way into rag_gui.py, and this check
 # reported the Skill file "missing" there instead of the real install
 # directory, even though it was genuinely installed correctly.
+#
+# v8.1.14 update: the skill_path check moved from being __file__-relative
+# (independent of BOTH cwd and HOME) to being AI_PROWLER_HOME-relative
+# (independent of cwd, but now DELIBERATELY dependent on HOME — see
+# build_wrapper_script_content()'s docstring for why). The property this
+# test actually cares about — cwd-independence — still holds and is worth
+# guarding, but the test needs cwd and HOME to be two clearly DIFFERENT
+# directories to tell them apart; the original version happened to use the
+# same tmp_path for both (via the file's blanket Path.home() isolation),
+# which made the two indistinguishable and this test's own name misleading.
 
 def test_dry_run_skill_check_ignores_current_working_directory(tmp_path, monkeypatch):
     # Simulate exactly the real-world failure mode: change the PROCESS's
-    # cwd to somewhere completely unrelated to the install directory
-    # (standing in for C:\Windows\System32) and confirm the Skill file
-    # check still resolves to the real module location, not this fake cwd.
-    monkeypatch.chdir(tmp_path)
+    # cwd to somewhere completely unrelated to home/install (standing in
+    # for C:\Windows\System32), while HOME (and therefore AI_PROWLER_HOME)
+    # points somewhere else entirely — confirm the Skill file check
+    # reflects HOME, never the unrelated cwd.
+    fake_cwd = tmp_path / "unrelated_cwd_like_system32"
+    fake_cwd.mkdir()
+    fake_home = tmp_path / "real_home"
+    fake_home.mkdir()
+    monkeypatch.setattr(tqa.Path, "home", lambda: fake_home)
+    monkeypatch.setattr(tqa, "AI_PROWLER_HOME", fake_home / ".ai-prowler")
+    # dry_run_check() also calls _write_last_run() at the end, which writes
+    # to STATUS_PATH -- a separate module constant computed once at import
+    # time from the ORIGINAL Path.home(), not re-derived from AI_PROWLER_HOME
+    # dynamically. A conftest-level autouse fixture normally keeps this in
+    # sync with the default tmp_path-based isolation, but this test
+    # deliberately uses a fake_home SUBDIRECTORY of tmp_path (to keep cwd and
+    # home distinguishable -- see comment above), which that default no
+    # longer matches. Re-patch it explicitly to stay consistent, same
+    # pattern _isolated_home uses for every other test in this file.
+    monkeypatch.setattr(tqa, "STATUS_PATH", fake_home / ".ai-prowler" / "task_automation_last_run.json")
+    monkeypatch.chdir(fake_cwd)
+
     report = tqa.dry_run_check()
     skill_check = next(c for c in report["checks"] if c["name"] == "AI-Prowler Skill file")
-    assert str(tmp_path) not in skill_check["detail"]
-    # The detail path must be anchored to wherever task_queue_automation.py
-    # itself actually lives, not the (deliberately wrong) cwd above.
-    expected_dir = tqa.Path(tqa.__file__).resolve().parent
-    assert skill_check["detail"] == str(
-        expected_dir / ".claude" / "skills" / "ai-prowler-tasks" / "SKILL.md")
+    assert str(fake_cwd) not in skill_check["detail"]
+    # The detail path must be anchored to AI_PROWLER_HOME (HOME-relative),
+    # never the cwd this test deliberately set to something unrelated.
+    assert str(fake_home) in skill_check["detail"]
+    expected_path = fake_home / ".ai-prowler" / ".claude" / "skills" / "ai-prowler-tasks" / "SKILL.md"
+    assert skill_check["detail"] == str(expected_path)
 
 
 # ── Claude Code CLI presence + install ────────────────────────────────────

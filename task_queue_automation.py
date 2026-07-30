@@ -148,7 +148,10 @@ QUEUE_RUNNER_PROMPT = (
     "prompt, scope_dirs, and label; perform the actual analysis using "
     "AI-Prowler's own MCP tools only, scoped to scope_dirs if provided, "
     "otherwise the task's default scope; call record_learning for any "
-    "concrete findings worth persisting; call complete_analysis_task with "
+    "concrete findings worth persisting ONLY IF the task's prompt "
+    "explicitly includes an Output instruction to save key insights as "
+    "learnings — do not call record_learning if the task prompt does not "
+    "ask for it; call complete_analysis_task with "
     "the task_id and a real, specific summary of what was found, not a "
     "placeholder; next_due advancement and re-arming are handled "
     "automatically by AI-Prowler, do not compute this yourself; if the "
@@ -257,7 +260,6 @@ def build_wrapper_script_content(mcp_config_path: str, allowed_tools: str,
                                   notify_on_complete: bool = False,
                                   notify_method: str = "sms",
                                   use_api_key: bool = False,
-                                  install_dir: str = "",
                                   check_mode: str = "daily",
                                   active_days: list | None = None,
                                   active_start_time: str = "00:00",
@@ -280,34 +282,35 @@ def build_wrapper_script_content(mcp_config_path: str, allowed_tools: str,
     environment, is used in preference to any subscription/OAuth
     credential automatically — no extra flag needed to force this.
 
-    install_dir: the AI-Prowler application directory (contains
-    .claude/skills/ai-prowler-tasks/SKILL.md, which defines the
-    /ai-prowler-run-queue slash command this script invokes). v8.1.10 fix
-    — this used to `cd` into %USERPROFILE% instead, which has no .claude
-    folder of its own. Claude Code resolves project-level slash commands
-    from the CURRENT WORKING DIRECTORY's .claude folder, so every
-    scheduled run silently failed with "Unknown command:
-    /ai-prowler-run-queue" (0 turns, $0 cost, exits "success" in ~100ms)
-    — Windows Task Scheduler reported the run as successful throughout,
-    because the .bat itself did exit 0; nothing about the failure was
-    visible anywhere except the raw last_headless_run.json transcript. If
-    install_dir is not provided (e.g. an old caller not yet updated),
-    falls back to %USERPROFILE% to preserve prior (broken) behavior rather
-    than guessing wrong.
+    v8.1.14: always cd's into AI_PROWLER_HOME (~/.ai-prowler), which now
+    also holds .claude/ (settings.json's PostToolUse audit-log hook,
+    hooks/log_tool_call.py, skills/ai-prowler-tasks/SKILL.md). This
+    replaces the earlier install_dir PARAMETER entirely — no longer a
+    value a caller has to remember to compute and pass through several
+    layers (rag_gui.py -> here / run_single_prompt_now / run_queue_now).
+    That design directly caused two real bugs found in the same
+    debugging session: run_queue_now() silently omitted the parameter
+    entirely (fell back to the old broken %USERPROFILE% default), and
+    build_single_prompt_wrapper_content() (the "▶ NOW" button) had never
+    been updated to accept it at all. Removing the parameter removes the
+    whole bug class — there's no longer a value to forget to pass,
+    because this function now always uses the same module-level constant
+    every other piece of AI-Prowler state already lives under.
 
-    check_mode/active_days/active_start_time/active_end_time (v8.1.11):
-    the checker's own frequency (set via check_mode + the OS trigger
-    install_scheduled_task() creates) and active window are DELIBERATELY
-    independent of any individual custom task's own schedule — this is
-    about when the CHECKER wakes up at all, not whether any given task is
-    due. active_days always applies (both modes); active_start_time/
-    active_end_time are only enforced in "interval" mode — in "daily"
-    mode, schedule_time itself already IS the single trigger point, so an
-    additional time-window check would be redundant (and could only ever
-    contradict schedule_time, never usefully narrow it). If the check
-    lands outside the active window, the script exits immediately, before
-    ever invoking `claude -p` — zero cost for a skipped check, not just a
-    fast failure.
+    v8.1.10's original fix (install_dir = the AI-Prowler CODE directory,
+    e.g. C:\\Program Files\\AI-Prowler) solved the immediate cd-target bug
+    but created a DIFFERENT one, found later the same day: .claude therefore
+    had to be shipped into a Program-Files-class location, which requires
+    admin elevation to write to — meaning generate_mcp_config()'s hook
+    self-heal (_ensure_hook_uses_absolute_python(), which runs as the
+    normal non-elevated AI-Prowler process) could never actually write to
+    it, silently failing every time via its own try/except. AI_PROWLER_HOME
+    is the one location that's simultaneously (a) discoverable by Claude
+    Code via a plain `cd` — no --project-dir flag exists — (b) already
+    where every other piece of AI-Prowler's own state lives
+    (config/tokens/logs/generated MCP config), and (c) fully writable by
+    the same non-elevated user account that runs both the GUI and the
+    Scheduled Task, so self-healing code can actually do its job.
     """
     active_days = active_days if active_days is not None else list(DEFAULT_CONFIG["active_days"])
     _days_py_list = "{" + ",".join(f"'{d}'" for d in active_days) + "}"
@@ -436,22 +439,51 @@ if exist "{OAUTH_TOKEN_PLAIN_PATH}" (
 
 """
 
-    _cd_target = install_dir.strip() if install_dir and install_dir.strip() else "%USERPROFILE%"
-
     return f"""@echo off
+chcp 65001 >nul
+REM v8.1.16 fix: chcp 65001 switches THIS cmd.exe process to the UTF-8
+REM codepage before anything else runs. Without it, cmd.exe defaults to
+REM the legacy OEM codepage (e.g. cp437 on US Windows) for every byte in
+REM this file -- corrupting any non-ASCII character (em-dashes, curly
+REM quotes, etc.) anywhere below this line, INCLUDING inside the quoted
+REM prompt argument further down, not just in REM comments. Confirmed
+REM live (2026-07-29): a UTF-8 BOM (encoding="utf-8-sig" when writing this
+REM file) was tried first and reverted -- it works for a double-clicked
+REM or interactively-run .bat, but NOT for subprocess.run(..., shell=True)
+REM invocation, which doesn't auto-strip the BOM; the raw BOM bytes
+REM showed up as literal garbage text ("ï»¿") prepended to this very
+REM first line, corrupting `@echo off` itself and breaking the script
+REM outright. chcp as an explicit in-script command has no such
+REM invocation-path dependency.
 REM Auto-generated by task_queue_automation.py — do not edit by hand.
 REM Runs AI-Prowler's pending analysis task queue unattended via Claude
 REM Code headless mode. See the architecture spec for design rationale.
 
-{window_check_block}REM v8.1.10 fix: MUST cd into the AI-Prowler app directory, not
-REM %USERPROFILE% — the /ai-prowler-run-queue slash command is defined by
-REM .claude/skills/ai-prowler-tasks/SKILL.md, and Claude Code only
-REM discovers project-level skills/commands from the current working
-REM directory's own .claude folder. Running from %USERPROFILE% (which has
-REM no .claude/skills of its own) silently resolved to "Unknown command"
-REM every single time, with the .bat still exiting 0 — Task Scheduler
-REM showed "successful" runs that did nothing at all.
-cd /d "{_cd_target}"
+{window_check_block}REM v8.1.14: cd into AI_PROWLER_HOME (~/.ai-prowler), which holds
+REM .claude/hooks/log_tool_call.py's audit-log hook (via settings.json) and
+REM .claude/skills/ai-prowler-tasks/SKILL.md — Claude Code only discovers
+REM project-level hooks/skills from the CURRENT WORKING DIRECTORY's own
+REM .claude folder. This used to cd into the AI-Prowler CODE directory
+REM instead (v8.1.10) — fixed the original "Unknown command" bug, but that
+REM location (e.g. C:\\Program Files\\AI-Prowler) requires admin elevation
+REM to write to, which silently broke the separate audit-log hook self-heal
+REM (a normal non-elevated process can't write there). AI_PROWLER_HOME is
+REM fully non-elevated and writable, and is already where every other piece
+REM of AI-Prowler's own state lives.
+cd /d "{AI_PROWLER_HOME}"
+
+REM v8.1.17: append a persistent, timestamped copy of this script's own
+REM content to command_debug.log before invoking claude -- unlike
+REM last_headless_run.json (overwritten every run, only the MOST RECENT
+REM invocation is ever visible), this is append-only, so past runs stay
+REM inspectable for later debugging. `type "%~f0"` streams this file's own
+REM bytes verbatim -- no new escaping/quoting risk introduced, since
+REM nothing is being re-embedded into a new echo statement (exactly the
+REM class of bug this whole debugging session kept finding elsewhere).
+echo. >> "%USERPROFILE%\.ai-prowler\command_debug.log"
+echo ================================================================ >> "%USERPROFILE%\.ai-prowler\command_debug.log"
+echo [%date% %time%] SCHEDULED QUEUE RUN -- full script below: >> "%USERPROFILE%\.ai-prowler\command_debug.log"
+type "%~f0" >> "%USERPROFILE%\.ai-prowler\command_debug.log"
 
 {api_key_block}claude -p "{prompt}" ^
   --mcp-config "{mcp_config_path}" ^
@@ -468,7 +500,6 @@ def install_wrapper_script(target_dir: Path, mcp_config_path: str, allowed_tools
                             notify_on_complete: bool = False,
                             notify_method: str = "sms",
                             use_api_key: bool = False,
-                            install_dir: str = "",
                             check_mode: str = "daily",
                             active_days: list | None = None,
                             active_start_time: str = "00:00",
@@ -477,21 +508,29 @@ def install_wrapper_script(target_dir: Path, mcp_config_path: str, allowed_tools
     the GUI passes ~/.ai-prowler/ (NOT the install directory) so this never
     needs write access to C:\\Program Files\\AI-Prowler.
 
-    install_dir: passed straight through to build_wrapper_script_content()
-    — the directory the generated .bat should `cd` into before invoking
-    `claude -p`, i.e. wherever THIS AI-Prowler is actually running from
-    (contains .claude/skills/ai-prowler-tasks/SKILL.md). See that
-    function's docstring for why this is required (v8.1.10 fix).
-
     check_mode/active_days/active_start_time/active_end_time (v8.1.11):
     forwarded straight through to build_wrapper_script_content() — see
-    that function's docstring for the full rationale."""
+    that function's docstring for the full rationale.
+
+    v8.1.14: no longer accepts install_dir — build_wrapper_script_content()
+    always cd's into AI_PROWLER_HOME now, see that function's docstring."""
     target_dir.mkdir(parents=True, exist_ok=True)
     script_path = target_dir / WRAPPER_SCRIPT_NAME
+    # v8.1.16 fix, corrected: a UTF-8 BOM (encoding="utf-8-sig") was tried
+    # first here and reverted -- confirmed live that subprocess.run(...,
+    # shell=True) does NOT auto-detect/strip a BOM the way Windows 10
+    # 1903+ does for a double-clicked or interactively-run .bat file. The
+    # BOM bytes (EF BB BF) instead showed up as literal garbage text
+    # (mojibake: "ï»¿") prepended to the very first line, corrupting
+    # `@echo off` into `ï»¿@echo off` -- which cmd.exe then failed to
+    # recognize as a command at all. `chcp 65001` as an explicit command
+    # inside the script (added in build_wrapper_script_content()) is the
+    # actually-reliable fix for this specific invocation path -- plain
+    # "utf-8" (no BOM) here.
     script_path.write_text(
         build_wrapper_script_content(mcp_config_path, allowed_tools,
                                       notify_on_complete, notify_method,
-                                      use_api_key, install_dir,
+                                      use_api_key,
                                       check_mode, active_days,
                                       active_start_time, active_end_time),
         encoding="utf-8")
@@ -504,7 +543,22 @@ def dry_run_check() -> dict:
     """Validates every precondition for a real run WITHOUT triggering one.
     Returns a report dict the GUI renders as a checklist. This is the
     button-safe operation — it never touches pending_tasks.json, never
-    spends usage, never sends a notification."""
+    spends usage, never sends a notification.
+
+    v8.1.14: also runs _ensure_hook_uses_absolute_python() as a side
+    effect (not itself one of the numbered checks below — this is a
+    self-heal, not a validation). generate_mcp_config() already does this
+    too, but ONLY runs when a config is first created or explicitly
+    regenerated (e.g. toggling Enable) — a machine that already has a
+    saved mcp_config_path (the common case: audit log silently stopped
+    working sometime after initial setup, not before it) would never
+    naturally re-trigger it. Test Setup (Dry Run) is the one button
+    available at any time regardless of current Enabled state, so it's
+    the most reliable place to also catch this without requiring a full
+    re-enable cycle. No-ops harmlessly if .claude/settings.json doesn't
+    exist yet or is already fixed — see that function's own docstring.
+    """
+    _ensure_hook_uses_absolute_python()
     checks = []
 
     # 1. Is the `claude` CLI on PATH at all?
@@ -521,7 +575,8 @@ def dry_run_check() -> dict:
     if claude_path:
         try:
             r = subprocess.run(["claude", "--version"], capture_output=True,
-                                text=True, timeout=10)
+                                text=True, timeout=10,
+                                creationflags=subprocess.CREATE_NO_WINDOW)
             checks.append({
                 "name": "Claude Code CLI runs",
                 "ok": r.returncode == 0,
@@ -550,26 +605,26 @@ def dry_run_check() -> dict:
         })
 
     # 4. Does the Skill file exist?
-    # v8.1.11 fix: real-world bug — Path.cwd() reflects whatever the
-    # CALLING process's current working directory happens to be, which is
-    # only correct by accident (e.g. a desktop shortcut's "Start in"
-    # field). Confirmed live: a fresh install auto-launched via the
-    # AI-Prowler-AutoStart Scheduled Task (no explicit working directory)
-    # inherited Windows' default of C:\Windows\System32, and this check
-    # reported the Skill file "missing" at
+    # v8.1.14: checks under AI_PROWLER_HOME now, not the code install
+    # directory — .claude/ moved there entirely (see
+    # build_wrapper_script_content()'s docstring for the full history: the
+    # v8.1.11 fix below was itself superseded by this move, kept here for
+    # context on why __file__-relative resolution was ever used in the
+    # first place).
+    #
+    # v8.1.11 fix (historical): real-world bug — Path.cwd() reflects
+    # whatever the CALLING process's current working directory happens to
+    # be, which is only correct by accident (e.g. a desktop shortcut's
+    # "Start in" field). Confirmed live: a fresh install auto-launched via
+    # the AI-Prowler-AutoStart Scheduled Task (no explicit working
+    # directory) inherited Windows' default of C:\Windows\System32, and
+    # this check reported the Skill file "missing" at
     # C:\Windows\System32\.claude\skills\..., even though it was correctly
-    # installed at the real AI-Prowler directory. __file__ always
-    # resolves to where THIS module itself is actually running from
-    # (task_queue_automation.py is deployed alongside .claude\ in every
-    # install), independent of the calling process's cwd — the same
-    # robust pattern already used elsewhere (e.g. rag_gui.py's own
-    # install_dir computation for the wrapper script). RAG_RUN.bat now
-    # also sets a correct working directory explicitly as the real root
-    # fix; this is defense-in-depth for any other launch path that
-    # doesn't go through RAG_RUN.bat at all (e.g. a raw `python
-    # rag_gui.py` invocation from an arbitrary directory).
-    _this_module_dir = Path(__file__).resolve().parent
-    skill_path = _this_module_dir / ".claude" / "skills" / "ai-prowler-tasks" / "SKILL.md"
+    # installed. __file__-relative resolution fixed that specific bug, but
+    # depended on .claude/ living alongside the code — which is exactly
+    # the assumption v8.1.14 removed, for the admin-elevation reasons
+    # documented above.
+    skill_path = AI_PROWLER_HOME / ".claude" / "skills" / "ai-prowler-tasks" / "SKILL.md"
     checks.append({
         "name": "AI-Prowler Skill file",
         "ok": skill_path.exists(),
@@ -643,6 +698,25 @@ GENERATED_MCP_CONFIG_PATH = AI_PROWLER_HOME / "claude_mcp_config.json"
 LOCAL_MCP_SCRIPT_PATH = Path(__file__).resolve().parent / "ai_prowler_mcp.py"
 
 
+def _get_python_exe() -> str:
+    """Return the console python.exe path, never pythonw.exe.
+
+    sys.executable is pythonw.exe when AI-Prowler launches as a GUI app
+    (RAG_RUN.bat uses pythonw to suppress the console window). That's
+    correct for the GUI itself but breaks stdio MCP server usage: claude -p
+    communicates with the MCP server via stdin/stdout pipes, and pythonw.exe
+    explicitly discards both — pipes connect to null handles, so the MCP
+    server produces no output and claude -p hangs indefinitely waiting for
+    responses that never arrive. Confirmed live (2026-07-29): every ▶ NOW
+    run with a stdio MCP config hung for 10+ minutes before being killed.
+    Fix: always use python.exe (console variant) for spawning child processes.
+    """
+    exe = sys.executable or ""
+    if exe.lower().endswith("pythonw.exe"):
+        exe = exe[:-len("pythonw.exe")] + "python.exe"
+    return exe
+
+
 def _generate_local_mcp_config() -> tuple[bool, str]:
     """Writes a stdio --mcp-config pointing headless Claude Code directly
     at AI-Prowler's own ai_prowler_mcp.py — identical in shape to the
@@ -657,7 +731,7 @@ def _generate_local_mcp_config() -> tuple[bool, str]:
     mcp_config = {
         "mcpServers": {
             "ai-prowler": {
-                "command": sys.executable,
+                "command": _get_python_exe(),
                 "args": [str(LOCAL_MCP_SCRIPT_PATH)],
                 "env": {
                     "PYTHONNOUSERSITE": "1",
@@ -677,6 +751,117 @@ def _generate_local_mcp_config() -> tuple[bool, str]:
         return False, f"Could not write MCP config: {e}"
 
     return True, str(GENERATED_MCP_CONFIG_PATH)
+
+
+def _generate_localhost_mcp_config() -> tuple[bool, str]:
+    """v8.1.18: writes a Claude Code --mcp-config pointing at the
+    already-running AI-Prowler HTTP MCP server via localhost:8000 — the
+    same server the GUI launched at startup, used for remote/mobile access.
+
+    This is specifically for the ▶ NOW button path (run_single_prompt_now /
+    run_queue_now). The stdio path (generate_mcp_config / _generate_local_mcp_config)
+    is correct for the scheduled Task Scheduler wrapper, which runs overnight
+    when the GUI may not be open. But when the GUI IS open, the HTTP server
+    is already running, and using stdio via claude -p spawns a SECOND
+    ai_prowler_mcp.py process, both hitting the same ChromaDB concurrently.
+    Confirmed live (2026-07-29, multiple attempts): this dual-process
+    contention causes claude -p to run extremely slowly or appear to hang
+    for 10+ minutes even on a task that normally completes in ~2 minutes.
+
+    Uses localhost:8000 directly rather than the Cloudflare tunnel URL —
+    same server, avoids the external round-trip, faster and more reliable
+    for a process running on the same machine.
+
+    Returns (True, config_path) if the HTTP server is reachable, or
+    (False, reason) if it's not — callers fall back to stdio in that case.
+    """
+    import urllib.request as _ur
+    import urllib.error as _ue
+
+    # Quick reachability check before writing the config.
+    # /health returns 200 on the AI-Prowler HTTP MCP server.
+    try:
+        cfg_raw = json.loads(AI_PROWLER_CONFIG_PATH.read_text(
+            encoding="utf-8-sig")) if AI_PROWLER_CONFIG_PATH.exists() else {}
+    except Exception:
+        cfg_raw = {}
+    token = (cfg_raw.get("remote_token") or "").strip()
+    if not token:
+        return False, "No Bearer Token configured — HTTP server auth unknown."
+
+    try:
+        req = _ur.Request(
+            "http://localhost:8000/health",
+            headers={"Authorization": f"Bearer {token}"})
+        with _ur.urlopen(req, timeout=3) as resp:
+            if resp.status not in (200, 204):
+                return False, f"HTTP server returned {resp.status}"
+    except (_ue.URLError, OSError):
+        return False, "HTTP MCP server not reachable on localhost:8000."
+
+    mcp_config = {
+        "mcpServers": {
+            "ai-prowler": {
+                "type": "http",
+                "url": "http://localhost:8000/mcp",
+                "headers": {
+                    "Authorization": f"Bearer {token}",
+                },
+            }
+        }
+    }
+
+    # Write to a SEPARATE config file so the scheduled task's stdio config
+    # (GENERATED_MCP_CONFIG_PATH) is never overwritten mid-run.
+    now_config_path = AI_PROWLER_HOME / "claude_mcp_config_now.json"
+    try:
+        AI_PROWLER_HOME.mkdir(parents=True, exist_ok=True)
+        now_config_path.write_text(json.dumps(mcp_config, indent=2),
+                                    encoding="utf-8")
+    except Exception as e:
+        return False, f"Could not write NOW-button MCP config: {e}"
+
+    return True, str(now_config_path)
+
+
+def generate_mcp_config_for_now_button() -> tuple[bool, str]:
+    """v8.1.18: MCP config for the ▶ NOW button — prefers the
+    already-running localhost:8000 HTTP MCP server over stdio, to avoid
+    spawning a duplicate MCP server process alongside the one the GUI
+    already has running.
+
+    Background: the scheduled task uses stdio (generate_mcp_config /
+    _generate_local_mcp_config) and works fine at 9 AM because it runs
+    alone. The ▶ NOW button always runs while the GUI is already open,
+    which means the GUI's own HTTP MCP server is already running on
+    port 8000. Spawning a SECOND stdio MCP server on top of that causes
+    ChromaDB contention — confirmed live repeatedly (2026-07-29/30):
+    claude -p hangs for the full 600s timeout with 0 bytes of output,
+    every single time, when stdio is used while the GUI is running.
+
+    Using localhost:8000 directly eliminates both the contention AND
+    the duplicate process — claude -p talks to the server that's already
+    there. Falls back to stdio only if the HTTP server isn't reachable
+    (e.g. user hasn't set up remote access / port 8000 isn't running).
+
+    Writes to claude_mcp_config_now.json (separate from the scheduled
+    task's claude_mcp_config.json) so the two never collide.
+    """
+    ok, result = _generate_localhost_mcp_config()
+    if ok:
+        return True, result
+    # Fallback: try remote tunnel config
+    ok, result = _generate_remote_mcp_config()
+    if ok:
+        now_config_path = AI_PROWLER_HOME / "claude_mcp_config_now.json"
+        try:
+            import shutil as _shutil
+            _shutil.copy2(result, str(now_config_path))
+            return True, str(now_config_path)
+        except Exception:
+            return True, result
+    # Last resort: stdio (may hang if GUI is running, but better than nothing)
+    return _generate_local_mcp_config()
 
 
 def _generate_remote_mcp_config() -> tuple[bool, str]:
@@ -727,6 +912,87 @@ def _generate_remote_mcp_config() -> tuple[bool, str]:
     return True, str(GENERATED_MCP_CONFIG_PATH)
 
 
+def _ensure_hook_uses_absolute_python() -> None:
+    """v8.1.14 fix: self-heal .claude/settings.json's PostToolUse hook
+    command to invoke the audit-log hook via an ABSOLUTE python.exe path
+    (sys.executable) instead of a bare `python` token.
+
+    This is the exact same bug, and the exact same fix, as the v8.1.13
+    bare-`python` issue documented in detail at the top of this module for
+    the wrapper .bat's self-gate window check — confirmed live on David's
+    machine (2026-07-28) that `python` resolves fine in an interactive
+    shell but is silently ABSENT from PATH for non-interactive process
+    launches (Windows Task Scheduler S4U logon). That fix covered the
+    wrapper .bat. It did NOT cover this hook, because the hook's launch
+    command lives in a separate, static file — .claude/settings.json,
+    shipped as-is by the installer — rather than being generated fresh
+    by this module the way the wrapper .bat is.
+
+    Practical effect of the gap: after the v8.1.10-and-later fixes, the
+    Scheduled Task correctly cd's into the app directory, .claude/settings.json
+    and .claude/hooks/log_tool_call.py are correctly present (once
+    reinstalled), the hook's PostToolUse matcher correctly matches AI-
+    Prowler's MCP tool names ("mcp__ai-prowler__.*") — and STILL nothing
+    ever lands in autonomous_run_audit.log, because Claude Code's own
+    subprocess spawn for the hook command inherits the same PATH-less
+    environment as everything else launched non-interactively, so `python
+    ".../log_tool_call.py"` fails to even start. No error surfaces
+    anywhere the user would see it — Claude Code hooks are fire-and-forget
+    by design (a hook is never allowed to block or fail the actual tool
+    call), so a hook that can't launch just silently produces zero output,
+    identical in appearance to "the hook ran and correctly decided this
+    wasn't an AI-Prowler tool call."
+
+    Self-heals rather than being a one-time build-time fix, because a
+    hardcoded absolute path baked in on David's dev machine at build time
+    would be wrong on every other end user's machine (different Python
+    install location). Called from generate_mcp_config(), which already
+    runs before every real execution path (Test Setup / Dry Run, the
+    Scheduled Task's own setup, and every "▶ NOW" / "Run Due Tasks"
+    invocation all require a valid MCP config first) — so this keeps
+    itself correct for whichever machine and Python install it's actually
+    running under, no separate install-time step required.
+
+    v8.1.14 follow-up: settings_path now resolves under AI_PROWLER_HOME,
+    not the code install directory — see build_wrapper_script_content()'s
+    docstring for why .claude/ moved there (in short: the code directory
+    can be a Program-Files-class admin-only location, which this very
+    self-heal function can't write to).
+
+    Best-effort and silent: never raises, matching the philosophy of the
+    hook script itself (audit logging must never be allowed to interfere
+    with the actual task run). A missing settings.json, unreadable JSON,
+    an already-fixed command, or a locked/read-only file are all treated
+    as "nothing to do" rather than errors.
+    """
+    try:
+        settings_path = AI_PROWLER_HOME / ".claude" / "settings.json"
+        if not settings_path.exists():
+            return
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        hook_entry = (data.get("hooks", {})
+                          .get("PostToolUse", [{}])[0]
+                          .get("hooks", [{}])[0])
+        current_cmd = hook_entry.get("command", "")
+        if not current_cmd or not current_cmd.lstrip().startswith("python "):
+            return  # already fixed, or not the shape we expect — leave it alone
+
+        python_exe = sys.executable or "python"
+        # Rebuild the command with an absolute, quoted interpreter path in
+        # place of the bare `python` token. Everything after the first
+        # token (the script path, including the ${CLAUDE_PROJECT_DIR}
+        # placeholder Claude Code itself expands) is preserved unchanged.
+        rest = current_cmd.split(" ", 1)[1] if " " in current_cmd else ""
+        new_cmd = f'"{python_exe}" {rest}'.rstrip()
+        if new_cmd == current_cmd:
+            return
+
+        data["hooks"]["PostToolUse"][0]["hooks"][0]["command"] = new_cmd
+        settings_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except Exception:
+        pass  # self-heal is best-effort — never let this block MCP config generation
+
+
 def generate_mcp_config(prefer_remote: bool = False) -> tuple[bool, str]:
     """Writes/refreshes the --mcp-config file headless Claude Code needs to
     reach AI-Prowler. Tries local stdio first (works out of the box on any
@@ -740,7 +1006,18 @@ def generate_mcp_config(prefer_remote: bool = False) -> tuple[bool, str]:
     (see dry_run_check() callers / the architecture spec), so there is no
     server-mode case here at all. Either way, if the preferred path isn't
     actually usable, the other one is tried automatically rather than
-    failing outright. Returns (success, path_or_error_message)."""
+    failing outright.
+
+    v8.1.14: also self-heals .claude/settings.json's audit-log hook
+    command to use an absolute python.exe path — see
+    _ensure_hook_uses_absolute_python()'s docstring. This runs here
+    (rather than needing its own separate call site) because every real
+    caller of the MCP config — dry-run checks, the Scheduled Task setup,
+    and every actual run — needs a valid MCP config first, so this piggy-
+    backs on that same guaranteed-to-run-first spot.
+
+    Returns (success, path_or_error_message)."""
+    _ensure_hook_uses_absolute_python()
     first, second = (_generate_remote_mcp_config, _generate_local_mcp_config) \
         if prefer_remote else (_generate_local_mcp_config, _generate_remote_mcp_config)
     ok, result = first()
@@ -991,6 +1268,15 @@ def run_queue_now(mcp_config_path: str, allowed_tools: str,
     the Scheduled Task's own wrapper location, so a manual run never
     collides with (or overwrites mid-execution) the scheduled one.
 
+    v8.1.14: no longer accepts/forwards install_dir — see
+    build_wrapper_script_content()'s docstring. (This function previously
+    had a real bug here: it never accepted or forwarded install_dir at
+    all, even after install_wrapper_script() gained support for it, so
+    every "Run Due Tasks Now" click silently used the old %USERPROFILE%
+    fallback regardless of what the Scheduled Task itself was correctly
+    configured with. Removing the parameter from the whole call chain
+    fixes this by construction — there's nothing left to have forgotten.)
+
     Returns (success, detail) — detail is either the tail of the
     session's real output (truncated to keep dialog boxes reasonable)
     or a plain-language reason it never ran."""
@@ -1026,6 +1312,77 @@ def run_queue_now(mcp_config_path: str, allowed_tools: str,
     return ok, ("Run completed." if ok else f"Run failed (exit code {r.returncode}), no output captured.")
 
 
+def _sanitize_prompt_for_batch(prompt: str) -> str:
+    """Makes an arbitrary prompt string safe to embed as a single quoted
+    argument on ONE line of a generated .bat file.
+
+    v8.1.15 fix: custom_tasks_manager.py's build_task_prompt() joins its
+    output with embedded newlines -- entirely correct for its own purpose
+    (multi-line display in the GUI's task editor), but fatal once that
+    text gets embedded in a .bat file's single-line `claude -p "..."`
+    invocation. cmd.exe parses .bat files line-by-line BEFORE any
+    quote-aware parsing happens, so a literal newline unconditionally
+    ends the current command regardless of quoting -- everything after it
+    gets executed as a completely separate command. Confirmed live
+    (2026-07-29, David): a custom task's "▶ NOW" run failed with cmd.exe
+    reporting `'Output:' is not recognized as an internal or external
+    command` -- "Output:" is literally the start of build_task_prompt()'s
+    own action-summary line, which had simply become its own broken
+    command once the newline before it split the .bat file's execution.
+
+    Unlike QUEUE_RUNNER_PROMPT (a static, hand-verified single-line
+    constant covered by test_wrapper_prompt_has_no_batch_unsafe_characters
+    in the test suite), prompts reaching this function are effectively
+    arbitrary text -- built-in task prompts, and now custom task prompts
+    -- and can't be guaranteed batch-safe by construction. This sanitizes
+    at the one point they all funnel through before hitting a .bat file,
+    rather than requiring every prompt-producing function upstream to
+    independently know about this downstream transport quirk.
+
+    v8.1.16 follow-up: also normalizes common "smart" typographic
+    characters (em/en dash, curly quotes, ellipsis) to plain ASCII.
+    Discovered live testing this fix: custom_tasks_manager.py's own
+    generated action-summary text uses a real em-dash ("email the full
+    analysis via send_email() -- leave 'to' blank..."), and a .bat file
+    written without a UTF-8 BOM gets read by cmd.exe under the legacy OEM
+    codepage (e.g. cp437) by default -- silently corrupting every
+    non-ASCII byte in the file, INCLUDING inside the quoted claude -p
+    "..." argument, not just in REM comments. The real, complete fix is
+    the UTF-8 BOM now added where these .bat files get written (see
+    install_wrapper_script() / run_single_prompt_now()) -- Windows 10
+    1903+ auto-detects it and switches the whole file to codepage 65001.
+    This ASCII normalization is defense-in-depth on top of that, not a
+    substitute for it: it only covers a handful of common punctuation
+    substitutions, not arbitrary Unicode (accented names, emoji, non-Latin
+    scripts, etc., still depend entirely on the BOM fix being in place).
+    - Newlines become spaces: the prompt is instructions for Claude to
+      read, not something whose exact line breaks carry meaning.
+    - A literal '%' is doubled to '%%', cmd.exe's own escape for a
+      literal percent -- otherwise a bare % still triggers environment-
+      variable expansion attempts even inside a quoted argument (the same
+      root mechanism already documented at length elsewhere in this file
+      for the %a/%%a self-gate escaping bugs).
+    Double-quote escaping is handled separately by the caller (doubling,
+    for the outer -p "..." argument), so this function leaves " alone.
+    """
+    sanitized = prompt.replace('\r\n', ' ').replace('\n', ' ').replace('\r', ' ')
+    sanitized = sanitized.replace('%', '%%')
+    # Typographic punctuation -> ASCII equivalents (defense-in-depth; see
+    # docstring above -- the UTF-8 BOM on the .bat file is the real fix).
+    _typographic_map = {
+        '\u2014': ' - ',   # em dash —
+        '\u2013': '-',     # en dash –
+        '\u2018': "'",     # left single quote '
+        '\u2019': "'",     # right single quote '
+        '\u201c': '"',     # left double quote "
+        '\u201d': '"',     # right double quote "
+        '\u2026': '...',   # ellipsis …
+    }
+    for char, replacement in _typographic_map.items():
+        sanitized = sanitized.replace(char, replacement)
+    return sanitized
+
+
 def build_single_prompt_wrapper_content(prompt: str, mcp_config_path: str,
                                          allowed_tools: str,
                                          use_api_key: bool = False) -> str:
@@ -1042,6 +1399,17 @@ def build_single_prompt_wrapper_content(prompt: str, mcp_config_path: str,
     identical — see that function's docstring for why each auth path
     reads its credential from a file at runtime rather than embedding it.
     Double-quotes in the prompt are escaped for the batch string.
+
+    v8.1.14: cd's into AI_PROWLER_HOME unconditionally now, no install_dir
+    parameter — same fix, same rationale, as build_wrapper_script_content();
+    see that function's docstring for the full history. This function
+    previously took its OWN install_dir parameter (a v8.1.14-at-the-time
+    fix for a hardcoded %USERPROFILE% cd that broke the audit-log hook —
+    confirmed live 2026-07-28), which then had to be threaded through
+    run_single_prompt_now() and every GUI call site individually. Now
+    there's simply nothing to thread through — one fewer parameter, one
+    fewer place for a caller to forget it (this is exactly the class of
+    bug run_queue_now() had, found the same session).
     """
     api_key_block = ""
     if use_api_key:
@@ -1067,13 +1435,32 @@ if exist "{OAUTH_TOKEN_PLAIN_PATH}" (
 
 """
 
-    escaped_prompt = prompt.replace('"', '""')
+    escaped_prompt = _sanitize_prompt_for_batch(prompt).replace('"', '""')
     return f"""@echo off
+chcp 65001 >nul
+REM v8.1.16 fix: see build_wrapper_script_content()'s matching comment for
+REM the full discovery story (UTF-8 BOM tried first, reverted -- broke
+REM this invocation path outright). chcp as an explicit command has no
+REM such invocation-path dependency.
 REM Auto-generated by task_queue_automation.py — do not edit by hand.
 REM Runs a single ad-hoc analysis prompt right now (the "▶ NOW" button) —
 REM never touches pending_tasks.json, unlike the scheduled queue wrapper.
 
-cd /d "%USERPROFILE%"
+REM v8.1.14: cd into AI_PROWLER_HOME — see build_wrapper_script_content()'s
+REM docstring for the full rationale (in short: this is where
+REM .claude/hooks/log_tool_call.py's audit-log hook and
+REM .claude/skills/ai-prowler-tasks/SKILL.md now live, and it's fully
+REM non-elevated/writable unlike the code install directory this used to
+REM point at).
+cd /d "{AI_PROWLER_HOME}"
+
+REM v8.1.17: same append-only command debug log as the scheduled wrapper —
+REM see build_wrapper_script_content()'s matching comment for the full
+REM rationale.
+echo. >> "%USERPROFILE%\.ai-prowler\command_debug.log"
+echo ================================================================ >> "%USERPROFILE%\.ai-prowler\command_debug.log"
+echo [%date% %time%] SINGLE PROMPT RUN (NOW button) -- full script below: >> "%USERPROFILE%\.ai-prowler\command_debug.log"
+type "%~f0" >> "%USERPROFILE%\.ai-prowler\command_debug.log"
 
 {api_key_block}claude -p "{escaped_prompt}" ^
   --mcp-config "{mcp_config_path}" ^
@@ -1090,38 +1477,88 @@ def run_single_prompt_now(prompt: str, mcp_config_path: str, allowed_tools: str,
                            use_api_key: bool = False,
                            timeout: int = 600) -> tuple[bool, str]:
     """v8.1.6: runs ONE ad-hoc prompt right now via a real headless Claude
-    Code session — backs the "▶ NOW" button on each Common Business AI
-    Analysis item so a user can try one before deciding whether to queue
-    it. Deliberately does NOT touch pending_tasks.json or
-    complete_analysis_task() bookkeeping — this is a trial run, not part
-    of the tracked queue. Written to its own single_run/ subfolder,
-    separate from both the Scheduled Task's wrapper and manual_run/ (see
-    run_queue_now()'s docstring), so none of the three ever collide.
-    Blocking — callers MUST invoke from a background thread, never
-    directly on the Tk main thread, same requirement as run_queue_now().
+    Code session — backs the "▶ NOW" button on each analysis item.
+
+    v8.1.18: always calls generate_mcp_config_for_now_button() to get a
+    config that points at the already-running localhost:8000 HTTP MCP server
+    instead of spawning a SECOND stdio MCP server process alongside the one
+    the GUI already has running. Confirmed live (2026-07-29): the duplicate
+    stdio process causes severe ChromaDB contention — runs that normally
+    complete in ~2 minutes would hang for 10+ minutes. The caller-supplied
+    mcp_config_path is now ignored (kept for API compatibility only).
+
     Returns (success, detail)."""
     if not claude_code_cli_installed():
         return False, ("Claude Code CLI is not installed. Install it from "
                         "the 🤖 Autonomous AI Task Queue panel above, then try again.")
-    if not mcp_config_path:
-        return False, ("No MCP config is set up yet. See the 🤖 Autonomous "
-                        "AI Task Queue panel above (Test Setup (Dry Run) will "
-                        "show what's missing), then try again.")
+
+    # v8.1.18: prefer localhost HTTP over stdio for the NOW button.
+    ok_now, now_mcp_path = generate_mcp_config_for_now_button()
+    if not ok_now:
+        return False, f"Could not set up MCP config for ▶ NOW run: {now_mcp_path}"
 
     wrapper_dir = AI_PROWLER_HOME / "single_run"
     wrapper_dir.mkdir(parents=True, exist_ok=True)
     script_path = wrapper_dir / "run_single_now.bat"
-    script_path.write_text(
-        build_single_prompt_wrapper_content(prompt, mcp_config_path, allowed_tools, use_api_key),
-        encoding="utf-8")
+    bat_content = build_single_prompt_wrapper_content(prompt, now_mcp_path, allowed_tools,
+                                                       use_api_key)
+    script_path.write_text(bat_content, encoding="utf-8")
+
+    # ── NOW-button debug log ─────────────────────────────────────────────
+    # Written BEFORE the run so it exists even if claude -p hangs/crashes.
+    # Appended-to (not overwritten) so every attempt is preserved.
+    # Captures: MCP config used, .bat content, exit code, stdout, stderr,
+    # and the contents of last_single_run.json after the run completes.
+    _debug_log = AI_PROWLER_HOME / "now_button_debug.log"
+    import datetime as _dt
+
+    def _dbg(msg: str):
+        try:
+            with open(_debug_log, "a", encoding="utf-8") as _f:
+                _f.write(msg + "\n")
+        except Exception:
+            pass
+
+    _ts = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _dbg(f"\n{'='*70}")
+    _dbg(f"[{_ts}] ▶ NOW run started")
+    _dbg(f"  MCP config path : {now_mcp_path}")
+    _dbg(f"  allowed_tools   : {allowed_tools}")
+    _dbg(f"  use_api_key     : {use_api_key}")
+    _dbg(f"  timeout         : {timeout}s")
+    try:
+        _dbg(f"  MCP config contents:\n{Path(now_mcp_path).read_text(encoding='utf-8')}")
+    except Exception as _e:
+        _dbg(f"  (could not read MCP config: {_e})")
+    _dbg(f"\n  .bat script path: {script_path}")
+    _dbg(f"  .bat contents:\n{bat_content}")
 
     try:
         r = subprocess.run([str(script_path)], capture_output=True,
                             text=True, timeout=timeout, shell=True)
     except subprocess.TimeoutExpired:
-        return False, f"Run timed out after {timeout}s — check your internet connection."
+        _dbg(f"[{_dt.datetime.now().strftime('%H:%M:%S')}] TIMED OUT after {timeout}s")
+        # Read whatever last_single_run.json has at timeout time
+        _out_file = AI_PROWLER_HOME / "last_single_run.json"
+        if _out_file.exists() and _out_file.stat().st_size > 0:
+            _dbg(f"  last_single_run.json ({_out_file.stat().st_size} bytes):\n"
+                  f"{_out_file.read_text(encoding='utf-8', errors='replace')[-3000:]}")
+        else:
+            _dbg(f"  last_single_run.json: empty or missing (claude -p never wrote output)")
+        return False, f"Run timed out after {timeout}s — check now_button_debug.log in ~/.ai-prowler/"
     except Exception as e:
+        _dbg(f"[{_dt.datetime.now().strftime('%H:%M:%S')}] EXCEPTION: {e}")
         return False, str(e)
+
+    _dbg(f"[{_dt.datetime.now().strftime('%H:%M:%S')}] .bat exited — rc={r.returncode}")
+    _dbg(f"  stdout: {r.stdout!r}")
+    _dbg(f"  stderr: {r.stderr!r}")
+    _out_file = AI_PROWLER_HOME / "last_single_run.json"
+    if _out_file.exists() and _out_file.stat().st_size > 0:
+        _dbg(f"  last_single_run.json ({_out_file.stat().st_size} bytes):\n"
+              f"{_out_file.read_text(encoding='utf-8', errors='replace')[-3000:]}")
+    else:
+        _dbg(f"  last_single_run.json: empty or missing")
 
     ok = (r.returncode == 0)
     output = ((r.stdout or "") + (r.stderr or "")).strip()
@@ -1349,8 +1786,10 @@ def get_scheduled_task_display_info() -> dict:
     }
     r = subprocess.run(
         ["schtasks", "/query", "/tn", SCHEDULED_TASK_NAME, "/v", "/fo", "list"],
-        capture_output=True, text=True)
+        capture_output=True, text=True,
+        creationflags=subprocess.CREATE_NO_WINDOW)
     if r.returncode != 0:
+
         return info
 
     info["exists"] = True
@@ -1553,14 +1992,19 @@ def grant_batch_logon_right(username: str = None, timeout_sec: int = 30) -> tupl
 
     try:
         # Launches an ELEVATED powershell.exe to run the inner grant
-        # script, showing exactly one UAC consent prompt. -Wait blocks
-        # this (non-elevated) call until the elevated process exits.
+        # script. -Verb RunAs triggers exactly one UAC consent prompt
+        # (expected and required — can't elevate silently). The inner
+        # process runs hidden so no extra console window stays open after
+        # the user clicks yes.
         launcher = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-Command",
+            ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command",
              f'Start-Process -FilePath "powershell.exe" -ArgumentList '
-             f'\'-NoProfile -ExecutionPolicy Bypass -File "{ps1_path}"\' '
+             f'\'-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{ps1_path}"\' '
              f'-Verb RunAs -Wait'],
-            capture_output=True, text=True, timeout=timeout_sec)
+            capture_output=True, text=True, timeout=timeout_sec,
+            creationflags=subprocess.CREATE_NO_WINDOW)
+
+
 
         deadline = time.time() + timeout_sec
         while time.time() < deadline:
@@ -1607,7 +2051,8 @@ def grant_batch_logon_right(username: str = None, timeout_sec: int = 30) -> tupl
 
 def scheduled_task_exists() -> bool:
     r = subprocess.run(["schtasks", "/query", "/tn", SCHEDULED_TASK_NAME],
-                        capture_output=True, text=True)
+                        capture_output=True, text=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW)
     return r.returncode == 0
 
 
@@ -1621,8 +2066,10 @@ def scheduled_task_enabled() -> bool | None:
     "Scheduled Task State" field, which does."""
     r = subprocess.run(
         ["schtasks", "/query", "/tn", SCHEDULED_TASK_NAME, "/v", "/fo", "list"],
-        capture_output=True, text=True)
+        capture_output=True, text=True,
+        creationflags=subprocess.CREATE_NO_WINDOW)
     if r.returncode != 0:
+
         return None
     for line in r.stdout.splitlines():
         if line.strip().lower().startswith("scheduled task state"):
@@ -1697,11 +2144,14 @@ def _register_queue_task_elevated(wrapper_script_path: Path, schedule_time: str,
 
     try:
         subprocess.run(
-            ["powershell.exe", "-NoProfile", "-Command",
+            ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command",
              f'Start-Process -FilePath "powershell.exe" -ArgumentList '
-             f'\'-NoProfile -ExecutionPolicy Bypass -File "{ps1_path}"\' '
+             f'\'-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{ps1_path}"\' '
              f'-Verb RunAs -Wait'],
-            capture_output=True, text=True, timeout=timeout_sec)
+            capture_output=True, text=True, timeout=timeout_sec,
+            creationflags=subprocess.CREATE_NO_WINDOW)
+
+
 
         deadline = time.time() + timeout_sec
         while time.time() < deadline:
@@ -1861,11 +2311,12 @@ try {{
 
     try:
         subprocess.run(
-            ["powershell.exe", "-NoProfile", "-Command",
+            ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command",
              f'Start-Process -FilePath "powershell.exe" -ArgumentList '
-             f'\'-NoProfile -ExecutionPolicy Bypass -File "{ps1_path}"\' '
+             f'\'-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{ps1_path}"\' '
              f'-Verb RunAs -Wait'],
-            capture_output=True, text=True, timeout=timeout_sec)
+            capture_output=True, text=True, timeout=timeout_sec,
+            creationflags=subprocess.CREATE_NO_WINDOW)
 
         deadline = time.time() + timeout_sec
         while time.time() < deadline:
@@ -1877,6 +2328,7 @@ try {{
                 "Timed out waiting for the elevated task removal to "
                 "complete — if a UAC prompt appeared, it may have been "
                 "declined or is still waiting for a response.")
+
 
         content = result_file.read_text(encoding="utf-8-sig", errors="replace").strip()
         if content.startswith("OK"):
@@ -1898,7 +2350,8 @@ def uninstall_scheduled_task() -> tuple[bool, str]:
     if not scheduled_task_exists():
         return True, "not present"
     r = subprocess.run(["schtasks", "/delete", "/tn", SCHEDULED_TASK_NAME, "/f"],
-                        capture_output=True, text=True)
+                        capture_output=True, text=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW)
     if r.returncode == 0:
         return True, "ok"
     # v8.1.16 fix: the plain non-elevated delete above used to be the only

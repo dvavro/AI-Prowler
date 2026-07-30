@@ -4099,16 +4099,42 @@ or from the Help menu."""
                 # icons, etc.). We fetch the manifest first and use its
                 # "files" array. If the manifest is missing (older releases,
                 # or a forgotten manifest in the release build), we fall back
-                # to this minimal hardcoded list so the update path never
-                # bricks — but the fallback is intentionally minimal and the
-                # manifest is the supported mechanism.
+                # to a comprehensive fallback list. This fallback must stay
+                # in sync with update_manifest.json — any file added to the
+                # manifest should also be added here, or a manifest fetch
+                # failure will leave that file at the old version and crash
+                # AI-Prowler on next start. v8.1.18: expanded from 5 files
+                # to the full set after confirming task_queue_automation.py
+                # missing from the fallback was the root cause of user
+                # crashes after in-place updates.
+
                 _fallback_files = [
+                    # Core GUI + engine
                     'rag_gui.py',
                     'rag_preprocessor.py',
                     'ai_prowler_mcp.py',
                     'RAG_RUN.bat',
                     'mcp_diagnostics.py',
+                    # v8.0.0 task scheduling — omitting these from the
+                    # fallback was the root cause of crashes after an
+                    # in-place update (manifest fetch failed → these files
+                    # left at the old version → import error on next start).
+                    'task_queue_automation.py',
+                    'custom_tasks_manager.py',
+                    'scheduler_jobs.py',
+                    'scheduler_engine.py',
+                    # Supporting modules
+                    'self_learning.py',
+                    'scope_resolver.py',
+                    'scope_lookup.py',
+                    'file_watchdog.py',
+                    'sms_backends.py',
+                    'sms_inbox.py',
+                    'subscription_client.py',
+                    'mobile_activator.py',
+                    'cloudflared_service_helper.py',
                 ]
+
                 _files = _fallback_files
 
                 staging_dir.mkdir(parents=True, exist_ok=True)
@@ -4181,9 +4207,32 @@ or from the Help menu."""
                             print(f"[UPDATE] Manifest loaded — "
                                   f"{len(_files)} file(s) to update "
                                   f"({_n_hashed} with integrity hashes).")
+                        else:
+                            # Empty manifest — raise so the except block aborts.
+                            raise ValueError(
+                                "Manifest fetched but contained no file entries.")
                 except Exception as _man_exc:
-                    print(f"[UPDATE] No manifest ({_man_exc}) — using "
-                          f"fallback list of {len(_fallback_files)} files.")
+                    # v8.1.18: manifest fetch failure → ABORT entirely.
+                    # Previously fell back to a partial hardcoded list,
+                    # leaving interdependent files at mismatched versions
+                    # and crashing AI-Prowler on next start. The manifest
+                    # IS the authoritative file list — if we can't fetch
+                    # it, abort and leave the current install untouched.
+                    print(f"[UPDATE] Manifest fetch failed: {_man_exc} — aborting.")
+                    self.root.after(0, lambda _e=_man_exc: messagebox.showerror(
+                        "Update Aborted — Manifest Unavailable",
+                        f"AI-Prowler could not fetch the update manifest for "
+                        f"v{version}.\n\n"
+                        f"Reason: {_e}\n\n"
+                        f"Your current installation is completely unchanged "
+                        f"and safe to keep using.\n\n"
+                        f"This is usually a temporary network or GitHub issue. "
+                        f"Click '📥 Download Update' again in a few minutes to retry."
+                    ))
+                    self.root.after(0, lambda: self.status_var.set(
+                        f"❌ Update v{version} aborted — manifest unavailable, "
+                        f"your install is unchanged"))
+                    return
 
                 # ── Download + verify everything into memory first ────────
                 # Nothing is written to the staging directory until EVERY
@@ -4555,8 +4604,45 @@ or from the Help menu."""
         ttk.Checkbutton(opt_frame,
                         text="Smart scan — skip binaries, executables and system files  "
                              "(recommended)",
-                        variable=self.scan_mode_var).pack(anchor='w')
+                          variable=self.scan_mode_var).pack(anchor='w')
 
+        # ── OCR Engine status ────────────────────────────────────────────────
+        # Scanned PDFs and image files need Tesseract OCR to be indexable.
+        # The installer downloads/installs it silently, but that step is
+        # occasionally flaky (network hiccup, AV interference, etc.) — this
+        # panel gives a live red/green readiness check plus a one-click
+        # repair path, right where indexing actually happens, instead of
+        # forcing a full app reinstall to fix a missing OCR binary.
+        ocr_row_frame = ttk.LabelFrame(f, text="OCR Engine (Tesseract)", padding=(10, 6))
+        ocr_row_frame.pack(fill='x', padx=20, pady=(0, 5))
+
+        ocr_status_row = ttk.Frame(ocr_row_frame)
+        ocr_status_row.pack(fill='x')
+
+        self.ocr_status_var = tk.StringVar(value="● Checking...")
+        self.ocr_status_lbl = ttk.Label(ocr_status_row, textvariable=self.ocr_status_var,
+                                        font=('Arial', 9, 'bold'), foreground='#888888')
+        self.ocr_status_lbl.pack(side='left')
+
+        self.ocr_detail_var = tk.StringVar(value="")
+        ttk.Label(ocr_status_row, textvariable=self.ocr_detail_var,
+                  font=('Arial', 8), foreground='gray').pack(side='left', padx=(10, 0))
+
+        self.ocr_recheck_btn = ttk.Button(ocr_status_row, text="🔄 Recheck",
+                                          command=self._recheck_ocr_status)
+        self.ocr_recheck_btn.pack(side='right')
+
+        self.ocr_install_btn = ttk.Button(ocr_status_row, text="🔧 Install / Repair OCR",
+                                          command=self._install_or_repair_ocr)
+        self.ocr_install_btn.pack(side='right', padx=(0, 6))
+
+        ttk.Label(ocr_row_frame,
+                  text="Without this, scanned PDFs and image files (.jpg, .png, .tiff, etc.) "
+                       "will be skipped during indexing — everything else is unaffected.",
+                  font=('Arial', 8), foreground='gray').pack(anchor='w', pady=(4, 0))
+
+        # Kick off an initial async check as soon as the tab is built.
+        self._recheck_ocr_status()
 
         # ── Action buttons ────────────────────────────────────────────────────
         btn_row = ttk.Frame(f)
@@ -4616,6 +4702,487 @@ or from the Help menu."""
                                                       wrap=tk.WORD)
         self.index_output.pack(fill='both', expand=True, padx=20, pady=(0, 10))
     
+    # ═══════════════════════════════════════════════════════════════════════
+    # OCR ENGINE (Tesseract) — status check + in-app install/repair
+    # ═══════════════════════════════════════════════════════════════════════
+    #
+    # The .iss installer downloads and silently installs Tesseract to
+    # %LOCALAPPDATA%\Programs\Tesseract-OCR during setup. That step is a
+    # best-effort background task (network download + NSIS silent install
+    # via a non-elevated scheduled-task workaround — see AI-Prowler-Setup.iss
+    # for the full explanation) and occasionally fails silently: a flaky
+    # connection, antivirus quarantining the downloaded exe, or the install
+    # simply timing out. Previously the only way to notice and fix this was
+    # to dig into Settings → Debug → OCR, which just said "reinstall AI
+    # Prowler to fix" — reinstalling the entire app to fix one binary.
+    #
+    # This panel makes OCR readiness visible right on the Index Docs tab
+    # (where a scanned PDF actually gets silently skipped) and gives a
+    # same-app repair path that mirrors the installer's own download/verify
+    # logic, so no reinstall or restart is needed.
+
+    def _locate_tesseract_exe(self):
+        """Return the first existing tesseract.exe candidate path, or None.
+
+        Mirrors the candidate order in rag_preprocessor.py's Windows
+        auto-locate block: per-user install (installer's actual target)
+        first, then the two common system-wide locations for anyone who
+        installed Tesseract manually or via an older AI-Prowler build.
+        """
+        import shutil as _shutil_local
+        if sys.platform != 'win32':
+            return _shutil_local.which('tesseract')
+        local_appdata = os.environ.get('LOCALAPPDATA', '')
+        candidates = [
+            os.path.join(local_appdata, 'Programs', 'Tesseract-OCR', 'tesseract.exe'),
+            r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+            r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
+        ]
+        for c in candidates:
+            if c and os.path.isfile(c):
+                return c
+        # Fall back to PATH, in case it's installed somewhere non-standard.
+        found = _shutil_local.which('tesseract')
+        return found
+
+    def _check_ocr_ready(self):
+        """Synchronous, fast readiness check. Safe to call from a worker
+        thread. Returns a dict:
+            ready:   bool — tesseract binary found AND runs
+            version: str  — e.g. '5.4.0' (empty if not ready)
+            langs:   list — installed language codes found in tessdata/
+            missing_langs: list — of ('eng','spa') that are missing
+            path:    str  — resolved tesseract.exe path (empty if not found)
+            detail:  str  — short human-readable status for the UI
+        """
+        result = {
+            'ready': False, 'version': '', 'langs': [], 'missing_langs': [],
+            'path': '', 'detail': 'Tesseract not found',
+        }
+        exe_path = self._locate_tesseract_exe()
+        if not exe_path:
+            result['detail'] = 'Tesseract binary not found on this system'
+            return result
+        result['path'] = exe_path
+
+        # Confirm it actually runs — a present-but-corrupt/partial install
+        # (e.g. an interrupted download) can leave the exe on disk but
+        # non-functional, which a pure file-existence check would miss.
+        try:
+            proc = subprocess.run(
+                [exe_path, '--version'], capture_output=True, text=True,
+                timeout=10, creationflags=(subprocess.CREATE_NO_WINDOW
+                                            if sys.platform == 'win32' else 0)
+            )
+            first_line = (proc.stdout or proc.stderr or '').splitlines()
+            if first_line:
+                # Typical output: "tesseract 5.4.0.20240606 ..."
+                parts = first_line[0].split()
+                result['version'] = parts[1] if len(parts) > 1 else first_line[0]
+        except Exception as e:
+            result['detail'] = f'tesseract.exe present but failed to run ({e})'
+            return result
+
+        # Check language packs — OCR "works" but silently mangles/half-reads
+        # documents if eng/spa traineddata is missing, which is worse than
+        # an obvious failure, so this is surfaced as its own state.
+        tessdata_dir = os.path.join(os.path.dirname(exe_path), 'tessdata')
+        for lang in ('eng', 'spa'):
+            lang_file = os.path.join(tessdata_dir, f'{lang}.traineddata')
+            if os.path.isfile(lang_file):
+                result['langs'].append(lang)
+            else:
+                result['missing_langs'].append(lang)
+
+        if result['missing_langs']:
+            result['detail'] = (f"Tesseract {result['version']} running, but missing "
+                                 f"language pack(s): {', '.join(result['missing_langs'])}")
+            result['ready'] = True  # partially functional — still index-capable for eng
+        else:
+            result['detail'] = f"Tesseract {result['version']} ready (eng+spa)"
+            result['ready'] = True
+        return result
+
+    def _set_ocr_status_ui(self, state, detail=''):
+        """Update the Index Docs tab's OCR status dot/text. state is one of
+        'ready', 'partial', 'error', 'checking'. Must be called on the main
+        thread (use root.after from a worker thread)."""
+        colours = {
+            'ready':    ('#27ae60', '● OCR Ready'),
+            'partial':  ('#e67e00', '● OCR Partial'),
+            'error':    ('#cc0000', '● OCR Not Ready'),
+            'checking': ('#888888', '● Checking...'),
+        }
+        colour, text = colours.get(state, colours['error'])
+        try:
+            self.ocr_status_var.set(text)
+            self.ocr_status_lbl.configure(foreground=colour)
+            self.ocr_detail_var.set(detail)
+        except tk.TclError:
+            pass  # tab not built yet / window closed
+
+    def _recheck_ocr_status(self):
+        """Kick off an async OCR readiness check and update the status UI
+        when it completes. Safe to call repeatedly (e.g. Recheck button)."""
+        self._set_ocr_status_ui('checking', '')
+
+        def worker():
+            info = self._check_ocr_ready()
+            def update():
+                if info['ready'] and info['missing_langs']:
+                    self._set_ocr_status_ui('partial', info['detail'])
+                elif info['ready']:
+                    self._set_ocr_status_ui('ready', info['detail'])
+                else:
+                    self._set_ocr_status_ui('error', info['detail'])
+            try:
+                self.root.after(0, update)
+            except tk.TclError:
+                pass
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _ocr_log(self, message):
+        """Thread-safe append to the Index Docs Output box."""
+        def write():
+            try:
+                self.index_output.insert(tk.END, message + '\n')
+                self.index_output.see(tk.END)
+            except tk.TclError:
+                pass
+        try:
+            self.root.after(0, write)
+        except tk.TclError:
+            pass
+
+    def _persist_tesseract_path(self, tess_folder):
+        """Write tess_folder onto the user's PATH (HKCU\\Environment) and
+        broadcast WM_SETTINGCHANGE so newly-opened processes see it without
+        a logoff/logon — same fix applied in AI-Prowler-Setup.iss for the
+        installer's own Tesseract step. Best-effort: failure here doesn't
+        block OCR working in the CURRENT process (that's handled separately
+        via pytesseract.pytesseract.tesseract_cmd), it only affects whether
+        a brand-new terminal/process picks up Tesseract without a restart."""
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment',
+                                 0, winreg.KEY_READ | winreg.KEY_WRITE) as key:
+                try:
+                    current_path, _ = winreg.QueryValueEx(key, 'Path')
+                except FileNotFoundError:
+                    current_path = ''
+                if tess_folder.lower() not in current_path.lower():
+                    new_path = f"{tess_folder};{current_path}" if current_path else tess_folder
+                    winreg.SetValueEx(key, 'Path', 0, winreg.REG_EXPAND_SZ, new_path)
+            # Broadcast so Explorer / new processes pick it up immediately.
+            HWND_BROADCAST = 0xFFFF
+            WM_SETTINGCHANGE = 0x1A
+            SMTO_ABORTIFHUNG = 0x0002
+            result = ctypes.c_long()
+            ctypes.windll.user32.SendMessageTimeoutW(
+                HWND_BROADCAST, WM_SETTINGCHANGE, 0, 'Environment',
+                SMTO_ABORTIFHUNG, 5000, ctypes.byref(result)
+            )
+            self._ocr_log('[OCR] Added Tesseract to user PATH and broadcast the change '
+                           '— new terminals will see it immediately.')
+        except Exception as e:
+            self._ocr_log(f'[OCR] Note: could not update user PATH automatically ({e}). '
+                           f'OCR still works in this running session; a restart will '
+                           f'also pick it up for good measure.')
+
+    def _install_or_repair_ocr(self):
+        """Download and silently install/repair Tesseract OCR from inside
+        the running app — no reinstall of AI-Prowler required. Hardened
+        version of the installer's own logic: retries on transient network
+        failures, validates the download isn't a truncated/blocked partial
+        file before running it, and verifies the binary actually executes
+        (not just that the folder exists) before declaring success."""
+        try:
+            self.ocr_install_btn.configure(state='disabled')
+            self.ocr_recheck_btn.configure(state='disabled')
+        except tk.TclError:
+            pass
+        self._set_ocr_status_ui('checking', 'Installing...')
+
+        def worker():
+            TESS_URL = ('https://github.com/UB-Mannheim/tesseract/releases/download/'
+                        'v5.4.0.20240606/tesseract-ocr-w64-setup-5.4.0.20240606.exe')
+            MIN_EXPECTED_BYTES = 30 * 1024 * 1024
+            MAX_ATTEMPTS = 3
+            _LANG_URLS = {
+                'spa': ('https://github.com/tesseract-ocr/tessdata/raw/'
+                        'main/spa.traineddata'),
+            }
+
+            try:
+                import urllib.request
+                local_appdata = os.environ.get('LOCALAPPDATA',
+                                                os.path.join(os.path.expanduser('~'),
+                                                             'AppData', 'Local'))
+                dest_folder = os.path.join(local_appdata, 'Programs', 'Tesseract-OCR')
+                tmp_installer = os.path.join(
+                    os.environ.get('TEMP', os.path.expanduser('~')),
+                    'tesseract-setup.exe')
+
+                self._ocr_log('\n' + '=' * 60)
+                self._ocr_log('[OCR] Starting Tesseract install/repair...')
+                self._ocr_log(f'[OCR] Target folder: {dest_folder}')
+
+                # Fast-path: if Tesseract binary already exists and runs,
+                # only download any missing language packs — no need to
+                # re-run the full 50 MB installer just for a .traineddata file.
+                _quick_info = self._check_ocr_ready()
+                if _quick_info['ready'] and _quick_info['missing_langs']:
+                    self._ocr_log('[OCR] Tesseract already installed — '
+                                   'downloading missing language pack(s) only...')
+                    tessdata_dir = os.path.join(dest_folder, 'tessdata')
+                    os.makedirs(tessdata_dir, exist_ok=True)
+                    for lang_code in _quick_info['missing_langs']:
+                        lang_url = _LANG_URLS.get(lang_code)
+                        if not lang_url:
+                            self._ocr_log(f'[OCR] No download URL for {lang_code} — skipping.')
+                            continue
+                        lang_file = os.path.join(tessdata_dir, f'{lang_code}.traineddata')
+                        self._ocr_log(f'[OCR] Downloading {lang_code} language pack...')
+                        try:
+                            req = urllib.request.Request(
+                                lang_url, headers={'User-Agent': 'AI-Prowler-OCR'})
+                            with urllib.request.urlopen(req, timeout=120) as resp:
+                                lang_data = resp.read()
+                            with open(lang_file, 'wb') as lf:
+                                lf.write(lang_data)
+                            self._ocr_log(
+                                f'[OCR] ✅ {lang_code} language pack installed '
+                                f'({len(lang_data) / 1024 / 1024:.1f} MB).')
+                        except Exception as lang_err:
+                            self._ocr_log(
+                                f'[OCR] ❌ Failed to download {lang_code}: {lang_err}')
+                    info = self._check_ocr_ready()
+                    if info['ready'] and not info['missing_langs']:
+                        self._ocr_log('[OCR] ✅ All language packs now installed (eng+spa). OCR fully ready.')
+                        self.root.after(0, lambda: self._set_ocr_status_ui('ready', info['detail']))
+                    else:
+                        self.root.after(0, lambda: self._set_ocr_status_ui(
+                            'partial' if info['ready'] else 'error', info['detail']))
+                    return  # done — skip the full installer
+
+                downloaded_ok = False
+                last_error = ''
+                for attempt in range(1, MAX_ATTEMPTS + 1):
+                    self._ocr_log(f'[OCR] Download attempt {attempt}/{MAX_ATTEMPTS}...')
+                    try:
+                        req = urllib.request.Request(
+                            TESS_URL, headers={'User-Agent': 'AI-Prowler-OCR-Installer'})
+
+                        with urllib.request.urlopen(req, timeout=60) as resp:
+                            data = resp.read()
+                        with open(tmp_installer, 'wb') as f:
+                            f.write(data)
+                        size = os.path.getsize(tmp_installer)
+                        if size < MIN_EXPECTED_BYTES:
+                            raise ValueError(
+                                f'downloaded file only {size / 1024 / 1024:.1f} MB '
+                                f'(expected 30MB+) — likely blocked or truncated')
+                        self._ocr_log(f'[OCR] Download OK ({size / 1024 / 1024:.1f} MB).')
+                        downloaded_ok = True
+                        break
+                    except Exception as e:
+                        last_error = str(e)
+                        self._ocr_log(f'[OCR] Attempt {attempt} failed: {last_error}')
+                        try:
+                            if os.path.exists(tmp_installer):
+                                os.remove(tmp_installer)
+                        except Exception:
+                            pass
+                        if attempt < MAX_ATTEMPTS:
+                            wait_s = 2 * attempt
+                            self._ocr_log(f'[OCR] Retrying in {wait_s}s...')
+                            time.sleep(wait_s)
+
+                if not downloaded_ok:
+                    self._ocr_log('[OCR] ❌ All download attempts failed.')
+                    self._ocr_log('[OCR] This is usually a firewall/antivirus blocking '
+                                   'github.com, or no internet connection.')
+                    self._ocr_log(f'[OCR] Manual fix: download this file yourself and run it, '
+                                   f'choosing "{dest_folder}" as the install folder:')
+                    self._ocr_log(f'[OCR]   {TESS_URL}')
+                    self.root.after(0, lambda: self._set_ocr_status_ui(
+                        'error', f'Download failed after {MAX_ATTEMPTS} attempts: {last_error}'))
+                    return
+
+                self._ocr_log('[OCR] Installing silently (usually 30-60s)...')
+                os.makedirs(dest_folder, exist_ok=True)
+                # v8.1.14 assumption WRONG — confirmed live (WinError 740):
+                # the NSIS tesseract installer has RequestExecutionLevel=admin
+                # in its own manifest, so Windows refuses to even START it
+                # from a direct subprocess.run() call regardless of whether
+                # the parent process is elevated or not. The fix is the same
+                # RunAsInvoker + schtasks pattern used in AI-Prowler-Setup.iss:
+                # write a .bat with __COMPAT_LAYER=RunAsInvoker (tells Windows
+                # to ignore the NSIS manifest's elevation request and run at
+                # the current token) and launch it via a one-shot Scheduled
+                # Task without /RL HIGHEST (inherits the user's normal,
+                # non-elevated token), so NSIS honours /D= and installs to
+                # LocalAppData without ever showing a UAC prompt.
+                tess_bat = os.path.join(
+                    os.environ.get('TEMP', os.path.expanduser('~')),
+                    'ai_prowler_tess_install.bat')
+                tess_task = 'AI-Prowler-TesseractInstall-InApp'
+                bat_content = (
+                    '@echo off\r\n'
+                    'set __COMPAT_LAYER=RunAsInvoker\r\n'
+                    f'start /wait "" "{tmp_installer}" /S /D={dest_folder}\r\n'
+                )
+                with open(tess_bat, 'w', encoding='utf-8') as _bf:
+                    _bf.write(bat_content)
+                self._ocr_log(f'[OCR] Wrote RunAsInvoker batch: {tess_bat}')
+
+                # Register one-shot task
+                subprocess.run(
+                    ['schtasks', '/Create', '/F',
+                     '/RU', os.environ.get('USERNAME', ''),
+                     '/SC', 'ONCE', '/TN', tess_task,
+                     '/ST', '00:00',
+                     '/TR', f'cmd /C "{tess_bat}"'],
+                    capture_output=True, timeout=30,
+                    creationflags=(subprocess.CREATE_NO_WINDOW
+                                   if sys.platform == 'win32' else 0)
+                )
+                # Trigger immediately
+                subprocess.run(
+                    ['schtasks', '/Run', '/TN', tess_task],
+                    capture_output=True, timeout=30,
+                    creationflags=(subprocess.CREATE_NO_WINDOW
+                                   if sys.platform == 'win32' else 0)
+                )
+                self._ocr_log('[OCR] Installer launched via schtasks (RunAsInvoker)...')
+
+                # Poll for the actual binary rather than trusting the
+                # installer's exit code — NSIS installers can return before
+                # extraction fully completes on slower disks / AV scanning.
+                exe_path = os.path.join(dest_folder, 'tesseract.exe')
+                waited = 0
+                while not os.path.isfile(exe_path) and waited < 120:
+                    time.sleep(1)
+                    waited += 1
+
+                # Clean up the scheduled task and temp .bat regardless of outcome.
+                try:
+                    subprocess.run(
+                        ['schtasks', '/Delete', '/F', '/TN', tess_task],
+                        capture_output=True, timeout=15,
+                        creationflags=(subprocess.CREATE_NO_WINDOW
+                                       if sys.platform == 'win32' else 0))
+                except Exception:
+                    pass
+                try:
+                    if os.path.exists(tess_bat):
+                        os.remove(tess_bat)
+                except Exception:
+                    pass
+
+                if not os.path.isfile(exe_path):
+                    self._ocr_log('[OCR] ❌ Install failed — tesseract.exe never '
+                                   'appeared after 120s wait.')
+                    self._ocr_log(f'[OCR] Manual fix: run {tmp_installer} yourself '
+                                   f'and watch for an error dialog it may be showing.')
+                    self.root.after(0, lambda: self._set_ocr_status_ui(
+                        'error', 'Install did not complete — binary never appeared'))
+                    return
+
+                # Verify it actually runs (catches missing VC++ runtime etc.)
+                try:
+                    subprocess.run([exe_path, '--version'], capture_output=True,
+                                    text=True, timeout=10,
+                                    creationflags=(subprocess.CREATE_NO_WINDOW
+                                                   if sys.platform == 'win32' else 0))
+                except Exception as e:
+                    self._ocr_log(f'[OCR] ⚠️  tesseract.exe installed but failed to '
+                                   f'run: {e}')
+                    self.root.after(0, lambda: self._set_ocr_status_ui(
+                        'error', f'Binary present but not runnable: {e}'))
+                    return
+
+                # Make OCR work in THIS running session immediately, without
+                # a restart — rag_preprocessor.py resolves tesseract_cmd once
+                # at import time, so a fresh install after that needs an
+                # explicit re-point.
+                try:
+                    import pytesseract as _pt
+                    _pt.pytesseract.tesseract_cmd = exe_path
+                    if RAG_AVAILABLE and hasattr(_rag_engine, 'pytesseract'):
+                        _rag_engine.pytesseract.pytesseract.tesseract_cmd = exe_path
+                    self._ocr_log('[OCR] Live session updated — no restart needed '
+                                   'for indexing in this window.')
+                except Exception as e:
+                    self._ocr_log(f'[OCR] Note: could not hot-update the live session '
+                                   f'({e}); a restart will pick it up.')
+
+                # Persist to PATH for future sessions / new processes.
+                self._persist_tesseract_path(dest_folder)
+
+                # Download any missing language packs directly — no elevation
+                # needed, tessdata/ is just a plain folder inside dest_folder
+                # which we own. spa.traineddata (~20 MB, best-quality model)
+                # comes from the same UB-Mannheim build via GitHub releases.
+                _LANG_URLS = {
+                    'spa': ('https://github.com/tesseract-ocr/tessdata/raw/'
+                            'main/spa.traineddata'),
+                }
+                tessdata_dir = os.path.join(dest_folder, 'tessdata')
+                os.makedirs(tessdata_dir, exist_ok=True)
+                for lang_code, lang_url in _LANG_URLS.items():
+                    lang_file = os.path.join(tessdata_dir, f'{lang_code}.traineddata')
+                    if os.path.isfile(lang_file):
+                        self._ocr_log(f'[OCR] Language pack {lang_code} already present.')
+                        continue
+                    self._ocr_log(f'[OCR] Downloading {lang_code} language pack...')
+                    try:
+                        import urllib.request as _ur
+                        req = _ur.Request(lang_url,
+                                          headers={'User-Agent': 'AI-Prowler-OCR'})
+                        with _ur.urlopen(req, timeout=120) as resp:
+                            lang_data = resp.read()
+                        with open(lang_file, 'wb') as lf:
+                            lf.write(lang_data)
+                        self._ocr_log(
+                            f'[OCR] ✅ {lang_code} language pack installed '
+                            f'({len(lang_data) / 1024 / 1024:.1f} MB).')
+                    except Exception as lang_err:
+                        self._ocr_log(
+                            f'[OCR] ⚠️  Could not download {lang_code} pack: '
+                            f'{lang_err}  — English OCR still works; '
+                            f'retry Install/Repair OCR to get Spanish.')
+
+                # Final readiness check (also reports language pack status).
+                info = self._check_ocr_ready()
+                if info['missing_langs']:
+                    self._ocr_log(f"[OCR] ⚠️  Installed, but missing language pack(s): "
+                                   f"{', '.join(info['missing_langs'])}")
+                    self.root.after(0, lambda: self._set_ocr_status_ui(
+                        'partial', info['detail']))
+                else:
+                    self._ocr_log(f"[OCR] ✅ Tesseract {info['version']} installed and "
+                                   f"verified (eng+spa).")
+                    self.root.after(0, lambda: self._set_ocr_status_ui(
+                        'ready', info['detail']))
+
+            except Exception as e:
+                self._ocr_log(f'[OCR] ❌ Unexpected error during install: {e}')
+                self.root.after(0, lambda: self._set_ocr_status_ui('error', str(e)))
+            finally:
+                def re_enable():
+                    try:
+                        self.ocr_install_btn.configure(state='normal')
+                        self.ocr_recheck_btn.configure(state='normal')
+                    except tk.TclError:
+                        pass
+                try:
+                    self.root.after(0, re_enable)
+                except tk.TclError:
+                    pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def create_query_tab(self):
         """Create query tab — fully scrollable pane."""
         # ── Outer tab frame holds the canvas + scrollbar ──────────────────────
@@ -5693,6 +6260,7 @@ or from the Help menu."""
                     "Autonomous AI Task Queue panel above, or click ▶ Queue to "
                     "save this analysis for the next scheduled run instead.")
                 return
+
             _cfg_now = _tqa_now.load_config()
             if not _cfg_now.get("mcp_config_path"):
                 messagebox.showwarning(
@@ -5710,6 +6278,10 @@ or from the Help menu."""
             self.status_var.set(f"⏳ Running {task_def['label']} now via Claude Code…")
 
             def _do_run():
+                # v8.1.14: no install_dir to compute/pass anymore —
+                # run_single_prompt_now() now always cd's into
+                # AI_PROWLER_HOME internally (see
+                # build_single_prompt_wrapper_content()'s docstring).
                 ok, detail = _tqa_now.run_single_prompt_now(
                     enriched_prompt, _cfg_now.get("mcp_config_path", ""),
                     _cfg_now.get("allowed_tools", "mcp__ai-prowler__*"),
@@ -6190,6 +6762,77 @@ or from the Help menu."""
             # Action buttons
             btn_col = tk.Frame(row, bg='#0d1a26')
             btn_col.pack(side='right', padx=4, pady=4)
+
+            # v8.1.14: custom tasks previously had no way to try themselves
+            # immediately — only ▶ Queue (wait for the next scheduled pass)
+            # or ✎ Edit. Mirrors the built-in Common Business AI Analysis
+            # section's ▶ NOW exactly: same run_single_prompt_now() call,
+            # same install_dir fix (audit-log hook needs it — see that
+            # function's docstring), same disabled-while-running / result
+            # dialog pattern. The only real difference is the prompt source:
+            # build_task_prompt(t) (custom tasks' own enrichment — scope
+            # dirs, output options, schedule) instead of
+            # _build_builtin_prompt(task_def, settings).
+            def _run_custom_now(t=task, now_btn=None):
+                try:
+                    import task_queue_automation as _tqa_cn
+                    import custom_tasks_manager as _ctm_cn
+                except ImportError:
+                    messagebox.showerror("Not Available",
+                                          "Required module not found.")
+                    return
+                if not _tqa_cn.claude_code_cli_installed():
+                    messagebox.showwarning(
+                        "Claude Code Needed",
+                        "Running an analysis right now requires Claude Code CLI, "
+                        "which isn't installed yet.\n\nInstall it from the 🤖 "
+                        "Autonomous AI Task Queue panel above, or click ▶ Queue to "
+                        "save this analysis for the next scheduled run instead.")
+                    return
+                _cfg_cn = _tqa_cn.load_config()
+                if not _cfg_cn.get("mcp_config_path"):
+                    messagebox.showwarning(
+                        "Setup Needed",
+                        "No MCP config is set up yet — see the 🤖 Autonomous "
+                        "Task Queue panel above (🧪 Test Setup (Dry Run) will "
+                        "show what's missing), then try again.")
+                    return
+
+                enriched_prompt = _ctm_cn.build_task_prompt(t)
+
+                orig_text = now_btn.cget("text")
+                now_btn.configure(state='disabled', text="⏳")
+                self.status_var.set(f"⏳ Running {t['label']} now via Claude Code…")
+
+                def _do_run():
+                    ok, detail = _tqa_cn.run_single_prompt_now(
+                        enriched_prompt, _cfg_cn.get("mcp_config_path", ""),
+                        _cfg_cn.get("allowed_tools", "mcp__ai-prowler__*"),
+                        _cfg_cn.get("use_api_key", False))
+
+                    def _finish():
+                        now_btn.configure(state='normal', text=orig_text)
+                        if ok:
+                            messagebox.showinfo(
+                                "Run Complete",
+                                f"✅  {t['label']} finished.\n\n{detail[:500]}")
+                            self.status_var.set(f"✅ {t['label']} completed")
+                        else:
+                            messagebox.showerror("Run Failed", detail[:800])
+                            self.status_var.set("❌ Run failed")
+                        self.root.after(3000, lambda: self.status_var.set("Ready"))
+
+                    self.root.after(0, _finish)
+
+                threading.Thread(target=_do_run, daemon=True).start()
+
+            _custom_now_b = tk.Button(btn_col, text="▶ NOW",
+                                      bg='#2a2f45', fg='#e8ebf7',
+                                      font=('Arial', 7, 'bold'),
+                                      relief='flat', cursor='hand2')
+            _custom_now_b.configure(
+                command=lambda t=task, b=_custom_now_b: _run_custom_now(t, b))
+            _custom_now_b.pack(fill='x', pady=1)
 
             def _queue_task(t=task):
                 try:
@@ -6698,14 +7341,29 @@ or from the Help menu."""
                   relief='flat', cursor='hand2',
                   command=lambda: _open_task_editor(None)).pack(side='left')
 
-        # v8.1.6 fix: "Run Due Tasks" removed — redundant now that the
-        # Autonomous Task Queue (see panel above) runs the whole pending
-        # queue on its own schedule once enabled. catch_up_all_due_tasks()
-        # (called on enabling) keeps overdue backlog from all firing at
-        # once on day one; from there the daily scheduled run picks
-        # everything up automatically. A manual per-analysis test run is
-        # still available via the ▶ NOW button on each Common Business AI
-        # Analysis item above, for trying one out before queuing it.
+        # Hint label — mirrors the Common Business AI Analysis section's own
+        # hint below. v8.1.14: custom tasks gained their own ▶ NOW button
+        # (previously only ▶ Queue / ✎ Edit / 🗑 — a custom task could only
+        # ever run via the next scheduled Autonomous AI Task Queue pass, with
+        # no way to try it immediately).
+        tk.Label(_custom_outer,
+                 text="▶ NOW runs this task immediately (requires Claude Code CLI).  "
+                      "▶ Queue saves it for the next Autonomous AI Task Queue run.  "
+                      "✎ Edit changes scope, output, schedule, and report folder.  "
+                      "🗑 deletes the task.",
+                 bg='#0d1a26', fg='#4a6a82',
+                 font=('Arial', 7), wraplength=900,
+                 justify='left', anchor='w').pack(anchor='w', padx=10, pady=(0, 6))
+
+        # v8.1.6 fix: "Run Due Tasks" (a button that ran the ENTIRE pending
+        # queue) was removed — redundant now that the Autonomous Task Queue
+        # (see panel above) runs the whole pending queue on its own schedule
+        # once enabled. catch_up_all_due_tasks() (called on enabling) keeps
+        # overdue backlog from all firing at once on day one; from there the
+        # daily scheduled run picks everything up automatically. A manual
+        # per-analysis test run is available via each row's own ▶ NOW button
+        # — for Common Business AI Analysis items above, and (v8.1.14) for
+        # My Custom Analyses items too — for trying one out before queuing it.
 
         # Initial render
         _refresh_custom_list()
@@ -7847,6 +8505,99 @@ or from the Help menu."""
                 _lt.insert('1.0', _tqa.read_audit_log_tail(200))
                 _lt.configure(state='disabled')
 
+            def _tqa_clear_audit_log():
+                import tkinter.messagebox as _mb
+                if not _mb.askyesno("Clear Audit Log",
+                                    "Clear the entire audit log?\n\nThis cannot be undone."):
+                    return
+                _p = Path.home() / ".ai-prowler" / "autonomous_run_audit.log"
+                try:
+                    if _p.exists():
+                        _p.write_text("", encoding="utf-8")
+                    self.status_var.set("Audit log cleared.")
+                    self.root.after(3000, lambda: self.status_var.set("Ready"))
+                except Exception as _e:
+                    _mb.showerror("Error", f"Could not clear audit log: {_e}")
+
+            def _tqa_view_cmd_debug_log():
+                """v8.1.17: show the last ~200 lines of command_debug.log —
+                a persistent, append-only record of the EXACT .bat file
+                content (full prompt + all flags) sent to claude -p on each
+                run. Unlike last_headless_run.json / last_single_run.json
+                (overwritten every run), this keeps ALL past runs visible
+                for later debugging — particularly useful when a run behaves
+                unexpectedly and you need to see whether the prompt itself
+                was correct, or if a batch-escaping / encoding bug slipped
+                through into the actual command."""
+                _dbg_path = Path.home() / ".ai-prowler" / "command_debug.log"
+                _dbg_win = tk.Toplevel(self.root)
+                _dbg_win.title("Autonomous AI Task Queue — Command Debug Log")
+                _dbg_win.geometry("900x550")
+                import tkinter.scrolledtext as _st2
+                _dt = _st2.ScrolledText(_dbg_win, font=('Courier', 8),
+                                        wrap='none', bg='#0a1a0a', fg='#88cc88')
+                _dt.pack(fill='both', expand=True, padx=8, pady=8)
+                if _dbg_path.exists():
+                    _lines = _dbg_path.read_text(encoding='utf-8',
+                                                  errors='replace').splitlines()
+                    _dt.insert('1.0', '\n'.join(_lines[-200:]))
+                else:
+                    _dt.insert('1.0',
+                               "(no command_debug.log yet — it's written the\n"
+                               "next time a scheduled run or ▶ NOW button fires)")
+                _dt.configure(state='disabled')
+
+            def _tqa_clear_cmd_debug_log():
+                import tkinter.messagebox as _mb
+                if not _mb.askyesno("Clear Command Debug Log",
+                                    "Clear the entire command debug log?\n\nThis cannot be undone."):
+                    return
+                _p = Path.home() / ".ai-prowler" / "command_debug.log"
+                try:
+                    if _p.exists():
+                        _p.write_text("", encoding="utf-8")
+                    self.status_var.set("Command debug log cleared.")
+                    self.root.after(3000, lambda: self.status_var.set("Ready"))
+                except Exception as _e:
+                    _mb.showerror("Error", f"Could not clear command debug log: {_e}")
+
+            def _tqa_view_now_debug_log():
+                """▶ NOW run debug log — captures MCP config, .bat content,
+                exit code, stdout/stderr and last_single_run.json on every
+                ▶ NOW attempt. First place to look when a ▶ NOW run fails
+                or hangs — tells you exactly what ran and what it returned."""
+                _dbg_path = Path.home() / ".ai-prowler" / "now_button_debug.log"
+                _w = tk.Toplevel(self.root)
+                _w.title("▶ NOW Run Debug Log")
+                _w.geometry("1000x600")
+                import tkinter.scrolledtext as _st3
+                _t = _st3.ScrolledText(_w, font=('Courier', 8),
+                                       wrap='none', bg='#1a0a00', fg='#ffcc66')
+                _t.pack(fill='both', expand=True, padx=8, pady=8)
+                if _dbg_path.exists() and _dbg_path.stat().st_size > 0:
+                    _lines = _dbg_path.read_text(
+                        encoding='utf-8', errors='replace').splitlines()
+                    _t.insert('1.0', '\n'.join(_lines[-400:]))
+                else:
+                    _t.insert('1.0',
+                              "(no now_button_debug.log yet — it's created the\n"
+                              "first time ▶ NOW is clicked on any task)")
+                _t.configure(state='disabled')
+
+            def _tqa_clear_now_debug_log():
+                import tkinter.messagebox as _mb
+                if not _mb.askyesno("Clear ▶ NOW Debug Log",
+                                    "Clear the ▶ NOW debug log?\n\nThis cannot be undone."):
+                    return
+                _p = Path.home() / ".ai-prowler" / "now_button_debug.log"
+                try:
+                    if _p.exists():
+                        _p.write_text("", encoding="utf-8")
+                    self.status_var.set("▶ NOW debug log cleared.")
+                    self.root.after(3000, lambda: self.status_var.set("Ready"))
+                except Exception as _e:
+                    _mb.showerror("Error", f"Could not clear debug log: {_e}")
+
             def _tqa_save_and_apply():
                 """Enable/disable is the one action here that actually touches
                 the Scheduled Task — everything else (checkboxes, time field)
@@ -7917,18 +8668,14 @@ or from the Help menu."""
 
                 if cfg["enabled"] and cfg.get("mcp_config_path"):
                     wrapper_dir = _tqa.AI_PROWLER_HOME
-                    # v8.1.10 fix: pass the directory THIS rag_gui.py is
-                    # actually running from — that's where .claude/skills/
-                    # ai-prowler-tasks/SKILL.md lives, and the generated
-                    # wrapper .bat needs to `cd` there before invoking
-                    # `claude -p`, or the /ai-prowler-run-queue slash
-                    # command silently resolves to "Unknown command" every
-                    # time (see build_wrapper_script_content()'s docstring).
-                    _install_dir = str(Path(__file__).resolve().parent)
+                    # v8.1.14: no install_dir to compute/pass anymore —
+                    # install_wrapper_script() now always cd's the
+                    # generated .bat into AI_PROWLER_HOME internally (see
+                    # build_wrapper_script_content()'s docstring).
                     wrapper = _tqa.install_wrapper_script(
                         wrapper_dir, cfg["mcp_config_path"], cfg["allowed_tools"],
                         cfg["notify_on_complete"], cfg["notify_method"],
-                        cfg["use_api_key"], _install_dir,
+                        cfg["use_api_key"],
                         check_mode=cfg["check_mode"],
                         active_days=cfg.get("active_days"),
                         active_start_time=cfg.get("active_start_time", "00:00"),
@@ -8137,6 +8884,23 @@ or from the Help menu."""
             _tqa_btn_audit = ttk.Button(_tqa_btn_row2, text="📄 View Audit Log",
                                          command=_tqa_view_audit_log)
             _tqa_btn_audit.pack(side='left')
+            ttk.Button(_tqa_btn_row2, text="🗑 Clear",
+                       command=_tqa_clear_audit_log).pack(side='left', padx=(2, 10))
+
+            # v8.1.17: Command Debug Log — append-only record of the full
+            # .bat script sent to claude -p on each scheduled/manual run.
+            ttk.Button(_tqa_btn_row2, text="🔍 Command Debug Log",
+                       command=_tqa_view_cmd_debug_log).pack(side='left', padx=(0, 0))
+            ttk.Button(_tqa_btn_row2, text="🗑 Clear",
+                       command=_tqa_clear_cmd_debug_log).pack(side='left', padx=(2, 10))
+
+            # v8.1.18: ▶ NOW Debug Log — detailed per-run diagnostic including
+            # MCP config, .bat content, exit code, and claude -p output.
+            # First place to look when a ▶ NOW run fails or hangs.
+            ttk.Button(_tqa_btn_row2, text="🐛 NOW Debug Log",
+                       command=_tqa_view_now_debug_log).pack(side='left', padx=(0, 0))
+            ttk.Button(_tqa_btn_row2, text="🗑 Clear",
+                       command=_tqa_clear_now_debug_log).pack(side='left', padx=(2, 0))
 
             # Exposed on self so tests/gui/*.py can drive this panel the
             # same way tests/gui/test_http_uptime.py drives the uptime
@@ -9185,7 +9949,9 @@ or from the Help menu."""
             else:
                 cmd = f'schtasks /create /tn "AI Prowler Auto-Update" /tr "{script_path}" /sc weekly /d {days_str} /st {time_str}{ru_clause} /f'
                 day_label = days_str
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True,
+                                     creationflags=subprocess.CREATE_NO_WINDOW)
+
             if result.returncode == 0:
                 messagebox.showinfo("Success",
                                     f"Schedule set!\n\nRuns {day_label} at {time_str}")
@@ -9234,7 +10000,9 @@ or from the Help menu."""
         """Disable the schedule temporarily"""
         try:
             cmd = 'schtasks /change /tn "AI Prowler Auto-Update" /disable'
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True,
+                                     creationflags=subprocess.CREATE_NO_WINDOW)
+
             
             if result.returncode == 0:
                 messagebox.showinfo("Success", "Schedule disabled successfully!")
@@ -9254,7 +10022,9 @@ or from the Help menu."""
         
         try:
             cmd = 'schtasks /delete /tn "AI Prowler Auto-Update" /f'
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True,
+                                     creationflags=subprocess.CREATE_NO_WINDOW)
+
             
             if result.returncode == 0:
                 messagebox.showinfo("Success", "Schedule removed successfully!")
@@ -9269,7 +10039,9 @@ or from the Help menu."""
         """Query Windows Task Scheduler and show full schedule + last-run details."""
         try:
             cmd    = 'schtasks /query /tn "AI Prowler Auto-Update" /fo list'
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True,
+                                     creationflags=subprocess.CREATE_NO_WINDOW)
+
 
             if result.returncode == 0:
                 output   = result.stdout
@@ -10845,9 +11617,21 @@ or from the Help menu."""
         _ocr_color = '#27ae60' if _ocr_ready else '#c0392b'
         _ocr_label = ("✅ OCR active  —  Tesseract detected"
                       if _ocr_ready else
-                      "⚠️  Tesseract binary not found  —  reinstall AI Prowler to fix")
-        ttk.Label(ocr_frame, text=_ocr_label,
-                  font=('Arial', 9, 'bold'), foreground=_ocr_color).pack(anchor='w', pady=(0, 6))
+                      "⚠️  Tesseract binary not found")
+        _ocr_status_row = ttk.Frame(ocr_frame)
+        _ocr_status_row.pack(fill='x', pady=(0, 6))
+        ttk.Label(_ocr_status_row, text=_ocr_label,
+                  font=('Arial', 9, 'bold'), foreground=_ocr_color).pack(side='left')
+        if not _ocr_ready:
+            # v8.1.13: this used to say "reinstall AI Prowler to fix" — that's
+            # no longer accurate. The Index Docs tab now has a live status
+            # check plus an "Install / Repair OCR" button that redoes the
+            # install from inside the app, no reinstall needed. Send the
+            # user there directly instead of repeating stale advice here.
+            ttk.Button(_ocr_status_row, text="🔧 Fix in Index Docs tab →",
+                       command=lambda: self.notebook.select(self._TAB_INDEX_INDEX)
+                       ).pack(side='left', padx=(10, 0))
+
 
         ttk.Label(ocr_frame, justify='left', font=('Arial', 9),
                   text="OCR is always enabled.  AI Prowler automatically detects and indexes:\n"

@@ -269,9 +269,23 @@ Source: "scheduler_engine.py"; DestDir: "{app}"; Flags: ignoreversion
 ; Task. See task_queue_automation.py's own module docstring for the full
 ; design reference (architecture spec in AI-Prowler-ADMIN).
 Source: "task_queue_automation.py"; DestDir: "{app}"; Flags: ignoreversion
-Source: ".claude\settings.json"; DestDir: "{app}\.claude"; Flags: ignoreversion
-Source: ".claude\hooks\log_tool_call.py"; DestDir: "{app}\.claude\hooks"; Flags: ignoreversion
-Source: ".claude\skills\ai-prowler-tasks\SKILL.md"; DestDir: "{app}\.claude\skills\ai-prowler-tasks"; Flags: ignoreversion
+; v8.1.14: .claude\ ships to {%USERPROFILE}\.ai-prowler\.claude, NOT
+; {app}\.claude. It used to go to {app} (this app's own code directory),
+; which matches where the wrapper .bat's `cd` needed to point at the time
+; (v8.1.10) — but {app} can be a Program-Files-class location requiring
+; admin elevation to write to, which then silently broke a LATER fix: the
+; audit-log hook's self-heal (task_queue_automation.py's
+; _ensure_hook_uses_absolute_python(), which runs as the normal
+; non-elevated AI-Prowler process and therefore could never actually write
+; there). {%USERPROFILE}\.ai-prowler is where every other piece of
+; AI-Prowler's own state already lives (config/tokens/logs/generated MCP
+; config) — fully non-elevated and writable by the same user account that
+; runs both the GUI and the Scheduled Task — and is exactly where
+; build_wrapper_script_content() now `cd`s. See that function's docstring
+; for the complete before/after history.
+Source: ".claude\settings.json"; DestDir: "{%USERPROFILE}\.ai-prowler\.claude"; Flags: ignoreversion
+Source: ".claude\hooks\log_tool_call.py"; DestDir: "{%USERPROFILE}\.ai-prowler\.claude\hooks"; Flags: ignoreversion
+Source: ".claude\skills\ai-prowler-tasks\SKILL.md"; DestDir: "{%USERPROFILE}\.ai-prowler\.claude\skills\ai-prowler-tasks"; Flags: ignoreversion
 ; --- Full Python installer bundled into {app} so Exec() can find it ---
 Source: "python-3.11.8-amd64.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; NOTE: Ollama is downloaded from the internet at install time, not bundled here
@@ -1501,6 +1515,32 @@ var
   ClaudeCodeCheckResult, ClaudeCodeInstallResult: Integer;
   ClaudeCodeLocalBin, ClaudeCodeCurPath: String;
   ClaudeCodeTask, ClaudeCodeBat: String;
+  // Hardened Claude Code CLI install: retry loop + functional verification,
+  // same philosophy as the Tesseract hardening above.
+  ClaudeCodeAttempt: Integer;
+  ClaudeCodeVerified: Boolean;
+  ClaudeCodeVerBat, ClaudeCodeVerOutFile: String;
+  // v8.1.14 fix: LoadStringFromFile's second (var) parameter is typed
+  // AnsiString in Inno Setup's Pascal Script -- unlike a value parameter,
+  // a var parameter requires an EXACT type match, so passing a plain
+  // String (Unicode in Inno 6.x) here is a compile-time "Type mismatch",
+  // not just a style nit. AnsiString still works fine with Pos/Lowercase/
+  // Copy/Trim and string concatenation below (implicit conversion IS
+  // allowed for value contexts, just not for var params), so this is the
+  // only place the type needs to differ.
+  ClaudeCodeVerOutput: AnsiString;
+  ClaudeCodeVerResultCode: Integer;
+  // Hardened Tesseract install: retry loop + download validation + a real
+  // functional check (tesseract.exe --version), not just folder existence.
+  TessAttempt: Integer;
+  TessFileSize: Int64;
+  TessDownloadOK, TessInstallVerified: Boolean;
+  TessExePath, TessVerBat, TessVerOutFile: String;
+  // v8.1.14 fix: same AnsiString requirement as ClaudeCodeVerOutput above
+  // -- LoadStringFromFile's var parameter must match exactly.
+  TessVerOutput: AnsiString;
+  TessVerResultCode: Integer;
+  TessMissingLangs: String;
   MsgDummy: DWORD;
   PythonReady: Boolean;
 begin
@@ -2112,32 +2152,91 @@ begin
     end;
 
     // ----------------------------------------------------------
-    // TESSERACT OCR  (progress 83 -> 87)
+    // TESSERACT OCR  (progress 83 -> 87)  —  HARDENED (v8.1.13)
     // Download and silently install UB-Mannheim Tesseract 5.x.
     // Required for OCR of scanned PDFs and image files.
     // Skipped if already installed (registry key check).
+    //
+    // HARDENING (this install was previously "hit or miss" — a single
+    // network hiccup or AV scan delay meant no retry, and the only
+    // detection was a scan of the folder existing, not the binary
+    // actually working):
+    //   1. Up to 3 attempts, with a short backoff between them.
+    //   2. Download size is validated (>= 30 MB) before running the
+    //      installer — a truncated/blocked download (e.g. an HTML
+    //      error page saved as .exe by a captive portal) is caught
+    //      here instead of silently failing the NSIS install later.
+    //   3. Success is now "tesseract.exe exists AND runs and prints a
+    //      version string" — not just "the folder exists". A partial
+    //      extraction (folder created, binary missing or corrupt) no
+    //      longer gets reported as a successful install.
+    //   4. Failed attempts clean up their partial folder before
+    //      retrying, so attempt 2 starts from a clean slate.
+    //   5. If OCR still isn't ready after this step (all 3 attempts
+    //      failed, or the user's firewall/AV blocks it entirely), the
+    //      running app has its own repair path: Index Docs tab ->
+    //      "Install / Repair OCR" button, which redoes this same
+    //      download+verify from inside AI-Prowler with no reinstall
+    //      needed. This log points the user there.
     // ----------------------------------------------------------
     if not RegKeyExists(HKCU, 'SOFTWARE\Tesseract-OCR') and
        not RegKeyExists(HKLM, 'SOFTWARE\Tesseract-OCR') and
        not RegKeyExists(HKLM, 'SOFTWARE\WOW6432Node\Tesseract-OCR') then
     begin
-      SetProgress(83, 'Downloading Tesseract OCR...');
-      AppendInstallLog('[Tesseract] Not found  -  downloading installer...');
-      TessSetup := ExpandConstant('{tmp}\tesseract-setup.exe');
+      TessFolder   := ExpandConstant(TESSERACT_FOLDER);
+      TessExePath  := TessFolder + '\tesseract.exe';
+      TessInstallVerified := False;
 
-      Exec('powershell.exe',
-        '-NoProfile -Command "' +
-          '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; ' +
-          '$wc = New-Object System.Net.WebClient; ' +
-          '$task = $wc.DownloadFileTaskAsync(''' + TESSERACT_URL + ''', ''' + TessSetup + '''); ' +
-          'while (-not $task.IsCompleted) { Start-Sleep -Milliseconds 300 }; ' +
-          'Write-Host ''Tesseract download complete.''"'  ,
-        '', SW_HIDE, ewWaitUntilTerminated, TessElapsed);
-      AppendInstallLog('[Tesseract] Download exit code: ' + IntToStr(TessElapsed));
-
-      if FileExists(TessSetup) then
+      for TessAttempt := 1 to 3 do
       begin
-        SetProgress(85, 'Installing Tesseract OCR...');
+        if TessInstallVerified then continue;
+
+        AppendInstallLog('[Tesseract] --- Attempt ' + IntToStr(TessAttempt) + ' of 3 ---');
+        SetProgress(83, 'Downloading Tesseract OCR (attempt ' + IntToStr(TessAttempt) + '/3)...');
+        TessSetup := ExpandConstant('{tmp}\tesseract-setup.exe');
+        DeleteFileIfExists(TessSetup);
+
+        Exec('powershell.exe',
+          '-NoProfile -Command "' +
+            '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; ' +
+            '$wc = New-Object System.Net.WebClient; ' +
+            '$task = $wc.DownloadFileTaskAsync(''' + TESSERACT_URL + ''', ''' + TessSetup + '''); ' +
+            'while (-not $task.IsCompleted) { Start-Sleep -Milliseconds 300 }; ' +
+            'Write-Host ''Tesseract download complete.''"'  ,
+          '', SW_HIDE, ewWaitUntilTerminated, TessElapsed);
+        AppendInstallLog('[Tesseract] Download exit code: ' + IntToStr(TessElapsed));
+
+        // Validate the download actually landed and isn't a truncated /
+        // blocked partial file before trusting it to an installer.
+        TessDownloadOK := False;
+        TessFileSize := 0;
+        if FileExists(TessSetup) then
+        begin
+          FileSize64(TessSetup, TessFileSize);
+          if TessFileSize >= 30000000 then
+            TessDownloadOK := True
+          else
+            AppendInstallLog('[Tesseract] Download too small ('
+              + IntToStr(TessFileSize) + ' bytes, expected 30MB+) '
+              + '-  likely blocked or truncated.');
+        end
+        else
+          AppendInstallLog('[Tesseract] Download FAILED  -  file not found.');
+
+        if not TessDownloadOK then
+        begin
+          DeleteFileIfExists(TessSetup);
+          if TessAttempt < 3 then
+          begin
+            AppendInstallLog('[Tesseract] Retrying in ' + IntToStr(TessAttempt * 3) + 's...');
+            Sleep(TessAttempt * 3000);
+          end;
+          continue;
+        end;
+
+        AppendInstallLog('[Tesseract] Download OK ('
+          + IntToStr(TessFileSize div 1024 div 1024) + ' MB).');
+        SetProgress(85, 'Installing Tesseract OCR (attempt ' + IntToStr(TessAttempt) + '/3)...');
         AppendInstallLog('[Tesseract] Running installer silently...');
         // NSIS silent install flags:
         //   /S       = fully silent  -  suppresses ALL pages including license
@@ -2155,9 +2254,14 @@ begin
         // Solution: use Task Scheduler to launch the NSIS installer under the
         // original non-elevated user token.  Without /RL HIGHEST the task runs
         // at the user's normal privilege level, so NSIS respects /D=.
-        TessFolder := ExpandConstant(TESSERACT_FOLDER);
         TessTask   := 'AI-Prowler-TesseractInstall';
         TessBat    := ExpandConstant('{tmp}') + '\tess_install.bat';
+
+        // Clean slate: if a previous failed attempt left a partial folder,
+        // remove it first so this attempt's success check can't be fooled
+        // by leftover files from the last try.
+        if DirExists(TessFolder) then
+          DelTree(TessFolder, True, True, True);
 
         // Write a batch file that sets __COMPAT_LAYER=RunAsInvoker before
         // launching the NSIS installer.  This shim tells Windows to ignore
@@ -2197,60 +2301,115 @@ begin
           '', SW_HIDE, ewWaitUntilTerminated, TessResultCode);
         AppendInstallLog('[Tesseract] schtasks /Delete exit code: ' + IntToStr(TessResultCode));
         DeleteFile(TessBat);
+        DeleteFileIfExists(TessSetup);
 
-        // Only write PATH and declare success if the folder actually exists.
-        // Previously this block ran unconditionally, logging 'Install complete'
-        // even when WaitForFolderCreation had already logged 'Folder NOT found'.
-        // That false-success caused a non-existent path to be added to the user
-        // PATH and masked the real failure from the install log summary.
-        if DirExists(TessFolder) then
+        // Success is folder existence AND the actual binary being present
+        // AND that binary actually running -- not just DirExists, which a
+        // partial/interrupted extraction can satisfy without a working
+        // tesseract.exe (e.g. NSIS killed mid-extraction by AV scanning).
+        if DirExists(TessFolder) and FileExists(TessExePath) then
         begin
-          // Add Tesseract to user PATH so pytesseract finds it without
-          // a hardcoded path  -  same pattern as Python's own installer.
-          RegWriteExpandStringValue(HKCU, 'Environment', 'Path',
-            ExpandConstant(TESSERACT_FOLDER) + ';%Path%');
-          AppendInstallLog('[Tesseract] Added to user PATH: '
-            + ExpandConstant(TESSERACT_FOLDER));
+          TessVerOutFile := ExpandConstant('{tmp}\tess_ver.txt');
+          TessVerBat := ExpandConstant('{tmp}\tess_ver.bat');
+          DeleteFileIfExists(TessVerOutFile);
+          SaveStringToFile(TessVerBat,
+            '@echo off' + #13#10 +
+            '"' + TessExePath + '" --version > "' + TessVerOutFile + '" 2>&1' + #13#10,
+            False);
+          Exec(ExpandConstant('{cmd}'), '/C "' + TessVerBat + '"', '',
+            SW_HIDE, ewWaitUntilTerminated, TessVerResultCode);
+          TessVerOutput := '';
+          if FileExists(TessVerOutFile) then
+            LoadStringFromFile(TessVerOutFile, TessVerOutput);
+          DeleteFileIfExists(TessVerBat);
+          DeleteFileIfExists(TessVerOutFile);
 
-          // FIX (2026-07-14): broadcast WM_SETTINGCHANGE again, here.
-          // The one broadcast earlier in this procedure (~30% progress,
-          // after PYTHONNOUSERSITE) fires LONG before this PATH write
-          // (85% progress) even exists -- so Explorer and any already-
-          // running process never learned about THIS specific change.
-          // Result: a brand-new cmd.exe window, spawned from the same
-          // still-running Explorer session, kept the stale pre-install
-          // PATH and reported 'tesseract is not recognized' even though
-          // the install itself succeeded. Broadcasting again immediately
-          // after this write (reusing the same MsgDummy var declared
-          // above) means a freshly-opened terminal sees Tesseract on
-          // PATH right away, with no logoff/logon required.
-          SendMessageTimeoutA(HWND_BROADCAST, WM_SETTINGCHANGE, 0,
-            'Environment', SMTO_ABORTIFHUNG, 5000, MsgDummy);
-          AppendInstallLog('[Tesseract] Broadcast WM_SETTINGCHANGE - '
-            + 'new terminals will see Tesseract on PATH immediately.');
-
-          AppendInstallLog('[Tesseract] Install complete.');
+          if Pos('tesseract', Lowercase(TessVerOutput)) > 0 then
+          begin
+            AppendInstallLog('[Tesseract] Functional check OK: '
+              + Copy(TessVerOutput, 1, 60));
+            TessInstallVerified := True;
+          end
+          else
+          begin
+            AppendInstallLog('[Tesseract] Binary present but did not report a '
+              + 'version string when run (output: "' + TessVerOutput + '") '
+              + '-  treating this attempt as failed.');
+          end;
         end
         else
+          AppendInstallLog('[Tesseract] FAILED - folder or tesseract.exe never '
+            + 'appeared after 120s wait.');
+
+        if not TessInstallVerified and (TessAttempt < 3) then
         begin
-          AppendInstallLog('[Tesseract] FAILED - folder never appeared after 120s wait.');
-          AppendInstallLog('[Tesseract] OCR of scanned PDFs will be unavailable.');
-          AppendInstallLog('[Tesseract] To fix: download and install Tesseract manually from:');
-          AppendInstallLog('[Tesseract]   ' + TESSERACT_URL);
-          SetProgress(86, 'Tesseract install failed - OCR unavailable. See install_log.txt.');
+          AppendInstallLog('[Tesseract] Attempt ' + IntToStr(TessAttempt)
+            + ' unsuccessful. Cleaning up and retrying...');
+          if DirExists(TessFolder) then
+            DelTree(TessFolder, True, True, True);
+          Sleep(TessAttempt * 3000);
         end;
+      end;  // for TessAttempt
+
+      if TessInstallVerified then
+      begin
+        // Add Tesseract to user PATH so pytesseract finds it without
+        // a hardcoded path  -  same pattern as Python's own installer.
+        RegWriteExpandStringValue(HKCU, 'Environment', 'Path',
+          ExpandConstant(TESSERACT_FOLDER) + ';%Path%');
+        AppendInstallLog('[Tesseract] Added to user PATH: '
+          + ExpandConstant(TESSERACT_FOLDER));
+
+        // Broadcast WM_SETTINGCHANGE again, here (separately from the one
+        // earlier in this procedure at ~30% progress) so a freshly-opened
+        // terminal sees Tesseract on PATH immediately, no logoff/logon
+        // required.
+        SendMessageTimeoutA(HWND_BROADCAST, WM_SETTINGCHANGE, 0,
+          'Environment', SMTO_ABORTIFHUNG, 5000, MsgDummy);
+        AppendInstallLog('[Tesseract] Broadcast WM_SETTINGCHANGE - '
+          + 'new terminals will see Tesseract on PATH immediately.');
+
+        // Language pack check -- informational only. Missing spa.traineddata
+        // still leaves English OCR working, so this doesn't fail the install,
+        // but it's worth surfacing since it silently degrades OCR quality on
+        // Spanish-language documents rather than erroring obviously.
+        TessMissingLangs := '';
+        if not FileExists(TessFolder + '\tessdata\eng.traineddata') then
+          TessMissingLangs := TessMissingLangs + 'eng ';
+        if not FileExists(TessFolder + '\tessdata\spa.traineddata') then
+          TessMissingLangs := TessMissingLangs + 'spa ';
+        if TessMissingLangs <> '' then
+          AppendInstallLog('[Tesseract] Note: missing language pack(s): '
+            + TessMissingLangs + '- see COMPLETE_USER_GUIDE.md for how to add them.');
+
+        AppendInstallLog('[Tesseract] Install complete and verified working.');
+        SetProgress(87, 'Tesseract OCR installed and verified.');
       end
       else
       begin
-        AppendInstallLog('[Tesseract] Download FAILED  -  OCR unavailable.');
-        SetProgress(86, 'Tesseract download failed  -  continuing...');
+        AppendInstallLog('[Tesseract] FAILED after 3 attempts. OCR of scanned '
+          + 'PDFs and image files will be unavailable.');
+        AppendInstallLog('[Tesseract] This is usually a firewall/antivirus '
+          + 'blocking github.com, or a slow/unstable connection during setup.');
+        AppendInstallLog('[Tesseract] EASIEST FIX: open AI-Prowler, go to the '
+          + '"Index Docs" tab, and click "Install / Repair OCR" -- it redoes '
+          + 'this same download and install from inside the running app, with '
+          + 'a live red/green status check, no reinstall needed.');
+        AppendInstallLog('[Tesseract] Manual alternative: download and run '
+          + 'this installer yourself, choosing "' + TessFolder
+          + '" as the install folder:');
+        AppendInstallLog('[Tesseract]   ' + TESSERACT_URL);
+        SetProgress(87, 'Tesseract install failed after 3 attempts - '
+          + 'use Index Docs tab to repair. See install_log.txt.');
       end;
     end
     else
     begin
       AppendInstallLog('[Tesseract] Already installed  -  skipping.');
-      SetProgress(86, 'Tesseract already installed  -  skipping...');
+      SetProgress(87, 'Tesseract already installed  -  skipping...');
     end;
+
+
 
     // ----------------------------------------------------------
     // CLAUDE CODE CLI  (progress 87 -> 89)
@@ -2300,123 +2459,170 @@ begin
         SetProgress(89, 'Claude Code CLI already installed  -  skipping...');
       end
       else
-      begin
-        SetProgress(87, 'Installing Claude Code CLI...');
-        AppendInstallLog('[Claude Code] Not found on PATH  -  running native installer as current user...');
-
-        ClaudeCodeTask := 'AI-Prowler-ClaudeCodeInstall';
-        ClaudeCodeBat  := ExpandConstant('{tmp}') + '\claude_code_install.bat';
-
-        SaveStringToFile(ClaudeCodeBat,
-          '@echo off' + #13#10 +
-          'set __COMPAT_LAYER=RunAsInvoker' + #13#10 +
-          'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "' +
-            '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; ' +
-            'irm https://claude.ai/install.ps1 | iex" ' +
-          '>"' + ExpandConstant('{%LOCALAPPDATA}') + '\Temp\AI-Prowler\claude_code_install_stdout.log" ' +
-          '2>"' + ExpandConstant('{%LOCALAPPDATA}') + '\Temp\AI-Prowler\claude_code_install_stderr.log"' + #13#10,
-          False);
-        AppendInstallLog('[Claude Code] Wrote RunAsInvoker batch: ' + ClaudeCodeBat);
-
-        // Register a one-shot scheduled task to run the batch as the current
-        // user WITHOUT /RL HIGHEST  ->  non-elevated token. Same pattern as
-        // the Tesseract install above.
-        Exec(ExpandConstant('{sys}\schtasks.exe'),
-          '/Create /F /RU "' + GetEnv('USERNAME') + '"' +
-          ' /SC ONCE /TN "' + ClaudeCodeTask + '"' +
-          ' /ST 00:00' +
-          ' /TR "cmd /C \"' + ClaudeCodeBat + '\""',
-          '', SW_HIDE, ewWaitUntilTerminated, ClaudeCodeInstallResult);
-        AppendInstallLog('[Claude Code] schtasks /Create exit code: ' + IntToStr(ClaudeCodeInstallResult));
-
-        // Trigger immediately
-        Exec(ExpandConstant('{sys}\schtasks.exe'),
-          '/Run /TN "' + ClaudeCodeTask + '"',
-          '', SW_HIDE, ewWaitUntilTerminated, ClaudeCodeInstallResult);
-        AppendInstallLog('[Claude Code] schtasks /Run exit code: ' + IntToStr(ClaudeCodeInstallResult));
-
-        // Poll until claude.exe appears on disk (installer writes to
-        // %USERPROFILE%\.local\bin) rather than trusting the task's own
-        // exit code — same philosophy as WaitForFolderCreation for Tesseract.
-        // NOTE: {userpf} is Inno's PER-USER PROGRAM FILES constant
-        // (AppData\Local\Programs) — NOT the user's home directory. Using
-        // it here produced AppData\Local\Programs\.local\bin, which never
-        // exists, causing a false-negative timeout even when the native
-        // installer succeeded. Use USERPROFILE directly instead.
-        ClaudeCodeLocalBin := GetEnv('USERPROFILE') + '\.local\bin';
-        WaitForFileCreation(ClaudeCodeLocalBin + '\claude.exe', '[Claude Code]', 60000);
-
-        // Clean up scheduled task and temp batch regardless of outcome.
-        Exec(ExpandConstant('{sys}\schtasks.exe'),
-          '/Delete /F /TN "' + ClaudeCodeTask + '"',
-          '', SW_HIDE, ewWaitUntilTerminated, ClaudeCodeInstallResult);
-        AppendInstallLog('[Claude Code] schtasks /Delete exit code: ' + IntToStr(ClaudeCodeInstallResult));
-        DeleteFile(ClaudeCodeBat);
-
-        // Re-check rather than trusting the exit code alone — the native
-        // installer's own exit-code reliability isn't something we've
-        // independently verified, so confirming `claude` actually resolves
-        // afterward is the real signal, same philosophy as everywhere else
-        // in this file that trusts observed state over a reported result.
-        Exec('cmd.exe', '/C where claude >nul 2>nul', '', SW_HIDE,
-          ewWaitUntilTerminated, ClaudeCodeCheckResult);
-
-        if ClaudeCodeCheckResult = 0 then
         begin
-          AppendInstallLog('[Claude Code] Install verified  -  claude is on PATH.');
-          SetProgress(89, 'Claude Code CLI installed.');
+          SetProgress(87, 'Installing Claude Code CLI...');
+          AppendInstallLog('[Claude Code] Not found on PATH  -  running native installer as current user...');
 
-          // Same PATH-broadcast fix documented above for Tesseract — a
-          // freshly-opened terminal needs this to see the updated PATH
-          // without a logoff/logon.
-          SendMessageTimeoutA(HWND_BROADCAST, WM_SETTINGCHANGE, 0,
-            'Environment', SMTO_ABORTIFHUNG, 5000, MsgDummy);
-          AppendInstallLog('[Claude Code] Broadcast WM_SETTINGCHANGE - '
-            + 'new terminals will see it on PATH immediately.');
-        end
-        else
-        begin
-          // Real-world finding (confirmed live, not theoretical): the
-          // native installer writes claude.exe to %USERPROFILE%\.local\bin
-          // but does NOT reliably add that folder to PATH itself — it can
-          // succeed completely while `where claude` still finds nothing.
-          // Check disk directly and fix PATH ourselves rather than
-          // reporting a false failure for an install that actually worked.
-          if FileExists(ClaudeCodeLocalBin + '\claude.exe') then
+          // HARDENING (matches the Tesseract retry pattern above): up to 2
+          // attempts, and success now requires claude.exe to both exist on
+          // disk AND actually run (--version), not just be present -- a
+          // network drop mid-`irm | iex` can leave a zero-byte or partial
+          // file that FileExists() alone would treat as a working install.
+          ClaudeCodeLocalBin := GetEnv('USERPROFILE') + '\.local\bin';
+          ClaudeCodeVerified := False;
+
+          for ClaudeCodeAttempt := 1 to 2 do
           begin
-            AppendInstallLog('[Claude Code] claude.exe found on disk at '
-              + ClaudeCodeLocalBin + ' but not yet on PATH  -  fixing PATH directly.');
-            if RegQueryStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', ClaudeCodeCurPath) then
+            if ClaudeCodeVerified then continue;
+
+            AppendInstallLog('[Claude Code] --- Attempt ' + IntToStr(ClaudeCodeAttempt) + ' of 2 ---');
+            ClaudeCodeTask := 'AI-Prowler-ClaudeCodeInstall';
+            ClaudeCodeBat  := ExpandConstant('{tmp}') + '\claude_code_install.bat';
+
+            SaveStringToFile(ClaudeCodeBat,
+              '@echo off' + #13#10 +
+              'set __COMPAT_LAYER=RunAsInvoker' + #13#10 +
+              'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "' +
+                '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; ' +
+                'irm https://claude.ai/install.ps1 | iex" ' +
+              '>"' + ExpandConstant('{%LOCALAPPDATA}') + '\Temp\AI-Prowler\claude_code_install_stdout.log" ' +
+              '2>"' + ExpandConstant('{%LOCALAPPDATA}') + '\Temp\AI-Prowler\claude_code_install_stderr.log"' + #13#10,
+              False);
+            AppendInstallLog('[Claude Code] Wrote RunAsInvoker batch: ' + ClaudeCodeBat);
+
+            // Register a one-shot scheduled task to run the batch as the current
+            // user WITHOUT /RL HIGHEST  ->  non-elevated token. Same pattern as
+            // the Tesseract install above.
+            Exec(ExpandConstant('{sys}\schtasks.exe'),
+              '/Create /F /RU "' + GetEnv('USERNAME') + '"' +
+              ' /SC ONCE /TN "' + ClaudeCodeTask + '"' +
+              ' /ST 00:00' +
+              ' /TR "cmd /C \"' + ClaudeCodeBat + '\""',
+              '', SW_HIDE, ewWaitUntilTerminated, ClaudeCodeInstallResult);
+            AppendInstallLog('[Claude Code] schtasks /Create exit code: ' + IntToStr(ClaudeCodeInstallResult));
+
+            // Trigger immediately
+            Exec(ExpandConstant('{sys}\schtasks.exe'),
+              '/Run /TN "' + ClaudeCodeTask + '"',
+              '', SW_HIDE, ewWaitUntilTerminated, ClaudeCodeInstallResult);
+            AppendInstallLog('[Claude Code] schtasks /Run exit code: ' + IntToStr(ClaudeCodeInstallResult));
+
+            // Poll until claude.exe appears on disk (installer writes to
+            // %USERPROFILE%\.local\bin) rather than trusting the task's own
+            // exit code — same philosophy as WaitForFolderCreation for Tesseract.
+            // NOTE: {userpf} is Inno's PER-USER PROGRAM FILES constant
+            // (AppData\Local\Programs) — NOT the user's home directory. Using
+            // it here produced AppData\Local\Programs\.local\bin, which never
+            // exists, causing a false-negative timeout even when the native
+            // installer succeeded. Use USERPROFILE directly instead.
+            WaitForFileCreation(ClaudeCodeLocalBin + '\claude.exe', '[Claude Code]', 60000);
+
+            // Clean up scheduled task and temp batch regardless of outcome.
+            Exec(ExpandConstant('{sys}\schtasks.exe'),
+              '/Delete /F /TN "' + ClaudeCodeTask + '"',
+              '', SW_HIDE, ewWaitUntilTerminated, ClaudeCodeInstallResult);
+            AppendInstallLog('[Claude Code] schtasks /Delete exit code: ' + IntToStr(ClaudeCodeInstallResult));
+            DeleteFile(ClaudeCodeBat);
+
+            // Functional check: the file existing isn't proof it works (a
+            // partial/interrupted download can leave a truncated exe on
+            // disk). Actually run it and look for real version output,
+            // same approach as the Tesseract --version check above.
+            if FileExists(ClaudeCodeLocalBin + '\claude.exe') then
             begin
-              if Pos(LowerCase(ClaudeCodeLocalBin), LowerCase(ClaudeCodeCurPath)) = 0 then
-                RegWriteExpandStringValue(HKEY_CURRENT_USER, 'Environment', 'Path',
-                  ClaudeCodeCurPath + ';' + ClaudeCodeLocalBin);
+              ClaudeCodeVerOutFile := ExpandConstant('{tmp}\claude_ver.txt');
+              ClaudeCodeVerBat := ExpandConstant('{tmp}\claude_ver.bat');
+              DeleteFileIfExists(ClaudeCodeVerOutFile);
+              SaveStringToFile(ClaudeCodeVerBat,
+                '@echo off' + #13#10 +
+                '"' + ClaudeCodeLocalBin + '\claude.exe" --version > "'
+                  + ClaudeCodeVerOutFile + '" 2>&1' + #13#10,
+                False);
+              Exec(ExpandConstant('{cmd}'), '/C "' + ClaudeCodeVerBat + '"', '',
+                SW_HIDE, ewWaitUntilTerminated, ClaudeCodeVerResultCode);
+              ClaudeCodeVerOutput := '';
+              if FileExists(ClaudeCodeVerOutFile) then
+                LoadStringFromFile(ClaudeCodeVerOutFile, ClaudeCodeVerOutput);
+              DeleteFileIfExists(ClaudeCodeVerBat);
+              DeleteFileIfExists(ClaudeCodeVerOutFile);
+
+              if Length(Trim(ClaudeCodeVerOutput)) > 0 then
+              begin
+                AppendInstallLog('[Claude Code] Functional check OK: '
+                  + Copy(ClaudeCodeVerOutput, 1, 60));
+                ClaudeCodeVerified := True;
+              end
+              else
+                AppendInstallLog('[Claude Code] claude.exe present but produced no '
+                  + 'output for --version  -  treating this attempt as failed.');
             end
             else
-              RegWriteExpandStringValue(HKEY_CURRENT_USER, 'Environment', 'Path',
-                ClaudeCodeLocalBin);
+              AppendInstallLog('[Claude Code] claude.exe not found on disk after '
+                + 'this attempt.');
 
+            if not ClaudeCodeVerified and (ClaudeCodeAttempt < 2) then
+            begin
+              AppendInstallLog('[Claude Code] Attempt ' + IntToStr(ClaudeCodeAttempt)
+                + ' unsuccessful. Retrying...');
+              DeleteFileIfExists(ClaudeCodeLocalBin + '\claude.exe');
+              Sleep(3000);
+            end;
+          end;  // for ClaudeCodeAttempt
+
+          if ClaudeCodeVerified then
+          begin
+            // Re-check PATH — the native installer writes claude.exe to
+            // %USERPROFILE%\.local\bin but does NOT reliably add that folder
+            // to PATH itself (confirmed live: it can succeed completely while
+            // `where claude` still finds nothing), so fix PATH ourselves
+            // whenever needed rather than depending on the installer for it.
+            Exec('cmd.exe', '/C where claude >nul 2>nul', '', SW_HIDE,
+              ewWaitUntilTerminated, ClaudeCodeCheckResult);
+
+            if ClaudeCodeCheckResult = 0 then
+            begin
+              AppendInstallLog('[Claude Code] Install verified  -  claude is on PATH.');
+            end
+            else
+            begin
+              AppendInstallLog('[Claude Code] claude.exe verified working at '
+                + ClaudeCodeLocalBin + ' but not yet on PATH  -  fixing PATH directly.');
+              if RegQueryStringValue(HKEY_CURRENT_USER, 'Environment', 'Path', ClaudeCodeCurPath) then
+              begin
+                if Pos(LowerCase(ClaudeCodeLocalBin), LowerCase(ClaudeCodeCurPath)) = 0 then
+                  RegWriteExpandStringValue(HKEY_CURRENT_USER, 'Environment', 'Path',
+                    ClaudeCodeCurPath + ';' + ClaudeCodeLocalBin);
+              end
+              else
+                RegWriteExpandStringValue(HKEY_CURRENT_USER, 'Environment', 'Path',
+                  ClaudeCodeLocalBin);
+              AppendInstallLog('[Claude Code] PATH fixed  -  new terminals and the '
+                + 'next AI-Prowler launch will see claude immediately (this running '
+                + 'Setup.exe process still won''t, since it already inherited its '
+                + 'own environment block  -  that''s expected and harmless).');
+            end;
+
+            // Same PATH-broadcast fix documented above for Tesseract — a
+            // freshly-opened terminal needs this to see the updated PATH
+            // without a logoff/logon.
             SendMessageTimeoutA(HWND_BROADCAST, WM_SETTINGCHANGE, 0,
               'Environment', SMTO_ABORTIFHUNG, 5000, MsgDummy);
-            AppendInstallLog('[Claude Code] PATH fixed and broadcast  -  '
-              + 'new terminals and the next AI-Prowler launch will see '
-              + 'claude immediately (this running Setup.exe process still '
-              + 'won''t, since it already inherited its own environment '
-              + 'block  -  that''s expected and harmless).');
-            SetProgress(89, 'Claude Code CLI installed (PATH fixed).');
+            AppendInstallLog('[Claude Code] Broadcast WM_SETTINGCHANGE - '
+              + 'new terminals will see it on PATH immediately.');
+            AppendInstallLog('[Claude Code] Install complete and verified working.');
+            SetProgress(89, 'Claude Code CLI installed and verified.');
           end
           else
           begin
-            AppendInstallLog('[Claude Code] Install could not be verified  -  '
-              + 'claude.exe not found on disk either. See '
-              + 'claude_code_install_stdout.log / _stderr.log in the AI-Prowler '
-              + 'temp log folder for the installer''s own output.');
+            AppendInstallLog('[Claude Code] FAILED after 2 attempts  -  claude.exe '
+              + 'not found or not runnable. See claude_code_install_stdout.log / '
+              + '_stderr.log in the AI-Prowler temp log folder for the installer''s '
+              + 'own output.');
             AppendInstallLog('[Claude Code] Autonomous Task Queue automation will show '
               + 'this as unavailable until installed manually from claude.ai/install.ps1.');
-            SetProgress(89, 'Claude Code CLI install failed  -  continuing...');
+            SetProgress(89, 'Claude Code CLI install failed after 2 attempts  -  continuing...');
           end;
         end;
-      end;
     end
     else
     begin

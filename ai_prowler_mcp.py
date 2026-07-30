@@ -716,6 +716,55 @@ _log.info(
     _IS_SERVER_MODE, len(_PERSONAL_MODE_SUPPRESSED)
 )
 
+# ── Internal audit logging (v8.1.17) ────────────────────────────────────────
+# Replaces reliance on Claude Code's PostToolUse hook (.claude/settings.json
+# + .claude/hooks/log_tool_call.py) for populating
+# ~/.ai-prowler/autonomous_run_audit.log — that hook mechanism was chased
+# through several real bugs this debugging session (missing .claude folder,
+# wrong deploy location under an admin-only path, a bare-python PATH
+# resolution failure) and, after ALL of those were genuinely fixed, STILL
+# never fired for a real, successfully-completed run. Root cause, confirmed
+# via multiple currently-open upstream bug reports on
+# github.com/anthropics/claude-code (#40506, #6305, #1084): PostToolUse
+# hooks configured via .claude/settings.json are simply unreliable in
+# Claude Code itself — silently skipped entirely in headless -p mode per
+# #40506, and inconsistently fired even interactively per #6305/#1084 —
+# "manual hook execution works correctly" but "Claude Code's tool execution
+# pipeline doesn't integrate with the hooks system," in the words of one of
+# those reports. This is not fixable from AI-Prowler's side at all.
+#
+# Fix: log directly from inside AI-Prowler's OWN tool-call handling instead
+# — the _counting_mcp_tool wrapper below, which every @mcp.tool() already
+# passes through for telemetry counting. This works identically regardless
+# of which client is calling (headless claude -p, interactive Claude Code,
+# Claude Desktop, claude.ai, mobile) — broader and more reliable coverage
+# than the hook ever gave, and entirely independent of any Claude Code
+# hook-system bug, present or future. Same log file, same line format, as
+# the old hook wrote — View Audit Log in the GUI needs no changes.
+_AUDIT_LOG_PATH = Path.home() / ".ai-prowler" / "autonomous_run_audit.log"
+
+
+def _append_audit_log(tool_name: str, kwargs: dict, ok: bool, error: str = "") -> None:
+    """Best-effort, never raises, never slows down or blocks the actual tool
+    call — audit logging must not be able to interfere with real work, same
+    philosophy the old hook script followed."""
+    try:
+        import datetime as _dt
+        _AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        # ctx is a FastMCP Context object -- not JSON-serializable and not
+        # useful in an audit trail; strip it before logging.
+        safe_kwargs = {k: v for k, v in kwargs.items() if k != "ctx"}
+        input_summary = json.dumps(safe_kwargs, default=str)[:200]
+        ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        line = f"[{ts}] mcp__ai-prowler__{tool_name} ok={ok} input={input_summary}"
+        if error:
+            line += f" error={error[:200]}"
+        with open(_AUDIT_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+
+
 # ── Monkeypatch mcp.tool() ───────────────────────────────────────────────────
 import functools as _functools
 
@@ -734,6 +783,10 @@ def _counting_mcp_tool(*tool_args, **tool_kwargs):
     Mirror gate: in personal mode, any tool whose name appears in
     _PERSONAL_MODE_SUPPRESSED is suppressed the same way — tools that
     only make sense with more than one registered user.
+
+    v8.1.17: also appends to the audit log (_append_audit_log) on every
+    call, success or failure — see that function's docstring / the module
+    comment above it for why this replaced the old Claude Code hook.
     """
     def _outer(fn):
         _tool_name = getattr(fn, '__name__', '_unknown')
@@ -752,8 +805,13 @@ def _counting_mcp_tool(*tool_args, **tool_kwargs):
 
         @_functools.wraps(fn)
         def _inner(*args, **kwargs):
-            result = fn(*args, **kwargs)
+            try:
+                result = fn(*args, **kwargs)
+            except Exception as e:
+                _append_audit_log(_tool_name, kwargs, ok=False, error=str(e))
+                raise
             _telemetry_increment_tool_count(_tool_name)
+            _append_audit_log(_tool_name, kwargs, ok=True)
             return result
         return real_decorator(_inner)
 
@@ -763,7 +821,8 @@ def _counting_mcp_tool(*tool_args, **tool_kwargs):
 mcp.tool = _counting_mcp_tool
 _log.info("Monkeypatched mcp.tool() — all subsequent @mcp.tool decorators "
           "will increment ~/.ai-prowler/telemetry_counter.json by tool name "
-          "on success")
+          "on success, and append to ~/.ai-prowler/autonomous_run_audit.log "
+          "on every call (success or failure)")
 
 # Module-level event set by the background prewarm thread when ChromaDB and
 # the embedding model are fully loaded.  Tool handlers that need ChromaDB

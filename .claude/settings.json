@@ -1,6 +1,8 @@
 {
   "_comment": "Project-local Claude Code settings for the AI-Prowler autonomous task runner. Scoped to THIS project only — does not modify your global ~/.claude/settings.json.",
 
+  "_command_note": "v8.1.14: the hook command below is a fallback bare `python` invocation, shipped as-is by the installer. task_queue_automation.py's generate_mcp_config() and dry_run_check() both self-heal this to an absolute python.exe path (sys.executable) on whatever machine this actually runs on — see _ensure_hook_uses_absolute_python()'s docstring for why a build-time hardcoded path can't work here (every end user has Python installed somewhere different). This static fallback only matters in the brief window before that self-heal first runs.",
+
   "hooks": {
     "PostToolUse": [
       {
