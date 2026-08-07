@@ -1543,6 +1543,7 @@ var
   TessMissingLangs: String;
   MsgDummy: DWORD;
   PythonReady: Boolean;
+  DefenderPs, DefenderPsFile: String;
 begin
   if CurStep = ssPostInstall then
   begin
@@ -2707,6 +2708,48 @@ begin
     // ----------------------------------------------------------
     SetProgress(98, 'Granting task scheduler permissions...');
     GrantBatchLogonRight();
+
+    // ----------------------------------------------------------
+    // WINDOWS DEFENDER EXCLUSIONS  (progress 99)
+    // Python pip-installed compiled extensions (.pyd, .dll) are not
+    // signed by us — they come from upstream packages like cffi,
+    // numpy, torch, chromadb, Pillow, tokenizers, etc. Windows Smart
+    // App Control / Defender reputation-checks each binary individually
+    // and will block or warn on any unsigned .pyd it hasn't seen before.
+    //
+    // Signing thousands of third-party .pyd files is impractical, so
+    // we exclude the Python site-packages tree and the AI-Prowler app
+    // folder from real-time scanning instead. Both are read-only after
+    // install and contain no user data.
+    //
+    // Add-MpPreference requires elevation — we already run elevated
+    // (PrivilegesRequired=admin) so no extra UAC prompt is needed.
+    // ----------------------------------------------------------
+    SetProgress(99, 'Configuring Windows Defender exclusions...');
+    begin
+      DefenderPsFile := MakeTempFile('defender_excl');
+      DefenderPsFile := Copy(DefenderPsFile, 1, Length(DefenderPsFile) - 4) + '.ps1';
+      DefenderPs :=
+        '$ErrorActionPreference = "SilentlyContinue"' + #13#10 +
+        '$sitePackages = "$env:LOCALAPPDATA\Programs\Python\Python311\Lib\site-packages"' + #13#10 +
+        '$appFolder    = "' + ExpandConstant('{app}') + '"' + #13#10 +
+        'try {' + #13#10 +
+        '    Add-MpPreference -ExclusionPath $sitePackages' + #13#10 +
+        '    Add-MpPreference -ExclusionPath $appFolder' + #13#10 +
+        '    Write-Host "Defender exclusions added for: $sitePackages"' + #13#10 +
+        '    Write-Host "Defender exclusions added for: $appFolder"' + #13#10 +
+        '} catch {' + #13#10 +
+        '    Write-Host "WARNING: Could not add Defender exclusions: $_"' + #13#10 +
+        '    Write-Host "Add these paths manually in Windows Security > Virus & threat protection > Exclusions:"' + #13#10 +
+        '    Write-Host "  $sitePackages"' + #13#10 +
+        '    Write-Host "  $appFolder"' + #13#10 +
+        '}' + #13#10;
+      SaveStringToFile(DefenderPsFile, DefenderPs, False);
+      ExecWithLogging(True, '[Defender]', 'powershell.exe',
+        '-NoProfile -ExecutionPolicy Bypass -File "' + DefenderPsFile + '"');
+      DeleteFileIfExists(DefenderPsFile);
+      AppendInstallLog('[Defender] Exclusion step complete.');
+    end;
 
     SetProgress(99, 'AI-Prowler ready.');
 
