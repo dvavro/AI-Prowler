@@ -1,21 +1,21 @@
 {
-  "version": "8.1.12",
-  "generated": "2026-07-28T13:47:30",
+  "version": "9.0.0",
+  "generated": "2026-08-07T09:58:49",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "44c70e6e91caeec564e85589f6f1c7bd2c526e6c76ad27bad3808b4a62330b1c",
-      "bytes": 1188624
+      "sha256": "a44f6b010cf0e5c44fd2e82b050d93248949eea878c2997ad88a8a671d4150e4",
+      "bytes": 1229648
     },
     {
       "path": "rag_preprocessor.py",
-      "sha256": "5ebd2dd604bba09bb207d0f50ab7b4ed2b607b63fdbb1d5948a69120cd4f593c",
-      "bytes": 301663
+      "sha256": "d16ea47838af5d278293e53c4e859761238f0180b1b006888f140d8d9b6ad6ae",
+      "bytes": 306279
     },
     {
       "path": "ai_prowler_mcp.py",
-      "sha256": "fae3309b1b1506c61ef6871a93e15ca009189be24a82ac410966b677f57ffa4f",
-      "bytes": 783728
+      "sha256": "ed1676927fdb28e22211fd953828feaaef1d5b9b424090570dfdf9ae73245ac7",
+      "bytes": 787598
     },
     {
       "path": "mcp_diagnostics.py",
@@ -59,13 +59,13 @@
     },
     {
       "path": "COMPLETE_USER_GUIDE.md",
-      "sha256": "f70d98cbe6cc8eb0d3c5daedf3ca7180133bc5045a71ae704ec09bad779823df",
-      "bytes": 162535
+      "sha256": "245a22005e8da66a594f45c05ce284ca7fbdf59a6211fee6fafbe3eab9c0652f",
+      "bytes": 163570
     },
     {
       "path": "VERSION",
-      "sha256": "199be1eb67e5983526774c4196f70f1ac2f1fb5f176f7a95ac7546b1d09cb119",
-      "bytes": 7
+      "sha256": "cdecb300baad839a6f62791229f551a4fa33f3cbdca08e378dc976466354e778",
+      "bytes": 6
     },
     {
       "path": "scope_resolver.py",
@@ -114,8 +114,8 @@
     },
     {
       "path": "scheduler_jobs.py",
-      "sha256": "4086d0020a688dab15eb1561bb4442b2ecac36e05d13e195a3bb241bc6a7d2ae",
-      "bytes": 18374
+      "sha256": "d11fb20929bb4bad7bf278cdb468ce8db8498d66667669377bddc21124893e84",
+      "bytes": 19244
     },
     {
       "path": "scheduler_engine.py",
@@ -124,13 +124,13 @@
     },
     {
       "path": "task_queue_automation.py",
-      "sha256": "ca527727ec71726b3c77dddda1a4d308c8de3e0369e3df44aaf1ece48abd55ce",
-      "bytes": 96058
+      "sha256": "be85e3fc920716b75f3eac8a9bcf60c9b596e501d87209b43c9764d75ec27d03",
+      "bytes": 134513
     },
     {
       "path": ".claude/settings.json",
-      "sha256": "a3ba3cba57dab651df6386560954fbfe2d2e554197d4828b27ef3c2e1e2fa6cc",
-      "bytes": 768
+      "sha256": "2b047af7bdd9b5c5062558c81911f08cfedf500e23aa638e4491e7a10cae7171",
+      "bytes": 1329
     },
     {
       "path": ".claude/hooks/log_tool_call.py",

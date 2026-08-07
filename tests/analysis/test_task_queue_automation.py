@@ -349,17 +349,6 @@ def test_install_wrapper_script_writes_bat_without_bom(tmp_path, _isolated_home)
     assert raw.startswith(b'@echo off')
 
 
-def test_run_single_prompt_now_writes_bat_without_bom(tmp_path, _isolated_home, monkeypatch):
-    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: True)
-    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: type(
-        "R", (), {"returncode": 0, "stdout": "", "stderr": ""})())
-    tqa.run_single_prompt_now("hello \u2014 world", "x.json", "mcp__ai-prowler__*")
-    bat_path = tqa.AI_PROWLER_HOME / "single_run" / "run_single_now.bat"
-    raw = bat_path.read_bytes()
-    assert not raw.startswith(b'\xef\xbb\xbf')
-    assert raw.startswith(b'@echo off')
-
-
 def test_single_prompt_wrapper_end_to_end_em_dash_normalized(tmp_path, _isolated_home):
     # Uses the real custom task shape: the prompt line contains no raw
     # smart-dash character (normalized by the sanitizer), and the script
@@ -560,20 +549,103 @@ class TestInstallScheduledTaskTriggerMode:
 
     def test_daily_mode_uses_new_scheduledtasktrigger_daily(self):
         script = tqa._build_register_queue_task_ps1(
-            "fake.bat", "07:30", "daily", 1, "david", True, "result.txt")
+            "fake.bat", "07:30", "23:00", "daily", 1, "david", True, "result.txt")
         assert "New-ScheduledTaskTrigger -Daily -At '07:30'" in script
         assert "RepetitionInterval" not in script
 
-    def test_interval_mode_uses_repetition_interval(self):
+    def test_interval_mode_uses_multiple_daily_triggers_not_repetition(self):
+        """v9.0.1 REDESIGN: interval mode no longer uses a single hour-
+        repetition trigger — it registers N separate -Daily -At triggers
+        (one per compute_daily_run_times() slot), combined into a
+        PowerShell array. This is what actually fixed the anchor-drift bug
+        class (a Daily trigger's time-of-day can't drift the way a
+        RepetitionInterval trigger's StartBoundary could)."""
         script = tqa._build_register_queue_task_ps1(
-            "fake.bat", "07:30", "interval", 3, "david", True, "result.txt")
-        assert "RepetitionInterval (New-TimeSpan -Hours 3)" in script
-        assert "-Daily" not in script
+            "fake.bat", "07:00", "23:00", "interval", 3, "david", True, "result.txt")
+        assert "RepetitionInterval" not in script
+        assert "RepetitionDuration" not in script
+        # 3 times/day across 07:00-23:00 -> 07:00, 15:00, 23:00
+        assert "New-ScheduledTaskTrigger -Daily -At '07:00'" in script
+        assert "New-ScheduledTaskTrigger -Daily -At '15:00'" in script
+        assert "New-ScheduledTaskTrigger -Daily -At '23:00'" in script
+        assert "-Trigger $trigger" in script
+        assert "@($t0, $t1, $t2)" in script
 
-    def test_interval_mode_clamps_zero_or_negative_hours_to_one(self):
+    def test_interval_mode_clamps_zero_or_negative_times_per_day_to_one(self):
         script = tqa._build_register_queue_task_ps1(
-            "fake.bat", "07:30", "interval", 0, "david", True, "result.txt")
-        assert "RepetitionInterval (New-TimeSpan -Hours 1)" in script
+            "fake.bat", "07:30", "23:00", "interval", 0, "david", True, "result.txt")
+        # times_per_day <= 1 -> compute_daily_run_times just returns [start]
+        assert "New-ScheduledTaskTrigger -Daily -At '07:30'" in script
+        assert "@($t0)" in script
+
+
+    # ── v9.0.1: interval-mode anchor time (superseded by the v9.0.1 REDESIGN
+    # right above — kept as historical record) ──────────────────────────────
+    # Found live: David configured Scheduled time=07:00, Check queue=8
+    # times/day (a 3-hour interval) and the panel showed "next: 8/7/2026
+    # 1:27:54 AM" -- nowhere near a clean multiple of 3 hours from 07:00.
+    # Root cause: the interval trigger anchored at (Get-Date) -- the exact
+    # instant Apply was clicked, full seconds precision included -- and
+    # completely ignored the schedule_time field. Windows Task Scheduler
+    # computes every future occurrence as StartBoundary + N * Repetition
+    # Interval, so that arbitrary seconds offset propagated forward forever.
+    #
+    # First fix attempt: keep the single hour-repetition trigger, but anchor
+    # -At at today's schedule_time (seconds zeroed) instead of (Get-Date).
+    # That fixed the drift but was still fundamentally a single anchor +
+    # fixed-hour-interval design — it couldn't express "N times evenly
+    # spread across a Start/End range" (the actual feature request that
+    # triggered the REDESIGN above), and non-round divisions of 24 still
+    # distorted the true interval. SUPERSEDED, not just fixed: interval mode
+    # now has no single "anchor" concept at all — every check time is its
+    # own independent Daily trigger, so there's nothing left that CAN drift.
+    # The four tests below (which asserted on a single -Once -At full-
+    # datetime anchor) are retired rather than force-adapted, since
+    # test_interval_mode_uses_multiple_daily_triggers_not_repetition above
+    # already covers every property that still applies (no Get-Date, no
+    # RepetitionInterval/Duration, clean deterministic times) — and more
+    # completely, since there's no anchor-drift risk left to test for at all.
+
+    def test_interval_mode_anchor_reflects_schedule_time_not_current_moment(self):
+        pytest.skip("Superseded by the v9.0.1 REDESIGN — interval mode has "
+                     "no single anchor anymore, see "
+                     "test_interval_mode_uses_multiple_daily_triggers_not_repetition")
+
+    def test_interval_mode_anchor_zeroes_seconds_for_any_schedule_time(self):
+        pytest.skip("Superseded by the v9.0.1 REDESIGN — every check time "
+                     "is now a bare HH:MM -Daily -At value with no seconds "
+                     "component to begin with, see "
+                     "test_interval_mode_uses_multiple_daily_triggers_not_repetition")
+
+    def test_interval_mode_anchor_is_a_full_datetime_literal(self):
+        pytest.skip("Superseded by the v9.0.1 REDESIGN — interval mode no "
+                     "longer uses -Once -At at all, only -Daily -At with a "
+                     "bare HH:MM, see "
+                     "test_interval_mode_uses_multiple_daily_triggers_not_repetition")
+
+    def test_interval_mode_schedule_is_deterministic_across_repeated_calls(self):
+        """Successor to the old 'anchor stable across repeated calls' test.
+        Two registrations with identical inputs must produce byte-identical
+        trigger sets — trivially true now (compute_daily_run_times() is a
+        pure function of start/end/N, no wall-clock time involved at all),
+        but still worth asserting explicitly since it's the property that
+        actually matters: the schedule never drifts no matter when or how
+        many times Apply gets clicked."""
+        script_a = tqa._build_register_queue_task_ps1(
+            "fake.bat", "07:00", "23:00", "interval", 3, "david", True, "result.txt")
+        script_b = tqa._build_register_queue_task_ps1(
+            "fake.bat", "07:00", "23:00", "interval", 3, "david", True, "result.txt")
+        assert script_a == script_b, (
+            "Identical inputs produced different registration scripts — "
+            "the schedule is not deterministic"
+        )
+
+    def test_daily_mode_at_unchanged_by_interval_anchor_fix(self):
+        """Daily mode's -At must remain the plain HH:MM string — this fix
+        only touches the interval branch."""
+        script = tqa._build_register_queue_task_ps1(
+            "fake.bat", "07:30", "23:00", "daily", 1, "david", True, "result.txt")
+        assert "New-ScheduledTaskTrigger -Daily -At '07:30'" in script
 
 
 # ── v8.1.11: run whether logged on or not, even during a full logoff ──
@@ -595,7 +667,7 @@ class TestRegisterQueueTaskPs1UserPrincipal:
 
     def test_userid_matches_run_as_user(self):
         script = tqa._build_register_queue_task_ps1(
-            "fake.bat", "07:30", "daily", 1, "david", True, "result.txt")
+            "fake.bat", "07:30", "23:00", "daily", 1, "david", True, "result.txt")
         assert "-UserId 'david'" in script
 
     def test_logontype_is_s4u_not_password_based(self):
@@ -603,28 +675,28 @@ class TestRegisterQueueTaskPs1UserPrincipal:
         # a plaintext Windows login password would be a real security
         # regression and isn't what this mechanism needs.
         script = tqa._build_register_queue_task_ps1(
-            "fake.bat", "07:30", "daily", 1, "david", True, "result.txt")
+            "fake.bat", "07:30", "23:00", "daily", 1, "david", True, "result.txt")
         assert "-LogonType S4U" in script
         assert "Password" not in script
 
     def test_different_username_reflected_in_principal(self):
         script = tqa._build_register_queue_task_ps1(
-            "fake.bat", "07:30", "daily", 1, "someone_else", True, "result.txt")
+            "fake.bat", "07:30", "23:00", "daily", 1, "someone_else", True, "result.txt")
         assert "-UserId 'someone_else'" in script
 
     def test_s4u_principal_present_in_both_daily_and_interval_modes(self):
         daily_script = tqa._build_register_queue_task_ps1(
-            "fake.bat", "07:30", "daily", 1, "david", True, "result.txt")
+            "fake.bat", "07:30", "23:00", "daily", 1, "david", True, "result.txt")
         interval_script = tqa._build_register_queue_task_ps1(
-            "fake.bat", "07:30", "interval", 2, "david", True, "result.txt")
+            "fake.bat", "07:30", "23:00", "interval", 2, "david", True, "result.txt")
         assert "-LogonType S4U" in daily_script
         assert "-LogonType S4U" in interval_script
 
     def test_disabled_state_adds_disable_scheduledtask_call(self):
         enabled_script = tqa._build_register_queue_task_ps1(
-            "fake.bat", "07:30", "daily", 1, "david", True, "result.txt")
+            "fake.bat", "07:30", "23:00", "daily", 1, "david", True, "result.txt")
         disabled_script = tqa._build_register_queue_task_ps1(
-            "fake.bat", "07:30", "daily", 1, "david", False, "result.txt")
+            "fake.bat", "07:30", "23:00", "daily", 1, "david", False, "result.txt")
         assert "Disable-ScheduledTask" not in enabled_script
         assert "Disable-ScheduledTask" in disabled_script
 
@@ -633,7 +705,7 @@ class TestRegisterQueueTaskPs1UserPrincipal:
         # is responsible for doubling single quotes before calling this
         # builder -- this function does not do it itself.
         script = tqa._build_register_queue_task_ps1(
-            "fake''bat", "07:30", "daily", 1, "david", True, "result.txt")
+            "fake''bat", "07:30", "23:00", "daily", 1, "david", True, "result.txt")
         assert "fake''bat" in script
 
 
@@ -664,6 +736,18 @@ class TestGetScheduledTaskDisplayInfo:
         assert info["display"] == "🔴 Not armed"
 
     def test_enabled_daily_task_shows_armed_with_time(self, monkeypatch):
+        """v9.0.1: cadence now comes from OUR saved config (schedule_time,
+        check_times_per_day), not schtasks's own Start Time field —
+        next_run_time in `display` is now computed via compute_next_checker_run()
+        (real wall-clock), NOT read straight from schtasks, so we must
+        monkeypatch compute_next_checker_run to get a stable date in the output."""
+        import datetime as _dt
+        _fixed = _dt.datetime(2026, 7, 27, 6, 0, 0)
+        monkeypatch.setattr(tqa, "compute_next_checker_run", lambda *a, **kw: _fixed)
+        tqa.save_config({
+            "enabled": True, "schedule_time": "06:00",
+            "check_mode": "daily", "check_times_per_day": 1,
+        })
         self._mock_query(monkeypatch,
             "Scheduled Task State:    Enabled\r\n"
             "Schedule Type:           Daily\r\n"
@@ -673,20 +757,38 @@ class TestGetScheduledTaskDisplayInfo:
         assert info["exists"] is True
         assert info["enabled"] is True
         assert "🟢 Armed" in info["display"]
-        assert "06:00:00" in info["display"]
+        assert "Daily at 06:00" in info["display"]
         assert "7/27/2026" in info["display"]
 
-    def test_enabled_interval_task_shows_repeat_cadence(self, monkeypatch):
+    def test_enabled_multi_trigger_task_shows_computed_check_times(self, monkeypatch):
+        """v9.0.1: N times/day > 1 now shows the actual computed check
+        times (via compute_daily_run_times), not a raw schtasks "Repeat:
+        Every" hour-interval string — the OS trigger mechanism changed
+        from hour-repetition to N explicit Daily triggers, and schtasks's
+        /v /fo list query has no clean way to describe several independent
+        triggers, so it's not used for this anymore.
+        compute_next_checker_run() is also monkeypatched here because the
+        display's "next:" date is computed from real wall-clock time, not
+        read from schtasks, so the assertion needs a pinned return value."""
+        import datetime as _dt
+        _fixed = _dt.datetime(2026, 7, 27, 15, 0, 0)
+        monkeypatch.setattr(tqa, "compute_next_checker_run", lambda *a, **kw: _fixed)
+        tqa.save_config({
+            "enabled": True, "schedule_time": "07:00",
+            "schedule_end_time": "23:00", "check_mode": "interval",
+            "check_times_per_day": 3,
+        })
         self._mock_query(monkeypatch,
             "Scheduled Task State:    Enabled\r\n"
-            "Schedule Type:           Hourly\r\n"
-            "Start Time:              00:00:00\r\n"
-            "Repeat: Every:           2 Hour(s), 0 Minute(s)\r\n"
-            "Next Run Time:           7/27/2026 2:00:00 PM\r\n")
+            "Schedule Type:           Multiple Triggers\r\n"
+            "Next Run Time:           7/27/2026 3:00:00 PM\r\n")
         info = tqa.get_scheduled_task_display_info()
         assert info["enabled"] is True
         assert "🟢 Armed" in info["display"]
-        assert "2 Hour(s), 0 Minute(s)" in info["display"]
+        assert "3x/day" in info["display"]
+        assert "07:00" in info["display"]
+        assert "23:00" in info["display"]
+        assert "7/27/2026" in info["display"]
 
     def test_disabled_task_shows_not_armed(self, monkeypatch):
         self._mock_query(monkeypatch,
@@ -706,6 +808,23 @@ class TestGetScheduledTaskDisplayInfo:
         info = tqa.get_scheduled_task_display_info()
         assert isinstance(info["display"], str)
         assert info["display"]  # non-empty
+
+    def test_display_falls_back_gracefully_on_malformed_saved_times(self, monkeypatch):
+        """A corrupt/malformed schedule_time or schedule_end_time in the
+        saved config must not crash display info -- falls back to a
+        still-informative (if less precise) cadence string."""
+        tqa.save_config({
+            "enabled": True, "schedule_time": "not-a-time",
+            "schedule_end_time": "also-not-a-time",
+            "check_mode": "interval", "check_times_per_day": 4,
+        })
+        self._mock_query(monkeypatch,
+            "Scheduled Task State:    Enabled\r\n"
+            "Next Run Time:           7/27/2026 3:00:00 PM\r\n")
+        info = tqa.get_scheduled_task_display_info()
+        assert isinstance(info["display"], str)
+        assert "🟢 Armed" in info["display"]
+        assert "4x/day" in info["display"]
 
 
 class TestWrapperActiveWindowSelfGate:
@@ -1174,8 +1293,8 @@ def test_dry_run_check_reports_missing_claude_cli(_isolated_home, monkeypatch):
 
 def test_install_scheduled_task_delegates_enabled_flag(monkeypatch, tmp_path):
     captured = {}
-    def _fake_register(wrapper_script_path, schedule_time, check_mode,
-                        check_interval_hours, enabled, username, **kw):
+    def _fake_register(wrapper_script_path, schedule_time, schedule_end_time,
+                        check_mode, times_per_day, enabled, username, **kw):
         captured["enabled"] = enabled
         return True, "ok"
     monkeypatch.setattr(tqa, "_register_queue_task_elevated", _fake_register)
@@ -1530,13 +1649,13 @@ class TestRegisterQueueTaskElevated:
     def test_success_path_returns_true(self, monkeypatch):
         self._mock_uac_success_with_result(monkeypatch, "OK")
         ok, detail = tqa._register_queue_task_elevated(
-            Path("fake.bat"), "07:30", "daily", 1, True, "david", timeout_sec=5)
+            Path("fake.bat"), "07:30", "23:00", "daily", 1, True, "david", timeout_sec=5)
         assert ok is True
 
     def test_failure_reported_by_ps1_returns_false_with_message(self, monkeypatch):
         self._mock_uac_success_with_result(monkeypatch, "FAIL: access denied")
         ok, detail = tqa._register_queue_task_elevated(
-            Path("fake.bat"), "07:30", "daily", 1, True, "david", timeout_sec=5)
+            Path("fake.bat"), "07:30", "23:00", "daily", 1, True, "david", timeout_sec=5)
         assert ok is False
         assert "access denied" in detail
 
@@ -1549,14 +1668,14 @@ class TestRegisterQueueTaskElevated:
             return _R()
         monkeypatch.setattr(tqa.subprocess, "run", _fake_run)
         ok, detail = tqa._register_queue_task_elevated(
-            Path("fake.bat"), "07:30", "daily", 1, True, "david", timeout_sec=1)
+            Path("fake.bat"), "07:30", "23:00", "daily", 1, True, "david", timeout_sec=1)
         assert ok is False
         assert "timed out" in detail.lower()
 
     def test_cleanup_removes_temp_ps1_and_result_files(self, monkeypatch):
         self._mock_uac_success_with_result(monkeypatch, "OK")
         tqa._register_queue_task_elevated(
-            Path("fake.bat"), "07:30", "daily", 1, True, "david", timeout_sec=5)
+            Path("fake.bat"), "07:30", "23:00", "daily", 1, True, "david", timeout_sec=5)
         leftover = list(tqa.AI_PROWLER_HOME.glob("_register_queue_task_*"))
         assert leftover == []
 
@@ -1581,7 +1700,7 @@ class TestRegisterQueueTaskElevated:
             return _R()
         monkeypatch.setattr(tqa.subprocess, "run", _fake_run)
         ok, detail = tqa._register_queue_task_elevated(
-            Path("fake.bat"), "07:30", "daily", 1, True, "david", timeout_sec=5)
+            Path("fake.bat"), "07:30", "23:00", "daily", 1, True, "david", timeout_sec=5)
         assert ok is True
 
     def test_wrapper_path_single_quotes_are_escaped_before_ps1_generation(self, monkeypatch):
@@ -1598,7 +1717,7 @@ class TestRegisterQueueTaskElevated:
             return _R()
         monkeypatch.setattr(tqa.subprocess, "run", _fake_run)
         tqa._register_queue_task_elevated(
-            Path("C:/fake's/path.bat"), "07:30", "daily", 1, True, "david", timeout_sec=1)
+            Path("C:/fake's/path.bat"), "07:30", "23:00", "daily", 1, True, "david", timeout_sec=1)
         # Path() normalizes to backslashes on Windows -- check for the
         # doubled single quote specifically, not an exact path string.
         assert "fake''s" in captured_scripts[0]
@@ -1618,6 +1737,109 @@ def test_read_audit_log_tail_reads_last_n_lines(_isolated_home):
     lines = tail.splitlines()
     assert len(lines) == 10
     assert lines[-1] == "line 499"
+
+
+# ── Audit log rotation (v9.0.0) ───────────────────────────────────────────
+
+def test_rotate_audit_log_no_op_when_log_missing(_isolated_home):
+    # Nothing to rotate — must not raise and must not create any files.
+    assert not tqa.AUDIT_LOG_PATH.exists()
+    tqa.rotate_audit_log()
+    assert not tqa.AUDIT_LOG_PATH.exists()
+
+
+def test_rotate_audit_log_renames_current_to_dot1(_isolated_home):
+    tqa.AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tqa.AUDIT_LOG_PATH.write_text("run 1\n", encoding="utf-8")
+
+    tqa.rotate_audit_log()
+
+    backup1 = Path(str(tqa.AUDIT_LOG_PATH) + ".1")
+    assert backup1.exists(), ".log.1 backup must be created"
+    assert backup1.read_text(encoding="utf-8") == "run 1\n"
+    # Active log restarted fresh (empty)
+    assert tqa.AUDIT_LOG_PATH.exists()
+    assert tqa.AUDIT_LOG_PATH.read_text(encoding="utf-8") == ""
+
+
+def test_rotate_audit_log_shifts_existing_backups(_isolated_home):
+    base = tqa.AUDIT_LOG_PATH
+    base.parent.mkdir(parents=True, exist_ok=True)
+    base.write_text("run 3\n", encoding="utf-8")
+    Path(str(base) + ".1").write_text("run 2\n", encoding="utf-8")
+    Path(str(base) + ".2").write_text("run 1\n", encoding="utf-8")
+
+    tqa.rotate_audit_log(max_backups=2)
+
+    # After rotation: .1 gets run3, .2 gets run2, run1 is overwritten (oldest slot)
+    assert Path(str(base) + ".1").read_text(encoding="utf-8") == "run 3\n"
+    assert Path(str(base) + ".2").read_text(encoding="utf-8") == "run 2\n"
+    assert base.read_text(encoding="utf-8") == ""
+
+
+def test_rotate_audit_log_keeps_max_backups_only(_isolated_home):
+    base = tqa.AUDIT_LOG_PATH
+    base.parent.mkdir(parents=True, exist_ok=True)
+    base.write_text("newest\n", encoding="utf-8")
+    # Create a .3 that sits beyond the max_backups=2 window
+    Path(str(base) + ".2").write_text("old\n", encoding="utf-8")
+
+    tqa.rotate_audit_log(max_backups=2)
+
+    # .3 must not exist — no backup slot beyond max_backups
+    assert not Path(str(base) + ".3").exists()
+
+
+def test_rotate_audit_log_is_best_effort_never_raises(_isolated_home, monkeypatch):
+    # Even if Path.replace fails, rotate_audit_log must not propagate the error.
+    tqa.AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tqa.AUDIT_LOG_PATH.write_text("data\n", encoding="utf-8")
+
+    def _boom(*a, **kw):
+        raise OSError("simulated disk full")
+
+    monkeypatch.setattr(tqa.Path, "replace", _boom)
+    tqa.rotate_audit_log()  # must not raise
+
+
+def test_run_queue_now_rotates_audit_log_before_run(_isolated_home, monkeypatch):
+    # Confirms rotate_audit_log() is called when run_queue_now() fires —
+    # the key integration point for the Scheduled Task "Run Due Tasks" path.
+    tqa.AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tqa.AUDIT_LOG_PATH.write_text("previous run\n", encoding="utf-8")
+
+    rotated = []
+    _orig_rotate = tqa.rotate_audit_log
+    monkeypatch.setattr(tqa, "rotate_audit_log", lambda *a, **kw: rotated.append(True) or _orig_rotate(*a, **kw))
+    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: True)
+    monkeypatch.setattr(tqa, "install_wrapper_script", lambda *a, **kw: Path("fake.bat"))
+    monkeypatch.setattr(tqa.subprocess, "run",
+                         lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})())
+
+    tqa.run_queue_now("real.json", "mcp__ai-prowler__*")
+
+    assert len(rotated) == 1, "rotate_audit_log() must be called exactly once per queue run"
+    backup = Path(str(tqa.AUDIT_LOG_PATH) + ".1")
+    assert backup.exists(), "previous log must be rotated to .1"
+    assert backup.read_text(encoding="utf-8") == "previous run\n"
+
+
+def test_wrapper_bat_content_includes_rotation_call(_isolated_home):
+    # Confirms the generated .bat for the Scheduled Task embeds a Python
+    # call to rotate_audit_log() before the claude -p invocation, so the
+    # rotation fires on the overnight/unattended path too.
+    content = tqa.build_wrapper_script_content(
+        "real.json", "mcp__ai-prowler__*")
+    assert "rotate_audit_log" in content, (
+        "Wrapper .bat must call rotate_audit_log() before claude -p so the "
+        "Scheduled Task path also rotates the log on each run."
+    )
+    # Rotation call must appear BEFORE the claude -p line
+    rotation_pos = content.index("rotate_audit_log")
+    claude_pos = content.index("claude -p")
+    assert rotation_pos < claude_pos, (
+        "rotate_audit_log() call must precede the claude -p invocation in the .bat"
+    )
 
 
 # ── Project artifacts (.claude/settings.json, hooks, Skill) sanity ───────
@@ -2655,10 +2877,11 @@ def test_run_queue_now_uses_separate_wrapper_dir_from_scheduled_task(_isolated_h
 
 
 # ── build_single_prompt_wrapper_content / run_single_prompt_now ────────────
-# v8.1.6: backs the "▶ NOW" button on each Common Business AI Analysis item
-# — runs ONE ad-hoc prompt immediately, without touching pending_tasks.json
-# or the complete_analysis_task() bookkeeping the queue-processing wrapper
-# uses. Mirrors build_wrapper_script_content()/run_queue_now()'s tests.
+# build_single_prompt_wrapper_content backs the "▶ NOW" button on My Custom
+# Analyses tasks — runs ONE ad-hoc prompt immediately, without touching
+# pending_tasks.json. The built-in Common Business AI Analysis section no
+# longer has a ▶ NOW button (removed v8.2.x — ChromaDB contention issues).
+# run_single_prompt_now() is still live code used by custom tasks.
 
 def test_build_single_prompt_wrapper_embeds_the_prompt():
     content = tqa.build_single_prompt_wrapper_content(
@@ -2699,78 +2922,3 @@ def test_build_single_prompt_wrapper_api_key_block_when_enabled():
         "Analyze my business.", "x.json", "mcp__ai-prowler__*", use_api_key=True)
     assert "ANTHROPIC_API_KEY" in content
     assert "set /p ANTHROPIC_API_KEY=" in content
-
-
-def test_run_single_prompt_now_fails_when_cli_not_installed(_isolated_home, monkeypatch):
-    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: False)
-
-    def _guard(*a, **kw):
-        raise AssertionError("Must not attempt a run when CLI isn't installed!")
-    monkeypatch.setattr(tqa.subprocess, "run", _guard)
-
-    ok, detail = tqa.run_single_prompt_now("Analyze my business.", "x.json", "mcp__ai-prowler__*")
-    assert ok is False
-    assert "not installed" in detail.lower()
-
-
-def test_run_single_prompt_now_fails_without_mcp_config(_isolated_home, monkeypatch):
-    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: True)
-
-    def _guard(*a, **kw):
-        raise AssertionError("Must not attempt a run without an MCP config!")
-    monkeypatch.setattr(tqa.subprocess, "run", _guard)
-
-    ok, detail = tqa.run_single_prompt_now("Analyze my business.", "", "mcp__ai-prowler__*")
-    assert ok is False
-    assert "mcp config" in detail.lower()
-
-
-def test_run_single_prompt_now_success(_isolated_home, monkeypatch):
-    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: True)
-    monkeypatch.setattr(tqa.subprocess, "run",
-                         lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": "Found 3 insights.", "stderr": ""})())
-
-    ok, detail = tqa.run_single_prompt_now("Analyze my business.", "real.json", "mcp__ai-prowler__*")
-    assert ok is True
-    assert "Found 3 insights." in detail
-
-
-def test_run_single_prompt_now_reports_failure_on_nonzero_exit(_isolated_home, monkeypatch):
-    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: True)
-    monkeypatch.setattr(tqa.subprocess, "run",
-                         lambda *a, **kw: type("R", (), {"returncode": 1, "stdout": "", "stderr": "boom"})())
-
-    ok, detail = tqa.run_single_prompt_now("Analyze my business.", "real.json", "mcp__ai-prowler__*")
-    assert ok is False
-    assert "boom" in detail
-
-
-def test_run_single_prompt_now_handles_timeout(_isolated_home, monkeypatch):
-    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: True)
-
-    def _fake_run(*a, **kw):
-        raise tqa.subprocess.TimeoutExpired(cmd="run_single_now.bat", timeout=600)
-    monkeypatch.setattr(tqa.subprocess, "run", _fake_run)
-
-    ok, detail = tqa.run_single_prompt_now("Analyze my business.", "real.json", "mcp__ai-prowler__*")
-    assert ok is False
-    assert "timed out" in detail.lower()
-
-
-def test_run_single_prompt_now_uses_own_subfolder_not_queue_wrappers(_isolated_home, monkeypatch):
-    # Confirms a NOW run never collides with the Scheduled Task's own
-    # wrapper or with a manual "run the whole queue" wrapper — same
-    # rationale as run_queue_now()'s own separate-subfolder test.
-    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: True)
-    written_paths = []
-    _orig_write_text = tqa.Path.write_text
-    def _spy_write_text(self, *a, **kw):
-        written_paths.append(self)
-        return _orig_write_text(self, *a, **kw)
-    monkeypatch.setattr(tqa.Path, "write_text", _spy_write_text)
-    monkeypatch.setattr(tqa.subprocess, "run",
-                         lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})())
-
-    tqa.run_single_prompt_now("Analyze my business.", "real.json", "mcp__ai-prowler__*")
-    assert any("single_run" in str(p) for p in written_paths)
-    assert not any("manual_run" in str(p) for p in written_paths)

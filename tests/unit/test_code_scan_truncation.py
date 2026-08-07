@@ -265,7 +265,7 @@ def test_F_CODE_08_csv_file_over_500_rows_is_not_truncated(isolated_env):
 # ──────────────────────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("ext", [
     ".py", ".js", ".ts", ".java", ".cs", ".cpp", ".go", ".rs",
-    ".sh", ".ps1", ".css", ".sql", ".rb", ".php",
+    ".sh", ".ps1", ".rb", ".php",
 ])
 def test_F_CODE_09_truncation_applies_across_program_extensions(isolated_env, ext):
     """Spot-check a broad sample of CODE_SCAN_EXTENSIONS members — not just
@@ -285,6 +285,44 @@ def test_F_CODE_09_truncation_applies_across_program_extensions(isolated_env, ex
     assert "x = 500" in data["content"]
     assert "x = 700" not in data["content"], (
         f"{ext} file leaked content past the 500-line cap"
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# F-CODE-09b — .css/.scss/.sass/.less/.sql are fully chunked, NOT code-scanned
+# ──────────────────────────────────────────────────────────────────────────────
+# These five were removed from CODE_SCAN_EXTENSIONS (were previously code-scan-
+# only, same as .py/.js/etc.) on the reasoning that stylesheets are design
+# documentation and .sql files are schema/query documentation, not executables
+# — users index these to ask "what tables exist" or "what does this class do",
+# which needs full semantic chunking, not a 500-line security-scan blob. See
+# CODE_SCAN_EXTENSIONS's own comment in rag_preprocessor.py for the full list
+# of intentional exclusions. F-CODE-09 above already proves these are NOT in
+# the parametrize list; this test positively proves what DOES happen to them
+# instead, so the exclusion has real behavioral coverage, not just an absence.
+@pytest.mark.parametrize("ext", [".css", ".scss", ".sass", ".less", ".sql"])
+def test_F_CODE_09b_stylesheet_and_sql_extensions_fully_chunked_not_scanned(
+        isolated_env, ext):
+    """A .css/.scss/.sass/.less/.sql file over 700 lines must be indexed in
+    full — no "[SECURITY SCAN ONLY]" header, no 500-line cap — the same as
+    any other document format (see F-CODE-08's identical guarantee for CSV)."""
+    rag = isolated_env.rag
+    f = _make_numbered_lines_file(
+        isolated_env.sample_root / f"sample{ext}", n_lines=700, line_prefix="x =")
+
+    data = rag.load_file(str(f))
+    assert data is not None, f"load_file returned None for {ext}"
+
+    assert "[SECURITY SCAN ONLY" not in data["content"], (
+        f"{ext} file incorrectly received the code-scan header — it was "
+        f"removed from CODE_SCAN_EXTENSIONS and must be fully chunked"
+    )
+    assert "x = 700" in data["content"], (
+        f"{ext} file content beyond line 500 is missing — the code-scan cap "
+        f"is incorrectly still applying to this extension"
+    )
+    assert ext not in rag.CODE_SCAN_EXTENSIONS, (
+        f"{ext} unexpectedly present in CODE_SCAN_EXTENSIONS"
     )
 
 

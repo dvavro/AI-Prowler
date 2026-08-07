@@ -23,6 +23,23 @@ def _today() -> str:
 def _now_str() -> str:
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
 
+def _due_date_prefix(t: dict, fallback: str = "") -> str:
+    """Return a task's due-date string, truncated to a YYYY-MM-DD prefix,
+    falling back from next_due -> created_at -> fallback.
+
+    dict.get(key, default) only substitutes default when the key is
+    MISSING from the dict -- a key that's PRESENT but explicitly None
+    (the normal state for a one-shot/manual-only task with no schedule,
+    e.g. custom_tasks_manager.create_task(..., schedule="none") stores
+    next_due=None) sails straight through unchanged. The old inline
+    `t.get("next_due", t.get("created_at", ""))[:10]` pattern crashed with
+    "'NoneType' object is not subscriptable" the moment such a task showed
+    up in the pending queue -- this treats a None value the same as a
+    missing key at every step of the fallback chain.
+    """
+    value = t.get("next_due") or t.get("created_at") or fallback
+    return (value or "")[:10]
+
 def _footer() -> str:
     return f"<hr><p style='color:gray;font-size:11px'>AI-Prowler Proactive Alert · {_now_str()}</p>"
 
@@ -278,7 +295,7 @@ def job_morning_briefing(config: dict):
         # Due analysis tasks
         tasks = [t for t in _pending_tasks()
                  if t.get("status") == "pending"
-                 and t.get("next_due", t.get("created_at",""))[:10] <= _today()]
+                 and _due_date_prefix(t) <= _today()]
         if tasks:
             parts.append(f"<h3>🧠 Analysis Tasks Due ({len(tasks)})</h3><ul>")
             for t in tasks:
@@ -318,13 +335,13 @@ def job_due_analysis_tasks(config: dict):
     try:
         due = [t for t in _pending_tasks()
                if t.get("status") == "pending"
-               and t.get("next_due", t.get("created_at",""))[:10] <= _today()]
+               and _due_date_prefix(t) <= _today()]
         if not due:
             return None
         parts = [f"<h2>🧠 {len(due)} Analysis Task(s) Due</h2><ul>"]
         for t in due:
             parts.append(f"<li><b>{t.get('label','?')}</b> "
-                         f"(due: {t.get('next_due','?')[:10]}, "
+                         f"(due: {_due_date_prefix(t, fallback='?')}, "
                          f"schedule: {t.get('schedule','?')})</li>")
         parts += ["</ul>",
                   "<p><b>Open Claude and press Ctrl+V to run all pending tasks.</b></p>",

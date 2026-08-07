@@ -204,7 +204,35 @@ DEFAULT_CONFIG = {
     # configs (which predate these keys) get these via the load_config()
     # merge and see zero behavior change until explicitly customized.
     "check_mode": "daily",          # "daily" or "interval"
-    "check_interval_hours": 1,      # only used when check_mode == "interval"
+    "check_interval_hours": 1,      # DEPRECATED as of v9.0.1 — retained only
+                                     # so pre-v9.0.1 configs still load/merge
+                                     # cleanly. New code reads/writes
+                                     # check_times_per_day instead (below).
+    "schedule_end_time": "23:00",   # 24h HH:MM. v9.0.1: only used when
+                                     # check_times_per_day > 1 — paired with
+                                     # schedule_time (the start) to define
+                                     # the [start, end] range that
+                                     # check_times_per_day checks get evenly
+                                     # spread across, via the exact same
+                                     # custom_tasks_manager.compute_daily_
+                                     # run_times() algorithm the My Custom AI
+                                     # Analyses / Common Business AI Analysis
+                                     # editors already use for the same
+                                     # "Start time / End time / Times per
+                                     # day" pattern — so the two features
+                                     # behave identically and can't drift out
+                                     # of sync with each other.
+    "check_times_per_day": 1,       # v9.0.1: canonical, lossless storage of
+                                     # "Check queue: N times/day" — replaces
+                                     # the old check_interval_hours=round(24/N)
+                                     # round-trip, which silently distorted N
+                                     # for any value that doesn't divide 24
+                                     # evenly (e.g. 5x/day became a 5-hour
+                                     # interval — round(24/5)=5 — not the 5
+                                     # evenly-spaced checks actually asked
+                                     # for), compounded further by the
+                                     # interval-trigger anchor bug this whole
+                                     # redesign replaces.
     "active_days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
     "active_start_time": "00:00",   # only enforced when check_mode == "interval"
     "active_end_time": "23:59",     # only enforced when check_mode == "interval"
@@ -484,6 +512,11 @@ echo. >> "%USERPROFILE%\.ai-prowler\command_debug.log"
 echo ================================================================ >> "%USERPROFILE%\.ai-prowler\command_debug.log"
 echo [%date% %time%] SCHEDULED QUEUE RUN -- full script below: >> "%USERPROFILE%\.ai-prowler\command_debug.log"
 type "%~f0" >> "%USERPROFILE%\.ai-prowler\command_debug.log"
+
+REM v9.0.0: rotate the audit log before each run so it never grows without
+REM bound. Two backup files kept: .log.1 (previous run) and .log.2 (oldest).
+REM Best-effort — failure is silently ignored so it never blocks the run.
+"{_get_python_exe()}" -c "import sys; sys.path.insert(0,r'{str(LOCAL_MCP_SCRIPT_PATH.parent)}'); import task_queue_automation as _tqa; _tqa.rotate_audit_log()" >nul 2>&1
 
 {api_key_block}claude -p "{prompt}" ^
   --mcp-config "{mcp_config_path}" ^
@@ -1245,6 +1278,93 @@ def _add_to_user_path(new_dir: Path) -> bool:
         return False
 
 
+# ── Audit log rotation (v9.0.0) ─────────────────────────────────────────────
+
+def rotate_audit_log(max_backups: int = 2) -> None:
+    """Rotate autonomous_run_audit.log before each Task Queue run.
+
+    Keeps up to max_backups numbered backup files (.log.1, .log.2) so the
+    active log never grows without bound while preserving recent history.
+    Rotation scheme (same as Python's RotatingFileHandler):
+        autonomous_run_audit.log.2  ← oldest, overwritten each rotation
+        autonomous_run_audit.log.1  ← previous run
+        autonomous_run_audit.log    ← current (just started) run
+
+    Best-effort — never raises. A failure here must never prevent the
+    actual queue run from starting.
+    """
+    try:
+        base = AUDIT_LOG_PATH
+        if not base.exists():
+            return  # Nothing to rotate yet
+
+        # Shift existing backups up by one (oldest is silently overwritten)
+        for i in range(max_backups, 0, -1):
+            src = Path(str(base) + f".{i}")
+            dst = Path(str(base) + f".{i + 1}") if i < max_backups else None
+            if dst is not None and src.exists():
+                try:
+                    src.replace(dst)
+                except Exception:
+                    pass
+
+        # Rotate current log → .1
+        rotated = Path(str(base) + ".1")
+        try:
+            base.replace(rotated)
+        except Exception:
+            pass
+        # Start fresh (touch, so the next append has somewhere to go)
+        try:
+            base.write_text("", encoding="utf-8")
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+# ── Jobs directory purge (v9.0.0) ───────────────────────────────────────────
+
+def purge_old_jobs(max_age_days: int = 3) -> None:
+    """Delete job files from ~/.ai-prowler/jobs/ older than max_age_days.
+
+    Each job produces two files: <job_id>.json (manifest) and <job_id>.log
+    (stdout/stderr). Both are removed together whenever the manifest is older
+    than the retention window. Only completed/failed/timed-out jobs are
+    purged — any manifest whose status is still "running" is left alone so a
+    slow in-progress job is never interrupted by cleanup.
+
+    Called from run_script_start() so cleanup happens automatically on each
+    new job launch. Best-effort — never raises, never blocks.
+    """
+    try:
+        import time as _time
+        jobs_dir = AI_PROWLER_HOME / "jobs"
+        if not jobs_dir.exists():
+            return
+        cutoff = _time.time() - (max_age_days * 86400)
+        import json as _j
+        for mani_path in jobs_dir.glob("*.json"):
+            try:
+                if mani_path.stat().st_mtime >= cutoff:
+                    continue  # Recent enough — keep it
+                # Leave running jobs alone
+                try:
+                    mani = _j.loads(mani_path.read_text(encoding="utf-8"))
+                    if mani.get("status") == "running":
+                        continue
+                except Exception:
+                    pass  # Unreadable manifest — purge it anyway
+                # Remove manifest and matching log together
+                mani_path.unlink(missing_ok=True)
+                log_path = mani_path.with_suffix(".log")
+                log_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def run_queue_now(mcp_config_path: str, allowed_tools: str,
                    use_api_key: bool = False,
                    notify_on_complete: bool = False,
@@ -1287,6 +1407,10 @@ def run_queue_now(mcp_config_path: str, allowed_tools: str,
         return False, ("No MCP config is set up yet. Click 'Generate MCP "
                         "Config' in the 🤖 Autonomous AI Task Queue panel above, "
                         "then try again.")
+
+    # v9.0.0: rotate the audit log before each queue run so it never grows
+    # without bound. Best-effort — never prevents the run.
+    rotate_audit_log()
 
     wrapper_dir = AI_PROWLER_HOME / "manual_run"
     wrapper_path = install_wrapper_script(
@@ -1755,6 +1879,58 @@ def open_setup_token_terminal() -> tuple[bool, str]:
 
 
 
+def compute_next_checker_run(schedule_time: str, schedule_end_time: str,
+                              times_per_day: int,
+                              now: datetime | None = None) -> datetime:
+    """v9.0.1: compute the checker's true next-run datetime PURELY LOCALLY,
+    from its own Start time / End time / Times per day config and the real
+    current date/time — no schtasks query, no subprocess call, no I/O at
+    all. Safe (and cheap enough) to call as often as needed.
+
+    This works because we already know exactly which HH:MM times get
+    registered as Windows Daily triggers — the identical
+    custom_tasks_manager.compute_daily_run_times() call
+    _build_register_queue_task_ps1() uses to build those triggers in the
+    first place. Given that same list of times, "what's the next
+    occurrence from right now" is a pure calendar calculation: walk
+    forward through today's remaining slots, and if none are left, take
+    the first slot tomorrow.
+
+    Found live: David set Start=08:30 (once/day), the checker fired
+    successfully at 8:30 AM, and the "Armed" line kept showing "next: 8/7"
+    instead of advancing to 8/8. Windows itself DID correctly advance its
+    own internal state — that's exactly what a plain Daily trigger always
+    does — but get_scheduled_task_display_info() (which reported that
+    state) is only ever called on explicit GUI actions (Apply, Toggle,
+    etc.), never on a timer, so the displayed text was simply stale. This
+    function replaces the schtasks-sourced value entirely for display
+    purposes, and because it's pure computation (not a subprocess call),
+    it can safely be recomputed on a lightweight GUI timer without the
+    risk profile that got an earlier schtasks-query-based periodic
+    refresh removed (see rag_gui.py's _tqa_refresh_status_display()
+    history for that incident — this doesn't reintroduce it).
+
+    now defaults to datetime.now() — overridable for tests.
+    """
+    now = now or datetime.now()
+    n = max(1, int(times_per_day))
+    import custom_tasks_manager as _ctm_next
+    run_times = _ctm_next.compute_daily_run_times(
+        schedule_time, schedule_end_time, n)
+
+    today = now.date()
+    for t in run_times:
+        hh, mm = (int(p) for p in t.split(":"))
+        candidate = datetime(today.year, today.month, today.day, hh, mm)
+        if candidate > now:
+            return candidate
+
+    # Every slot today has already passed — first slot tomorrow.
+    tomorrow = today + timedelta(days=1)
+    hh, mm = (int(p) for p in run_times[0].split(":"))
+    return datetime(tomorrow.year, tomorrow.month, tomorrow.day, hh, mm)
+
+
 def get_scheduled_task_display_info() -> dict:
     """v8.1.11: real, OS-level truth about the actual armed Windows
     Scheduled Task — not what the GUI's config file says should be true,
@@ -1764,19 +1940,40 @@ def get_scheduled_task_display_info() -> dict:
     Toggle Off can be visually confirmed as genuinely having disarmed the
     real task, not just flipped a local config flag.
 
+    v9.0.1: the human-readable "cadence" half of `display` (e.g. "Daily at
+    07:00" or "3x/day (07:00, 15:00, 23:00)") is now computed from OUR OWN
+    saved config via load_config() + compute_daily_run_times(), not from
+    schtasks's Schedule Type / Start Time / Repeat fields. Those fields
+    can't cleanly describe the new multi-trigger design (N times/day now
+    registers as several independent -Daily triggers; schtasks's simple
+    `/v /fo list` query reports something unhelpful like "Schedule Type:
+    Multiple Triggers" for a task like that, with no per-trigger
+    breakdown). `next_run_time` below is UNCHANGED — still read straight
+    from schtasks, still genuine OS truth: Windows itself correctly
+    computes the true soonest occurrence across however many triggers are
+    registered, regardless of how unhelpfully schtasks describes the
+    schedule type in English. schedule_type/start_time/repeat_every are
+    still parsed and returned in the info dict below (unchanged) for
+    anyone who wants the raw schtasks fields directly — only `display`
+    itself stopped depending on them for the cadence description.
+
     Returns a dict:
         exists:   bool
         enabled:  bool | None (None if it doesn't exist)
-        schedule_type: str | None  ("Daily", "Hourly", etc. as schtasks
-                       itself reports it)
+        schedule_type: str | None  ("Daily", "Multiple Triggers", etc. as
+                       schtasks itself reports it — informational only,
+                       no longer used to build `display`)
         start_time: str | None    ("Start Time" field, HH:MM:SS as
-                       schtasks reports it)
+                       schtasks reports it — informational only)
         repeat_every: str | None  ("Repeat: Every" field, when present —
-                       only set for interval/hourly-mode tasks)
-        next_run_time: str | None ("Next Run Time" field)
+                       informational only; the new multi-trigger design
+                       never sets this, it's legacy/only relevant to a
+                       pre-v9.0.1 task that hasn't been re-Applied yet)
+        next_run_time: str | None ("Next Run Time" field — still genuine
+                       OS truth, used in `display`)
         display: str               a single human-readable summary line,
                        ready to drop straight into the GUI, e.g.
-                       "🟢 Armed — Daily at 6:00 AM (next: 7/27/2026 6:00 AM)"
+                       "🟢 Armed — Daily at 07:00 (next: 7/27/2026 6:00 AM)"
                        or "🔴 Not armed" if disabled/missing.
     """
     info = {
@@ -1829,14 +2026,41 @@ def get_scheduled_task_display_info() -> dict:
         info["display"] = "🔴 Not armed" + (" (disabled)" if info["enabled"] is False else "")
         return info
 
-    if info["repeat_every"] and info["repeat_every"] not in ("Disabled", ""):
-        cadence = f"every {info['repeat_every']}"
-    elif info["start_time"]:
-        cadence = f"{info['schedule_type'] or 'Daily'} at {info['start_time']}"
+    cfg = load_config()
+    n = max(1, int(cfg.get("check_times_per_day", 1) or 1))
+    start = cfg.get("schedule_time", "06:00")
+    end = cfg.get("schedule_end_time", "23:00")
+    if n <= 1:
+        cadence = f"Daily at {start}"
     else:
-        cadence = info["schedule_type"] or "scheduled"
+        try:
+            import custom_tasks_manager as _ctm_disp
+            run_times = _ctm_disp.compute_daily_run_times(start, end, n)
+            cadence = f"{n}x/day ({', '.join(run_times)})"
+        except Exception:
+            # Malformed start/end in the saved config (shouldn't happen —
+            # the GUI validates before saving) — fall back to something
+            # still informative rather than a blank cadence.
+            cadence = f"{n}x/day ({start}-{end})"
 
-    next_run = f" (next: {info['next_run_time']})" if info["next_run_time"] else ""
+    # v9.0.1: "next:" now comes from compute_next_checker_run() — a pure
+    # local calculation from our own config + the real current time — not
+    # from schtasks's own Next Run Time field. Windows' own state is
+    # correct (a plain Daily trigger always advances itself right after
+    # firing); the problem was this whole function only ever being called
+    # on explicit GUI actions, so the OLD schtasks-sourced value could sit
+    # stale for a full day after a run. See compute_next_checker_run()'s
+    # docstring for the full incident. Falls back to the schtasks-reported
+    # value only if our own computation fails outright (malformed config).
+    # No seconds in the format — every trigger we register is HH:MM only,
+    # so seconds are always :00 and would just be noise.
+    try:
+        next_dt = compute_next_checker_run(start, end, n)
+        info["next_run_time_computed"] = next_dt.isoformat()
+        next_run = f" (next: {next_dt.strftime('%#m/%#d/%Y %#I:%M %p')})"
+    except Exception:
+        next_run = f" (next: {info['next_run_time']})" if info["next_run_time"] else ""
+
     info["display"] = f"🟢 Armed — {cadence}{next_run}"
     return info
 
@@ -2079,8 +2303,8 @@ def scheduled_task_enabled() -> bool | None:
 
 
 def _build_register_queue_task_ps1(wrapper_script_path: str, schedule_time: str,
-                                    check_mode: str, check_interval_hours: int,
-                                    username: str, enabled: bool,
+                                    schedule_end_time: str, check_mode: str,
+                                    times_per_day: int, username: str, enabled: bool,
                                     result_file: str) -> str:
     """Returns a PowerShell script that (re)registers SCHEDULED_TASK_NAME
     with a genuine S4U principal via the ScheduledTasks module — the
@@ -2090,13 +2314,41 @@ def _build_register_queue_task_ps1(wrapper_script_path: str, schedule_time: str,
     (PowerShell's own escaping convention) — Windows paths essentially
     never contain them, but this is defensive correctness, not a fix for
     an observed problem.
+
+    v9.0.1 REDESIGN — check_mode == "interval" no longer means "fire every
+    N hours around the clock" (an hour-repetition trigger anchored at
+    Get-Date, which silently ignored schedule_time and — worse — baked
+    whatever arbitrary seconds Apply happened to be clicked at into every
+    future occurrence forever; see the incident this replaced for the full
+    story). It now means "fire at exactly `times_per_day` times, evenly
+    spread across [schedule_time, schedule_end_time]" — computed by
+    custom_tasks_manager.compute_daily_run_times(), the EXACT SAME function
+    the My Custom AI Analyses and Common Business AI Analysis editors use
+    for their own Start time / End time / Times per day fields, so this
+    panel's "Check queue: N times/day" behaves identically to those and
+    the two features can never drift out of sync with each other. Each
+    computed time becomes its own plain `-Daily -At 'HH:MM'` trigger
+    (registered together as an array via `-Trigger`) — a Daily trigger's
+    time-of-day never drifts, sidestepping the whole class of anchor-drift
+    bug the old repetition-based approach was vulnerable to.
     """
     if check_mode == "interval":
-        trigger_block = (
-            "$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) "
-            f"-RepetitionInterval (New-TimeSpan -Hours {max(1, int(check_interval_hours))}) "
-            "-RepetitionDuration (New-TimeSpan -Days 3650)"
+        n = max(1, int(times_per_day))
+        try:
+            import custom_tasks_manager as _ctm_trig
+            run_times = _ctm_trig.compute_daily_run_times(
+                schedule_time, schedule_end_time, n)
+        except Exception:
+            # Malformed start/end (shouldn't happen — the GUI validates
+            # before calling in) — fall back to a single daily trigger
+            # rather than fail registration outright.
+            run_times = [schedule_time]
+        trigger_lines = "\n    ".join(
+            f"$t{i} = New-ScheduledTaskTrigger -Daily -At '{t}'"
+            for i, t in enumerate(run_times)
         )
+        trigger_array = ", ".join(f"$t{i}" for i in range(len(run_times)))
+        trigger_block = f"{trigger_lines}\n    $trigger = @({trigger_array})"
     else:
         trigger_block = f"$trigger = New-ScheduledTaskTrigger -Daily -At '{schedule_time}'"
 
@@ -2121,8 +2373,8 @@ try {{
 
 
 def _register_queue_task_elevated(wrapper_script_path: Path, schedule_time: str,
-                                   check_mode: str, check_interval_hours: int,
-                                   enabled: bool, username: str,
+                                   schedule_end_time: str, check_mode: str,
+                                   times_per_day: int, enabled: bool, username: str,
                                    timeout_sec: int = 30) -> tuple[bool, str]:
     """Runs _build_register_queue_task_ps1()'s script through the same
     one-time-UAC-prompt elevation pattern as grant_batch_logon_right() —
@@ -2136,7 +2388,7 @@ def _register_queue_task_elevated(wrapper_script_path: Path, schedule_time: str,
         ps1_path.write_text(
             _build_register_queue_task_ps1(
                 str(wrapper_script_path).replace("'", "''"), schedule_time,
-                check_mode, check_interval_hours, username, enabled,
+                schedule_end_time, check_mode, times_per_day, username, enabled,
                 str(result_file)),
             encoding="utf-8")
     except Exception as e:
@@ -2186,22 +2438,31 @@ def _register_queue_task_elevated(wrapper_script_path: Path, schedule_time: str,
 def install_scheduled_task(wrapper_script_path: Path, schedule_time: str,
                             enabled: bool = True,
                             check_mode: str = "daily",
-                            check_interval_hours: int = 1,
+                            schedule_end_time: str = "23:00",
+                            times_per_day: int = 1,
                             run_as_user: str = None) -> tuple[bool, str]:
     """Creates (or replaces) the Scheduled Task. `enabled=False` creates it
     DISABLED — used by the test harness below to prove the mechanism works
     without leaving anything live.
 
-    v8.1.11: check_mode/check_interval_hours control the OS-level trigger
-    type. "daily" (default, matches all prior behavior) fires once a day
-    at schedule_time. "interval" fires every check_interval_hours hours,
-    around the clock — day-of-week and time-of-day restrictions for
-    interval mode are DELIBERATELY NOT expressed here as OS trigger
-    constraints (schtasks.exe's simple CLI can't cleanly combine an hourly
-    repetition with day-of-week + time-window filtering — that requires a
-    full XML task definition). Instead, that filtering happens inside the
+    v8.1.11, redesigned v9.0.1: check_mode/schedule_end_time/times_per_day
+    control the OS-level trigger(s). "daily" (default, matches all prior
+    behavior) fires once a day at schedule_time. "interval" fires exactly
+    `times_per_day` times, evenly spread across [schedule_time,
+    schedule_end_time] via custom_tasks_manager.compute_daily_run_times() —
+    the SAME function the My Custom AI Analyses / Common Business AI
+    Analysis editors use for their own Start/End/Times-per-day fields.
+    Each computed time is registered as its own genuine `-Daily -At`
+    trigger, so none of them can drift the way the old single hour-
+    repetition trigger did (see _build_register_queue_task_ps1()'s
+    docstring for that incident).
+
+    Day-of-week restriction (active_days) still isn't expressible as an OS
+    trigger constraint via this mechanism (Register-ScheduledTask CAN
+    express it via -DaysOfWeek, but that's left as a possible future
+    tightening rather than done here) — it's still enforced inside the
     generated wrapper script itself (see build_wrapper_script_content()'s
-    active-window self-check) — simpler to build correctly and far easier
+    active-window self-check), simpler to build correctly and far easier
     to unit-test as plain string content than to validate real Task
     Scheduler XML/state.
 
@@ -2268,8 +2529,8 @@ def install_scheduled_task(wrapper_script_path: Path, schedule_time: str,
     # UAC consent click each time the schedule is actually (re)created,
     # not just once ever like the rights grant.
     reg_ok, reg_detail = _register_queue_task_elevated(
-        wrapper_script_path, schedule_time, check_mode, check_interval_hours,
-        enabled, run_as_user)
+        wrapper_script_path, schedule_time, schedule_end_time, check_mode,
+        times_per_day, enabled, run_as_user)
     if not reg_ok:
         return False, reg_detail
 

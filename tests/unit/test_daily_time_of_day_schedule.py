@@ -403,8 +403,23 @@ class TestDueStatusLabelDailyTimeAware:
         assert ctm.due_status_label(task) == "⚡ Due now"
 
     def test_daily_due_later_today_shows_time(self, ctm):
-        future = (datetime.datetime.now() + datetime.timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%S")
-        task = {"schedule": "daily", "next_due": future}
+        """v9.0.1 fix: was a fixed 'now + 2 hours' offset, which flakes
+        whenever the test happens to run within 2 hours of midnight — that
+        offset genuinely lands on the NEXT calendar date, and
+        due_status_label() correctly says "Due tomorrow at ..." in that
+        case (see its date-comparison logic) — that's correct behavior,
+        not a bug, but this test's assumption that "+2 hours" is always
+        "later today" doesn't hold near midnight. Anchored to a point
+        strictly between now and 23:59 today instead, so it can never
+        cross into tomorrow no matter what time the suite happens to run."""
+        now = datetime.datetime.now()
+        end_of_today = datetime.datetime.combine(now.date(), datetime.time(23, 59, 0))
+        if end_of_today - now < datetime.timedelta(minutes=2):
+            pytest.skip("Test run too close to midnight for a meaningful "
+                        "'later today' offset")
+        future = now + (end_of_today - now) / 2
+        future_str = future.strftime("%Y-%m-%dT%H:%M:%S")
+        task = {"schedule": "daily", "next_due": future_str}
         result = ctm.due_status_label(task)
         assert result != "Unknown"
         assert "today at" in result

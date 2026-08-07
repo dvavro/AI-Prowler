@@ -10861,6 +10861,14 @@ def run_script_start(script_path: str, args: str = "",
     log_path  = str(_job_log_path(job_id))
     mani_path = str(_job_manifest_path(job_id))
 
+    # v9.0.0: purge job files older than 3 days so the jobs dir never
+    # accumulates indefinitely. Best-effort — failure never blocks the launch.
+    try:
+        from task_queue_automation import purge_old_jobs as _purge_jobs
+        _purge_jobs(max_age_days=3)
+    except Exception:
+        pass
+
     # Build the wrapper script that runs the target and updates the manifest.
     wrapper_src = f"""
 import subprocess, json, datetime, sys, os, signal
@@ -13739,7 +13747,8 @@ def reindex_file(filepath: str, ctx: Context = None) -> str:
             # continue — index_file_list still adds fresh chunks
         return index_file_list([resolved], label="reindex_file",
                                root_directory=str(Path(resolved).parent),
-                               indexer_user=_indexer_user_rf)
+                               indexer_user=_indexer_user_rf,
+                               force=True)  # bypass mtime skip — explicit reindex must always run
 
     try:
         stats = _db_write(_job, timeout=900.0)

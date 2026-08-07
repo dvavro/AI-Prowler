@@ -92,7 +92,7 @@ if sys.stderr is None:
 # Single source of truth for the app version. Bump this one line when releasing
 # a new version; all UI labels, About dialogs, help text, and update checks
 # read from here.
-APP_VERSION = "8.1.12"
+APP_VERSION = "9.0.0"
 
 # ── UI feature flags ─────────────────────────────────────────────────────────
 # Toggle visibility of advanced/legacy GUI sections without removing any
@@ -1213,10 +1213,10 @@ then ask Claude questions from your desktop or phone.
 ─────────────────────────────────────────────────
  COMMON BUSINESS AI ANALYSIS
 ─────────────────────────────────────────────────
-• 5 one-click analysis buttons (Quick Links tab)
+• 4 one-click analysis buttons (Quick Links tab)
 • Schedule recurring analyses — weekly, monthly, quarterly
 • QuickBooks-aware: uses QB if connected, Job Tracker if not
-• Queue for later, or ▶ NOW to run any analysis immediately
+• ▶ Queue to schedule; runs on the next Task Queue pass
 
 ─────────────────────────────────────────────────
  PROACTIVE ALERTS SCHEDULER
@@ -5865,8 +5865,7 @@ or from the Help menu."""
                 return
             self.status_var.set(
                 f"✅ {task_def['label']} queued — will run on the next "
-                f"scheduled Autonomous AI Task Queue pass, or click ▶ NOW "
-                f"to try it immediately.")
+                f"scheduled Autonomous AI Task Queue pass.")
             self.root.after(4000, lambda: self.status_var.set("Ready"))
             _refresh_queue_count()
             if _queue_expanded.get():
@@ -6239,74 +6238,12 @@ or from the Help menu."""
             self.status_var.set(f"✅ Settings saved for {task_def['label']}")
             self.root.after(3000, lambda: self.status_var.set("Ready"))
 
-        # v8.1.6: runs ONE analysis right now via Claude Code, without
-        # queuing it — see run_single_prompt_now()'s docstring. Uses the
-        # currently SAVED settings (scope/output/report folder), same as
-        # ▶ Queue, via _build_builtin_prompt() — previously used the raw
-        # unenriched task prompt, silently ignoring scope/output settings.
-        def _run_analysis_now(task_def, now_btn):
-            try:
-                import task_queue_automation as _tqa_now
-                import custom_tasks_manager as _ctm_now
-            except ImportError:
-                messagebox.showerror("Not Available",
-                                      "Required module not found.")
-                return
-            if not _tqa_now.claude_code_cli_installed():
-                messagebox.showwarning(
-                    "Claude Code Needed",
-                    "Running an analysis right now requires Claude Code CLI, "
-                    "which isn't installed yet.\n\nInstall it from the 🤖 "
-                    "Autonomous AI Task Queue panel above, or click ▶ Queue to "
-                    "save this analysis for the next scheduled run instead.")
-                return
-
-            _cfg_now = _tqa_now.load_config()
-            if not _cfg_now.get("mcp_config_path"):
-                messagebox.showwarning(
-                    "Setup Needed",
-                    "No MCP config is set up yet — see the 🤖 Autonomous "
-                    "Task Queue panel above (🧪 Test Setup (Dry Run) will "
-                    "show what's missing), then try again.")
-                return
-
-            settings = _ctm_now.get_builtin_analysis_settings(task_def["type"])
-            enriched_prompt = _build_builtin_prompt(task_def, settings)
-
-            orig_text = now_btn.cget("text")
-            now_btn.configure(state='disabled', text="⏳")
-            self.status_var.set(f"⏳ Running {task_def['label']} now via Claude Code…")
-
-            def _do_run():
-                # v8.1.14: no install_dir to compute/pass anymore —
-                # run_single_prompt_now() now always cd's into
-                # AI_PROWLER_HOME internally (see
-                # build_single_prompt_wrapper_content()'s docstring).
-                ok, detail = _tqa_now.run_single_prompt_now(
-                    enriched_prompt, _cfg_now.get("mcp_config_path", ""),
-                    _cfg_now.get("allowed_tools", "mcp__ai-prowler__*"),
-                    _cfg_now.get("use_api_key", False))
-
-                def _finish():
-                    now_btn.configure(state='normal', text=orig_text)
-                    if ok:
-                        messagebox.showinfo(
-                            "Run Complete",
-                            f"✅  {task_def['label']} finished.\n\n{detail[:500]}")
-                        self.status_var.set(f"✅ {task_def['label']} completed")
-                    else:
-                        messagebox.showerror("Run Failed", detail[:800])
-                        self.status_var.set("❌ Run failed")
-                    self.root.after(3000, lambda: self.status_var.set("Ready"))
-
-                self.root.after(0, _finish)
-
-            threading.Thread(target=_do_run, daemon=True).start()
-
-        # Full-width rows, matching My Custom Analyses' own layout — each
-        # analysis gets ▶ NOW / ▶ Queue / ✎ Edit on the right (no trash:
-        # these 5 are fixed, not user-deletable). Replaces the old 2-column
-        # grid of big colored buttons that opened a popup on every click.
+        # Full-width rows — each analysis gets ▶ Queue / ✎ Edit on the right
+        # (no trash: these 4 are fixed, not user-deletable).
+        # NOTE: ▶ NOW was removed in v8.2.x — the Claude Code CLI headless
+        # launch path was unreliable (ChromaDB contention, localhost:8000
+        # reachability issues) and has been retired. Use ▶ Queue to schedule
+        # the next run, or run from the 🤖 Task Queue panel.
         _an_list_frame = tk.Frame(_an_inner, bg='#1a2530')
         _an_list_frame.pack(fill='x', pady=(4, 0))
 
@@ -6352,13 +6289,6 @@ or from the Help menu."""
             btn_col = tk.Frame(row, bg='#0d1a26')
             btn_col.pack(side='right', padx=4, pady=4)
 
-            _now_b = tk.Button(btn_col, text="▶ NOW",
-                               bg='#2a2f45', fg='#e8ebf7',
-                               font=('Arial', 7, 'bold'),
-                               relief='flat', cursor='hand2')
-            _now_b.configure(command=lambda t=task_def, b=_now_b: _run_analysis_now(t, b))
-            _now_b.pack(fill='x', pady=1)
-
             tk.Button(btn_col, text="▶ Queue",
                       bg='#1a3a5a', fg='white',
                       font=('Arial', 7, 'bold'),
@@ -6386,7 +6316,6 @@ or from the Help menu."""
         self._an_list_frame        = _an_list_frame
         self._ANALYSIS_TASKS       = _ANALYSIS_TASKS
         self._queue_task_row       = _queue_task_row
-        self._run_analysis_now     = _run_analysis_now
         self._queue_builtin_task   = _queue_builtin_task
         self._build_builtin_prompt = _build_builtin_prompt
         self._open_builtin_editor  = _open_builtin_editor
@@ -6394,7 +6323,6 @@ or from the Help menu."""
         # Hint label
         tk.Label(_an_inner,
                  text="▶ Queue saves for the next Autonomous AI Task Queue run.  "
-                      "▶ NOW runs it immediately instead (requires Claude Code CLI).  "
                       "✎ Edit changes scope, output, schedule, and report folder.",
                  bg='#1a2530', fg='#4a6a82',
                  font=('Arial', 7), wraplength=900,
@@ -6763,77 +6691,6 @@ or from the Help menu."""
             btn_col = tk.Frame(row, bg='#0d1a26')
             btn_col.pack(side='right', padx=4, pady=4)
 
-            # v8.1.14: custom tasks previously had no way to try themselves
-            # immediately — only ▶ Queue (wait for the next scheduled pass)
-            # or ✎ Edit. Mirrors the built-in Common Business AI Analysis
-            # section's ▶ NOW exactly: same run_single_prompt_now() call,
-            # same install_dir fix (audit-log hook needs it — see that
-            # function's docstring), same disabled-while-running / result
-            # dialog pattern. The only real difference is the prompt source:
-            # build_task_prompt(t) (custom tasks' own enrichment — scope
-            # dirs, output options, schedule) instead of
-            # _build_builtin_prompt(task_def, settings).
-            def _run_custom_now(t=task, now_btn=None):
-                try:
-                    import task_queue_automation as _tqa_cn
-                    import custom_tasks_manager as _ctm_cn
-                except ImportError:
-                    messagebox.showerror("Not Available",
-                                          "Required module not found.")
-                    return
-                if not _tqa_cn.claude_code_cli_installed():
-                    messagebox.showwarning(
-                        "Claude Code Needed",
-                        "Running an analysis right now requires Claude Code CLI, "
-                        "which isn't installed yet.\n\nInstall it from the 🤖 "
-                        "Autonomous AI Task Queue panel above, or click ▶ Queue to "
-                        "save this analysis for the next scheduled run instead.")
-                    return
-                _cfg_cn = _tqa_cn.load_config()
-                if not _cfg_cn.get("mcp_config_path"):
-                    messagebox.showwarning(
-                        "Setup Needed",
-                        "No MCP config is set up yet — see the 🤖 Autonomous "
-                        "Task Queue panel above (🧪 Test Setup (Dry Run) will "
-                        "show what's missing), then try again.")
-                    return
-
-                enriched_prompt = _ctm_cn.build_task_prompt(t)
-
-                orig_text = now_btn.cget("text")
-                now_btn.configure(state='disabled', text="⏳")
-                self.status_var.set(f"⏳ Running {t['label']} now via Claude Code…")
-
-                def _do_run():
-                    ok, detail = _tqa_cn.run_single_prompt_now(
-                        enriched_prompt, _cfg_cn.get("mcp_config_path", ""),
-                        _cfg_cn.get("allowed_tools", "mcp__ai-prowler__*"),
-                        _cfg_cn.get("use_api_key", False))
-
-                    def _finish():
-                        now_btn.configure(state='normal', text=orig_text)
-                        if ok:
-                            messagebox.showinfo(
-                                "Run Complete",
-                                f"✅  {t['label']} finished.\n\n{detail[:500]}")
-                            self.status_var.set(f"✅ {t['label']} completed")
-                        else:
-                            messagebox.showerror("Run Failed", detail[:800])
-                            self.status_var.set("❌ Run failed")
-                        self.root.after(3000, lambda: self.status_var.set("Ready"))
-
-                    self.root.after(0, _finish)
-
-                threading.Thread(target=_do_run, daemon=True).start()
-
-            _custom_now_b = tk.Button(btn_col, text="▶ NOW",
-                                      bg='#2a2f45', fg='#e8ebf7',
-                                      font=('Arial', 7, 'bold'),
-                                      relief='flat', cursor='hand2')
-            _custom_now_b.configure(
-                command=lambda t=task, b=_custom_now_b: _run_custom_now(t, b))
-            _custom_now_b.pack(fill='x', pady=1)
-
             def _queue_task(t=task):
                 try:
                     import custom_tasks_manager as _ctmq
@@ -7071,8 +6928,31 @@ or from the Help menu."""
                             _sched_values_list.index(_initial_sched_label))
                 except Exception:
                     pass
+                # v9.0.1 fix: <Map> is NOT guaranteed to fire only once for
+                # this window. A ttk.Combobox's dropdown listbox is its own
+                # popup Toplevel — opening/closing it (i.e. the user actually
+                # USING the dropdown to pick a new schedule) can generate a
+                # second <Map> event on this parent dialog depending on
+                # window-manager/Tk timing. Left bound with add='+' forever,
+                # that second event re-ran this handler and force-reset the
+                # combobox's DISPLAYED text back to _initial_sched_label —
+                # the value from when the dialog first opened — even though
+                # the underlying sched_var (and everything reacting to it,
+                # like the daily start/end/times-per-day fields showing
+                # correctly) had already moved on to the user's real
+                # selection. Confirmed live: selecting "Daily" showed the
+                # daily time fields immediately but the dropdown itself
+                # still read "Manual only" until the SAME selection was
+                # made a second time. Unbinding after the first firing makes
+                # this run exactly once, which is all it was ever meant to
+                # do — the original not-yet-mapped-widget bug this works
+                # around only exists during the dialog's initial construction.
+                try:
+                    win.unbind('<Map>', _map_bind_id)
+                except Exception:
+                    pass
 
-            win.bind('<Map>', _apply_sched_current_on_map, add='+')
+            _map_bind_id = win.bind('<Map>', _apply_sched_current_on_map, add='+')
 
             tk.Label(sched_row, text="First due date:",
                      font=('Arial', 9, 'bold')).pack(side='left')
@@ -7341,14 +7221,11 @@ or from the Help menu."""
                   relief='flat', cursor='hand2',
                   command=lambda: _open_task_editor(None)).pack(side='left')
 
-        # Hint label — mirrors the Common Business AI Analysis section's own
-        # hint below. v8.1.14: custom tasks gained their own ▶ NOW button
-        # (previously only ▶ Queue / ✎ Edit / 🗑 — a custom task could only
-        # ever run via the next scheduled Autonomous AI Task Queue pass, with
-        # no way to try it immediately).
+        # Hint label
+        # v9.0.0: ▶ NOW removed — same ChromaDB contention rationale as
+        # the Common Business AI Analysis removal above.
         tk.Label(_custom_outer,
-                 text="▶ NOW runs this task immediately (requires Claude Code CLI).  "
-                      "▶ Queue saves it for the next Autonomous AI Task Queue run.  "
+                 text="▶ Queue saves it for the next Autonomous AI Task Queue run.  "
                       "✎ Edit changes scope, output, schedule, and report folder.  "
                       "🗑 deletes the task.",
                  bg='#0d1a26', fg='#4a6a82',
@@ -7360,10 +7237,7 @@ or from the Help menu."""
         # (see panel above) runs the whole pending queue on its own schedule
         # once enabled. catch_up_all_due_tasks() (called on enabling) keeps
         # overdue backlog from all firing at once on day one; from there the
-        # daily scheduled run picks everything up automatically. A manual
-        # per-analysis test run is available via each row's own ▶ NOW button
-        # — for Common Business AI Analysis items above, and (v8.1.14) for
-        # My Custom Analyses items too — for trying one out before queuing it.
+        # daily scheduled run picks everything up automatically.
 
         # Initial render
         _refresh_custom_list()
@@ -7413,6 +7287,11 @@ or from the Help menu."""
         # live-refresh behavior unobservable in tests.
         self._poll_custom_tasks_file = _poll_custom_tasks_file
         self._refresh_custom_task_list = _refresh_custom_list
+        # Exposed for tests — lets a GUI test open the real "Edit/New Custom
+        # Analysis" dialog and drive its widgets directly (e.g. the schedule
+        # dropdown), the same way _refresh_custom_task_list above is exposed
+        # for the same reason.
+        self._open_task_editor = _open_task_editor
 
         _sync_custom_tasks_mtime()
         self.root.after(3000, _poll_custom_tasks_file)
@@ -8095,6 +7974,11 @@ or from the Help menu."""
 
             _tqa_enabled_var  = tk.BooleanVar(value=_tqa_cfg.get("enabled", False))
             _tqa_time_var     = tk.StringVar(value=_tqa_cfg.get("schedule_time", "06:00"))
+            # v9.0.1: paired end time — only meaningful when Check queue is
+            # set to more than 1 time/day, mirroring the exact same Start
+            # time / End time / Times per day pattern the My Custom AI
+            # Analyses and Common Business AI Analysis editors already use.
+            _tqa_end_time_var = tk.StringVar(value=_tqa_cfg.get("schedule_end_time", "23:00"))
             _tqa_notify_var   = tk.BooleanVar(value=_tqa_cfg.get("notify_on_complete", False))
             _tqa_method_var   = tk.StringVar(value=_tqa_cfg.get("notify_method", "sms"))
             # v8.1.11: real OS-level "what's actually armed right now"
@@ -8177,42 +8061,80 @@ or from the Help menu."""
             # here is gone — the big color-coded toggle button at the
             # bottom of the panel is now the single control for on/off.
             # This row is just the schedule time input.
-            tk.Label(_tqa_row1, text="Scheduled time:", bg='#1a1e2e', fg='#a0a8cc',
+            # v9.0.1: "Scheduled time" -> "Start time", paired with a new
+            # "End time" field — mirrors the My Custom AI Analyses / Common
+            # Business AI Analysis editors' own Start time / End time /
+            # Times per day pattern exactly. End time is only meaningful
+            # once Check queue below is set above 1 time/day; at 1 time/day
+            # it's simply unused (matches compute_daily_run_times()'s own
+            # "times_per_day <= 1 just returns [start_time]" behavior).
+            tk.Label(_tqa_row1, text="Start time:", bg='#1a1e2e', fg='#a0a8cc',
                      font=('Arial', 9)).pack(side='left')
             tk.Entry(_tqa_row1, textvariable=_tqa_time_var, width=6,
                      font=('Arial', 9)).pack(side='left', padx=(4, 2))
-            tk.Label(_tqa_row1, text="(24h HH:MM, daily)", bg='#1a1e2e', fg='#6a7a9a',
+            tk.Label(_tqa_row1, text="End time:", bg='#1a1e2e', fg='#a0a8cc',
+                     font=('Arial', 9)).pack(side='left', padx=(6, 0))
+            tk.Entry(_tqa_row1, textvariable=_tqa_end_time_var, width=6,
+                     font=('Arial', 9)).pack(side='left', padx=(4, 2))
+            tk.Label(_tqa_row1, text="(24h HH:MM)", bg='#1a1e2e', fg='#6a7a9a',
                      font=('Arial', 8)).pack(side='left', padx=(0, 8))
 
             # v8.1.11: independently-configurable checker frequency — how
             # often the Autonomous AI Task Queue itself wakes up to look
             # for due work, DECOUPLED from any individual task's own
-            # schedule. 1 = classic once-daily at Scheduled time above
-            # (unchanged default). >1 switches the underlying Windows
-            # trigger to an hourly-interval one (check_mode="interval",
-            # check_interval_hours = round(24 / times_per_day)) — Scheduled
-            # time above is then only used as history, the interval trigger
-            # runs around the clock. Static GUI warning, not something
-            # Claude says in chat — same "if they set it for 10 times per
-            # day" scenario David asked to have flagged right here.
-            def _tqa_times_per_day_to_interval_hours(n):
-                n = max(1, int(n))
-                return max(1, round(24 / n))
-
-            _initial_check_mode = _tqa_cfg.get("check_mode", "daily")
-            _initial_interval_hrs = _tqa_cfg.get("check_interval_hours", 1)
-            _initial_times_per_day = (
-                1 if _initial_check_mode != "interval"
-                else max(1, round(24 / max(1, int(_initial_interval_hrs))))
-            )
+            # schedule. 1 = classic once-daily at Start time above
+            # (unchanged default). v9.0.1 REDESIGN: >1 no longer switches
+            # to an hourly-interval trigger (check_interval_hours =
+            # round(24/N), which both distorted N for non-round divisions
+            # of 24 AND, before the v9.0.1 anchor fix, could drift onto an
+            # arbitrary non-hour-aligned time forever) — it now computes N
+            # explicit check times evenly spread across [Start time, End
+            # time] via the exact same custom_tasks_manager.compute_daily_
+            # run_times() the task editors use, shown live below. Static
+            # GUI warning, not something Claude says in chat — same "if
+            # they set it for 10 times per day" scenario David asked to
+            # have flagged right here.
+            _initial_times_per_day = _tqa_cfg.get("check_times_per_day")
+            if _initial_times_per_day is None:
+                # Backward compat: pre-v9.0.1 config has no
+                # check_times_per_day key yet, only the old check_mode/
+                # check_interval_hours pair — derive an equivalent N once,
+                # same lossy math the old code used, purely so an existing
+                # saved config's GUI field shows something reasonable
+                # before the user ever touches it again.
+                _legacy_mode = _tqa_cfg.get("check_mode", "daily")
+                _legacy_hrs = _tqa_cfg.get("check_interval_hours", 1)
+                _initial_times_per_day = (
+                    1 if _legacy_mode != "interval"
+                    else max(1, round(24 / max(1, int(_legacy_hrs))))
+                )
             _tqa_times_per_day_var = tk.StringVar(value=str(_initial_times_per_day))
 
             tk.Label(_tqa_row1, text="Check queue:", bg='#1a1e2e', fg='#a0a8cc',
                      font=('Arial', 9)).pack(side='left', padx=(8, 0))
             tk.Entry(_tqa_row1, textvariable=_tqa_times_per_day_var, width=3,
                      font=('Arial', 9)).pack(side='left', padx=(4, 2))
-            tk.Label(_tqa_row1, text="times/day", bg='#1a1e2e', fg='#6a7a9a',
+            tk.Label(_tqa_row1, text="times/day (max 24)", bg='#1a1e2e', fg='#6a7a9a',
                      font=('Arial', 8)).pack(side='left', padx=(0, 4))
+
+            # v9.0.1: cap Check queue at the same MAX_DAILY_TIMES_PER_DAY the
+            # My Custom AI Analyses / Common Business AI Analysis editors
+            # already enforce for their own Times per day field — this
+            # field had no upper bound at all until now (only a floor of
+            # 1), an inconsistency David caught. compute_daily_run_times()
+            # itself has no ceiling either, so nothing downstream would
+            # have stopped a value like 100 from actually being registered
+            # as 100 separate Windows Daily triggers. Imported from
+            # custom_tasks_manager rather than duplicated so the two
+            # features can never drift to different limits.
+            def _tqa_clamp_times_per_day(raw):
+                import custom_tasks_manager as _ctm_clamp
+                try:
+                    n = int(str(raw).strip() or 1)
+                except (ValueError, TypeError):
+                    return 1, False
+                clamped = max(1, min(n, _ctm_clamp.MAX_DAILY_TIMES_PER_DAY))
+                return clamped, (n > _ctm_clamp.MAX_DAILY_TIMES_PER_DAY)
 
             _tqa_credit_warn_var = tk.StringVar(value="")
             _tqa_credit_warn_lbl = tk.Label(
@@ -8221,11 +8143,12 @@ or from the Help menu."""
             _tqa_credit_warn_lbl.pack(side='left', padx=(4, 8))
 
             def _tqa_update_credit_warning(*_a):
-                try:
-                    n = max(1, int(_tqa_times_per_day_var.get().strip() or 1))
-                except ValueError:
-                    n = 1
-                if n > 1:
+                n, was_capped = _tqa_clamp_times_per_day(_tqa_times_per_day_var.get())
+                if was_capped:
+                    _tqa_credit_warn_var.set(
+                        f"⚠️ Capped at {n}x/day (max) — uses Claude "
+                        f"subscription usage credits each check")
+                elif n > 1:
                     _tqa_credit_warn_var.set(
                         f"⚠️ {n}x/day uses Claude subscription usage credits "
                         f"each check")
@@ -8233,6 +8156,37 @@ or from the Help menu."""
                     _tqa_credit_warn_var.set("")
             _tqa_times_per_day_var.trace_add('write', _tqa_update_credit_warning)
             _tqa_update_credit_warning()
+
+            # v9.0.1: live "Checks at: ..." preview row — the actual
+            # computed check times for the current Start time / End time /
+            # Check queue field values, exactly mirroring the "Runs at:
+            # ..." preview in the My Custom AI Analyses / Common Business
+            # AI Analysis editors (both call custom_tasks_manager.
+            # format_daily_run_times_preview() too, so this panel's preview
+            # can never drift out of sync with theirs on what a given
+            # combination produces). Empty at 1 time/day — nothing useful
+            # to preview beyond the Start time field itself.
+            _tqa_checks_at_row = tk.Frame(_tqa_inner, bg='#1a1e2e')
+            _tqa_checks_at_row.pack(fill='x', pady=(0, 4))
+            _tqa_checks_at_var = tk.StringVar(value="")
+            tk.Label(_tqa_checks_at_row, textvariable=_tqa_checks_at_var,
+                     bg='#1a1e2e', fg='#6a9adf', font=('Arial', 8)).pack(side='left')
+
+            def _tqa_update_checks_at_preview(*_a):
+                n, _was_capped = _tqa_clamp_times_per_day(_tqa_times_per_day_var.get())
+                if n <= 1:
+                    _tqa_checks_at_var.set("")
+                    return
+                import custom_tasks_manager as _ctm_preview
+                preview = _ctm_preview.format_daily_run_times_preview(
+                    _tqa_time_var.get().strip(), _tqa_end_time_var.get().strip(), n)
+                _tqa_checks_at_var.set(
+                    preview.replace("Runs at:", "Checks at:") if preview else "")
+            _tqa_time_var.trace_add('write', _tqa_update_checks_at_preview)
+            _tqa_end_time_var.trace_add('write', _tqa_update_checks_at_preview)
+            _tqa_times_per_day_var.trace_add('write', _tqa_update_checks_at_preview)
+            _tqa_update_checks_at_preview()
+
             # v8.1.9 fix: _tqa_save_and_apply() reinstalls the Windows
             # Scheduled Task with whatever's currently in the time field
             # every time it runs while automation is enabled — but it was
@@ -8544,7 +8498,7 @@ or from the Help menu."""
                 else:
                     _dt.insert('1.0',
                                "(no command_debug.log yet — it's written the\n"
-                               "next time a scheduled run or ▶ NOW button fires)")
+                               "next time a scheduled run fires)")
                 _dt.configure(state='disabled')
 
             def _tqa_clear_cmd_debug_log():
@@ -8561,43 +8515,6 @@ or from the Help menu."""
                 except Exception as _e:
                     _mb.showerror("Error", f"Could not clear command debug log: {_e}")
 
-            def _tqa_view_now_debug_log():
-                """▶ NOW run debug log — captures MCP config, .bat content,
-                exit code, stdout/stderr and last_single_run.json on every
-                ▶ NOW attempt. First place to look when a ▶ NOW run fails
-                or hangs — tells you exactly what ran and what it returned."""
-                _dbg_path = Path.home() / ".ai-prowler" / "now_button_debug.log"
-                _w = tk.Toplevel(self.root)
-                _w.title("▶ NOW Run Debug Log")
-                _w.geometry("1000x600")
-                import tkinter.scrolledtext as _st3
-                _t = _st3.ScrolledText(_w, font=('Courier', 8),
-                                       wrap='none', bg='#1a0a00', fg='#ffcc66')
-                _t.pack(fill='both', expand=True, padx=8, pady=8)
-                if _dbg_path.exists() and _dbg_path.stat().st_size > 0:
-                    _lines = _dbg_path.read_text(
-                        encoding='utf-8', errors='replace').splitlines()
-                    _t.insert('1.0', '\n'.join(_lines[-400:]))
-                else:
-                    _t.insert('1.0',
-                              "(no now_button_debug.log yet — it's created the\n"
-                              "first time ▶ NOW is clicked on any task)")
-                _t.configure(state='disabled')
-
-            def _tqa_clear_now_debug_log():
-                import tkinter.messagebox as _mb
-                if not _mb.askyesno("Clear ▶ NOW Debug Log",
-                                    "Clear the ▶ NOW debug log?\n\nThis cannot be undone."):
-                    return
-                _p = Path.home() / ".ai-prowler" / "now_button_debug.log"
-                try:
-                    if _p.exists():
-                        _p.write_text("", encoding="utf-8")
-                    self.status_var.set("▶ NOW debug log cleared.")
-                    self.root.after(3000, lambda: self.status_var.set("Ready"))
-                except Exception as _e:
-                    _mb.showerror("Error", f"Could not clear debug log: {_e}")
-
             def _tqa_save_and_apply():
                 """Enable/disable is the one action here that actually touches
                 the Scheduled Task — everything else (checkboxes, time field)
@@ -8606,24 +8523,35 @@ or from the Help menu."""
                 cfg = dict(_tqa_cfg)
                 cfg["enabled"]            = _tqa_enabled_var.get()
                 cfg["schedule_time"]      = _tqa_time_var.get().strip() or "06:00"
+                cfg["schedule_end_time"]  = _tqa_end_time_var.get().strip() or "23:00"
                 cfg["notify_on_complete"] = _tqa_notify_var.get()
                 cfg["notify_method"]      = _tqa_method_var.get()
                 cfg["use_api_key"]        = (_tqa_auth_var.get() == "api_key")
 
-                # v8.1.11: derive check_mode/check_interval_hours from the
-                # "times/day" field — 1 keeps the classic once-daily
-                # behavior at schedule_time above (check_mode stays
-                # "daily"); >1 switches to an hourly-interval trigger.
-                try:
-                    _times_per_day = max(1, int(_tqa_times_per_day_var.get().strip() or 1))
-                except ValueError:
-                    _times_per_day = 1
+                # v9.0.1: times_per_day now stored directly and losslessly
+                # (check_times_per_day) instead of round-tripped through
+                # check_interval_hours = round(24 / N) — that conversion
+                # silently distorted N for anything that doesn't divide 24
+                # evenly. 1 keeps the classic once-daily behavior at
+                # schedule_time above (check_mode stays "daily"); >1
+                # switches to check_mode="interval", which now means N
+                # explicit Daily triggers evenly spread across
+                # [schedule_time, schedule_end_time] — see
+                # _build_register_queue_task_ps1()'s docstring. Clamped to
+                # MAX_DAILY_TIMES_PER_DAY (same limit the task editors
+                # enforce) so what actually gets saved/registered can never
+                # exceed the cap — the field is corrected back to the
+                # clamped number below too, so the display and the saved
+                # config can't disagree.
+                _times_per_day, _ = _tqa_clamp_times_per_day(
+                    _tqa_times_per_day_var.get())
+                if str(_times_per_day) != _tqa_times_per_day_var.get().strip():
+                    _tqa_times_per_day_var.set(str(_times_per_day))
+                cfg["check_times_per_day"] = _times_per_day
                 if _times_per_day > 1:
                     cfg["check_mode"] = "interval"
-                    cfg["check_interval_hours"] = _tqa_times_per_day_to_interval_hours(_times_per_day)
                 else:
                     cfg["check_mode"] = "daily"
-                    cfg["check_interval_hours"] = 1
 
                 # v8.1.6: on the OFF -> ON transition specifically (not on
                 # every save while already enabled — that would incorrectly
@@ -8683,7 +8611,8 @@ or from the Help menu."""
                     ok, detail = _tqa.install_scheduled_task(
                         wrapper, cfg["schedule_time"], enabled=True,
                         check_mode=cfg["check_mode"],
-                        check_interval_hours=cfg["check_interval_hours"])
+                        schedule_end_time=cfg.get("schedule_end_time", "23:00"),
+                        times_per_day=cfg.get("check_times_per_day", 1))
                     if not ok:
                         messagebox.showerror("Could Not Enable", detail)
                         cfg["enabled"] = False
@@ -8892,15 +8821,7 @@ or from the Help menu."""
             ttk.Button(_tqa_btn_row2, text="🔍 Command Debug Log",
                        command=_tqa_view_cmd_debug_log).pack(side='left', padx=(0, 0))
             ttk.Button(_tqa_btn_row2, text="🗑 Clear",
-                       command=_tqa_clear_cmd_debug_log).pack(side='left', padx=(2, 10))
-
-            # v8.1.18: ▶ NOW Debug Log — detailed per-run diagnostic including
-            # MCP config, .bat content, exit code, and claude -p output.
-            # First place to look when a ▶ NOW run fails or hangs.
-            ttk.Button(_tqa_btn_row2, text="🐛 NOW Debug Log",
-                       command=_tqa_view_now_debug_log).pack(side='left', padx=(0, 0))
-            ttk.Button(_tqa_btn_row2, text="🗑 Clear",
-                       command=_tqa_clear_now_debug_log).pack(side='left', padx=(2, 0))
+                       command=_tqa_clear_cmd_debug_log).pack(side='left', padx=(2, 0))
 
             # Exposed on self so tests/gui/*.py can drive this panel the
             # same way tests/gui/test_http_uptime.py drives the uptime
@@ -8911,6 +8832,8 @@ or from the Help menu."""
             self._tqa_cfg               = _tqa_cfg
             self._tqa_enabled_var      = _tqa_enabled_var
             self._tqa_time_var         = _tqa_time_var
+            self._tqa_end_time_var     = _tqa_end_time_var
+            self._tqa_checks_at_var    = _tqa_checks_at_var
             self._tqa_notify_var       = _tqa_notify_var
             self._tqa_method_var       = _tqa_method_var
             self._tqa_auth_var         = _tqa_auth_var
@@ -8941,11 +8864,11 @@ or from the Help menu."""
             self._tqa_apply_time_only        = _tqa_apply_time_only
             self._tqa_btn_apply_time         = _tqa_btn_apply_time
             self._tqa_times_per_day_var      = _tqa_times_per_day_var
+            self._tqa_clamp_times_per_day    = _tqa_clamp_times_per_day
             self._tqa_credit_warn_var        = _tqa_credit_warn_var
             self._tqa_update_credit_warning  = _tqa_update_credit_warning
             self._tqa_armed_var              = _tqa_armed_var
             self._tqa_refresh_status_display = _tqa_refresh_status_display
-            self._tqa_times_per_day_to_interval_hours = _tqa_times_per_day_to_interval_hours
 
             _tqa_refresh_status_display()
 
@@ -8960,6 +8883,17 @@ or from the Help menu."""
             # in this panel after the tooltip timer already caused a real
             # incident tonight — refresh-on-explicit-action only, as it
             # was for most of this session before this loop was added.
+            #
+            # v9.0.1: the "next:" half of this display is now computed via
+            # compute_next_checker_run() — a pure local calculation from
+            # the saved Start time / End time / Times per day config and
+            # the real current date/time, not from schtasks's own Next Run
+            # Time field (which only got re-queried on explicit actions
+            # here, same as before — see that function's docstring for the
+            # incident this fixes). That's the actual bug fix: the value
+            # shown is now always correct WHENEVER this refresh runs. No
+            # timer added here — still refresh-on-explicit-action only,
+            # per the standing decision above.
         # "Common Business AI Analysis" — moved here via pack_configure
         # rather than physically relocating this whole block's code, which
         # would have meant hand-copying ~380 lines of nested Tkinter with a

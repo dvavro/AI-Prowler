@@ -20,6 +20,11 @@ Covers:
   - Actual deletion removes all 3 files per qualifying job
   - Missing/corrupt manifest falls back to file mtime rather than crashing
 
+Also covers purge_old_jobs() (v9.0.0) — the automatic background purge
+called from run_script_start() on every new job launch. Same jobs dir,
+different API surface: no dry-run, no keep_last, always purges files older
+than max_age_days (default 3), skips running jobs, best-effort never raises.
+
 IMPORTANT: ai_prowler_mcp._JOBS_DIR is a MODULE-LEVEL constant computed
 once at import time from Path.home() — the exact same class of bug caught
 twice already today in scheduler_engine.py testing. Patching Path.home()
@@ -27,6 +32,10 @@ alone would do nothing; every test here patches the module attribute
 `mcp_mod._JOBS_DIR` directly to a tmp_path, and _jobs_dir() (which the
 tool calls) reads that same patched global — confirmed by inspection of
 ai_prowler_mcp.py's _jobs_dir()/_JOBS_DIR definitions.
+
+purge_old_jobs() lives in task_queue_automation.py and reads
+AI_PROWLER_HOME / "jobs" — patched via tqa.AI_PROWLER_HOME in the purge
+tests below.
 """
 
 import datetime
@@ -39,6 +48,8 @@ import pytest
 _SRC = Path(__file__).resolve().parent.parent.parent
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
+
+import task_queue_automation as tqa
 
 
 @pytest.fixture(scope="module")
@@ -227,3 +238,115 @@ class TestCorruptOrMissingManifest:
         # Must not raise — corrupt JSON is handled gracefully.
         result = mcp_mod.cleanup_job_logs(older_than_days=7, keep_last=0, dry_run=True)
         assert "❌" not in result or "job_corrupt" in result
+
+
+# ── purge_old_jobs() — v9.0.0 automatic background cleanup ──────────────────
+# purge_old_jobs() is the lightweight auto-purge called from run_script_start()
+# on every new job launch. Unlike cleanup_job_logs (explicit MCP tool with
+# dry-run / keep_last options), this is fire-and-forget: no UI, no dry-run,
+# just delete .json + .log pairs older than max_age_days that aren't running.
+#
+# It reads AI_PROWLER_HOME / "jobs" from task_queue_automation, so we patch
+# tqa.AI_PROWLER_HOME to a tmp_path rather than mcp_mod._JOBS_DIR.
+
+@pytest.fixture
+def purge_jobs_dir(tmp_path, monkeypatch):
+    """Redirect tqa.AI_PROWLER_HOME to an isolated tmp dir for purge tests."""
+    monkeypatch.setattr(tqa, "AI_PROWLER_HOME", tmp_path / ".ai-prowler")
+    jobs = tmp_path / ".ai-prowler" / "jobs"
+    return jobs
+
+
+def _make_purge_job(jobs_dir, job_id, *, status="done", age_days=0):
+    """Create .json + .log for a purge test job with a specific mtime age."""
+    jobs_dir.mkdir(parents=True, exist_ok=True)
+    manifest = {"job_id": job_id, "status": status}
+    json_path = jobs_dir / f"{job_id}.json"
+    log_path  = jobs_dir / f"{job_id}.log"
+    json_path.write_text(json.dumps(manifest), encoding="utf-8")
+    log_path.write_text("output\n", encoding="utf-8")
+    if age_days > 0:
+        # Back-date mtime so the file looks old to purge_old_jobs()
+        old_time = (datetime.datetime.now() -
+                    datetime.timedelta(days=age_days)).timestamp()
+        import os
+        os.utime(json_path, (old_time, old_time))
+        os.utime(log_path,  (old_time, old_time))
+    return json_path, log_path
+
+
+class TestPurgeOldJobs:
+    """Tests for tqa.purge_old_jobs() — the v9.0.0 automatic background purge."""
+
+    def test_no_op_when_jobs_dir_missing(self, purge_jobs_dir):
+        # Must not raise even when the directory doesn't exist yet.
+        assert not purge_jobs_dir.exists()
+        tqa.purge_old_jobs(max_age_days=3)  # must not raise
+        assert not purge_jobs_dir.exists()
+
+    def test_deletes_old_completed_job(self, purge_jobs_dir):
+        json_path, log_path = _make_purge_job(purge_jobs_dir, "job_old",
+                                               status="done", age_days=5)
+        tqa.purge_old_jobs(max_age_days=3)
+
+        assert not json_path.exists(), "Old completed job manifest must be deleted"
+        assert not log_path.exists(),  "Old completed job log must be deleted"
+
+    def test_keeps_recent_job(self, purge_jobs_dir):
+        json_path, log_path = _make_purge_job(purge_jobs_dir, "job_recent",
+                                               status="done", age_days=1)
+        tqa.purge_old_jobs(max_age_days=3)
+
+        assert json_path.exists(), "Recent job (< max_age_days) must not be deleted"
+        assert log_path.exists()
+
+    def test_never_deletes_running_job(self, purge_jobs_dir):
+        # A running job must never be deleted, even if its mtime is old.
+        json_path, log_path = _make_purge_job(purge_jobs_dir, "job_running",
+                                               status="running", age_days=10)
+        tqa.purge_old_jobs(max_age_days=3)
+
+        assert json_path.exists(), "Running job must never be deleted by purge"
+        assert log_path.exists()
+
+    def test_deletes_only_old_jobs_not_recent(self, purge_jobs_dir):
+        old_json, old_log = _make_purge_job(purge_jobs_dir, "job_old",
+                                             status="done", age_days=7)
+        new_json, new_log = _make_purge_job(purge_jobs_dir, "job_new",
+                                             status="done", age_days=0)
+        tqa.purge_old_jobs(max_age_days=3)
+
+        assert not old_json.exists(), "Old job must be deleted"
+        assert not old_log.exists()
+        assert new_json.exists(),  "Recent job must be kept"
+        assert new_log.exists()
+
+    def test_deletes_both_json_and_log_together(self, purge_jobs_dir):
+        json_path, log_path = _make_purge_job(purge_jobs_dir, "job_pair",
+                                               status="failed", age_days=5)
+        tqa.purge_old_jobs(max_age_days=3)
+
+        assert not json_path.exists()
+        assert not log_path.exists()
+
+    def test_handles_corrupt_manifest_without_raising(self, purge_jobs_dir):
+        purge_jobs_dir.mkdir(parents=True, exist_ok=True)
+        bad = purge_jobs_dir / "job_corrupt.json"
+        bad.write_text("{not valid json", encoding="utf-8")
+        import os, datetime as dt
+        old_time = (dt.datetime.now() - dt.timedelta(days=10)).timestamp()
+        os.utime(bad, (old_time, old_time))
+
+        # Must not raise — corrupt manifest is purged anyway (mtime is old)
+        tqa.purge_old_jobs(max_age_days=3)
+
+    def test_is_best_effort_never_raises_on_os_error(self, purge_jobs_dir,
+                                                       monkeypatch):
+        # Even if unlink() throws, purge_old_jobs must swallow it.
+        _make_purge_job(purge_jobs_dir, "job_old", status="done", age_days=5)
+
+        def _boom(*a, **kw):
+            raise OSError("simulated permission denied")
+
+        monkeypatch.setattr(Path, "unlink", _boom)
+        tqa.purge_old_jobs(max_age_days=3)  # must not raise

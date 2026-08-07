@@ -61,10 +61,10 @@ setlocal
 
 REM ── Path configuration ───────────────────────────────────────────────────
 REM Edit these lines if you move any repo.
-set "AIPROWLER_ROOT=C:\Users\david\AI-Prowler_V700_to_V800_work\AI-Prowler"
-set "SUBS_ROOT=C:\Users\david\AI-Prowler-ADMIN-V8\ai-prowler-subs"
-set "SUBSCRIPTION_ROOT=C:\Users\david\AI-Prowler-ADMIN-V8\ai-prowler-subscription"
-set "TELEMETRY_ROOT=C:\Users\david\AI-Prowler-ADMIN-V8\ai-prowler-telemetry"
+set "AIPROWLER_ROOT=C:\Users\david\AI-Prowler_V812_to_V900_work\AI-Prowler"
+set "SUBS_ROOT=C:\Users\david\AI-Prowler-ADMIN-V9\ai-prowler-subs"
+set "SUBSCRIPTION_ROOT=C:\Users\david\AI-Prowler-ADMIN-V9\ai-prowler-subscription"
+set "TELEMETRY_ROOT=C:\Users\david\AI-Prowler-ADMIN-V9\ai-prowler-telemetry"
 
 REM ── Environment sanity checks (fail fast with clear messages) ────────────
 if not exist "%AIPROWLER_ROOT%\rag_preprocessor.py" (

@@ -1,5 +1,5 @@
 # AI-Prowler — Complete User Guide
-## Version 8.1.12
+## Version 9.0.0
 
 ---
 
@@ -96,6 +96,15 @@ This produces dramatically better results — equivalent to having a skilled res
 - **`fuzzy_replace_in_file` removed** — this whitespace-tolerant file-editing tool (added in v8.0.0) had a bug where, if its stricter matching strategies failed and it fell back to whitespace-collapse matching, that normalization was applied to the *entire file* rather than just the matched region, risking corruption of unrelated content. Removed entirely; `str_replace_in_file` (exact match) and `line_replace_in_file` (by line number) remain as the two-tool escalation path for surgical file edits. See **Section 6.2c** and **Section 6 → Code Tools — Write-Side**.
 - **Total tools: 82** — down from 83, reflecting the `fuzzy_replace_in_file` removal above.
 - **Auto-updater now refreshes the Documents\AI-Prowler user guide copy** — `update_manifest.json` has included `COMPLETE_USER_GUIDE.md` since v8.1.0, but the in-app updater (`RAG_RUN.bat`) only ever applied staged files into the install directory (`C:\Program Files\AI-Prowler`), never to the separate `%USERPROFILE%\Documents\AI-Prowler\COMPLETE_USER_GUIDE.md` copy the installer seeds — which is both the copy most users actually open and the one tracked for ChromaDB indexing, so Claude's own answers about AI-Prowler went stale after every auto-update even though the app code updated correctly. `RAG_RUN.bat` now also copies the updated guide into Documents\AI-Prowler if a copy already exists there. See **Section 23 → Update Notifications**.
+
+**New in v9.0.0:**
+
+- **▶ NOW button removed from Common Business AI Analysis** — the Claude Code CLI headless launch path had reliability issues (ChromaDB contention when both the GUI and a headless `claude -p` process hit the same database simultaneously). Use **▶ Queue** to schedule the next run; the 🤖 Autonomous AI Task Queue handles automated execution. The ▶ NOW button on **My Custom AI Analyses** rows is unaffected.
+- **Audit log rotation** — `autonomous_run_audit.log` is now automatically rotated (up to 2 backup files kept) at the start of each Task Queue run, preventing unbounded growth.
+- **Jobs directory auto-cleanup** — files in `~/.ai-prowler/jobs/` older than 3 days are purged automatically each time `run_script_start` launches a new job.
+- **Indexing bug fixes** — `.css`, `.scss`, `.sass`, `.less`, and `.sql` files were incorrectly treated as code-scan-only; they are now fully semantically chunked. `.env` files are now skipped (security). `.md`/`.rst`/`.markdown` files returning 0 chunks after `reindex_file()` fixed.
+
+---
 
 **New in v8.1.4 (Business Server — single unified knowledge base):**
 
@@ -2146,4 +2155,4 @@ To upgrade: `pip install --upgrade mcp`
 
 *AI-Prowler — Your Personal Agentic RAG Knowledge Base*
 *Copyright © 2026 David Kevin Vavro · david.vavro1@gmail.com*
-*Version 8.0.0 — Updated June 25, 2026 (83 tools · 234 analysis tests)*
+*Version 9.0.0 — Updated August 2026*

@@ -239,6 +239,9 @@ class TestTimesPerDayCheckerFrequency:
         assert saved["check_mode"] == "daily"
 
     def test_times_per_day_ten_saves_interval_check_mode(self, gui, monkeypatch):
+        """v9.0.1: times_per_day is now stored and passed through directly
+        and losslessly — no more round-tripping through
+        check_interval_hours = round(24/N)."""
         install_calls = []
         monkeypatch.setattr(tqa, "install_scheduled_task",
                              lambda *a, **kw: (install_calls.append(kw), (True, "ok"))[1])
@@ -251,13 +254,14 @@ class TestTimesPerDayCheckerFrequency:
         _pump(gui)
 
         assert install_calls[0]["check_mode"] == "interval"
-        # 24/10 rounds to 2 hours
-        assert install_calls[0]["check_interval_hours"] == 2
+        assert install_calls[0]["times_per_day"] == 10
         saved = tqa.load_config()
         assert saved["check_mode"] == "interval"
-        assert saved["check_interval_hours"] == 2
+        assert saved["check_times_per_day"] == 10
 
-    def test_times_per_day_24_yields_hourly_interval(self, gui, monkeypatch):
+    def test_times_per_day_24_yields_24_computed_check_times(self, gui, monkeypatch):
+        """v9.0.1: 24 times/day is stored and passed through as exactly 24
+        — no more lossy conversion to 'round(24/24) = 1 hour interval'."""
         install_calls = []
         monkeypatch.setattr(tqa, "install_scheduled_task",
                              lambda *a, **kw: (install_calls.append(kw), (True, "ok"))[1])
@@ -269,7 +273,220 @@ class TestTimesPerDayCheckerFrequency:
         gui.app._tqa_save_and_apply()
         _pump(gui)
 
-        assert install_calls[0]["check_interval_hours"] == 1
+        assert install_calls[0]["times_per_day"] == 24
+        saved = tqa.load_config()
+        assert saved["check_times_per_day"] == 24
+
+
+# ── v9.0.1: Start time / End time + live "Checks at:" preview ───────────────
+# Found live: "Scheduled time: 07:00, Check queue: 8 times/day" showed
+# "next: 8/7/2026 1:27:54 AM" -- nowhere near what the user configured. Root
+# cause was the interval trigger's anchor (fixed separately). This is the
+# feature-level fix David asked for on top of that: give the checker its own
+# Start time / End time / Times per day inputs, mirroring the My Custom AI
+# Analyses / Common Business AI Analysis editors exactly, and show the real
+# computed check times live — via the SAME custom_tasks_manager.
+# format_daily_run_times_preview() those editors use — instead of leaving
+# the user to guess what a given combination produces.
+
+class TestChecksAtLivePreview:
+
+    def test_end_time_var_defaults_to_config_value(self, gui):
+        assert gui.app._tqa_end_time_var.get() == gui.app._tqa_cfg.get(
+            "schedule_end_time", "23:00")
+
+    def test_preview_empty_at_one_time_per_day(self, gui):
+        gui.app._tqa_times_per_day_var.set("1")
+        _pump(gui)
+        assert gui.app._tqa_checks_at_var.get() == ""
+
+    def test_preview_shows_computed_times_above_one_per_day(self, gui):
+        gui.app._tqa_time_var.set("08:00")
+        gui.app._tqa_end_time_var.set("20:00")
+        gui.app._tqa_times_per_day_var.set("3")
+        _pump(gui)
+        preview = gui.app._tqa_checks_at_var.get()
+        assert preview.startswith("Checks at:")
+        assert "08:00" in preview
+        assert "14:00" in preview
+        assert "20:00" in preview
+
+    def test_preview_matches_custom_tasks_manager_shared_function_exactly(self, gui):
+        """The panel's preview must come from the exact same function the
+        task editors use — never a separately-maintained copy that could
+        drift out of sync."""
+        import custom_tasks_manager as ctm
+        gui.app._tqa_time_var.set("06:00")
+        gui.app._tqa_end_time_var.set("18:00")
+        gui.app._tqa_times_per_day_var.set("4")
+        _pump(gui)
+        expected = ctm.format_daily_run_times_preview("06:00", "18:00", 4)
+        actual = gui.app._tqa_checks_at_var.get()
+        assert actual == expected.replace("Runs at:", "Checks at:")
+
+    def test_preview_updates_live_on_start_time_change(self, gui):
+        gui.app._tqa_time_var.set("07:00")
+        gui.app._tqa_end_time_var.set("23:00")
+        gui.app._tqa_times_per_day_var.set("2")
+        _pump(gui)
+        before = gui.app._tqa_checks_at_var.get()
+        gui.app._tqa_time_var.set("01:00")
+        _pump(gui)
+        after = gui.app._tqa_checks_at_var.get()
+        assert before != after
+        assert "01:00" in after
+
+    def test_preview_reverts_to_empty_when_dropping_back_to_one(self, gui):
+        gui.app._tqa_times_per_day_var.set("5")
+        _pump(gui)
+        assert gui.app._tqa_checks_at_var.get() != ""
+        gui.app._tqa_times_per_day_var.set("1")
+        _pump(gui)
+        assert gui.app._tqa_checks_at_var.get() == ""
+
+    def test_save_and_apply_persists_end_time_and_times_per_day(self, gui, monkeypatch):
+        monkeypatch.setattr(tqa, "install_scheduled_task",
+                             lambda *a, **kw: (True, "ok"))
+        monkeypatch.setattr(tqa, "install_wrapper_script",
+                             lambda *a, **kw: Path("fake_wrapper.bat"))
+        gui.app._tqa_cfg["mcp_config_path"] = str(tqa.GENERATED_MCP_CONFIG_PATH)
+        gui.app._tqa_enabled_var.set(True)
+        gui.app._tqa_time_var.set("07:00")
+        gui.app._tqa_end_time_var.set("22:00")
+        gui.app._tqa_times_per_day_var.set("5")
+        gui.app._tqa_save_and_apply()
+        _pump(gui)
+
+        saved = tqa.load_config()
+        assert saved["schedule_time"] == "07:00"
+        assert saved["schedule_end_time"] == "22:00"
+        assert saved["check_times_per_day"] == 5
+
+    def test_install_scheduled_task_receives_end_time_and_times_per_day(self, gui, monkeypatch):
+        install_calls = []
+        monkeypatch.setattr(tqa, "install_scheduled_task",
+                             lambda *a, **kw: (install_calls.append(kw), (True, "ok"))[1])
+        monkeypatch.setattr(tqa, "install_wrapper_script",
+                             lambda *a, **kw: Path("fake_wrapper.bat"))
+        gui.app._tqa_cfg["mcp_config_path"] = str(tqa.GENERATED_MCP_CONFIG_PATH)
+        gui.app._tqa_enabled_var.set(True)
+        gui.app._tqa_time_var.set("09:00")
+        gui.app._tqa_end_time_var.set("21:00")
+        gui.app._tqa_times_per_day_var.set("6")
+        gui.app._tqa_save_and_apply()
+        _pump(gui)
+
+        assert install_calls[0]["schedule_end_time"] == "21:00"
+        assert install_calls[0]["times_per_day"] == 6
+
+
+# ── v9.0.1: Check queue capped at MAX_DAILY_TIMES_PER_DAY (24) ──────────────
+# Found live: David asked "Does the times/day have a limit of 24?" and the
+# honest answer was no -- this field had only a floor of 1, no ceiling,
+# unlike the My Custom AI Analyses / Common Business AI Analysis editors'
+# own Times per day field, which has always enforced custom_tasks_manager.
+# MAX_DAILY_TIMES_PER_DAY (24). Fixed by importing that same constant here
+# rather than duplicating it, so the two features can never drift to
+# different limits.
+
+class TestTimesPerDayMaxCap:
+
+    def test_clamp_helper_passes_through_values_within_range(self, gui):
+        for n in (1, 2, 12, 24):
+            clamped, was_capped = gui.app._tqa_clamp_times_per_day(str(n))
+            assert clamped == n
+            assert was_capped is False
+
+    def test_clamp_helper_caps_above_24(self, gui):
+        clamped, was_capped = gui.app._tqa_clamp_times_per_day("100")
+        assert clamped == 24
+        assert was_capped is True
+
+    def test_clamp_helper_floors_zero_and_negative_to_one(self, gui):
+        for raw in ("0", "-5"):
+            clamped, was_capped = gui.app._tqa_clamp_times_per_day(raw)
+            assert clamped == 1
+            assert was_capped is False
+
+    def test_clamp_helper_treats_invalid_input_as_one_no_crash(self, gui):
+        clamped, was_capped = gui.app._tqa_clamp_times_per_day("abc")
+        assert clamped == 1
+        assert was_capped is False
+
+    def test_clamp_helper_matches_custom_tasks_manager_constant(self, gui):
+        """The cap must come from the same constant the task editors use,
+        not a separately-maintained copy that could drift."""
+        import custom_tasks_manager as ctm
+        clamped, _ = gui.app._tqa_clamp_times_per_day(
+            str(ctm.MAX_DAILY_TIMES_PER_DAY + 1))
+        assert clamped == ctm.MAX_DAILY_TIMES_PER_DAY
+
+    def test_credit_warning_shows_capped_message_above_24(self, gui):
+        gui.app._tqa_times_per_day_var.set("50")
+        _pump(gui)
+        warning = gui.app._tqa_credit_warn_var.get()
+        assert "Capped" in warning
+        assert "24" in warning
+
+    def test_credit_warning_normal_message_at_or_below_24(self, gui):
+        gui.app._tqa_times_per_day_var.set("24")
+        _pump(gui)
+        warning = gui.app._tqa_credit_warn_var.get()
+        assert "Capped" not in warning
+        assert "24" in warning
+
+    def test_preview_never_shows_more_than_24_check_times(self, gui):
+        gui.app._tqa_time_var.set("00:00")
+        gui.app._tqa_end_time_var.set("23:00")
+        gui.app._tqa_times_per_day_var.set("50")
+        _pump(gui)
+        preview = gui.app._tqa_checks_at_var.get()
+        # 24 comma-separated times -> 23 commas
+        assert preview.count(",") == 23
+
+    def test_save_and_apply_persists_clamped_value_not_raw_input(self, gui, monkeypatch):
+        monkeypatch.setattr(tqa, "install_scheduled_task",
+                             lambda *a, **kw: (True, "ok"))
+        monkeypatch.setattr(tqa, "install_wrapper_script",
+                             lambda *a, **kw: Path("fake_wrapper.bat"))
+        gui.app._tqa_cfg["mcp_config_path"] = str(tqa.GENERATED_MCP_CONFIG_PATH)
+        gui.app._tqa_enabled_var.set(True)
+        gui.app._tqa_times_per_day_var.set("100")
+        gui.app._tqa_save_and_apply()
+        _pump(gui)
+
+        saved = tqa.load_config()
+        assert saved["check_times_per_day"] == 24
+
+    def test_save_and_apply_corrects_displayed_field_to_clamped_value(self, gui, monkeypatch):
+        """The field itself must be corrected back to 24 after Apply, so
+        what's shown on screen never disagrees with what's actually saved
+        and registered."""
+        monkeypatch.setattr(tqa, "install_scheduled_task",
+                             lambda *a, **kw: (True, "ok"))
+        monkeypatch.setattr(tqa, "install_wrapper_script",
+                             lambda *a, **kw: Path("fake_wrapper.bat"))
+        gui.app._tqa_cfg["mcp_config_path"] = str(tqa.GENERATED_MCP_CONFIG_PATH)
+        gui.app._tqa_enabled_var.set(True)
+        gui.app._tqa_times_per_day_var.set("100")
+        gui.app._tqa_save_and_apply()
+        _pump(gui)
+
+        assert gui.app._tqa_times_per_day_var.get() == "24"
+
+    def test_install_scheduled_task_never_receives_more_than_24(self, gui, monkeypatch):
+        install_calls = []
+        monkeypatch.setattr(tqa, "install_scheduled_task",
+                             lambda *a, **kw: (install_calls.append(kw), (True, "ok"))[1])
+        monkeypatch.setattr(tqa, "install_wrapper_script",
+                             lambda *a, **kw: Path("fake_wrapper.bat"))
+        gui.app._tqa_cfg["mcp_config_path"] = str(tqa.GENERATED_MCP_CONFIG_PATH)
+        gui.app._tqa_enabled_var.set(True)
+        gui.app._tqa_times_per_day_var.set("999")
+        gui.app._tqa_save_and_apply()
+        _pump(gui)
+
+        assert install_calls[0]["times_per_day"] == 24
 
 
 # ── v8.1.9: Apply-time-without-toggle button ───────────────────────────────
@@ -478,14 +695,191 @@ def test_pack_order_tqa_then_queue_then_analysis(gui):
 # ── Common Business AI Analysis: full-row redesign ──────────────────────────
 # v8.1.6: replaced the 2-column grid of big colored buttons (which opened a
 # popup on every click) with full-width rows matching My Custom Analyses'
-# own layout — ▶ NOW / ▶ Queue / ✎ Edit per row, no trash (fixed, not
-# user-deletable). Settings persist via custom_tasks_manager's new
-# get/save_builtin_analysis_settings() so Queue/NOW don't need the popup.
+# own layout — ▶ Queue / ✎ Edit per row, no trash (fixed, not user-deletable).
+# v9.0.0: ▶ NOW button removed — ChromaDB contention when GUI + headless
+# claude -p both hit the same database. ▶ Queue / ✎ Edit remain.
 
 def test_analysis_rows_rendered_for_every_task(gui):
     _pump(gui)
     rows = gui.app._an_list_frame.winfo_children()
     assert len(rows) == len(gui.app._ANALYSIS_TASKS)
+
+
+# ── v9.0.0: NOW button removal regression ────────────────────────────────────
+# Confirms the ▶ NOW button is gone from every Common Business AI Analysis row
+# and that _run_analysis_now is no longer exposed on the GUI object.
+
+def test_now_button_not_present_on_any_analysis_row(gui):
+    """Every button label in every analysis row must not say '▶ NOW'.
+
+    Walks the full widget tree of _an_list_frame so even a deeply-nested
+    Button would be caught. A failure here means ▶ NOW was accidentally
+    re-added to the built-in analysis section — the exact regression this
+    test guards against."""
+    import tkinter as tk
+    _pump(gui)
+
+    def _collect_buttons(widget):
+        btns = []
+        for child in widget.winfo_children():
+            if isinstance(child, tk.Button):
+                btns.append(child.cget("text"))
+            btns.extend(_collect_buttons(child))
+        return btns
+
+    all_labels = _collect_buttons(gui.app._an_list_frame)
+    now_labels = [lbl for lbl in all_labels if "NOW" in lbl]
+    assert now_labels == [], (
+        f"▶ NOW button must not exist on any Common Business AI Analysis row "
+        f"(v9.0.0 removal). Found: {now_labels}"
+    )
+
+
+def test_run_analysis_now_not_exposed_on_gui(gui):
+    """_run_analysis_now must no longer be an attribute of the GUI app.
+
+    It was removed in v9.0.0 — if it reappears it means the old NOW-button
+    handler crept back in and needs to be cleaned up."""
+    _pump(gui)
+    assert not hasattr(gui.app, "_run_analysis_now"), (
+        "_run_analysis_now should not exist on the GUI object after v9.0.0 removal"
+    )
+
+
+def test_queue_and_edit_buttons_still_present_on_every_row(gui):
+    """▶ Queue and ✎ Edit must still be present on every analysis row.
+
+    Guards against accidentally removing the wrong buttons when removing NOW."""
+    import tkinter as tk
+    _pump(gui)
+
+    def _collect_buttons(widget):
+        btns = []
+        for child in widget.winfo_children():
+            if isinstance(child, tk.Button):
+                btns.append(child.cget("text"))
+            btns.extend(_collect_buttons(child))
+        return btns
+
+    all_labels = _collect_buttons(gui.app._an_list_frame)
+    n_tasks = len(gui.app._ANALYSIS_TASKS)
+    queue_count = sum(1 for lbl in all_labels if "Queue" in lbl)
+    edit_count  = sum(1 for lbl in all_labels if "Edit"  in lbl)
+    assert queue_count == n_tasks, (
+        f"Expected {n_tasks} ▶ Queue buttons, found {queue_count}"
+    )
+    assert edit_count == n_tasks, (
+        f"Expected {n_tasks} ✎ Edit buttons, found {edit_count}"
+    )
+
+
+# ── v9.0.0: NOW button removal — My Custom AI Analyses ───────────────────────
+# Same removal applied to the custom tasks section in v9.0.0.
+
+def test_now_button_not_present_on_any_custom_task_row(gui):
+    """▶ NOW must not appear on any My Custom AI Analyses row.
+
+    Walks the full custom list frame widget tree. Guards against the NOW
+    button being re-added to custom tasks in a future edit."""
+    import tkinter as tk
+    _pump(gui)
+
+    # Add a custom task so the list has at least one row to inspect
+    import custom_tasks_manager as ctm
+    tasks = ctm.load_custom_tasks()
+    new_task = ctm.create_task(label="Test Task", prompt="Do something.",
+                                schedule="none")
+    tasks.append(new_task)
+    ctm.save_custom_tasks(tasks)
+    gui.app._refresh_custom_task_list()
+    _pump(gui)
+
+    def _collect_buttons(widget):
+        btns = []
+        for child in widget.winfo_children():
+            if isinstance(child, tk.Button):
+                btns.append(child.cget("text"))
+            btns.extend(_collect_buttons(child))
+        return btns
+
+    custom_frame = gui.app._custom_list_frame
+    all_labels = _collect_buttons(custom_frame)
+    now_labels = [lbl for lbl in all_labels if "NOW" in lbl]
+    assert now_labels == [], (
+        f"▶ NOW button must not exist on any My Custom AI Analyses row "
+        f"(v9.0.0 removal). Found: {now_labels}"
+    )
+
+
+# ── v9.0.1: NOW Debug Log button removal — Autonomous AI Task Queue panel ───
+# The ▶ NOW button was removed from BOTH Common Business AI Analysis (v9.0.0)
+# and My Custom AI Analyses (v9.0.0) rows above, but the "🐛 NOW Debug Log" /
+# "🗑 Clear" button pair in this panel's own button row (_tqa_btn_row2) was
+# left behind — a viewer for a run mechanism that no longer exists anywhere
+# in the app, and whose underlying now_button_debug.log is never written to
+# by anything reachable from the GUI either (run_single_prompt_now() in
+# task_queue_automation.py, the only thing that ever wrote it, has no
+# remaining caller). Found live: David rebuilt with the v9.0.0 NOW-removal
+# changes and the button was still visible in this panel.
+
+def test_now_debug_log_button_not_present_in_task_queue_panel(gui):
+    """The NOW Debug Log button (and its companion Clear button) must not
+    appear anywhere in the Autonomous AI Task Queue panel's own button row.
+
+    Walks from _tqa_btn_enable (self-exposed, packed directly into
+    _tqa_btn_row2) rather than requiring _tqa_btn_row2 itself to be exposed
+    on self — none of this panel's debug-log buttons ever were. Checks both
+    tk.Button and ttk.Button since this row mixes both widget types (the
+    Toggle On/Off button is a plain tk.Button for its bg/fg color; the
+    View Audit Log / Command Debug Log / Clear buttons are ttk.Button)."""
+    import tkinter as tk
+    import tkinter.ttk as ttk
+    _pump(gui)
+
+    def _collect_buttons(widget):
+        btns = []
+        for child in widget.winfo_children():
+            if isinstance(child, (tk.Button, ttk.Button)):
+                btns.append(child.cget("text"))
+            btns.extend(_collect_buttons(child))
+        return btns
+
+    btn_row = gui.app._tqa_btn_enable.master
+    all_labels = _collect_buttons(btn_row)
+    now_labels = [lbl for lbl in all_labels if "NOW" in lbl]
+    assert now_labels == [], (
+        f"'NOW Debug Log' button must not exist in the Autonomous AI Task "
+        f"Queue panel (v9.0.1 removal — the NOW run mechanism it debugged "
+        f"was already removed from both analysis sections in v9.0.0). "
+        f"Found: {now_labels}"
+    )
+
+
+def test_view_and_command_debug_log_buttons_still_present_in_task_queue_panel(gui):
+    """View Audit Log and Command Debug Log (+ their Clear buttons) must
+    still be present — guards against accidentally removing the wrong
+    buttons when removing the NOW Debug Log button."""
+    import tkinter as tk
+    import tkinter.ttk as ttk
+    _pump(gui)
+
+    def _collect_buttons(widget):
+        btns = []
+        for child in widget.winfo_children():
+            if isinstance(child, (tk.Button, ttk.Button)):
+                btns.append(child.cget("text"))
+            btns.extend(_collect_buttons(child))
+        return btns
+
+    btn_row = gui.app._tqa_btn_enable.master
+    all_labels = _collect_buttons(btn_row)
+    assert any("View Audit Log" in lbl for lbl in all_labels)
+    assert any("Command Debug Log" in lbl for lbl in all_labels)
+    assert sum(1 for lbl in all_labels if lbl == "🗑 Clear") == 2, (
+        f"Expected exactly 2 'Clear' buttons (audit log + command debug "
+        f"log) now that NOW Debug Log's Clear button is gone. "
+        f"Found labels: {all_labels}"
+    )
 
 
 def test_build_builtin_prompt_injects_scope_and_output(gui):
@@ -766,63 +1160,138 @@ def test_edit_settings_persist_across_reopen(gui):
     assert settings["first_due"] == "2026-08-01"
 
 
-def test_run_analysis_now_uses_saved_settings_not_raw_prompt(gui, monkeypatch):
-    """v8.1.6 regression test: ▶ NOW previously used the raw unenriched
-    task prompt, silently ignoring any saved scope/output settings. Now it
-    must build the SAME enriched prompt ▶ Queue would use."""
+# ── v9.0.1: Edit Custom Analysis schedule dropdown reverts to stale value ────
+# Found live (screenshots): editing an existing task from Manual to Daily
+# correctly showed the Start/End time + Times-per-day fields immediately, but
+# the dropdown ITSELF kept displaying "Manual only" until the exact same
+# "Daily" selection was made a SECOND time. Root cause: _apply_sched_current_
+# on_map was bound to the dialog's <Map> event to work around an earlier
+# not-yet-mapped-widget bug (ttk.Combobox.current() called before the window
+# is mapped silently clears the display) -- but <Map> isn't guaranteed to
+# fire only once. A ttk.Combobox's dropdown listbox is its own popup
+# Toplevel; opening it (i.e. the user actually using the dropdown) can
+# generate a second <Map> event on the parent dialog. Left bound forever via
+# add='+', that second event re-ran the handler and force-reset the
+# combobox's displayed text back to whatever it was when the dialog first
+# opened, clobbering the user's real selection. Fix: the handler now unbinds
+# itself after the first firing.
+
+def _find_toplevel_by_title(root, title_substr):
+    """Depth-first search of root's children for a Toplevel whose title
+    contains title_substr. The task editor is a plain tk.Toplevel, not
+    tracked anywhere on the app object, so tests have to find it this way."""
+    for child in root.winfo_children():
+        if isinstance(child, tk.Toplevel) and title_substr in child.title():
+            return child
+        found = _find_toplevel_by_title(child, title_substr)
+        if found is not None:
+            return found
+    return None
+
+
+def _find_first_combobox(widget):
+    import tkinter.ttk as ttk
+    for child in widget.winfo_children():
+        if isinstance(child, ttk.Combobox):
+            return child
+        found = _find_first_combobox(child)
+        if found is not None:
+            return found
+    return None
+
+
+def test_schedule_dropdown_does_not_revert_after_second_map_event(gui):
+    """v9.0.1 regression: selecting a new schedule must stick even if the
+    dialog's <Map> event fires again afterward (simulating the combobox's
+    own popdown listbox triggering a second <Map> on the parent window)."""
     import custom_tasks_manager as ctm
-    ctm.save_builtin_analysis_settings("growth_opportunities", {
-        "scope_dirs": ["C:\\Data"],
-        "output_learnings": True,
-        "output_report": False,
-        "report_folder": ctm.DEFAULT_REPORT_FOLDER,
-        "schedule": "none",
-        "first_due": None,
-    })
-    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: True)
-    monkeypatch.setattr(tqa, "load_config", lambda: {
-        "mcp_config_path": "x.json",
-        "allowed_tools": "mcp__ai-prowler__*",
-        "use_api_key": False})
 
-    captured = {}
-    def _fake_run_single_prompt_now(prompt, *a, **kw):
-        captured["prompt"] = prompt
-        return True, "done"
-    monkeypatch.setattr(tqa, "run_single_prompt_now", _fake_run_single_prompt_now)
-    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: True)
+    tasks = ctm.load_custom_tasks()
+    task = ctm.create_task(label="Schedule Bug Task", prompt="Do something.",
+                            schedule="none")
+    tasks.append(task)
+    ctm.save_custom_tasks(tasks)
 
-    # Run the background thread synchronously, same pattern the old
-    # Run Due Tasks tests used — threading.Thread is the same stdlib
-    # singleton rag_gui.py itself imports.
-    import threading
-    monkeypatch.setattr(threading, "Thread",
-                         lambda target, daemon: type("T", (), {"start": lambda self: target()})())
+    win = gui.app._open_task_editor(task)
+    _pump(gui)  # real initial <Map> fires here — the correct, intended one
 
-    task_def = next(t for t in gui.app._ANALYSIS_TASKS if t["type"] == "growth_opportunities")
-    now_btn = tk.Button(gui.root, text="▶ NOW")
-    gui.app._run_analysis_now(task_def, now_btn)
+    dlg = win or _find_toplevel_by_title(gui.root, "Edit Custom Analysis")
+    assert dlg is not None, "Could not locate the Edit Custom Analysis window"
+
+    combo = _find_first_combobox(dlg)
+    assert combo is not None, "Could not locate the schedule Combobox"
+    assert combo.get() == "Manual only"
+
+    # User selects "Daily" — real interaction: set the display value and
+    # fire the same virtual event ttk.Combobox fires on a real selection.
+    combo.set("Daily")
+    combo.event_generate("<<ComboboxSelected>>")
+    _pump(gui)
+    assert combo.get() == "Daily", (
+        "Combobox did not show 'Daily' immediately after selection"
+    )
+
+    # Simulate the second <Map> event that was clobbering the selection.
+    dlg.event_generate("<Map>")
+    _pump(gui)
+    assert combo.get() == "Daily", (
+        "Combobox reverted to a stale value after a second <Map> event — "
+        "the v9.0.1 regression this test guards against"
+    )
+
+    dlg.destroy()
+
+
+def test_schedule_dropdown_initializes_correctly_for_existing_daily_task(gui):
+    """Regression guard for the ORIGINAL bug _apply_sched_current_on_map
+    exists to fix: opening the editor for a task that's already scheduled
+    Daily must show 'Daily' in the dropdown immediately, with no extra
+    interaction needed. Makes sure the v9.0.1 fix (unbind after first
+    firing) didn't remove the single application that's still required."""
+    import custom_tasks_manager as ctm
+
+    tasks = ctm.load_custom_tasks()
+    task = ctm.create_task(label="Already Daily Task", prompt="Do something.",
+                            schedule="daily", first_due="2026-08-10")
+    tasks.append(task)
+    ctm.save_custom_tasks(tasks)
+
+    win = gui.app._open_task_editor(task)
     _pump(gui)
 
-    assert "prompt" in captured
-    assert "C:\\Data" in captured["prompt"]
-    now_btn.destroy()
+    dlg = win or _find_toplevel_by_title(gui.root, "Edit Custom Analysis")
+    assert dlg is not None
+
+    combo = _find_first_combobox(dlg)
+    assert combo is not None
+    assert combo.get() == "Daily", (
+        "Editing an already-Daily task should show 'Daily' immediately "
+        "without any user interaction"
+    )
+
+    dlg.destroy()
+
+
+def test_run_analysis_now_uses_saved_settings_not_raw_prompt(gui, monkeypatch):
+    """OBSOLETE as of v9.0.0 — ▶ NOW (and gui.app._run_analysis_now, the
+    method this test drove) was removed from Common Business AI Analysis
+    entirely; see test_run_analysis_now_not_exposed_on_gui above, which
+    positively asserts the method no longer exists. This test used to guard
+    a v8.1.6 bug where ▶ NOW used the raw unenriched task prompt instead of
+    the same enriched prompt ▶ Queue builds — moot now that the enrichment
+    path (_build_builtin_prompt) is only ever reached via ▶ Queue.
+    Kept as a stub, not deleted outright, so the v8.1.6 bug this used to
+    guard against stays discoverable in test history if ▶ NOW (or an
+    equivalent immediate-run mechanism) is ever reintroduced."""
+    pytest.skip("_run_analysis_now removed in v9.0.0 — see "
+                "test_run_analysis_now_not_exposed_on_gui")
 
 
 def test_run_analysis_now_blocked_without_cli(gui, monkeypatch, dialogs):
-    monkeypatch.setattr(tqa, "claude_code_cli_installed", lambda: False)
-    run_calls = []
-    monkeypatch.setattr(tqa, "run_single_prompt_now", lambda *a, **kw: run_calls.append(1))
-    dialogs.reset()
-
-    task_def = next(t for t in gui.app._ANALYSIS_TASKS if t["type"] == "analyze_business")
-    now_btn = tk.Button(gui.root, text="▶ NOW")
-    gui.app._run_analysis_now(task_def, now_btn)
-    _pump(gui)
-
-    assert len(run_calls) == 0
-    assert dialogs.last_call("showwarning") is not None
-    now_btn.destroy()
+    """OBSOLETE as of v9.0.0 — see test_run_analysis_now_uses_saved_settings_
+    not_raw_prompt above for the full explanation."""
+    pytest.skip("_run_analysis_now removed in v9.0.0 — see "
+                "test_run_analysis_now_not_exposed_on_gui")
 
 
 # ── v8.3: color-coded ON/OFF toggle button — replaces checkbox + status dot ─

@@ -143,6 +143,16 @@ def isolated_env(tmp_path, rag, monkeypatch):
     monkeypatch.setattr(rag, "AUTO_UPDATE_LIST", auto_update)
     monkeypatch.setattr(rag, "EMAIL_INDEX_DB", email_index)
 
+    # v9.0.1: default the ChromaDB cold-init settle delay (see
+    # get_chroma_client()'s docstring) to 0 for every isolated_env-backed
+    # test. isolated_env is the thing that forces a fresh cold client init
+    # per test via invalidate_chroma_cache() below, so without this every
+    # test in the suite would pay the real ~1.5s delay on top of the model
+    # load it already pays. tests/unit/test_chroma_cold_init_settle.py
+    # overrides this back to a small nonzero value in its own tests to
+    # actually exercise the delay.
+    monkeypatch.setattr(rag, "_CHROMA_COLD_INIT_SETTLE_SECONDS", 0)
+
     # Cache invalidation — must run AFTER the patch so the next call rebuilds
     # against the new path.
     rag.invalidate_chroma_cache()

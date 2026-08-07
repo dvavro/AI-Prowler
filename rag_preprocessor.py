@@ -271,6 +271,12 @@ OLLAMA_MODEL = "llama3.2:1b"
 # survives app upgrades/reinstalls, and follows standard Windows conventions.
 CHROMA_DB_PATH = str(Path.home() / 'AI-Prowler' / 'rag_database')
 COLLECTION_NAME = "documents"
+# v9.0.1: settle delay applied once, right after a COLD chromadb.PersistentClient
+# init, before that client is cached/returned. See get_chroma_client()'s docstring
+# for the full rationale. Exposed as a module-level constant (rather than a bare
+# literal in the function body) so tests can monkeypatch it to 0 for speed, or to
+# a small nonzero value to assert the delay actually happens.
+_CHROMA_COLD_INIT_SETTLE_SECONDS = 1.5
 CHUNK_SIZE    = 500   # words per chunk
 CHUNK_OVERLAP = 50    # words overlap between chunks
 # Scanned-PDF threshold: if pdfplumber finds fewer chars than this the
@@ -1238,7 +1244,9 @@ SUPPORTED_EXTENSIONS = {
     '.groovy',              # JVM language (sibling of .java/.kt/.scala)
     '.pl', '.pm',           # Perl
     '.html', '.htm', '.css', '.scss', '.sass', '.less', '.xml', '.xhtml',
-    '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf', '.env',
+    '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf',
+    # NOTE: .env is intentionally NOT here — it contains secrets (API keys,
+    # DB passwords, tokens). See SKIP_EXTENSIONS below.
     # Data / logs
     '.csv', '.tsv', '.log', '.sql',
     # Images — OCR extracts text content via Tesseract
@@ -1261,6 +1269,15 @@ SUPPORTED_EXTENSIONS = {
 # Indexed as ONE chunk containing only the first 500 lines, prefixed with
 # [SECURITY SCAN ONLY]. Lets Claude detect malicious scripts without flooding
 # semantic search with code boilerplate. Use grep for code search.
+#
+# INTENTIONALLY EXCLUDED from this set (fully semantically chunked instead):
+#   .css/.scss/.sass/.less — stylesheets are design documentation, not
+#       executables; semantic chunking over class names and comments is useful.
+#   .sql — schema definitions and query libraries are documentation; users
+#       index these to ask "what tables exist" or "what does this query do".
+#   .md/.rst/.markdown — handled by load_md() before this branch is even
+#       reached in load_file(); listed here only for clarity.
+#   .env — excluded from SUPPORTED_EXTENSIONS entirely (contains secrets).
 CODE_SCAN_EXTENSIONS = {
     '.py', '.rb', '.pl', '.pm', '.r',
     '.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs',
@@ -1268,8 +1285,6 @@ CODE_SCAN_EXTENSIONS = {
     '.cs', '.cpp', '.c', '.h', '.hpp', '.cc', '.cxx',
     '.go', '.rs', '.swift', '.php',
     '.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd',
-    '.css', '.scss', '.sass', '.less',
-    '.sql',
 }
 CODE_SCAN_LINES = 500
 
@@ -1304,6 +1319,10 @@ SKIP_EXTENSIONS = {
     # Temp / cache / lock
     '.tmp', '.temp', '.cache', '.lock', '.bak', '.swp', '.swo',
     '.DS_Store', '.Thumbs.db',
+    # Secret / credential files — must never be indexed
+    # .env files contain API keys, DB passwords, tokens, and other secrets.
+    # Indexing them into ChromaDB would expose credentials to every search query.
+    '.env',
 }
 
 # ----- Code Tools write-side: backup-filename pattern check -----
@@ -3313,11 +3332,47 @@ def get_chroma_client():
 
     The "Loading embedding model" message is suppressed on cache hits so the
     GUI output box stays clean.
+
+    Cold-init settle delay (v9.0.1)
+    --------------------------------
+    A fresh chromadb.PersistentClient's Rust-side segment manager spins up
+    background HNSW compaction/bookkeeping work that is not guaranteed to be
+    finished the instant the constructor returns. Writing to a collection
+    (add/delete) immediately after a cold init has been observed in the wild
+    to race that startup work and corrupt the on-disk HNSW vector segment —
+    not a soft/recoverable error, but permanent: every subsequent read of
+    that collection (even a bare .count(), no write, no embedding function)
+    then crashes the whole process with a native access violation, because
+    the corruption lives in the persisted HNSW binary files themselves, not
+    in anything Python-side that a retry could work around. See
+    COMPLETE_USER_GUIDE.md's "v9.0.1" changelog entry for the incident this
+    guard was added for.
+
+    Historically the only place in this codebase that was protected against
+    this was rag_gui.py's _prewarm_embedding_model, which sidesteps the
+    problem entirely by never writing to ChromaDB there. That protection
+    didn't extend to the general indexing path (index_file_list /
+    reindex_file / command_update), which routes through this function too
+    and DOES write shortly after — that gap is what let the corruption
+    happen. Since the client is cached after this call, the delay below is
+    paid at most once per process lifetime, not once per index operation.
+
+    This is a mitigation for an upstream chromadb/HNSW race, not a proven
+    fix — there's no public confirmation from the chromadb project of the
+    exact mechanism. If it recurs even with this guard in place, the only
+    remedy is rebuilding the collection from source files (reindex_all with
+    purge_first=True), since the corruption is unrepairable in place.
+
+    Skippable for tests: _CHROMA_COLD_INIT_SETTLE_SECONDS is a module-level
+    constant (not a literal here) so test code can monkeypatch it to 0 to
+    avoid paying this cost on every isolated_env-backed test, or to a small
+    nonzero value to assert the delay actually happens.
     """
     global _chroma_client_cache, _embedding_func_cache
 
     if _chroma_client_cache is not None and _embedding_func_cache is not None:
-        # Return cached instances — no disk I/O or model loading
+        # Return cached instances — no disk I/O or model loading, and
+        # critically, no settle delay: that's a cold-init-only cost.
         return _chroma_client_cache, _embedding_func_cache
 
     # First call — load everything and cache it
@@ -3335,6 +3390,11 @@ def get_chroma_client():
     # Use our GPU-aware wrapper instead of ChromaDB's built-in
     # SentenceTransformerEmbeddingFunction (see class docstring above).
     embedding_func = _SentenceTransformerEmbedding(EMBEDDING_MODEL, device=device)
+
+    # Let the freshly-constructed client's background HNSW bookkeeping settle
+    # before any caller can reach a write call — see docstring above.
+    if _CHROMA_COLD_INIT_SETTLE_SECONDS > 0:
+        time.sleep(_CHROMA_COLD_INIT_SETTLE_SECONDS)
 
     _chroma_client_cache = client
     _embedding_func_cache = embedding_func
@@ -3469,7 +3529,8 @@ def index_file_list(file_paths: list, label: str = "",
                     stop_event=None, pause_event=None,
                     start_from: int = 0,
                     root_directory: str = "",
-                    collection_resolver=None, indexer_user=None, purge_gate=None) -> dict:
+                    collection_resolver=None, indexer_user=None, purge_gate=None,
+                    force: bool = False) -> dict:
     """
     Index a specific pre-built list of file paths.
 
@@ -3499,6 +3560,11 @@ def index_file_list(file_paths: list, label: str = "",
         indexer_user:        Optional user dict for ownership stamping (v7.0.0).
         purge_gate:          Optional callable(existing_metas)->bool to gate chunk
                              purges by ownership (v7.0.0). None = purge freely.
+        force:               If True, bypass the mtime+size unchanged-skip guard and
+                             always re-index every file in file_paths. Used by
+                             reindex_file() so that an explicit "force re-index" call
+                             can never silently produce 0 chunks because the file
+                             hasn't changed on disk since the last index run.
 
     Returns dict with keys: processed, skipped, chunks, words, stopped_at
       stopped_at = 1-based index of next unprocessed file (0 if completed)
@@ -3510,6 +3576,7 @@ def index_file_list(file_paths: list, label: str = "",
             root_directory=root_directory,
             collection_resolver=collection_resolver,
             indexer_user=indexer_user, purge_gate=purge_gate,
+            force=force,
         )
 
 
@@ -3518,7 +3585,7 @@ def _index_file_list_impl(file_paths: list, label: str = "",
                           start_from: int = 0,
                           root_directory: str = "",
                           collection_resolver=None, indexer_user=None,
-                          purge_gate=None) -> dict:
+                          purge_gate=None, force: bool = False) -> dict:
     """Internal implementation — called under _index_write_lock."""
     import time as _time
     client, embedding_func = get_chroma_client()
@@ -3617,20 +3684,24 @@ def _index_file_list_impl(file_paths: list, label: str = "",
         progress = f"[{i}/{total}]"
 
         # ── Skip unchanged files (mtime + size match tracking DB) ───────────────
-        try:
-            _stat    = os.stat(filepath)
-            _tracked = _flat_tracking.get(filepath)
-            if (_tracked is not None
-                    and abs(_tracked.get('modified', 0) - _stat.st_mtime) < 1.0
-                    and _tracked.get('size') == _stat.st_size):
-                _rel = os.path.join(
-                    os.path.basename(os.path.dirname(filepath)),
-                    os.path.basename(filepath))
-                print(f"{prefix}{progress} ✓ {_rel}  (unchanged — skipping)")
-                skipped += 1
-                continue
-        except OSError:
-            pass  # File vanished between scan and index — let load_file handle it
+        # Bypassed when force=True — reindex_file() sets this so an explicit
+        # "force re-index" call never silently produces 0 chunks just because
+        # the file hasn't changed on disk since it was last indexed.
+        if not force:
+            try:
+                _stat    = os.stat(filepath)
+                _tracked = _flat_tracking.get(filepath)
+                if (_tracked is not None
+                        and abs(_tracked.get('modified', 0) - _stat.st_mtime) < 1.0
+                        and _tracked.get('size') == _stat.st_size):
+                    _rel = os.path.join(
+                        os.path.basename(os.path.dirname(filepath)),
+                        os.path.basename(filepath))
+                    print(f"{prefix}{progress} ✓ {_rel}  (unchanged — skipping)")
+                    skipped += 1
+                    continue
+            except OSError:
+                pass  # File vanished between scan and index — let load_file handle it
 
         # ── Email archive — use per-message incremental indexer ────────────────
         if ext in EMAIL_ARCHIVE_EXTENSIONS:
