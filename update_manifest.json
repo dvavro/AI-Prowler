@@ -1,21 +1,21 @@
 {
   "version": "9.0.0",
-  "generated": "2026-08-07T13:00:37",
+  "generated": "2026-08-09T17:04:27",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "a44f6b010cf0e5c44fd2e82b050d93248949eea878c2997ad88a8a671d4150e4",
-      "bytes": 1229648
+      "sha256": "d52e9a3d177262f95ff089edd4689bfb5e3371fe4eaf4f58457b40f44a46902e",
+      "bytes": 1231924
     },
     {
       "path": "rag_preprocessor.py",
-      "sha256": "d16ea47838af5d278293e53c4e859761238f0180b1b006888f140d8d9b6ad6ae",
-      "bytes": 306279
+      "sha256": "8900ee4dba50fec33ddd0c3ed9ac98fd830c5b57ffac0fc75b87b22302bac48e",
+      "bytes": 310397
     },
     {
       "path": "ai_prowler_mcp.py",
-      "sha256": "ed1676927fdb28e22211fd953828feaaef1d5b9b424090570dfdf9ae73245ac7",
-      "bytes": 787598
+      "sha256": "184ef0451d5e6b428e0c1db8f57fb4907bf3052ed33cc19e25c90d5e51856679",
+      "bytes": 784669
     },
     {
       "path": "mcp_diagnostics.py",
@@ -124,13 +124,13 @@
     },
     {
       "path": "task_queue_automation.py",
-      "sha256": "be85e3fc920716b75f3eac8a9bcf60c9b596e501d87209b43c9764d75ec27d03",
-      "bytes": 134513
+      "sha256": "04f8ffdd0377e4faecc473296e1033575678501a5621fd69ff2c84fc2491bede",
+      "bytes": 136780
     },
     {
       "path": ".claude/settings.json",
-      "sha256": "2b047af7bdd9b5c5062558c81911f08cfedf500e23aa638e4491e7a10cae7171",
-      "bytes": 1329
+      "sha256": "05096649e613963a1ba967656f883f279b3eaf7ddd8cd0f5456aeba68bd752e4",
+      "bytes": 1591
     },
     {
       "path": ".claude/hooks/log_tool_call.py",
@@ -139,8 +139,8 @@
     },
     {
       "path": ".claude/skills/ai-prowler-tasks/SKILL.md",
-      "sha256": "de495421f5329dc88428639cc241da8532e34a96d6a160a853ee38039263fb00",
-      "bytes": 6304
+      "sha256": "3adb919aebab44e567fbeea638135010ddd89fe7ab63b76c41361aa954e84a63",
+      "bytes": 6255
     }
   ]
 }

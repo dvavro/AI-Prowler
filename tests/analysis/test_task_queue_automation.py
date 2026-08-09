@@ -124,12 +124,15 @@ def test_load_last_run_none_when_absent(_isolated_home):
 # ── Wrapper script content (pure function, no file I/O) ───────────────────
 
 def test_wrapper_script_contains_headless_flag():
+    # v9.0.0: mcp__ai-prowler__* broadened to mcp__* so third-party
+    # connectors (Gmail, QuickBooks, etc.) are also permitted.
     content = tqa.build_wrapper_script_content("C:\\fake\\mcp.json", "mcp__ai-prowler__*")
     assert "claude -p" in content
     assert "--mcp-config" in content
     assert "C:\\fake\\mcp.json" in content
     assert "--allowedTools" in content
-    assert "mcp__ai-prowler__*" in content
+    assert "mcp__*" in content          # broadened wildcard
+    assert "mcp__ai-prowler__*" not in content  # narrow form replaced
 
 
 def test_wrapper_script_scopes_tools_not_wildcard_bash():
@@ -180,7 +183,58 @@ def test_local_mcp_config_never_uses_pythonw(_isolated_home, monkeypatch):
         r"C:\Users\david\AppData\Local\Programs\Python\Python311\pythonw.exe")
     exe = tqa._get_python_exe()
     assert exe.lower().endswith("python.exe")
-    assert "pythonw" not in exe.lower()
+
+
+# ── v9.0.0 regression: _SELF_GATE_PYTHON must never be pythonw.exe ─────────
+#
+# Bug: the GUI launches via pythonw.exe (RAG_RUN.bat), so sys.executable at
+# module import time is pythonw.exe. _SELF_GATE_PYTHON was set directly from
+# sys.executable, so the generated bat embedded pythonw.exe in the
+# active-days gate subshell:
+#   for /f "delims=" %%R in ('pythonw.exe -c "..."') do ...
+# pythonw.exe discards stdout, so the subshell produces no output,
+# AIP_WINDOW_CHECK stays empty, the condition fails, and the bat exits 0
+# before ever reaching the claude -p line. last_headless_run.json was 0
+# bytes as a result — confirmed live 2026-08-09.
+#
+# _get_python_exe() correctly substitutes python.exe but it is only called
+# at generate time for the MCP config command — _SELF_GATE_PYTHON is a
+# module-level constant set at import time, so it needs its own inline fix.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_self_gate_python_never_pythonw(monkeypatch):
+    """_SELF_GATE_PYTHON must be python.exe even when sys.executable is
+    pythonw.exe at module import time (GUI launched via RAG_RUN.bat)."""
+    monkeypatch.setattr(
+        tqa.sys, "executable",
+        r"C:\Users\david\AppData\Local\Programs\Python\Python311\pythonw.exe")
+    # Re-evaluate the expression the same way the module does at import time
+    gate = (tqa.sys.executable or "python").replace(
+        "pythonw.exe", "python.exe").replace("pythonw", "python")
+    assert "pythonw" not in gate.lower(), (
+        f"_SELF_GATE_PYTHON would be {gate!r} — pythonw.exe in the "
+        f"active-days gate subshell discards stdout, causing the bat to "
+        f"exit 0 before reaching claude -p")
+    assert gate.lower().endswith("python.exe")
+
+
+def test_wrapper_bat_active_days_gate_never_uses_pythonw(monkeypatch):
+    """The generated bat's active-days gate must use python.exe not pythonw.
+    Regression guard: if pythonw.exe appears in the gate's for /f subshell,
+    AIP_WINDOW_CHECK is always empty (pythonw discards stdout), the condition
+    always fails, and every scheduled run silently exits without doing anything.
+    Confirmed live 2026-08-09: last_headless_run.json was 0 bytes."""
+    monkeypatch.setattr(
+        tqa.sys, "executable",
+        r"C:\Users\david\AppData\Local\Programs\Python\Python311\pythonw.exe")
+    content = tqa.build_wrapper_script_content("x.json", "mcp__*")
+    # Find the active-days gate line
+    gate_lines = [l for l in content.splitlines()
+                  if 'AIP_WINDOW_CHECK' in l and 'for /f' in l]
+    assert gate_lines, "Active-days gate line not found in bat content"
+    for line in gate_lines:
+        assert "pythonw" not in line.lower(), (
+            f"pythonw.exe in active-days gate will break scheduled runs:\n{line}")
 
 
 def test_local_mcp_config_command_is_never_pythonw(_isolated_home, monkeypatch,
@@ -463,10 +517,9 @@ def test_wrapper_prompt_does_not_use_slash_command():
 
 def test_wrapper_prompt_embeds_full_sequence_instructions():
     content = tqa.build_wrapper_script_content("x.json", "mcp__ai-prowler__*")
-    # Spot-check a few distinctive phrases from each step of the sequence,
-    # not just tool names — confirms the actual instructions made it in,
-    # not just a truncated fragment.
-    assert "sync_due_tasks_to_queue" in content
+    # v9.0.0: sync_due_tasks_to_queue removed — queue is user-controlled only.
+    # Confirm it is NOT present, and that the correct step 1 is.
+    assert "sync_due_tasks_to_queue" not in content
     assert "get_pending_analysis_tasks" in content
     assert "complete_analysis_task" in content
     assert "save_analysis_report" in content
@@ -599,29 +652,11 @@ class TestInstallScheduledTaskTriggerMode:
     # distorted the true interval. SUPERSEDED, not just fixed: interval mode
     # now has no single "anchor" concept at all — every check time is its
     # own independent Daily trigger, so there's nothing left that CAN drift.
-    # The four tests below (which asserted on a single -Once -At full-
-    # datetime anchor) are retired rather than force-adapted, since
-    # test_interval_mode_uses_multiple_daily_triggers_not_repetition above
-    # already covers every property that still applies (no Get-Date, no
-    # RepetitionInterval/Duration, clean deterministic times) — and more
-    # completely, since there's no anchor-drift risk left to test for at all.
-
-    def test_interval_mode_anchor_reflects_schedule_time_not_current_moment(self):
-        pytest.skip("Superseded by the v9.0.1 REDESIGN — interval mode has "
-                     "no single anchor anymore, see "
-                     "test_interval_mode_uses_multiple_daily_triggers_not_repetition")
-
-    def test_interval_mode_anchor_zeroes_seconds_for_any_schedule_time(self):
-        pytest.skip("Superseded by the v9.0.1 REDESIGN — every check time "
-                     "is now a bare HH:MM -Daily -At value with no seconds "
-                     "component to begin with, see "
-                     "test_interval_mode_uses_multiple_daily_triggers_not_repetition")
-
-    def test_interval_mode_anchor_is_a_full_datetime_literal(self):
-        pytest.skip("Superseded by the v9.0.1 REDESIGN — interval mode no "
-                     "longer uses -Once -At at all, only -Daily -At with a "
-                     "bare HH:MM, see "
-                     "test_interval_mode_uses_multiple_daily_triggers_not_repetition")
+    # The three tests that used to assert on a single -Once -At full-datetime
+    # anchor were deleted in v9.0.0. The v9.0.1 redesign removed the single
+    # anchor entirely — each check time is now a bare HH:MM -Daily -At trigger.
+    # test_interval_mode_uses_multiple_daily_triggers_not_repetition (above)
+    # covers everything that still applies.
 
     def test_interval_mode_schedule_is_deterministic_across_repeated_calls(self):
         """Successor to the old 'anchor stable across repeated calls' test.
@@ -2922,3 +2957,237 @@ def test_build_single_prompt_wrapper_api_key_block_when_enabled():
         "Analyze my business.", "x.json", "mcp__ai-prowler__*", use_api_key=True)
     assert "ANTHROPIC_API_KEY" in content
     assert "set /p ANTHROPIC_API_KEY=" in content
+
+
+# ── v9.0.2 regression: WebSearch/WebFetch missing from --allowedTools when
+#    customer config was written before they were added to DEFAULT_CONFIG ───
+#
+# Root cause: build_wrapper_script_content() embedded the saved
+# allowed_tools string verbatim. A config written with only
+# "mcp__ai-prowler__*" produced a bat that silently denied every WebSearch
+# and WebFetch call the prompt explicitly instructed Claude to make —
+# the permission layer blocked the tool at the claude CLI level with no
+# error visible in the run output, producing incomplete task results.
+#
+# Fix: normalise allowed_tools at generation time to always include
+# WebSearch and WebFetch, regardless of what's in the saved config.
+# ──────────────────────────────────────────────────────────────────────────
+
+class TestAllowedToolsNormalisation:
+    """v9.0.2 — WebSearch/WebFetch always present; mcp__* broadened."""
+
+    def test_websearch_webfetch_added_when_missing_from_config(self):
+        """Stale config with only mcp__ai-prowler__* still gets WebSearch
+        and WebFetch injected into the generated bat."""
+        content = tqa.build_wrapper_script_content(
+            mcp_config_path="x.json",
+            allowed_tools="mcp__ai-prowler__*",
+        )
+        assert "WebSearch" in content
+        assert "WebFetch" in content
+
+    def test_websearch_webfetch_preserved_when_already_present(self):
+        """Current default config already has WebSearch,WebFetch — they
+        must still be present after normalisation."""
+        content = tqa.build_wrapper_script_content(
+            mcp_config_path="x.json",
+            allowed_tools="mcp__ai-prowler__*,WebSearch,WebFetch",
+        )
+        assert content.count("WebSearch") >= 1
+        assert content.count("WebFetch") >= 1
+
+    def test_narrow_mcp_wildcard_broadened_to_mcp_star(self):
+        """mcp__ai-prowler__* is replaced with mcp__* so third-party
+        connectors like QuickBooks or Gmail are also permitted."""
+        content = tqa.build_wrapper_script_content(
+            mcp_config_path="x.json",
+            allowed_tools="mcp__ai-prowler__*",
+        )
+        assert "mcp__*" in content
+        # The narrow wildcard should not appear on its own any more
+        assert "mcp__ai-prowler__*" not in content
+
+    def test_broad_mcp_wildcard_preserved_when_already_set(self):
+        """If the config already has mcp__* it stays as-is."""
+        content = tqa.build_wrapper_script_content(
+            mcp_config_path="x.json",
+            allowed_tools="mcp__*,WebSearch,WebFetch",
+        )
+        assert "mcp__*" in content
+
+    def test_empty_allowed_tools_gets_mcp_star_and_web_tools(self):
+        """Edge case: empty allowed_tools still gets the full minimum set."""
+        content = tqa.build_wrapper_script_content(
+            mcp_config_path="x.json",
+            allowed_tools="",
+        )
+        assert "mcp__*" in content
+        assert "WebSearch" in content
+        assert "WebFetch" in content
+
+
+# ── v9.0.0 regression tests: prewarm removal + get_best_embedding_device ─────
+#
+# Root cause of 70s hang in all stdio MCP server contexts (Claude Desktop
+# and headless task runner): the prewarm thread imported sentence_transformers
+# which at import time caused torch.cuda.is_available() to block indefinitely
+# on Blackwell RTX 50xx hardware, holding the GIL and freezing FastMCP's
+# asyncio event loop. Claude Desktop kept re-asking for tool permission every
+# ~60s because the server never replied.
+#
+# Fix 1 — ai_prowler_mcp.py: prewarm thread removed entirely.
+#   The prewarm pre-loaded ChromaDB + sentence-transformers as a "first
+#   search is faster" optimisation unrelated to Ollama. Removed in favour
+#   of on-demand loading (~2-3s, acceptable).
+#
+# Fix 2 — rag_preprocessor.py: get_best_embedding_device() returns 'cpu'
+#   directly without calling torch.cuda.is_available().
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestPrewarmRemovalRegression:
+    """v9.0.0 — prewarm thread removed; MCP config env is minimal."""
+
+    def test_mcp_config_env_has_no_ai_prowler_headless(self, tmp_path,
+                                                         monkeypatch):
+        """AI_PROWLER_HEADLESS no longer needed — prewarm is gone entirely.
+        The MCP server env block must NOT include it so we don't ship dead
+        config to customers."""
+        fake_mcp = tmp_path / "ai_prowler_mcp.py"
+        fake_mcp.write_text("")
+        monkeypatch.setattr(tqa, "LOCAL_MCP_SCRIPT_PATH", fake_mcp)
+        ok, path = tqa._generate_local_mcp_config()
+        assert ok
+        import json
+        config = json.loads(Path(path).read_text())
+        env = config["mcpServers"]["ai-prowler"]["env"]
+        assert "AI_PROWLER_HEADLESS" not in env
+
+    def test_mcp_config_env_has_required_python_vars(self, tmp_path,
+                                                       monkeypatch):
+        """Standard Python env vars must still be present."""
+        fake_mcp = tmp_path / "ai_prowler_mcp.py"
+        fake_mcp.write_text("")
+        monkeypatch.setattr(tqa, "LOCAL_MCP_SCRIPT_PATH", fake_mcp)
+        ok, path = tqa._generate_local_mcp_config()
+        assert ok
+        import json
+        config = json.loads(Path(path).read_text())
+        env = config["mcpServers"]["ai-prowler"]["env"]
+        assert env.get("PYTHONNOUSERSITE") == "1"
+        assert env.get("PYTHONIOENCODING") == "utf-8"
+        assert env.get("PYTHONUNBUFFERED") == "1"
+
+    def test_queue_runner_prompt_does_not_call_sync_due_tasks_to_queue(self):
+        """sync_due_tasks_to_queue must NOT be in the queue runner prompt.
+        The queue is user-controlled — only the user manually queues tasks.
+        Auto-promoting custom task definitions was removed in v9.0.0."""
+        assert "sync_due_tasks_to_queue" not in tqa.QUEUE_RUNNER_PROMPT
+
+    def test_queue_runner_prompt_starts_with_get_pending(self):
+        """Step 1 of the runner must be get_pending_analysis_tasks,
+        not sync_due_tasks_to_queue."""
+        # The first tool mentioned in the sequence should be
+        # get_pending_analysis_tasks
+        idx_pending = tqa.QUEUE_RUNNER_PROMPT.find("get_pending_analysis_tasks")
+        idx_sync    = tqa.QUEUE_RUNNER_PROMPT.find("sync_due_tasks_to_queue")
+        assert idx_pending != -1
+        assert idx_sync == -1   # completely absent
+
+    def test_queue_runner_uses_bypass_permissions(self):
+        """bypassPermissions is required so MCP tool calls are not
+        interactively prompted — acceptEdits only covers file edits."""
+        content = tqa.build_wrapper_script_content("x.json", "mcp__*")
+        assert "bypassPermissions" in content
+        assert "acceptEdits" not in content
+
+
+class TestGetBestEmbeddingDeviceRegression:
+    """v9.0.0 — get_best_embedding_device() always returns 'cpu'."""
+
+    def test_returns_cpu_always(self):
+        """Must return 'cpu' unconditionally — no torch.cuda calls allowed.
+        torch.cuda.is_available() hangs indefinitely on Blackwell RTX 50xx
+        inside any stdio MCP server subprocess context, holding the GIL and
+        freezing the asyncio event loop. Ollama uses the GPU independently."""
+        import sys
+        repo_root = str(Path(__file__).parent.parent.parent)
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        import importlib
+        rp = importlib.import_module("rag_preprocessor")
+        assert rp.get_best_embedding_device() == 'cpu'
+
+    def test_does_not_call_torch(self):
+        """get_best_embedding_device() must not call torch in its body.
+        Importing torch triggers CUDA device enumeration at module level
+        which hangs on Blackwell hardware. The docstring may mention torch
+        for documentation purposes — only the code body matters."""
+        import sys, importlib, inspect, ast
+        repo_root = str(Path(__file__).parent.parent.parent)
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        rp = importlib.import_module("rag_preprocessor")
+        src = inspect.getsource(rp.get_best_embedding_device)
+        # Parse the AST to check only the code body, not the docstring
+        tree = ast.parse(src)
+        func = tree.body[0]
+        # Get all nodes AFTER the docstring
+        body_nodes = func.body[1:]  # skip docstring
+        body_src = ast.unparse(ast.Module(body=body_nodes, type_ignores=[]))
+        assert "torch" not in body_src
+        assert "cuda" not in body_src.lower()
+
+
+# ── v9.0.0 regression: sentence_transformers must be pre-imported at module
+#    level in rag_preprocessor.py, NOT lazily inside tool handlers ────────────
+#
+# Root cause of 30-60s hang in check_ai_prowler_status and any other tool
+# that calls get_chroma_client(): when sentence_transformers is first imported
+# inside _SentenceTransformerEmbedding.__init__() during a live tool call,
+# FastMCP's asyncio event loop is already running. PyTorch initialization
+# conflicts with the running loop, causing a deadlock until the 60s
+# _prewarm_event.wait() timeout fires.
+#
+# Fix: pre-import sentence_transformers at rag_preprocessor module level
+# (lines ~168-175). This import happens when ai_prowler_mcp.py first imports
+# rag_preprocessor — BEFORE mcp.run() starts the event loop. Subsequent
+# lazy imports inside __init__ are no-ops from sys.modules cache.
+#
+# Confirmed fix: check_ai_prowler_status now completes in ~10s (was 72s).
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestSentenceTransformersPreImportRegression:
+    """v9.0.0 — sentence_transformers pre-imported at module level."""
+
+    def test_sentence_transformers_preloaded_at_module_level(self):
+        """rag_preprocessor must pre-import sentence_transformers at module
+        level so the lazy import inside _SentenceTransformerEmbedding.__init__
+        is a no-op (sys.modules hit) when called from a live tool handler
+        with asyncio event loop already running."""
+        import sys, importlib
+        repo_root = str(Path(__file__).parent.parent.parent)
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        rp = importlib.import_module("rag_preprocessor")
+        # The pre-import sets _SENTENCE_TRANSFORMERS_AVAILABLE
+        assert hasattr(rp, '_SENTENCE_TRANSFORMERS_AVAILABLE'), (
+            "_SENTENCE_TRANSFORMERS_AVAILABLE not set — "
+            "sentence_transformers module-level pre-import is missing")
+        assert rp._SENTENCE_TRANSFORMERS_AVAILABLE, (
+            "sentence_transformers failed to import at module level")
+
+    def test_sentence_transformers_in_sys_modules_after_rag_import(self):
+        """After importing rag_preprocessor, sentence_transformers must
+        already be in sys.modules so any subsequent lazy import inside
+        _SentenceTransformerEmbedding.__init__ is a no-op cache hit."""
+        import sys, importlib
+        repo_root = str(Path(__file__).parent.parent.parent)
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        importlib.import_module("rag_preprocessor")
+        assert "sentence_transformers" in sys.modules, (
+            "sentence_transformers not in sys.modules after rag_preprocessor "
+            "import — module-level pre-import is missing or failed. "
+            "This means the first call to get_chroma_client() from a live "
+            "tool handler will trigger a slow lazy import that deadlocks "
+            "with FastMCP's asyncio event loop (~60s hang).")

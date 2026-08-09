@@ -1,8 +1,6 @@
 {
   "_comment": "Project-local Claude Code settings for the AI-Prowler autonomous task runner. Scoped to THIS project only — does not modify your global ~/.claude/settings.json.",
-
   "_command_note": "v8.1.14: the hook command below is a fallback bare `python` invocation, shipped as-is by the installer. task_queue_automation.py's generate_mcp_config() and dry_run_check() both self-heal this to an absolute python.exe path (sys.executable) on whatever machine this actually runs on — see _ensure_hook_uses_absolute_python()'s docstring for why a build-time hardcoded path can't work here (every end user has Python installed somewhere different). This static fallback only matters in the brief window before that self-heal first runs.",
-
   "hooks": {
     "PostToolUse": [
       {
@@ -16,6 +14,12 @@
       }
     ]
   },
-
-  "_permission_note": "The unattended runner passes --allowedTools 'mcp__ai-prowler__*' explicitly on the command line (see task_queue_automation.py build_wrapper_script_content) rather than relying on this file's permissions block, so scoping is visible and testable independent of local settings drift."
+  "_permission_note": "v9.0.0 fix: acceptEdits permission mode does NOT auto-approve MCP tool calls — it only covers file edits and filesystem operations. The permissions.allow block below pre-approves all MCP tools and web tools at the project level, complementing the --allowedTools flag on the command line. Without this, Claude Code prompts for MCP tool approval even in headless -p mode, causing permission_denials in last_headless_run.json and the queue never runs.",
+  "permissions": {
+    "allow": [
+      "mcp__*",
+      "WebSearch",
+      "WebFetch"
+    ]
+  }
 }

@@ -142,6 +142,77 @@ except ImportError as e:
     print("Please run: pip install -r requirements.txt")
     sys.exit(1)
 
+# ── Pre-import sentence_transformers at module level ──────────────────────────
+# v9.0.0 fix: sentence_transformers must be imported here, at module load
+# time, NOT lazily inside _SentenceTransformerEmbedding.__init__().
+#
+# Root cause of 30-60s hang in every Claude Code / Claude Desktop MCP
+# server session: when sentence_transformers is first imported inside a
+# tool handler (i.e. the first call to get_chroma_client() → __init__()),
+# the asyncio event loop is already running (FastMCP's mcp.run() loop).
+# The sentence_transformers import triggers PyTorch initialization which
+# internally tries to acquire locks or spawn threads that conflict with the
+# running asyncio loop, causing a deadlock that lasts until the 60-second
+# _prewarm_event.wait() timeout fires.
+#
+# Importing here — at rag_preprocessor module load time — happens
+# BEFORE mcp.run() is called (ai_prowler_mcp.py imports rag_preprocessor
+# at module level, before the stdio entry point). At that point there is
+# no asyncio event loop running, so PyTorch initializes cleanly in 2-3s.
+# Subsequent lazy imports inside __init__ are no-ops (sys.modules cache).
+#
+# Confirmed by debug tracing: the hang was at
+#   from sentence_transformers import SentenceTransformer
+# inside _SentenceTransformerEmbedding.__init__() called from
+# get_chroma_client() called from a tool handler mid-session.
+# Confirmed fix: check_ai_prowler_status completes in ~10s (was 60-72s).
+
+# ── Debug logging helper ──────────────────────────────────────────────────────
+# Writes timestamped entries to ~/.ai-prowler/rag_init_debug.log so the
+# full init sequence is visible if a hang recurs in the installed version.
+# Uses a file (not stderr) because the MCP server's stderr is swallowed by
+# Claude Code CLI and stdout IS the MCP JSON-RPC pipe — neither is safe.
+import time as _init_time
+
+_RAG_DEBUG_LOG = os.path.join(os.path.expanduser('~'), '.ai-prowler',
+                               'rag_init_debug.log')
+_RAG_DEBUG_T0 = _init_time.time()
+
+
+def _rdlog(msg: str) -> None:
+    """Write a timestamped line to the rag_init_debug.log file."""
+    try:
+        elapsed = _init_time.time() - _RAG_DEBUG_T0
+        line = f"[+{elapsed:6.2f}s] {msg}\n"
+        with open(_RAG_DEBUG_LOG, 'a', encoding='utf-8') as _f:
+            _f.write(line)
+    except Exception:
+        pass  # never crash the server over a debug write
+
+
+# Mark module load start
+_rdlog("rag_preprocessor: module load started")
+_rdlog(f"rag_preprocessor: sentence_transformers in sys.modules = "
+       f"{'sentence_transformers' in sys.modules}")
+
+try:
+    _rdlog("rag_preprocessor: importing sentence_transformers at module level...")
+    _st_import_start = _init_time.time()
+    with suppress_stderr():
+        from sentence_transformers import SentenceTransformer as _SentenceTransformerPreload  # noqa: F401
+        # Import succeeded — subsequent lazy imports inside __init__ will be
+        # no-ops from sys.modules. The alias prevents name collision.
+    _st_import_elapsed = _init_time.time() - _st_import_start
+    _rdlog(f"rag_preprocessor: sentence_transformers import DONE in "
+           f"{_st_import_elapsed:.2f}s")
+    _SENTENCE_TRANSFORMERS_AVAILABLE = True
+except ImportError as _st_err:
+    _rdlog(f"rag_preprocessor: sentence_transformers import FAILED: {_st_err}")
+    _SENTENCE_TRANSFORMERS_AVAILABLE = False
+
+_rdlog(f"rag_preprocessor: module load complete, "
+       f"_SENTENCE_TRANSFORMERS_AVAILABLE={_SENTENCE_TRANSFORMERS_AVAILABLE}")
+
 # ── Excel support — optional but strongly recommended ─────────────────────────
 # openpyxl handles modern .xlsx files; xlrd handles legacy .xls (BIFF8) files.
 # Both are listed in requirements.txt. If missing, Excel files fall back to the
@@ -2992,45 +3063,26 @@ def detect_gpu():
 
 def get_best_embedding_device() -> str:
     """Return the best available torch device string for the embedding model.
-    Returns 'cuda', 'mps', or 'cpu'.
 
-    Validates that CUDA actually works by running a real matrix-multiply
-    (not just allocation) before returning 'cuda'.  torch.cuda.is_available()
-    can return True even when the installed CUDA kernel has no compiled code
-    for the GPU compute capability -- allocation succeeds but the first
-    actual compute op raises cudaErrorUnknown.
+    v9.0.0: always returns 'cpu'.
 
-    Blackwell GPUs (RTX 50xx, SM 12.0+): PyTorch stable cu128 does not yet
-    ship SM 12.0 compute kernels, so we force CPU for any capability >= (12,0)
-    regardless of the matmul result.
+    The sentence-transformers embedding model runs on CPU only on this
+    codebase. Blackwell GPUs (RTX 50xx, SM 12.0+) are incompatible with
+    PyTorch stable cu128 which lacks SM 12.0 compute kernels, so CUDA
+    would be forced to CPU anyway.
+
+    More critically: torch.cuda.is_available() hangs indefinitely when
+    called inside any thread running within a stdio MCP server subprocess
+    (both Claude Desktop and the headless task runner). This is because
+    CUDA device enumeration in a non-interactive subprocess context
+    blocks on Blackwell hardware. While hanging it holds the Python GIL,
+    freezing FastMCP's asyncio event loop and making all tool calls
+    unresponsive. Confirmed by debug tracing — the hang occurs at the
+    torch.cuda.is_available() call itself.
+
+    Ollama uses the GPU independently for LLM inference — that is
+    unaffected by this function returning 'cpu'.
     """
-    try:
-        import torch
-        if torch.cuda.is_available():
-            try:
-                # Blackwell (SM 12.0+) guard.  Stable PyTorch cu128 does not
-                # include SM 12.0 compute kernels; matmul will crash at runtime
-                # with cudaErrorUnknown even though is_available() returns True.
-                major, _minor = torch.cuda.get_device_capability(0)
-                if major >= 12:
-                    gpu_name = torch.cuda.get_device_name(0)
-                    print(f'\u26a0\ufe0f  Blackwell GPU ({gpu_name}, SM {major}.{_minor}) detected -- '
-                          f'PyTorch stable cu128 lacks SM 12.0 compute kernels. '
-                          f'Embeddings will run on CPU; Ollama still uses the GPU.')
-                    return 'cpu'
-                # Real compute smoke-test: a tiny matmul exercises the CUDA
-                # compute kernels, unlike torch.zeros() which is pure allocation.
-                _a = torch.zeros(4, 4, device='cuda')
-                _b = torch.zeros(4, 4, device='cuda')
-                _  = torch.mm(_a, _b)
-                del _a, _b
-                return 'cuda'
-            except Exception:
-                print('\u26a0\ufe0f  CUDA compute test failed -- embeddings will run on CPU.')
-        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-            return 'mps'
-    except ImportError:
-        pass
     return 'cpu'
 
 
@@ -3058,13 +3110,24 @@ class _SentenceTransformerEmbedding:
     """
 
     def __init__(self, model_name: str, device: str = 'cpu'):
+        _rdlog(f"_SentenceTransformerEmbedding.__init__: model={model_name} device={device}")
+        _rdlog(f"_SentenceTransformerEmbedding.__init__: sentence_transformers already in "
+               f"sys.modules = {'sentence_transformers' in sys.modules}")
         import warnings
         import shutil
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
+            _rdlog("_SentenceTransformerEmbedding.__init__: importing SentenceTransformer...")
+            _t = _init_time.time()
             from sentence_transformers import SentenceTransformer
+            _rdlog(f"_SentenceTransformerEmbedding.__init__: import done in "
+                   f"{_init_time.time()-_t:.2f}s")
             try:
+                _rdlog("_SentenceTransformerEmbedding.__init__: calling SentenceTransformer()...")
+                _t2 = _init_time.time()
                 self._model = SentenceTransformer(model_name, device=device)
+                _rdlog(f"_SentenceTransformerEmbedding.__init__: model loaded in "
+                       f"{_init_time.time()-_t2:.2f}s")
             except OSError as e:
                 if e.errno != 22:
                     raise  # unrelated OS error — don't swallow it
@@ -3373,32 +3436,40 @@ def get_chroma_client():
     if _chroma_client_cache is not None and _embedding_func_cache is not None:
         # Return cached instances — no disk I/O or model loading, and
         # critically, no settle delay: that's a cold-init-only cost.
+        _rdlog("get_chroma_client: returning cached client+embedding_func")
         return _chroma_client_cache, _embedding_func_cache
 
     # First call — load everything and cache it
+    _rdlog("get_chroma_client: first call — initializing ChromaDB + embedding model")
     if not GUI_MODE:
         print(f"🔧 Initializing ChromaDB at {CHROMA_DB_PATH}...")
 
+    _rdlog(f"get_chroma_client: calling chromadb.PersistentClient({CHROMA_DB_PATH})")
     client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
+    _rdlog("get_chroma_client: PersistentClient() returned")
 
     # Auto-detect best device for the embedding model (CUDA > MPS > CPU)
     device = get_best_embedding_device()
+    _rdlog(f"get_chroma_client: device={device}")
 
     if not GUI_MODE:
         print(f"🔧 Loading embedding model: {EMBEDDING_MODEL} (device: {device})")
 
     # Use our GPU-aware wrapper instead of ChromaDB's built-in
     # SentenceTransformerEmbeddingFunction (see class docstring above).
+    _rdlog(f"get_chroma_client: creating _SentenceTransformerEmbedding({EMBEDDING_MODEL})")
     embedding_func = _SentenceTransformerEmbedding(EMBEDDING_MODEL, device=device)
+    _rdlog("get_chroma_client: _SentenceTransformerEmbedding() created")
 
     # Let the freshly-constructed client's background HNSW bookkeeping settle
     # before any caller can reach a write call — see docstring above.
     if _CHROMA_COLD_INIT_SETTLE_SECONDS > 0:
+        _rdlog(f"get_chroma_client: sleeping {_CHROMA_COLD_INIT_SETTLE_SECONDS}s settle delay")
         time.sleep(_CHROMA_COLD_INIT_SETTLE_SECONDS)
 
     _chroma_client_cache = client
     _embedding_func_cache = embedding_func
-
+    _rdlog("get_chroma_client: done — client+embedding_func cached and returned")
     return client, embedding_func
 
 def create_or_get_collection(client, embedding_func):

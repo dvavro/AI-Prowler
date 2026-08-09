@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 AI-Prowler MCP Server
 =====================
@@ -1495,8 +1495,14 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
             footer_lines.append("")
             footer_lines.append("Admin tab: ✅ you have admin rights (user management, recovery, etc.)")
 
-    # ── MORNING BRIEFING — pending queue + due tasks ────────────────────────
-    # Always ask the user before running — they may have something urgent first.
+    # ── ANALYSIS BRIEFING — due tasks only ──────────────────────────────────
+    # v9.0.0 fix: only show tasks that are actually due right now.
+    # Previously showed ALL pending tasks regardless of next_due, causing
+    # Claude to report "2 queued tasks" even after they had just run and
+    # re-armed for tomorrow. Also removed the ACTION REQUIRED prompt
+    # injection — injecting instructions into tool output that override
+    # the user's actual request is a prompt-injection risk and was flagged
+    # by Claude itself as suspicious behavior in the scheduled run.
     briefing_lines = []
     try:
         import datetime as _dt
@@ -1505,9 +1511,23 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         if _app not in _sys.path:
             _sys.path.insert(0, _app)
 
-        # Check pending_tasks.json for queued items
+        # Only show queue entries that are due right now
         pending_tasks = _load_pending_tasks()
-        pending = [t for t in pending_tasks if t.get("status") == "pending"]
+        now_utc = _dt.datetime.utcnow()
+        due_now = []
+        for t in pending_tasks:
+            if t.get("status") != "pending":
+                continue
+            next_due_str = t.get("next_due", "")
+            if not next_due_str:
+                continue
+            try:
+                next_due = _dt.datetime.fromisoformat(
+                    next_due_str.replace("Z", ""))
+                if next_due <= now_utc:
+                    due_now.append(t)
+            except Exception:
+                pass
 
         # Check custom_analysis_tasks.json for due/overdue items
         try:
@@ -1518,39 +1538,27 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
             custom_tasks = []
             due_tasks = []
 
-        has_pending = len(pending) > 0
+        has_due_now = len(due_now) > 0
         has_due     = len(due_tasks) > 0
 
-        if has_pending or has_due:
+        if has_due_now or has_due:
             briefing_lines.append("")
             briefing_lines.append("─" * 50)
             briefing_lines.append("")
             briefing_lines.append("📋 ANALYSIS BRIEFING")
             briefing_lines.append("─" * 30)
 
-            if has_pending:
+            if has_due_now:
                 briefing_lines.append(
-                    f"Queue: {len(pending)} pending task"
-                    f"{'s' if len(pending) != 1 else ''}:"
+                    f"Queue: {len(due_now)} task"
+                    f"{'s' if len(due_now) != 1 else ''} due now:"
                 )
-                now = _dt.datetime.utcnow()
-                for t in pending:
-                    try:
-                        created = _dt.datetime.strptime(
-                            t.get("created_at", ""), "%Y-%m-%dT%H:%M:%SZ")
-                        age_mins = int((now - created).total_seconds() / 60)
-                        if age_mins < 60:
-                            age = f"{age_mins}m ago"
-                        elif age_mins < 1440:
-                            age = f"{age_mins // 60}h ago"
-                        else:
-                            age = f"{age_mins // 1440}d ago"
-                    except Exception:
-                        age = "unknown"
-                    briefing_lines.append(f"  • {t.get('label', t.get('task_id', '?'))} (queued {age})")
+                for t in due_now:
+                    briefing_lines.append(
+                        f"  • {t.get('label', t.get('task_id', '?'))}")
 
             if has_due:
-                if has_pending:
+                if has_due_now:
                     briefing_lines.append("")
                 briefing_lines.append(
                     f"Scheduled: {len(due_tasks)} task"
@@ -1558,23 +1566,10 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
                 )
                 for t in due_tasks:
                     status = _ctm.due_status_label(t)
-                    briefing_lines.append(f"  • {t.get('label', '?')} — {status}")
+                    briefing_lines.append(
+                        f"  • {t.get('label', '?')} — {status}")
 
-            briefing_lines.append("")
-            briefing_lines.append(
-                "ACTION REQUIRED: Before answering the user's first question,\n"
-                "ask them: 'I noticed you have "
-                + (f"{len(pending)} queued task{'s' if len(pending) != 1 else ''}" if has_pending else "")
-                + (" and " if has_pending and has_due else "")
-                + (f"{len(due_tasks)} scheduled task{'s' if len(due_tasks) != 1 else ''} due" if has_due else "")
-                + ". Would you like me to run those before we start, "
-                "or would you prefer to handle your current question first?'"
-            )
-            briefing_lines.append(
-                "Wait for the user's answer before taking any action."
-            )
-
-    except Exception as _be:
+    except Exception:
         pass  # Briefing is non-fatal — never block the main guidance
 
     return base_text + "\n".join(footer_lines) + "\n".join(briefing_lines)
@@ -17106,61 +17101,17 @@ if __name__ == "__main__":
         # rag_preprocessor to invoke tkinter/GUI callbacks that hang forever
         # in a subprocess with no event loop running.
 
-        # Event that tool handlers wait on before using ChromaDB
-        _prewarm_event.clear()
-
-        def _do_prewarm():
-            # ── Stdout pollution guard ────────────────────────────────────────
-            # Some libraries (PyTorch Blackwell GPU detection, sentence-
-            # transformers, tokenizers) print directly to sys.stdout during
-            # model load.  In stdio mode sys.stdout IS the MCP JSON-RPC pipe,
-            # so any stray text corrupts it and Claude Desktop shows
-            # "not valid JSON".
-            #
-            # Fix: replace sys.stdout with a filter that discards Python-level
-            # write() calls (killing stray prints) while keeping .buffer
-            # pointing at the real pipe (so mcp.run() can still write JSON).
-            # This is race-condition-safe: mcp.run() uses sys.stdout.buffer,
-            # and _StdoutFilter.buffer always points to the real pipe regardless
-            # of when the swap happens.
-            import sys as _sys
-            _real_stdout = _sys.stdout   # capture before any modification
-
-            class _StdoutFilter:
-                """Discards print()-level writes; exposes real .buffer for mcp."""
-                buffer   = getattr(_real_stdout, 'buffer', _real_stdout)
-                encoding = getattr(_real_stdout, 'encoding', 'utf-8')
-                errors   = getattr(_real_stdout, 'errors',   'replace')
-                def write(self, s):   pass   # discard stray prints
-                def flush(self):      pass
-                def fileno(self):
-                    return _real_stdout.fileno()
-
-            _sys.stdout = _StdoutFilter()
-            try:
-                _log.info("PREWARM: background thread started — loading ChromaDB "
-                          "+ embedding model...")
-                from rag_preprocessor import get_chroma_client, COLLECTION_NAME
-                _pw_client, _pw_emb = get_chroma_client()
-                try:
-                    _pw_col   = _pw_client.get_or_create_collection(
-                                    name=COLLECTION_NAME,
-                                    embedding_function=_pw_emb)
-                    _pw_count = _pw_col.count()
-                    _log.info("PREWARM: done — %d chunks indexed, model cached, "
-                              "asyncio-safe", _pw_count)
-                except Exception:
-                    _log.info("PREWARM: done — DB empty/not created yet, "
-                              "embedding model cached")
-            except Exception as _pw_err:
-                _log.warning("PREWARM: failed (%s) — tool calls will load on demand",
-                             _pw_err)
-            finally:
-                _sys.stdout = _real_stdout   # restore before unblocking tools
-                _prewarm_event.set()          # unblock any waiting tool handlers
-                _log.info("PREWARM: complete, tool handlers unblocked")
-
-        threading.Thread(target=_do_prewarm, daemon=True, name="prewarm").start()
-        _log.info("PREWARM: thread launched — calling mcp.run() immediately")
+        # v9.0.0: prewarm thread removed entirely.
+        # The prewarm pre-loaded ChromaDB + sentence-transformers at startup
+        # as a "first search is faster" optimisation — it had nothing to do
+        # with Ollama. On Blackwell RTX 50xx (SM 12.0) hardware the
+        # sentence_transformers import hangs ~70s in any stdio subprocess
+        # context (Claude Desktop and the headless task runner), freezing
+        # the FastMCP asyncio event loop via the GIL and making all tool
+        # calls unresponsive. The 2-3s cost of loading ChromaDB on first
+        # use is far preferable to a 70s startup hang.
+        # _prewarm_event is set immediately so all tool handlers proceed
+        # without waiting.
+        _prewarm_event.set()
 
         mcp.run(transport="stdio")

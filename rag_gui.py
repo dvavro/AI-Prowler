@@ -92,7 +92,7 @@ if sys.stderr is None:
 # Single source of truth for the app version. Bump this one line when releasing
 # a new version; all UI labels, About dialogs, help text, and update checks
 # read from here.
-APP_VERSION = "9.0.0"
+APP_VERSION = (Path(__file__).parent / "VERSION").read_text(encoding="utf-8").strip()
 
 # ── UI feature flags ─────────────────────────────────────────────────────────
 # Toggle visibility of advanced/legacy GUI sections without removing any
@@ -8582,17 +8582,31 @@ or from the Help menu."""
                         "first.\n\nSaving other settings now, but scheduled "
                         "runs won't work until a key is added.")
 
-                if not cfg.get("mcp_config_path"):
-                    messagebox.showwarning(
-                        "MCP Config Needed",
-                        "No MCP config path is set yet for the headless runner. "
-                        "See the architecture spec (AI-Prowler-ADMIN) for how to "
-                        "generate one with `claude setup-token`.\n\n"
-                        "Saving settings, but scheduled runs won't start until "
-                        "that's configured.")
+                  # v9.0.0: 'MCP Config Needed' warning removed.
+                  # generate_mcp_config() below handles a missing config path.
+
 
                 _tqa.save_config(cfg)
                 _tqa_cfg.update(cfg)
+
+                # v9.0.0 fix: always (re)generate the MCP config on Apply
+                # when enabled, so claude_mcp_config.json is written even
+                # when mcp_config_path is absent from the saved config —
+                # e.g. on a fresh install, after the file is deleted, or
+                # any time the config pre-dates this field being populated.
+                # Previously the gate below silently skipped everything
+                # when mcp_config_path was falsy: no config written, no
+                # bat written, scheduled task fires next morning with
+                # exit 9009. generate_mcp_config() is idempotent and fast;
+                # calling it unconditionally here costs nothing and ensures
+                # the file always exists and points to the correct installed
+                # path before install_wrapper_script() embeds it in the bat.
+                if cfg["enabled"]:
+                    _mcp_ok, _mcp_path = _tqa.generate_mcp_config()
+                    if _mcp_ok and _mcp_path:
+                        cfg["mcp_config_path"] = _mcp_path
+                        _tqa.save_config(cfg)
+                        _tqa_cfg.update(cfg)
 
                 if cfg["enabled"] and cfg.get("mcp_config_path"):
                     wrapper_dir = _tqa.AI_PROWLER_HOME
@@ -8871,6 +8885,23 @@ or from the Help menu."""
             self._tqa_refresh_status_display = _tqa_refresh_status_display
 
             _tqa_refresh_status_display()
+
+            # v9.0.0 fix: 60-second poll to keep the armed display
+            # current after the scheduled task fires and re-arms for
+            # the next day. Safe because compute_next_checker_run() is
+            # a pure local calculation (no schtasks, no subprocess, no
+            # disk I/O) so it cannot block the Tk event loop. 60s
+            # interval avoids the tooltip flicker that caused the
+            # original v8.1.6 4-second loop to be removed.
+            def _tqa_poll_armed():
+                try:
+                    _tqa_armed_var.set(
+                        _tqa.get_scheduled_task_display_info()["display"])
+                except Exception:
+                    pass
+                self._tqa_armed_poll_id = self.root.after(
+                    60_000, _tqa_poll_armed)
+            self._tqa_armed_poll_id = self.root.after(60_000, _tqa_poll_armed)
 
             # v8.1.6 fix, then removed again same night: a self-rescheduling
             # self.root.after(4000, ...) polling loop briefly lived here to
@@ -11252,7 +11283,16 @@ or from the Help menu."""
                 import json as _j
                 p = Path.home() / '.ai-prowler' / 'config.json'
                 cfg = _j.loads(p.read_text(encoding='utf-8-sig')) if p.exists() else {}
-                base = cfg.get('public_base', '').rstrip('/')
+                # v9.0.0 fix: tunnel_domain is the field AI-Prowler
+                # actually writes; public_base is a legacy key no
+                # longer populated. Fall back to tunnel_domain so the
+                # webhook URL shows correctly when the tunnel is running.
+                raw_base = cfg.get('public_base', '').strip()
+                if not raw_base:
+                    td = cfg.get('tunnel_domain', '').strip()
+                    if td:
+                        raw_base = f'https://{td}'
+                base = raw_base.rstrip('/')
                 if base:
                     path = '/whatsapp-webhook' if (_prov_id() == 'twilio' and _wa_enabled_var.get()) else '/sms-webhook'
                     _wh_url_var.set(f'{base}{path}')

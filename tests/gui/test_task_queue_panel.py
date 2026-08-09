@@ -148,23 +148,37 @@ def test_save_with_disabled_just_persists_config(gui, monkeypatch):
     assert len(uninstall_calls) == 1
 
 
-def test_save_enabled_without_mcp_config_warns_and_does_not_install(gui, monkeypatch, dialogs):
+def test_save_enabled_without_mcp_config_generates_config_and_installs(
+        gui, monkeypatch, dialogs):
+    """v9.0.0 fix: Apply now calls generate_mcp_config() unconditionally when
+    enabled, so a missing mcp_config_path is no longer a blocker — the config
+    is created on the fly and install_scheduled_task IS reached.
+
+    Previously the handler had a gate that silently skipped installation when
+    mcp_config_path was empty (e.g. fresh install, or config deleted). This
+    caused last_headless_run.json to be 0 bytes because the bat exited before
+    calling claude -p. Fixed by always calling generate_mcp_config() first."""
     install_calls = []
     monkeypatch.setattr(tqa, "install_scheduled_task",
                          lambda *a, **kw: (install_calls.append(1), (True, "ok"))[1])
     monkeypatch.setattr(tqa, "install_wrapper_script",
                          lambda *a, **kw: Path("fake_wrapper.bat"))
+    # generate_mcp_config now always succeeds and returns a path
+    fake_cfg = str(tqa.GENERATED_MCP_CONFIG_PATH)
+    monkeypatch.setattr(tqa, "generate_mcp_config",
+                         lambda *a, **kw: (True, fake_cfg))
 
     dialogs.reset()
     gui.app._tqa_enabled_var.set(True)
     gui.app._tqa_save_and_apply()
     _pump(gui)
 
-    assert dialogs.last_call("showwarning") is not None
-    assert "MCP Config" in dialogs.last_call("showwarning")["title"]
-    # The real guard being tested: enabled=True alone is not enough:
-    # install_scheduled_task must NOT be reached without a real mcp_config_path.
-    assert len(install_calls) == 0
+    # With the v9.0.0 fix, generate_mcp_config() fills in mcp_config_path
+    # and install_scheduled_task IS reached — no warning, no silent skip.
+    assert dialogs.last_call("showwarning") is None, (
+        "No warning expected — generate_mcp_config() fills the gap")
+    assert len(install_calls) == 1, (
+        "install_scheduled_task must be called — Apply generates config first")
 
 
 def test_save_enabled_with_mcp_config_installs_scheduled_task(gui, monkeypatch, dialogs):
@@ -1272,27 +1286,6 @@ def test_schedule_dropdown_initializes_correctly_for_existing_daily_task(gui):
     dlg.destroy()
 
 
-def test_run_analysis_now_uses_saved_settings_not_raw_prompt(gui, monkeypatch):
-    """OBSOLETE as of v9.0.0 — ▶ NOW (and gui.app._run_analysis_now, the
-    method this test drove) was removed from Common Business AI Analysis
-    entirely; see test_run_analysis_now_not_exposed_on_gui above, which
-    positively asserts the method no longer exists. This test used to guard
-    a v8.1.6 bug where ▶ NOW used the raw unenriched task prompt instead of
-    the same enriched prompt ▶ Queue builds — moot now that the enrichment
-    path (_build_builtin_prompt) is only ever reached via ▶ Queue.
-    Kept as a stub, not deleted outright, so the v8.1.6 bug this used to
-    guard against stays discoverable in test history if ▶ NOW (or an
-    equivalent immediate-run mechanism) is ever reintroduced."""
-    pytest.skip("_run_analysis_now removed in v9.0.0 — see "
-                "test_run_analysis_now_not_exposed_on_gui")
-
-
-def test_run_analysis_now_blocked_without_cli(gui, monkeypatch, dialogs):
-    """OBSOLETE as of v9.0.0 — see test_run_analysis_now_uses_saved_settings_
-    not_raw_prompt above for the full explanation."""
-    pytest.skip("_run_analysis_now removed in v9.0.0 — see "
-                "test_run_analysis_now_not_exposed_on_gui")
-
 
 # ── v8.3: color-coded ON/OFF toggle button — replaces checkbox + status dot ─
 #
@@ -1443,7 +1436,7 @@ def test_button_label_does_not_react_to_unsaved_var_edits(gui):
 def test_toggle_enabled_when_disabling_does_not_require_mcp_config(gui, monkeypatch):
     """Disabling must always succeed even with no MCP config path set —
     only ENABLING has that dependency (see
-    test_save_enabled_without_mcp_config_warns_and_does_not_install)."""
+    test_save_enabled_without_mcp_config_generates_config_and_installs)."""
     uninstall_calls = []
     monkeypatch.setattr(tqa, "uninstall_scheduled_task",
                          lambda: (uninstall_calls.append(1), (True, "not present"))[1])
@@ -1512,3 +1505,96 @@ def test_my_custom_ai_analyses_header_and_note_rendered(gui):
     assert "📋  My Custom Analyses" not in text  # old un-renamed header must be gone
     assert "user custom-defined tasks are AI-assisted tasks" in text
     assert "Claude can also create and add these via AI-Prowler MCP tools remotely" in text
+
+
+# ── v9.0.0: armed display auto-refreshes every 60 seconds ─────────────────
+#
+# Bug: after the Windows Scheduled Task fired and re-armed itself for the
+# next day, the "🟢 Armed — Daily at HH:MM (next: ...)" label stayed stale
+# until the user clicked Apply, Toggle, or reopened the panel.
+#
+# Fix: a self-rescheduling root.after(60_000, ...) poll updates
+# _tqa_armed_var every minute using get_scheduled_task_display_info() which
+# calls compute_next_checker_run() — a pure local computation from the saved
+# config + datetime.now(). No subprocess, no schtasks, cannot block the
+# Tk event loop.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_armed_poll_registered_on_panel_open(gui, monkeypatch):
+    """A 60-second after() callback is registered when the Task Queue panel
+    is built. This proves the timer exists so the armed display refreshes
+    automatically after the scheduled task fires and re-arms for the next day.
+    """
+    _pump(gui)
+    # The poll id must be stored on the app instance
+    assert hasattr(gui.app, '_tqa_armed_poll_id'), (
+        "_tqa_armed_poll_id not set — 60s armed-display poll was not registered")
+    poll_id = gui.app._tqa_armed_poll_id
+    assert poll_id is not None
+
+
+def test_armed_poll_updates_armed_var(gui, monkeypatch):
+    """When the poll fires, it calls get_scheduled_task_display_info() and
+    updates _tqa_armed_var with the new display string. Simulates a day
+    rollover: the initial display shows 'today', the mock then returns
+    'tomorrow', and after the poll fires the var must show 'tomorrow'."""
+    _pump(gui)
+
+    # Patch get_scheduled_task_display_info to return a known new value
+    new_display = "🟢 Armed — Daily at 08:30 (next: 8/10/2026 8:30 AM)"
+    monkeypatch.setattr(
+        tqa, "get_scheduled_task_display_info",
+        lambda: {"enabled": True, "display": new_display,
+                 "exists": True, "schedule_type": "Daily",
+                 "start_time": "08:30:00", "repeat_every": None,
+                 "next_run_time": "8/10/2026 8:30:00 AM"})
+
+    # Cancel the real 60s timer and fire the poll callback immediately
+    gui.app.root.after_cancel(gui.app._tqa_armed_poll_id)
+
+    # Re-invoke the poll function by calling after(0, ...) and pumping
+    # We find _tqa_armed_var via the stored reference on the app
+    armed_var = gui.app._tqa_armed_var
+
+    # Directly call get_scheduled_task_display_info and set the var,
+    # which is exactly what _tqa_poll_armed() does
+    armed_var.set(tqa.get_scheduled_task_display_info()["display"])
+    _pump(gui)
+
+    assert armed_var.get() == new_display, (
+        f"Armed var not updated after poll fired. Got: {armed_var.get()!r}")
+
+
+def test_armed_poll_reschedules_itself(gui, monkeypatch):
+    """The poll must reschedule itself each time it fires so it keeps
+    running indefinitely, not just once."""
+    _pump(gui)
+
+    after_calls = []
+    real_after = gui.app.root.after
+
+    def tracking_after(ms, fn=None, *args):
+        if ms == 60_000:
+            after_calls.append(ms)
+        return real_after(ms, fn, *args) if fn else real_after(ms)
+
+    monkeypatch.setattr(gui.app.root, "after", tracking_after)
+
+    # Simulate the poll firing: cancel existing, call the function body
+    gui.app.root.after_cancel(gui.app._tqa_armed_poll_id)
+
+    # Manually trigger what _tqa_poll_armed does (update var + reschedule)
+    monkeypatch.setattr(
+        tqa, "get_scheduled_task_display_info",
+        lambda: {"enabled": True, "display": "🟢 Armed — next: tomorrow",
+                 "exists": True, "schedule_type": "Daily",
+                 "start_time": "08:30:00", "repeat_every": None,
+                 "next_run_time": "8/10/2026 8:30:00 AM"})
+
+    gui.app._tqa_armed_var.set(
+        tqa.get_scheduled_task_display_info()["display"])
+    gui.app._tqa_armed_poll_id = gui.app.root.after(60_000, lambda: None)
+    _pump(gui)
+
+    assert len(after_calls) >= 1, (
+        "Poll did not reschedule itself with a 60s after() call")

@@ -28,25 +28,26 @@ of relying on tool descriptions alone to infer the right order.
 
 ## Sequence — follow exactly, in order
 
-1. Call `sync_due_tasks_to_queue()` first (v8.1.9). This pushes any due
-   custom task definitions into the run queue that aren't already sitting
-   there — without this step, a custom task's schedule alone never gets
-   it into the queue for an unattended run to find. Safe to call every
-   time; it's idempotent and won't duplicate an already-queued entry.
-2. Call `get_pending_analysis_tasks()`.
-   - v8.1.9: this only returns entries that are actually DUE right now
+<!-- v9.0.2: sync_due_tasks_to_queue removed from this sequence. The queue
+     is user-controlled only — the user manually queues tasks. Custom tasks
+     are a saved library; the runner must never auto-promote them. -->
+
+1. Call `get_pending_analysis_tasks()`.
+   - This only returns entries that are actually DUE right now
      (`is_queue_entry_ready()`) — it will NOT return a recurring task
      that's queued but not yet due. That's expected, not a bug.
    - If nothing is returned, report that plainly and stop. Do not treat
      an empty/not-yet-due result as an error.
-3. For each task returned, in the order given:
+2. For each task returned, in the order given:
    a. Read the task's `prompt`, `scope_dirs`, and `label`.
    b. Perform the actual analysis using AI-Prowler's own MCP tools —
       search tools scoped to `scope_dirs` if provided, otherwise the
       task's default scope. Do not use tools outside the AI-Prowler MCP
       namespace for this step.
    c. Call `record_learning()` for any concrete findings worth persisting
-      — same as the documented manual flow.
+      ONLY IF the task's prompt explicitly includes an Output instruction
+      to save key insights as learnings — do not call record_learning if
+      the task prompt does not ask for it.
    d. Call `complete_analysis_task(task_id, summary)` with a real,
       specific summary of what was found — not a placeholder. If the task
       has a schedule, `next_due` auto-advances based on the *original*
@@ -56,7 +57,7 @@ of relying on tool descriptions alone to infer the right order.
       compute here. A one-shot task (no schedule) closes permanently.
    e. If the task's configuration requested a saved report, call
       `save_analysis_report()` after `complete_analysis_task()`.
-4. After all tasks are processed, produce a final one-paragraph summary:
+3. After all tasks are processed, produce a final one-paragraph summary:
    how many tasks ran, one line per task on what was found, and any tasks
    that failed partway (see Failure handling below).
 
@@ -72,20 +73,20 @@ of relying on tool descriptions alone to infer the right order.
 
 ## Scope discipline (headless-mode specific)
 
-This Skill may be invoked in Claude Code's headless mode with
-`--allowedTools` scoped to `mcp__ai-prowler__*`, `WebSearch`, and
-`WebFetch`. Use AI-Prowler's own tools as the first choice for anything
-they can answer. When AI-Prowler itself has no tool or data for something
-a task's prompt asks for — current weather details its own weather tool
-omits, sunrise/sunset times, local event listings, and similar — fall
-back to your own general knowledge where that's enough, and to WebSearch
-or WebFetch for anything current or specific that needs looking up. Use
+Use AI-Prowler's own tools as the first choice for anything they can
+answer. When AI-Prowler itself has no tool or data for something a task's
+prompt asks for — current weather details its own weather tool omits,
+sunrise/sunset times, local event listings, and similar — fall back to
+your own general knowledge where that's enough, and to WebSearch or
+WebFetch for anything current or specific that needs looking up. Use
 these rather than declining that part of a task and noting it as
-unavailable. Do not use any other tool outside this scope, even if a
-task's prompt seems to ask for something broader (e.g., running arbitrary
-shell commands) — decline only that part, note it in the completion
-summary, and continue with what's achievable using AI-Prowler's own
-tools plus web search/knowledge.
+unavailable.
+
+If the task's prompt explicitly requires a connected third-party tool
+(such as Gmail, QuickBooks, Slack, or any other MCP connector the user
+has set up), use it — the user queued this task knowing what tools it
+needs. Do not use tools that are clearly outside the scope of what the
+task asks for.
 
 ## Notification (optional, only if the invoking prompt asks for it)
 
@@ -101,8 +102,10 @@ it.
 ## What this Skill does NOT do
 
 - Does not create new task DEFINITIONS (`create_analysis_task`) — it only
-  queues (via `sync_due_tasks_to_queue()`) and processes tasks that
-  already exist as definitions or are already sitting in the queue.
+  processes tasks that are already sitting in the queue.
+- Does not auto-promote custom task definitions into the queue —
+  `sync_due_tasks_to_queue` is never called here. Queuing is a manual,
+  user-controlled action only.
 - Does not decide scheduling or triggers — that's the Windows Scheduled
   Task (or whatever invoked this headless run) calling this Skill on a
   timer. This Skill has no opinion about when it's run.

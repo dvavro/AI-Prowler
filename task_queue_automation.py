@@ -66,7 +66,17 @@ SCHEDULED_TASK_NAME = "AI-Prowler-QueueRunner"
 # interpreter generating the wrapper. Quoted in the .bat to tolerate
 # spaces in the path (e.g. "C:\Program Files\Python311\python.exe" on
 # other machines, even though David's own path happens not to have any).
-_SELF_GATE_PYTHON = sys.executable or "python"
+# v9.0.0 fix: replace pythonw.exe with python.exe. The GUI launches via
+# pythonw.exe (so sys.executable is pythonw.exe at import time), but the
+# active-days gate subshell in the generated .bat uses this path in a
+# `for /f ('...')` command — pythonw.exe discards stdout, so the gate
+# check produces no output, AIP_WINDOW_CHECK stays empty, the condition
+# fails, and the bat exits 0 before ever reaching the claude -p line.
+# Confirmed live: last_headless_run.json was 0 bytes because the bat
+# exited at the gate check. _get_python_exe() is not yet defined here
+# (module-level constant), so we replicate its core logic inline.
+_SELF_GATE_PYTHON = (sys.executable or "python").replace(
+    "pythonw.exe", "python.exe").replace("pythonw", "python")
 
 
 def _self_gate_python_invocation() -> str:
@@ -134,17 +144,19 @@ BATCH_LOGON_MARKER_PATH = AI_PROWLER_HOME / "batch_logon_granted.marker"
 # the same steps manually or interactively, it's just no longer what the
 # headless wrapper actually relies on.
 QUEUE_RUNNER_PROMPT = (
+    # v9.0.2: removed the sync_due_tasks_to_queue step that was previously
+    # step 1. The queue is user-controlled — only the user manually queues
+    # tasks. Custom tasks are a saved library the user can queue or not;
+    # the runner must never auto-promote them into the queue behind the
+    # user's back. The runner only processes what the user has already
+    # explicitly queued.
     "Run AI-Prowler's pending analysis task queue. Follow this sequence "
     "exactly, in order. "
-    "1. Call sync_due_tasks_to_queue first. This pushes any due custom "
-    "task definitions into the run queue that aren't already sitting "
-    "there. Safe to call every time; it is idempotent and will not "
-    "duplicate an already-queued entry. "
-    "2. Call get_pending_analysis_tasks. This only returns entries that "
+    "1. Call get_pending_analysis_tasks. This only returns entries that "
     "are actually due right now. If nothing is returned, report that "
     "plainly and stop; do not treat an empty or not-yet-due result as an "
     "error. "
-    "3. For each task returned, in the order given: read the task's "
+    "2. For each task returned, in the order given: read the task's "
     "prompt, scope_dirs, and label; perform the actual analysis using "
     "AI-Prowler's own MCP tools only, scoped to scope_dirs if provided, "
     "otherwise the task's default scope; call record_learning for any "
@@ -157,7 +169,7 @@ QUEUE_RUNNER_PROMPT = (
     "automatically by AI-Prowler, do not compute this yourself; if the "
     "task's configuration requested a saved report, call "
     "save_analysis_report after complete_analysis_task. "
-    "4. After all tasks are processed, produce a final one-paragraph "
+    "3. After all tasks are processed, produce a final one-paragraph "
     "summary: how many tasks ran, one line per task on what was found, "
     "and any tasks that failed partway. "
     "If a single task's analysis fails partway through, still call "
@@ -174,10 +186,13 @@ QUEUE_RUNNER_PROMPT = (
     "general knowledge where that is enough, and to WebSearch or WebFetch "
     "for anything current or specific that requires looking up; use these "
     "rather than declining that part of a task and noting it as "
-    "unavailable. Do not use any other tool outside AI-Prowler's own MCP "
-    "tools plus WebSearch and WebFetch. "
+    "unavailable. If the task's prompt explicitly requires a connected "
+    "third-party tool (such as Gmail, QuickBooks, Slack, or any other MCP "
+    "connector the user has set up), use it — the user queued this task "
+    "knowing what tools it needs. Do not use tools that are clearly outside "
+    "the scope of what the task asks for. "
     "Do not create new task definitions; only process what is already "
-    "due or queued."
+    "queued."
 )
 
 DEFAULT_CONFIG = {
@@ -342,6 +357,26 @@ def build_wrapper_script_content(mcp_config_path: str, allowed_tools: str,
     """
     active_days = active_days if active_days is not None else list(DEFAULT_CONFIG["active_days"])
     _days_py_list = "{" + ",".join(f"'{d}'" for d in active_days) + "}"
+
+    # v9.0.2 fix: always ensure WebSearch and WebFetch are present, and
+    # broaden the MCP wildcard to mcp__* so any third-party MCP connector
+    # the user has set up (QuickBooks, Gmail, Slack, etc.) is permitted.
+    # The prompt already instructs Claude to use AI-Prowler's own tools
+    # first — the wildcard just opens the permission gate for connectors
+    # a task prompt may explicitly require. Without this, a task like
+    # "check my QuickBooks invoices" would be denied at the CLI permission
+    # layer even though the user deliberately queued it knowing what
+    # tools it needs.
+    _required_tools = {"WebSearch", "WebFetch"}
+    _tools_set = {t.strip() for t in allowed_tools.split(",") if t.strip()}
+    _tools_set |= _required_tools
+    # Replace any mcp__ai-prowler__* with the broader mcp__* wildcard so
+    # all connected MCP servers are reachable, not just AI-Prowler's own.
+    _tools_set = {t if t != "mcp__ai-prowler__*" else "mcp__*" for t in _tools_set}
+    # If no mcp__ wildcard at all, add the broad one.
+    if not any(t.startswith("mcp__") for t in _tools_set):
+        _tools_set.add("mcp__*")
+    allowed_tools = ",".join(sorted(_tools_set))
 
     if check_mode == "interval":
         # Single Python one-liner does the whole window check and prints
@@ -522,7 +557,7 @@ REM Best-effort — failure is silently ignored so it never blocks the run.
   --mcp-config "{mcp_config_path}" ^
   --allowedTools "{allowed_tools}" ^
   --output-format json ^
-  --permission-mode acceptEdits > "%USERPROFILE%\\.ai-prowler\\last_headless_run.json" 2>&1
+  --permission-mode bypassPermissions > "%USERPROFILE%\\.ai-prowler\\last_headless_run.json" 2>&1
 
 set RC=%ERRORLEVEL%
 exit /b %RC%
@@ -1590,7 +1625,7 @@ type "%~f0" >> "%USERPROFILE%\.ai-prowler\command_debug.log"
   --mcp-config "{mcp_config_path}" ^
   --allowedTools "{allowed_tools}" ^
   --output-format json ^
-  --permission-mode acceptEdits > "%USERPROFILE%\\.ai-prowler\\last_single_run.json" 2>&1
+  --permission-mode bypassPermissions > "%USERPROFILE%\\.ai-prowler\\last_single_run.json" 2>&1
 
 set RC=%ERRORLEVEL%
 exit /b %RC%
