@@ -553,7 +553,7 @@ REM bound. Two backup files kept: .log.1 (previous run) and .log.2 (oldest).
 REM Best-effort — failure is silently ignored so it never blocks the run.
 "{_get_python_exe()}" -c "import sys; sys.path.insert(0,r'{str(LOCAL_MCP_SCRIPT_PATH.parent)}'); import task_queue_automation as _tqa; _tqa.rotate_audit_log()" >nul 2>&1
 
-{api_key_block}claude -p "{prompt}" ^
+{api_key_block}"{_get_claude_exe()}" -p "{prompt}" ^
   --mcp-config "{mcp_config_path}" ^
   --allowedTools "{allowed_tools}" ^
   --output-format json ^
@@ -629,12 +629,39 @@ def dry_run_check() -> dict:
     _ensure_hook_uses_absolute_python()
     checks = []
 
-    # 1. Is the `claude` CLI on PATH at all?
+    # 1a. Is claude.exe findable (PATH or well-known disk location)?
+    #     Two-level check so we can give the user a precise action when it's
+    #     on disk but PATH is broken — the exact failure mode from 2026-08-10.
     claude_path = shutil.which("claude")
+    _default_disk = Path.home() / ".local" / "bin" / "claude.exe"
+    _on_disk = _default_disk.exists()
+    if claude_path is not None:
+        _cli_detail = claude_path
+    elif _on_disk:
+        _cli_detail = (f"Found at {_default_disk} but not on PATH — "
+                       "click \u2b07 Install Claude Code CLI to register it.")
+    else:
+        _cli_detail = ("`claude` not found — click \u2b07 Install Claude Code CLI.")
     checks.append({
         "name": "Claude Code CLI on PATH",
         "ok": claude_path is not None,
-        "detail": claude_path or "`claude` not found on PATH — install Claude Code first.",
+        "detail": _cli_detail,
+    })
+
+    # 1b. Will Task Scheduler actually find it? dry_run_check() runs in the
+    #     GUI process (full user PATH), but the Scheduled Task runs in a
+    #     stripped environment that often lacks user PATH entries. This check
+    #     verifies that _get_claude_exe() resolved an absolute path — meaning
+    #     the wrapper .bat will use a hard path and never depend on PATH at all.
+    _claude_abs = _get_claude_exe()
+    _sched_ok = _claude_abs != "claude"   # resolved to something absolute
+    checks.append({
+        "name": "Claude Code CLI — Task Scheduler path",
+        "ok": _sched_ok,
+        "detail": (f"Wrapper will use absolute path: {_claude_abs}"
+                   if _sched_ok else
+                   "No absolute path found — Task Scheduler will fail. "
+                   "Click \u2b07 Install Claude Code CLI to fix."),
     })
 
     # 2. Is there a setup-token / valid auth? We don't invoke a real call;
@@ -783,6 +810,34 @@ def _get_python_exe() -> str:
     if exe.lower().endswith("pythonw.exe"):
         exe = exe[:-len("pythonw.exe")] + "python.exe"
     return exe
+
+
+def _get_claude_exe() -> str:
+    """Return the absolute path to claude.exe for embedding in the .bat
+    wrapper. Never relies on bare 'claude' on PATH — Task Scheduler runs
+    in a stripped environment that often lacks the user's PATH entries,
+    which is exactly what caused the 2026-08-10 silent-failure bug where
+    the .bat fired correctly but 'claude' was not recognized as a command.
+
+    Resolution order (mirrors claude_code_cli_installed()'s disk fallback
+    so both functions agree on what "installed" means):
+      1. shutil.which("claude") — covers any user-configured install path.
+      2. ~/.local/bin/claude.exe — Anthropic's default install location when
+         their install.ps1 script doesn't add itself to PATH automatically.
+      3. Bare "claude" as a last resort so the generated .bat fails loudly
+         with a recognisable error rather than silently doing nothing.
+
+    Called at wrapper-generation time (Enable / Apply / Run Due Tasks), so
+    the resolved path is baked into the .bat — the running Scheduled Task
+    never has to search PATH at all.
+    """
+    path = shutil.which("claude")
+    if path:
+        return path
+    default = Path.home() / ".local" / "bin" / "claude.exe"
+    if default.exists():
+        return str(default)
+    return "claude"
 
 
 def _generate_local_mcp_config() -> tuple[bool, str]:
@@ -1735,8 +1790,22 @@ def install_claude_code_cli() -> tuple[bool, str]:
     unlike open_setup_token_terminal, no interactive browser step is
     needed here, so waiting for completion is fine — typically a few
     seconds). Returns (success, detail)."""
-    if claude_code_cli_installed():
+    # Fast path: PATH is fine — nothing to do.
+    if shutil.which("claude") is not None:
         return True, "Already installed."
+    # Slow path: claude.exe is on disk but not on PATH (Anthropic's installer
+    # sometimes skips the PATH update on certain Windows configurations).
+    # _add_to_user_path() was already written for exactly this case but was
+    # previously only reachable after a fresh install — not when the user
+    # clicked the button on a machine where claude.exe already existed on disk
+    # but PATH was broken, because the old guard used claude_code_cli_installed()
+    # which returns True via the disk fallback and bailed out immediately.
+    default_install_dir = Path.home() / ".local" / "bin"
+    if (default_install_dir / "claude.exe").exists():
+        _add_to_user_path(default_install_dir)
+        if claude_code_cli_installed():
+            return True, ("Claude Code CLI was installed but missing from PATH — "
+                          "registered successfully. Scheduled tasks will now find it.")
     try:
         r = subprocess.run(
             ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",

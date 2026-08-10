@@ -127,7 +127,7 @@ def test_wrapper_script_contains_headless_flag():
     # v9.0.0: mcp__ai-prowler__* broadened to mcp__* so third-party
     # connectors (Gmail, QuickBooks, etc.) are also permitted.
     content = tqa.build_wrapper_script_content("C:\\fake\\mcp.json", "mcp__ai-prowler__*")
-    assert "claude -p" in content
+    assert '" -p "' in content  # exe path is quoted; -p flag is always present
     assert "--mcp-config" in content
     assert "C:\\fake\\mcp.json" in content
     assert "--allowedTools" in content
@@ -511,7 +511,7 @@ def test_wrapper_prompt_does_not_use_slash_command():
     # fix was needed — check the actual claude -p invocation line itself,
     # not the whole file, so this test isn't fooled by that documentation.
     content = tqa.build_wrapper_script_content("x.json", "mcp__ai-prowler__*")
-    prompt_line = next(l for l in content.splitlines() if l.strip().startswith('claude -p "'))
+    prompt_line = next(l for l in content.splitlines() if '" -p "' in l)
     assert "/ai-prowler-run-queue" not in prompt_line
 
 
@@ -547,9 +547,11 @@ def test_wrapper_prompt_plus_notify_clause_still_batch_safe():
     # The notify clause is appended to the same prompt string — confirm
     # the combined result still contains no stray unescaped quotes that
     # would prematurely close the -p "..." argument.
-    prompt_line = next(l for l in content.splitlines() if l.strip().startswith('claude -p "'))
-    # Exactly two double-quotes on this line: opening and closing the -p arg.
-    assert prompt_line.count('"') == 2
+    prompt_line = next(l for l in content.splitlines() if '" -p "' in l)
+    # The line is: "<exe>" -p "<prompt>" — exactly 4 double-quotes total
+    # (opening/closing the exe path + opening/closing the -p argument).
+    # Any stray unescaped quote inside the prompt itself would push this above 4.
+    assert prompt_line.count('"') == 4
 
 
 def test_wrapper_script_no_notify_clause_by_default():
@@ -904,7 +906,7 @@ class TestWrapperActiveWindowSelfGate:
         content = tqa.build_wrapper_script_content(
             "x.json", "mcp__ai-prowler__*", check_mode="interval")
         skip_idx = content.index("exit /b 0")
-        claude_idx = content.index('claude -p "')
+        claude_idx = content.index('" -p "')
         assert skip_idx < claude_idx, (
             "the active-window skip-exit must appear BEFORE the claude -p "
             "invocation in the generated script — otherwise a skipped "
@@ -1256,7 +1258,7 @@ def test_install_wrapper_script_writes_expected_file(tmp_path):
     path = tqa.install_wrapper_script(target, "C:\\x\\mcp.json", "mcp__ai-prowler__*")
     assert path.exists()
     assert path.name == tqa.WRAPPER_SCRIPT_NAME
-    assert "claude -p" in path.read_text(encoding="utf-8")
+    assert '" -p "' in path.read_text(encoding="utf-8")  # exe path quoted; -p always present
 
 
 def test_install_wrapper_script_never_targets_program_files(tmp_path):
@@ -1871,7 +1873,7 @@ def test_wrapper_bat_content_includes_rotation_call(_isolated_home):
     )
     # Rotation call must appear BEFORE the claude -p line
     rotation_pos = content.index("rotate_audit_log")
-    claude_pos = content.index("claude -p")
+    claude_pos = content.index('" -p "')
     assert rotation_pos < claude_pos, (
         "rotate_audit_log() call must precede the claude -p invocation in the .bat"
     )
@@ -3191,3 +3193,320 @@ class TestSentenceTransformersPreImportRegression:
             "This means the first call to get_chroma_client() from a live "
             "tool handler will trigger a slow lazy import that deadlocks "
             "with FastMCP's asyncio event loop (~60s hang).")
+
+
+# ── v9.0.1: _get_claude_exe() + .bat absolute path + dry-run Task Scheduler
+#            path check + install_claude_code_cli() PATH repair ───────────────
+#
+# Root cause of 2026-08-10 bug: the generated .bat used bare `claude -p`
+# which relies on PATH. Windows Task Scheduler runs in a stripped environment
+# that often lacks user PATH entries, so `claude` was not recognized as a
+# command. The GUI's dry-run check used shutil.which() which ran in the GUI
+# process (full user PATH) so it reported ✅ while the Scheduled Task silently
+# failed with "not recognized as a command" in last_headless_run.json.
+#
+# Three interlocking fixes:
+#   _get_claude_exe()           — resolves absolute path at generation time
+#   build_wrapper_script_content() — embeds that absolute path in the .bat
+#   dry_run_check()             — adds a Task Scheduler-specific check
+#   install_claude_code_cli()   — fixes PATH even when claude.exe is on disk
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestGetClaudeExe:
+    """_get_claude_exe() must always return an absolute path when claude is
+    findable, and degrade gracefully to bare 'claude' when it isn't."""
+
+    def test_returns_which_result_when_on_path(self, monkeypatch):
+        monkeypatch.setattr(tqa.shutil, "which",
+                            lambda name: r"C:\Users\david\AppData\Local\bin\claude.EXE")
+        assert tqa._get_claude_exe() == r"C:\Users\david\AppData\Local\bin\claude.EXE"
+
+    def test_returns_disk_fallback_when_not_on_path(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(tqa.shutil, "which", lambda name: None)
+        monkeypatch.setattr(tqa.Path, "home", lambda: tmp_path)
+        disk_path = tmp_path / ".local" / "bin" / "claude.exe"
+        disk_path.parent.mkdir(parents=True)
+        disk_path.write_text("")
+        result = tqa._get_claude_exe()
+        assert result == str(disk_path)
+
+    def test_returns_bare_claude_when_nowhere_found(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(tqa.shutil, "which", lambda name: None)
+        monkeypatch.setattr(tqa.Path, "home", lambda: tmp_path)
+        # Don't create the disk fallback — nothing exists
+        assert tqa._get_claude_exe() == "claude"
+
+    def test_which_takes_priority_over_disk(self, monkeypatch, tmp_path):
+        """Even if the disk fallback exists, shutil.which() wins."""
+        monkeypatch.setattr(tqa.shutil, "which",
+                            lambda name: r"C:\custom\claude.exe")
+        monkeypatch.setattr(tqa.Path, "home", lambda: tmp_path)
+        disk_path = tmp_path / ".local" / "bin" / "claude.exe"
+        disk_path.parent.mkdir(parents=True)
+        disk_path.write_text("")
+        assert tqa._get_claude_exe() == r"C:\custom\claude.exe"
+
+    def test_result_is_never_pythonw(self, monkeypatch):
+        """Sanity guard — _get_claude_exe() must never accidentally return
+        a Python interpreter path."""
+        monkeypatch.setattr(tqa.shutil, "which",
+                            lambda name: r"C:\Python311\python.exe" if name == "python" else None)
+        result = tqa._get_claude_exe()
+        assert "python" not in result.lower()
+
+
+class TestWrapperBatUsesAbsoluteClaudePath:
+    """The generated .bat must embed the absolute path from _get_claude_exe()
+    rather than bare 'claude', so Task Scheduler never has to search PATH.
+    This is the regression guard for the 2026-08-10 silent-failure bug."""
+
+    def test_bat_uses_absolute_path_not_bare_claude(self, monkeypatch):
+        monkeypatch.setattr(tqa.shutil, "which",
+                            lambda name: r"C:\Users\david\AppData\Local\bin\claude.EXE")
+        content = tqa.build_wrapper_script_content("x.json", "mcp__*")
+        # Must contain the quoted absolute path before -p
+        assert r'"C:\Users\david\AppData\Local\bin\claude.EXE" -p' in content
+
+    def test_bat_does_not_use_bare_claude_when_path_resolved(self, monkeypatch):
+        monkeypatch.setattr(tqa.shutil, "which",
+                            lambda name: r"C:\Users\david\AppData\Local\bin\claude.EXE")
+        content = tqa.build_wrapper_script_content("x.json", "mcp__*")
+        # No unquoted bare `claude -p` anywhere in the script
+        for line in content.splitlines():
+            stripped = line.strip()
+            assert not stripped.startswith("claude -p"), (
+                f"Bare 'claude -p' found — Task Scheduler will fail:\n{line}")
+
+    def test_bat_uses_disk_fallback_path_when_not_on_path(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(tqa.shutil, "which", lambda name: None)
+        monkeypatch.setattr(tqa.Path, "home", lambda: tmp_path)
+        disk_path = tmp_path / ".local" / "bin" / "claude.exe"
+        disk_path.parent.mkdir(parents=True)
+        disk_path.write_text("")
+        content = tqa.build_wrapper_script_content("x.json", "mcp__*")
+        assert f'"{disk_path}" -p' in content
+
+    def test_bat_falls_back_to_bare_claude_when_nowhere_found(self, monkeypatch, tmp_path):
+        """Last-resort fallback: bare 'claude' is still embedded so the .bat
+        fails visibly rather than silently skipping the claude invocation."""
+        monkeypatch.setattr(tqa.shutil, "which", lambda name: None)
+        monkeypatch.setattr(tqa.Path, "home", lambda: tmp_path)
+        content = tqa.build_wrapper_script_content("x.json", "mcp__*")
+        assert '"claude" -p' in content
+
+    def test_bat_absolute_path_survives_spaces_in_path(self, monkeypatch):
+        """A path with spaces must be quoted correctly so cmd.exe treats it
+        as a single token."""
+        spaced = r"C:\Program Files\Claude\claude.exe"
+        monkeypatch.setattr(tqa.shutil, "which", lambda name: spaced)
+        content = tqa.build_wrapper_script_content("x.json", "mcp__*")
+        assert f'"{spaced}" -p' in content
+
+    def test_bat_claude_invocation_never_uses_pythonw(self, monkeypatch):
+        """Regression guard: _get_claude_exe() must never accidentally return
+        a Python interpreter path."""
+        monkeypatch.setattr(tqa.shutil, "which",
+                            lambda name: r"C:\Python311\claude.exe")
+        content = tqa.build_wrapper_script_content("x.json", "mcp__*")
+        claude_line = next(
+            l for l in content.splitlines()
+            if "-p" in l and "mcp-config" not in l and "REM" not in l)
+        assert "pythonw" not in claude_line.lower()
+
+    def test_install_wrapper_script_also_uses_absolute_path(self, monkeypatch, tmp_path):
+        """install_wrapper_script() writes the .bat to disk — confirm the
+        on-disk file also contains the absolute path, not bare 'claude'."""
+        monkeypatch.setattr(tqa.shutil, "which",
+                            lambda name: r"C:\Users\david\AppData\Local\bin\claude.EXE")
+        target = tmp_path / "wrapper_dir"
+        path = tqa.install_wrapper_script(target, "C:\\x\\mcp.json", "mcp__*")
+        content = path.read_text(encoding="utf-8")
+        assert r'"C:\Users\david\AppData\Local\bin\claude.EXE" -p' in content
+        assert "claude -p" not in content  # bare form never appears
+
+
+class TestDryRunTaskSchedulerPathCheck:
+    """dry_run_check() must include a Task Scheduler-specific path check
+    that is independent of the GUI process's PATH — the check that was
+    missing before the 2026-08-10 bug."""
+
+    def test_task_scheduler_check_present_in_report(self, _isolated_home, monkeypatch):
+        monkeypatch.setattr(tqa.subprocess, "run",
+                            lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": "2.1.0", "stderr": ""})())
+        monkeypatch.setattr(tqa.shutil, "which",
+                            lambda name: r"C:\Users\david\AppData\Local\bin\claude.EXE")
+        report = tqa.dry_run_check()
+        names = [c["name"] for c in report["checks"]]
+        assert "Claude Code CLI — Task Scheduler path" in names, (
+            "Task Scheduler path check missing from dry_run_check() — "
+            "this was the check that would have caught the 2026-08-10 bug")
+
+    def test_task_scheduler_check_passes_when_absolute_path_resolved(
+            self, _isolated_home, monkeypatch):
+        monkeypatch.setattr(tqa.subprocess, "run",
+                            lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": "2.1.0", "stderr": ""})())
+        monkeypatch.setattr(tqa.shutil, "which",
+                            lambda name: r"C:\Users\david\AppData\Local\bin\claude.EXE")
+        report = tqa.dry_run_check()
+        sched_check = next(
+            c for c in report["checks"]
+            if c["name"] == "Claude Code CLI — Task Scheduler path")
+        assert sched_check["ok"] is True
+        assert r"C:\Users\david\AppData\Local\bin\claude.EXE" in sched_check["detail"]
+
+    def test_task_scheduler_check_fails_when_only_bare_claude_available(
+            self, _isolated_home, monkeypatch, tmp_path):
+        """Simulates the exact 2026-08-10 failure: shutil.which() returns None
+        (PATH broken in this process) AND no disk fallback exists either."""
+        monkeypatch.setattr(tqa.shutil, "which", lambda name: None)
+        monkeypatch.setattr(tqa.Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(tqa, "AI_PROWLER_HOME", tmp_path / ".ai-prowler")
+        monkeypatch.setattr(tqa, "STATUS_PATH",
+                            tmp_path / ".ai-prowler" / "task_automation_last_run.json")
+        monkeypatch.setattr(tqa.subprocess, "run",
+                            lambda *a, **kw: type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})())
+        report = tqa.dry_run_check()
+        sched_check = next(
+            c for c in report["checks"]
+            if c["name"] == "Claude Code CLI — Task Scheduler path")
+        assert sched_check["ok"] is False
+        assert "Install Claude Code CLI" in sched_check["detail"]
+
+    def test_task_scheduler_check_passes_via_disk_fallback(
+            self, _isolated_home, monkeypatch, tmp_path):
+        """Disk fallback: not on PATH but on disk — _get_claude_exe() finds it,
+        so the Task Scheduler check passes even though the PATH check fails."""
+        monkeypatch.setattr(tqa.shutil, "which", lambda name: None)
+        monkeypatch.setattr(tqa.Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(tqa, "AI_PROWLER_HOME", tmp_path / ".ai-prowler")
+        monkeypatch.setattr(tqa, "STATUS_PATH",
+                            tmp_path / ".ai-prowler" / "task_automation_last_run.json")
+        disk_path = tmp_path / ".local" / "bin" / "claude.exe"
+        disk_path.parent.mkdir(parents=True)
+        disk_path.write_text("")
+        monkeypatch.setattr(tqa.subprocess, "run",
+                            lambda *a, **kw: type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})())
+        report = tqa.dry_run_check()
+        sched_check = next(
+            c for c in report["checks"]
+            if c["name"] == "Claude Code CLI — Task Scheduler path")
+        assert sched_check["ok"] is True
+        assert str(disk_path) in sched_check["detail"]
+
+    def test_path_check_tells_user_to_click_install_when_on_disk_not_path(
+            self, _isolated_home, monkeypatch, tmp_path):
+        """When claude.exe is on disk but not on PATH, the PATH check detail
+        must explicitly tell the user to click Install Claude Code CLI."""
+        monkeypatch.setattr(tqa.shutil, "which", lambda name: None)
+        monkeypatch.setattr(tqa.Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(tqa, "AI_PROWLER_HOME", tmp_path / ".ai-prowler")
+        monkeypatch.setattr(tqa, "STATUS_PATH",
+                            tmp_path / ".ai-prowler" / "task_automation_last_run.json")
+        disk_path = tmp_path / ".local" / "bin" / "claude.exe"
+        disk_path.parent.mkdir(parents=True)
+        disk_path.write_text("")
+        monkeypatch.setattr(tqa.subprocess, "run",
+                            lambda *a, **kw: type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})())
+        report = tqa.dry_run_check()
+        path_check = next(
+            c for c in report["checks"]
+            if c["name"] == "Claude Code CLI on PATH")
+        assert path_check["ok"] is False
+        assert "Install Claude Code CLI" in path_check["detail"]
+        assert str(disk_path) in path_check["detail"]
+
+    def test_dry_run_all_ok_requires_task_scheduler_check_to_pass(
+            self, _isolated_home, monkeypatch, tmp_path):
+        """all_ok must be False if the Task Scheduler check fails, even if
+        all other checks pass — this is what would have flagged the bug."""
+        monkeypatch.setattr(tqa.shutil, "which", lambda name: None)
+        monkeypatch.setattr(tqa.Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(tqa, "AI_PROWLER_HOME", tmp_path / ".ai-prowler")
+        monkeypatch.setattr(tqa, "STATUS_PATH",
+                            tmp_path / ".ai-prowler" / "task_automation_last_run.json")
+        monkeypatch.setattr(tqa.subprocess, "run",
+                            lambda *a, **kw: type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})())
+        report = tqa.dry_run_check()
+        assert report["all_ok"] is False
+
+
+class TestInstallClaudeCodeCliPathRepair:
+    """install_claude_code_cli() must repair PATH when claude.exe is on disk
+    but not on PATH — the case where the button previously said 'Already
+    installed' and did nothing, leaving Task Scheduler broken."""
+
+    def test_already_on_path_returns_already_installed(self, monkeypatch):
+        monkeypatch.setattr(tqa.shutil, "which",
+                            lambda name: r"C:\Users\david\AppData\Local\bin\claude.EXE")
+        ok, detail = tqa.install_claude_code_cli()
+        assert ok is True
+        assert "Already installed" in detail
+
+    def test_on_disk_not_on_path_calls_add_to_user_path(
+            self, monkeypatch, tmp_path):
+        """Core regression test: when claude.exe exists on disk but PATH is
+        broken, the button must call _add_to_user_path() instead of bailing
+        out with 'Already installed.'"""
+        monkeypatch.setattr(tqa.shutil, "which", lambda name: None)
+        monkeypatch.setattr(tqa.Path, "home", lambda: tmp_path)
+        disk_path = tmp_path / ".local" / "bin" / "claude.exe"
+        disk_path.parent.mkdir(parents=True)
+        disk_path.write_text("")
+        path_calls = []
+        monkeypatch.setattr(tqa, "_add_to_user_path",
+                            lambda d: path_calls.append(d) or True)
+        # After _add_to_user_path, which() now succeeds (simulate PATH fixed)
+        call_count = {"n": 0}
+        def _which_after_repair(name):
+            call_count["n"] += 1
+            return r"C:\fake\claude.exe" if call_count["n"] > 1 else None
+        monkeypatch.setattr(tqa.shutil, "which", _which_after_repair)
+        ok, detail = tqa.install_claude_code_cli()
+        assert ok is True
+        assert len(path_calls) == 1, "_add_to_user_path must be called exactly once"
+        assert "missing from PATH" in detail or "registered" in detail
+
+    def test_on_disk_not_on_path_does_not_say_already_installed(
+            self, monkeypatch, tmp_path):
+        """The old broken behaviour: button returned 'Already installed.'
+        without fixing PATH. This must never happen again."""
+        monkeypatch.setattr(tqa.shutil, "which", lambda name: None)
+        monkeypatch.setattr(tqa.Path, "home", lambda: tmp_path)
+        disk_path = tmp_path / ".local" / "bin" / "claude.exe"
+        disk_path.parent.mkdir(parents=True)
+        disk_path.write_text("")
+        monkeypatch.setattr(tqa, "_add_to_user_path", lambda d: True)
+        call_count = {"n": 0}
+        def _which_after_repair(name):
+            call_count["n"] += 1
+            return r"C:\fake\claude.exe" if call_count["n"] > 1 else None
+        monkeypatch.setattr(tqa.shutil, "which", _which_after_repair)
+        ok, detail = tqa.install_claude_code_cli()
+        assert "Already installed" not in detail, (
+            "install_claude_code_cli() still returns 'Already installed.' "
+            "when claude.exe is on disk but PATH is broken — this is the "
+            "regression that caused the 2026-08-10 bug")
+
+    def test_install_cli_skips_powershell_when_disk_fallback_succeeds(
+            self, monkeypatch, tmp_path):
+        """When the disk-fallback PATH repair succeeds, no PowerShell installer
+        should be invoked — it's already installed, just mis-registered."""
+        run_calls = []
+        monkeypatch.setattr(tqa.shutil, "which", lambda name: None)
+        monkeypatch.setattr(tqa.Path, "home", lambda: tmp_path)
+        disk_path = tmp_path / ".local" / "bin" / "claude.exe"
+        disk_path.parent.mkdir(parents=True)
+        disk_path.write_text("")
+        monkeypatch.setattr(tqa, "_add_to_user_path", lambda d: True)
+        call_count = {"n": 0}
+        def _which_after_repair(name):
+            call_count["n"] += 1
+            return r"C:\fake\claude.exe" if call_count["n"] > 1 else None
+        monkeypatch.setattr(tqa.shutil, "which", _which_after_repair)
+        monkeypatch.setattr(tqa.subprocess, "run",
+                            lambda *a, **kw: run_calls.append(a) or
+                            type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})())
+        tqa.install_claude_code_cli()
+        ps_calls = [c for c in run_calls
+                    if c and isinstance(c[0], list) and "powershell" in str(c[0]).lower()]
+        assert not ps_calls, "PowerShell installer must not run when disk-fallback PATH repair succeeds"

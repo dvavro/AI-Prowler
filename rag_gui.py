@@ -92,7 +92,22 @@ if sys.stderr is None:
 # Single source of truth for the app version. Bump this one line when releasing
 # a new version; all UI labels, About dialogs, help text, and update checks
 # read from here.
-APP_VERSION = (Path(__file__).parent / "VERSION").read_text(encoding="utf-8").strip()
+#
+# Wrapped defensively (v9.0.1) — this used to be a bare .read_text() that
+# crashed the whole process before a single window could open if VERSION was
+# ever missing (exactly what happened when the v9.0.0 [Files] section shipped
+# every .py file except this one — see AI-Prowler-Setup.iss). _slog isn't
+# imported yet at this point in the file, so this can't log through it
+# directly; APP_VERSION_FALLBACK_USED is checked and logged a few lines down
+# once _slog becomes available, so the failure still shows up in startup.log.
+APP_VERSION_FALLBACK_USED = False
+try:
+    APP_VERSION = (Path(__file__).parent / "VERSION").read_text(encoding="utf-8").strip()
+    if not APP_VERSION:
+        raise ValueError("VERSION file is empty")
+except Exception:
+    APP_VERSION = "0.0.0"
+    APP_VERSION_FALLBACK_USED = True
 
 # ── UI feature flags ─────────────────────────────────────────────────────────
 # Toggle visibility of advanced/legacy GUI sections without removing any
@@ -154,8 +169,49 @@ try:
 except ImportError as _se:
     _speech_import_error = str(_se)
 
+# ── Startup diagnostic log ───────────────────────────────────────────────────
+# Writes ~/.ai-prowler/startup.log at every launch so Defender issues,
+# import failures, and silent crashes are traceable without needing a
+# console window. Imported before rag_preprocessor so even a total RAG
+# import failure is captured.
+try:
+    import startup_log as _slog
+    _slog.begin('?')   # version patched below once APP_VERSION is read
+    _slog.step("startup_log imported OK")
+except Exception:
+    # Define a no-op stub so the rest of the file can call _slog.step() safely
+    class _slog:  # type: ignore[no-redef]
+        @staticmethod
+        def begin(*a, **kw): pass
+        @staticmethod
+        def step(*a, **kw): pass
+        @staticmethod
+        def warn(*a, **kw): pass
+        @staticmethod
+        def fail(*a, **kw): pass
+        @staticmethod
+        def info(*a, **kw): pass
+        @staticmethod
+        def check_defender_exclusions(*a, **kw): pass
+        @staticmethod
+        def check_chroma_path(*a, **kw): pass
+        @staticmethod
+        def check_hf_cache(*a, **kw): pass
+
+# APP_VERSION's own read (near top of file, before _slog existed) couldn't
+# log through _slog directly — flush that result now that it can.
+if APP_VERSION_FALLBACK_USED:
+    _slog.warn(
+        f"VERSION file missing/unreadable at {Path(__file__).parent / 'VERSION'} "
+        f"— falling back to APP_VERSION='0.0.0'. Title bar, About dialog, and "
+        f"update checks will show this placeholder until VERSION is restored."
+    )
+else:
+    _slog.step(f"VERSION file read OK — APP_VERSION={APP_VERSION}")
+
 # Import AI Prowler functions with better error handling
 RAG_AVAILABLE = False
+_slog.step("importing rag_preprocessor (ChromaDB + sentence_transformers)...")
 try:
     from rag_preprocessor import (
         index_directory, index_file_list, scan_directory,
@@ -181,11 +237,13 @@ try:
     import rag_preprocessor as _rag_engine
     _rag_engine.GUI_MODE = True   # disable terminal spinner — use GUI-safe progress output
     RAG_AVAILABLE = True
+    _slog.step("rag_preprocessor imported OK — RAG_AVAILABLE=True")
 except ImportError as e:
     print(f"Warning: Could not import AI Prowler functions: {e}")
     print("Make sure rag_preprocessor.py is in the same directory")
     RAG_AVAILABLE = False
     _RAG_ERROR = str(e)
+    _slog.fail(f"rag_preprocessor ImportError — GUI will show error dialog", e)
 except Exception as e:
     print(f"Error loading AI Prowler module: {e}")
     print("Continuing with limited functionality...")
@@ -194,6 +252,7 @@ except Exception as e:
     MODEL_INFO = {}
     MODEL_CONTEXT_WINDOWS = {"default": 8192}
     EXTERNAL_PROVIDERS = {}
+    _slog.fail(f"rag_preprocessor unexpected error — limited functionality", e)
 else:
     _RAG_ERROR = ""
 
@@ -24263,6 +24322,23 @@ class TextRedirector:
 def main():
     """Main entry point"""
 
+    # ── Startup log — patch in real version now that APP_VERSION is known ────
+    try:
+        _slog.begin(APP_VERSION)   # overwrites the '?' from module-level begin()
+        _slog.step(f"main() entered — APP_VERSION={APP_VERSION}")
+        _slog.check_defender_exclusions(Path(__file__).parent)
+        _slog.check_hf_cache()
+        if RAG_AVAILABLE:
+            try:
+                from rag_preprocessor import CHROMA_DB_PATH
+                _slog.check_chroma_path(CHROMA_DB_PATH)
+            except Exception:
+                pass
+        else:
+            _slog.warn(f"RAG not available — error: {_RAG_ERROR}")
+    except Exception:
+        pass
+
     # ── Hide the Python console window (2nd DOS window) when Debug View is OFF ──
     # AI Prowler is launched with python.exe which always creates a CMD console.
     # We hide it here unless the saved config has debug_view=True.
@@ -24336,6 +24412,7 @@ def main():
             pass
 
     root = tk.Tk()
+    _slog.step("tk.Tk() created")
 
     # Apply the AI-Prowler icon to the window AND the taskbar button
     _icon_path = Path(__file__).parent / 'rag_icon.ico'
@@ -24363,7 +24440,9 @@ def main():
         pass
     
     app = RAGGui(root)
+    _slog.step("RAGGui initialized — entering mainloop ✅")
     root.mainloop()
+    _slog.step("mainloop() exited — clean shutdown")
 
 if __name__ == "__main__":
     main()

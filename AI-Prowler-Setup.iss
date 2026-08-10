@@ -217,6 +217,19 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
 ; --- Application files ---
+; VERSION is read at compile time above (line 166) to stamp AppVersion in
+; this installer's own Windows metadata, but that read never copied the file
+; itself into {app} — rag_gui.py reads VERSION again at runtime to build
+; APP_VERSION (title bar, About dialog, update checks), and with no [Files]
+; entry for it, that read failed on every v9.0.0 install with
+; FileNotFoundError, crashing the GUI before a window could even open.
+Source: "VERSION"; DestDir: "{app}"; Flags: ignoreversion
+; startup_log.py — the module rag_gui.py imports for startup diagnostics
+; (writes %TEMP%\AI-Prowler\startup.log, checks Defender exclusions /
+; ChromaDB path / HF cache). Same class of bug as VERSION above:
+; referenced by rag_gui.py but never listed here, so it would have failed
+; the same way the moment anything called it unconditionally.
+Source: "startup_log.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "rag_gui.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "rag_preprocessor.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "ai_prowler_mcp.py"; DestDir: "{app}"; Flags: ignoreversion
@@ -381,9 +394,16 @@ begin
 end;
 
 const
-  LOG_FOLDER      = '{%LOCALAPPDATA}\Temp\AI-Prowler';
-  INSTALL_LOG     = '{%LOCALAPPDATA}\Temp\AI-Prowler\install_log.txt';
-  UNINSTALL_LOG   = '{%LOCALAPPDATA}\Temp\AI-Prowler\uninstall_log.txt';
+  // Consolidated with startup_log.py's own log location (see rag_gui.py /
+  // startup_log.py) — both now write under {%USERPROFILE}\.ai-prowler\logs,
+  // the same folder every other piece of AI-Prowler's persistent state
+  // already lives in (config.json, custom_analysis_tasks.json, scheduler
+  // state, etc. — see the .ai-prowler references throughout this file).
+  // Previously {%LOCALAPPDATA}\Temp\AI-Prowler — a second, separate
+  // location the user had to know about on top of ~/.ai-prowler.
+  LOG_FOLDER      = '{%USERPROFILE}\.ai-prowler\logs';
+  INSTALL_LOG     = '{%USERPROFILE}\.ai-prowler\logs\install_log.txt';
+  UNINSTALL_LOG   = '{%USERPROFILE}\.ai-prowler\logs\uninstall_log.txt';
 
   PY_FOLDER       = '{%LOCALAPPDATA}\Programs\Python\Python311';
   // NOTE: Python's real uninstaller is found via registry at runtime,
