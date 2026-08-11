@@ -256,15 +256,23 @@ class TestDateAdvancement:
         ("biweekly",  "2026-06-30", "2026-07-14"),
         ("monthly",   "2026-06-30", "2026-07-30"),
         ("monthly",   "2026-01-31", "2026-02-28"),  # Feb edge case
-        ("quarterly", "2026-06-30", "2026-09-30"),
-        ("yearly",    "2026-06-30", "2027-06-30"),
-        ("yearly",    "2024-02-29", "2025-02-28"),  # leap year edge
+        # quarterly and yearly removed in v9.0.2 — no longer valid schedules
     ])
     def test_TC_CTASK_004_advance_date(self, schedule, from_date, expected):
         import custom_tasks_manager as ctm
         result = ctm._advance_date(from_date, schedule)
         assert result == expected, \
             f"schedule={schedule}, from={from_date}: expected {expected}, got {result}"
+
+    def test_TC_CTASK_004_quarterly_returns_none(self):
+        """v9.0.2: quarterly removed from SCHEDULES — _advance_date returns None."""
+        import custom_tasks_manager as ctm
+        assert ctm._advance_date("2026-06-30", "quarterly") is None
+
+    def test_TC_CTASK_004_yearly_returns_none(self):
+        """v9.0.2: yearly removed from SCHEDULES — _advance_date returns None."""
+        import custom_tasks_manager as ctm
+        assert ctm._advance_date("2026-06-30", "yearly") is None
 
     def test_TC_CTASK_004_advance_none_returns_none(self):
         import custom_tasks_manager as ctm
@@ -1307,12 +1315,17 @@ class TestBuiltInScheduleAdvancement:
         result, _ = self._run_complete(mcp, [entry], "t1")
         assert "Next scheduled run" in result or "2026-07-01" in result
 
-    def test_TC_CTASK_016_quarterly_next_due_advanced(self):
+    def test_TC_CTASK_016_monthly_next_due_advanced(self):
+        # v9.0.2: quarterly removed — replaced with monthly equivalent test.
+        # Use a future anchor so catchup doesn't skip past one interval.
         import ai_prowler_mcp as mcp
-        entry = self._pending_builtin("t1", "quarterly", "2026-06-01")
+        import datetime
+        future = (datetime.date.today() + datetime.timedelta(days=60)).isoformat()
+        entry = self._pending_builtin("t1", "monthly", future)
         result, saved = self._run_complete(mcp, [entry], "t1")
         done = next(t for t in saved["tasks"] if t["task_id"] == "t1")
-        assert done.get("next_due") == "2026-09-01"
+        # next_due must be advanced by ~1 month past the anchor
+        assert done.get("next_due") > future
 
     def test_TC_CTASK_016_completed_at_stamped(self):
         import ai_prowler_mcp as mcp, datetime

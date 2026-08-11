@@ -6179,6 +6179,33 @@ or from the Help menu."""
             _daily_times_var.trace_add('write',
                                         lambda *a: _update_daily_row_visibility_builtin())
 
+            # v9.0.2: Day-of-week pin row for builtin Configure dialog
+            _dow_row_b = tk.Frame(_pad)
+            tk.Label(_dow_row_b, text="Day of week:",
+                     font=('Arial', 9, 'bold')).pack(side='left')
+            _dow_lbl_to_int_b = {lbl: (i - 1 if i > 0 else None)
+                                 for i, lbl in enumerate(_ctm_q.DOW_LABELS)}
+            _saved_dow_b = saved.get("schedule_day_of_week")
+            _initial_dow_lbl_b = (
+                _ctm_q.DOW_LABELS[_saved_dow_b + 1]
+                if _saved_dow_b is not None else _ctm_q.DOW_LABELS[0]
+            )
+            _dow_var_b = tk.StringVar(value=_initial_dow_lbl_b)
+            ttk.Combobox(_dow_row_b, textvariable=_dow_var_b,
+                         values=_ctm_q.DOW_LABELS,
+                         state='readonly', width=12).pack(side='left', padx=(8, 0))
+            tk.Label(_dow_row_b,
+                     text="(stagger tasks to spread credit usage)",
+                     font=('Arial', 7), fg='gray').pack(side='left', padx=(8, 0))
+
+            def _update_dow_row_visibility_builtin(event=None):
+                _k = _sched_lbl_to_key.get(_sched_var.get(), 'none')
+                if _k in _ctm_q.DOW_ELIGIBLE_SCHEDULES:
+                    _dow_row_b.pack(fill='x', pady=(0, 4), after=_sched_row)
+                else:
+                    _dow_row_b.pack_forget()
+                    _dow_var_b.set(_ctm_q.DOW_LABELS[0])
+
             def _on_sched_change(e=None):
                 _k = _sched_lbl_to_key.get(_sched_var.get(), 'none')
                 if _k == 'none':
@@ -6190,7 +6217,9 @@ or from the Help menu."""
                         import datetime as _dt2
                         _due_var.set(_dt2.date.today().isoformat())
                 _update_daily_row_visibility_builtin()
+                _update_dow_row_visibility_builtin()
             _sched_combo.bind('<<ComboboxSelected>>', _on_sched_change)
+            _update_dow_row_visibility_builtin()
             # Match the entry's enabled/disabled state to the PRE-FILLED
             # schedule (not always-disabled like the old "always Manual
             # only at open" popup) — otherwise re-opening Edit on an
@@ -6281,17 +6310,22 @@ or from the Help menu."""
                         "End time must be after start time when times per day > 1.")
                     return
 
+            # v9.0.2: resolve DOW label → int (None for "Any day")
+            _dow_val_b = _dow_lbl_to_int_b.get(_dow_var_b.get())
+            sched_dow_b = _dow_val_b if schedule_key in _ctm_q.DOW_ELIGIBLE_SCHEDULES else None
+
             new_settings = {
-                "scope_dirs":       scope_dirs,
-                "output_learnings": _learn_var.get(),
-                "output_report":    _report_var.get(),
-                "output_email":     _email_var.get(),
-                "report_folder":    _folder_var.get().strip() or _ctm_q.DEFAULT_REPORT_FOLDER,
-                "schedule":         schedule_key,
-                "first_due":        first_due_val,
-                "daily_start_time":    daily_start_val,
-                "daily_end_time":      daily_end_val,
-                "daily_times_per_day": daily_times_val,
+                "scope_dirs":            scope_dirs,
+                "output_learnings":      _learn_var.get(),
+                "output_report":         _report_var.get(),
+                "output_email":          _email_var.get(),
+                "report_folder":         _folder_var.get().strip() or _ctm_q.DEFAULT_REPORT_FOLDER,
+                "schedule":              schedule_key,
+                "schedule_day_of_week":  sched_dow_b,   # v9.0.2
+                "first_due":             first_due_val,
+                "daily_start_time":      daily_start_val,
+                "daily_end_time":        daily_end_val,
+                "daily_times_per_day":   daily_times_val,
             }
             _ctm_q.save_builtin_analysis_settings(task_def["type"], new_settings)
             self.status_var.set(f"✅ Settings saved for {task_def['label']}")
@@ -7110,6 +7144,38 @@ or from the Help menu."""
             daily_times_var.trace_add('write', _update_daily_row_visibility)
             _update_daily_row_visibility()
 
+            # v9.0.2: Day-of-week pin row — visible only for weekly/biweekly/monthly
+            dow_row = tk.Frame(pad)
+            tk.Label(dow_row, text="Day of week:",
+                     font=('Arial', 9, 'bold')).pack(side='left')
+            _dow_label_to_int = {lbl: (i - 1 if i > 0 else None)
+                                 for i, lbl in enumerate(_ctm.DOW_LABELS)}
+            _existing_dow = existing_task.get("schedule_day_of_week") if existing_task else None
+            _initial_dow_label = (
+                _ctm.DOW_LABELS[_existing_dow + 1]
+                if _existing_dow is not None else _ctm.DOW_LABELS[0]
+            )
+            dow_var = tk.StringVar(value=_initial_dow_label)
+            dow_combo = ttk.Combobox(
+                dow_row, textvariable=dow_var,
+                values=_ctm.DOW_LABELS,
+                state='readonly', width=12)
+            dow_combo.pack(side='left', padx=(8, 0))
+            tk.Label(dow_row, text="(stagger tasks to spread credit usage)",
+                     font=('Arial', 7), fg='gray').pack(side='left', padx=(8, 0))
+
+            def _update_dow_row_visibility(event=None):
+                _k = _sched_label_to_key.get(sched_combo.get(), 'none')
+                if _k in _ctm.DOW_ELIGIBLE_SCHEDULES:
+                    dow_row.pack(fill='x', pady=(0, 8), after=daily_row
+                                 if _k == 'daily' else sched_row)
+                else:
+                    dow_row.pack_forget()
+                    dow_var.set(_ctm.DOW_LABELS[0])  # reset to "Any day" when hidden
+
+            sched_combo.bind('<<ComboboxSelected>>', _update_dow_row_visibility, add='+')
+            _update_dow_row_visibility()
+
             # Output options
             tk.Label(pad, text="Output:", font=('Arial', 9, 'bold'),
                      anchor='w').pack(anchor='w')
@@ -7165,6 +7231,9 @@ or from the Help menu."""
                 scope   = [d for d, v in scope_vars.items() if v.get()]
                 sched_key = _sched_label_to_key.get(sched_combo.get(), "none")
                 first_due = due_var.get().strip() or None
+                # v9.0.2: resolve DOW label → int (or None for "Any day")
+                _dow_raw = _dow_label_to_int.get(dow_var.get())
+                sched_dow = _dow_raw if sched_key in _ctm.DOW_ELIGIBLE_SCHEDULES else None
 
                 try:
                     import custom_tasks_manager as _ctm2
@@ -7176,6 +7245,7 @@ or from the Help menu."""
                             label=label, prompt=prompt,
                             scope_dirs=scope,
                             schedule=sched_key,
+                            schedule_day_of_week=sched_dow,
                             first_due=first_due,
                             output_learnings=learn_var.get(),
                             output_report=report_var.get(),
@@ -7197,6 +7267,7 @@ or from the Help menu."""
                             label=label, prompt=prompt,
                             scope_dirs=scope,
                             schedule=sched_key,
+                            schedule_day_of_week=sched_dow,
                             first_due=first_due,
                             output_learnings=learn_var.get(),
                             output_report=report_var.get(),

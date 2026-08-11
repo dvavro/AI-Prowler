@@ -13,24 +13,36 @@ Responsibilities:
   - Merge built-in and custom tasks into a unified queue view
 
 Schedule intervals supported:
-  none, daily, weekly, biweekly, monthly, quarterly, yearly
+  none, daily, weekly, biweekly, monthly
+  (quarterly and yearly removed — use monthly for longer cadences)
+
+Day-of-week pinning (v9.0.2):
+  weekly, biweekly, and monthly tasks optionally carry a
+  schedule_day_of_week field (0=Mon … 6=Sun, None = unpinned /
+  current behaviour). When set, next_due is snapped to that weekday
+  instead of advancing by a raw +7/+14/+30 interval, letting you
+  stagger tasks across the week to spread credit consumption.
+  Monthly tasks snap to the FIRST occurrence of that weekday on or
+  after the otherwise-computed monthly date.
 
 File schema (list of task objects):
   {
-    "task_id":          str   — unique, e.g. "custom_001"
-    "label":            str   — user-facing name (max 60 chars)
-    "prompt":           str   — full analysis prompt
-    "scope_dirs":       list  — directory paths to focus on (empty = all)
-    "schedule":         str   — one of SCHEDULES keys
-    "first_due":        str   — YYYY-MM-DD user-chosen first run date
-    "next_due":         str   — YYYY-MM-DD next scheduled run (or null)
-    "last_run":         str   — YYYY-MM-DD last completed date (or null)
-    "last_status":      str   — "completed" | "skipped" | null
-    "output_learnings": bool  — record key insights as learnings
-    "output_report":    bool  — save full analysis as .docx report
-    "report_folder":    str   — absolute path for report output
-    "created_at":       str   — ISO 8601 creation timestamp
-    "updated_at":       str   — ISO 8601 last-modified timestamp
+    "task_id":               str   — unique, e.g. "custom_001"
+    "label":                 str   — user-facing name (max 60 chars)
+    "prompt":                str   — full analysis prompt
+    "scope_dirs":            list  — directory paths to focus on (empty = all)
+    "schedule":              str   — one of SCHEDULES keys
+    "schedule_day_of_week":  int|null — 0=Mon…6=Sun pin for weekly/biweekly/
+                                        monthly; null = unpinned (default)
+    "first_due":             str   — YYYY-MM-DD user-chosen first run date
+    "next_due":              str   — YYYY-MM-DD next scheduled run (or null)
+    "last_run":              str   — YYYY-MM-DD last completed date (or null)
+    "last_status":           str   — "completed" | "skipped" | null
+    "output_learnings":      bool  — record key insights as learnings
+    "output_report":         bool  — save full analysis as .docx report
+    "report_folder":         str   — absolute path for report output
+    "created_at":            str   — ISO 8601 creation timestamp
+    "updated_at":            str   — ISO 8601 last-modified timestamp
   }
 """
 
@@ -80,8 +92,7 @@ SCHEDULES = {
     "weekly":    7,
     "biweekly":  14,
     "monthly":   30,   # approximate — see _advance_date for exact month math
-    "quarterly": 91,
-    "yearly":    365,
+    # quarterly and yearly removed in v9.0.2 — use monthly for longer cadences
 }
 
 SCHEDULE_LABELS = {
@@ -90,9 +101,16 @@ SCHEDULE_LABELS = {
     "weekly":    "Weekly",
     "biweekly":  "Every 2 weeks",
     "monthly":   "Monthly",
-    "quarterly": "Quarterly",
-    "yearly":    "Yearly",
 }
+
+# v9.0.2: day-of-week pinning for weekly / biweekly / monthly schedules.
+# Stored as int 0–6 (Monday=0 … Sunday=6), matching Python's weekday().
+# None means "unpinned" — behaves identically to the pre-v9.0.2 +N-day math.
+DOW_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday",
+             "Friday", "Saturday", "Sunday"]
+DOW_LABELS = ["Any day"] + DOW_NAMES   # index 0 → None, indices 1-7 → 0-6
+# Schedules that support day-of-week pinning:
+DOW_ELIGIBLE_SCHEDULES = {"weekly", "biweekly", "monthly"}
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +142,24 @@ def _parse_due_datetime(value: str) -> datetime.datetime:
     if "T" in value:
         return datetime.datetime.fromisoformat(value)
     return datetime.datetime.combine(_parse_date(value), datetime.time())
+
+
+def _snap_to_weekday(date: datetime.date, day_of_week: int) -> datetime.date:
+    """v9.0.2: advance `date` to the nearest occurrence of `day_of_week`
+    (0=Mon … 6=Sun) that is >= `date`.  If `date` already falls on that
+    weekday it is returned unchanged.
+
+    This is the core primitive for weekly/biweekly/monthly day-of-week
+    pinning — every schedule path that has a DOW constraint passes through
+    here so the snap logic lives in exactly one place.
+
+    Examples (all advance-only, never backwards):
+        _snap_to_weekday(date(2026, 8, 10), 0)  # Mon → 2026-08-10 (already Mon)
+        _snap_to_weekday(date(2026, 8, 10), 2)  # Mon → 2026-08-12 (Wed, +2)
+        _snap_to_weekday(date(2026, 8, 10), 6)  # Mon → 2026-08-16 (Sun, +6)
+    """
+    delta = (day_of_week - date.weekday()) % 7
+    return date + datetime.timedelta(days=delta)
 
 
 def compute_daily_run_times(start_time: str, end_time: str, times_per_day: int) -> list:
@@ -243,11 +279,19 @@ def advance_next_due_for_task(task: dict, today_str: str = None) -> str:
     return _advance_date_catchup(anchor, schedule, today_str)
 
 
-def _advance_date(from_date_str: str, schedule: str) -> str:
-    """
-    Advance from_date by one schedule interval.
-    Uses exact month/year arithmetic for monthly/quarterly/yearly.
-    Returns YYYY-MM-DD string.
+def _advance_date(from_date_str: str, schedule: str,
+                  day_of_week: int = None) -> str:
+    """Advance from_date by one schedule interval.
+
+    v9.0.2: added optional day_of_week (0=Mon…6=Sun).  When supplied for
+    a weekly, biweekly, or monthly schedule the result is snapped forward
+    to the nearest occurrence of that weekday on or after the raw
+    interval date — so tasks can be pinned to a specific day of the week
+    regardless of when they were first created.
+
+    quarterly and yearly removed in v9.0.2; use monthly for longer cadences.
+
+    Returns YYYY-MM-DD string, or None if schedule is "none" or unknown.
     """
     if schedule == "none" or schedule not in SCHEDULES:
         return None
@@ -256,40 +300,30 @@ def _advance_date(from_date_str: str, schedule: str) -> str:
 
     if schedule == "monthly":
         # Add exactly one month, handling month-end edge cases
+        import calendar
         month = base.month + 1
         year  = base.year + (1 if month > 12 else 0)
         month = month if month <= 12 else 1
-        # Clamp day to last day of target month
-        import calendar
         max_day = calendar.monthrange(year, month)[1]
         day = min(base.day, max_day)
-        return datetime.date(year, month, day).isoformat()
-
-    if schedule == "quarterly":
-        # Add 3 months
-        month = base.month + 3
-        year  = base.year + (month - 1) // 12
-        month = ((month - 1) % 12) + 1
-        import calendar
-        max_day = calendar.monthrange(year, month)[1]
-        day = min(base.day, max_day)
-        return datetime.date(year, month, day).isoformat()
-
-    if schedule == "yearly":
-        try:
-            return datetime.date(base.year + 1, base.month, base.day).isoformat()
-        except ValueError:
-            # Feb 29 in non-leap year → Feb 28
-            return datetime.date(base.year + 1, base.month, 28).isoformat()
+        result = datetime.date(year, month, day)
+        # v9.0.2: snap to the pinned weekday on or after the computed date
+        if day_of_week is not None:
+            result = _snap_to_weekday(result, day_of_week)
+        return result.isoformat()
 
     # daily / weekly / biweekly — simple day arithmetic
     days = SCHEDULES[schedule]
-    return (base + datetime.timedelta(days=days)).isoformat()
+    result = base + datetime.timedelta(days=days)
+    # v9.0.2: snap weekly/biweekly to the pinned weekday
+    if day_of_week is not None and schedule in DOW_ELIGIBLE_SCHEDULES:
+        result = _snap_to_weekday(result, day_of_week)
+    return result.isoformat()
 
 
-def _advance_date_catchup(anchor: str, schedule: str, today_str: str = None) -> str:
-    """
-    Advance anchor by schedule intervals until the result is strictly after
+def _advance_date_catchup(anchor: str, schedule: str, today_str: str = None,
+                          day_of_week: int = None) -> str:
+    """Advance anchor by schedule intervals until the result is strictly after
     today (or a supplied reference date) — rather than only one interval.
 
     v8.1.5 fix: previously, completing a task only ever called _advance_date()
@@ -303,14 +337,17 @@ def _advance_date_catchup(anchor: str, schedule: str, today_str: str = None) -> 
     has fallen behind by more than one interval, in which case a single
     completion now fully resyncs it to the next occurrence after today,
     instead of requiring one completion per missed interval.
+
+    v9.0.2: day_of_week threaded through to _advance_date() so the DOW pin
+    is respected during catch-up advancement as well as normal advancement.
     """
     today_str = today_str or _today()
-    new_date = _advance_date(anchor, schedule)
+    new_date = _advance_date(anchor, schedule, day_of_week)
     if new_date is None:
         return None
     guard = 0
     while new_date <= today_str and guard < 10000:
-        new_date = _advance_date(new_date, schedule)
+        new_date = _advance_date(new_date, schedule, day_of_week)
         guard += 1
     return new_date
 
@@ -458,19 +495,20 @@ def get_builtin_analysis_settings(task_type: str) -> dict:
     if not isinstance(saved, dict):
         saved = {}
     return {
-        "scope_dirs":       saved.get("scope_dirs") or [],
-        "output_learnings": saved.get("output_learnings", True),
-        "output_report":    saved.get("output_report", False),
-        "output_email":     saved.get("output_email", False),
-        "report_folder":    saved.get("report_folder") or DEFAULT_REPORT_FOLDER,
-        "schedule":         saved.get("schedule", "none"),
-        "first_due":        saved.get("first_due"),
+        "scope_dirs":            saved.get("scope_dirs") or [],
+        "output_learnings":      saved.get("output_learnings", True),
+        "output_report":         saved.get("output_report", False),
+        "output_email":          saved.get("output_email", False),
+        "report_folder":         saved.get("report_folder") or DEFAULT_REPORT_FOLDER,
+        "schedule":              saved.get("schedule", "none"),
+        "schedule_day_of_week":  saved.get("schedule_day_of_week"),  # v9.0.2; None = unpinned
+        "first_due":             saved.get("first_due"),
         # v8.1.11: extended to Common Business Analysis tasks too, matching
         # My Custom AI Analyses — Start time, End time, and Times per day
         # only apply when schedule == "daily".
-        "daily_start_time":    saved.get("daily_start_time", "09:00"),
-        "daily_end_time":      saved.get("daily_end_time", "17:00"),
-        "daily_times_per_day": saved.get("daily_times_per_day", 1),
+        "daily_start_time":      saved.get("daily_start_time", "09:00"),
+        "daily_end_time":        saved.get("daily_end_time", "17:00"),
+        "daily_times_per_day":   saved.get("daily_times_per_day", 1),
     }
 
 
@@ -491,6 +529,7 @@ def create_task(label: str,
                 prompt: str,
                 scope_dirs: list = None,
                 schedule: str = "none",
+                schedule_day_of_week: int = None,
                 first_due: str = None,
                 output_learnings: bool = True,
                 output_report: bool = False,
@@ -517,6 +556,11 @@ def create_task(label: str,
                           when schedule == "daily" (v8.1.11).
         daily_end_time:   HH:MM, last run of the day — only used when
                           daily_times_per_day > 1 (v8.1.11).
+        schedule_day_of_week: int 0–6 (Mon=0…Sun=6) or None. Only used when
+                          schedule is weekly, biweekly, or monthly. Pins
+                          next_due to that weekday via _snap_to_weekday()
+                          so tasks can be staggered across the week to
+                          spread credit consumption (v9.0.2).
         daily_times_per_day: how many evenly-spaced runs per day, first
                           exactly at daily_start_time and last exactly at
                           daily_end_time when > 1 (v8.1.11). 1 = classic
@@ -595,6 +639,20 @@ def create_task(label: str,
                     "End time must be after start time when times per day > 1."
                 )
 
+    # v9.0.2: validate schedule_day_of_week
+    if schedule_day_of_week is not None:
+        if schedule not in DOW_ELIGIBLE_SCHEDULES:
+            raise ValueError(
+                f"schedule_day_of_week is only valid for weekly, biweekly, "
+                f"or monthly schedules (got '{schedule}')."
+            )
+        try:
+            schedule_day_of_week = int(schedule_day_of_week)
+        except (TypeError, ValueError):
+            raise ValueError("schedule_day_of_week must be an integer 0–6.")
+        if not (0 <= schedule_day_of_week <= 6):
+            raise ValueError("schedule_day_of_week must be 0 (Mon) … 6 (Sun).")
+
     # Validate and set first_due / next_due
     next_due = None
     if schedule != "none":
@@ -608,7 +666,13 @@ def create_task(label: str,
             next_due = _first_daily_datetime(
                 first_due, daily_start_time, daily_end_time, daily_times_per_day)
         else:
-            next_due = first_due
+            # v9.0.2: snap first_due itself to the pinned weekday so the very
+            # first run also lands on the correct day of week.
+            if schedule_day_of_week is not None:
+                snapped = _snap_to_weekday(_parse_date(first_due), schedule_day_of_week)
+                next_due = snapped.isoformat()
+            else:
+                next_due = first_due
 
     scope_dirs = [str(d).strip() for d in (scope_dirs or []) if str(d).strip()]
 
@@ -617,24 +681,25 @@ def create_task(label: str,
 
     now = _now_iso()
     return {
-        "task_id":            task_id,
-        "label":              label,
-        "prompt":             prompt,
-        "scope_dirs":         scope_dirs,
-        "schedule":           schedule,
-        "first_due":          first_due,
-        "next_due":           next_due,
-        "last_run":           None,
-        "last_status":        None,
-        "output_learnings":   bool(output_learnings),
-        "output_report":      bool(output_report),
-        "output_email":       bool(output_email),
-        "report_folder":      report_folder or DEFAULT_REPORT_FOLDER,
-        "daily_start_time":   daily_start_time,
-        "daily_end_time":     daily_end_time,
-        "daily_times_per_day": daily_times_per_day,
-        "created_at":         now,
-        "updated_at":         now,
+        "task_id":               task_id,
+        "label":                 label,
+        "prompt":                prompt,
+        "scope_dirs":            scope_dirs,
+        "schedule":              schedule,
+        "schedule_day_of_week":  schedule_day_of_week,  # v9.0.2; None = unpinned
+        "first_due":             first_due,
+        "next_due":              next_due,
+        "last_run":              None,
+        "last_status":           None,
+        "output_learnings":      bool(output_learnings),
+        "output_report":         bool(output_report),
+        "output_email":          bool(output_email),
+        "report_folder":         report_folder or DEFAULT_REPORT_FOLDER,
+        "daily_start_time":      daily_start_time,
+        "daily_end_time":        daily_end_time,
+        "daily_times_per_day":   daily_times_per_day,
+        "created_at":            now,
+        "updated_at":            now,
     }
 
 
@@ -670,6 +735,7 @@ def update_task(tasks: list, task_id: str, **kwargs) -> bool:
 
         updatable = [
             "label", "prompt", "scope_dirs", "schedule",
+            "schedule_day_of_week",                          # v9.0.2
             "first_due", "output_learnings", "output_report",
             "output_email", "report_folder",
             "daily_start_time", "daily_end_time", "daily_times_per_day",
@@ -677,6 +743,7 @@ def update_task(tasks: list, task_id: str, **kwargs) -> bool:
 
         old_schedule  = t.get("schedule", "none")
         old_first_due = t.get("first_due")
+        old_dow       = t.get("schedule_day_of_week")        # v9.0.2
         old_daily_start = t.get("daily_start_time", "09:00")
         old_daily_end   = t.get("daily_end_time", "17:00")
         old_daily_times = t.get("daily_times_per_day", 1)
@@ -686,6 +753,11 @@ def update_task(tasks: list, task_id: str, **kwargs) -> bool:
         )
         first_due_changed = (
             "first_due" in kwargs and kwargs["first_due"] != old_first_due
+        )
+        # v9.0.2: changing the pinned day is a cadence edit — reset next_due
+        dow_changed = (
+            "schedule_day_of_week" in kwargs
+            and kwargs["schedule_day_of_week"] != old_dow
         )
         daily_fields_changed = (
             ("daily_start_time" in kwargs and kwargs["daily_start_time"] != old_daily_start) or
@@ -741,8 +813,8 @@ def update_task(tasks: list, task_id: str, **kwargs) -> bool:
         if schedule == "none":
             # Manual-only tasks never carry a next_due.
             t["next_due"] = None
-        elif (schedule_changed or first_due_changed or daily_fields_changed
-              or not t.get("next_due")):
+        elif (schedule_changed or first_due_changed or dow_changed
+              or daily_fields_changed or not t.get("next_due")):
             # Genuine cadence/anchor edit (or a task that never had a
             # next_due yet, e.g. switching from "none" to a real
             # schedule) — reset to the new anchor. This can legitimately
@@ -755,9 +827,14 @@ def update_task(tasks: list, task_id: str, **kwargs) -> bool:
                         t.get("daily_end_time", "17:00"),
                         t.get("daily_times_per_day", 1))
                 else:
-                    t["next_due"] = first_due
-        # else: neither schedule nor first_due (nor daily_* fields) changed
-        # — next_due is left exactly as it was.
+                    # v9.0.2: snap first_due to the (possibly new) DOW pin.
+                    new_dow = t.get("schedule_day_of_week")
+                    if new_dow is not None and schedule in DOW_ELIGIBLE_SCHEDULES:
+                        snapped = _snap_to_weekday(_parse_date(first_due), new_dow)
+                        t["next_due"] = snapped.isoformat()
+                    else:
+                        t["next_due"] = first_due
+        # else: no cadence fields changed — next_due left as-is.
 
         t["updated_at"] = _now_iso()
         return True
@@ -827,8 +904,12 @@ def advance_next_due(tasks: list, task_id: str,
     # fell behind by more than one interval, _advance_date_catchup() (v8.1.5)
     # skips past every already-missed occurrence in one call, so a single
     # completion always makes the task current — see its docstring.
+    # v9.0.2: pass through the task's day_of_week pin so the DOW constraint
+    # is preserved across completions.
     anchor = task.get("next_due") or completed_date or _today()
-    new_next_due = _advance_date_catchup(anchor, schedule, completed_date or _today())
+    dow = task.get("schedule_day_of_week")  # None = unpinned
+    new_next_due = _advance_date_catchup(anchor, schedule,
+                                         completed_date or _today(), dow)
 
     task["last_run"]    = completed_date or _today()
     task["last_status"] = "completed"
@@ -865,7 +946,8 @@ def catch_up_all_due_tasks(tasks: list) -> int:
         if schedule == "none":
             continue
         anchor = task.get("next_due") or today
-        new_next_due = _advance_date_catchup(anchor, schedule, today)
+        dow = task.get("schedule_day_of_week")  # v9.0.2
+        new_next_due = _advance_date_catchup(anchor, schedule, today, dow)
         if new_next_due is None:
             continue
         task["next_due"]    = new_next_due
