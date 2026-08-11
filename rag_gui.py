@@ -4845,7 +4845,19 @@ or from the Help menu."""
         # Check language packs — OCR "works" but silently mangles/half-reads
         # documents if eng/spa traineddata is missing, which is worse than
         # an obvious failure, so this is surfaced as its own state.
-        tessdata_dir = os.path.join(os.path.dirname(exe_path), 'tessdata')
+        #
+        # Mirror Tesseract's own resolution order: if TESSDATA_PREFIX is
+        # set, Tesseract reads from there instead of the exe-adjacent
+        # tessdata/ folder. We set this env var ourselves (see
+        # _install_or_repair_ocr's permission-denied fallback) when the
+        # real tessdata/ folder isn't writable by this process — so the
+        # check has to look in the same place Tesseract will actually use,
+        # or a successful fallback install would still show as "missing".
+        _tessdata_override = os.environ.get('TESSDATA_PREFIX', '')
+        if _tessdata_override and os.path.isdir(_tessdata_override):
+            tessdata_dir = _tessdata_override
+        else:
+            tessdata_dir = os.path.join(os.path.dirname(exe_path), 'tessdata')
         for lang in ('eng', 'spa'):
             lang_file = os.path.join(tessdata_dir, f'{lang}.traineddata')
             if os.path.isfile(lang_file):
@@ -4948,6 +4960,38 @@ or from the Help menu."""
                            f'OCR still works in this running session; a restart will '
                            f'also pick it up for good measure.')
 
+    def _persist_tessdata_prefix(self, override_dir):
+        """Write TESSDATA_PREFIX=override_dir onto the user's environment
+        (HKCU\\Environment) and broadcast WM_SETTINGCHANGE, same pattern as
+        _persist_tesseract_path above. Used when the real tessdata/ folder
+        next to tesseract.exe isn't writable by this (non-elevated) process
+        — e.g. a system-wide install under Program Files — so language
+        packs get placed in a folder AI-Prowler owns instead, and Tesseract
+        is told (via this env var) to read from there. Best-effort: failure
+        here doesn't block OCR in the CURRENT process (os.environ is set
+        directly for that), it only affects new processes after a restart."""
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment',
+                                 0, winreg.KEY_READ | winreg.KEY_WRITE) as key:
+                winreg.SetValueEx(key, 'TESSDATA_PREFIX', 0,
+                                   winreg.REG_EXPAND_SZ, override_dir)
+            HWND_BROADCAST = 0xFFFF
+            WM_SETTINGCHANGE = 0x1A
+            SMTO_ABORTIFHUNG = 0x0002
+            result = ctypes.c_long()
+            ctypes.windll.user32.SendMessageTimeoutW(
+                HWND_BROADCAST, WM_SETTINGCHANGE, 0, 'Environment',
+                SMTO_ABORTIFHUNG, 5000, ctypes.byref(result)
+            )
+            self._ocr_log(f'[OCR] Set TESSDATA_PREFIX={override_dir} for future sessions '
+                           f'and broadcast the change — new terminals will see it '
+                           f'immediately.')
+        except Exception as e:
+            self._ocr_log(f'[OCR] Note: could not persist TESSDATA_PREFIX automatically '
+                           f'({e}). OCR still works in this running session; a restart '
+                           f'may require setting it manually if this failed.')
+
     def _install_or_repair_ocr(self):
         """Download and silently install/repair Tesseract OCR from inside
         the running app — no reinstall of AI-Prowler required. Hardened
@@ -4993,8 +5037,64 @@ or from the Help menu."""
                 if _quick_info['ready'] and _quick_info['missing_langs']:
                     self._ocr_log('[OCR] Tesseract already installed — '
                                    'downloading missing language pack(s) only...')
-                    tessdata_dir = os.path.join(dest_folder, 'tessdata')
-                    os.makedirs(tessdata_dir, exist_ok=True)
+                    # Use the folder Tesseract was ACTUALLY found in (not a
+                    # hardcoded LOCALAPPDATA guess) — if Tesseract lives at
+                    # one of the fallback locations (e.g. a system-wide
+                    # Program Files install), downloading into a different
+                    # folder than the one _check_ocr_ready() re-inspects
+                    # means the pack never gets picked up and OCR stays
+                    # stuck reporting "missing" even after a successful
+                    # download.
+                    real_tessdata_dir = os.path.join(
+                        os.path.dirname(_quick_info['path']), 'tessdata')
+
+                    # That folder itself may not be writable — a system-wide
+                    # install (e.g. C:\Program Files\Tesseract-OCR) requires
+                    # admin rights, and this process runs non-elevated. Try
+                    # it first (works for the common per-user LOCALAPPDATA
+                    # install); fall back to a writable override folder AI-
+                    # Prowler owns if that fails with a permission error.
+                    tessdata_dir = real_tessdata_dir
+                    using_override = False
+                    try:
+                        os.makedirs(real_tessdata_dir, exist_ok=True)
+                        _probe = os.path.join(real_tessdata_dir, '.ai_prowler_write_test')
+                        with open(_probe, 'w') as _pf:
+                            _pf.write('ok')
+                        os.remove(_probe)
+                    except (PermissionError, OSError) as perm_err:
+                        using_override = True
+                        tessdata_dir = os.path.join(
+                            local_appdata, 'AI-Prowler', 'tessdata_override')
+                        self._ocr_log(
+                            f'[OCR] ⚠️  {real_tessdata_dir} is not writable '
+                            f'({perm_err}) — this is a system-wide Tesseract '
+                            f'install (e.g. Program Files) that needs admin '
+                            f'rights to modify.')
+                        self._ocr_log(
+                            f'[OCR] Falling back to a writable folder AI-Prowler '
+                            f'owns: {tessdata_dir}')
+                        os.makedirs(tessdata_dir, exist_ok=True)
+                        # Copy over any language files that are already
+                        # installed (e.g. eng) so the override folder is a
+                        # complete tessdata/ dir, not just the new pack —
+                        # Tesseract only looks in ONE tessdata folder at a
+                        # time (whatever TESSDATA_PREFIX points to), so a
+                        # partial copy would "fix" spa but break eng.
+                        import shutil as _shutil_ocr
+                        for existing_lang in _quick_info['langs']:
+                            src = os.path.join(real_tessdata_dir, f'{existing_lang}.traineddata')
+                            dst = os.path.join(tessdata_dir, f'{existing_lang}.traineddata')
+                            if os.path.isfile(src) and not os.path.isfile(dst):
+                                try:
+                                    _shutil_ocr.copy2(src, dst)
+                                    self._ocr_log(
+                                        f'[OCR] Copied existing {existing_lang} pack '
+                                        f'into the override folder.')
+                                except Exception as copy_err:
+                                    self._ocr_log(
+                                        f'[OCR] ⚠️  Could not copy {existing_lang} into '
+                                        f'override folder: {copy_err}')
                     for lang_code in _quick_info['missing_langs']:
                         lang_url = _LANG_URLS.get(lang_code)
                         if not lang_url:
@@ -5015,6 +5115,13 @@ or from the Help menu."""
                         except Exception as lang_err:
                             self._ocr_log(
                                 f'[OCR] ❌ Failed to download {lang_code}: {lang_err}')
+                    if using_override:
+                        # Point Tesseract at the override folder — both for
+                        # this running session (os.environ, inherited by any
+                        # subprocess.run() calls this process makes) and for
+                        # future sessions (persisted to the registry).
+                        os.environ['TESSDATA_PREFIX'] = tessdata_dir
+                        self._persist_tessdata_prefix(tessdata_dir)
                     info = self._check_ocr_ready()
                     if info['ready'] and not info['missing_langs']:
                         self._ocr_log('[OCR] ✅ All language packs now installed (eng+spa). OCR fully ready.')

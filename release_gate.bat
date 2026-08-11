@@ -176,7 +176,11 @@ echo       Covers: auth/identity (ST1), scope isolation (ST2), concurrent (ST3)
 echo       Requires: pip install mcp[cli]
 echo.
 cd /d "%AIPROWLER_ROOT%"
-py -m pytest tests/e2e -v -m e2e
+REM Route through run_tests.bat (same as Suite 1) so the pytest auto-install
+REM guard fires. Calling py -m pytest directly bypasses that guard and fails
+REM with "No module named pytest" if the package was installed into the
+REM Python311 Scripts folder that isn't on PATH.
+call run_tests.bat tests\e2e -v -m e2e
 set "SUITE4_RC=%ERRORLEVEL%"
 echo.
 if "%SUITE4_RC%"=="0" (

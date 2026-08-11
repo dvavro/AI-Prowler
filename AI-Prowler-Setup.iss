@@ -1569,6 +1569,11 @@ var
   TessVerOutput: AnsiString;
   TessVerResultCode: Integer;
   TessMissingLangs: String;
+  // v9.0.2: language pack download variables — used after NSIS install to
+  // fetch any packs the base installer didn't include (spa is the main one;
+  // eng ships with the NSIS installer but we check and repair it too).
+  TessLangPsFile, TessLangPsContents: String;
+  TessLangDownloadResult: Integer;
   MsgDummy: DWORD;
   PythonReady: Boolean;
   DefenderPs, DefenderPsFile: String;
@@ -2398,18 +2403,93 @@ begin
         AppendInstallLog('[Tesseract] Broadcast WM_SETTINGCHANGE - '
           + 'new terminals will see Tesseract on PATH immediately.');
 
-        // Language pack check -- informational only. Missing spa.traineddata
-        // still leaves English OCR working, so this doesn't fail the install,
-        // but it's worth surfacing since it silently degrades OCR quality on
-        // Spanish-language documents rather than erroring obviously.
-        TessMissingLangs := '';
-        if not FileExists(TessFolder + '\tessdata\eng.traineddata') then
-          TessMissingLangs := TessMissingLangs + 'eng ';
-        if not FileExists(TessFolder + '\tessdata\spa.traineddata') then
-          TessMissingLangs := TessMissingLangs + 'spa ';
-        if TessMissingLangs <> '' then
-          AppendInstallLog('[Tesseract] Note: missing language pack(s): '
-            + TessMissingLangs + '- see COMPLETE_USER_GUIDE.md for how to add them.');
+          // v9.0.2: Language pack download — active, not just a log note.
+          //
+          // The UB-Mannheim base NSIS installer only bundles English (eng) by
+          // default when run silently with /S. Spanish (spa) and any other
+          // packs are optional components that the silent /S flag skips.
+          // Previously AI-Prowler only checked for missing packs and logged a
+          // note pointing to the user guide — every fresh install therefore
+          // silently landed without spa, and OCR of Spanish documents would
+          // fail or produce garbage without any obvious error.
+          //
+          // Fix: after NSIS succeeds, check each required pack and download
+          // any that are missing directly from the official tessdata GitHub
+          // repo — the same URLs the runtime "Install / Repair OCR" button
+          // in rag_gui.py already uses. Best-effort: a download failure is
+          // logged but never blocks the rest of the install.
+          //
+          // URLs (stable raw GitHub links, same as rag_gui.py):
+          //   eng: https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata
+          //   spa: https://github.com/tesseract-ocr/tessdata/raw/main/spa.traineddata
+
+          SetProgress(87, 'Downloading Tesseract language packs (eng + spa)...');
+
+          TessMissingLangs := '';
+
+          // --- eng ---
+          if not FileExists(TessFolder + '\tessdata\eng.traineddata') then
+          begin
+            TessMissingLangs := TessMissingLangs + 'eng ';
+            AppendInstallLog('[Tesseract] eng.traineddata missing after NSIS install - downloading...');
+            TessLangPsFile := ExpandConstant('{tmp}\tess_lang_eng.ps1');
+            TessLangPsContents :=
+              '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;' + #13#10 +
+              'try {' + #13#10 +
+              '  $wc = New-Object System.Net.WebClient;' + #13#10 +
+              '  $wc.Headers["User-Agent"] = "AI-Prowler-OCR-Installer";' + #13#10 +
+              '  $wc.DownloadFile(''https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata'', ' +
+              '''' + TessFolder + '\tessdata\eng.traineddata'');' + #13#10 +
+              '  Write-Host "eng OK"' + #13#10 +
+              '} catch { Write-Host "eng FAILED: $_"; exit 1 }';
+            SaveStringToFile(TessLangPsFile, TessLangPsContents, False);
+            Exec('powershell.exe',
+              '-NoProfile -ExecutionPolicy Bypass -File "' + TessLangPsFile + '"',
+              '', SW_HIDE, ewWaitUntilTerminated, TessLangDownloadResult);
+            DeleteFileIfExists(TessLangPsFile);
+            if FileExists(TessFolder + '\tessdata\eng.traineddata') then
+              AppendInstallLog('[Tesseract] eng.traineddata downloaded OK.')
+            else
+              AppendInstallLog('[Tesseract] eng.traineddata download FAILED (rc='
+                + IntToStr(TessLangDownloadResult) + '). Use Install/Repair OCR in the app.');
+          end
+          else
+            AppendInstallLog('[Tesseract] eng.traineddata present - skipping download.');
+
+          // --- spa ---
+          if not FileExists(TessFolder + '\tessdata\spa.traineddata') then
+          begin
+            TessMissingLangs := TessMissingLangs + 'spa ';
+            AppendInstallLog('[Tesseract] spa.traineddata not present - downloading...');
+            TessLangPsFile := ExpandConstant('{tmp}\tess_lang_spa.ps1');
+            TessLangPsContents :=
+              '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;' + #13#10 +
+              'try {' + #13#10 +
+              '  $wc = New-Object System.Net.WebClient;' + #13#10 +
+              '  $wc.Headers["User-Agent"] = "AI-Prowler-OCR-Installer";' + #13#10 +
+              '  $wc.DownloadFile(''https://github.com/tesseract-ocr/tessdata/raw/main/spa.traineddata'', ' +
+              '''' + TessFolder + '\tessdata\spa.traineddata'');' + #13#10 +
+              '  Write-Host "spa OK"' + #13#10 +
+              '} catch { Write-Host "spa FAILED: $_"; exit 1 }';
+            SaveStringToFile(TessLangPsFile, TessLangPsContents, False);
+            Exec('powershell.exe',
+              '-NoProfile -ExecutionPolicy Bypass -File "' + TessLangPsFile + '"',
+              '', SW_HIDE, ewWaitUntilTerminated, TessLangDownloadResult);
+            DeleteFileIfExists(TessLangPsFile);
+            if FileExists(TessFolder + '\tessdata\spa.traineddata') then
+              AppendInstallLog('[Tesseract] spa.traineddata downloaded OK.')
+            else
+              AppendInstallLog('[Tesseract] spa.traineddata download FAILED (rc='
+                + IntToStr(TessLangDownloadResult) + '). Use Install/Repair OCR in the app.');
+          end
+          else
+            AppendInstallLog('[Tesseract] spa.traineddata present - skipping download.');
+
+          if TessMissingLangs <> '' then
+            AppendInstallLog('[Tesseract] Lang packs missing after NSIS and download attempted: '
+              + TessMissingLangs)
+          else
+            AppendInstallLog('[Tesseract] All required language packs present (eng + spa).');
 
         AppendInstallLog('[Tesseract] Install complete and verified working.');
         SetProgress(87, 'Tesseract OCR installed and verified.');
