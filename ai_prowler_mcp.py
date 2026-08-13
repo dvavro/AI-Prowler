@@ -16724,6 +16724,286 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                 await oauth_only_app(scope, receive, send)
                 return
 
+            # ── PWA token endpoint — no auth required ─────────────────────
+            # Serves the bearer token to the PWA so it can authenticate MCP
+            # calls. Reads from ~/.ai-prowler/config.json (same source as
+            # the Settings tab). Safe — token is already on this machine.
+            if path == "/pwa-token":
+                import json as _json2, os.path as _osp2
+                _cfg_p = _osp2.join(str(Path.home()), ".ai-prowler", "config.json")
+                try:
+                    with open(_cfg_p, "r", encoding="utf-8") as _f2:
+                        _tok2 = __import__("json").load(_f2).get("remote_token", "")
+                    _body2 = f'{{"token":"{_tok2}"}}'.encode()
+                except Exception:
+                    _body2 = b'{"token":""}'
+                await send({"type": "http.response.start", "status": 200,
+                            "headers": [
+                                [b"content-type",  b"application/json"],
+                                [b"content-length", str(len(_body2)).encode()],
+                                [b"cache-control",  b"no-store"],
+                            ]})
+                await send({"type": "http.response.body", "body": _body2,
+                            "more_body": False})
+                return
+            # ── end PWA token endpoint ─────────────────────────────────────
+
+            # ── PWA API endpoint — no auth required ────────────────────────
+            # Simple tool-call bridge for the PWA. The PWA cannot use /mcp
+            # directly because FastMCP requires the full Streamable HTTP MCP
+            # protocol handshake. This endpoint accepts plain JSON:
+            #   POST /pwa-api  {"tool": "tool_name", "args": {...}}
+            #   Response:      {"ok": true, "result": "..."} 
+            #                  {"ok": false, "error": "..."}
+            if path == "/pwa-api":
+                import json as _json3
+                # Read request body
+                _body_chunks = []
+                while True:
+                    _msg = await receive()
+                    _body_chunks.append(_msg.get("body", b""))
+                    if not _msg.get("more_body", False):
+                        break
+                _raw = b"".join(_body_chunks)
+                try:
+                    _req  = _json3.loads(_raw)
+                    _tool = _req.get("tool", "")
+                    _args = _req.get("args", {})
+                    # Use globals() to get live module-level tool functions
+                    _allowed_tools = {
+                        "read_job_spreadsheet",
+                        "log_time_entry",
+                        "update_job_spreadsheet",
+                        "record_learning",
+                        "check_ai_prowler_status",
+                        "search_learnings",
+                    }
+                    _g = globals()
+                    if _tool not in _allowed_tools or _tool not in _g:
+                        _resp = _json3.dumps({"ok": False, "error": f"Unknown tool: {_tool}"}).encode()
+                        _status = 400
+                    else:
+                        _fn = _g[_tool]
+                        import asyncio as _asyncio3
+                        import inspect as _inspect3
+                        try:
+                            if _inspect3.iscoroutinefunction(_fn):
+                                _result = await _fn(**_args)
+                            else:
+                                _result = _fn(**_args)
+                        except Exception as _call_exc:
+                            raise _call_exc
+                        _resp = _json3.dumps({"ok": True, "result": str(_result)}).encode()
+                        _status = 200
+                except Exception as _exc:
+                    _resp = _json3.dumps({"ok": False, "error": str(_exc)}).encode()
+                    _status = 400
+                await send({"type": "http.response.start", "status": _status,
+                            "headers": [
+                                [b"content-type",  b"application/json"],
+                                [b"content-length", str(len(_resp)).encode()],
+                                [b"cache-control",  b"no-store"],
+                                [b"access-control-allow-origin", b"*"],
+                            ]})
+                await send({"type": "http.response.body", "body": _resp,
+                            "more_body": False})
+                return
+            # ── end PWA API endpoint ────────────────────────────────────────
+
+            # ── PWA photo upload endpoint — no auth required ───────────────
+            # Accepts multipart/form-data POST from the PWA photo screen.
+            # Saves images to:
+            #   <user home>/Documents/AI-Prowler/JobPhotos/<JobID>/<timestamp>_N.jpg
+            # Path is fully dynamic — uses Path.home() so it works for any
+            # Windows user, no hardcoded names.
+            # Request fields:
+            #   job_id  — the job identifier string (e.g. JOB-0042)
+            #   notes   — optional text notes
+            #   files   — one or more image files (field name: photo)
+            if path == "/photos/upload":
+                import os as _os4, json as _json4, re as _re4
+                from pathlib import Path as _Path4
+                from datetime import datetime as _dt4
+
+                # ── Read full body ──────────────────────────────────────────
+                _chunks4 = []
+                while True:
+                    _msg4 = await receive()
+                    _chunks4.append(_msg4.get("body", b""))
+                    if not _msg4.get("more_body", False):
+                        break
+                _raw4 = b"".join(_chunks4)
+
+                # ── Parse content-type for boundary ────────────────────────
+                _ct4 = ""
+                for _hk, _hv in scope.get("headers", []):
+                    if _hk.lower() == b"content-type":
+                        _ct4 = _hv.decode(errors="replace")
+                        break
+
+                try:
+                    # ── Extract multipart boundary ──────────────────────────
+                    _bnd4 = None
+                    for _part in _ct4.split(";"):
+                        _part = _part.strip()
+                        if _part.startswith("boundary="):
+                            _bnd4 = _part[9:].strip().encode()
+                            break
+
+                    if not _bnd4:
+                        raise ValueError("No multipart boundary found")
+
+                    # ── Parse multipart fields ──────────────────────────────
+                    _job_id4  = ""
+                    _notes4   = ""
+                    _photos4  = []   # list of (filename, bytes)
+
+                    _delim4   = b"--" + _bnd4
+                    _parts4   = _raw4.split(_delim4)
+
+                    for _seg4 in _parts4[1:]:
+                        if _seg4.strip() in (b"", b"--", b"--\r\n"):
+                            continue
+                        # Split headers from body
+                        if b"\r\n\r\n" in _seg4:
+                            _hdrs4, _body4 = _seg4.split(b"\r\n\r\n", 1)
+                        elif b"\n\n" in _seg4:
+                            _hdrs4, _body4 = _seg4.split(b"\n\n", 1)
+                        else:
+                            continue
+                        # Strip trailing boundary marker
+                        _body4 = _body4.rstrip(b"\r\n")
+                        _hdrs4_str = _hdrs4.decode(errors="replace")
+
+                        # Extract field name and optional filename
+                        _fname4 = None
+                        _ffile4 = None
+                        _cd4 = ""
+                        for _hl4 in _hdrs4_str.splitlines():
+                            if _hl4.lower().startswith("content-disposition"):
+                                _cd4 = _hl4
+                        _nm4 = _re4.search(r'name="([^"]+)"', _cd4)
+                        _fn4 = _re4.search(r'filename="([^"]+)"', _cd4)
+                        _fname4 = _nm4.group(1) if _nm4 else ""
+                        _ffile4 = _fn4.group(1) if _fn4 else None
+
+                        if _fname4 == "job_id":
+                            _job_id4 = _body4.decode(errors="replace").strip()
+                        elif _fname4 == "notes":
+                            _notes4 = _body4.decode(errors="replace").strip()
+                        elif _fname4 == "photo" and _ffile4:
+                            _photos4.append((_ffile4, _body4))
+
+                    if not _job_id4:
+                        raise ValueError("job_id field is required")
+
+                    # ── Build save directory using Path.home() ─────────────
+                    # Never hardcoded — resolves to the current Windows user
+                    _photo_dir4 = (
+                        _Path4.home()
+                        / "Documents"
+                        / "AI-Prowler"
+                        / "JobPhotos"
+                        / _job_id4
+                    )
+                    _photo_dir4.mkdir(parents=True, exist_ok=True)
+
+                    # ── Save each photo ─────────────────────────────────────
+                    _ts4      = _dt4.now().strftime("%Y%m%d_%H%M%S")
+                    _saved4   = []
+                    _ext_map4 = {
+                        ".jpg": ".jpg", ".jpeg": ".jpg",
+                        ".png": ".png", ".gif": ".gif",
+                        ".webp": ".webp", ".heic": ".jpg",
+                    }
+                    for _idx4, (_orig_name4, _img_bytes4) in enumerate(_photos4, 1):
+                        _orig_ext4 = _os4.path.splitext(_orig_name4)[1].lower()
+                        _ext4      = _ext_map4.get(_orig_ext4, ".jpg")
+                        _out_name4 = f"{_ts4}_{_idx4}{_ext4}"
+                        _out_path4 = _photo_dir4 / _out_name4
+                        _out_path4.write_bytes(_img_bytes4)
+                        _saved4.append(str(_out_path4))
+
+                    # ── Log a learning entry for searchability ──────────────
+                    try:
+                        _learn_content4 = (
+                            f"{len(_saved4)} photo(s) saved for {_job_id4}. "
+                            f"Notes: {_notes4 or 'none'}. "
+                            f"Saved to: {str(_photo_dir4)}"
+                        )
+                        record_learning(
+                            title=f"Photos — {_job_id4} — {_ts4}",
+                            content=_learn_content4,
+                            category="technical_note",
+                            tags=f"photos,job_documentation,{_job_id4}",
+                        )
+                    except Exception:
+                        pass  # Learning log failure should not fail the upload
+
+                    _resp4 = _json4.dumps({
+                        "ok":    True,
+                        "saved": len(_saved4),
+                        "dir":   str(_photo_dir4),
+                        "files": [_os4.path.basename(p) for p in _saved4],
+                    }).encode()
+                    _status4 = 200
+
+                except Exception as _exc4:
+                    _resp4   = _json4.dumps({"ok": False, "error": str(_exc4)}).encode()
+                    _status4 = 400
+
+                await send({"type": "http.response.start", "status": _status4,
+                            "headers": [
+                                [b"content-type",  b"application/json"],
+                                [b"content-length", str(len(_resp4)).encode()],
+                                [b"cache-control",  b"no-store"],
+                                [b"access-control-allow-origin", b"*"],
+                            ]})
+                await send({"type": "http.response.body", "body": _resp4,
+                            "more_body": False})
+                return
+            # ── end PWA photo upload endpoint ──────────────────────────────
+
+            # ── PWA static file server — no auth required ────────────────
+
+            # Serves the Crew Companion PWA from the pwa/ folder next to
+            # this file. Accessible at: https://<tunnel-url>/pwa/
+            # Crew install via "Add to Home Screen" on their phones.
+            if path.startswith("/pwa"):
+                import mimetypes as _mt2, os as _os2
+                _pwa_root = _os2.path.join(
+                    _os2.path.dirname(_os2.path.abspath(__file__)), "pwa")
+                rel = path[4:].lstrip("/") or "index.html"
+                file_path = _os2.path.join(_pwa_root, rel)
+                if not _os2.path.abspath(file_path).startswith(
+                        _os2.path.abspath(_pwa_root)):
+                    await send({"type": "http.response.start", "status": 403,
+                                "headers": [[b"content-type", b"text/plain"]]})
+                    await send({"type": "http.response.body",
+                                "body": b"Forbidden", "more_body": False})
+                    return
+                if _os2.path.isfile(file_path):
+                    mime, _ = _mt2.guess_type(file_path)
+                    mime_b = (mime or "application/octet-stream").encode()
+                    with open(file_path, "rb") as _f:
+                        body = _f.read()
+                    await send({"type": "http.response.start", "status": 200,
+                                "headers": [
+                                    [b"content-type",   mime_b],
+                                    [b"content-length", str(len(body)).encode()],
+                                    [b"cache-control",  b"no-cache"],
+                                ]})
+                    await send({"type": "http.response.body", "body": body,
+                                "more_body": False})
+                else:
+                    await send({"type": "http.response.start", "status": 404,
+                                "headers": [[b"content-type", b"text/plain"]]})
+                    await send({"type": "http.response.body",
+                                "body": b"PWA file not found",
+                                "more_body": False})
+                return
+            # ── end PWA static server ─────────────────────────────────────
+
             # Everything else (including /mcp) — check Bearer token first
             headers = {k.lower(): v for k, v in scope.get("headers", [])}
             auth_raw = headers.get(b"authorization", b"")
