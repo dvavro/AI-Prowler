@@ -578,6 +578,27 @@ MANIFEST_FILES = [
     ".claude/settings.json",
     ".claude/hooks/log_tool_call.py",
     ".claude/skills/ai-prowler-tasks/SKILL.md",
+    # Added v9.1.0: sms_consent.py — SMS opt-in consent record management.
+    # Provides list_sms_consents and delete_sms_consent MCP tool implementations.
+    # Was in AI-Prowler-Setup.iss [Files] from v9.1.0 but missing here, meaning
+    # auto-updated clients from older versions would never receive it.
+    "sms_consent.py",
+    # Added v9.1.0: Jobs PWA — field crew job management interface served at
+    # /jobs/ by the HTTP MCP server. All six files are needed for the PWA to
+    # work as a home-screen installable app on iPhone and Android.
+    "jobs/index.html",
+    "jobs/manifest.json",
+    "jobs/sw.js",
+    "jobs/icon-192.png",
+    "jobs/icon-512.png",
+    "jobs/icon.png",
+    # Added v9.1.0: Remote PWA — field crew interface for Business Server mode,
+    # served at /remote/. Identical layout to Jobs PWA but per-user scoped.
+    "remote/index.html",
+    "remote/manifest.json",
+    "remote/sw.js",
+    "remote/icon-192.png",
+    "remote/icon-512.png",
     # NOTE: rag_icon.ico and python-3.11.8-amd64.exe are intentionally excluded.
     # rag_icon.ico rarely changes and is large binary noise in the update.
     # python-3.11.8-amd64.exe is the bundled Python installer — it is never

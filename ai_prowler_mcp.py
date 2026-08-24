@@ -19,6 +19,7 @@ Author: AI-Prowler project
 """
 
 # ── Critical env vars — must come before ANY library import ──────────────────
+import textwrap
 import os
 import sys
 
@@ -77,7 +78,7 @@ from typing import Optional
 import logging
 import traceback
 
-_LOG_PATH = Path.home() / "AppData" / "Local" / "AI-Prowler" / "mcp_server.log"
+_LOG_PATH = Path.home() / ".ai-prowler" / "logs" / "mcp_server.log"
 _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 # Keep last 3 log files by rotating on each startup
@@ -286,6 +287,66 @@ def _get_personal_owner_name() -> str:
         return (_engine.OWNER_NAME or "").strip()
     except Exception:
         return ""
+
+
+# Found 2026-08-24: the PWA update-available banner (jobs/index.html,
+# remote/index.html — see each file's _initUpdateBanner()) relies on the
+# browser detecting that sw.js's own bytes have changed. Before this, that
+# meant hand-incrementing a CACHE = 'aiprowler-vN' string inside sw.js on
+# every deploy — easy to forget, and it only caught changes to sw.js
+# itself, not to index.html or manifest.json (a change to either of those
+# with no matching sw.js bump would silently never trigger an update at
+# all). This computes a content hash covering all three files instead, so
+# there's no version number to remember — any change to any of the three
+# automatically produces a different value here. jobs/sw.js and
+# remote/sw.js each keep a stable `const CACHE = 'auto';` placeholder on
+# disk; _patch_sw_cache_version() below substitutes this computed value
+# into that line ONLY in the HTTP response body, at serve time — the file
+# on disk is never modified.
+def _compute_pwa_sw_cache_version(pwa_root: str, sw_source_bytes: bytes) -> str:
+    """Short content hash over sw.js's own source (as read from disk,
+    placeholder and all) plus index.html and manifest.json from the same
+    pwa_root. A missing file (e.g. no manifest.json) just doesn't
+    contribute rather than raising — this always returns SOME hash.
+    """
+    import hashlib as _pwa_hl
+    import os as _pwa_hos
+    h = _pwa_hl.sha256()
+    h.update(sw_source_bytes)
+    for _fname in ("index.html", "manifest.json"):
+        _fpath = _pwa_hos.path.join(pwa_root, _fname)
+        try:
+            with open(_fpath, "rb") as _fh:
+                h.update(_fh.read())
+        except Exception:
+            pass
+    return h.hexdigest()[:12]
+
+
+def _patch_sw_cache_version(rel_path: str, pwa_root: str, body: bytes) -> bytes:
+    """If rel_path is sw.js, returns body with its `const CACHE = '...';`
+    line's value replaced by the freshly computed content hash (see
+    _compute_pwa_sw_cache_version). Returns body unchanged for every other
+    file, and falls back to the original body untouched on ANY error
+    (bad encoding, unexpected sw.js contents, etc.) — this must never be
+    the reason the Jobs or Remote PWA fails to load.
+    """
+    if rel_path != "sw.js":
+        return body
+    try:
+        import re as _pwa_re
+        _version = _compute_pwa_sw_cache_version(pwa_root, body)
+        _text = body.decode("utf-8")
+        _patched, _n = _pwa_re.subn(
+            r"const CACHE = '[^']*';",
+            f"const CACHE = '{_version}';",
+            _text, count=1,
+        )
+        if _n != 1:
+            return body  # placeholder line not found in the expected shape — serve as-is
+        return _patched.encode("utf-8")
+    except Exception:
+        return body
 
 
 def _get_personal_owner_address() -> dict:
@@ -674,11 +735,15 @@ _TIER_A_SUPPRESSED: frozenset = frozenset({
     # server mode's GUI, so the queue they drive has no server-mode caller).
     "get_pending_analysis_tasks", "complete_analysis_task", "save_analysis_report",
     "create_analysis_task", "list_analysis_tasks",
-    # v8.1.9: the three queue-management tools added alongside the due-aware
+    # v8.1.9: the queue-management tools added alongside the due-aware
     # filtering / unified re-arm redesign — same personal-install-only
     # rationale as the rest of this group above; there is no server-mode
-    # caller for any of them either.
-    "sync_due_tasks_to_queue", "delete_analysis_task", "update_analysis_task",
+    # caller for either of them either. (sync_due_tasks_to_queue, a third
+    # tool from this same redesign, was later fully removed — deprecated
+    # once the real usage model turned out to be "user adds tasks to the
+    # queue manually only, no auto-syncing" — so it no longer needs an
+    # entry here at all.)
+    "delete_analysis_task", "update_analysis_task",
     # Raw/unscoped SMS inbox — personal-install-only. sms_inbox_read() has no
     # per-user filtering (unlike sms_inbox_read_for_user()), so in a
     # multi-user server it would let any employee read every inbound
@@ -951,8 +1016,8 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "AI-Prowler — Agentic RAG Knowledge Base\n"
         + "=" * 50 + "\n\n"
 
-        "TOOL CATEGORIES (82 tools total — 82 visible in personal mode,\n"
-        "54 visible in server mode; call check_tools_status() for a precise\n"
+        "TOOL CATEGORIES (96 tools total — 95 visible in personal mode,\n"
+        "64 visible in server mode; call check_tools_status() for a precise\n"
         "per-tool breakdown on this connection)\n"
         + "-" * 30 + "\n"
         "AI-Prowler exposes ten tool families. Most question-answering\n"
@@ -977,12 +1042,13 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "  • Field service actions (free public APIs, no key needed):\n"
         "      geocode_address, get_weather, optimize_route,\n"
         "      build_maps_url, read_job_spreadsheet, update_job_spreadsheet,\n"
-        "      check_tools_status\n"
+        "      create_job, get_sheet_columns, check_tools_status\n"
         "      get_home_address (personal mode only — Settings tab's Home\n"
         "      address is a single-owner concept with no server-mode caller)\n\n"
 
         "  • Contractor / business workflow:\n"
-        "      email_invoice, schedule_next_recurring_job, log_time_entry,\n"
+        "      email_invoice, text_invoice, email_receipt, text_receipt,\n"
+        "      schedule_next_recurring_job, log_time_entry,\n"
         "      get_ar_aging_report, save_contact, get_sms_thread,\n"
         "      list_sms_contacts_with_replies\n\n"
 
@@ -990,7 +1056,9 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "    personal and server mode):\n"
         "      configure_email, send_email, send_alert, send_file,\n"
         "      send_sms, check_sms_replies, check_sms_inbox,\n"
-        "      send_whatsapp, check_whatsapp_replies\n\n"
+        "      check_sms_configured, check_email_configured,\n"
+        "      send_whatsapp, check_whatsapp_replies,\n"
+        "      list_sms_consents, delete_sms_consent\n\n"
 
         "  • File editing (write tools — see EDITING FILES section below):\n"
         "      create_file, write_file, str_replace_in_file,\n"
@@ -1021,12 +1089,11 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "        per task. Use for 'what's in my task queue' — different from\n"
         "        get_pending_analysis_tasks below, which only shows tasks\n"
         "        already queued into the run queue. Read-only.\n"
-        "      sync_due_tasks_to_queue — pushes any DUE custom task\n"
-        "        definitions into the run queue that aren't already sitting\n"
-        "        there. Call this FIRST, before get_pending_analysis_tasks,\n"
-        "        for a fully autonomous 'check and run whatever's due' pass\n"
-        "        — without it, a scheduled custom task never enters the run\n"
-        "        queue on its own. Idempotent; safe to call every time.\n"
+        "      queue_single_task(task_id) — adds one specific task to the\n"
+        "        run queue immediately, regardless of its scheduled next_due\n"
+        "        time. The queue is populated manually only — there is no\n"
+        "        bulk 'sync everything currently due' tool — so this is how\n"
+        "        a task actually gets into the queue in the first place.\n"
         "      get_pending_analysis_tasks — returns tasks from\n"
         "        pending_tasks.json that are DUE right now (queued but not\n"
         "        yet due stays hidden). Call when the user pastes the\n"
@@ -1149,9 +1216,22 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "    trips after many writes in one conversation, call\n"
         "    reset_write_counter() to continue — this is a runaway-loop\n"
         "    safeguard, not an error.\n"
-        "  • Before relying on freshly-edited code, run syntax_check() or\n"
-        "    compile_check() to catch typos, then check_python_import() to\n"
-        "    catch load-time errors syntax checking alone would miss.\n"
+          "  • Before relying on freshly-edited code, run syntax_check() or\n"
+          "    compile_check() to catch typos, then check_python_import() to\n"
+          "    catch load-time errors syntax checking alone would miss.\n"
+          "  • str_replace_in_file and line_replace_in_file both support\n"
+          "    dedent=True for indented Python code — strips common leading\n"
+          "    whitespace and re-indents to match the target, avoiding the\n"
+          "    2-space padding bug from tool call encoding. ALWAYS use it\n"
+          "    when new_str/new_content is indented Python.\n"
+          "    ⚠️  CAVEAT for line_replace_in_file: start_line must be a\n"
+          "    non-blank line — dedent keys off that line's leading whitespace.\n"
+          "    If start_line is blank, the block writes at column 0. Fix:\n"
+          "    replace a real indented line and include it at the end of\n"
+          "    new_content. str_replace_in_file keys off the first line of\n"
+          "    old_str so it does not have this blank-line limitation.\n"
+          "    Example: line_replace_in_file(path, 42, 44, code, dedent=True)\n"
+          "             str_replace_in_file(path, old, new, dedent=True)\n"
         "  Rationale: re-embedding on every write deadlocked the HTTP server\n"
         "  on large files; explicit end-of-session reindex avoids that.\n"
         "  Server mode: create_file/write_file/str_replace_in_file/\n"
@@ -1212,6 +1292,15 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "removed — carriers are shutting those gateways down industry-wide.\n"
         "A real SMS/WhatsApp provider (Twilio, SignalWire, or Vonage) is now\n"
         "the only path.\n\n"
+        "list_sms_consents / delete_sms_consent — SMS opt-in records captured\n"
+        "via the /consent-signup website widget (consent-widget.js, embedded\n"
+        "on the operator's OWN business site — fully decentralized, no data\n"
+        "flows through AI-Prowler LLC infrastructure). Records stay in sync\n"
+        "with STOP/START replies automatically: a STOP reply flips a signed-up\n"
+        "contact's record to opted-out without any manual bookkeeping, and\n"
+        "START/UNSTOP restores it while preserving the original signup data.\n"
+        "delete_sms_consent permanently erases a record (CCPA/GDPR removal\n"
+        "requests) — distinct from an opt-out, which just marks it inactive.\n\n"
 
         "SELF-LEARNING WORKFLOW — PERSISTENT MEMORY\n"
         + "-" * 30 + "\n"
@@ -1324,7 +1413,7 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "    primary financial source. If no, use AI-Prowler Job Tracker tools.\n\n"
         "  Server mode: get_pending_analysis_tasks, complete_analysis_task,\n"
         "  save_analysis_report, create_analysis_task, list_analysis_tasks,\n"
-        "  sync_due_tasks_to_queue, delete_analysis_task, and\n"
+        "  queue_single_task, delete_analysis_task, and\n"
         "  update_analysis_task are NOT available to any role — the Quick\n"
         "  Links tab that queues this workflow is a personal-install-only\n"
         "  GUI feature.\n\n"
@@ -3848,6 +3937,116 @@ def _resolve_job_spreadsheet_path(ctx, filepath_arg: str = "") -> str:
     return default_path
 
 
+def _join_header_lines(raw_value) -> str:
+    """
+    Normalizes a spreadsheet header cell that may span multiple lines into
+    a single clean string, distinguishing two genuinely different cases
+    that a blind "keep only the first line" or "merge all lines with a
+    space" approach both get wrong for at least one real column:
+
+      1. A formula-documentation note on a continuation line, e.g.
+         "Tax 7% ($)\n=M*0.07" — the "=..." part is NOT part of the
+         column's actual name, it's a note for whoever built the sheet.
+         Dropped entirely; the header becomes "Tax 7% ($)".
+
+      2. A column name that is ITSELF wrapped across multiple lines with
+         no formula involved, e.g. "Service\nDate" (the real name is
+         "Service Date", just word-wrapped in the cell) or "Customer\n
+         Type". Merged with a space; the header becomes "Service Date".
+
+      A prior fix here (see git history / backup files) took only the
+      first line unconditionally, which correctly fixed case 1 but
+      silently broke case 2: "Service Date", "Service Type", and
+      "Service Details / Notes" all collapsed to the single word
+      "Service", making three separate columns indistinguishable by
+      name. That collision broke the Service Date column lookup in
+      read_job_spreadsheet's date_filter logic entirely (no column
+      matched 'service' AND 'date' anymore, since "date" was gone),
+      which in turn caused filter_date='today' to silently filter
+      nothing — returning every job on the sheet instead of just
+      today's, or in combination with other effects, an empty list.
+    """
+    if not raw_value:
+        return ''
+    parts = str(raw_value).split('\n')
+    kept = [parts[0].strip()]
+    for line in parts[1:]:
+        line = line.strip()
+        if line and not line.startswith('='):
+            kept.append(line)
+    return ' '.join(kept).strip()
+
+
+def _job_crew_scope(ctx, fp: str) -> tuple[bool, str]:
+    """
+    Shared crew-scoping decision for job-spreadsheet tools (Phase 3/4 of the
+    server-mode Jobs PWA plan). Used by read_job_spreadsheet,
+    update_job_spreadsheet, log_time_entry, and email_invoice so all four
+    agree on exactly the same rule rather than drifting across four
+    separate implementations.
+
+    Returns (restrict, crew_name):
+      - restrict=False: no crew filtering should be applied — either
+        personal mode, an owner/manager role, or a user already isolated
+        to their own per-user spreadsheet file (Model B — every row in
+        that file already belongs to them by construction).
+      - restrict=True: caller is a server-mode staff/field_crew user on
+        the SHARED master spreadsheet (Model A). crew_name is their
+        stripped, lowercased display name — the caller is responsible for
+        comparing it against a row's "Crew / Technician" cell using the
+        same normalization, and treating a blank cell as non-matching.
+    """
+    user = _current_user(ctx)
+    if user is None:
+        return False, ""
+
+    try:
+        uid = (user.get("id") or "").strip()
+        if uid:
+            default_path = _get_default_spreadsheet_path()
+            folder = os.path.dirname(default_path) if default_path else ""
+            if folder:
+                own_candidate = os.path.join(folder, f"{uid}.xlsx")
+                if os.path.abspath(fp) == os.path.abspath(own_candidate):
+                    return False, ""  # Model B — own file, no filtering
+    except Exception:
+        pass
+
+    full_access, _ = _check_db_cap(user, "full")
+    if full_access:
+        return False, ""
+
+    return True, (user.get("name") or "").strip().lower()
+
+
+def _crew_name_in_cell(row_crew_lower: str, crew_name: str) -> bool:
+    """
+    Checks whether crew_name (the logged-in user's stripped+lowercased
+    display name) appears among the names listed in a "Crew /
+    Technician" cell. Jobs can be assigned to multiple people — the cell
+    holds a comma-separated list (e.g. "mike c., david vavro") rather
+    than a single name, so this is membership-in-list, not equality.
+
+    Args:
+        row_crew_lower: the FULL "Crew / Technician" cell value, ALREADY
+            stripped and lowercased by the caller — every one of this
+            helper's call sites already does that before the check, so
+            this stays a drop-in replacement for a plain `==`/`!=`
+            comparison rather than requiring each site to also change
+            how it reads the cell.
+        crew_name: the logged-in user's stripped+lowercased display name.
+
+    Returns:
+        False if row_crew_lower or crew_name is blank — matching the
+        "not row_crew" short-circuit every call site already had before
+        this helper existed (an unassigned job is never "assigned to"
+        anyone, regardless of who's asking).
+    """
+    if not row_crew_lower or not crew_name:
+        return False
+    return crew_name in [n.strip() for n in row_crew_lower.split(',')]
+
+
 def _backup_spreadsheet(fp: str, keep_days: int = 30) -> str:
     """
     Copy fp into a _backups subfolder next to the file, timestamped.
@@ -3903,6 +4102,7 @@ def update_job_spreadsheet(
     id_column:      str = "Customer",
     sheet_name:     str = "",
     backup:         bool = True,
+    row_index:      int = -1,
     ctx: "Context | None" = None,
 ) -> str:
     """
@@ -3911,6 +4111,12 @@ def update_job_spreadsheet(
     Finds the correct row by matching job_identifier against id_column
     (e.g. customer name), then writes new values to specified columns
     (e.g. marks job complete, records invoice number, updates last service date).
+
+    Some sheets (Route_Planner is the current example) have no single
+    column that uniquely identifies a row — Stop # repeats across every
+    route date and crew, and the sheet's first column (Route Date) repeats
+    across every stop on the same day. For these, pass row_index instead
+    of relying on id_column/job_identifier — see that arg's docs below.
 
     Uses openpyxl — already installed, no new package needed.
     Works only on .xlsx files. For .xls, convert to .xlsx first.
@@ -3924,7 +4130,9 @@ def update_job_spreadsheet(
     communications gate applies here.
 
     Args:
-        job_identifier: Value to search for in id_column.
+        job_identifier: Value to search for in id_column. Ignored (may be
+                        left as any placeholder string) when row_index is
+                        given, since row_index locates the row directly.
                         Example: "Crabby's Daytona" (partial matches accepted)
         updates:        Dict of {column_header: new_value} pairs to write.
                         Example: {"Job\\nStatus": "Complete",
@@ -3935,12 +4143,21 @@ def update_job_spreadsheet(
                         If omitted, uses the path saved in AI-Prowler Settings.
                         Example: "C:/Users/Dave/Documents/jobs.xlsx"
         id_column:      Column header to search in (default "Customer").
+                        Ignored when row_index is given.
         sheet_name:     Sheet to use (default: first/active sheet).
         backup:         If True (default), a timestamped backup copy of the
                         spreadsheet is saved in a _backups subfolder next to
                         the file before any changes are written.
                         Backups older than 30 days are pruned automatically.
                         Set to False to skip the backup (faster, no disk use).
+        row_index:      0-based position among this sheet's DATA rows (i.e.
+                        the row order read_job_spreadsheet() returns them
+                        in — 0 is the first row below the header, 1 the
+                        next, and so on), used to target a row directly
+                        instead of searching id_column for job_identifier.
+                        Takes priority over the id_column search whenever
+                        it's >= 0. Use this for sheets like Route_Planner
+                        that have no column guaranteed unique on its own.
 
     Returns:
         Confirmation listing exactly which cells were updated, backup status,
@@ -4019,28 +4236,59 @@ def update_job_spreadsheet(
                 "Expected a row with at least 3 non-empty cells in the first 5 rows."
             )
 
-        if id_column not in headers:
-            avail = [k for k in headers.keys() if '\n' not in k][:15]
-            return (
-                f"❌ Column '{id_column}' not found in headers (detected on row {header_row_num}).\n"
-                f"Available columns: {', '.join(avail)}"
-            )
-
-        id_col_idx = headers[id_column]
-
-        # ── Find matching row ─────────────────────────────────────────────────────
+        # ── Find the row to update ──────────────────────────────────────────────
+        # row_index (when given) targets a row by position — the Nth data
+        # row below the header, matching read_job_spreadsheet()'s row
+        # order exactly — bypassing the id_column search entirely. This is
+        # the only reliable way to target a specific row on a sheet like
+        # Route_Planner, where no single column is unique on its own.
         found_row = None
-        for row in ws.iter_rows(min_row=header_row_num + 1):
-            cell_val = row[id_col_idx - 1].value
-            if cell_val and job_identifier.lower() in str(cell_val).lower():
-                found_row = row
-                break
+        if row_index >= 0:
+            target_row_num = header_row_num + 1 + row_index
+            if target_row_num > ws.max_row:
+                return (
+                    f"❌ row_index {row_index} is out of range — this sheet only has "
+                    f"{max(ws.max_row - header_row_num, 0)} data row(s)."
+                )
+            found_row = next(iter(ws.iter_rows(min_row=target_row_num, max_row=target_row_num)))
+        else:
+            if id_column not in headers:
+                avail = [k for k in headers.keys() if '\n' not in k][:15]
+                return (
+                    f"❌ Column '{id_column}' not found in headers (detected on row {header_row_num}).\n"
+                    f"Available columns: {', '.join(avail)}"
+                )
 
-        if found_row is None:
-            return (
-                f"❌ No row found where {id_column} contains '{job_identifier}'.\n"
-                "Check the spelling — partial matches are accepted."
-            )
+            id_col_idx = headers[id_column]
+            for row in ws.iter_rows(min_row=header_row_num + 1):
+                cell_val = row[id_col_idx - 1].value
+                if cell_val and job_identifier.lower() in str(cell_val).lower():
+                    found_row = row
+                    break
+
+            if found_row is None:
+                return (
+                    f"❌ No row found where {id_column} contains '{job_identifier}'.\n"
+                    "Check the spelling — partial matches are accepted."
+                )
+
+        # ── Server-mode crew scoping (Phase 4) ──────────────────────────────
+        # Same rule as read_job_spreadsheet, via the shared _job_crew_scope()
+        # helper. Only enforced when the resolved sheet is Jobs_Schedule —
+        # updates to any other sheet (e.g. Customers) are unaffected. A
+        # restricted user attempting to update a row that isn't theirs is
+        # rejected before any cell is written, not silently allowed.
+        if ws.title == "Jobs_Schedule":
+            _ujs_restrict, _ujs_crew_name = _job_crew_scope(ctx, fp)
+            if _ujs_restrict:
+                _ujs_crew_col = headers.get("Crew / Technician")
+                _ujs_row_crew = (str(found_row[_ujs_crew_col - 1].value or "").strip().lower()
+                                  if _ujs_crew_col else "")
+                if not _crew_name_in_cell(_ujs_row_crew, _ujs_crew_name):
+                    return (
+                        f"❌ You can only update jobs assigned to you "
+                        f"(Crew / Technician column). This row is not assigned to you."
+                    )
 
         # ── Apply updates ─────────────────────────────────────────────────────────
         updated:    list[str] = []
@@ -4060,9 +4308,10 @@ def update_job_spreadsheet(
             return f"❌ Could not save spreadsheet: {exc}"
 
         row_num = found_row[0].row
+    row_label = f"row_index {row_index}" if row_index >= 0 else f"{id_column}: {job_identifier}"
     lines   = [
         f"✅ Spreadsheet updated: {os.path.basename(fp)}",
-        f"   Row:     {row_num}  ({id_column}: {job_identifier})",
+        f"   Row:     {row_num}  ({row_label})",
         f"   Updated: {', '.join(updated)}",
     ]
     if backup_msg:
@@ -4075,6 +4324,337 @@ def update_job_spreadsheet(
         "\n📑 Re-index the spreadsheet to keep AI-Prowler search results current:\n"
         "   Call update_tracked_directories() after updating the file."
     )
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 5b — create_job
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def create_job(
+    updates:    dict,
+    filepath:   str = "",
+    backup:     bool = True,
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Create a new job — appends a brand-new row to the Jobs_Schedule sheet,
+    auto-assigning the next JobID (JOB-####).
+
+    Unlike update_job_spreadsheet, which requires an EXISTING row and edits
+    it in place, this tool always appends a new row. Available to every role
+    in every mode — personal and ALL server-mode roles (owner, manager,
+    staff, field_crew) — no DB-management or communications gate applies,
+    and (unlike update_job_spreadsheet) creation is not restricted to a
+    crew member's own existing jobs, since a brand-new row has no prior
+    owner to check against.
+
+    Uses openpyxl — already installed, no new package needed.
+    Works only on .xlsx files.
+
+    If filepath is omitted, the default spreadsheet path configured in
+    AI-Prowler Settings → Small Business → Default Spreadsheet Path is used
+    automatically.
+
+    Args:
+        updates:  Dict of {column_header: new_value} pairs for the new job.
+                  Example: {"Customer Name / Company": "Jane Smith",
+                            "Street Address ★ AI Route": "42 Beachside Dr",
+                            "Service Date": "2026-04-05",
+                            "Service Type": "Window",
+                            "Job Status": "Scheduled"}
+                  A "JobID (JOB-####)" key, if passed, is ignored — the next
+                  JobID is always auto-generated from the highest existing
+                  JOB-#### number in the sheet.
+        filepath: Full path to the Excel spreadsheet (.xlsx). If omitted,
+                  uses the path saved in AI-Prowler Settings. In server mode
+                  this argument is ignored — see _resolve_job_spreadsheet_path().
+        backup:   If True (default), a timestamped backup copy of the
+                  spreadsheet is saved before any changes are written.
+
+    Returns:
+        Confirmation with the new JobID, or an error if the file or the
+        Jobs_Schedule sheet's header row could not be found.
+
+    Voice examples:
+        "Add a new job for Jane Smith on April 5th, window washing"
+        "Create a job: Blue Wave Cafe, pressure wash, next Monday"
+    """
+    # Serialise the whole load -> modify -> save cycle so two concurrent
+    # server-mode writers can never interleave and silently drop each
+    # other's changes (openpyxl has no file locking of its own) — same
+    # lock update_job_spreadsheet and schedule_next_recurring_job use.
+    with _spreadsheet_write_lock:
+        return _create_job_impl(updates, filepath, backup, ctx)
+
+
+def _create_job_impl(updates: dict, filepath: str, backup: bool, ctx) -> str:
+    """Implementation body, called under _spreadsheet_write_lock. See
+    create_job() for the public docstring."""
+    _telemetry_increment_tool_count("create_job")
+
+    try:
+        import openpyxl as _opx
+    except ImportError:
+        return "❌ openpyxl not installed. Run: pip install openpyxl"
+
+    filepath = _resolve_job_spreadsheet_path(ctx, filepath)
+    if not filepath:
+        return (
+            "❌ No spreadsheet path provided and no default path configured.\n"
+            "Set one in AI-Prowler → Settings → Small Business → Default Spreadsheet Path,\n"
+            "or pass the full filepath argument explicitly."
+        )
+
+    fp = filepath.replace("\\", "/")
+    if not os.path.exists(fp):
+        return f"❌ Spreadsheet not found: {fp}"
+    if not fp.lower().endswith(".xlsx"):
+        return (
+            "❌ Only .xlsx files are supported for updates.\n"
+            "Save the spreadsheet as .xlsx in Excel first."
+        )
+
+    backup_msg = ""
+    if backup:
+        backup_msg = _backup_spreadsheet(fp)
+        if backup_msg.startswith("⚠️") or backup_msg.startswith("❌"):
+            return (
+                f"{backup_msg}\n"
+                "Spreadsheet was NOT modified. Fix the backup issue or pass backup=False to skip."
+            )
+
+    try:
+        wb = _opx.load_workbook(fp)
+    except Exception as exc:
+        return f"❌ Could not open spreadsheet: {exc}"
+
+    if "Jobs_Schedule" not in wb.sheetnames:
+        return "❌ 'Jobs_Schedule' sheet not found in spreadsheet."
+    ws = wb["Jobs_Schedule"]
+
+    # ── Detect header row — same logic as update_job_spreadsheet ──────────────
+    header_row_num: int | None = None
+    headers: dict[str, int] = {}
+    for r in ws.iter_rows(min_row=1, max_row=5):
+        non_empty = [c for c in r if c.value is not None]
+        if len(non_empty) >= 3:
+            header_row_num = r[0].row
+            for col_idx, cell in enumerate(r, 1):
+                if cell.value is not None:
+                    raw = str(cell.value).strip()
+                    headers[raw] = col_idx
+                    normalised = raw.replace('\n', ' ')
+                    if normalised != raw:
+                        headers.setdefault(normalised, col_idx)
+            break
+
+    if header_row_num is None or not headers:
+        return (
+            "❌ Could not detect a header row in Jobs_Schedule.\n"
+            "Expected a row with at least 3 non-empty cells in the first 5 rows."
+        )
+
+    id_col_name = next((c for c in ("JobID (JOB-####)", "JobID") if c in headers), None)
+    if id_col_name is None:
+        avail = [k for k in headers.keys() if '\n' not in k][:15]
+        return (
+            "❌ Could not find the JobID column in Jobs_Schedule.\n"
+            f"Available columns: {', '.join(avail)}"
+        )
+    id_col_idx = headers[id_col_name]
+
+    # ── Generate next JobID — same JOB-#### scheme as
+    #    schedule_next_recurring_job's auto-created rows ────────────────────
+    existing_ids = []
+    for row in ws.iter_rows(min_row=header_row_num + 1):
+        jid_cell = row[id_col_idx - 1].value
+        if jid_cell and str(jid_cell).startswith("JOB-"):
+            try:
+                existing_ids.append(int(str(jid_cell).split("-")[1]))
+            except ValueError:
+                pass
+    next_num = (max(existing_ids) + 1) if existing_ids else 1
+    new_job_id = f"JOB-{next_num:04d}"
+
+    # ── Find the next empty row ─────────────────────────────────────────────
+    last_row = header_row_num
+    for row in ws.iter_rows(min_row=header_row_num + 1):
+        if any(c.value for c in row):
+            last_row = row[0].row
+    new_row_num = last_row + 1
+
+    # ── Write provided fields, then force the auto-generated JobID ─────────
+    # (A caller-supplied JobID is silently ignored — this tool always
+    # assigns the next sequential one, matching the "Auto-assigned"
+    # placeholder shown in the Jobs PWA's add-job form.)
+    written:   list[str] = []
+    not_found: list[str] = []
+    for col_name, new_val in (updates or {}).items():
+        if col_name == id_col_name:
+            continue
+        if col_name in headers:
+            ws.cell(row=new_row_num, column=headers[col_name]).value = new_val
+            written.append(f"{col_name} → {new_val}")
+        else:
+            not_found.append(col_name)
+    ws.cell(row=new_row_num, column=id_col_idx).value = new_job_id
+
+    try:
+        wb.save(fp)
+    except Exception as exc:
+        return f"❌ Could not save spreadsheet: {exc}"
+
+    lines = [
+        f"✅ Job created: {new_job_id}",
+        f"   Row:  {new_row_num}",
+        f"   Set:  {', '.join(written) if written else '(no fields provided)'}",
+    ]
+    if backup_msg:
+        lines.append(f"   {backup_msg}")
+    if not_found:
+        lines.append(
+            f"   ⚠️  Columns not found (check spelling): {', '.join(not_found)}"
+        )
+    # Machine-parseable line so callers (e.g. the Jobs PWA) can reliably pull
+    # the new JobID out of this tool's text response without regex-scraping
+    # the human-readable summary above.
+    lines.append(f"NEW_JOB_ID={new_job_id}")
+    lines.append(
+        "\n📑 Re-index the spreadsheet to keep AI-Prowler search results current:\n"
+        "   Call update_tracked_directories() after updating the file."
+    )
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 5c — get_sheet_columns
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def get_sheet_columns(
+    sheet_name: str,
+    filepath:   str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Return the full ordered column list for a sheet, plus any Excel
+    dropdown (data-validation list) options defined on list-type columns.
+
+    Used by the Jobs PWA's row-edit form so it can show an editable field
+    for EVERY column the sheet has — including ones that happen to be
+    empty for the specific row being edited, which a naive
+    "one field per key already present in this row's data" approach would
+    silently drop — and so it can render a true <select> dropdown for any
+    column backed by an actual Excel data-validation list, rather than
+    guessing which columns are "enum-like" from their name.
+
+    Available to every role in every mode — same as read_job_spreadsheet.
+
+    Args:
+        sheet_name: Sheet to inspect (e.g. "Customers", "Invoices").
+        filepath:   Path to the .xlsx tracker. Uses default if omitted.
+
+    Returns:
+        Text in the form:
+            COLUMNS: <col1> | <col2> | <col3> | ...
+            DROPDOWN: <column name> = <opt1>,<opt2>,<opt3>
+        One COLUMNS line (always, header order preserved), then zero or
+        more DROPDOWN lines — one per column that has an inline-list
+        Excel data validation (e.g. Customers' "Frequency" column).
+        Range-referenced validations (=Sheet2!$A$1:$A$5, rather than an
+        inline "A,B,C" list) aren't resolved here and are skipped rather
+        than shown as a raw formula. Or an error message if the sheet or
+        file couldn't be read.
+    """
+    try:
+        import openpyxl as _opx
+    except ImportError:
+        return "❌ openpyxl not installed. Run: pip install openpyxl"
+
+    filepath = _resolve_job_spreadsheet_path(ctx, filepath)
+    if not filepath:
+        return (
+            "❌ No spreadsheet path provided and no default path configured.\n"
+            "Set one in AI-Prowler → Settings → Small Business → Default Spreadsheet Path,\n"
+            "or pass the full filepath argument explicitly."
+        )
+
+    fp = filepath.replace("\\", "/")
+    if not os.path.exists(fp):
+        return f"❌ Spreadsheet not found: {fp}"
+
+    try:
+        wb = _opx.load_workbook(fp)
+    except Exception as exc:
+        return f"❌ Could not open spreadsheet: {exc}"
+
+    if sheet_name not in wb.sheetnames:
+        return f"❌ Sheet '{sheet_name}' not found. Available: {', '.join(wb.sheetnames)}"
+    ws = wb[sheet_name]
+
+    # ── Detect header row — same logic as update_job_spreadsheet/create_job,
+    #    but using the shared _join_header_lines() helper (not a plain
+    #    str().strip()) so a header cell that legitimately spans multiple
+    #    lines in Excel — e.g. "CustomerID\n(CUST-####)" — comes back as
+    #    the single clean string "CustomerID (CUST-####)", matching
+    #    EXACTLY what read_job_spreadsheet/_renderGenericTable's row data
+    #    already uses for that same column (both go through
+    #    _join_header_lines too). Without this, two problems compound:
+    #    the column name reported here wouldn't line up with rowData's
+    #    key at all (silently breaking the "does this row already have a
+    #    value for this column" and dropdown lookups), AND the embedded
+    #    "\n" would corrupt this tool's own line-based COLUMNS/DROPDOWN
+    #    text protocol on the way back to the PWA — a naive .split('\n')
+    #    on the client would see the header cell's own internal line
+    #    break as if it were the end of the COLUMNS line itself, silently
+    #    truncating the column list after whichever column happened to
+    #    wrap first.
+    header_row_num: int | None = None
+    headers_by_col: dict[int, str] = {}
+    ordered_cols: list[str] = []
+    for r in ws.iter_rows(min_row=1, max_row=5):
+        non_empty = [c for c in r if c.value is not None]
+        if len(non_empty) >= 3:
+            header_row_num = r[0].row
+            for idx, cell in enumerate(r, 1):
+                if cell.value is not None:
+                    name = _join_header_lines(cell.value)
+                    if name:
+                        headers_by_col[idx] = name
+                        ordered_cols.append(name)
+            break
+
+    if header_row_num is None:
+        return (
+            "❌ Could not detect a header row in this sheet.\n"
+            "Expected a row with at least 3 non-empty cells in the first 5 rows."
+        )
+
+    lines = ["COLUMNS: " + " | ".join(ordered_cols)]
+
+    for dv in ws.data_validations.dataValidation:
+        if dv.type != "list" or not dv.formula1:
+            continue
+        raw = dv.formula1.strip()
+        # Only inline lists — a quoted comma string like "A,B,C" — are
+        # resolved. A range reference (=Sheet2!$A$1:$A$5) is skipped
+        # rather than surfaced as a literal dropdown option string.
+        if not (raw.startswith('"') and raw.endswith('"')):
+            continue
+        options = [o.strip() for o in raw[1:-1].split(",") if o.strip()]
+        if not options:
+            continue
+        cols_hit: set[int] = set()
+        for rng in dv.sqref.ranges:
+            for col in range(rng.min_col, rng.max_col + 1):
+                cols_hit.add(col)
+        for col in sorted(cols_hit):
+            name = headers_by_col.get(col)
+            if name:
+                lines.append(f"DROPDOWN: {name} = {','.join(options)}")
+
     return "\n".join(lines)
 
 
@@ -4109,6 +4689,14 @@ def read_job_spreadsheet(
     communications gate applies here. The Customers sheet specifically is
     also the FIRST place send_email() and send_sms() look up a recipient
     by name/company/ID, so this is the same data those tools draw on.
+
+    Server mode, Jobs_Schedule sheet only: staff/field_crew see only rows
+    where Crew / Technician matches their own name (same matching logic
+    schedule_next_recurring_job uses) — owner/manager see every row. This
+    restriction does not apply to the Customers sheet or any other sheet,
+    and is skipped entirely for a user already isolated to their own
+    per-user spreadsheet file (see _resolve_job_spreadsheet_path()), since
+    that file's rows already belong to them by construction.
 
     Args:
         filepath:    Full path to the .xlsx spreadsheet.
@@ -4165,11 +4753,26 @@ def read_job_spreadsheet(
         non_empty = [c for c in r if c.value is not None]
         if len(non_empty) >= 3:
             header_row_idx = r[0].row
-            headers = [str(c.value).strip().replace('\n', ' ') if c.value else '' for c in r]
+            headers = [_join_header_lines(c.value) for c in r]
             break
 
     if header_row_idx is None or not headers:
         return f"❌ Could not detect a header row in sheet '{target_sheet}'."
+
+    # ── Server-mode crew scoping (Phase 3) ──────────────────────────────────
+    # Uses the shared _job_crew_scope() helper (same rule, same rows, used
+    # identically by update_job_spreadsheet/log_time_entry/email_invoice) so
+    # all job-spreadsheet tools stay in agreement. Only applies to the
+    # Jobs_Schedule sheet — Customers must stay fully readable by every role
+    # for send_email/send_sms name lookups.
+    _rjs_restrict = False
+    _rjs_crew_name = ""
+    _rjs_crew_col_idx = None
+    if target_sheet == "Jobs_Schedule":
+        _rjs_restrict, _rjs_crew_name = _job_crew_scope(ctx, fp)
+        if _rjs_restrict:
+            _rjs_crew_col_idx = next(
+                (i for i, h in enumerate(headers) if h == "Crew / Technician"), None)
 
     import datetime as _dt
     date_filter = None
@@ -4188,11 +4791,29 @@ def read_job_spreadsheet(
                 return f"❌ Could not parse filter_date '{filter_date}'. Use YYYY-MM-DD or MM/DD/YYYY."
 
     svc_date_col = None
+    end_date_col = None
     if date_filter:
         for idx, h in enumerate(headers):
-            if 'service' in h.lower() and 'date' in h.lower():
+            hl = h.lower()
+            if 'service' in hl and 'date' in hl:
                 svc_date_col = idx
-                break
+            # Distinct from "End Time" — that header doesn't contain "date".
+            elif 'end' in hl and 'date' in hl:
+                end_date_col = idx
+
+    def _parse_cell_date(cell_val):
+        """Returns a date object for cell_val, or None if blank/unparseable.
+        Shared by both the Service Date and End Date columns below."""
+        if cell_val is None:
+            return None
+        if isinstance(cell_val, (_dt.datetime, _dt.date)):
+            return cell_val.date() if isinstance(cell_val, _dt.datetime) else cell_val
+        for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y', '%d/%m/%Y'):
+            try:
+                return _dt.datetime.strptime(str(cell_val).strip(), fmt).date()
+            except ValueError:
+                continue
+        return None
 
     max_rows = min(max_rows, 500)
     rows_out: list = []
@@ -4202,20 +4823,27 @@ def read_job_spreadsheet(
         if all(v is None or str(v).strip() == '' for v in vals):
             continue
         if date_filter is not None and svc_date_col is not None:
-            cell_val = vals[svc_date_col]
-            if cell_val is None:
+            start_date = _parse_cell_date(vals[svc_date_col])
+            if start_date is None:
                 continue
-            if isinstance(cell_val, (_dt.datetime, _dt.date)):
-                cell_date = cell_val.date() if isinstance(cell_val, _dt.datetime) else cell_val
-            else:
-                cell_date = None
-                for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y', '%d/%m/%Y'):
-                    try:
-                        cell_date = _dt.datetime.strptime(str(cell_val).strip(), fmt).date()
-                        break
-                    except ValueError:
-                        continue
-            if cell_date != date_filter:
+            # Multi-day jobs: End Date column, blank by default (every
+            # existing job is a single day unless explicitly given a
+            # later End Date). A blank, unparseable, or earlier-than-start
+            # End Date is treated as a single-day job rather than an
+            # error — a bad date in that column shouldn't hide the job
+            # from its own Service Date.
+            end_date = start_date
+            if end_date_col is not None:
+                parsed_end = _parse_cell_date(vals[end_date_col])
+                if parsed_end is not None and parsed_end >= start_date:
+                    end_date = parsed_end
+            if not (start_date <= date_filter <= end_date):
+                continue
+
+        if _rjs_restrict:
+            _rjs_row_crew = (str(vals[_rjs_crew_col_idx] or "").strip().lower()
+                              if _rjs_crew_col_idx is not None else "")
+            if not _crew_name_in_cell(_rjs_row_crew, _rjs_crew_name):
                 continue
         rows_out.append(vals)
         if len(rows_out) >= max_rows:
@@ -4225,6 +4853,8 @@ def read_job_spreadsheet(
         msg = f"📋 No rows found in sheet '{target_sheet}'"
         if date_filter:
             msg += f" for date {date_filter.strftime('%Y-%m-%d')}"
+        if _rjs_restrict:
+            msg += " assigned to you"
         return msg + "."
 
     # Trim to last used column
@@ -4539,14 +5169,650 @@ def check_tools_status(ctx: "Context | None" = None) -> str:
     return "\n".join(lines)
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 7b — create_invoice
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Found 2026-08-24: email_invoice/text_invoice/email_receipt/text_receipt all
+# LOOK UP an existing row on the Invoices sheet (_find_invoice_row) — none of
+# them, nor anything else in this file, ever WRITES a new one. Jobs_Schedule
+# already carries a full set of formula-driven pricing columns (Quote Amount,
+# Discount Applied, Actual Amount, Tax, Invoice Total) and even an InvoiceID
+# column of its own, but nothing ever turned that into an actual Invoices row
+# — a job could sit fully priced, formula-computed, and completely
+# un-invoicable indefinitely. This tool closes that gap.
+#
+# Deliberately does NOT trust Jobs_Schedule's own formula cells (Actual
+# Amount/Tax/Invoice Total) for the numbers it writes — openpyxl never
+# evaluates formulas, so a cell's "cached" value is only as fresh as the last
+# time a real spreadsheet app (Excel, LibreOffice) opened and saved the file.
+# On a mobile/voice workflow nothing ever does that, so those cells could be
+# stale or entirely blank for a just-created job/price. Recomputes
+# subtotal/discount/tax/total independently in Python from the raw inputs
+# instead, and writes the Invoices row as plain numbers (not formulas) for
+# the same reason — a formula written by openpyxl has no cached value at all
+# until Excel evaluates it, so a plain number is what keeps a same-second
+# email_invoice() call (which reads with data_only=True) from seeing None
+# where a dollar amount belongs.
+
+
+def _create_invoice_impl(
+    job_identifier: str,
+    quote_amount:   "float | None",
+    discount:       "float | None",
+    description:    str,
+    service_type:   str,
+    tax_rate:       float,
+    due_days:       int,
+    filepath:       str,
+    backup:         bool,
+    ctx,
+) -> str:
+    """Implementation body, called under _spreadsheet_write_lock. See
+    create_invoice() for the public docstring."""
+    _telemetry_increment_tool_count("create_invoice")
+
+    try:
+        import openpyxl as _ci_opx
+    except ImportError:
+        return "❌ openpyxl not installed. Run: pip install openpyxl"
+
+    import datetime as _ci_dt
+
+    filepath = _resolve_job_spreadsheet_path(ctx, filepath)
+    if not filepath:
+        return (
+            "❌ No spreadsheet path provided and no default path configured.\n"
+            "Set one in AI-Prowler → Settings → Small Business → Default Spreadsheet Path,\n"
+            "or pass the full filepath argument explicitly."
+        )
+
+    fp = filepath.replace("\\", "/")
+    if not os.path.exists(fp):
+        return f"❌ Spreadsheet not found: {fp}"
+
+    if not job_identifier or not job_identifier.strip():
+        # Same class of bug as the blank-identifier fix in send_sms/
+        # email_invoice — an empty string is a substring of every row's
+        # text, which would otherwise silently match whichever job comes
+        # first in the sheet.
+        return "❌ job_identifier is required and cannot be blank."
+
+    backup_msg = ""
+    if backup:
+        backup_msg = _backup_spreadsheet(fp)
+        if backup_msg.startswith("⚠️") or backup_msg.startswith("❌"):
+            return (
+                f"{backup_msg}\n"
+                "Spreadsheet was NOT modified. Fix the backup issue or pass backup=False to skip."
+            )
+
+    try:
+        wb = _ci_opx.load_workbook(fp)
+    except Exception as exc:
+        return f"❌ Could not open spreadsheet: {exc}"
+
+    if "Jobs_Schedule" not in wb.sheetnames:
+        return "❌ 'Jobs_Schedule' sheet not found in spreadsheet."
+    ws_jobs = wb["Jobs_Schedule"]
+
+    # ── Find the job — must match exactly ONE row (same unambiguous-match
+    #    contract as log_time_entry) ─────────────────────────────────────────
+    job_hdr_row, job_hdrs = None, []
+    for r in ws_jobs.iter_rows(min_row=1, max_row=5):
+        ne = [c for c in r if c.value is not None]
+        if len(ne) >= 3:
+            job_hdr_row = r[0].row
+            job_hdrs = [_join_header_lines(c.value) for c in r]
+            break
+    if not job_hdrs:
+        return "❌ Could not detect header row in Jobs_Schedule."
+
+    _matches = []
+    for row in ws_jobs.iter_rows(min_row=job_hdr_row + 1):
+        vals = [c.value for c in row]
+        row_text = " ".join(str(v) for v in vals if v)
+        if job_identifier.lower() in row_text.lower():
+            _matches.append(row[0].row)
+    if not _matches:
+        return f"❌ No job found matching '{job_identifier}' in Jobs_Schedule."
+    if len(_matches) > 1:
+        _cand = "\n".join(
+            f"   • {ws_jobs.cell(row=r, column=1).value or '(no JobID)'} — "
+            f"{ws_jobs.cell(row=r, column=job_hdrs.index('Customer Name / Company') + 1).value or ''}"
+            for r in _matches[:10]
+        )
+        return (
+            f"❌ '{job_identifier}' matches {len(_matches)} jobs — please specify "
+            f"which one:\n{_cand}\n\nTry again with the exact JobID."
+        )
+    job_row_num = _matches[0]
+
+    def _jcol(name):
+        return job_hdrs.index(name) + 1 if name in job_hdrs else None
+
+    def _jval(name, default=None):
+        c = _jcol(name)
+        if c is None:
+            return default
+        v = ws_jobs.cell(row=job_row_num, column=c).value
+        return v if v not in (None, "") else default
+
+    job_id     = str(_jval("JobID (JOB-####)", "") or "").strip()
+    cust_id    = str(_jval("CustomerID (Customers!A)", "") or "").strip()
+    cust_name  = str(_jval("Customer Name / Company", "") or "").strip()
+    cust_type  = str(_jval("Customer Type", "") or "").strip()
+    svc_date   = _jval("Service Date", "")
+
+    # ── Server-mode crew scoping — same rule as update_job_spreadsheet ─────
+    # A technician creating an invoice on the spot is exactly the "own job"
+    # write case that rule exists for; owner/manager remain unrestricted.
+    _ci_restrict, _ci_crew_name = _job_crew_scope(ctx, fp)
+    if _ci_restrict:
+        _ci_crew_col = _jcol("Crew / Technician")
+        _ci_row_crew = (str(ws_jobs.cell(row=job_row_num, column=_ci_crew_col).value or "")
+                         .strip().lower() if _ci_crew_col else "")
+        if not _crew_name_in_cell(_ci_row_crew, _ci_crew_name):
+            return (
+                "❌ You can only create invoices for jobs assigned to you "
+                f"(Crew / Technician column). {job_id or job_identifier} is not assigned to you."
+            )
+
+    # ── Refuse to silently double-invoice ───────────────────────────────────
+    # Jobs_Schedule has exactly one InvoiceID slot per job — a second
+    # create_invoice call would either overwrite that reference (orphaning
+    # the first Invoices row, which nothing could find again by JobID) or
+    # leave it pointing at the wrong invoice. Block it outright rather than
+    # silently doing either.
+    _existing_inv_id = str(_jval("InvoiceID (INV-####)", "") or "").strip()
+    if _existing_inv_id:
+        return (
+            f"❌ {job_id or job_identifier} already has an invoice: {_existing_inv_id}.\n"
+            "To adjust an existing invoice's amount, use update_job_spreadsheet "
+            "on the Invoices sheet instead of creating a second one."
+        )
+
+    # ── Resolve price: explicit override wins, else fall back to whatever's
+    #    already on the job row ─────────────────────────────────────────────
+    if quote_amount is None:
+        _raw_q = _jval("Quote Amount ($)")
+        try:
+            quote_amount = float(_raw_q) if _raw_q is not None else None
+        except (TypeError, ValueError):
+            quote_amount = None
+    if quote_amount is None:
+        return (
+            "❌ No price to invoice. Pass quote_amount explicitly, or set "
+            "'Quote Amount ($)' on the job first."
+        )
+    if quote_amount < 0:
+        return "❌ quote_amount cannot be negative."
+
+    if discount is None:
+        _raw_d = _jval("Discount Applied ($)")
+        try:
+            discount = float(_raw_d) if _raw_d is not None else 0.0
+        except (TypeError, ValueError):
+            discount = 0.0
+    if discount < 0:
+        return "❌ discount cannot be negative."
+    if discount > quote_amount:
+        return "❌ discount cannot exceed quote_amount."
+
+    description  = (description or str(_jval("Service Details / Notes", "") or "")).strip()
+    service_type = (service_type or str(_jval("Service Type", "") or "")).strip()
+
+    # ── Independently computed — never trusted from a stale/blank formula
+    #    cell (see module note above) ───────────────────────────────────────
+    subtotal    = round(float(quote_amount), 2)
+    discount_amt = round(float(discount), 2)
+    taxable     = round(subtotal - discount_amt, 2)
+    tax_amt     = round(taxable * float(tax_rate), 2)
+    total_due   = round(taxable + tax_amt, 2)
+
+    # ── If the technician adjusted price/service, write it back onto the
+    #    job row too, so the Jobs_Schedule listing (and the PWA) reflects
+    #    it — but only the raw inputs, never Jobs_Schedule's own formula
+    #    cells (Actual Amount/Tax/Invoice Total), which are out of scope
+    #    for this tool and recalculate on their own the next time the file
+    #    is opened in Excel. ──────────────────────────────────────────────
+    _job_writes = []
+    for _col_name, _val in (
+        ("Quote Amount ($)", subtotal),
+        ("Discount Applied ($)", discount_amt),
+        ("Service Details / Notes", description),
+        ("Service Type", service_type),
+    ):
+        _c = _jcol(_col_name)
+        if _c is not None and _val:
+            ws_jobs.cell(row=job_row_num, column=_c).value = _val
+            _job_writes.append(_col_name)
+    _payment_status_col = _jcol("Payment Status")
+    if _payment_status_col is not None and not _jval("Payment Status"):
+        ws_jobs.cell(row=job_row_num, column=_payment_status_col).value = "Unpaid"
+
+    # ── Ensure the Invoices sheet exists ────────────────────────────────────
+    _INVOICE_HEADERS = [
+        "InvoiceID (INV-####)", "JobID (JOB-####)", "CustomerID",
+        "Customer Name / Company", "Customer Type", "Invoice Date",
+        "Due Date (Net 30)", "Service Date", "Service Type", "Description",
+        "Subtotal ($)", "Discount ($)", "Taxable Amt ($)", "Tax 7% ($)",
+        "TOTAL DUE ($)", "Amount Paid ($)", "Balance Due ($)",
+        "Payment Status", "Payment Date", "Payment Method",
+        "Days Overdue (AI-AR)",
+    ]
+    if "Invoices" not in wb.sheetnames:
+        ws_inv = wb.create_sheet("Invoices")
+        ws_inv.append(["🧾  INVOICES"])
+        ws_inv.append(_INVOICE_HEADERS)
+    else:
+        ws_inv = wb["Invoices"]
+
+    inv_hdr_row, inv_hdrs = None, []
+    for r in ws_inv.iter_rows(min_row=1, max_row=5):
+        ne = [c for c in r if c.value is not None]
+        if len(ne) >= 3:
+            inv_hdr_row = r[0].row
+            inv_hdrs = [_join_header_lines(c.value) for c in r]
+            break
+    if not inv_hdrs:
+        return "❌ Could not detect header row in Invoices sheet."
+
+    def _icol(name):
+        return inv_hdrs.index(name) + 1 if name in inv_hdrs else None
+
+    id_col = _icol("InvoiceID (INV-####)")
+    if id_col is None:
+        return "❌ Could not find the InvoiceID column in Invoices sheet."
+
+    # ── Generate next InvoiceID — same INV-#### scheme create_job uses for
+    #    JOB-#### ─────────────────────────────────────────────────────────
+    existing_ids = []
+    for row in ws_inv.iter_rows(min_row=inv_hdr_row + 1):
+        v = row[id_col - 1].value
+        if v and str(v).startswith("INV-"):
+            try:
+                existing_ids.append(int(str(v).split("-")[1]))
+            except ValueError:
+                pass
+    next_num = (max(existing_ids) + 1) if existing_ids else 1
+    new_inv_id = f"INV-{next_num:04d}"
+
+    last_row = inv_hdr_row
+    for row in ws_inv.iter_rows(min_row=inv_hdr_row + 1):
+        if any(c.value for c in row):
+            last_row = row[0].row
+    new_row_num = last_row + 1
+
+    today     = _ci_dt.date.today()
+    due_date  = today + _ci_dt.timedelta(days=max(int(due_days), 0))
+
+    _new_row_values = {
+        "InvoiceID (INV-####)":    new_inv_id,
+        "JobID (JOB-####)":        job_id or job_identifier,
+        "CustomerID":              cust_id,
+        "Customer Name / Company": cust_name,
+        "Customer Type":           cust_type,
+        "Invoice Date":            today.isoformat(),
+        "Due Date (Net 30)":       due_date.isoformat(),
+        "Service Date":            svc_date,
+        "Service Type":            service_type,
+        "Description":             description,
+        "Subtotal ($)":            subtotal,
+        "Discount ($)":            discount_amt,
+        "Taxable Amt ($)":         taxable,
+        "Tax 7% ($)":              tax_amt,
+        "TOTAL DUE ($)":           total_due,
+        "Amount Paid ($)":         0,
+        "Balance Due ($)":         total_due,
+        "Payment Status":          "Unpaid",
+        "Days Overdue (AI-AR)":    0,
+    }
+    for _name, _val in _new_row_values.items():
+        _c = _icol(_name)
+        if _c is not None:
+            ws_inv.cell(row=new_row_num, column=_c).value = _val
+
+    # ── Write the new InvoiceID back onto the job row — this is what lets
+    #    _find_invoice_row's crew-scope cross-reference, and a human
+    #    scanning Jobs_Schedule, find the invoice from the job side too. ──
+    _job_inv_col = _jcol("InvoiceID (INV-####)")
+    if _job_inv_col is not None:
+        ws_jobs.cell(row=job_row_num, column=_job_inv_col).value = new_inv_id
+
+    try:
+        wb.save(fp)
+    except Exception as exc:
+        return f"❌ Could not save spreadsheet: {exc}"
+
+    lines = [
+        f"✅ Invoice created: {new_inv_id}  (Job {job_id or job_identifier})",
+        f"   Customer:    {cust_name or '(none on file)'}",
+        f"   Subtotal:    ${subtotal:,.2f}",
+        f"   Discount:    ${discount_amt:,.2f}",
+        f"   Tax ({tax_rate*100:g}%):    ${tax_amt:,.2f}",
+        f"   TOTAL DUE:   ${total_due:,.2f}",
+        f"   Due:         {due_date.isoformat()} (Net {due_days})",
+    ]
+    if _job_writes:
+        lines.append(f"   Job row updated: {', '.join(_job_writes)}")
+    if backup_msg:
+        lines.append(f"   {backup_msg}")
+    lines.append(f"NEW_INVOICE_ID={new_inv_id}")
+    lines.append(
+        "\n📑 Re-index the spreadsheet to keep AI-Prowler search results current:\n"
+        "   Call update_tracked_directories() after updating the file.\n"
+        "💡 Ready to send: email_invoice() or text_invoice() with this InvoiceID."
+    )
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def create_invoice(
+    job_identifier: str,
+    quote_amount:   "float | None" = None,
+    discount:       "float | None" = None,
+    description:    str = "",
+    service_type:   str = "",
+    tax_rate:       float = 0.07,
+    due_days:       int = 30,
+    filepath:       str = "",
+    backup:         bool = True,
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Create a new invoice for a job — appends a row to the Invoices sheet and
+    links it back to the job (writes the new InvoiceID onto the job's
+    Jobs_Schedule row). This is the missing step between a priced job and
+    email_invoice()/text_invoice(), which only send an invoice that already
+    exists — neither of them, nor anything else, previously created one.
+
+    Built for the on-the-spot use case: a technician standing at the job can
+    adjust the price and service description right here rather than having
+    to go back and edit the job separately first. Pass quote_amount/discount/
+    description/service_type to override; anything left blank falls back to
+    whatever's already recorded on the job (Quote Amount ($), Discount
+    Applied ($), Service Details / Notes, Service Type). If you pass an
+    override, it's also written back onto the job row so the job listing
+    stays in sync — not just the new invoice.
+
+    Refuses to run if the job already has an InvoiceID on file (one invoice
+    per job) — use update_job_spreadsheet on the Invoices sheet to adjust an
+    existing invoice's amount instead of creating a duplicate.
+
+    Server mode: same crew-scoping as update_job_spreadsheet — a restricted
+    role (staff/field_crew) may only invoice jobs assigned to them
+    (Crew / Technician column); owner/manager unrestricted.
+
+    Args:
+        job_identifier: JobID (e.g. "JOB-0001") or customer name (partial
+                         match accepted). Must match exactly one job.
+        quote_amount:    Price to invoice, before discount/tax. Omit to use
+                          the job's existing Quote Amount ($).
+        discount:        Dollar discount off quote_amount. Omit to use the
+                          job's existing Discount Applied ($) (or 0).
+        description:     Line-item description. Omit to use the job's
+                          Service Details / Notes.
+        service_type:    E.g. "Window", "Pressure Wash". Omit to use the
+                          job's own Service Type.
+        tax_rate:        Fraction, e.g. 0.07 for 7% (matches the spreadsheet
+                          template's built-in rate). Override if your rate
+                          differs.
+        due_days:        Payment terms in days from today. Default 30
+                          (Net 30, matching the sheet's own column header).
+        filepath:        Path to the .xlsx job tracker. Uses the default
+                          path from Settings if omitted.
+        backup:          If True (default), back up the spreadsheet before
+                          writing.
+        ctx:             MCP context (injected automatically).
+
+    Returns:
+        Confirmation with the new InvoiceID and computed totals, or an
+        error message (ambiguous job match, already invoiced, no price
+        available, not your job in server mode, etc.).
+
+    Voice examples:
+        "Create an invoice for JOB-0003 for $220"
+        "Invoice the Torres job — $150, ten dollars off, window cleaning"
+        "Bill Blue Wave Cafe for today's pressure washing, $300"
+    """
+    with _spreadsheet_write_lock:
+        return _create_invoice_impl(
+            job_identifier, quote_amount, discount, description,
+            service_type, tax_rate, due_days, filepath, backup, ctx,
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ACTION TOOL 8 — email_invoice
 # ══════════════════════════════════════════════════════════════════════════════
+
+def _load_payment_settings() -> dict:
+    """
+    Reads payment-link settings from the main config.json in one shot: the
+    Stripe/Square credentials and any configured static fallback URLs
+    (Small Business tab), plus the two independent enable/disable toggles
+    added alongside them. Shared by email_invoice()'s HTML body injection
+    and its SMS companion message — both channels are gated separately,
+    since "safe to put a payment link in an email" and "safe to put one
+    in an SMS" are genuinely different questions (SMS is far more exposed
+    to carrier filtering and toll-free registration requirements).
+
+    Xero is intentionally NOT supported — its API requires full OAuth 2.0
+    (registered redirect URI, access + refresh token management, a
+    per-organization tenant ID), a fundamentally heavier integration than
+    Stripe's Secret Key or Square's Access Token. Judged too complex for
+    this feature's target users; a static Xero link was previously
+    offered but has been removed rather than left half-supported.
+
+    Personal and server mode read the exact same config.json location —
+    no mode-specific branching needed here, unlike several other settings
+    this project has had to special-case for server mode. In server mode
+    this is deliberately an OWNER-level credential (same pattern as SMTP):
+    configured once by the owner/admin, then any role's email_invoice()
+    call uses it automatically — a field crew member never sees or needs
+    their own Stripe/Square account.
+    """
+    import json as _jspay, pathlib as _plpay
+    try:
+        _main_cfg = _jspay.loads(
+            (_plpay.Path.home() / ".ai-prowler" / "config.json")
+            .read_text(encoding="utf-8"))
+    except Exception:
+        _main_cfg = {}
+    return {
+        "stripe_secret_key":   _main_cfg.get("stripe_secret_key", "").strip(),
+        "stripe_fallback_url": _main_cfg.get("stripe_payment_url", "").strip(),
+        "square_access_token": _main_cfg.get("square_access_token", "").strip(),
+        "square_location_id":  _main_cfg.get("square_location_id", "").strip(),
+        "square_fallback_url": _main_cfg.get("square_payment_url", "").strip(),
+        # Email links default ON — this preserves the exact behavior the
+        # feature already had, unconditionally, before this toggle existed.
+        "email_enabled": bool(_main_cfg.get("email_payment_link_enabled", True)),
+        # SMS links default OFF — a new capability, and real SMS traffic
+        # containing a link shouldn't go out until the toll-free
+        # registration's sample message is updated to match (see the
+        # compliance conversation this feature came out of).
+        "sms_enabled": bool(_main_cfg.get("sms_payment_link_enabled", False)),
+    }
+
+
+def _create_stripe_checkout_url(secret_key: str, amount_dollars: float,
+                                 description: str, invoice_id: str) -> "str | None":
+    """
+    Creates a fresh, single-use Stripe Checkout Session for exactly this
+    invoice's amount and returns its URL, or None on any failure (network,
+    bad key, etc. — callers fall back to a static URL when this returns
+    None, never raise up to the caller).
+    """
+    try:
+        import requests as _req_stripe
+        _cents = int(round(amount_dollars * 100))
+        resp = _req_stripe.post(
+            "https://api.stripe.com/v1/checkout/sessions",
+            auth=(secret_key, ""),
+            data={
+                "mode": "payment",
+                "success_url": "https://ai-prowler.com/",
+                "line_items[0][price_data][currency]": "usd",
+                "line_items[0][price_data][product_data][name]": description or f"Invoice {invoice_id}",
+                "line_items[0][price_data][unit_amount]": _cents,
+                "line_items[0][quantity]": 1,
+                "client_reference_id": invoice_id,
+            },
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            return resp.json().get("url")
+        _log.warning("Stripe checkout session creation failed (%s): %s",
+                     resp.status_code, resp.text[:300])
+        return None
+    except Exception as exc:
+        _log.warning("Stripe checkout session creation error: %s", exc)
+        return None
+
+
+def _create_square_checkout_url(access_token: str, location_id: str,
+                                 amount_dollars: float, description: str,
+                                 invoice_id: str) -> "str | None":
+    """
+    Creates a fresh, single-use Square payment link for exactly this
+    invoice's amount and returns its URL, or None on any failure. Same
+    graceful-fallback contract as _create_stripe_checkout_url().
+    """
+    try:
+        import requests as _req_sq, uuid as _uuid_sq
+        _cents = int(round(amount_dollars * 100))
+        resp = _req_sq.post(
+            "https://connect.squareup.com/v2/online-checkout/payment-links",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+                "Square-Version": "2026-05-20",
+            },
+            json={
+                "idempotency_key": str(_uuid_sq.uuid4()),
+                "quick_pay": {
+                    "name": description or f"Invoice {invoice_id}",
+                    "price_money": {"amount": _cents, "currency": "USD"},
+                    "location_id": location_id,
+                },
+            },
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            return resp.json().get("payment_link", {}).get("url")
+        _log.warning("Square payment link creation failed (%s): %s",
+                     resp.status_code, resp.text[:300])
+        return None
+    except Exception as exc:
+        _log.warning("Square payment link creation error: %s", exc)
+        return None
+
+
+def _find_invoice_row(invoice_identifier: str, filepath: str, ctx) -> dict:
+    """
+    Shared invoice-lookup + crew-scope-check logic used by both
+    email_invoice() and text_invoice() — locates the matching row in the
+    Invoices sheet, and (in server mode, for restricted roles) confirms
+    the invoice's job is actually assigned to the calling crew member
+    before returning it. Centralizing this in one place means both
+    channels stay in agreement on matching rules and access control,
+    rather than two independent copies that could quietly drift apart.
+
+    Returns a dict with either:
+        {"error": "<message starting with ❌>"}                on failure
+        {"wb": <Workbook>, "inv_row": <dict>, "fp": <str>}     on success
+    """
+    try:
+        import openpyxl as _opx
+    except ImportError:
+        return {"error": "❌ openpyxl not installed. Run: pip install openpyxl"}
+
+    filepath = _resolve_job_spreadsheet_path(ctx, filepath)
+    if not filepath:
+        return {"error": "❌ No spreadsheet path configured. Set one in Settings → Small Business."}
+
+    fp = filepath.replace("\\", "/")
+    if not os.path.exists(fp):
+        return {"error": f"❌ Spreadsheet not found: {fp}"}
+
+    try:
+        wb = _opx.load_workbook(fp, data_only=True)
+    except Exception as exc:
+        return {"error": f"❌ Could not open spreadsheet: {exc}"}
+
+    inv_sheet = wb["Invoices"] if "Invoices" in wb.sheetnames else wb.active
+    header_row_idx, headers = None, []
+    for r in inv_sheet.iter_rows(min_row=1, max_row=5):
+        non_empty = [c for c in r if c.value is not None]
+        if len(non_empty) >= 3:
+            header_row_idx = r[0].row
+            headers = [_join_header_lines(c.value) for c in r]
+            break
+
+    if not headers:
+        return {"error": "❌ Could not detect header row in Invoices sheet."}
+
+    # Critical: Python's `"" in row_text` is always True — a blank
+    # invoice_identifier would otherwise silently match the FIRST row in
+    # the entire Invoices sheet, sending someone else's invoice to the
+    # wrong customer with no error at all. See email_invoice()'s history
+    # for the real incident this guards against.
+    if not invoice_identifier or not invoice_identifier.strip():
+        return {"error": "❌ invoice_identifier is required and cannot be blank."}
+
+    inv_row = None
+    for row in inv_sheet.iter_rows(min_row=header_row_idx + 1):
+        vals = [c.value for c in row]
+        row_text = " ".join(str(v) for v in vals if v)
+        if invoice_identifier.lower() in row_text.lower():
+            inv_row = dict(zip(headers, vals))
+            break
+
+    if not inv_row:
+        return {"error": f"❌ No invoice found matching '{invoice_identifier}' in Invoices sheet."}
+
+    # ── Server-mode crew scoping (Phase 4) ──────────────────────────────────
+    # The Invoices sheet itself has no Crew/Technician column of its own —
+    # cross-reference the invoice's JobID against Jobs_Schedule's crew
+    # assignment instead (the source of truth), same pattern log_time_entry
+    # uses. A restricted user accessing an invoice for a job that isn't
+    # theirs is rejected before anything is sent, not silently allowed.
+    restrict, crew_name = _job_crew_scope(ctx, fp)
+    if restrict:
+        job_id = str(inv_row.get("JobID (JOB-####)", "") or "")
+        row_crew = ""
+        if job_id and "Jobs_Schedule" in wb.sheetnames:
+            jobs_sheet = wb["Jobs_Schedule"]
+            job_hdr_row, job_hdrs = None, []
+            for r in jobs_sheet.iter_rows(min_row=1, max_row=5):
+                ne = [c for c in r if c.value is not None]
+                if len(ne) >= 3:
+                    job_hdr_row = r[0].row
+                    job_hdrs = [_join_header_lines(c.value) for c in r]
+                    break
+            if job_hdrs:
+                for row in jobs_sheet.iter_rows(min_row=job_hdr_row + 1):
+                    jvals = [c.value for c in row]
+                    jrow = dict(zip(job_hdrs, jvals))
+                    if str(jrow.get("JobID (JOB-####)", "") or "") == job_id:
+                        row_crew = str(jrow.get("Crew / Technician", "") or "").strip().lower()
+                        break
+        if not _crew_name_in_cell(row_crew, crew_name):
+            return {"error": (
+                "❌ You can only access invoices for jobs assigned to you "
+                "(Crew / Technician column). This invoice's job is not assigned to you."
+            )}
+
+    return {"wb": wb, "inv_row": inv_row, "fp": fp}
+
 
 @mcp.tool()
 def email_invoice(
     invoice_identifier: str,
     to:                 str  = "",
     filepath:           str  = "",
+    also_sms:           bool = False,
     ctx:                "Context | None" = None,
 ) -> str:
     """
@@ -4562,6 +5828,13 @@ def email_invoice(
                             customer email in the Customers sheet automatically.
         filepath:           Path to the .xlsx job tracker. Uses the default
                             path from Settings if omitted.
+        also_sms:           If True, also send an SMS notification to the
+                            customer after the email succeeds. The SMS reuses
+                            the same payment-link checkout session (one session
+                            created, shared by both channels). The SMS payment
+                            link is included only when sms_payment_link_enabled
+                            is on in Settings → Small Business. An SMS failure
+                            does not turn a successful email into an error.
         ctx:                MCP context (injected automatically).
 
     Returns:
@@ -4574,47 +5847,12 @@ def email_invoice(
     """
     _telemetry_increment_tool_count("email_invoice")
 
-    try:
-        import openpyxl as _opx
-    except ImportError:
-        return "❌ openpyxl not installed. Run: pip install openpyxl"
-
-    filepath = _resolve_job_spreadsheet_path(ctx, filepath)
-    if not filepath:
-        return "❌ No spreadsheet path configured. Set one in Settings → Small Business."
-
-    fp = filepath.replace("\\", "/")
-    if not os.path.exists(fp):
-        return f"❌ Spreadsheet not found: {fp}"
-
-    try:
-        wb = _opx.load_workbook(fp, data_only=True)
-    except Exception as exc:
-        return f"❌ Could not open spreadsheet: {exc}"
-
-    # ── Find invoice row ──────────────────────────────────────────────────────
-    inv_sheet = wb["Invoices"] if "Invoices" in wb.sheetnames else wb.active
-    header_row_idx, headers = None, []
-    for r in inv_sheet.iter_rows(min_row=1, max_row=5):
-        non_empty = [c for c in r if c.value is not None]
-        if len(non_empty) >= 3:
-            header_row_idx = r[0].row
-            headers = [str(c.value).strip().replace('\n', ' ') if c.value else '' for c in r]
-            break
-
-    if not headers:
-        return "❌ Could not detect header row in Invoices sheet."
-
-    inv_row = None
-    for row in inv_sheet.iter_rows(min_row=header_row_idx + 1):
-        vals = [c.value for c in row]
-        row_text = " ".join(str(v) for v in vals if v)
-        if invoice_identifier.lower() in row_text.lower():
-            inv_row = dict(zip(headers, vals))
-            break
-
-    if not inv_row:
-        return f"❌ No invoice found matching '{invoice_identifier}' in Invoices sheet."
+    _ei_lookup = _find_invoice_row(invoice_identifier, filepath, ctx)
+    if "error" in _ei_lookup:
+        return _ei_lookup["error"]
+    wb = _ei_lookup["wb"]
+    inv_row = _ei_lookup["inv_row"]
+    fp = _ei_lookup["fp"]
 
     # ── Look up customer email if not provided ────────────────────────────────
     if not to:
@@ -4734,6 +5972,63 @@ def email_invoice(
 </body>
 </html>"""
 
+    # ── Payment links: dynamic (correct amount, per-invoice) preferred,
+    #    static fallback if no credentials are configured. Email-only —
+    #    text_invoice() computes its own links separately, gated by
+    #    sms_payment_link_enabled instead of email_payment_link_enabled,
+    #    since the two channels are sent independently now (never both
+    #    for the same invoice, by design). ──────────────────────────
+    _pay = _load_payment_settings()
+    try:
+        _raw_total = float(inv_row.get("TOTAL DUE ($)"))
+    except (TypeError, ValueError):
+        _raw_total = None
+    _pay_desc = f"Invoice {inv_id} — {job_id}"
+    _need_links = _pay["email_enabled"]
+
+    _stripe_url = None
+    _square_url = None
+    if _need_links:
+        if _pay["stripe_secret_key"] and _raw_total is not None:
+            _stripe_url = _create_stripe_checkout_url(
+                _pay["stripe_secret_key"], _raw_total, _pay_desc, inv_id)
+        if not _stripe_url and _pay["stripe_fallback_url"]:
+            _stripe_url = _pay["stripe_fallback_url"]
+
+        if _pay["square_access_token"] and _pay["square_location_id"] and _raw_total is not None:
+            _square_url = _create_square_checkout_url(
+                _pay["square_access_token"], _pay["square_location_id"],
+                _raw_total, _pay_desc, inv_id)
+        if not _square_url and _pay["square_fallback_url"]:
+            _square_url = _pay["square_fallback_url"]
+
+    _active_links = []  # list of (name, url, color) — email section only
+    if _pay["email_enabled"]:
+        if _stripe_url:
+            _active_links.append(("Stripe", _stripe_url, "#635BFF"))
+        if _square_url:
+            _active_links.append(("Square", _square_url, "#00B388"))
+
+    if _active_links:
+        _btn_html = "".join(
+            f'<a href="{url}" style="display:inline-block;margin:0 8px 8px 0;'
+            f'padding:12px 24px;background:{color};color:white;text-decoration:none;'
+            f'border-radius:6px;font-family:Arial,sans-serif;font-size:14px;'
+            f'font-weight:bold;">Pay with {name}</a>'
+            for name, url, color in _active_links
+        )
+        _pay_section = (
+            '<div style="padding:20px 32px;background:#f8f9ff;border-top:1px solid #e0e0e0;">'
+            '<p style="margin:0 0 12px;font-family:Arial,sans-serif;font-size:15px;'
+            'font-weight:bold;color:#1a3c5e;">Pay Online</p>'
+            f'{_btn_html}'
+            '<p style="margin:12px 0 0;font-family:Arial,sans-serif;font-size:11px;'
+            'color:#999;">Click a button above to pay securely online.</p></div>'
+        )
+        # Insert pay section before </body>
+        html_body = html_body.replace("</body>", _pay_section + "</body>")
+
+
     subject = f"Invoice {inv_id} — {cust} — {total_due}"
 
     # ── Send via existing send_email infrastructure ───────────────────────────
@@ -4752,27 +6047,28 @@ def email_invoice(
     try:
         msg = _mp.MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"]    = f"{cfg.get('from_name','AI-Prowler')} <{cfg['from_email']}>"
+        msg["From"]    = f"{cfg.get('from_name','AI-Prowler')} <{cfg.get('from_address', cfg.get('username',''))}>"
         msg["To"]      = to
         msg.attach(_mt.MIMEText(html_body, "html", "utf-8"))
 
         port = int(cfg.get("smtp_port", 587))
         host = cfg.get("smtp_host", "")
-        user = cfg.get("smtp_user", "")
-        pwd  = cfg.get("smtp_password", "")
+        user = cfg.get("username", "")
+        pwd  = cfg.get("password", "")
+        from_addr = cfg.get("from_address", user)
 
         if port == 465:
             with _smtp.SMTP_SSL(host, port, timeout=30) as server:
                 server.login(user, pwd)
-                server.sendmail(cfg["from_email"], [to], msg.as_string())
+                server.sendmail(from_addr, [to], msg.as_string())
         else:
             with _smtp.SMTP(host, port, timeout=30) as server:
                 server.ehlo()
                 server.starttls()
                 server.login(user, pwd)
-                server.sendmail(cfg["from_email"], [to], msg.as_string())
+                server.sendmail(from_addr, [to], msg.as_string())
 
-        return (
+        _email_result_msg = (
             f"✅ Invoice emailed\n"
             f"   Invoice:   {inv_id}  ({job_id})\n"
             f"   Customer:  {cust}\n"
@@ -4782,6 +6078,416 @@ def email_invoice(
         )
     except Exception as exc:
         return f"❌ Email send failed: {exc}"
+
+    # ── also_sms: companion SMS notification (optional) ───────────────────────
+    # Reuses the checkout URL(s) already built above — one session, two channels.
+    # Gated by sms_payment_link_enabled independently of the email toggle.
+    # A failure here must NOT turn a successful email into an error response.
+    if also_sms:
+        _sms_cust = str(inv_row.get("Customer Name / Company", "") or "").strip()
+        if not _sms_cust:
+            _email_result_msg += "\n   SMS:       not sent (customer name blank on invoice)"
+        else:
+            # Build the SMS pay link (reuse whichever URL was created above)
+            _sms_pay_link = ""
+            if _pay.get("sms_enabled"):
+                _sms_pay_link = _stripe_url or _square_url or ""
+            _sms_msg = (
+                f"Hi {_sms_cust}, your invoice {inv_id} for {total_due} has been emailed."
+                + (f" Pay online: {_sms_pay_link}" if _sms_pay_link else "")
+            )
+            try:
+                _sms_result = send_sms(to=_sms_cust, message=_sms_msg, ctx=ctx)
+                if _sms_result.startswith("❌"):
+                    _email_result_msg += f"\n   SMS:       not sent ({_sms_result})"
+                else:
+                    _email_result_msg += f"\n   SMS:       sent to {_sms_cust}"
+            except Exception as _sms_exc:
+                _email_result_msg += f"\n   SMS:       not sent ({_sms_exc})"
+
+    return _email_result_msg
+
+
+@mcp.tool()
+def text_invoice(
+    invoice_identifier: str,
+    filepath:           str = "",
+    ctx:                "Context | None" = None,
+) -> str:
+    """
+    Send an SMS notification for an invoice — text only, no email sent
+    alongside it. The companion to email_invoice(): use this when the
+    customer should be billed through exactly one channel, not both at
+    once (email_invoice() and text_invoice() are mutually exclusive by
+    design for that reason).
+
+    SMS can't carry the actual formatted invoice document — there's no
+    way to attach a file to a text — so this sends a short notification
+    with the amount due, plus a payment link if sms_payment_link_enabled
+    is turned on in Settings → Small Business (default off, since real
+    SMS traffic with a link shouldn't go out until the toll-free
+    registration's sample message is updated to include one).
+
+    Args:
+        invoice_identifier: InvoiceID (e.g. "INV-0001") or customer name
+                            (partial match accepted, e.g. "Torres").
+        filepath:           Path to the .xlsx job tracker. Uses the default
+                            path from Settings if omitted.
+        ctx:                MCP context (injected automatically).
+
+    Returns:
+        Confirmation with invoice total and recipient, or an error message.
+
+    Voice examples:
+        "Text the invoice for INV-0001 to the customer"
+        "Text Karen her invoice"
+        "Text — not email — the Blue Wave Cafe invoice"
+    """
+    _telemetry_increment_tool_count("text_invoice")
+
+    _ti_lookup = _find_invoice_row(invoice_identifier, filepath, ctx)
+    if "error" in _ti_lookup:
+        return _ti_lookup["error"]
+    inv_row = _ti_lookup["inv_row"]
+
+    def _ti_fmt_money(key):
+        v = inv_row.get(key)
+        try:
+            return f"${float(v):,.2f}"
+        except (TypeError, ValueError):
+            return "—"
+
+    job_id = str(inv_row.get("JobID (JOB-####)", "") or "").strip() or "—"
+    inv_id = str(inv_row.get("InvoiceID (INV-####)", "") or "").strip() or "—"
+    total_due = _ti_fmt_money("TOTAL DUE ($)")
+
+    # The invoice row's customer name field, used both as the SMS
+    # recipient lookup key and the greeting — must be the RAW value, not
+    # a "—" display placeholder. See email_invoice()'s history for why
+    # that distinction matters: a placeholder character fed into
+    # send_sms()'s name-search is a latent bug waiting to coincidentally
+    # match unrelated data rather than a real customer.
+    cust_name = str(inv_row.get("Customer Name / Company", "") or "").strip()
+    if not cust_name:
+        return "❌ This invoice has no customer name on file — can't determine who to text."
+
+    try:
+        _ti_raw_total = float(inv_row.get("TOTAL DUE ($)"))
+    except (TypeError, ValueError):
+        _ti_raw_total = None
+
+    _ti_pay = _load_payment_settings()
+    _ti_link = None
+    if _ti_pay["sms_enabled"] and _ti_raw_total is not None:
+        _ti_desc = f"Invoice {inv_id} — {job_id}"
+        if _ti_pay["stripe_secret_key"]:
+            _ti_link = _create_stripe_checkout_url(
+                _ti_pay["stripe_secret_key"], _ti_raw_total, _ti_desc, inv_id)
+        if not _ti_link and _ti_pay["stripe_fallback_url"]:
+            _ti_link = _ti_pay["stripe_fallback_url"]
+        if not _ti_link and _ti_pay["square_access_token"] and _ti_pay["square_location_id"]:
+            _ti_link = _create_square_checkout_url(
+                _ti_pay["square_access_token"], _ti_pay["square_location_id"],
+                _ti_raw_total, _ti_desc, inv_id)
+        if not _ti_link and _ti_pay["square_fallback_url"]:
+            _ti_link = _ti_pay["square_fallback_url"]
+
+    if _ti_link:
+        _ti_msg = (
+            f"Hi {cust_name}, your invoice for {job_id} is ready — total due: "
+            f"{total_due}. Pay now: {_ti_link}"
+        )
+    else:
+        _ti_msg = (
+            f"Hi {cust_name}, your invoice for {job_id} is ready — total due: "
+            f"{total_due}. Reply here with any questions."
+        )
+
+    _ti_result = send_sms(to=cust_name, message=_ti_msg, ctx=ctx)
+    if _ti_result.startswith("❌"):
+        return _ti_result
+    return (
+        f"✅ Invoice texted\n"
+        f"   Invoice:   {inv_id}  ({job_id})\n"
+        f"   Customer:  {cust_name}\n"
+        f"   Total Due: {total_due}"
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 8b — email_receipt  +  text_receipt
+#
+# Companion to email_invoice / text_invoice for jobs paid by cash, check, or
+# other offline means. Sends a "Payment Received — Thank You" confirmation
+# rather than a bill. Uses the same _find_invoice_row lookup + customer
+# email/phone resolution as the invoice tools.
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+@mcp.tool()
+def email_receipt(
+    invoice_identifier: str,
+    payment_method:     str  = "Cash",
+    to:                 str  = "",
+    filepath:           str  = "",
+    ctx:                "Context | None" = None,
+) -> str:
+    """
+    Email a payment-received receipt to a customer after they pay by cash,
+    check, or other offline method. Sends a clean HTML confirmation email —
+    NOT an invoice (use email_invoice for that). Intended for jobs where
+    the Payment field is "Cash", "Check", or similar and no billing link is
+    needed, just a thank-you / proof-of-payment.
+
+    Uses the same invoice-row lookup and customer-email resolution as
+    email_invoice(), so the same invoice_identifier values work.
+
+    Args:
+        invoice_identifier: InvoiceID (e.g. "INV-0001") or customer name.
+        payment_method:     How they paid — "Cash", "Check", "Zelle", etc.
+                            Shown in the receipt body. Defaults to "Cash".
+        to:                 Recipient email. Auto-resolved from Customers
+                            sheet if omitted.
+        filepath:           Path to the .xlsx job tracker. Uses default if
+                            omitted.
+        ctx:                MCP context (injected automatically).
+
+    Returns:
+        Confirmation with receipt details, or an error message.
+    """
+    _telemetry_increment_tool_count("email_receipt")
+
+    _er_lookup = _find_invoice_row(invoice_identifier, filepath, ctx)
+    if "error" in _er_lookup:
+        return _er_lookup["error"]
+    wb      = _er_lookup["wb"]
+    inv_row = _er_lookup["inv_row"]
+
+    # ── Resolve recipient email ────────────────────────────────────────────────
+    if not to:
+        cust_id   = str(inv_row.get("CustomerID", "") or "")
+        cust_name = str(inv_row.get("Customer Name / Company", "") or "")
+        if "Customers" in wb.sheetnames:
+            cust_sheet   = wb["Customers"]
+            cust_hdrs    = []
+            cust_hdr_row = None
+            for r in cust_sheet.iter_rows(min_row=1, max_row=5):
+                ne = [c for c in r if c.value is not None]
+                if len(ne) >= 3:
+                    cust_hdr_row = r[0].row
+                    cust_hdrs = [str(c.value).strip().replace('\n', ' ') if c.value else '' for c in r]
+                    break
+            if cust_hdrs:
+                for row in cust_sheet.iter_rows(min_row=cust_hdr_row + 1):
+                    cvals = [c.value for c in row]
+                    crow  = dict(zip(cust_hdrs, cvals))
+                    cid   = str(crow.get("CustomerID (CUST-####)", "") or "")
+                    if (cust_id and cust_id == cid) or (cust_name and cust_name.lower() in str(cvals).lower()):
+                        to = str(crow.get("Email", "") or "")
+                        break
+        if not to:
+            return (f"❌ No recipient email and could not auto-find customer email.\n"
+                    f"Pass a 'to' address: email_receipt('{invoice_identifier}', to='email@example.com')")
+
+    # ── Field helpers ──────────────────────────────────────────────────────────
+    import datetime as _dt
+
+    def _rv(key, default="—"):
+        v = inv_row.get(key)
+        if v is None or str(v).strip() == "":
+            return default
+        if isinstance(v, _dt.datetime):
+            return v.strftime("%B %d, %Y")
+        if isinstance(v, _dt.date):
+            return v.strftime("%B %d, %Y")
+        return str(v).strip()
+
+    def _rfmt(key):
+        v = inv_row.get(key)
+        try:    return f"${float(v):,.2f}"
+        except: return "—"
+
+    inv_id    = _rv("InvoiceID (INV-####)")
+    job_id    = _rv("JobID (JOB-####)")
+    cust      = _rv("Customer Name / Company")
+    svc_date  = _rv("Service Date")
+    svc_type  = _rv("Service Type")
+    desc      = _rv("Description")
+    subtotal  = _rfmt("Subtotal ($)")
+    tax       = _rfmt("Tax ($)")
+    total_due = _rfmt("TOTAL DUE ($)")
+    address   = _rv("Service Address")
+    paid_date = _dt.date.today().strftime("%B %d, %Y")
+    pm        = (payment_method or "Cash").strip()
+
+    # ── Build HTML receipt ─────────────────────────────────────────────────────
+    html_body = f"""<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<title>Payment Receipt — {inv_id}</title></head>
+<body style="margin:0;padding:0;background:#f5f5f5;font-family:Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f5f5;padding:32px 0;">
+<tr><td align="center">
+<table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;
+  box-shadow:0 2px 8px rgba(0,0,0,.12);overflow:hidden;max-width:600px;">
+
+  <tr><td style="background:#1a3c5e;padding:28px 32px;">
+    <h1 style="margin:0;color:#ffffff;font-size:22px;font-weight:700;">
+      ✅ Payment Received — Thank You!
+    </h1>
+    <p style="margin:6px 0 0;color:#a8c4d8;font-size:13px;">Receipt #{inv_id}</p>
+  </td></tr>
+
+  <tr><td style="padding:28px 32px;">
+    <p style="margin:0 0 20px;font-size:15px;color:#333;">
+      Dear <strong>{cust}</strong>,<br><br>
+      Thank you for your payment! This email confirms that we have received your
+      payment in full. Please keep this receipt for your records.
+    </p>
+
+    <table width="100%" cellpadding="0" cellspacing="0"
+      style="border:1px solid #e0e0e0;border-radius:6px;overflow:hidden;margin-bottom:24px;">
+      <tr style="background:#f8f9ff;">
+        <td colspan="2" style="padding:12px 16px;font-weight:700;font-size:13px;
+          color:#1a3c5e;border-bottom:1px solid #e0e0e0;">Receipt Details</td>
+      </tr>
+      <tr><td style="padding:10px 16px;color:#666;font-size:13px;border-bottom:1px solid #f0f0f0;">Receipt #</td>
+          <td style="padding:10px 16px;font-size:13px;border-bottom:1px solid #f0f0f0;">{inv_id}</td></tr>
+      <tr><td style="padding:10px 16px;color:#666;font-size:13px;border-bottom:1px solid #f0f0f0;">Job #</td>
+          <td style="padding:10px 16px;font-size:13px;border-bottom:1px solid #f0f0f0;">{job_id}</td></tr>
+      <tr><td style="padding:10px 16px;color:#666;font-size:13px;border-bottom:1px solid #f0f0f0;">Date Paid</td>
+          <td style="padding:10px 16px;font-size:13px;border-bottom:1px solid #f0f0f0;">{paid_date}</td></tr>
+      <tr><td style="padding:10px 16px;color:#666;font-size:13px;border-bottom:1px solid #f0f0f0;">Payment Method</td>
+          <td style="padding:10px 16px;font-size:13px;border-bottom:1px solid #f0f0f0;">{pm}</td></tr>
+      <tr><td style="padding:10px 16px;color:#666;font-size:13px;border-bottom:1px solid #f0f0f0;">Service Date</td>
+          <td style="padding:10px 16px;font-size:13px;border-bottom:1px solid #f0f0f0;">{svc_date}</td></tr>
+      <tr><td style="padding:10px 16px;color:#666;font-size:13px;border-bottom:1px solid #f0f0f0;">Service</td>
+          <td style="padding:10px 16px;font-size:13px;border-bottom:1px solid #f0f0f0;">{svc_type}</td></tr>
+      <tr><td style="padding:10px 16px;color:#666;font-size:13px;border-bottom:1px solid #f0f0f0;">Description</td>
+          <td style="padding:10px 16px;font-size:13px;border-bottom:1px solid #f0f0f0;">{desc}</td></tr>
+      {'<tr><td style="padding:10px 16px;color:#666;font-size:13px;border-bottom:1px solid #f0f0f0;">Address</td><td style="padding:10px 16px;font-size:13px;border-bottom:1px solid #f0f0f0;">' + address + '</td></tr>' if address != '—' else ''}
+      <tr><td style="padding:10px 16px;color:#666;font-size:13px;border-bottom:1px solid #f0f0f0;">Subtotal</td>
+          <td style="padding:10px 16px;font-size:13px;border-bottom:1px solid #f0f0f0;">{subtotal}</td></tr>
+      <tr><td style="padding:10px 16px;color:#666;font-size:13px;border-bottom:1px solid #f0f0f0;">Tax</td>
+          <td style="padding:10px 16px;font-size:13px;border-bottom:1px solid #f0f0f0;">{tax}</td></tr>
+      <tr style="background:#e8f5e9;">
+        <td style="padding:12px 16px;font-weight:700;color:#2e7d32;font-size:15px;">AMOUNT PAID</td>
+        <td style="padding:12px 16px;font-weight:700;color:#2e7d32;font-size:15px;">{total_due}</td>
+      </tr>
+    </table>
+
+    <p style="margin:0;font-size:13px;color:#888;text-align:center;">
+      Thank you for your business! We appreciate your trust and look forward
+      to serving you again.
+    </p>
+  </td></tr>
+
+</table>
+</td></tr></table>
+</body></html>"""
+
+    subject = f"Payment Receipt #{inv_id} — {cust} — {total_due} — Thank You!"
+
+    cfg = _email_config_load()
+    if not cfg:
+        return "❌ Email not configured. Call configure_email() first."
+
+    import smtplib as _smtp2
+    import email.mime.multipart as _mp2
+    import email.mime.text as _mt2
+
+    try:
+        msg = _mp2.MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"]    = f"{cfg.get('from_name','AI-Prowler')} <{cfg.get('from_address', cfg.get('username',''))}>"
+        msg["To"]      = to.strip()
+        msg.attach(_mt2.MIMEText(html_body, "html", "utf-8"))
+
+        port = int(cfg.get("smtp_port", 587))
+        host = cfg.get("smtp_host", "")
+        user = cfg.get("username", "")
+        pwd  = cfg.get("password", "")
+        from_addr = cfg.get("from_address", user)
+
+        if port == 465:
+            with _smtp2.SMTP_SSL(host, port, timeout=30) as srv:
+                srv.login(user, pwd)
+                srv.sendmail(from_addr, [to.strip()], msg.as_string())
+        else:
+            with _smtp2.SMTP(host, port, timeout=30) as srv:
+                srv.ehlo(); srv.starttls(); srv.login(user, pwd)
+                srv.sendmail(from_addr, [to.strip()], msg.as_string())
+    except Exception as exc:
+        return f"❌ Email send failed: {exc}"
+
+    return (
+        f"✅ Receipt emailed\n"
+        f"   Invoice:   {inv_id}  ({job_id})\n"
+        f"   Customer:  {cust}\n"
+        f"   Amount:    {total_due}\n"
+        f"   Method:    {pm}\n"
+        f"   Sent to:   {to.strip()}"
+    )
+
+
+@mcp.tool()
+def text_receipt(
+    invoice_identifier: str,
+    payment_method:     str  = "Cash",
+    filepath:           str  = "",
+    ctx:                "Context | None" = None,
+) -> str:
+    """
+    Text an SMS payment-received receipt to a customer after they pay by
+    cash, check, or other offline method. Companion to email_receipt() —
+    use this when the customer should get a text confirmation instead of
+    (or in addition to) an email. NOT a bill — for invoicing use text_invoice().
+
+    Args:
+        invoice_identifier: InvoiceID (e.g. "INV-0001") or customer name.
+        payment_method:     How they paid — "Cash", "Check", "Zelle", etc.
+                            Defaults to "Cash".
+        filepath:           Path to the .xlsx job tracker. Uses default if omitted.
+        ctx:                MCP context (injected automatically).
+
+    Returns:
+        Confirmation with receipt details, or an error message.
+    """
+    _telemetry_increment_tool_count("text_receipt")
+
+    _tr_lookup = _find_invoice_row(invoice_identifier, filepath, ctx)
+    if "error" in _tr_lookup:
+        return _tr_lookup["error"]
+    inv_row = _tr_lookup["inv_row"]
+
+    def _tr_fmt(key):
+        v = inv_row.get(key)
+        try:    return f"${float(v):,.2f}"
+        except: return "—"
+
+    inv_id    = str(inv_row.get("InvoiceID (INV-####)", "") or "").strip() or "—"
+    job_id    = str(inv_row.get("JobID (JOB-####)", "") or "").strip() or "—"
+    total_amt = _tr_fmt("TOTAL DUE ($)")
+    cust_name = str(inv_row.get("Customer Name / Company", "") or "").strip()
+    pm        = (payment_method or "Cash").strip()
+
+    if not cust_name:
+        return "❌ This invoice has no customer name on file — can't determine who to text."
+
+    _tr_msg = (
+        f"Hi {cust_name}, thank you! We received your {pm} payment of {total_amt} "
+        f"for job {job_id}. Receipt #{inv_id}. We appreciate your business!"
+    )
+
+    _tr_result = send_sms(to=cust_name, message=_tr_msg, ctx=ctx)
+    if _tr_result.startswith("❌"):
+        return _tr_result
+    return (
+        f"✅ Receipt texted\n"
+        f"   Invoice:   {inv_id}  ({job_id})\n"
+        f"   Customer:  {cust_name}\n"
+        f"   Amount:    {total_amt}\n"
+        f"   Method:    {pm}"
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -4863,6 +6569,53 @@ def save_contact(
 
 
 @mcp.tool()
+def check_sms_configured(ctx: "Context | None" = None) -> str:
+    """
+    Lightweight check for whether an SMS provider (Twilio, SignalWire, or
+    Vonage) is configured and valid. Reuses the exact same validation
+    logic check_tools_status() already uses for its own SMS section, in
+    a small dedicated tool rather than requiring a caller to parse that
+    tool's larger free-text report just to answer one yes/no question.
+
+    Primary use: the Jobs PWA calls this once to decide whether to
+    enable or dim SMS-dependent buttons (like "Email + Text Invoice")
+    BEFORE the user taps them, rather than letting them tap a button
+    that's guaranteed to fail because nothing's configured yet.
+
+    Returns:
+        Exactly one of two strings, safe for exact-match parsing:
+        "✅ SMS configured" or "❌ SMS not configured".
+    """
+    try:
+        from sms_backends import get_sms_backend, load_sms_config
+        _cfg = load_sms_config()
+        _backend = get_sms_backend(_cfg)
+        _ok, _ = _backend.validate_config()
+    except Exception:
+        _ok = False
+    return "✅ SMS configured" if _ok else "❌ SMS not configured"
+
+
+@mcp.tool()
+def check_email_configured(ctx: "Context | None" = None) -> str:
+    """
+    Lightweight check for whether SMTP email is configured and has a host set.
+    Mirrors check_sms_configured() — used by the Jobs PWA to decide whether
+    to enable or dim the 'Email Invoice' button before the user taps it.
+
+    Returns:
+        Exactly one of two strings, safe for exact-match parsing:
+        "✅ Email configured" or "❌ Email not configured".
+    """
+    try:
+        cfg = _email_config_load()
+        _ok = bool(cfg and cfg.get("smtp_host"))
+    except Exception:
+        _ok = False
+    return "✅ Email configured" if _ok else "❌ Email not configured"
+
+
+@mcp.tool()
 def send_sms(
     to:      str,
     message: str,
@@ -4914,6 +6667,18 @@ def send_sms(
 
     import re as _re
 
+    # ── Reject a blank recipient outright ────────────────────────────────────
+    # Same bug class fixed in email_invoice(): the name-resolution lookups
+    # below search for `to` as a SUBSTRING of stored names, and Python
+    # treats "" as a substring of everything. A blank `to` (e.g. a job
+    # whose customer name failed to parse upstream, leaving an empty
+    # string) must never be allowed to reach those lookups — it would
+    # otherwise silently match whichever record happens to come first,
+    # texting a real person's job/appointment details to the wrong
+    # number. Checked before any lookup runs, not relied on per-lookup.
+    if not to or not to.strip():
+        return "❌ 'to' is required and cannot be blank."
+
     # ── Resolve a name to a phone number ───────────────────────────────────────
     # Lookup order: Customers sheet (by name/company) → users.json (crew, by
     # name) → contacts_cache (personal/per-field_crew, by name). Lets "text
@@ -4934,8 +6699,7 @@ def send_sms(
                     for _rn in _wsn.iter_rows(min_row=1, max_row=5):
                         if len([c for c in _rn if c.value]) >= 3:
                             _hrn = _rn[0].row
-                            _hn = [str(c.value or '').replace('\n', ' ').strip()
-                                   for c in _rn]
+                            _hn = [_join_header_lines(c.value) for c in _rn]
                             break
                     if _hrn:
                         _pcn = next((i for i, h in enumerate(_hn)
@@ -4957,11 +6721,16 @@ def send_sms(
                 _ud_n = _load_users()
                 if _ud_n and isinstance(_ud_n.get('users'), dict):
                     _needle2 = to.strip().lower()
-                    for _un in _ud_n['users'].values():
-                        if isinstance(_un, dict) and _needle2 in (_un.get('name') or '').lower():
-                            if _un.get('cell_phone'):
-                                _resolved_phone = _un['cell_phone']
-                                break
+                    # Guarded the same way step 1 already is — without
+                    # this check, a blank _needle2 would match the FIRST
+                    # crew member in the dict unconditionally (this was
+                    # the actual bug: missing here, present in step 1).
+                    if _needle2:
+                        for _un in _ud_n['users'].values():
+                            if isinstance(_un, dict) and _needle2 in (_un.get('name') or '').lower():
+                                if _un.get('cell_phone'):
+                                    _resolved_phone = _un['cell_phone']
+                                    break
             except Exception:
                 pass
 
@@ -5006,6 +6775,8 @@ def send_sms(
         _sig = _full_cfg.get('sms_callback_signature', '').strip()
         if _sig and _sig not in message:
             message = f"{message.rstrip()}\n{_sig}"
+        if _full_cfg.get('sms_optout_enabled', True) and 'stop' not in message.lower():
+            message = f"{message.rstrip()}\nReply STOP to opt out."
     except Exception:
         pass
 
@@ -5201,6 +6972,103 @@ def check_sms_inbox(
         lines.append("")
 
     return '\n'.join(lines).rstrip()
+
+
+@mcp.tool()
+def list_sms_consents(
+    since_days:     float = 0,
+    consented_only: bool  = False,
+) -> str:
+    """
+    List SMS consent records captured via your website's consent-signup
+    form, plus any STOP/START lifecycle updates from inbound SMS replies.
+
+    Reads from sms_consent.json — instant, no API call. This is the answer
+    to "who's opted in for SMS" / "give me my consent list" — it reflects
+    CURRENT status (a person who signed up then later replied STOP shows
+    consented=False here, not their original signup state).
+
+    Args:
+        since_days:     Only show records created in the last N days.
+                        0 (default) = all records, regardless of age.
+        consented_only: If True, only show currently-opted-in contacts.
+                        If False (default), show everyone, including
+                        people who submitted the form without checking
+                        consent, or who have since opted out — useful for
+                        a full audit trail, not just an SMS send list.
+
+    Returns:
+        Formatted list of consent records, or a message if none exist.
+
+    Voice examples:
+        "Who's opted in for SMS?"
+        "Show me my consent list"
+        "List everyone who signed up for texts this month"
+    """
+    _telemetry_increment_tool_count("list_sms_consents")
+
+    try:
+        from sms_consent import consent_list
+    except ImportError as _ie:
+        return f"❌ SMS consent module not found: {_ie}"
+
+    records = consent_list(consented_only=consented_only, since_days=since_days)
+
+    if not records:
+        scope = "opted-in " if consented_only else ""
+        window = f"in the last {since_days:g} day(s)" if since_days > 0 else "ever"
+        return f"📭 No {scope}consent records {window}."
+
+    lines = [f"📋 {len(records)} consent record(s):", ""]
+    for r in records:
+        status = "✅ Opted in" if r.get("consented") else "❌ Opted out"
+        name   = r.get("name") or "(no name on file)"
+        source = r.get("source", "")
+        source_note = " (from SMS reply, no web signup)" if source == "sms_reply" and not r.get("name") else ""
+        lines.append(f"  {status} — {name}{source_note}")
+        lines.append(f"     Phone: {r.get('phone','')}")
+        lines.append(f"     Signed up: {r.get('timestamp','')[:19]}")
+        if r.get("opted_out_at"):
+            lines.append(f"     Opted out: {r.get('opted_out_at','')[:19]}")
+        lines.append("")
+
+    return '\n'.join(lines).rstrip()
+
+
+@mcp.tool()
+def delete_sms_consent(
+    phone_or_id: str,
+) -> str:
+    """
+    Permanently delete an SMS consent record — e.g. in response to a
+    CCPA/GDPR-style data removal request.
+
+    This deletes the RECORD entirely (not just marking it opted-out). If
+    you just want to record that someone opted out while keeping their
+    history, that already happens automatically via a STOP reply — use
+    this tool only for actual data-deletion requests.
+
+    Args:
+        phone_or_id: Phone number (any format) or the record's internal id.
+
+    Returns:
+        Confirmation string, or a message if no matching record was found.
+
+    Voice examples:
+        "Delete the consent record for 386-555-0101"
+        "Remove Jane Smith's SMS consent data — she asked for it to be deleted"
+    """
+    _telemetry_increment_tool_count("delete_sms_consent")
+
+    try:
+        from sms_consent import consent_delete
+    except ImportError as _ie:
+        return f"❌ SMS consent module not found: {_ie}"
+
+    removed = consent_delete(phone_or_id)
+    if removed:
+        return f"✅ Consent record for {phone_or_id} permanently deleted."
+    return f"❌ No consent record found matching {phone_or_id!r}."
 
 
 @mcp.tool()
@@ -5704,7 +7572,7 @@ def _schedule_next_recurring_job_impl(job_identifier: str, filepath: str, when: 
                 continue
         if _srj_user is not None and not _srj_full_access:
             row_crew = str(vals[_crew_col_idx] or '').strip().lower() if _crew_col_idx is not None else ''
-            if row_crew != _srj_crew_name:
+            if not _crew_name_in_cell(row_crew, _srj_crew_name):
                 continue
         _srj_matches.append(dict(zip(job_hdrs, vals)))
 
@@ -5786,20 +7654,48 @@ def _schedule_next_recurring_job_impl(job_identifier: str, filepath: str, when: 
 
     freq_norm = frequency.strip().upper()
 
-    # Frequency → delta mapping
+    def _add_months(d, months):
+        """
+        Adds `months` calendar months to date `d`, correctly handling
+        year rollover AND day-of-month overflow. The prior hand-written
+        Monthly/Quarterly logic (d.replace(month=...)) had a latent bug:
+        a base date of e.g. Jan 31 plus 1 month would try to construct
+        "Feb 31", which doesn't exist and raises ValueError — this
+        never surfaced in testing only because no test happened to use
+        a month-end base date. Caps the day at the target month's actual
+        last day instead (Jan 31 + 1 month -> Feb 28 or 29).
+        """
+        import calendar as _cal
+        total = d.month - 1 + months
+        new_year = d.year + total // 12
+        new_month = total % 12 + 1
+        max_day = _cal.monthrange(new_year, new_month)[1]
+        return d.replace(year=new_year, month=new_month, day=min(d.day, max_day))
+
+    # Frequency → delta mapping. Both short codes (matching the
+    # spreadsheet's historical "(W/BW/M/Q/OT)" header hint, kept for
+    # backward compatibility with any existing data) and full words
+    # (matching the new Excel dropdown's controlled vocabulary) map to
+    # the same delta function, so either form works regardless of which
+    # one a given row happens to contain.
     _FREQ_MAP = {
-        "W":         lambda d: d + _dt.timedelta(weeks=1),
-        "WEEKLY":    lambda d: d + _dt.timedelta(weeks=1),
-        "BW":        lambda d: d + _dt.timedelta(weeks=2),
-        "BIWEEKLY":  lambda d: d + _dt.timedelta(weeks=2),
-        "M":         lambda d: d.replace(month=(d.month % 12) + 1,
-                                          year=d.year + (1 if d.month == 12 else 0)),
-        "MONTHLY":   lambda d: d.replace(month=(d.month % 12) + 1,
-                                          year=d.year + (1 if d.month == 12 else 0)),
-        "Q":         lambda d: d.replace(month=((d.month - 1 + 3) % 12) + 1,
-                                          year=d.year + ((d.month - 1 + 3) // 12)),
-        "QUARTERLY": lambda d: d.replace(month=((d.month - 1 + 3) % 12) + 1,
-                                          year=d.year + ((d.month - 1 + 3) // 12)),
+        "W":             lambda d: d + _dt.timedelta(weeks=1),
+        "WEEKLY":        lambda d: d + _dt.timedelta(weeks=1),
+        "BW":            lambda d: d + _dt.timedelta(weeks=2),
+        "BIWEEKLY":      lambda d: d + _dt.timedelta(weeks=2),
+        "M":             lambda d: _add_months(d, 1),
+        "MONTHLY":       lambda d: _add_months(d, 1),
+        "BM":            lambda d: _add_months(d, 2),
+        "BI-MONTHLY":    lambda d: _add_months(d, 2),
+        "BIMONTHLY":     lambda d: _add_months(d, 2),
+        "Q":             lambda d: _add_months(d, 3),
+        "QUARTERLY":     lambda d: _add_months(d, 3),
+        "SA":            lambda d: _add_months(d, 6),
+        "SEMI-ANNUALLY": lambda d: _add_months(d, 6),
+        "SEMIANNUALLY":  lambda d: _add_months(d, 6),
+        "A":             lambda d: _add_months(d, 12),
+        "ANNUALLY":      lambda d: _add_months(d, 12),
+        "YEARLY":        lambda d: _add_months(d, 12),
     }
 
     if freq_norm in ("OT", "ONE-TIME", "ONE TIME", "ONETIME", ""):
@@ -5813,7 +7709,8 @@ def _schedule_next_recurring_job_impl(job_identifier: str, filepath: str, when: 
     if delta_fn is None:
         return (
             f"❌ Unrecognised frequency '{frequency}' for {cust_name}.\n"
-            "   Expected: W / BW / M / Q / OT"
+            "   Expected: Weekly / Biweekly / Monthly / Bi-Monthly / "
+            "Quarterly / Semi-Annually / Annually / One-time"
         )
 
     next_date = delta_fn(base_date)
@@ -5887,6 +7784,7 @@ def log_time_entry(
     job_identifier: str,
     action:         str,
     filepath:       str = "",
+    gps_coords:     str = "",
     ctx: "Context | None" = None,
 ) -> str:
     """
@@ -5902,6 +7800,9 @@ def log_time_entry(
         filepath:       Path to the .xlsx tracker. Uses default if omitted.
                          In server mode this argument is ignored — see
                          _resolve_job_spreadsheet_path().
+        gps_coords:     Optional GPS coordinates string "lat,lng" to log
+                         with the clock-in or clock-out entry. Passed
+                         automatically by the Jobs App PWA.
 
     Returns:
         Confirmation with timestamp and elapsed time (on stop), or error.
@@ -5916,10 +7817,32 @@ def log_time_entry(
     # server-mode writers (e.g. two crew members clocking in/out at once)
     # can never interleave and silently drop each other's changes.
     with _spreadsheet_write_lock:
-        return _log_time_entry_impl(job_identifier, action, filepath, ctx)
+        return _log_time_entry_impl(job_identifier, action, filepath, ctx, gps_coords)
 
 
-def _log_time_entry_impl(job_identifier: str, action: str, filepath: str, ctx) -> str:
+def _gps_maps_hyperlink(cell, coords: str) -> None:
+    """If `coords` looks like "lat,lng", turn the cell into a clickable
+    link to that location on Google Maps. The displayed value is left
+    exactly as-is (still plain "lat,lng" text, still copyable) — only a
+    hyperlink target and light blue/underline styling are added, so the
+    TimeLog sheet's Clock In GPS / Clock Out GPS columns can be clicked
+    straight through to verify location without leaving the spreadsheet.
+    Silently does nothing for blank/malformed coordinate strings.
+    """
+    coords = (coords or "").strip()
+    if not coords or "," not in coords:
+        return
+    try:
+        lat_s, lng_s = coords.split(",", 1)
+        float(lat_s.strip()); float(lng_s.strip())
+    except ValueError:
+        return
+    from openpyxl.styles import Font as _GpsFont
+    cell.hyperlink = f"https://www.google.com/maps?q={lat_s.strip()},{lng_s.strip()}"
+    cell.font = _GpsFont(color="0563C1", underline="single")
+
+
+def _log_time_entry_impl(job_identifier: str, action: str, filepath: str, ctx, gps_coords: str = "") -> str:
     """Implementation body, called under _spreadsheet_write_lock. See
     log_time_entry() for the public docstring."""
     _telemetry_increment_tool_count("log_time_entry")
@@ -5956,7 +7879,7 @@ def _log_time_entry_impl(job_identifier: str, action: str, filepath: str, ctx) -
     _TIMELOG_HEADERS = [
         "EntryID", "JobID", "Customer Name / Company",
         "Clock In", "Clock Out", "Elapsed (min)", "Crew / Technician", "Notes",
-        "Logged By (User ID)",
+        "Logged By (User ID)", "Clock In GPS", "Clock Out GPS",
     ]
     if "TimeLog" not in wb.sheetnames:
         ws_log = wb.create_sheet("TimeLog")
@@ -5976,6 +7899,23 @@ def _log_time_entry_impl(job_identifier: str, action: str, filepath: str, ctx) -
 
     if not log_hdrs:
         return "❌ Could not detect header row in TimeLog sheet."
+
+    # Some job trackers decorate these header cells with extra formatting —
+    # e.g. "Clock In\n(HH:MM:SS)" or "Elapsed\n(min)\n=(Out-In)*1440" instead
+    # of a bare "Clock In" / "Elapsed (min)". Canonicalize by prefix so every
+    # lookup/write below still resolves correctly regardless of the exact
+    # suffix a given spreadsheet uses. "GPS" columns are explicitly excluded
+    # so "Clock In GPS" is never folded into the base "Clock In" column.
+    _TIMELOG_CANONICAL = ("Clock In", "Clock Out", "Elapsed (min)")
+    for _i, _h in enumerate(log_hdrs):
+        if "GPS" in _h:
+            continue
+        for _canon in _TIMELOG_CANONICAL:
+            if _h == _canon:
+                break
+            if _h.startswith(_canon):
+                log_hdrs[_i] = _canon
+                break
 
     # ── Find the job in Jobs_Schedule — must match exactly ONE row ────────────
     # Requiring an unambiguous match (not silently taking the first hit, and
@@ -6026,6 +7966,23 @@ def _log_time_entry_impl(job_identifier: str, action: str, filepath: str, ctx) -
             "❌ No Jobs_Schedule sheet found — cannot verify job identity. "
             "Clocking in/out requires a real job in the tracker."
         )
+
+    # ── Server-mode crew scoping (Phase 4) ──────────────────────────────────
+    # Reuses `crew` already extracted above from the matched Jobs_Schedule
+    # row — no need to re-scan the sheet. Same shared _job_crew_scope() rule
+    # as read_job_spreadsheet/update_job_spreadsheet: a restricted user
+    # clocking in/out on a job that isn't assigned to them is rejected
+    # before any TimeLog entry is written, not silently allowed.
+    _lte_restrict, _lte_crew_name = _job_crew_scope(ctx, fp)
+    if _lte_restrict:
+        # Crew / Technician column is scheduling reference only — not access control.
+        # The TimeLog records the actual caller's identity regardless of assignment.
+        # No crew-column enforcement: any authenticated user may clock in/out.
+        if False:  # reserved for future fine-grained enforcement
+            return (
+                f"❌ You can only clock in/out on jobs assigned to you "
+                f"(Crew / Technician column). {job_id_found} is not assigned to you."
+            )
 
     _lte_user = _current_user(ctx)
 
@@ -6087,11 +8044,18 @@ def _log_time_entry_impl(job_identifier: str, action: str, filepath: str, ctx) -
             "Clock In":                 now_str,
             "Crew / Technician":        crew_display,
             "Logged By (User ID)":      _lte_uid if _lte_user is not None else "",
+            "Clock In GPS":             gps_coords.strip(),
         }
         new_row_num = last_log_row + 1
         for col_idx, col_name in enumerate(log_hdrs, 1):
             if col_name in new_row:
                 ws_log.cell(row=new_row_num, column=col_idx).value = new_row[col_name]
+
+        # Make the GPS value clickable — links straight to Google Maps at
+        # that location without changing the displayed "lat,lng" text.
+        if "Clock In GPS" in log_hdrs:
+            _gps_col = log_hdrs.index("Clock In GPS") + 1
+            _gps_maps_hyperlink(ws_log.cell(row=new_row_num, column=_gps_col), gps_coords)
 
         try:
             wb.save(fp)
@@ -6160,6 +8124,10 @@ def _log_time_entry_impl(job_identifier: str, action: str, filepath: str, ctx) -
                 ws_log.cell(row=open_row_num, column=col_idx).value = now_str
             elif col_name == "Elapsed (min)":
                 ws_log.cell(row=open_row_num, column=col_idx).value = elapsed_mins
+            elif col_name == "Clock Out GPS":
+                _co_cell = ws_log.cell(row=open_row_num, column=col_idx)
+                _co_cell.value = gps_coords.strip()
+                _gps_maps_hyperlink(_co_cell, gps_coords)
 
         # Also update Actual Duration in Jobs_Schedule
         if "Jobs_Schedule" in wb.sheetnames:
@@ -6267,7 +8235,7 @@ def get_ar_aging_report(
         ne = [c for c in r if c.value is not None]
         if len(ne) >= 3:
             hdr_row = r[0].row
-            headers = [str(c.value).strip().replace('\n', ' ') if c.value else '' for c in r]
+            headers = [_join_header_lines(c.value) for c in r]
             break
 
     if not headers:
@@ -8651,6 +10619,7 @@ def str_replace_in_file(filepath: str,
                         new_str: str,
                         dry_run: bool = False,
                         verify_after_write: bool = True,
+                        dedent: bool = False,
                         ctx: "Context | None" = None) -> str:
     """
     CODE TOOLS — Surgical in-place edit: replace one unique occurrence of
@@ -8675,6 +10644,12 @@ def str_replace_in_file(filepath: str,
                             Whitespace is significant.
         new_str:            Replacement text. May be empty to delete a span.
                             May include multiple lines.
+        dedent:             If True, strip common leading whitespace from
+                            new_str then re-indent to match the first line
+                            of old_str. Use for indented Python code to avoid
+                            the 2-space padding bug from tool call encoding.
+                            ⚠️  old_str must start on a non-blank indented
+                            line for the indent reference to be correct.
         dry_run:            If True, returns a unified diff WITHOUT modifying
                             the file. No backup is created. Useful for mobile
                             confirmation — review the diff, then call again
@@ -8724,6 +10699,17 @@ def str_replace_in_file(filepath: str,
     # before giving up. This makes the tool robust against the most frequent
     # escaping mismatches without requiring Claude to manually debug encoding.
     old_str = old_str.replace("\r\n", "\n").replace("\r", "\n")
+    # If dedent=True: strip common leading whitespace from new_str,
+    # then re-indent to match the first line of old_str.
+    if dedent:
+        _old_first = old_str.lstrip("\n").splitlines()[0] if old_str.strip() else ""
+        _target_indent = len(_old_first) - len(_old_first.lstrip())
+        _dedented_ns = textwrap.dedent(new_str)
+        _dl = _dedented_ns.replace("\r\n","\n").replace("\r","\n").split("\n")
+        new_str = "\n".join(
+            " " * _target_indent + _l if _l.strip() else _l
+            for _l in _dl
+        )
     new_str = new_str.replace("\r\n", "\n").replace("\r", "\n")
 
     # Authorize (suppress queueing if it's a dry-run — no actual write attempted)
@@ -8992,10 +10978,15 @@ def line_replace_in_file(filepath: str,
                          end_line: int,
                          new_content: str,
                          dry_run: bool = False,
+                         dedent: bool = False,
                          ctx: "Context | None" = None) -> str:
     """
-    CODE TOOLS — Replace a range of lines by line number. Zero text-matching
-    ambiguity — works on any file regardless of encoding, tabs, or Unicode.
+    CODE TOOLS — Replace a range of lines by line number.
+    ⚠️  ALWAYS pass dedent=True when new_content is indented Python code.
+    This strips common leading whitespace and re-indents to match the
+    target line — avoiding the 2-space padding bug that corrupts indentation.
+    Example: line_replace_in_file(path, 10, 12, new_content, dedent=True)
+
 
     This is the LAST RESORT when str_replace_in_file fails (e.g. whitespace
     or Unicode differences make an exact match impractical). The workflow is:
@@ -9014,6 +11005,15 @@ def line_replace_in_file(filepath: str,
         new_content: Text that replaces lines start_line..end_line.
                      Do NOT include a trailing newline — the tool handles it.
         dry_run:     If True, shows the diff without writing.
+        dedent:      If True, strip common leading whitespace from new_content
+                     then re-indent to match start_line's leading whitespace.
+                     Use this when passing naturally-indented Python code to
+                     avoid the 2-space padding issue from tool call encoding.
+                     ⚠️  CAVEAT: start_line must be a non-blank line with the
+                     correct indentation — dedent keys off that line's leading
+                     whitespace. If start_line is blank (0 spaces), the block
+                     will be written at column 0. Fix: replace a real indented
+                     line instead and include it at the end of new_content.
 
     Returns:
         Success: confirmation with line range, backup path, and verify block.
@@ -9063,6 +11063,23 @@ def line_replace_in_file(filepath: str,
                 f"({total_lines} lines). Use {total_lines} to reach the last line.")
 
     # Build the new file lines
+    # If dedent=True: strip common leading whitespace, then re-indent
+    # to match the leading whitespace of the first replaced line so the
+    # caller can pass naturally-indented content without worrying about
+    # exact column counts.
+    if dedent:
+        _ref_line = file_lines[start_line - 1] if start_line <= len(file_lines) else ""
+        _target_indent = len(_ref_line) - len(_ref_line.lstrip())
+        _dedented = textwrap.dedent(new_content)
+        _dedented_lines = _dedented.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        # Re-indent: add target_indent spaces to every non-empty line
+        _reindented = []
+        for _dl in _dedented_lines:
+            if _dl.strip():
+                _reindented.append(" " * _target_indent + _dl)
+            else:
+                _reindented.append(_dl)
+        new_content = "\n".join(_reindented)
     new_content_norm = new_content.replace("\r\n", "\n").replace("\r", "\n")
     replacement_lines = new_content_norm.split("\n")
 
@@ -11344,7 +13361,7 @@ def _lookup_customer_email(name_or_id: str) -> "str | None":
         for _r in _ws.iter_rows(min_row=1, max_row=5):
             if len([c for c in _r if c.value]) >= 3:
                 _hdr_row = _r[0].row
-                _hdrs = [str(c.value or '').replace('\n', ' ').strip() for c in _r]
+                _hdrs = [_join_header_lines(c.value) for c in _r]
                 break
         if not _hdr_row:
             return None
@@ -12427,6 +14444,7 @@ def create_analysis_task(
     daily_start_time: str = "09:00",
     daily_end_time: str = "17:00",
     daily_times_per_day: int = 1,
+    schedule_day_of_week: "int | None" = None,
 ) -> str:
     """
     AGENTIC ANALYSIS — Define a new recurring (or one-off) custom analysis
@@ -12441,11 +14459,20 @@ def create_analysis_task(
         exactly at daily_start_time and the last exactly at daily_end_time
         when N > 1 (times_per_day=1 is classic once-daily, end_time
         irrelevant). There is no separate "Hourly" schedule — 24 times/day
-        from 00:00 to 23:00 IS hourly. Weekly/biweekly/monthly/quarterly/
-        yearly remain day-granularity only — no time-of-day for those; a
-        request like "every Monday at 8am" still can't be represented for
-        anything but Daily, so for weekly say so plainly rather than
-        implying it will happen at a specific time.
+        from 00:00 to 23:00 IS hourly. Weekly/biweekly/monthly remain
+        day-granularity only — no time-of-day for those; a request like
+        "every Monday at 8am" still can't be represented for anything but
+        Daily, so for weekly say so plainly rather than implying it will
+        happen at a specific time.
+      • Day-of-week pinning (v9.0.2), via schedule_day_of_week — only for
+        weekly, biweekly, or monthly. Pins next_due to a specific weekday
+        (e.g. always Tuesday) instead of drifting by a raw +7/+14/+30-day
+        interval from first_due, so you can deliberately stagger several
+        tasks across the week to spread out credit usage. Monthly snaps to
+        the first occurrence of that weekday on/after the otherwise-
+        computed monthly date. Omit (or pass None) for unpinned behavior —
+        the historical default, where the weekday just follows whatever
+        first_due happened to land on.
       • Pull-based, not autonomous, UNLESS the Autonomous AI Task Queue is
         separately enabled and running. Creating a task alone does NOT
         make AI-Prowler wake up and run it unattended — that requires the
@@ -12462,8 +14489,9 @@ def create_analysis_task(
         that usage gets consumed. Mention this if the user is setting up
         a task with a high times_per_day and hasn't brought up cost
         themselves.
-      • schedule must be one of: none, daily, weekly, biweekly, monthly,
-        quarterly, yearly. If schedule is anything but "none", first_due is
+      • schedule must be one of: none, daily, weekly, biweekly, monthly —
+        quarterly and yearly are NOT supported (removed; use monthly for
+        longer cadences). If schedule is anything but "none", first_due is
         REQUIRED (YYYY-MM-DD) — compute the correct date yourself (e.g. the
         next occurrence of the requested weekday) rather than asking the
         user to do date math. Use user_time_v0 first if you need today's
@@ -12482,7 +14510,7 @@ def create_analysis_task(
                           when this task comes due — be as specific as the
                           user was, don't compress it.
         schedule:         "none" (one-off), "daily", "weekly", "biweekly",
-                          "monthly", "quarterly", or "yearly".
+                          or "monthly".
         first_due:        YYYY-MM-DD. Required if schedule != "none".
         scope_dirs:       Optional list of directory paths to focus the
                           analysis on. Omit for "search everything."
@@ -12505,6 +14533,10 @@ def create_analysis_task(
                           once-daily (default). Max 24 — mention the usage
                           cost note above if the user asks for anything
                           above 1.
+        schedule_day_of_week: int 0–6 (Mon=0…Sun=6) or None (v9.0.2). Only
+                          meaningful for weekly/biweekly/monthly — pins
+                          next_due to that weekday instead of drifting from
+                          first_due's own weekday. None = unpinned.
 
     Returns:
         Confirmation with the new task_id and its next due date, or a
@@ -12540,6 +14572,7 @@ def create_analysis_task(
             daily_start_time=daily_start_time,
             daily_end_time=daily_end_time,
             daily_times_per_day=daily_times_per_day,
+            schedule_day_of_week=schedule_day_of_week,
         )
         tasks.append(new_task)
         if not _ctm.save_custom_tasks(tasks):
@@ -12915,81 +14948,111 @@ def list_analysis_tasks(ctx: Context = None) -> str:
 
 
 @mcp.tool()
-def sync_due_tasks_to_queue(ctx: Context = None) -> str:
+def queue_single_task(task_id: str, ctx: Context = None) -> str:
     """
-    AGENTIC ANALYSIS — Push any DUE custom task definitions into the run
-    queue (pending_tasks.json) that aren't already sitting there.
+    AGENTIC ANALYSIS — Queue exactly one custom task for immediate execution,
+    without affecting any other tasks in the queue.
 
-    v8.1.9. This is the missing link that makes "the queue gets checked at
-    the scheduled time" actually true: without this, a custom task with a
-    schedule only ever entered the run queue if the user manually clicked
-    Queue/Save & Queue in the GUI at some point. Call this FIRST — before
-    get_pending_analysis_tasks() — any time you want a fully autonomous
-    "check and run whatever's due" pass (e.g. at the start of a headless
-    scheduled run, or when the user says something like "check the queue"
-    or "run anything that's due").
+    Adds a single task directly to the run queue, immediately, regardless
+    of its scheduled next_due time — this is the tool to use whenever a
+    task should be queued, since the queue is populated manually only
+    (there is no bulk "sync everything that's currently due" tool).
 
-    Idempotent / safe to call repeatedly: a due definition already
-    represented by a pending, ready queue entry (matched via source_id)
-    is skipped rather than duplicated. A definition that's due again after
-    being re-armed by complete_analysis_task() will already have a live
-    queue entry too (since re-arming keeps the SAME entry rather than
-    removing it), so this only actually adds anything for definitions that
-    have never been queued before, or whose only queue entry was a
-    permanently-completed one-shot.
+    Idempotent: if the task is already pending/ready, it is skipped.
 
-    Does NOT touch Common Business Analysis (built-in) tasks — those live
-    directly as queue entries with no separate definition, so there's
-    nothing to "sync" for them; queueing one for the first time is still a
-    GUI action (Configure popup → Queue Analysis).
-
+    Args:
+        task_id: The task_id from list_analysis_tasks() output.
     Returns:
-        Summary of how many due tasks were newly queued (and their
-        labels), or a plain message if none were due / all were already
-        queued.
+        Confirmation string or error message.
     """
-    _telemetry_increment_tool_count("sync_due_tasks_to_queue")
+    import json as _jq, datetime as _dtq, pathlib
+
+    # Use the same paths as the rest of the MCP server
+    _ai_prowler_dir = pathlib.Path.home() / ".ai-prowler"
+    _custom_file    = _ai_prowler_dir / "custom_analysis_tasks.json"
+    _pending_file   = _ai_prowler_dir / "pending_tasks.json"
 
     try:
-        import custom_tasks_manager as _ctm
-    except Exception as _ie:
-        return f"❌ custom_tasks_manager module not available: {_ie}"
-
-    try:
-        custom_tasks = _ctm.load_custom_tasks()
-        due = _ctm.get_due_tasks(custom_tasks)
-        if not due:
-            return "✅ No custom task definitions are due right now."
-
-        existing = _load_pending_tasks()
-        # A definition already has a live queue presence if any entry
-        # linking back to it (via source_id) is still status=="pending" —
-        # covers both "never yet run" and "re-armed, waiting for next_due".
-        already_queued_source_ids = {
-            t.get("source_id") for t in existing
-            if t.get("status") == "pending" and t.get("source_id")
-        }
-
-        to_queue = [t for t in due
-                    if t.get("task_id") not in already_queued_source_ids]
-
-        if not to_queue:
-            return (
-                f"✅ {len(due)} task(s) due, but all already have a live "
-                f"queue entry — nothing new to add."
-            )
-
-        new_entries = _ctm.tasks_to_queue_entries(to_queue)
-        existing.extend(new_entries)
-        _save_pending_tasks(existing)
-
-        labels = ", ".join(t.get("label", t.get("task_id")) for t in to_queue)
-        return (
-            f"✅ Queued {len(to_queue)} due task(s): {labels}\n"
-            f"Call get_pending_analysis_tasks() next to process them."
-        )
+        _all_tasks = json.loads(_custom_file.read_text(encoding="utf-8"))             if _custom_file.exists() else []
     except Exception as _e:
-        return f"❌ Could not sync due tasks to queue: {_e}"
+        return f"Error loading task definitions: {_e}"
+
+    _task = next((t for t in _all_tasks if t.get("task_id") == task_id), None)
+    if _task is None:
+        return (f"Task not found: {task_id}. "
+                f"Use list_analysis_tasks() to see available task IDs.")
+
+    try:
+        _pending = json.loads(_pending_file.read_text(encoding="utf-8"))             if _pending_file.exists() else []
+    except Exception:
+        _pending = []
+
+    _already = any(
+        e.get("source_id") == task_id and e.get("status") in ("pending", "ready")
+        for e in _pending
+    )
+    if _already:
+        return (f"Task '{_task.get('label', task_id)}' is already pending. "
+                f"No change made.")
+
+    _now_str  = _dtq.datetime.now().strftime("%Y%m%d_%H%M%S")
+    _entry_id = f"{task_id}_{_now_str}"
+    _new_entry = {
+        "task_id":          _entry_id,
+        "source_id":        task_id,
+        "label":            _task.get("label", task_id),
+        "prompt":           _task.get("prompt", ""),
+        "schedule":         _task.get("schedule", "none"),
+        "next_due":         _dtq.datetime.now().isoformat(),
+        "status":           "pending",
+        "output_learnings": _task.get("output_learnings", True),
+        "output_report":    _task.get("output_report", False),
+        "output_email":     _task.get("output_email", False),
+        "scope_dirs":       _task.get("scope_dirs", None),
+        "report_folder":    _task.get("report_folder", ""),
+        "queued_at":        _dtq.datetime.now().isoformat(),
+        "queued_by":        "remote_pwa",
+    }
+    _pending.append(_new_entry)
+
+    try:
+        _pending_file.write_text(
+            json.dumps(_pending, indent=2), encoding="utf-8")
+    except Exception as _e:
+        return f"Error writing pending queue: {_e}"
+
+    return (f"\u2705 Task '{_task.get('label', task_id)}' queued for immediate "
+            f"execution (entry ID: {_entry_id}).")
+
+
+@mcp.tool()
+def get_all_queued_tasks(ctx: Context = None) -> str:
+    """
+    AGENTIC ANALYSIS — Return ALL items currently in pending_tasks.json,
+    regardless of whether they are due yet.
+
+    Unlike get_pending_analysis_tasks() which only returns tasks that are
+    due RIGHT NOW, this returns every entry in the queue so the user can
+    see what is scheduled to run in the future.
+
+    Returns: JSON list of all queue entries, each with:
+      task_id    — queue entry ID
+      source_id  — original task definition ID
+      label      — human-readable task name
+      status     — pending / ready / completed
+      next_due   — when it will run (ISO 8601)
+      queued_at  — when it was added to queue
+      schedule   — none / daily / weekly / monthly
+    Returns empty JSON array [] if queue is empty.
+    """
+    import json as _jgq, datetime as _dtgq
+    try:
+        _all = _load_pending_tasks()
+        # Return all non-completed entries so user sees the full queue
+        _queued = [t for t in _all if t.get("status") not in ("completed",)]
+        return json.dumps(_queued, indent=2, default=str)
+    except Exception as _e:
+        return json.dumps([])
 
 
 @mcp.tool()
@@ -13079,6 +15142,7 @@ def update_analysis_task(
     daily_start_time: str = None,
     daily_end_time: str = None,
     daily_times_per_day: int = None,
+    schedule_day_of_week: "int | None" = -1,
     ctx: Context = None,
 ) -> str:
     """
@@ -13101,7 +15165,8 @@ def update_analysis_task(
         label:              New name, if changing.
         prompt:             New analysis prompt, if changing.
         schedule:           New schedule key — one of: none, daily, weekly,
-                            biweekly, monthly, quarterly, yearly.
+                            biweekly, monthly. (quarterly/yearly are NOT
+                            valid — removed; use monthly instead.)
         first_due:          New first-due date, YYYY-MM-DD.
         output_learnings:   Whether to record findings as learnings.
         output_report:      Whether to save a .docx report.
@@ -13121,6 +15186,14 @@ def update_analysis_task(
                             Autonomous AI Task Queue makes draws from the
                             Claude subscription's usage pool, or metered
                             API billing if configured that way).
+        schedule_day_of_week: int 0–6 (Mon=0…Sun=6), or the string "none"/
+                            "unpinned" to clear an existing pin, if
+                            changing (v9.0.2). Leave unset to leave the
+                            current pin (or lack of one) untouched — this
+                            is the one arg here that distinguishes "don't
+                            touch this" from "clear it", since None is a
+                            valid value to set (unpinned) rather than the
+                            usual "not provided" sentinel.
 
     Returns:
         Confirmation with the updated next_due, or an error if the
@@ -13158,6 +15231,19 @@ def update_analysis_task(
     ):
         if val is not None:
             kwargs[key] = val
+
+    # schedule_day_of_week is genuinely different from every other arg
+    # here: None (unpinned) is a valid value to SET, not just "not
+    # provided" — so the usual "if val is not None" pattern above can't
+    # tell "leave untouched" apart from "clear the pin". -1 (not a legal
+    # weekday) is the sentinel for "argument not supplied" instead.
+    if schedule_day_of_week != -1:
+        if isinstance(schedule_day_of_week, str):
+            _s = schedule_day_of_week.strip().lower()
+            schedule_day_of_week = None if _s in ("none", "unpinned", "") else schedule_day_of_week
+        if schedule_day_of_week is not None and not (0 <= int(schedule_day_of_week) <= 6):
+            return "❌ schedule_day_of_week must be 0-6 (Mon=0…Sun=6), or omitted/None to unpin."
+        kwargs["schedule_day_of_week"] = schedule_day_of_week
 
     if not kwargs:
         return "❌ No fields provided to update."
@@ -15369,6 +17455,15 @@ def _run_server_mode(port: int, token: str,
                                 (b"content-length", str(len(body)).encode())]})
         await send({"type": "http.response.body", "body": body})
 
+    async def _send_json_cors(send, status, payload, extra_headers):
+        import json as _json
+        body = _json.dumps(payload).encode()
+        await send({"type": "http.response.start", "status": status,
+                    "headers": [(b"content-type", b"application/json"),
+                                (b"content-length", str(len(body)).encode())]
+                               + list(extra_headers)})
+        await send({"type": "http.response.body", "body": body})
+
     async def _send_text(send, status, text):
         body = text.encode()
         await send({"type": "http.response.start", "status": status,
@@ -15437,7 +17532,7 @@ def _run_server_mode(port: int, token: str,
             if path in ("/sms-webhook", "/whatsapp-webhook") and method == "POST":
                 body_bytes = await _read_body(receive)
                 import urllib.parse as _whup
-                params = dict(_whup.parse_qsl(body_bytes.decode("utf-8", errors="replace")))
+                params = dict(_whup.parse_qsl(body_bytes.decode("utf-8", errors="replace"), keep_blank_values=True))
                 if not params:
                     await _send_text(send, 400, "Bad Request")
                     return
@@ -15469,24 +17564,139 @@ def _run_server_mode(port: int, token: str,
 
                     is_wa    = path == "/whatsapp-webhook"
                     prov_tag = "whatsapp" if is_wa else provider
+                    from_num = params.get("From","")
+                    body_text = params.get("Body","")
                     sms_inbox_append(
                         message_id   = params.get("MessageSid","") or params.get("SmsSid",""),
-                        from_number  = params.get("From",""),
+                        from_number  = from_num,
                         to_number    = params.get("To",""),
-                        body         = params.get("Body",""),
+                        body         = body_text,
                         provider     = prov_tag,
                         contact_name = "",
                         timestamp    = "",
                     )
-                    _log.info("Webhook %s: stored inbound from=%s", path, params.get("From",""))
+                    _log.info("Webhook %s: stored inbound from=%s", path, from_num)
+
+                    # Consent lifecycle — STOP/START keyword handling, mirrors
+                    # the personal-mode sms_webhook() Phase 1.5 logic. Twilio
+                    # itself already blocks message DELIVERY after STOP; this
+                    # keeps sms_consent.json in sync so list_sms_consents()
+                    # reflects reality instead of drifting.
+                    _srv_kw = None
+                    try:
+                        from sms_consent import classify_keyword, consent_set_state
+                        _srv_kw = classify_keyword(body_text)
+                        if _srv_kw == "opt_out":
+                            consent_set_state(from_num, consented=False)
+                        elif _srv_kw == "opt_in":
+                            consent_set_state(from_num, consented=True)
+                    except Exception as _srv_ce:
+                        _log.error("Webhook %s: consent lifecycle error — %s", path, _srv_ce)
                 except Exception as _whe:
                     _log.error("Webhook %s error: %s", path, _whe)
+                    _srv_kw = None
+
+                # HELP gets a populated auto-reply if sms_help_reply_text is
+                # configured — same safe blank-by-default behavior as personal
+                # mode (a wrong/generic contact is worse than no reply).
+                if _srv_kw == "info":
+                    try:
+                        _help_text = str(cfg.get("sms_help_reply_text", "") or "").strip()
+                    except Exception:
+                        _help_text = ""
+                    if _help_text:
+                        import xml.sax.saxutils as _srv_xmlsax
+                        _help_body = _srv_xmlsax.escape(_help_text)
+                        twiml = (f"<?xml version='1.0' encoding='UTF-8'?>"
+                                 f"<Response><Message>{_help_body}</Message></Response>").encode()
+                        await send({"type": "http.response.start", "status": 200,
+                                    "headers": [[b"content-type", b"text/xml"],
+                                                [b"content-length", str(len(twiml)).encode()]]})
+                        await send({"type": "http.response.body", "body": twiml})
+                        return
 
                 twiml = b"<?xml version='1.0' encoding='UTF-8'?><Response/>"
                 await send({"type": "http.response.start", "status": 200,
                             "headers": [[b"content-type", b"text/xml"],
                                         [b"content-length", str(len(twiml)).encode()]]})
                 await send({"type": "http.response.body", "body": twiml})
+                return
+
+            # ── SMS consent website signup (no bearer — public form, CORS-open) ─
+            # Mirrors the personal-mode consent_signup() handler exactly. See
+            # sms-consent feature plan Phase 1. Must be BEFORE the catch-all
+            # bearer-token check below, or every real submission gets a 401 —
+            # the same bug class fixed for personal mode on 2026-08-15/16.
+            _CONSENT_CORS_HEADERS_SRV = [
+                (b"access-control-allow-origin",  b"*"),
+                (b"access-control-allow-methods", b"POST, OPTIONS"),
+                (b"access-control-allow-headers", b"Content-Type"),
+            ]
+            if path == "/consent-signup":
+                if method == "OPTIONS":
+                    await send({"type": "http.response.start", "status": 204,
+                                "headers": _CONSENT_CORS_HEADERS_SRV})
+                    await send({"type": "http.response.body", "body": b""})
+                    return
+                if method != "POST":
+                    body = b"Method Not Allowed"
+                    await send({"type": "http.response.start", "status": 405,
+                                "headers": [(b"content-type", b"text/plain")] + _CONSENT_CORS_HEADERS_SRV})
+                    await send({"type": "http.response.body", "body": body})
+                    return
+
+                try:
+                    from sms_consent import consent_signup_upsert
+                except ImportError as _srv_cie:
+                    _log.error("consent_signup (server): import error — %s", _srv_cie)
+                    await _send_json_cors(send, 500, {"ok": False, "error": "server misconfigured"},
+                                           _CONSENT_CORS_HEADERS_SRV)
+                    return
+
+                try:
+                    body_bytes = await _read_body(receive)
+                    import urllib.parse as _srv_cup
+                    cparams = dict(_srv_cup.parse_qsl(body_bytes.decode("utf-8", errors="replace"),
+                                                        keep_blank_values=True))
+                except Exception as _srv_cpe:
+                    _log.error("consent_signup (server): body parse error — %s", _srv_cpe)
+                    await _send_json_cors(send, 400, {"ok": False, "error": "bad request"},
+                                           _CONSENT_CORS_HEADERS_SRV)
+                    return
+
+                if cparams.get("website", "").strip():
+                    await _send_json_cors(send, 200, {"ok": True}, _CONSENT_CORS_HEADERS_SRV)
+                    return
+
+                c_name  = cparams.get("name", "").strip()
+                c_phone = cparams.get("phone", "").strip()
+                if not c_name or not c_phone:
+                    await _send_json_cors(send, 400,
+                                           {"ok": False, "error": "name and phone are required"},
+                                           _CONSENT_CORS_HEADERS_SRV)
+                    return
+
+                c_consented = cparams.get("consent", "").strip() not in ("", "0", "false", "off")
+                c_headers_d = {k.lower().decode(): v.decode("utf-8", "ignore")
+                               for k, v in scope.get("headers", [])}
+                c_origin = c_headers_d.get("origin", "") or c_headers_d.get("referer", "")
+                c_client = scope.get("client")
+                c_ip = c_client[0] if c_client else ""
+
+                try:
+                    consent_signup_upsert(
+                        name=c_name, phone=c_phone, consented=c_consented,
+                        source_domain=c_origin, ip=c_ip,
+                    )
+                except Exception as _srv_cse:
+                    _log.error("consent_signup (server): storage error — %s", _srv_cse)
+                    await _send_json_cors(send, 500, {"ok": False, "error": "storage error"},
+                                           _CONSENT_CORS_HEADERS_SRV)
+                    return
+
+                _log.info("consent_signup (server): recorded name=%r phone=%r consented=%s origin=%r",
+                          c_name, c_phone, c_consented, c_origin)
+                await _send_json_cors(send, 200, {"ok": True}, _CONSENT_CORS_HEADERS_SRV)
                 return
 
             if path == "/.well-known/oauth-protected-resource":
@@ -15655,6 +17865,427 @@ def _run_server_mode(port: int, token: str,
                 })
                 return
 
+            # ── Remote Control PWA — not available in server mode (Phase 0) ────
+            # Owner-only tool for a single-user personal install; doesn't map
+            # to a multi-user business server. Checked BEFORE the bearer-auth
+            # gate below so someone hitting an old bookmark or a stray link
+            # gets a clear, deliberate explanation instead of a confusing
+            # "missing bearer token" error that looks like a bug.
+            if path.startswith("/remote"):
+                _remote_msg = (
+                    "The Remote Control app is a personal-install feature and "
+                    "isn't available on a business server. Ask your admin "
+                    "about the Jobs app (/jobs/) instead."
+                )
+                await _send_text(send, 404, _remote_msg)
+                return
+
+            # ── Jobs App PWA — static file server, no auth required (Phase 1) ──
+            # Mirrors personal mode's /jobs/ handler exactly: static HTML/CSS/JS
+            # is identical for every crew member, so serving the page shell
+            # itself needs no auth — only the tool calls the PWA makes
+            # afterward (clock in/out, photo upload, invoicing) go through the
+            # normal Bearer-token + per-user scoping below. See Phase 2 for
+            # the login flow that gets the PWA a token to use for those calls.
+            if path.startswith("/jobs"):
+                import mimetypes as _srv_mt, os as _srv_os
+                _srv_pwa_root = _srv_os.path.join(
+                    _srv_os.path.dirname(_srv_os.path.abspath(__file__)), "jobs")
+                _srv_rel = path[5:].lstrip("/") or "index.html"
+                _srv_file_path = _srv_os.path.join(_srv_pwa_root, _srv_rel)
+                if not _srv_os.path.abspath(_srv_file_path).startswith(
+                        _srv_os.path.abspath(_srv_pwa_root)):
+                    await _send_text(send, 403, "Forbidden")
+                    return
+                if not _srv_os.path.isfile(_srv_file_path):
+                    # SPA-style fallback: unknown sub-paths serve index.html
+                    # so client-side routing works, matching personal mode.
+                    _srv_file_path = _srv_os.path.join(_srv_pwa_root, "index.html")
+                    if not _srv_os.path.isfile(_srv_file_path):
+                        await _send_text(send, 404, "Not Found")
+                        return
+                try:
+                    with open(_srv_file_path, "rb") as _srv_f:
+                        _srv_body = _srv_f.read()
+                except Exception as _srv_fe:
+                    _log.error("Jobs PWA (server): file read error for %s — %s",
+                               _srv_file_path, _srv_fe)
+                    await _send_text(send, 500, "Internal Server Error")
+                    return
+                _srv_ctype = (_srv_mt.guess_type(_srv_file_path)[0]
+                              or "application/octet-stream").encode()
+                _srv_body = _patch_sw_cache_version(_srv_rel, _srv_pwa_root, _srv_body)
+                # Found 2026-08-24: unlike personal mode's /jobs handler below,
+                # this response sent no Cache-Control header at all, letting a
+                # browser hold a stale cached copy of index.html/sw.js for an
+                # arbitrary heuristic duration in server mode — a code deploy
+                # could sit invisible to an already-installed PWA. Matches
+                # personal mode's no-cache header now.
+                await send({"type": "http.response.start", "status": 200,
+                            "headers": [[b"content-type", _srv_ctype],
+                                        [b"content-length", str(len(_srv_body)).encode()],
+                                        [b"cache-control", b"no-cache"]]})
+                await send({"type": "http.response.body", "body": _srv_body})
+                return
+
+            # ── Jobs PWA mode signal (server mode) ──────────────────────────────
+            # Server-mode equivalent of personal mode's /pwa-token. The ONLY
+            # thing the PWA's frontend actually reads out of this response is
+            # `mode` — that single field is what flips state.serverMode to
+            # true, which in turn decides whether the login screen shows the
+            # name field, whether doAuth() calls /pwa-login vs. comparing a
+            # single shared password, and whether Authorization headers get
+            # attached to /pwa-api and /photos/upload calls. Missing this
+            # route entirely (as it was until now) meant loadBearerToken()
+            # silently failed on every server-mode install, state.serverMode
+            # never became true, and the whole PWA quietly behaved as if it
+            # were running in personal mode. `token` is deliberately left
+            # blank — server mode never authenticates via a single shared
+            # value, real auth goes through /pwa-login instead.
+            if path == "/pwa-token":
+                await _send_json(send, 200, {"token": "", "owner_name": "", "mode": "server"})
+                return
+
+            # ── Jobs PWA login (server mode, Phase 2) ───────────────────────────
+            # Personal mode's /pwa-token just hands back the single owner's
+            # saved token from config.json — there's only one user, no login
+            # needed. Server mode has no such single owner, so the PWA needs
+            # an actual login step: the crew member enters their own name
+            # AND their personal users.json token, and BOTH must resolve to
+            # the same registered user — a valid token entered under someone
+            # else's name is rejected, not silently accepted. This catches
+            # copy-paste mistakes (wrong token pasted under the right name)
+            # far more clearly than a bare "invalid token" ever could, while
+            # still returning one generic error message either way so the
+            # response itself never reveals whether the name or the token
+            # was the actual problem.
+            if path == "/pwa-login" and method == "POST":
+                import json as _srv_pl_json
+                _srv_pl_body = await _read_body(receive)
+                try:
+                    _srv_pl_req = _srv_pl_json.loads(_srv_pl_body) if _srv_pl_body else {}
+                except Exception:
+                    _srv_pl_req = {}
+                _srv_pl_name    = str(_srv_pl_req.get("name", "")).strip()
+                _srv_pl_entered = str(_srv_pl_req.get("token", "")).strip()
+                _srv_pl_generic_error = "Name or password not recognized."
+
+                if not _srv_pl_name or not _srv_pl_entered:
+                    await _send_json(send, 401, {"ok": False, "error": _srv_pl_generic_error})
+                    return
+
+                _srv_pl_user = _resolve_user(_hot_reload_users(users_data), _srv_pl_entered)
+                if _srv_pl_user is None:
+                    await _send_json(send, 401, {"ok": False, "error": _srv_pl_generic_error})
+                    return
+                if (_srv_pl_user.get("name", "") or "").strip().lower() != _srv_pl_name.lower():
+                    _log.info("Jobs PWA login: name/token mismatch (entered name=%r, token belongs to id=%s)",
+                              _srv_pl_name, _srv_pl_user.get("id"))
+                    await _send_json(send, 401, {"ok": False, "error": _srv_pl_generic_error})
+                    return
+
+                _srv_pl_access = _srv_secrets.token_urlsafe(48)
+                _srv_access_tokens[_srv_pl_access] = _srv_pl_entered
+                _log.info("Jobs PWA login: user=%s role=%s",
+                          _srv_pl_user.get("id"), _srv_pl_user.get("role"))
+                await _send_json(send, 200, {
+                    "ok":           True,
+                    "access_token": _srv_pl_access,
+                    "name":         _srv_pl_user.get("name", ""),
+                    "role":         _srv_pl_user.get("role", ""),
+                })
+                return
+
+            # ── Jobs PWA tool-call bridge (server mode, Phase 2) ────────────────
+            # Mirrors personal mode's /pwa-api exactly (same allowed-tools set,
+            # same direct-call-in-Python dispatch, same JSON request/response
+            # shape) with ONE deliberate difference: personal mode requires no
+            # auth and calls tools with ctx=None (fine — single user, nothing
+            # to scope). Server mode MUST resolve a real Bearer token to a
+            # real user and construct a Context-shaped stand-in carrying that
+            # user, or _current_user(ctx) inside read_job_spreadsheet /
+            # update_job_spreadsheet / log_time_entry / email_invoice would
+            # see ctx=None and silently fall back to unrestricted personal-
+            # mode behavior — defeating the entire point of Phase 3/4's
+            # per-crew scoping.
+            if path == "/pwa-api" and method == "POST":
+                import json as _srv_pa_json
+
+                _srv_pa_tok = _bearer_from_scope(scope)
+                if not _srv_pa_tok:
+                    await _send_json(send, 401, {"ok": False, "error": "Missing bearer token"})
+                    return
+                _srv_pa_live_users = _hot_reload_users(users_data)
+                _srv_pa_raw_tok = _srv_access_tokens.get(_srv_pa_tok, _srv_pa_tok)
+                _srv_pa_user = _resolve_user(_srv_pa_live_users, _srv_pa_raw_tok)
+                if _srv_pa_user is None:
+                    await _send_json(send, 401, {"ok": False, "error": "Invalid or revoked token"})
+                    return
+
+                _srv_pa_body = await _read_body(receive)
+                try:
+                    _srv_pa_req  = _srv_pa_json.loads(_srv_pa_body)
+                    _srv_pa_tool = _srv_pa_req.get("tool", "")
+                    _srv_pa_args = dict(_srv_pa_req.get("args", {}) or {})
+                    _srv_pa_args.pop("ctx", None)  # never let the client supply its own ctx
+
+                    _srv_pa_allowed = {
+                        "read_job_spreadsheet",
+                        "log_time_entry",
+                        "update_job_spreadsheet",
+                        "record_learning",
+                        "check_ai_prowler_status",
+                        "search_learnings",
+                        "create_invoice",
+                        "email_invoice",
+                        "text_invoice",
+                        "email_receipt",
+                        "text_receipt",
+                        "send_sms",
+                        "check_sms_configured",
+                        "check_email_configured",
+                        # check_sms_replies, not check_sms_inbox — server
+                        # mode's per-user reply scoping (only threads THIS
+                        # crew member sent) is exactly what a multi-employee
+                        # PWA needs. check_sms_inbox is deliberately
+                        # unavailable in server mode entirely.
+                        "check_sms_replies",
+                        "create_job",
+                        "get_sheet_columns",
+                    }
+
+                    _srv_pa_g = globals()
+                    if _srv_pa_tool not in _srv_pa_allowed or _srv_pa_tool not in _srv_pa_g:
+                        await _send_json(send, 400,
+                                          {"ok": False, "error": f"Unknown tool: {_srv_pa_tool}"})
+                        return
+
+                    # Minimal duck-typed stand-in for a FastMCP Context, only
+                    # satisfying the exact attribute chain _current_user()
+                    # reads: ctx.request_context.request.state.user. Nothing
+                    # else in the tool functions touches ctx, so nothing
+                    # else needs to be faked.
+                    class _SrvPwaState:
+                        def __init__(self, user): self.user = user
+                    class _SrvPwaRequest:
+                        def __init__(self, user): self.state = _SrvPwaState(user)
+                    class _SrvPwaRequestContext:
+                        def __init__(self, user): self.request = _SrvPwaRequest(user)
+                    class _SrvPwaCtx:
+                        def __init__(self, user): self.request_context = _SrvPwaRequestContext(user)
+
+                    _srv_pa_fn = _srv_pa_g[_srv_pa_tool]
+                    import inspect as _srv_pa_inspect
+                    _srv_pa_ctx = _SrvPwaCtx(_srv_pa_user)
+                    if _srv_pa_inspect.iscoroutinefunction(_srv_pa_fn):
+                        _srv_pa_result = await _srv_pa_fn(**_srv_pa_args, ctx=_srv_pa_ctx)
+                    else:
+                        _srv_pa_result = _srv_pa_fn(**_srv_pa_args, ctx=_srv_pa_ctx)
+                    await _send_json(send, 200, {"ok": True, "result": str(_srv_pa_result)})
+                    return
+                except Exception as _srv_pa_exc:
+                    _log.error("Jobs PWA API (server): tool call error — %s", _srv_pa_exc)
+                    await _send_json(send, 400, {"ok": False, "error": str(_srv_pa_exc)})
+                    return
+
+            # ── Jobs PWA photo upload (server mode, Phase 4) ────────────────────
+            # Same multipart parsing and save-path convention as personal mode's
+            # /photos/upload (Path.home()/Documents/AI-Prowler/JobPhotos/<JobID>/)
+            # — the physical save location doesn't change per crew member;
+            # identity separation happens via the auth + crew-scoping check
+            # below, BEFORE any file is written, not via a different folder
+            # per person.
+            if path == "/photos/upload":
+                import os as _srv_p_os, json as _srv_p_json, re as _srv_p_re
+                from pathlib import Path as _srv_p_Path
+                from datetime import datetime as _srv_p_dt
+
+                _srv_p_tok = _bearer_from_scope(scope)
+                if not _srv_p_tok:
+                    await _send_json(send, 401, {"ok": False, "error": "Missing bearer token"})
+                    return
+                _srv_p_live_users = _hot_reload_users(users_data)
+                _srv_p_raw_tok = _srv_access_tokens.get(_srv_p_tok, _srv_p_tok)
+                _srv_p_user = _resolve_user(_srv_p_live_users, _srv_p_raw_tok)
+                if _srv_p_user is None:
+                    await _send_json(send, 401, {"ok": False, "error": "Invalid or revoked token"})
+                    return
+
+                _chunks4 = []
+                while True:
+                    _msg4 = await receive()
+                    _chunks4.append(_msg4.get("body", b""))
+                    if not _msg4.get("more_body", False):
+                        break
+                _raw4 = b"".join(_chunks4)
+
+                _ct4 = ""
+                for _hk, _hv in scope.get("headers", []):
+                    if _hk.lower() == b"content-type":
+                        _ct4 = _hv.decode(errors="replace")
+                        break
+
+                try:
+                    _bnd4 = None
+                    for _part in _ct4.split(";"):
+                        _part = _part.strip()
+                        if _part.startswith("boundary="):
+                            _bnd4 = _part[9:].strip().encode()
+                            break
+                    if not _bnd4:
+                        raise ValueError("No multipart boundary found")
+
+                    _job_id4  = ""
+                    _notes4   = ""
+                    _photos4  = []
+
+                    _delim4   = b"--" + _bnd4
+                    _parts4   = _raw4.split(_delim4)
+
+                    for _seg4 in _parts4[1:]:
+                        if _seg4.strip() in (b"", b"--", b"--\r\n"):
+                            continue
+                        if b"\r\n\r\n" in _seg4:
+                            _hdrs4, _body4 = _seg4.split(b"\r\n\r\n", 1)
+                        elif b"\n\n" in _seg4:
+                            _hdrs4, _body4 = _seg4.split(b"\n\n", 1)
+                        else:
+                            continue
+                        _body4 = _body4.rstrip(b"\r\n")
+                        _hdrs4_str = _hdrs4.decode(errors="replace")
+
+                        _fname4 = None
+                        _ffile4 = None
+                        _cd4 = ""
+                        for _hl4 in _hdrs4_str.splitlines():
+                            if _hl4.lower().startswith("content-disposition"):
+                                _cd4 = _hl4
+                        _nm4 = _srv_p_re.search(r'name="([^"]+)"', _cd4)
+                        _fn4 = _srv_p_re.search(r'filename="([^"]+)"', _cd4)
+                        _fname4 = _nm4.group(1) if _nm4 else ""
+                        _ffile4 = _fn4.group(1) if _fn4 else None
+
+                        if _fname4 == "job_id":
+                            _job_id4 = _body4.decode(errors="replace").strip()
+                        elif _fname4 == "notes":
+                            _notes4 = _body4.decode(errors="replace").strip()
+                        elif _fname4 == "photo" and _ffile4:
+                            _photos4.append((_ffile4, _body4))
+
+                    if not _job_id4:
+                        raise ValueError("job_id field is required")
+
+                    # ── Server-mode crew scoping (Phase 4) ──────────────────
+                    # Same duck-typed Context stand-in as /pwa-api, reusing
+                    # the shared _job_crew_scope() helper. A restricted user
+                    # uploading a photo for a job that isn't theirs is
+                    # rejected before any file touches disk.
+                    class _SrvPhotoState:
+                        def __init__(self, user): self.user = user
+                    class _SrvPhotoRequest:
+                        def __init__(self, user): self.state = _SrvPhotoState(user)
+                    class _SrvPhotoRequestContext:
+                        def __init__(self, user): self.request = _SrvPhotoRequest(user)
+                    class _SrvPhotoCtx:
+                        def __init__(self, user): self.request_context = _SrvPhotoRequestContext(user)
+
+                    _srv_p_ctx = _SrvPhotoCtx(_srv_p_user)
+                    _srv_p_fp = _resolve_job_spreadsheet_path(_srv_p_ctx, "")
+                    _srv_p_restrict, _srv_p_crew_name = _job_crew_scope(_srv_p_ctx, _srv_p_fp)
+                    if _srv_p_restrict and _srv_p_fp and os.path.exists(_srv_p_fp):
+                        import openpyxl as _srv_p_opx
+                        _srv_p_row_crew = ""
+                        try:
+                            _srv_p_wb = _srv_p_opx.load_workbook(_srv_p_fp, data_only=True)
+                            if "Jobs_Schedule" in _srv_p_wb.sheetnames:
+                                _srv_p_ws = _srv_p_wb["Jobs_Schedule"]
+                                _srv_p_hdr_row, _srv_p_hdrs = None, []
+                                for r in _srv_p_ws.iter_rows(min_row=1, max_row=5):
+                                    ne = [c for c in r if c.value is not None]
+                                    if len(ne) >= 3:
+                                        _srv_p_hdr_row = r[0].row
+                                        _srv_p_hdrs = [_join_header_lines(c.value) for c in r]
+                                        break
+                                if _srv_p_hdrs:
+                                    for row in _srv_p_ws.iter_rows(min_row=_srv_p_hdr_row + 1):
+                                        jvals = [c.value for c in row]
+                                        jrow = dict(zip(_srv_p_hdrs, jvals))
+                                        if str(jrow.get("JobID (JOB-####)", "") or "") == _job_id4:
+                                            _srv_p_row_crew = str(jrow.get("Crew / Technician", "") or "").strip().lower()
+                                            break
+                        except Exception:
+                            _srv_p_row_crew = ""
+                        if not _crew_name_in_cell(_srv_p_row_crew, _srv_p_crew_name):
+                            raise ValueError(
+                                f"You can only upload photos for jobs assigned to you "
+                                f"(Crew / Technician column). {_job_id4} is not assigned to you."
+                            )
+
+                    _photo_dir4 = (
+                        _srv_p_Path.home()
+                        / "Documents"
+                        / "AI-Prowler"
+                        / "JobPhotos"
+                        / _job_id4
+                    )
+                    _photo_dir4.mkdir(parents=True, exist_ok=True)
+
+                    _ts4      = _srv_p_dt.now().strftime("%Y%m%d_%H%M%S")
+                    _saved4   = []
+                    _ext_map4 = {
+                        ".jpg": ".jpg", ".jpeg": ".jpg",
+                        ".png": ".png", ".gif": ".gif",
+                        ".webp": ".webp", ".heic": ".jpg",
+                    }
+                    for _idx4, (_orig_name4, _img_bytes4) in enumerate(_photos4, 1):
+                        _orig_ext4 = _srv_p_os.path.splitext(_orig_name4)[1].lower()
+                        # Known image extensions get normalized (matches
+                        # historical behavior). Anything else — PDFs, docs,
+                        # any general file the picker now allows — keeps its
+                        # OWN original extension instead of being silently
+                        # forced to .jpg while still containing non-JPEG
+                        # bytes. Only a genuinely missing extension (some
+                        # mobile camera captures omit one) falls back to .jpg.
+                        _ext4 = _ext_map4.get(_orig_ext4, _orig_ext4 or ".jpg")
+
+                        # Keep the original filename (sanitized) rather than
+                        # discarding it entirely — a crew member uploading
+                        # "invoice_march.pdf" or "warranty_cert.pdf" needs to
+                        # recognize the file later, not just see a bare
+                        # timestamp. The timestamp+index prefix is kept too,
+                        # for uniqueness (two files named the same in one
+                        # batch) and chronological sorting in the folder.
+                        _orig_stem4 = _srv_p_os.path.splitext(_orig_name4)[0]
+                        _safe_stem4 = _srv_p_re.sub(r'[^A-Za-z0-9 _.-]', '_', _orig_stem4).strip()[:80] or "file"
+                        _out_name4 = f"{_ts4}_{_idx4}_{_safe_stem4}{_ext4}"
+                        _out_path4 = _photo_dir4 / _out_name4
+                        _out_path4.write_bytes(_img_bytes4)
+                        _saved4.append(str(_out_path4))
+
+                        # Photo uploads do not record learnings (product policy)
+                    _resp4 = _srv_p_json.dumps({
+                        "ok":    True,
+                        "saved": len(_saved4),
+                        "dir":   str(_photo_dir4),
+                        "files": [_srv_p_os.path.basename(p) for p in _saved4],
+                    }).encode()
+                    _status4 = 200
+
+                except Exception as _exc4:
+                    _resp4   = _srv_p_json.dumps({"ok": False, "error": str(_exc4)}).encode()
+                    _status4 = 400
+
+                await send({"type": "http.response.start", "status": _status4,
+                            "headers": [
+                                [b"content-type",  b"application/json"],
+                                [b"content-length", str(len(_resp4)).encode()],
+                                [b"cache-control",  b"no-store"],
+                                [b"access-control-allow-origin", b"*"],
+                            ]})
+                await send({"type": "http.response.body", "body": _resp4,
+                            "more_body": False})
+                return
+
             # ── Authenticate all other paths (MCP, whoami, etc.) ─────────────
             tok = _bearer_from_scope(scope)
             if not tok:
@@ -15767,7 +18398,34 @@ def _run_server_mode(port: int, token: str,
 
     _log.info("Server mode (multi-user, scoped) listening on port %d", port)
     _log.info("Pure-ASGI router active — SSE-safe, per-user ctx scoping live.")
-    uvicorn.run(app, host="0.0.0.0", port=port,
+
+    # ── Wire uvicorn loggers to our file handler BEFORE calling uvicorn.run() ──
+    # IMPORTANT: Do NOT pass log_config= to uvicorn.run().  Doing so causes
+    # uvicorn to call logging.config.dictConfig() internally which OVERWRITES
+    # the root logger's FileHandler — silencing all _log.debug() calls made
+    # inside _ServerRouterASGI (i.e. during every request).  Instead we attach
+    # our existing file handler directly to uvicorn's named loggers here, then
+    # let uvicorn.run() manage its own internal lifecycle without touching
+    # the logging configuration.  Mirrors the identical block in _run_http().
+    _our_file_handler = logging.root.handlers[0] if logging.root.handlers else None
+    if _our_file_handler:
+        _uv_fmt = logging.Formatter(
+            "%(asctime)s [UVICORN ] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+        )
+        _our_file_handler.setFormatter(_uv_fmt)
+        for _uv_logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+            _uv_lg = logging.getLogger(_uv_logger_name)
+            _uv_lg.setLevel(logging.DEBUG)
+            _uv_lg.propagate = True   # propagate → root → our FileHandler
+    _log.info("Uvicorn loggers wired to our file handler — debug logging active during requests")
+
+    # ── Bind to 127.0.0.1, not 0.0.0.0 ──────────────────────────────────────
+    # Cloudflare Tunnel connects to localhost, so 0.0.0.0 (all interfaces) is
+    # unnecessary.  Binding broadly can trigger Windows Firewall / security
+    # policy blocks that kill the process immediately on startup — exactly the
+    # instability symptom reported.  127.0.0.1 is never blocked and matches
+    # the binding used by _run_http() for consistency.
+    uvicorn.run(app, host="127.0.0.1", port=port,
                 proxy_headers=True, forwarded_allow_ips="*", log_config=None)
 
 
@@ -16534,7 +19192,7 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
         try:
             body_bytes = await request.body()
             import urllib.parse as _up
-            params = dict(_up.parse_qsl(body_bytes.decode("utf-8", errors="replace")))
+            params = dict(_up.parse_qsl(body_bytes.decode("utf-8", errors="replace"), keep_blank_values=True))
         except Exception as _e:
             _log.error("sms_webhook: body parse error — %s", _e)
             return PlainTextResponse("Bad Request", status_code=400)
@@ -16547,7 +19205,12 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
         provider   = str(cfg.get("sms_provider", "twilio")).lower()
         auth_token = cfg.get("twilio_auth_token") or cfg.get("signalwire_auth_token", "")
         signature  = request.headers.get("X-Twilio-Signature", "")
-        url        = str(request.url)
+        # Twilio signs the PUBLIC HTTPS URL it actually POSTed to -- not the
+        # internal URL the ASGI app sees behind the Cloudflare Tunnel/reverse
+        # proxy (which would be http://127.0.0.1:8000/...). Reconstruct the
+        # public URL from the Host header the same way OAuth discovery does.
+        _qs = f"?{request.url.query}" if request.url.query else ""
+        url        = _get_public_base(request) + request.url.path + _qs
 
         if auth_token and signature:
             if provider == "signalwire":
@@ -16593,6 +19256,44 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
         )
         _log.info("sms_webhook: inbound from=%s to=%s appended=%s", from_num, to_num, appended)
 
+        # ── Consent lifecycle — STOP/START/HELP keyword handling (Phase 1.5) ─
+        # Twilio itself already blocks message DELIVERY after a STOP reply —
+        # this only keeps our own local sms_consent.json ledger in sync with
+        # that, so list_sms_consents() reflects reality instead of drifting.
+        _kw = None
+        try:
+            from sms_consent import classify_keyword, consent_set_state
+            _kw = classify_keyword(body_text)
+            if _kw == "opt_out":
+                consent_set_state(from_num, consented=False)
+                _log.info("sms_webhook: opt-out recorded for %s (keyword=%r)", from_num, body_text)
+            elif _kw == "opt_in":
+                consent_set_state(from_num, consented=True)
+                _log.info("sms_webhook: opt-in recorded for %s (keyword=%r)", from_num, body_text)
+            elif _kw == "info":
+                _log.info("sms_webhook: HELP received from %s — sending auto-reply", from_num)
+            # None (ordinary message) requires no consent-lifecycle action.
+        except Exception as _e:
+            _log.error("sms_webhook: consent lifecycle error — %s", _e)
+
+        # HELP gets a populated auto-reply if the operator has configured one
+        # in SMS settings (sms_help_reply_text) — each AI-Prowler install can
+        # set its OWN support contact info here; there is deliberately NO
+        # hardcoded default, since a generic/wrong contact would be worse
+        # than no reply at all for a customer texting HELP. If unconfigured,
+        # HELP falls through to the same empty TwiML as any ordinary message.
+        # Everything else (opt_out, opt_in, ordinary messages) always gets
+        # empty TwiML — Twilio expects SOME valid TwiML response either way.
+        if _kw == "info":
+            _help_text = str(cfg.get("sms_help_reply_text", "") or "").strip()
+            if _help_text:
+                import xml.sax.saxutils as _xmlsax
+                _help_body = _xmlsax.escape(_help_text)
+                return PlainTextResponse(
+                    f"<?xml version='1.0' encoding='UTF-8'?>"
+                    f"<Response><Message>{_help_body}</Message></Response>",
+                    media_type="text/xml", status_code=200)
+
         # Return empty TwiML — Twilio expects this, otherwise it will
         # try to play a default response message to the caller.
         return PlainTextResponse(
@@ -16618,7 +19319,7 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
         try:
             body_bytes = await request.body()
             import urllib.parse as _up2
-            params = dict(_up2.parse_qsl(body_bytes.decode("utf-8", errors="replace")))
+            params = dict(_up2.parse_qsl(body_bytes.decode("utf-8", errors="replace"), keep_blank_values=True))
         except Exception as _e:
             _log.error("whatsapp_webhook: body parse error — %s", _e)
             return PlainTextResponse("Bad Request", status_code=400)
@@ -16630,7 +19331,9 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
         cfg        = load_sms_config()
         auth_token = cfg.get("twilio_auth_token", "")
         signature  = request.headers.get("X-Twilio-Signature", "")
-        url        = str(request.url)
+        # Same public-URL reconstruction as sms_webhook (see comment there).
+        _qs = f"?{request.url.query}" if request.url.query else ""
+        url        = _get_public_base(request) + request.url.path + _qs
 
         if auth_token and signature:
             if not validate_twilio_signature(auth_token, signature, url, params):
@@ -16657,6 +19360,78 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
             "<?xml version='1.0' encoding='UTF-8'?><Response/>",
             media_type="text/xml", status_code=200)
 
+    # ── SMS consent signup — public, unauthenticated, CORS-open ───────────
+    # See sms-consent feature plan, Phase 1. Called by consent-widget.js
+    # (hosted at ai-prowler.com) embedded on ANY customer's OWN website —
+    # not just this install's own site. That's why CORS is wide open here
+    # specifically, unlike every other endpoint on this server.
+    _CONSENT_CORS_HEADERS = {
+        "access-control-allow-origin":  "*",
+        "access-control-allow-methods": "POST, OPTIONS",
+        "access-control-allow-headers": "Content-Type",
+    }
+
+    async def consent_signup(request: Request):
+        """
+        POST /consent-signup — captures SMS-consent web-form submissions
+        from a customer's own website (via consent-widget.js).
+
+        Stores to ~/.ai-prowler/sms_consent.json via sms_consent.py.
+        No Bearer token required (public form submissions, not Claude).
+        """
+        if request.method == "OPTIONS":
+            # CORS preflight — browsers send this before the real POST for
+            # cross-origin requests with non-"simple" characteristics.
+            return PlainTextResponse("", status_code=204, headers=_CONSENT_CORS_HEADERS)
+
+        try:
+            from sms_consent import consent_signup_upsert
+        except ImportError as _e:
+            _log.error("consent_signup: import error — %s", _e)
+            return JSONResponse({"ok": False, "error": "server misconfigured"},
+                                 status_code=500, headers=_CONSENT_CORS_HEADERS)
+
+        try:
+            body_bytes = await request.body()
+            import urllib.parse as _cup
+            params = dict(_cup.parse_qsl(body_bytes.decode("utf-8", errors="replace"),
+                                          keep_blank_values=True))
+        except Exception as _e:
+            _log.error("consent_signup: body parse error — %s", _e)
+            return JSONResponse({"ok": False, "error": "bad request"},
+                                 status_code=400, headers=_CONSENT_CORS_HEADERS)
+
+        # Honeypot — a hidden field real visitors never fill in. If it's
+        # non-empty, silently pretend success so scrapers don't learn the
+        # field exists, but discard the submission without storing it.
+        if params.get("website", "").strip():
+            return JSONResponse({"ok": True}, status_code=200, headers=_CONSENT_CORS_HEADERS)
+
+        name  = params.get("name", "").strip()
+        phone = params.get("phone", "").strip()
+        if not name or not phone:
+            return JSONResponse({"ok": False, "error": "name and phone are required"},
+                                 status_code=400, headers=_CONSENT_CORS_HEADERS)
+
+        consented = params.get("consent", "").strip() not in ("", "0", "false", "off")
+
+        client_ip = request.client.host if request.client else ""
+        origin    = request.headers.get("origin", "") or request.headers.get("referer", "")
+
+        try:
+            consent_signup_upsert(
+                name=name, phone=phone, consented=consented,
+                source_domain=origin, ip=client_ip,
+            )
+        except Exception as _e:
+            _log.error("consent_signup: storage error — %s", _e)
+            return JSONResponse({"ok": False, "error": "storage error"},
+                                 status_code=500, headers=_CONSENT_CORS_HEADERS)
+
+        _log.info("consent_signup: recorded name=%r phone=%r consented=%s origin=%r",
+                   name, phone, consented, origin)
+        return JSONResponse({"ok": True}, status_code=200, headers=_CONSENT_CORS_HEADERS)
+
     oauth_only_app = Starlette(routes=[
         Route("/health",  PlainTextResponse("OK")),
         Route("/.well-known/oauth-protected-resource",   oauth_protected_resource),
@@ -16666,6 +19441,7 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
         Route("/token",     token_endpoint, methods=["POST"]),
         Route("/sms-webhook",       sms_webhook,       methods=["POST"]),
         Route("/whatsapp-webhook",  whatsapp_webhook,  methods=["POST"]),
+        Route("/consent-signup",    consent_signup,    methods=["POST", "OPTIONS"]),
     ])
 
     # ── Get FastMCP ASGI app ──────────────────────────────────────────────────
@@ -16698,7 +19474,8 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
 
     _OAUTH_PATHS = {"/health", "/authorize", "/token", "/register",
                     "/.well-known/oauth-authorization-server",
-                    "/.well-known/oauth-protected-resource"}
+                    "/.well-known/oauth-protected-resource",
+                    "/sms-webhook", "/whatsapp-webhook", "/consent-signup"}
 
     class _RouterASGI:
         async def __call__(self, scope, receive, send):
@@ -16725,18 +19502,25 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                 return
 
             # ── PWA token endpoint — no auth required ─────────────────────
-            # Serves the bearer token to the PWA so it can authenticate MCP
-            # calls. Reads from ~/.ai-prowler/config.json (same source as
-            # the Settings tab). Safe — token is already on this machine.
+            # Serves the bearer token, owner name, and mode to the PWA so it
+            # can authenticate MCP calls and display the correct identity.
+            # Reads from ~/.ai-prowler/config.json (same source as Settings tab).
             if path == "/pwa-token":
                 import json as _json2, os.path as _osp2
                 _cfg_p = _osp2.join(str(Path.home()), ".ai-prowler", "config.json")
                 try:
                     with open(_cfg_p, "r", encoding="utf-8") as _f2:
-                        _tok2 = __import__("json").load(_f2).get("remote_token", "")
-                    _body2 = f'{{"token":"{_tok2}"}}'.encode()
+                        _cfg2 = __import__("json").load(_f2)
+                    _tok2       = _cfg2.get("remote_token", "")
+                    _owner2     = _cfg2.get("owner_name", "")
+                    _mode2      = _cfg2.get("mode", "personal")
+                    _body2 = __import__("json").dumps({
+                        "token":      _tok2,
+                        "owner_name": _owner2,
+                        "mode":       _mode2,
+                    }).encode()
                 except Exception:
-                    _body2 = b'{"token":""}'
+                    _body2 = b'{"token":"","owner_name":"","mode":"personal"}'
                 await send({"type": "http.response.start", "status": 200,
                             "headers": [
                                 [b"content-type",  b"application/json"],
@@ -16777,7 +19561,23 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                         "record_learning",
                         "check_ai_prowler_status",
                         "search_learnings",
+                        "create_invoice",
+                        "email_invoice",
+                        "text_invoice",
+                        "email_receipt",
+                        "text_receipt",
+                        "send_sms",
+                        "check_sms_configured",
+                        "check_email_configured",
+                        # check_sms_inbox, not check_sms_replies — personal
+                        # mode has a single user, so per-employee thread
+                        # scoping is meaningless; check_sms_replies is
+                        # deliberately server-mode-only.
+                        "check_sms_inbox",
+                        "create_job",
+                        "get_sheet_columns",
                     }
+
                     _g = globals()
                     if _tool not in _allowed_tools or _tool not in _g:
                         _resp = _json3.dumps({"ok": False, "error": f"Unknown tool: {_tool}"}).encode()
@@ -16918,26 +19718,22 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                     }
                     for _idx4, (_orig_name4, _img_bytes4) in enumerate(_photos4, 1):
                         _orig_ext4 = _os4.path.splitext(_orig_name4)[1].lower()
-                        _ext4      = _ext_map4.get(_orig_ext4, ".jpg")
-                        _out_name4 = f"{_ts4}_{_idx4}{_ext4}"
+                        # See the matching comment in the server-mode handler
+                        # above — unknown extensions keep their own extension
+                        # instead of being silently forced to .jpg.
+                        _ext4 = _ext_map4.get(_orig_ext4, _orig_ext4 or ".jpg")
+
+                        # Keep the original filename (sanitized) — see the
+                        # matching comment in the server-mode handler above.
+                        _orig_stem4 = _os4.path.splitext(_orig_name4)[0]
+                        _safe_stem4 = _re4.sub(r'[^A-Za-z0-9 _.-]', '_', _orig_stem4).strip()[:80] or "file"
+                        _out_name4 = f"{_ts4}_{_idx4}_{_safe_stem4}{_ext4}"
                         _out_path4 = _photo_dir4 / _out_name4
                         _out_path4.write_bytes(_img_bytes4)
                         _saved4.append(str(_out_path4))
 
                     # ── Log a learning entry for searchability ──────────────
-                    try:
-                        _learn_content4 = (
-                            f"{len(_saved4)} photo(s) saved for {_job_id4}. "
-                            f"Notes: {_notes4 or 'none'}. "
-                            f"Saved to: {str(_photo_dir4)}"
-                        )
-                        record_learning(
-                            title=f"Photos — {_job_id4} — {_ts4}",
-                            content=_learn_content4,
-                            category="technical_note",
-                            tags=f"photos,job_documentation,{_job_id4}",
-                        )
-                    except Exception:
+                        # Photo uploads do not record learnings (product policy)
                         pass  # Learning log failure should not fail the upload
 
                     _resp4 = _json4.dumps({
@@ -16965,15 +19761,14 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
             # ── end PWA photo upload endpoint ──────────────────────────────
 
             # ── PWA static file server — no auth required ────────────────
-
-            # Serves the Crew Companion PWA from the pwa/ folder next to
-            # this file. Accessible at: https://<tunnel-url>/pwa/
+            # Serves the Crew Companion PWA from the jobs/ folder next to
+            # this file. Accessible at: https://<tunnel-url>/jobs/
             # Crew install via "Add to Home Screen" on their phones.
-            if path.startswith("/pwa"):
+            if path.startswith("/jobs"):
                 import mimetypes as _mt2, os as _os2
                 _pwa_root = _os2.path.join(
-                    _os2.path.dirname(_os2.path.abspath(__file__)), "pwa")
-                rel = path[4:].lstrip("/") or "index.html"
+                    _os2.path.dirname(_os2.path.abspath(__file__)), "jobs")
+                rel = path[5:].lstrip("/") or "index.html"
                 file_path = _os2.path.join(_pwa_root, rel)
                 if not _os2.path.abspath(file_path).startswith(
                         _os2.path.abspath(_pwa_root)):
@@ -16987,6 +19782,7 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                     mime_b = (mime or "application/octet-stream").encode()
                     with open(file_path, "rb") as _f:
                         body = _f.read()
+                    body = _patch_sw_cache_version(rel, _pwa_root, body)
                     await send({"type": "http.response.start", "status": 200,
                                 "headers": [
                                     [b"content-type",   mime_b],
@@ -17003,6 +19799,386 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                                 "more_body": False})
                 return
             # ── end PWA static server ─────────────────────────────────────
+
+
+            # ── /remote/ static file server ─────────────────────────────────
+            # Owner-facing Remote Control PWA. Personal mode only.
+            # Serves files from the remote/ folder next to this script.
+            # Login required — Bearer token stored in sessionStorage same as /jobs/.
+            if path.startswith("/remote"):
+                # Server mode: not yet supported
+                try:
+                    import json as _jrc, pathlib as _plrc
+                    _mode_cfg = _jrc.loads(
+                        (_plrc.Path.home() / ".ai-prowler" / "config.json")
+                        .read_text(encoding="utf-8"))
+                except Exception:
+                    _mode_cfg = {}
+                if _mode_cfg.get("mode", "personal") != "personal":
+                    await send({"type": "http.response.start", "status": 403,
+                                "headers": [[b"content-type", b"text/plain"]]})
+                    await send({"type": "http.response.body",
+                                "body": b"Remote app not available in server mode yet",
+                                "more_body": False})
+                    return
+
+                # ── /remote/download — file download endpoint ─────────────────
+                # GET /remote/download?path=<encoded>&token=<bearer>
+                # Token in query param because browser <a download> can't set headers.
+                if path == "/remote/download":
+                    import urllib.parse as _up5, mimetypes as _mt5, os as _os5
+                    _qs5 = dict(_up5.parse_qsl(scope.get("query_string", b"").decode()))
+                    _dl_tok   = _qs5.get("token", "").strip()
+                    _dl_path  = _qs5.get("path",  "").strip()
+
+                    # Validate token
+                    if _dl_tok not in _access_tokens:
+                        await send({"type": "http.response.start", "status": 401,
+                                    "headers": [[b"content-type", b"application/json"]]})
+                        await send({"type": "http.response.body",
+                                    "body": b'{"error":"unauthorized"}',
+                                    "more_body": False})
+                        return
+
+                    # Rate limiting — 20 downloads per token per hour
+                    import time as _time5
+                    _REMOTE_DL_COUNTS = getattr(_RouterASGI, "_dl_counts", {})
+                    _RouterASGI._dl_counts = _REMOTE_DL_COUNTS
+                    _now5 = _time5.time()
+                    _tok_counts = _REMOTE_DL_COUNTS.get(_dl_tok, [])
+                    _tok_counts = [t for t in _tok_counts if _now5 - t < 3600]
+                    if len(_tok_counts) >= 20:
+                        await send({"type": "http.response.start", "status": 429,
+                                    "headers": [[b"content-type", b"application/json"]]})
+                        await send({"type": "http.response.body",
+                                      "body": b'{"error":"rate limit - max 20 downloads per hour"}',
+                                    "more_body": False})
+                        return
+                    _tok_counts.append(_now5)
+                    _REMOTE_DL_COUNTS[_dl_tok] = _tok_counts
+
+                    # Allowed extensions
+                    _ALLOWED_EXT5 = {
+                        ".pdf", ".docx", ".xlsx", ".doc", ".xls", ".pptx",
+                        ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic",
+                        ".mp4", ".mov", ".avi",
+                        ".txt", ".md", ".csv", ".json", ".log",
+                        ".py",  ".js",  ".html", ".css",
+                    }
+                    _dl_ext = _os5.path.splitext(_dl_path)[1].lower()
+                    if _dl_ext not in _ALLOWED_EXT5:
+                        await send({"type": "http.response.start", "status": 403,
+                                    "headers": [[b"content-type", b"application/json"]]})
+                        await send({"type": "http.response.body",
+                                    "body": b'{"error":"file type not allowed for download"}',
+                                    "more_body": False})
+                        return
+
+                    # Path must be inside a tracked readable directory
+                    _abs_dl = _os5.path.abspath(_dl_path)
+                    try:
+                        import json as _jrt
+                        _tdb = str(_plrc.Path.home() / ".ai-prowler" / "tracking_db.json")
+                        _tdata = _jrt.loads(open(_tdb, encoding="utf-8").read())
+                        _readable = [d.get("path","") for d in _tdata.get("directories",[])]
+                    except Exception:
+                        _readable = []
+                    _in_tracked = any(
+                        _abs_dl.startswith(_os5.path.abspath(str(d)))
+                        for d in _readable
+                    )
+                    if not _in_tracked:
+                        await send({"type": "http.response.start", "status": 403,
+                                    "headers": [[b"content-type", b"application/json"]]})
+                        await send({"type": "http.response.body",
+                                    "body": b'{"error":"path not in tracked directories"}',
+                                    "more_body": False})
+                        return
+
+                    if not _os5.path.isfile(_abs_dl):
+                        await send({"type": "http.response.start", "status": 404,
+                                    "headers": [[b"content-type", b"text/plain"]]})
+                        await send({"type": "http.response.body",
+                                    "body": b"File not found", "more_body": False})
+                        return
+
+                    # Size limit: 50MB
+                    _dl_size = _os5.path.getsize(_abs_dl)
+                    if _dl_size > 52_428_800:
+                        await send({"type": "http.response.start", "status": 413,
+                                    "headers": [[b"content-type", b"application/json"]]})
+                        await send({"type": "http.response.body",
+                                    "body": b'{"error":"file exceeds 50MB limit"}',
+                                    "more_body": False})
+                        return
+
+                    _mime5, _ = _mt5.guess_type(_abs_dl)
+                    _mime5 = (_mime5 or "application/octet-stream").encode()
+                    _fname5 = _os5.path.basename(_abs_dl).encode("utf-8",
+                                                                   errors="replace")
+                    with open(_abs_dl, "rb") as _fh5:
+                        _dl_body = _fh5.read()
+                    await send({"type": "http.response.start", "status": 200,
+                                "headers": [
+                                    [b"content-type",        _mime5],
+                                    [b"content-length",      str(len(_dl_body)).encode()],
+                                    [b"content-disposition", b"attachment; filename=\""
+                                                             + _fname5 + b"\""],
+                                    [b"cache-control",       b"no-store"],
+                                ]})
+                    await send({"type": "http.response.body", "body": _dl_body,
+                                "more_body": False})
+                    return
+
+                # ── /remote-api/ — MCP tool bridge ───────────────────────────
+                # Owner-only tool allowlist — broader than /pwa-api/ but
+                # read-only except for Permissions tools (grant/revoke write access).
+                if path == "/remote-api":
+                    import json as _json5
+                    _body5_chunks = []
+                    while True:
+                        _msg5 = await receive()
+                        _body5_chunks.append(_msg5.get("body", b""))
+                        if not _msg5.get("more_body", False):
+                            break
+                    _raw5 = b"".join(_body5_chunks)
+
+                    # Bearer token required for /remote-api/
+                    _ra_headers = {k.lower(): v
+                                   for k, v in scope.get("headers", [])}
+                    _ra_auth = _ra_headers.get(b"authorization", b"").decode(
+                        "utf-8", errors="ignore")
+                    _ra_tok = (_ra_auth[7:].strip()
+                               if _ra_auth.lower().startswith("bearer ")
+                               else "")
+                    if _ra_tok not in _access_tokens:
+                        _resp5 = b'{"error":"unauthorized","error_description":"Invalid or missing Bearer token"}'
+                        try:
+                            import json as _jb5, pathlib as _pb5
+                            _b5cfg = _jb5.loads(
+                                (_pb5.Path.home() / ".ai-prowler" / "config.json")
+                                .read_text(encoding="utf-8"))
+                            _base5 = "https://" + _b5cfg.get("tunnel_domain","").strip("/")
+                        except Exception:
+                            _base5 = "https://ai-prowler.local"
+                        _www5  = (f'Bearer realm="{_base5}", '
+                                  f'resource_metadata="{_base5}/.well-known/oauth-protected-resource"')
+                        await send({"type": "http.response.start", "status": 401,
+                                    "headers": [
+                                        [b"content-type",     b"application/json"],
+                                        [b"www-authenticate", _www5.encode()],
+                                        [b"content-length",   str(len(_resp5)).encode()],
+                                    ]})
+                        await send({"type": "http.response.body",
+                                    "body": _resp5, "more_body": False})
+                        return
+
+                    try:
+                        _req5  = _json5.loads(_raw5)
+                        _tool5 = _req5.get("tool", "")
+                        _args5 = _req5.get("args", {})
+                        _REMOTE_ALLOWED = {
+                            # Status & health
+                            "check_ai_prowler_status",
+                            # Knowledge base browsing
+                            "list_indexed_directories",
+                            "list_indexed_documents",
+                            "list_directory",
+                            "read_file_lines",
+                            "search_documents",
+                            # Learnings (read + write + delete)
+                            "list_learnings",
+                            "search_learnings",
+                            "record_learning",
+                            "update_learning",
+                            "delete_learning",
+                            "get_learning_stats",
+                            "get_database_stats",
+                            # Permissions management
+                            "list_tracked_directories",
+                            "list_writable_directories",
+                            "grant_write_access",
+                            "revoke_write_access",
+                            # Task queue management
+                            "list_analysis_tasks",
+                            "get_pending_analysis_tasks",
+                            "create_analysis_task",
+                            "update_analysis_task",
+                            "delete_analysis_task",
+                            "complete_analysis_task",
+                            "sync_due_tasks_to_queue",
+                            "queue_single_task",
+                            "get_all_queued_tasks",
+                        }
+                        _g5 = globals()
+                        if _tool5 not in _REMOTE_ALLOWED or _tool5 not in _g5:
+                            _resp5 = _json5.dumps(
+                                {"ok": False,
+                                 "error": f"Tool not available in remote API: {_tool5}"}
+                            ).encode()
+                            _status5 = 400
+                        else:
+                            _fn5 = _g5[_tool5]
+                            import inspect as _inspect5, asyncio as _aio5, functools as _ft5
+                            try:
+                                if _inspect5.iscoroutinefunction(_fn5):
+                                    _result5 = await _fn5(**_args5)
+                                else:
+                                    # Run blocking tools in thread executor to
+                                    # avoid blocking the ASGI event loop
+                                    _loop5 = _aio5.get_event_loop()
+                                    _result5 = await _loop5.run_in_executor(
+                                        None,
+                                        _ft5.partial(_fn5, **_args5)
+                                    )
+                            except Exception as _call5:
+                                raise _call5
+                            _resp5 = _json5.dumps(
+                                {"ok": True, "result": str(_result5)}
+                            ).encode()
+                            _status5 = 200
+                    except Exception as _exc5:
+                        _resp5 = _json5.dumps(
+                            {"ok": False, "error": str(_exc5)}
+                        ).encode()
+                        _status5 = 400
+
+                    await send({"type": "http.response.start", "status": _status5,
+                                "headers": [
+                                    [b"content-type",   b"application/json"],
+                                    [b"content-length", str(len(_resp5)).encode()],
+                                    [b"cache-control",  b"no-store"],
+                                    [b"access-control-allow-origin", b"*"],
+                                ]})
+                    await send({"type": "http.response.body", "body": _resp5,
+                                "more_body": False})
+                    return
+
+                # ── /remote/upload — file upload endpoint ────────────────────
+                # POST multipart/form-data: file, dir, token
+                # Saves to dir (must be writable), indexes the file into RAG.
+                if path == "/remote/upload":
+                    import os as _os7
+                    # Read body
+                    _up_chunks = []
+                    while True:
+                        _up_msg = await receive()
+                        _up_chunks.append(_up_msg.get("body", b""))
+                        if not _up_msg.get("more_body", False):
+                            break
+                    _up_raw = b"".join(_up_chunks)
+                    # Get content-type header
+                    _ct_hdr = ""
+                    for _hk, _hv in scope.get("headers", []):
+                        if _hk == b"content-type":
+                            _ct_hdr = _hv.decode("utf-8", errors="ignore")
+                            break
+                    try:
+                        import email.parser as _ep5, email.policy as _epo5, json as _jup5
+                        _raw_msg = ("Content-Type: " + _ct_hdr + "\r\n\r\n").encode() + _up_raw
+                        _msg5 = _ep5.BytesParser(policy=_epo5.default).parsebytes(_raw_msg)
+                        _up_file_data, _up_fname, _up_dir, _up_tok = None, "", "", ""
+                        for _part in _msg5.iter_parts():
+                            _cd = _part.get("Content-Disposition", "")
+                            if 'name="file"' in _cd:
+                                if 'filename="' in _cd:
+                                    _up_fname = _cd.split('filename="')[1].split('"')[0]
+                                _up_file_data = _part.get_payload(decode=True)
+                            elif 'name="dir"' in _cd:
+                                _up_dir = (_part.get_payload() or "").strip()
+                            elif 'name="token"' in _cd:
+                                _up_tok = (_part.get_payload() or "").strip()
+                        # Validate token
+                        if _up_tok not in _access_tokens:
+                            _ub = b'{"ok":false,"error":"unauthorized"}'
+                            await send({"type":"http.response.start","status":401,
+                                        "headers":[[b"content-type",b"application/json"]]})
+                            await send({"type":"http.response.body","body":_ub,"more_body":False})
+                            return
+                        if _up_file_data is None or not _up_dir:
+                            _ub = b'{"ok":false,"error":"missing file or dir"}'
+                            await send({"type":"http.response.start","status":400,
+                                        "headers":[[b"content-type",b"application/json"]]})
+                            await send({"type":"http.response.body","body":_ub,"more_body":False})
+                            return
+                        # Check writable
+                        _up_dir_abs = _os7.path.abspath(_up_dir)
+                        _wr5 = _writable_allowlist_load()
+                        _in_w = any(_up_dir_abs.lower().startswith(
+                            _os7.path.abspath(str(w)).lower()) for w in _wr5)
+                        if not _in_w:
+                            _ub = b'{"ok":false,"error":"directory not writable"}'
+                            await send({"type":"http.response.start","status":403,
+                                        "headers":[[b"content-type",b"application/json"]]})
+                            await send({"type":"http.response.body","body":_ub,"more_body":False})
+                            return
+                        # Save file + index in thread executor (blocking ops)
+                        _safe_name = _os7.path.basename(_up_fname) or "upload"
+                        _dest5 = _os7.path.join(_up_dir_abs, _safe_name)
+                        import asyncio as _aio7, functools as _ft7
+                        def _do_save_and_index():
+                            _os7.makedirs(_up_dir_abs, exist_ok=True)
+                            with open(_dest5, "wb") as _fout5:
+                                _fout5.write(_up_file_data)
+                            try:
+                                index_path(directory=_up_dir_abs, recursive=False)
+                            except Exception:
+                                pass
+                        _loop7 = _aio7.get_event_loop()
+                        await _loop7.run_in_executor(None, _do_save_and_index)
+                        _ub = _jup5.dumps({"ok": True, "filename": _safe_name,
+                                           "size": len(_up_file_data)}).encode()
+                        await send({"type":"http.response.start","status":200,
+                                    "headers":[[b"content-type",b"application/json"],
+                                               [b"content-length",str(len(_ub)).encode()]]})
+                        await send({"type":"http.response.body","body":_ub,"more_body":False})
+                    except Exception as _ue5:
+                        import json as _jue5
+                        _ub = _jue5.dumps({"ok":False,"error":str(_ue5)}).encode()
+                        await send({"type":"http.response.start","status":500,
+                                    "headers":[[b"content-type",b"application/json"]]})
+                        await send({"type":"http.response.body","body":_ub,"more_body":False})
+                    return
+                # ── end /remote/upload ──────────────────────────────────────────
+
+                # ── /remote/ static file server ───────────────────────────────
+                import mimetypes as _mt6, os as _os6
+                _remote_root = _os6.path.join(
+                    _os6.path.dirname(_os6.path.abspath(__file__)), "remote")
+                _rel6 = path[7:].lstrip("/") or "index.html"
+                _file6 = _os6.path.join(_remote_root, _rel6)
+
+                # Path traversal guard
+                if not _os6.path.abspath(_file6).startswith(
+                        _os6.path.abspath(_remote_root)):
+                    await send({"type": "http.response.start", "status": 403,
+                                "headers": [[b"content-type", b"text/plain"]]})
+                    await send({"type": "http.response.body",
+                                "body": b"Forbidden", "more_body": False})
+                    return
+
+                if _os6.path.isfile(_file6):
+                    _mime6, _ = _mt6.guess_type(_file6)
+                    _mime6 = (_mime6 or "application/octet-stream").encode()
+                    with open(_file6, "rb") as _fh6:
+                        _body6 = _fh6.read()
+                    _body6 = _patch_sw_cache_version(_rel6, _remote_root, _body6)
+                    await send({"type": "http.response.start", "status": 200,
+                                "headers": [
+                                    [b"content-type",   _mime6],
+                                    [b"content-length", str(len(_body6)).encode()],
+                                    [b"cache-control",  b"no-cache"],
+                                ]})
+                    await send({"type": "http.response.body", "body": _body6,
+                                "more_body": False})
+                else:
+                    await send({"type": "http.response.start", "status": 404,
+                                "headers": [[b"content-type", b"text/plain"]]})
+                    await send({"type": "http.response.body",
+                                "body": b"Remote file not found",
+                                "more_body": False})
+                return
+            # ── end /remote/ handler ──────────────────────────────────────────
 
             # Everything else (including /mcp) — check Bearer token first
             headers = {k.lower(): v for k, v in scope.get("headers", [])}

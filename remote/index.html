@@ -1,0 +1,1899 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#9b5de5">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>AI-Prowler Remote</title>
+<link rel="manifest" href="/remote/manifest.json">
+<link rel="icon" type="image/png" sizes="192x192" href="/remote/icon-192.png">
+<link rel="apple-touch-icon" href="/remote/icon-192.png">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#07080f;--surface:#0d0e1a;--card:#13152a;--card2:#1a1c35;
+  --accent:#9b5de5;--accent2:#7b3fc4;--green:#00f5a0;--red:#ff4d6d;
+  --yellow:#ffd166;--text:#ffffff;--dim:#8892b0;--dim2:#4a5568;
+  --border:#1e2140;--nav-h:64px;--topbar-h:56px;
+  --safe-top:env(safe-area-inset-top,0px); --safe-bot:env(safe-area-inset-bottom,0px);
+}
+/* Update-available banner — see the serviceWorker registration/update
+   logic near the init IIFE. Fixed overlay, safe-area-aware, sits above
+   everything until dismissed or acted on. */
+#updateBanner{position:fixed;top:calc(env(safe-area-inset-top,0px) + 10px);left:12px;right:12px;z-index:9999;background:var(--surface);border:1px solid var(--accent);border-radius:14px;padding:12px 14px;box-shadow:0 8px 30px rgba(0,0,0,.5);display:none;align-items:center;justify-content:space-between;gap:10px}
+#updateBanner.show{display:flex}
+#updateBanner .msg{font-size:13px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px}
+#updateBanner .actions{display:flex;gap:8px;flex-shrink:0}
+#updateBanner button{border:none;border-radius:9px;padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer;-webkit-tap-highlight-color:transparent}
+#updateBanner .btn-later{background:transparent;border:1px solid var(--border);color:var(--dim)}
+#updateBanner .btn-refresh{background:var(--accent);color:#fff}
+html,body{height:100%;background:var(--bg);color:var(--text);
+  font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
+  overscroll-behavior:none;-webkit-font-smoothing:antialiased;}
+/* Auth */
+.auth-screen{display:none;flex-direction:column;align-items:center;
+  justify-content:center;min-height:100vh;padding:32px 20px;gap:24px;}
+.auth-logo{width:72px;height:72px;border-radius:18px;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  display:flex;align-items:center;justify-content:center;font-size:32px;
+  box-shadow:0 8px 32px rgba(155,93,229,.4);}
+.auth-title{font-size:22px;font-weight:700;color:var(--accent);}
+.auth-sub{font-size:13px;color:var(--dim);text-align:center;max-width:280px;}
+.auth-card{background:var(--card);border:1px solid var(--border);
+  border-radius:16px;padding:24px;width:100%;max-width:360px;
+  display:flex;flex-direction:column;gap:16px;}
+.auth-card label{font-size:12px;color:var(--dim);font-weight:600;
+  text-transform:uppercase;letter-spacing:.05em;}
+.auth-card input{width:100%;background:var(--surface);border:1px solid var(--border);
+  border-radius:10px;padding:12px 14px;color:var(--text);font-size:15px;outline:none;}
+.auth-card input:focus{border-color:var(--accent);}
+.auth-err{color:var(--red);font-size:13px;display:none;}
+.btn-primary{background:var(--accent);color:#fff;border:none;border-radius:10px;
+  padding:14px;font-size:15px;font-weight:600;cursor:pointer;width:100%;}
+.btn-primary:hover{background:var(--accent2);}
+/* App */
+#app{display:none;flex-direction:column;height:100vh;height:100dvh;}
+.topbar{min-height:var(--topbar-h);padding-top:var(--safe-top);background:var(--surface);
+  border-bottom:1px solid var(--border);display:flex;align-items:center;
+  padding-left:16px;padding-right:16px;gap:12px;flex-shrink:0;}
+.topbar-logo{width:32px;height:32px;border-radius:8px;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  display:flex;align-items:center;justify-content:center;font-size:16px;}
+.topbar-title{font-size:15px;font-weight:700;color:var(--accent);}
+.topbar-sub{font-size:11px;color:var(--dim);}
+.conn-dot{width:8px;height:8px;border-radius:50%;background:var(--dim2);
+  margin-left:auto;transition:background .3s;}
+.conn-dot.live{background:var(--green);}
+.screens{flex:1;overflow:hidden;position:relative;}
+.screen{position:absolute;inset:0;overflow-y:auto;padding:16px;
+  display:none;flex-direction:column;gap:14px;}
+.screen.active{display:flex;}
+.navbar{min-height:var(--nav-h);padding-bottom:var(--safe-bot);background:var(--surface);
+  border-top:1px solid var(--border);display:flex;flex-shrink:0;}
+.nav-btn{flex:1;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:3px;background:none;border:none;
+  color:var(--dim);font-size:9px;font-weight:600;cursor:pointer;
+  text-transform:uppercase;letter-spacing:.05em;}
+.nav-btn .ni{font-size:20px;}
+.nav-btn.active{color:var(--accent);}
+/* Cards */
+.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px;}
+.card-title{font-size:12px;font-weight:700;color:var(--dim);
+  text-transform:uppercase;letter-spacing:.08em;margin-bottom:12px;}
+.row{display:flex;align-items:center;gap:10px;padding:10px 0;
+  border-bottom:1px solid var(--border);}
+.row:last-child{border-bottom:none;}
+.ri{font-size:18px;width:26px;text-align:center;flex-shrink:0;}
+.rm{flex:1;min-width:0;}
+.rn{font-size:14px;font-weight:600;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;}
+.rs{font-size:10px;color:var(--dim);margin-top:2px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ra{flex-shrink:0;}
+/* Tiles */
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.tile{background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:14px;display:flex;flex-direction:column;gap:4px;}
+.tile-val{font-size:24px;font-weight:800;color:var(--accent);}
+.tile-lbl{font-size:10px;color:var(--dim);font-weight:600;
+  text-transform:uppercase;letter-spacing:.06em;}
+/* Badges */
+.badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700;}
+.badge-r{background:rgba(0,212,255,.15);color:#00d4ff;}
+.badge-w{background:rgba(0,245,160,.15);color:var(--green);}
+/* Search */
+.search-bar{background:var(--card);border:1px solid var(--border);
+  border-radius:12px;padding:12px 14px;display:flex;align-items:center;gap:10px;}
+.search-bar input{flex:1;background:none;border:none;color:var(--text);
+  font-size:15px;outline:none;}
+.search-bar input::placeholder{color:var(--dim);}
+.search-btn{background:var(--accent);border:none;color:#fff;
+  border-radius:8px;padding:6px 14px;font-size:13px;font-weight:600;cursor:pointer;}
+/* Preview */
+.preview-wrap{background:var(--card);border:1px solid var(--border);
+  border-radius:12px;padding:14px;display:none;}
+.preview-wrap.show{display:block;}
+.preview-header{display:flex;align-items:center;gap:8px;margin-bottom:10px;}
+.preview-fname{font-size:13px;font-weight:700;flex:1;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.preview-close{background:none;border:none;color:var(--dim);
+  font-size:18px;cursor:pointer;padding:0 4px;}
+.preview-body{font-family:'Courier New',monospace;font-size:11px;color:var(--dim);
+  white-space:pre-wrap;max-height:280px;overflow-y:auto;
+  background:var(--surface);border-radius:8px;padding:10px;}
+/* Permission toggle */
+.perm-toggle{position:relative;width:44px;height:24px;flex-shrink:0;}
+.perm-toggle input{opacity:0;width:0;height:0;}
+.perm-slider{position:absolute;inset:0;background:var(--dim2);
+  border-radius:12px;cursor:pointer;transition:.3s;}
+.perm-slider::before{content:'';position:absolute;width:18px;height:18px;
+  left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.3s;}
+.perm-toggle input:checked + .perm-slider{background:var(--green);}
+.perm-toggle input:checked + .perm-slider::before{transform:translateX(20px);}
+/* Re-auth modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);
+  display:none;align-items:center;justify-content:center;z-index:100;padding:20px;}
+.modal-overlay.show{display:flex;}
+.modal{background:var(--card);border:1px solid var(--border);
+  border-radius:16px;padding:24px;width:100%;max-width:340px;
+  display:flex;flex-direction:column;gap:14px;}
+.modal-title{font-size:16px;font-weight:700;}
+.modal-path{font-size:11px;color:var(--yellow);font-family:monospace;
+  background:var(--surface);padding:8px 12px;border-radius:8px;word-break:break-all;}
+.modal-warn{font-size:12px;color:var(--dim);line-height:1.5;}
+.modal-warn strong{color:var(--red);}
+.modal-inp-wrap{position:relative;}
+.modal-inp-wrap input{width:100%;background:var(--surface);
+  border:1px solid var(--border);border-radius:10px;
+  padding:12px 40px 12px 14px;color:var(--text);font-size:15px;outline:none;}
+.modal-inp-wrap input:focus{border-color:var(--accent);}
+.show-btn{position:absolute;right:10px;top:50%;transform:translateY(-50%);
+  background:none;border:none;color:var(--dim);cursor:pointer;font-size:15px;}
+.modal-err{color:var(--red);font-size:12px;display:none;}
+.modal-locked{color:var(--yellow);font-size:12px;display:none;}
+.modal-btns{display:flex;gap:10px;}
+.btn-cancel{flex:1;background:var(--surface);border:1px solid var(--border);
+  color:var(--text);border-radius:10px;padding:12px;font-size:14px;
+  font-weight:600;cursor:pointer;}
+.btn-confirm{flex:1;background:var(--accent);border:none;color:#fff;
+  border-radius:10px;padding:12px;font-size:14px;font-weight:600;cursor:pointer;}
+.btn-confirm:disabled{opacity:.4;cursor:default;}
+/* Breadcrumb */
+.breadcrumb{font-size:12px;color:var(--dim);display:flex;flex-wrap:wrap;
+  align-items:center;gap:4px;}
+.bc-link{color:var(--accent);cursor:pointer;}
+.bc-sep{color:var(--dim2);}
+/* Action buttons */
+.btn-open{background:none;border:none;color:var(--accent);
+  font-size:13px;cursor:pointer;padding:0;}
+.btn-view{background:none;border:1px solid var(--border);color:var(--text);
+  border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer;}
+.btn-dl{background:var(--accent);color:#fff;border-radius:8px;
+  padding:4px 10px;font-size:12px;text-decoration:none;display:inline-block;}
+/* Toast */
+.toast{position:fixed;bottom:calc(var(--nav-h)+14px);left:50%;
+  transform:translateX(-50%) translateY(16px);background:var(--card2);
+  border:1px solid var(--border);border-radius:12px;padding:10px 18px;
+  font-size:13px;font-weight:600;opacity:0;transition:.25s;
+  pointer-events:none;white-space:nowrap;z-index:200;}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+/* Spinner */
+.spinner{width:20px;height:20px;border:2px solid var(--border);
+  border-top-color:var(--accent);border-radius:50%;
+  animation:spin .6s linear infinite;margin:24px auto;}
+@keyframes spin{to{transform:rotate(360deg)}}
+.empty{text-align:center;color:var(--dim);font-size:13px;padding:28px 0;}
+.info-banner{background:rgba(155,93,229,.08);border:1px solid rgba(155,93,229,.3);
+  border-radius:12px;padding:12px 14px;font-size:12px;color:var(--dim);line-height:1.5;}
+.sys-line{font-size:11px;color:var(--dim);font-family:monospace;padding:3px 0;
+  border-bottom:1px solid var(--border);}
+</style>
+</head>
+<body>
+
+<!-- ── Auth ───────────────────────────────────────────────────── -->
+<div class="auth-screen" id="authScreen">
+  <div class="auth-logo" style="padding:0;overflow:hidden;"><img src="/remote/icon-192.png" style="width:72px;height:72px;border-radius:18px;display:block;" alt="AI-Prowler"></div>
+  <div class="auth-title">AI-Prowler Remote</div>
+  <div class="auth-sub">Enter your Bearer token to access remote control</div>
+  <div class="auth-card">
+    <label for="authInput">Bearer Token</label>
+    <input type="password" id="authInput" placeholder="Your bearer token"
+      autocomplete="current-password"
+      onkeydown="if(event.key==='Enter')doAuth()">
+    <div class="auth-err" id="authErr">Incorrect token. Check Settings &#8594; Remote Access.</div>
+    <button class="btn-primary" onclick="doAuth()">Unlock Remote</button>
+  </div>
+</div>
+
+<!-- ── App ────────────────────────────────────────────────────── -->
+<div id="app">
+  <div id="updateBanner">
+    <span class="msg">🔄 A new version is available</span>
+    <div class="actions">
+      <button class="btn-later" onclick="_dismissUpdateBanner()">Later</button>
+      <button class="btn-refresh" onclick="_refreshForUpdate()">Refresh Now</button>
+    </div>
+  </div>
+  <div class="topbar">
+    <div class="topbar-logo" style="padding:0;overflow:hidden;">
+      <img src="/remote/icon-192.png" style="width:32px;height:32px;border-radius:8px;display:block;" alt="AI-Prowler">
+    </div>
+    <div>
+      <div class="topbar-title">AI-Prowler Remote</div>
+      <div class="topbar-sub" id="topbarSub">Personal</div>
+    </div>
+    <div class="conn-dot" id="connDot"></div>
+  </div>
+
+  <div class="screens">
+
+    <!-- Dashboard -->
+    <div class="screen active" id="screenDash">
+      <div class="tiles">
+        <div class="tile">
+          <div class="tile-val" id="dChunks">&#8212;</div>
+          <div class="tile-lbl">Chunks</div>
+        </div>
+        <div class="tile">
+          <div class="tile-val" id="dPaths">&#8212;</div>
+          <div class="tile-lbl">Tracked Paths</div>
+        </div>
+        <div class="tile">
+          <div class="tile-val" id="dDocs">&#8212;</div>
+          <div class="tile-lbl">Indexed Docs</div>
+        </div>
+        <div class="tile">
+          <div class="tile-val" id="dStatus" style="font-size:18px">&#8212;</div>
+          <div class="tile-lbl">Status</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Quick Access</div>
+        <div class="row" onclick="switchTab('files')" style="cursor:pointer">
+          <div class="ri">&#128193;</div>
+          <div class="rm">
+            <div class="rn">File Browser</div>
+            <div class="rs">Browse and download tracked files</div>
+          </div>
+          <div class="ra" style="color:var(--dim)">&#8250;</div>
+        </div>
+        <div class="row" onclick="switchTab('search')" style="cursor:pointer">
+          <div class="ri">&#128269;</div>
+          <div class="rm">
+            <div class="rn">Search</div>
+            <div class="rs">Full-text RAG search</div>
+          </div>
+          <div class="ra" style="color:var(--dim)">&#8250;</div>
+        </div>
+        <div class="row" onclick="switchTab('perms')" style="cursor:pointer">
+          <div class="ri">&#128274;</div>
+          <div class="rm">
+            <div class="rn">Permissions</div>
+            <div class="rs">Manage R/W access per directory</div>
+          </div>
+          <div class="ra" style="color:var(--dim)">&#8250;</div>
+        </div>
+        <div class="row" onclick="switchTab('system')" style="cursor:pointer">
+          <div class="ri">&#9881;</div>
+          <div class="rm">
+            <div class="rn">System</div>
+            <div class="rs">ChromaDB stats and uptime</div>
+          </div>
+          <div class="ra" style="color:var(--dim)">&#8250;</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Files -->
+    <div class="screen" id="screenFiles">
+      <div class="card" style="background:rgba(155,93,229,.07);border-color:rgba(155,93,229,.3);padding:12px 14px;margin-bottom:4px">
+        <div style="font-size:13px;font-weight:700;color:var(--accent);margin-bottom:4px">&#128228; Upload to AI-Prowler</div>
+        <div style="font-size:12px;color:var(--dim);margin-bottom:8px">Tap <strong style="color:var(--text)">Upload</strong> next to any writable folder to choose a file or photo from your device. It will be saved to that folder and indexed into AI-Prowler automatically.</div>
+        <div id="uploadStatus" style="font-size:12px;margin-top:4px;display:none;padding:6px 10px;border-radius:8px;background:var(--surface)"></div>
+      </div>
+      <div id="breadcrumb" style="font-size:12px;color:var(--dim);padding:4px 0 6px 2px;display:flex;gap:4px;flex-wrap:wrap;align-items:center"></div>
+      <div id="fileList"><div class="spinner"></div></div>
+      <div class="preview-wrap" id="previewWrap">
+        <div class="preview-header">
+          <div class="preview-fname" id="previewName"></div>
+          <button class="preview-close" onclick="closePreview()">&#10005;</button>
+        </div>
+        <div class="preview-body" id="previewBody"></div>
+      </div>
+    </div>
+
+    <!-- Search -->
+    <div class="screen" id="screenSearch">
+      <div class="search-bar">
+        <input type="text" id="searchInput"
+          placeholder="Search your knowledge base&#8230;"
+          onkeydown="if(event.key==='Enter')doSearch()">
+        <button class="search-btn" onclick="doSearch()">Search</button>
+      </div>
+      <div id="searchResults">
+        <div class="empty">Enter a query above to search</div>
+      </div>
+    </div>
+
+    <!-- Permissions -->
+    <div class="screen" id="screenPerms">
+      <div class="info-banner">
+        &#128274;&ensp;<strong style="color:var(--text)">Write access grant</strong>
+        requires re-entering your Bearer token.
+        Revoking is instant with no confirmation.
+      </div>
+      <div id="permList"><div class="spinner"></div></div>
+    </div>
+
+    <!-- Learn -->
+    <div class="screen" id="screenLearn">
+      <!-- Search bar -->
+      <div class="search-bar">
+        <input type="text" id="learnSearch" placeholder="Search learnings&#8230;"
+          onkeydown="if(event.key==='Enter')searchLearnings()">
+        <button class="search-btn" onclick="searchLearnings()">Search</button>
+      </div>
+      <!-- Add learning form toggle -->
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button class="btn-primary" style="width:auto;padding:8px 16px;font-size:13px;border-radius:8px"
+          onclick="toggleLearnForm()">&#43; Add Learning</button>
+        <button style="background:var(--surface);border:1px solid var(--border);color:var(--text);
+          border-radius:8px;padding:8px 12px;font-size:12px;cursor:pointer"
+          onclick="loadLearnings()">&#8635; Refresh</button>
+        <span id="learnStats" style="font-size:11px;color:var(--dim);margin-left:4px"></span>
+      </div>
+      <!-- Add learning form -->
+      <div id="learnForm" style="display:none">
+        <div class="card">
+          <div class="card-title">&#43; New Learning</div>
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <div>
+              <div style="font-size:11px;color:var(--dim);margin-bottom:4px">Title <span style="color:var(--red)">*</span></div>
+              <input id="lnTitle" type="text" placeholder="Short descriptive title"
+                style="width:100%;background:var(--surface);border:1px solid var(--border);
+                border-radius:8px;padding:10px 12px;color:var(--text);font-size:14px;outline:none;">
+            </div>
+            <div>
+              <div style="font-size:11px;color:var(--dim);margin-bottom:4px">Content <span style="color:var(--red)">*</span></div>
+              <textarea id="lnContent" placeholder="The actual learned fact, lesson, or insight&#8230;"
+                style="width:100%;background:var(--surface);border:1px solid var(--border);
+                border-radius:8px;padding:10px 12px;color:var(--text);font-size:13px;
+                outline:none;min-height:80px;resize:vertical;font-family:inherit;"></textarea>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+              <div>
+                <div style="font-size:11px;color:var(--dim);margin-bottom:4px">Category</div>
+                <select id="lnCategory"
+                  style="width:100%;background:var(--surface);border:1px solid var(--border);
+                  border-radius:8px;padding:10px 12px;color:var(--text);font-size:13px;outline:none;">
+                  <option value="general">General</option>
+                  <option value="business_lesson">Business Lesson</option>
+                  <option value="client_preference">Client Preference</option>
+                  <option value="best_practice">Best Practice</option>
+                  <option value="process_improvement">Process Improvement</option>
+                  <option value="project_insight">Project Insight</option>
+                  <option value="fact_correction">Fact Correction</option>
+                  <option value="technical_note">Technical Note</option>
+                  <option value="mistake_learned">Mistake Learned</option>
+                </select>
+              </div>
+              <div>
+                <div style="font-size:11px;color:var(--dim);margin-bottom:4px">Outcome</div>
+                <select id="lnOutcome"
+                  style="width:100%;background:var(--surface);border:1px solid var(--border);
+                  border-radius:8px;padding:10px 12px;color:var(--text);font-size:13px;outline:none;">
+                  <option value="unknown">Unknown</option>
+                  <option value="positive">Positive</option>
+                  <option value="negative">Negative</option>
+                  <option value="neutral">Neutral</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <div style="font-size:11px;color:var(--dim);margin-bottom:4px">Tags (comma-separated)</div>
+              <input id="lnTags" type="text" placeholder="e.g. client-x, windows, pricing"
+                style="width:100%;background:var(--surface);border:1px solid var(--border);
+                border-radius:8px;padding:10px 12px;color:var(--text);font-size:13px;outline:none;">
+            </div>
+            <div>
+              <div style="font-size:11px;color:var(--dim);margin-bottom:4px">Context (why this was recorded)</div>
+              <input id="lnContext" type="text" placeholder="Optional — what triggered this learning"
+                style="width:100%;background:var(--surface);border:1px solid var(--border);
+                border-radius:8px;padding:10px 12px;color:var(--text);font-size:13px;outline:none;">
+            </div>
+            <div id="lnError" style="color:var(--red);font-size:12px;display:none"></div>
+            <div style="display:flex;gap:10px;">
+              <button onclick="cancelLearnForm()"
+                style="flex:1;background:var(--surface);border:1px solid var(--border);
+                color:var(--text);border-radius:8px;padding:10px;font-size:14px;cursor:pointer;">
+                Cancel</button>
+              <button onclick="submitLearning()"
+                style="flex:2;background:var(--accent);border:none;color:#fff;
+                border-radius:8px;padding:10px;font-size:14px;font-weight:700;cursor:pointer;">
+                &#10003; Save Learning</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- Learnings list -->
+      <div id="learnList"><div class="spinner"></div></div>
+    </div>
+
+    <!-- Tasks -->
+    <div class="screen" id="screenTasks">
+      
+      <!-- Toolbar -->
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <button class="btn-primary" style="width:auto;padding:8px 14px;font-size:13px;border-radius:8px"
+          onclick="showNewTaskForm()">&#43; New Custom AI Task</button>
+        <button style="background:var(--surface);border:1px solid var(--border);color:var(--text);
+          border-radius:8px;padding:8px 12px;font-size:12px;cursor:pointer"
+          onclick="loadTasks()">&#8635; Refresh</button>
+        <span id="taskCount" style="font-size:11px;color:var(--dim);margin-left:4px"></span>
+      </div>
+
+      <!-- New task form -->
+      <div id="newTaskForm" style="display:none">
+        <div class="card">
+          <div class="card-title" id="taskFormTitle">&#43; New Custom AI Task</div>
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <div>
+              <div style="font-size:11px;color:var(--dim);margin-bottom:4px">Label (short name)</div>
+              <input id="ntLabel" type="text" placeholder="e.g. Weekly Sales Summary"
+                style="width:100%;background:var(--surface);border:1px solid var(--border);
+                border-radius:8px;padding:10px 12px;color:var(--text);font-size:14px;outline:none;">
+            </div>
+            <div>
+              <div style="font-size:11px;color:var(--dim);margin-bottom:4px">Prompt (what Claude should do)</div>
+              <textarea id="ntPrompt" placeholder="e.g. Summarize all learnings from this week and identify key trends."
+                style="width:100%;background:var(--surface);border:1px solid var(--border);
+                border-radius:8px;padding:10px 12px;color:var(--text);font-size:13px;
+                outline:none;min-height:90px;resize:vertical;font-family:inherit;"></textarea>
+            </div>
+
+            <!-- Scope directories — mirrors the desktop "Edit Custom
+                 Analysis" dialog's checkbox list. Populated from
+                 list_tracked_directories() when the form opens; leaving
+                 everything unchecked means "search everything" (the
+                 backend treats an empty scope_dirs list that way), same
+                 as the desktop dialog's own "Leave all unchecked" hint. -->
+            <div>
+              <div style="font-size:11px;color:var(--dim);margin-bottom:4px">Scope directories (optional)</div>
+              <div style="font-size:11px;color:var(--dim);margin-bottom:4px;font-style:italic">Check directories to focus analysis on. Leave all unchecked to search everything.</div>
+              <div id="ntScopeDirs" style="max-height:130px;overflow-y:auto;background:var(--surface);
+                border:1px solid var(--border);border-radius:8px;padding:6px 4px;font-size:12px">
+                <div class="spinner" style="margin:6px auto"></div>
+              </div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+              <div>
+                <div style="font-size:11px;color:var(--dim);margin-bottom:4px">Schedule</div>
+                <select id="ntSchedule" onchange="_toggleScheduleFields()"
+                  style="width:100%;background:var(--surface);border:1px solid var(--border);
+                  border-radius:8px;padding:10px 12px;color:var(--text);font-size:14px;outline:none;">
+                  <option value="none">Run once</option>
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="biweekly">Biweekly</option>
+                  <option value="monthly">Monthly</option>
+                </select>
+              </div>
+              <div>
+                <div style="font-size:11px;color:var(--dim);margin-bottom:4px">First due date</div>
+                <input id="ntFirstDue" type="date"
+                  style="width:100%;background:var(--surface);border:1px solid var(--border);
+                  border-radius:8px;padding:10px 12px;color:var(--text);font-size:13px;outline:none;">
+              </div>
+            </div>
+
+            <!-- Day of week — only meaningful (and only shown) for
+                 weekly/biweekly/monthly. Pins next_due to a specific
+                 weekday instead of drifting off whatever weekday
+                 first_due happens to land on — the desktop dialog's
+                 "(stagger tasks to spread credit usage)" hint. -->
+            <div id="ntDowRow" style="display:none">
+              <div style="font-size:11px;color:var(--dim);margin-bottom:4px">Day of week <span style="font-style:italic">(stagger tasks to spread credit usage)</span></div>
+              <select id="ntDayOfWeek"
+                style="width:100%;background:var(--surface);border:1px solid var(--border);
+                border-radius:8px;padding:10px 12px;color:var(--text);font-size:14px;outline:none;">
+                <option value="">Not pinned</option>
+                <option value="0">Monday</option>
+                <option value="1">Tuesday</option>
+                <option value="2">Wednesday</option>
+                <option value="3">Thursday</option>
+                <option value="4">Friday</option>
+                <option value="5">Saturday</option>
+                <option value="6">Sunday</option>
+              </select>
+            </div>
+
+            <!-- Daily-only settings: start/end time and how many evenly-
+                 spaced runs per day, with a live preview computed by the
+                 exact same formula custom_tasks_manager.py's
+                 compute_daily_run_times() uses server-side (see
+                 _computeDailyRunTimes below), so this can never drift out
+                 of sync with what actually gets scheduled. -->
+            <div id="ntDailyRow" style="display:none;flex-direction:column;gap:10px;
+              background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 12px">
+              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+                <div>
+                  <div style="font-size:11px;color:var(--dim);margin-bottom:4px">Start time</div>
+                  <input id="ntDailyStart" type="time" value="09:00" oninput="_updateDailyPreview()"
+                    style="width:100%;background:var(--bg);border:1px solid var(--border);
+                    border-radius:8px;padding:8px 10px;color:var(--text);font-size:13px;outline:none;">
+                </div>
+                <div>
+                  <div style="font-size:11px;color:var(--dim);margin-bottom:4px">End time</div>
+                  <input id="ntDailyEnd" type="time" value="17:00" oninput="_updateDailyPreview()"
+                    style="width:100%;background:var(--bg);border:1px solid var(--border);
+                    border-radius:8px;padding:8px 10px;color:var(--text);font-size:13px;outline:none;">
+                </div>
+                <div>
+                  <div style="font-size:11px;color:var(--dim);margin-bottom:4px">Times/day</div>
+                  <input id="ntDailyTimes" type="number" min="1" max="24" value="1" oninput="_updateDailyPreview()"
+                    style="width:100%;background:var(--bg);border:1px solid var(--border);
+                    border-radius:8px;padding:8px 10px;color:var(--text);font-size:13px;outline:none;">
+                </div>
+              </div>
+              <div id="ntDailyPreview" style="font-size:12px;color:var(--accent)"></div>
+              <div id="ntDailyCostWarn" style="display:none;font-size:11px;color:var(--red)">
+                &#9888; More runs per day uses more of your subscription/API usage each time the Autonomous AI Task Queue checks in.
+              </div>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:6px;font-size:13px;">
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                <input type="checkbox" id="ntLearnings" checked> Save key insights to Learnings
+              </label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                <input type="checkbox" id="ntReport"> Save full analysis as Word document (.docx)
+              </label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                <input type="checkbox" id="ntEmail"> Email the analysis
+              </label>
+            </div>
+
+            <div>
+              <div style="font-size:11px;color:var(--dim);margin-bottom:4px">Report folder</div>
+              <input id="ntReportFolder" type="text" placeholder="C:\Users\...\Documents\AI-Prowler_tasks_reports"
+                style="width:100%;background:var(--surface);border:1px solid var(--border);
+                border-radius:8px;padding:10px 12px;color:var(--text);font-size:13px;outline:none;">
+            </div>
+
+            <div id="ntError" style="color:var(--red);font-size:12px;display:none"></div>
+            <div style="display:flex;gap:10px;">
+              <button onclick="cancelNewTask()"
+                style="flex:1;background:var(--surface);border:1px solid var(--border);
+                color:var(--text);border-radius:8px;padding:10px;font-size:14px;cursor:pointer;">
+                Cancel</button>
+              <button onclick="submitNewTask()" id="taskFormSubmitBtn"
+                style="flex:2;background:var(--accent);border:none;color:#fff;
+                border-radius:8px;padding:10px;font-size:14px;font-weight:700;cursor:pointer;">
+                &#10003; Create Task</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Queue Status Panel -->
+      <div class="card" id="queuePanel" style="border-color:rgba(155,93,229,.3);background:rgba(155,93,229,.05)">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <div style="font-size:12px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;flex:1">
+            &#9654; Task Queue
+          </div>
+          <span id="queueCount" style="font-size:11px;color:var(--dim)">Loading&#8230;</span>
+          <button id="queueClearBtn" onclick="clearQueue()" style="display:none;
+            background:none;border:1px solid var(--red);color:var(--red);
+            border-radius:6px;padding:2px 10px;font-size:11px;cursor:pointer">
+            &#128465; Clear All
+          </button>
+        </div>
+        <div id="queueItems"><div class="spinner" style="margin:8px auto"></div></div>
+      </div>
+
+      <!-- Custom tasks (queue status shown inline per task) -->
+      <div id="taskList"><div class="spinner"></div></div>
+    </div>
+
+    <!-- System -->
+    <div class="screen" id="screenSystem">
+      <div class="card">
+        <div class="card-title">AI-Prowler Status</div>
+        <div id="sysStatus"><div class="spinner"></div></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Database Stats</div>
+        <div id="sysDb"><div class="spinner"></div></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Navbar -->
+  <div class="navbar">
+    <button class="nav-btn active" id="navDash" onclick="switchTab('dash')">
+      <span class="ni">&#127968;</span>Dashboard
+    </button>
+    <button class="nav-btn" id="navFiles" onclick="switchTab('files')">
+      <span class="ni">&#128193;</span>Files
+    </button>
+    <button class="nav-btn" id="navSearch" onclick="switchTab('search')">
+      <span class="ni">&#128269;</span>Search
+    </button>
+    <button class="nav-btn" id="navPerms" onclick="switchTab('perms')">
+      <span class="ni">&#128274;</span>Perms
+    </button>
+    <button class="nav-btn" id="navLearn" onclick="switchTab('learn')">
+      <span class="ni">&#129504;</span>Learn
+    </button>
+    <button class="nav-btn" id="navTasks" onclick="switchTab('tasks')">
+      <span class="ni">&#128203;</span>Tasks
+    </button>
+    <button class="nav-btn" id="navSystem" onclick="switchTab('system')">
+      <span class="ni">&#9881;</span>System
+    </button>
+  </div>
+</div>
+
+<!-- Re-auth modal -->
+<div class="modal-overlay" id="reAuthModal">
+  <div class="modal">
+    <div class="modal-title">&#128274; Confirm Write Access</div>
+    <div class="modal-path" id="raPath"></div>
+    <div class="modal-warn">
+      <strong>Warning:</strong> This allows Claude to modify files in
+      this directory. Re-enter your Bearer token to confirm.
+    </div>
+    <div class="modal-inp-wrap">
+      <input type="password" id="raInput" placeholder="Re-enter Bearer token"
+        onkeydown="if(event.key==='Enter')confirmGrant()">
+      <button class="show-btn" onclick="toggleShow()">&#128065;</button>
+    </div>
+    <div class="modal-err" id="raErr"></div>
+    <div class="modal-locked" id="raLocked"></div>
+    <div class="modal-btns">
+      <button class="btn-cancel" onclick="closeReAuth()">Cancel</button>
+      <button class="btn-confirm" id="raConfirm" onclick="confirmGrant()">Grant Access</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────
+let BEARER = '';
+let ownerName = '', serverMode = false;
+let dirStack = [];
+let raAttempts = 0, raLockUntil = 0;
+let raDirPath = null, raId = null, raCb = null;
+const TABS = ['Dash','Files','Search','Perms','Learn','Tasks','System'];
+
+// ── Token ─────────────────────────────────────────────────────────────────
+async function loadToken() {
+  try {
+    const r = await fetch('/pwa-token');
+    if (r.ok) {
+      const d = await r.json();
+      BEARER = d.token || '';
+      ownerName = d.owner_name || '';
+      serverMode = (d.mode || 'personal') === 'server';
+    }
+  } catch(e) {}
+}
+
+// ── Auth ──────────────────────────────────────────────────────────────────
+async function doAuth() {
+  const v = document.getElementById('authInput').value.trim();
+  document.getElementById('authErr').style.display = 'none';
+  if (!v) return;
+  if (!BEARER) await loadToken();
+  if (v !== BEARER) {
+    document.getElementById('authErr').style.display = 'block';
+    document.getElementById('authInput').value = '';
+    return;
+  }
+  sessionStorage.setItem('ap_remote', JSON.stringify({ token: BEARER }));
+  boot();
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────
+function boot() {
+  document.getElementById('authScreen').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+  document.getElementById('topbarSub').textContent =
+    serverMode ? 'Server Mode' : (ownerName || 'Owner') + ' \u00b7 Personal';
+  setConn(false);
+  loadDash();
+  loadFilesList();
+  loadPerms();
+  loadLearnings();
+  // Inline delegation — no external function dependency
+  (function(){
+    var sc=document.getElementById('screenTasks');
+    if(!sc||sc._del)return; sc._del=true;
+    sc.addEventListener('click',function(e){
+      var b=e.target.closest('button[data-action]'); if(!b)return;
+      var a=b.getAttribute('data-action'),id=b.getAttribute('data-id');
+      dbg('Button clicked: action='+a+' id='+id,'#44aaff');
+      if(a==='queue')        runTaskNow(id);
+      if(a==='edit')         editTask(id);
+      if(a==='delete')       deleteTask(id);
+      if(a==='remove')       removeFromQueue(id);
+      if(a==='remove-queue') removeFromQueue(id);
+    });
+  })();
+  loadTasks();
+  loadSystem();
+
+}
+
+// ── UPDATE-AVAILABLE BANNER ─────────────────────────────────────────────────
+// Found 2026-08-23: this app's service worker (remote/sw.js) was never
+// actually registered anywhere — the only serviceWorker reference in the
+// whole file unregistered any existing one on the login-screen path, and
+// even that never ran on a normal already-logged-in load. remote/sw.js
+// itself is correctly network-first for index.html (only static assets
+// cached), so it just needed to actually be registered to do any good.
+// Registering it now, plus the same "update available" prompt pattern as
+// the Jobs app: the worker's own skipWaiting()/clients.claim() (already in
+// remote/sw.js) mean a new version takes over in the background without
+// needing every tab closed — this banner is the visible signal for an
+// already-open tab that isn't going to pick up the new JS in memory until
+// it actually reloads.
+//
+// "Later" behavior (2026-08-23): dismissing does NOT clear _updatePending —
+// it only hides the banner for the CURRENT tab. switchTab() below calls
+// _maybeReshowUpdateBanner() on every navigation, so switching to a new
+// tab brings the prompt back automatically, repeating until the user
+// actually taps "Refresh Now". This deliberately replaces an earlier
+// version that force-reloaded on its own the moment the new worker took
+// over in the background, regardless of whether the user had clicked
+// Later. Nothing here reloads the page except the user's own tap.
+let _updatePending = false;
+
+function _initUpdateBanner() {
+  if (!('serviceWorker' in navigator)) return;
+
+  navigator.serviceWorker.register('/remote/sw.js').then(reg => {
+    if (reg.waiting && navigator.serviceWorker.controller) {
+      _showUpdateBanner();
+    }
+    reg.addEventListener('updatefound', () => {
+      const newWorker = reg.installing;
+      if (!newWorker) return;
+      newWorker.addEventListener('statechange', () => {
+        if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+          _showUpdateBanner();
+        }
+      });
+    });
+  }).catch(() => {});
+}
+
+function _showUpdateBanner() {
+  _updatePending = true;
+  const el = document.getElementById('updateBanner');
+  if (el) el.classList.add('show');
+}
+
+// "Later" — hide for now. _updatePending stays true so the next tab
+// change (see switchTab()'s _maybeReshowUpdateBanner() call) shows it
+// again; nothing here reloads the page.
+function _dismissUpdateBanner() {
+  const el = document.getElementById('updateBanner');
+  if (el) el.classList.remove('show');
+}
+
+// Called from switchTab() on every in-app navigation — re-nags if an
+// update is still pending and the user hasn't tapped Refresh Now yet.
+function _maybeReshowUpdateBanner() {
+  if (_updatePending) _showUpdateBanner();
+}
+
+function _refreshForUpdate() {
+  window.location.reload();
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────
+(async () => {
+  _initUpdateBanner();
+  await loadToken();
+  const saved = sessionStorage.getItem('ap_remote');
+  if (saved) {
+    try {
+      const s = JSON.parse(saved);
+      if (s.token && s.token === BEARER) { boot(); return; }
+    } catch(e) { sessionStorage.removeItem('ap_remote'); }
+  }
+  document.getElementById('authScreen').style.display = 'flex';
+})();
+
+// ── API ───────────────────────────────────────────────────────────────────
+function dbg(msg, color) {
+  const el = document.getElementById('debugLog');
+  if (!el) return;
+  const ts = new Date().toLocaleTimeString();
+  const c = color || '#ff9900';
+  el.innerHTML += '<span style="color:' + c + '">[' + ts + '] ' +
+    msg.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</span>\n';
+  el.scrollTop = el.scrollHeight;
+}
+
+// The scheduler sends bare calendar dates ("YYYY-MM-DD", no time
+// component) for next_due/last_run/first_due on weekly/monthly/one-time
+// tasks — those have no real time-of-day meaning. Per the ES spec,
+// `new Date("YYYY-MM-DD")` parses that as UTC MIDNIGHT, and formatting
+// it with toLocaleString()/toLocaleDateString() then converts to the
+// browser's LOCAL timezone for display — silently shifting the date
+// backward (and fabricating a nonsense time) for anyone west of UTC.
+// Confirmed directly: a task with next_due "2026-09-03" was displaying
+// as "9/2, 8:00 PM" in US Eastern (UTC-4) — a full day off, with a time
+// that was never actually part of the data at all. Parsing the Y-M-D
+// components directly into a LOCAL Date (instead of going through UTC
+// first) avoids that shift entirely. A string that already carries a
+// time component (contains "T", e.g. the full ISO timestamps used for
+// created_at/completed_at/queued_at) is passed through to normal Date
+// parsing unchanged — those already parse and display correctly.
+function _parseFlexDate(dateStr) {
+  if (!dateStr) return null;
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
+  if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
+  return new Date(dateStr);
+}
+
+async function api(tool, args) {
+  dbg('CALL api(' + tool + ') BEARER=' + (BEARER ? BEARER.slice(0,8)+'...' : 'EMPTY!'));
+  try {
+    const r = await fetch('/remote-api', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + BEARER
+      },
+      body: JSON.stringify({ tool, args: args || {} })
+    });
+    const txt = await r.text();
+    dbg('  HTTP ' + r.status + ' len=' + txt.length + ' raw: ' + txt.slice(0,120),
+        r.ok ? '#44ff44' : '#ff4444');
+    try { return JSON.parse(txt); }
+    catch(e) {
+      dbg('  JSON.parse FAILED: ' + e, '#ff4444');
+      return { ok: false, error: 'Bad JSON from server: ' + txt.slice(0,80) };
+    }
+  } catch(e) {
+    dbg('  FETCH ERROR: ' + e, '#ff4444');
+    return { ok: false, error: String(e) };
+  }
+}
+
+// Download a file — token injected at click time so it's always current
+function downloadFile(path) {
+  if (!BEARER) {
+    alert('Not authenticated. Please refresh and log in again.');
+    return;
+  }
+  const url = '/remote/download?path=' + encodeURIComponent(path) +
+              '&token=' + encodeURIComponent(BEARER);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = path.split('\\').pop() || path.split('/').pop() || 'file';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+// Slow API call with 30s timeout for search/RAG operations
+async function apiSlow(tool, args) {
+  const ctrl = new AbortController();
+  const tid = setTimeout(() => ctrl.abort(), 30000);
+  try {
+    const r = await fetch('/remote-api', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + BEARER },
+      body: JSON.stringify({ tool, args: args || {} }),
+      signal: ctrl.signal,
+    });
+    return r.json();
+  } catch(e) {
+    if (e.name === 'AbortError') return { ok: false, error: 'Search timed out (30s). Try a shorter query.' };
+    throw e;
+  } finally { clearTimeout(tid); }
+}
+
+// Upload a file to a specific directory via /remote/upload
+function triggerUpload(dirPath) {
+  inp.setAttribute('data-dir', dirPath);
+  inp.click();
+}
+
+async function handleUpload(inp) {
+  const file = inp.files[0];
+  const dirPath = inp.getAttribute('data-dir') || '';
+  inp.value = '';  // reset so same file can be re-uploaded
+  if (!file || !dirPath) return;
+  inp.value = '';
+  const statusEl = document.getElementById('uploadStatus');
+  statusEl.style.display = 'block';
+  statusEl.textContent = 'Uploading ' + file.name + '\u2026';
+  statusEl.style.color = 'var(--accent)';
+
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('dir', dirPath);
+    fd.append('token', BEARER);
+    const r = await fetch('/remote/upload', { method: 'POST', body: fd });
+    const data = await r.json().catch(() => ({}));
+    if (r.ok && data.ok) {
+      statusEl.textContent = '\u2705 Uploaded: ' + file.name + ' (' + Math.round((data.size||0)/1024) + ' KB) — indexed into AI-Prowler';
+      statusEl.style.color = 'var(--green)';
+      browseDir(dirPath);  // refresh listing
+    } else {
+      statusEl.textContent = '\u274c Failed: ' + (data.error || ('HTTP ' + r.status));
+      statusEl.style.color = 'var(--red)';
+    }
+  } catch(e) {
+    statusEl.textContent = '\u274c Error: ' + String(e);
+    statusEl.style.color = 'var(--red)';
+  }
+  setTimeout(() => { statusEl.style.display = 'none'; }, 6000);
+}
+
+function setConn(live) {
+  document.getElementById('connDot').className = 'conn-dot' + (live ? ' live' : '');
+}
+
+function toast(msg, dur) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), dur || 2800);
+}
+
+function esc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+function tail(p) {
+  return String(p).split(/[/\\]/).filter(Boolean).pop() || String(p);
+}
+
+// ── Nav ───────────────────────────────────────────────────────────────────
+function switchTab(tab) {
+  const t = tab.charAt(0).toUpperCase() + tab.slice(1);
+  TABS.forEach(x => {
+    document.getElementById('screen'+x).classList.toggle('active', x === t);
+    document.getElementById('nav'+x).classList.toggle('active', x === t);
+  });
+  // Reload on-demand when tab becomes visible
+  if (tab === 'tasks')  loadTasks();
+  if (tab === 'learn')  loadLearnings();
+  _maybeReshowUpdateBanner();
+}
+
+// ── Dashboard ─────────────────────────────────────────────────────────────
+async function loadDash() {
+  try {
+    const r = await api('check_ai_prowler_status');
+    if (r.ok) {
+      setConn(true);
+      const txt = r.result || '';
+      const m = (p) => (txt.match(p) || ['','—'])[1];
+      document.getElementById('dChunks').textContent =
+        m(/Chunks\s*:\s*([\d,]+)/).replace(/,/g,'');
+      document.getElementById('dPaths').textContent =
+        m(/Tracked paths\s*:\s*(\d+)/);
+      document.getElementById('dDocs').textContent =
+        m(/(\d+)\s+file/);
+      document.getElementById('dStatus').textContent = 'OK';
+    } else {
+      document.getElementById('dStatus').textContent = 'ERR';
+    }
+  } catch(e) {
+    document.getElementById('dStatus').textContent = '???';
+  }
+}
+
+// ── Files ─────────────────────────────────────────────────────────────────
+// Upload-focused: flat list of tracked dirs, each with an Upload button.
+// No drill-down needed — pick a folder, pick a file, it uploads and indexes.
+async function loadFilesList() {
+  const el = document.getElementById('fileList');
+  el.innerHTML = '<div class="spinner"></div>';
+  try {
+    // Fetch both tracked and writable dirs in parallel
+    const [rTracked, rWritable] = await Promise.all([
+      api('list_tracked_directories'),
+      api('list_writable_directories'),
+    ]);
+    if (!rTracked.ok) { el.innerHTML = '<div class="empty">Cannot load directories</div>'; return; }
+
+    // Parse writable set — lines containing [W]
+    const wSet = new Set(
+      (rWritable.result||'').split('\n')
+        .filter(l => l.includes('[W]'))
+        .map(l => l.replace(/[^\x20-\x7E]/g,'').replace('[W]','').trim().toLowerCase())
+        .filter(l => l.length > 2)
+    );
+
+    const dirs = (rTracked.result||'').split('\n').map(l => {
+      return l.replace(/[^\x20-\x7E]/g,'').trim().replace(/^\d+\.\s*/, '').trim();
+    }).filter(l => l.length > 3 && /[:\\/]/.test(l));
+
+    if (!dirs.length) { el.innerHTML = '<div class="empty">No tracked directories</div>'; return; }
+
+    el.innerHTML = '<div class="card">' + dirs.map((d, i) => {
+      const isW = wSet.has(d.toLowerCase());
+      // Use label wrapping a file input — guaranteed to work on all mobile browsers
+      // The label click IS the file input click — no programmatic .click() needed
+      const uid = 'upl_' + i;
+      const action = isW
+        ? '<label for="' + uid + '" class="btn-primary" ' +
+          'style="width:auto;padding:6px 12px;font-size:12px;border-radius:8px;cursor:pointer;display:inline-block">' +
+          '&#128247; Upload' +
+          '<input type="file" id="' + uid + '" accept="*/*" ' +
+          'style="display:none" ' +
+          'data-dir="' + esc(d) + '" ' +
+          'onchange="handleUpload(this)">' +
+          '</label>'
+        : '<span style="font-size:11px;color:var(--dim)">&#128274; Read only</span>';
+      return '<div class="row">' +
+        '<div class="ri">&#128193;</div>' +
+        '<div class="rm">' +
+          '<div class="rn">' + esc(tail(d)) + (isW ? '' : ' <span style="font-size:10px;color:var(--dim)">[R]</span>') + '</div>' +
+          '<div class="rs" style="font-size:10px;font-family:monospace">' + esc(d) + '</div>' +
+        '</div>' +
+        '<div class="ra">' + action + '</div>' +
+      '</div>';
+    }).join('') + '</div>';
+  } catch(e) { el.innerHTML = '<div class="empty">Error: ' + esc(String(e)) + '</div>'; }
+}
+
+// pickUpload replaced by label+input pattern
+
+// Stub — kept for any remaining references
+function browseDir(d) { loadFilesList(); }
+function previewFile(path, name) {
+  var ext = (name || path).split('.').pop().toLowerCase();
+  var previewEl      = document.getElementById('previewWrap');
+  var previewContent = document.getElementById('previewBody');
+  var previewTitle   = document.getElementById('previewName');
+  if (!previewEl || !previewContent) { downloadFile(path, name); return; }
+  if (previewTitle) previewTitle.textContent = name || path.split('/').pop();
+  previewEl.style.display = 'block';
+  var imgExts = ['png','jpg','jpeg','gif','webp','svg'];
+  var txtExts = ['txt','md','log','json','py','js','html','css','csv'];
+  if (imgExts.indexOf(ext) !== -1) {
+    previewContent.innerHTML = '<img src="/remote/download?path=' + encodeURIComponent(path) +
+      '" style="max-width:100%;border-radius:8px" alt="' + esc(name||'') + '">';
+  } else if (txtExts.indexOf(ext) !== -1) {
+    previewContent.innerHTML = '<div class="spinner"></div>';
+    api('read_file_lines', { filepath: path, max_lines: 100 }).then(function(r) {
+      previewContent.innerHTML = r.ok
+        ? '<pre style="font-size:12px;white-space:pre-wrap;word-break:break-all">' + esc(r.result||'') + '</pre>'
+        : '<div class="empty">Could not preview file</div>';
+    });
+  } else {
+    previewContent.innerHTML = '<div class="empty"><p>No preview for .' + esc(ext) + ' files.</p></div>';
+  }
+}
+
+function closePreview() {}
+
+// ── Search ────────────────────────────────────────────────────────────────
+async function doSearch() {
+  const q = document.getElementById('searchInput').value.trim();
+  if (!q) return;
+  const el = document.getElementById('searchResults');
+  el.innerHTML = '<div class="spinner"></div>';
+  try {
+    // search_documents: query (str), n_results (int, default 5)
+    const r = await apiSlow('search_documents', { query: q, n_results: 8 });
+    if (!r.ok) {
+      el.innerHTML = '<div class="empty">Search error: ' + esc(r.error||'unknown') + '</div>';
+      return;
+    }
+    const txt = (r.result || '').trim();
+    if (!txt) { el.innerHTML = '<div class="empty">No results found for: ' + esc(q) + '</div>'; return; }
+    // Results are separated by blank lines — each block is one result
+    const blocks = txt.split(/\n\s*\n/).filter(b => b.trim());
+    if (!blocks.length) { el.innerHTML = '<div class="empty">No results</div>'; return; }
+    el.innerHTML = '<div class="card">' + blocks.map((b, i) => {
+      const lines = b.trim().split('\n');
+      const title = lines[0] || '';
+      const snippet = lines.slice(1).join(' ').trim();
+      return '<div class="row" style="align-items:flex-start">' +
+        '<div class="ri" style="margin-top:2px">&#128196;</div>' +
+        '<div class="rm">' +
+          '<div class="rn" style="white-space:normal;font-size:13px">' + esc(title) + '</div>' +
+          (snippet ? '<div class="rs" style="white-space:normal;margin-top:4px">' + esc(snippet.slice(0,180)) + '</div>' : '') +
+        '</div></div>';
+    }).join('') + '</div>';
+  } catch(e) { el.innerHTML = '<div class="empty">Search error: ' + esc(String(e)) + '</div>'; }
+}
+
+// ── Permissions ───────────────────────────────────────────────────────────
+async function loadPerms() {
+  const el = document.getElementById('permList');
+  try {
+    const [tracked, writable] = await Promise.all([
+      api('list_tracked_directories'),
+      api('list_writable_directories')
+    ]);
+    // list_writable_directories format:
+    //   "  ✅ [W]  C:\path"  -> after stripping non-ASCII -> "  [W]  C:\path"
+    //   "  📖 [R]  C:\path"  -> after stripping non-ASCII -> "  [R]  C:\path"
+    // Extract writable paths (lines containing [W])
+    const wSet = new Set(
+      (writable.result||'').split('\n')
+        .filter(l => l.includes('[W]'))
+        .map(l => l.replace(/[^\x20-\x7E]/g,'')
+                   .replace(/\[W\]/, '').trim().toLowerCase())
+        .filter(l => l.length > 2)
+    );
+    // list_tracked_directories format:
+    //   "  1. 📁 C:\path"  -> after stripping -> "1. C:\path" -> strip number -> "C:\path"
+    const dirs = (tracked.result||'').split('\n')
+      .map(l => l.replace(/[^\x20-\x7E]/g,'').trim()
+                  .replace(/^\d+\.\s*/, '').trim())
+      .filter(l => l.length > 3 && /[:\\\/]/.test(l));
+
+    if (!dirs.length) { el.innerHTML = '<div class="empty">No tracked directories</div>'; return; }
+    // Event delegation — inline onchange unreliable on iOS Safari
+    el.innerHTML = '<div class="card" id="permCard">' + dirs.map((p, i) => {
+      const isW = wSet.has(p.toLowerCase());
+      return '<div class="row">' +
+        '<div class="ri">&#128193;</div>' +
+        '<div class="rm">' +
+          '<div class="rn">' + esc(tail(p)) + '</div>' +
+          '<div class="rs" style="font-family:monospace;font-size:9px">' + esc(p) + '</div>' +
+        '</div>' +
+        '<div class="ra" style="display:flex;align-items:center;gap:8px">' +
+          '<span class="badge ' + (isW?'badge-w':'badge-r') + '" id="pb'+i+'">' + (isW?'R+W':'R') + '</span>' +
+          '<label class="perm-toggle" style="cursor:pointer">' +
+            '<input type="checkbox" id="pc'+i+'" ' + (isW?'checked':'') +
+            ' data-path="' + esc(p) + '" data-idx="' + i + '" class="perm-cb">' +
+            '<span class="perm-slider"></span>' +
+          '</label>' +
+        '</div></div>';
+    }).join('') + '</div>';
+    // Delegated listener on the card container
+    document.getElementById('permCard').addEventListener('change', function(ev) {
+      if (ev.target && ev.target.classList.contains('perm-cb')) {
+        onPerm(ev.target,
+               ev.target.getAttribute('data-path'),
+               ev.target.getAttribute('data-idx'));
+      }
+    });
+  } catch(e) { el.innerHTML = '<div class="empty">Error loading permissions</div>'; }
+}
+
+async function onPerm(cb, path, id) {
+  if (!cb.checked) {
+    cb.disabled = true;
+    try {
+      const r = await api('revoke_write_access', { directory: path });
+      if (r.ok) {
+        document.getElementById('pb'+id).className = 'badge badge-r';
+        document.getElementById('pb'+id).textContent = 'R';
+        toast('&#128274; Write access revoked');
+      } else {
+        cb.checked = true;
+        toast('&#10060; ' + (r.error || 'Failed to revoke'));
+      }
+    } catch(e) { cb.checked = true; }
+    cb.disabled = false;
+  } else {
+    cb.checked = false;
+    raDirPath = path; raId = id; raCb = cb;
+    document.getElementById('raPath').textContent = path;
+    document.getElementById('raInput').value = '';
+    document.getElementById('raErr').style.display = 'none';
+    document.getElementById('raLocked').style.display = 'none';
+    document.getElementById('raConfirm').disabled = false;
+    raAttempts = 0;
+    document.getElementById('reAuthModal').classList.add('show');
+    setTimeout(() => document.getElementById('raInput').focus(), 120);
+  }
+}
+
+// ── Re-auth modal ─────────────────────────────────────────────────────────
+function closeReAuth() {
+  document.getElementById('reAuthModal').classList.remove('show');
+  raDirPath = raId = raCb = null;
+}
+
+function toggleShow() {
+  const inp = document.getElementById('raInput');
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+}
+
+async function confirmGrant() {
+  if (Date.now() < raLockUntil) {
+    const s = Math.ceil((raLockUntil - Date.now()) / 1000);
+    document.getElementById('raLocked').textContent = 'Locked for ' + s + 's';
+    document.getElementById('raLocked').style.display = 'block';
+    return;
+  }
+  const v = document.getElementById('raInput').value;
+  if (v !== BEARER) {
+    raAttempts++;
+    document.getElementById('raErr').textContent =
+      'Incorrect token (' + raAttempts + '/3)';
+    document.getElementById('raErr').style.display = 'block';
+    document.getElementById('raInput').value = '';
+    if (raAttempts >= 3) {
+      raLockUntil = Date.now() + 30000;
+      document.getElementById('raConfirm').disabled = true;
+      document.getElementById('raLocked').textContent = 'Too many attempts. Locked 30s.';
+      document.getElementById('raLocked').style.display = 'block';
+      setTimeout(() => {
+        document.getElementById('raConfirm').disabled = false;
+        document.getElementById('raLocked').style.display = 'none';
+        raAttempts = 0;
+      }, 30000);
+    }
+    return;
+  }
+  document.getElementById('raConfirm').disabled = true;
+  try {
+    const r = await api('grant_write_access', { directory: raDirPath });
+    if (r.ok) {
+      if (raCb) raCb.checked = true;
+      if (raId !== null) {
+        document.getElementById('pb'+raId).className = 'badge badge-w';
+        document.getElementById('pb'+raId).textContent = 'R+W';
+      }
+      toast('&#9989; Write access granted');
+      closeReAuth();
+    } else {
+      document.getElementById('raErr').textContent = r.error || 'Failed';
+      document.getElementById('raErr').style.display = 'block';
+      document.getElementById('raConfirm').disabled = false;
+    }
+  } catch(e) {
+    document.getElementById('raErr').textContent = 'Network error';
+    document.getElementById('raErr').style.display = 'block';
+    document.getElementById('raConfirm').disabled = false;
+  }
+}
+
+// ── System ────────────────────────────────────────────────────────────────
+async function loadSystem() {
+  const fmt = (txt) => {
+    const lines = (txt||'').split('\n').filter(l => l.trim());
+    return lines.length
+      ? lines.map(l => '<div class="sys-line">' + esc(l) + '</div>').join('')
+      : '<div class="empty">No data</div>';
+  };
+  try {
+    const [st, db] = await Promise.all([
+      api('check_ai_prowler_status'),
+      api('get_database_stats')
+    ]);
+    document.getElementById('sysStatus').innerHTML = fmt(st.result);
+    document.getElementById('sysDb').innerHTML = fmt(db.result);
+    setConn(true);
+  } catch(e) {
+    document.getElementById('sysStatus').innerHTML = '<div class="empty">Could not load</div>';
+    document.getElementById('sysDb').innerHTML = '<div class="empty">Could not load</div>';
+  }
+}
+
+// ── Task Queue ─────────────────────────────────────────────────────────────
+// Holds current pending queue entries keyed by source_id for inline display
+let _pendingBySourceId = {};
+
+async function loadTasks() {
+  dbg('loadTasks() called, BEARER=' + (BEARER ? BEARER.slice(0,8)+'...' : 'EMPTY!'));
+  try {
+    const rp = await api('get_all_queued_tasks');
+    dbg('get_all_queued_tasks: ok='+rp.ok+' preview='+String(rp.result||'').slice(0,60));
+    _pendingBySourceId = {};
+    if (rp.ok) {
+      const txt = (rp.result || '').trim();
+      try {
+        const items = JSON.parse(txt);
+        if (Array.isArray(items)) {
+          items.forEach(function(t) {
+            const sid = t.source_id || t.task_id;
+            if (sid) _pendingBySourceId[sid] = t;
+          });
+          renderQueuePanel(items);
+        } else { renderQueuePanel([]); }
+      } catch(e) { renderQueuePanel([]); }
+    } else { renderQueuePanel([]); }
+  } catch(e) { renderQueuePanel([]); }
+  await loadAllTasks();
+}
+
+function renderQueuePanel(items) {
+  const countEl  = document.getElementById('queueCount');
+  const itemsEl  = document.getElementById('queueItems');
+  const clearBtn = document.getElementById('queueClearBtn');
+  if (!countEl || !itemsEl) return;
+  if (!items || !items.length) {
+    countEl.textContent = 'Empty';
+    if (clearBtn) clearBtn.style.display = 'none';
+    itemsEl.innerHTML = '<div style="font-size:12px;color:var(--dim);padding:4px 0">No tasks in queue. Tap &#9654; Queue on any task to add it.</div>';
+    return;
+  }
+  countEl.textContent = items.length + ' item' + (items.length > 1 ? 's' : '') + ' queued';
+  if (clearBtn) clearBtn.style.display = 'inline-block';
+  itemsEl.innerHTML = items.map(function(t) {
+    const ago = t.queued_at ? _timeAgo(t.queued_at) : (t.created_at ? _timeAgo(t.created_at) : '');
+    // Date-only, no time — next_due for weekly/monthly/one-time tasks
+    // has no real time-of-day component (see _parseFlexDate above), so
+    // showing hour:minute here was always displaying a fabricated time
+    // that never existed in the underlying data.
+    const due = t.next_due ? _parseFlexDate(t.next_due).toLocaleDateString([], {month:'numeric',day:'numeric'}) : '';
+    const isPastDue = t.next_due && _parseFlexDate(t.next_due) <= new Date();
+    return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">' +
+      '<span style="font-size:14px">&#9654;</span>' +
+      '<div style="flex:1;min-width:0">' +
+        '<div style="font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(t.label || t.task_id) + '</div>' +
+        '<div style="font-size:11px;color:var(--dim);display:flex;gap:8px;flex-wrap:wrap">' +
+          (ago ? '<span>Queued ' + ago + '</span>' : '') +
+          (due ? '<span style="color:' + (isPastDue ? 'var(--green)' : 'var(--dim)') + '">&#128197; Due ' + due + '</span>' : '') +
+        '</div>' +
+      '</div>' +
+      '<button data-action="remove-queue" data-id="' + esc(t.task_id) + '" ' +
+        'style="background:none;border:1px solid var(--border);color:var(--dim);border-radius:5px;padding:2px 8px;font-size:11px;cursor:pointer;flex-shrink:0">&#10005;</button>' +
+    '</div>';
+  }).join('');
+}
+
+async function loadAllTasks() {
+  const el = document.getElementById('taskList');
+  const countEl = document.getElementById('taskCount');
+  if (!el) return;
+  el.innerHTML = '<div class="spinner"></div>';
+  try {
+    const r = await api('list_analysis_tasks');
+    dbg('list_analysis_tasks: ok=' + r.ok + ' result type=' + typeof r.result + ' preview=' + String(r.result||'').slice(0,80));
+    if (!r.ok) { el.innerHTML = '<div class="empty">Could not load tasks: ' + esc(r.error||'') + '</div>'; return; }
+    let tasks = [];
+    try {
+      const parsed = JSON.parse(r.result || '{}');
+      dbg('parsed tasks count=' + (parsed.tasks||[]).length + ' total=' + parsed.total_count);
+      tasks = parsed.tasks || [];
+      if (countEl) countEl.textContent = parsed.total_count + ' / ' + (parsed.max_tasks || 25) + ' tasks';
+    } catch(e) {
+      dbg('JSON.parse of result FAILED: ' + e, '#ff4444');
+      el.innerHTML = '<div class="card"><div style="font-size:12px;color:var(--dim);white-space:pre-wrap">' + esc((r.result||'').slice(0,1000)) + '</div></div>';
+      return;
+    }
+    if (!tasks.length) {
+      el.innerHTML = '<div class="card"><div class="empty">No custom tasks yet — tap + New Task to create one</div></div>';
+      return;
+    }
+    const overdue   = tasks.filter(function(t){ return t.is_due && t.schedule !== 'none'; });
+    const due       = tasks.filter(function(t){ return t.is_due && t.schedule === 'none'; });
+    const scheduled = tasks.filter(function(t){ return !t.is_due && t.schedule !== 'none'; });
+    const once      = tasks.filter(function(t){ return !t.is_due && t.schedule === 'none'; });
+    let html = '';
+    if (overdue.length || due.length) {
+      html += '<div class="card" style="border-color:rgba(255,77,109,.3);background:rgba(255,77,109,.05)">' +
+        '<div class="card-title" style="color:var(--red)">&#9888; Due Now (' + (overdue.length + due.length) + ')</div>' +
+        overdue.concat(due).map(function(t){ return renderTaskCard(t, true); }).join('') + '</div>';
+    }
+    if (scheduled.length) {
+      html += '<div class="card"><div class="card-title">&#128197; Scheduled (' + scheduled.length + ')</div>' +
+        scheduled.map(function(t){ return renderTaskCard(t, false); }).join('') + '</div>';
+    }
+    if (once.length) {
+      html += '<div class="card"><div class="card-title">&#128203; Completed / One-off (' + once.length + ')</div>' +
+        once.map(function(t){ return renderTaskCard(t, false); }).join('') + '</div>';
+    }
+    el.innerHTML = html;
+  } catch(e) { el.innerHTML = '<div class="empty">Error: ' + esc(String(e)) + '</div>'; }
+}
+
+function renderTaskCard(t, isDue) {
+  dbg('renderTaskCard: task_id=' + t.task_id + ' label=' + t.label);
+  const schedColor = isDue ? 'var(--red)' : (t.schedule !== 'none' ? 'var(--cyan)' : 'var(--dim)');
+  const schedLabel = t.schedule === 'none' ? 'Once' : t.schedule.charAt(0).toUpperCase() + t.schedule.slice(1);
+  const nextDue = t.next_due ? _parseFlexDate(t.next_due).toLocaleDateString() : null;
+  const lastRun = t.last_run ? _parseFlexDate(t.last_run).toLocaleDateString() : null;
+  const statusOk = t.last_status === 'completed';
+  const qEntry = _pendingBySourceId[t.task_id];
+  const inQueue = !!qEntry;
+  const qDue = qEntry && qEntry.next_due ? _parseFlexDate(qEntry.next_due).toLocaleDateString() : null;
+  const queuedAgo = qEntry && qEntry.queued_at ? _timeAgo(qEntry.queued_at) : null;
+  const badges = [];
+  if (t.output_email)     badges.push('<span style="font-size:10px;color:var(--dim)">&#128140; Email</span>');
+  if (t.output_learnings) badges.push('<span style="font-size:10px;color:var(--dim)">&#129504; Learnings</span>');
+  if (t.output_report)    badges.push('<span style="font-size:10px;color:var(--dim)">&#128196; Report</span>');
+  const queueBanner = inQueue
+    ? '<div style="font-size:11px;color:var(--yellow);margin-top:4px;display:flex;align-items:center;gap:6px">' +
+        '<span>&#9654; In queue</span>' +
+        (queuedAgo ? '<span style="color:var(--dim2)">' + esc(queuedAgo) + '</span>' : '') +
+        (qDue ? '<span style="color:var(--dim)">&#128197; Due ' + esc(qDue) + '</span>' : '') +
+        '<button data-action="remove-queue" data-id="' + esc(qEntry.task_id) + '" ' +
+          'style="background:none;border:1px solid var(--dim2);color:var(--dim);border-radius:5px;padding:1px 7px;font-size:10px;cursor:pointer;margin-left:4px">&#10005; Remove</button>' +
+      '</div>'
+    : '';
+  return '<div style="padding:10px 0;border-bottom:1px solid var(--border)" data-task-id="' + esc(t.task_id) + '">' +
+    '<div style="display:flex;align-items:flex-start;gap:8px">' +
+      '<div style="flex:1;min-width:0">' +
+        '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px">' +
+          '<span style="font-size:14px;font-weight:700">' + esc(t.label) + '</span>' +
+          '<span style="font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;background:rgba(0,0,0,.3);color:' + schedColor + '">' + schedLabel + '</span>' +
+          (isDue ? '<span style="font-size:10px;font-weight:700;color:var(--red)">&#9888; OVERDUE</span>' : '') +
+        '</div>' +
+        '<div style="font-size:11px;color:var(--dim);display:flex;gap:10px;flex-wrap:wrap">' +
+          (nextDue && !isDue ? '<span>Next: ' + esc(nextDue) + '</span>' : '') +
+          (lastRun ? '<span>' + (statusOk ? '&#10003;' : '&#9888;') + ' Last: ' + esc(lastRun) + '</span>' : '') +
+          badges.join('') +
+        '</div>' +
+        queueBanner +
+      '</div>' +
+      '<div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0">' +
+        '<button data-action="queue" data-id="' + esc(t.task_id) + '" ' +
+          'style="background:' + (inQueue ? 'var(--dim2)' : 'var(--accent)') + ';border:none;color:#fff;border-radius:6px;padding:5px 12px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">' +
+          '&#9654; ' + (inQueue ? 'Re-Queue' : 'Queue') + '</button>' +
+        '<button data-action="edit" data-id="' + esc(t.task_id) + '" ' +
+          'style="background:var(--surface);border:1px solid var(--accent);color:var(--accent);border-radius:6px;padding:3px 12px;font-size:11px;cursor:pointer;white-space:nowrap">' +
+          '&#9998; Edit</button>' +
+        '<button data-action="delete" data-id="' + esc(t.task_id) + '" ' +
+          'style="background:var(--surface);border:1px solid var(--red);color:var(--red);border-radius:6px;padding:3px 12px;font-size:11px;cursor:pointer;white-space:nowrap">' +
+          '&#128465; Delete</button>' +
+      '</div>' +
+    '</div>' +
+  '</div>';
+}
+
+function _timeAgo(iso) {
+  try {
+    const diff = Date.now() - new Date(iso).getTime();
+    const mins = Math.floor(diff / 60000);
+    const hrs  = Math.floor(mins / 60);
+    const days = Math.floor(hrs / 24);
+    if (days > 0)  return days + 'd ago';
+    if (hrs > 0)   return hrs + 'h ago';
+    if (mins > 0)  return mins + 'm ago';
+    return 'just now';
+  } catch(e) { return ''; }
+}
+
+async function syncTasks() {
+  toast('⏳ Syncing queue…');
+  try {
+    const r = await api('sync_due_tasks_to_queue');
+    toast(r.ok ? '✅ Queue synced' : '❌ ' + (r.error || 'Sync failed'));
+    await loadTasks();
+  } catch(e) { toast('❌ Error: ' + String(e)); }
+}
+
+async function runTaskNow(taskId) {
+  dbg('Queue button clicked: taskId=' + taskId, '#44aaff');
+  toast('⏳ Queuing task…');
+  try {
+    const r = await api('queue_single_task', { task_id: taskId });
+    dbg('queue_single_task result: ok=' + r.ok + ' result=' + JSON.stringify(r).slice(0,100));
+    if (r.ok) {
+      toast('✅ ' + (r.result || 'Task queued').slice(0,80));
+    } else {
+      toast('❌ ' + (r.error || 'Failed to queue task'));
+    }
+    await loadTasks();
+  } catch(e) {
+    dbg('runTaskNow EXCEPTION: ' + e, '#ff4444');
+    toast('❌ Error: ' + String(e));
+  }
+}
+
+async function editTask(taskId) {
+  dbg('Edit button clicked: taskId=' + taskId, '#44aaff');
+  toast('⏳ Loading task…');
+  try {
+    const r = await apiSlow('list_analysis_tasks');
+    if (!r.ok) { toast('❌ Could not load task for editing'); return; }
+    let t = null;
+    try {
+      const parsed = JSON.parse(r.result || '{}');
+      t = (parsed.tasks || []).find(function(x){ return x.task_id === taskId; });
+    } catch(e) {}
+    if (!t) { toast('❌ Task not found: ' + taskId); return; }
+    _editingTaskId = taskId;
+    document.getElementById('taskFormTitle').textContent = '✎ Edit Task';
+    document.getElementById('taskFormSubmitBtn').textContent = '✓ Save Changes';
+    document.getElementById('ntLabel').value    = t.label   || '';
+    document.getElementById('ntPrompt').value   = t.prompt  || '';
+    document.getElementById('ntSchedule').value = t.schedule || 'none';
+    document.getElementById('ntLearnings').checked = !!t.output_learnings;
+    document.getElementById('ntReport').checked    = !!t.output_report;
+    document.getElementById('ntEmail').checked     = !!t.output_email;
+    document.getElementById('ntReportFolder').value = t.report_folder || '';
+    document.getElementById('ntDayOfWeek').value =
+      (t.schedule_day_of_week === null || t.schedule_day_of_week === undefined) ? '' : String(t.schedule_day_of_week);
+    document.getElementById('ntDailyStart').value = t.daily_start_time || '09:00';
+    document.getElementById('ntDailyEnd').value   = t.daily_end_time   || '17:00';
+    document.getElementById('ntDailyTimes').value = t.daily_times_per_day || 1;
+    if (t.next_due) {
+      // Not just a display bug here — this populates an editable date
+      // input. With the old UTC-then-local-shift bug, opening the edit
+      // form for this task and saving WITHOUT touching the date field
+      // would have silently written back a due date one day earlier
+      // than what was actually stored. ntFirstDue is a plain type="date"
+      // input now (not datetime-local) — first_due/next_due are always
+      // bare calendar dates server-side, so there's no time component to
+      // round-trip here at all.
+      const dt  = _parseFlexDate(t.next_due);
+      const pad = function(n){ return String(n).padStart(2, '0'); };
+      document.getElementById('ntFirstDue').value =
+        dt.getFullYear() + '-' + pad(dt.getMonth()+1) + '-' + pad(dt.getDate());
+    } else {
+      document.getElementById('ntFirstDue').value = '';
+    }
+    document.getElementById('ntError').style.display = 'none';
+    _toggleScheduleFields();
+    await _loadScopeDirCheckboxes(t.scope_dirs || []);
+    document.getElementById('newTaskForm').style.display = 'block';
+    document.getElementById('newTaskForm').scrollIntoView({ behavior: 'smooth' });
+  } catch(e) {
+    toast('❌ Error: ' + String(e));
+  }
+}
+
+async function deleteTask(taskId) {
+  dbg('Delete button clicked: taskId=' + taskId, '#44aaff');
+  if (!confirm('Delete task ' + taskId + '? This cannot be undone.')) return;
+  try {
+    const r = await api('delete_analysis_task', { task_id: taskId });
+    if (r.ok) {
+      toast('✅ Task deleted');
+      await loadTasks();
+    } else {
+      toast('❌ ' + (r.error || 'Delete failed'));
+    }
+  } catch(e) { toast('❌ Error: ' + String(e)); }
+}
+
+async function removeFromQueue(taskId) {
+  dbg('Remove from queue: taskId=' + taskId, '#44aaff');
+  try {
+    const r = await api('delete_analysis_task', { task_id: taskId });
+    dbg('delete_analysis_task result: ok=' + r.ok + ' ' + JSON.stringify(r).slice(0,80));
+    if (r.ok) {
+      toast('✅ Removed from queue');
+      await loadTasks();
+    } else {
+      toast('❌ ' + (r.error || 'Failed to remove'));
+    }
+  } catch(e) { toast('❌ Error: ' + String(e)); }
+}
+
+async function clearQueue() {
+  const count = Object.keys(_pendingBySourceId).length;
+  if (!confirm('Remove all ' + count + ' items from the queue?')) return;
+  const ids = Object.values(_pendingBySourceId).map(function(t){ return t.task_id; });
+  let removed = 0;
+  for (let i = 0; i < ids.length; i++) {
+    try {
+      const r = await api('delete_analysis_task', { task_id: ids[i] });
+      if (r.ok) removed++;
+    } catch(e) {}
+  }
+  toast('✅ Cleared ' + removed + ' item' + (removed !== 1 ? 's' : '') + ' from queue');
+  await loadTasks();
+}
+
+// New/Edit task form
+let _editingTaskId = null;
+let _scopeDirsLoaded = false;
+
+// Mirrors custom_tasks_manager.py's compute_daily_run_times() EXACTLY —
+// N evenly-spaced "HH:MM" strings across [start, end] inclusive of both
+// endpoints. Kept in lockstep with the Python version deliberately (see
+// that function's own docstring) so this live preview can never show
+// something different from what the server will actually schedule.
+function _computeDailyRunTimes(startTime, endTime, timesPerDay) {
+  timesPerDay = Math.max(1, parseInt(timesPerDay, 10) || 1);
+  if (timesPerDay === 1) return [startTime];
+  const sParts = startTime.split(':'), eParts = endTime.split(':');
+  const startMinutes = (+sParts[0]) * 60 + (+sParts[1]);
+  const endMinutes   = (+eParts[0]) * 60 + (+eParts[1]);
+  const span = endMinutes - startMinutes;
+  const step = span / (timesPerDay - 1);
+  const out = [];
+  for (let i = 0; i < timesPerDay; i++) {
+    const total = Math.round(startMinutes + i * step);
+    const h = Math.floor(total / 60), m = total % 60;
+    out.push(String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0'));
+  }
+  return out;
+}
+
+function _updateDailyPreview() {
+  const start = document.getElementById('ntDailyStart').value || '09:00';
+  const end   = document.getElementById('ntDailyEnd').value || '17:00';
+  const times = document.getElementById('ntDailyTimes').value || '1';
+  const previewEl = document.getElementById('ntDailyPreview');
+  const warnEl = document.getElementById('ntDailyCostWarn');
+  try {
+    const runTimes = _computeDailyRunTimes(start, end, times);
+    previewEl.textContent = 'Runs at: ' + runTimes.join(', ');
+  } catch(e) {
+    previewEl.textContent = '';
+  }
+  warnEl.style.display = (parseInt(times, 10) || 1) > 1 ? 'block' : 'none';
+}
+
+// Shows/hides the Day-of-week row (weekly/biweekly/monthly only) and the
+// Daily start/end/times-per-day block (daily only) based on the current
+// Schedule selection — mirrors which fields the desktop dialog shows for
+// each schedule type.
+function _toggleScheduleFields() {
+  const schedule = document.getElementById('ntSchedule').value;
+  const dowRow = document.getElementById('ntDowRow');
+  const dailyRow = document.getElementById('ntDailyRow');
+  dowRow.style.display = (schedule === 'weekly' || schedule === 'biweekly' || schedule === 'monthly') ? 'block' : 'none';
+  dailyRow.style.display = (schedule === 'daily') ? 'flex' : 'none';
+  if (schedule === 'daily') _updateDailyPreview();
+}
+
+// Populates the Scope directories checkbox list from
+// list_tracked_directories() — parses lines like
+// "  3. 📁 C:\Users\david\Documents\Misc" into a plain path. Cached
+// after the first successful load (_scopeDirsLoaded) since the tracked-
+// directory list doesn't change within a single form session and
+// there's no reason to re-fetch it every time the form reopens.
+async function _loadScopeDirCheckboxes(preChecked) {
+  const el = document.getElementById('ntScopeDirs');
+  preChecked = preChecked || [];
+  try {
+    const r = await api('list_tracked_directories');
+    if (!r.ok) { el.innerHTML = '<div style="color:var(--dim);padding:6px">Could not load directories</div>'; return; }
+    const lines = (r.result || '').split('\n');
+    const paths = [];
+    lines.forEach(function(line) {
+      const m = /^\s*\d+\.\s*[^\sA-Za-z0-9]*\s*(.+)$/.exec(line);
+      if (m) paths.push(m[1].trim());
+    });
+    if (!paths.length) { el.innerHTML = '<div style="color:var(--dim);padding:6px">No tracked directories</div>'; return; }
+    el.innerHTML = paths.map(function(p) {
+      const checked = preChecked.indexOf(p) !== -1 ? ' checked' : '';
+      return '<label style="display:flex;align-items:center;gap:6px;padding:3px 4px;cursor:pointer;overflow:hidden">' +
+        '<input type="checkbox" data-path="' + esc(p) + '"' + checked + ' style="flex-shrink:0">' +
+        '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(p) + '">' + esc(p) + '</span></label>';
+    }).join('');
+    _scopeDirsLoaded = true;
+  } catch(e) {
+    el.innerHTML = '<div style="color:var(--red);padding:6px">Error: ' + esc(String(e)) + '</div>';
+  }
+}
+
+function _getCheckedScopeDirs() {
+  return Array.from(document.querySelectorAll('#ntScopeDirs input[type=checkbox]:checked'))
+    .map(function(cb){ return cb.getAttribute('data-path'); });
+}
+
+function showNewTaskForm() {
+  _editingTaskId = null;
+  document.getElementById('taskFormTitle').textContent = '+ New Custom AI Task';
+  document.getElementById('taskFormSubmitBtn').textContent = '✓ Create Task';
+  const form = document.getElementById('newTaskForm');
+  form.style.display = 'block';
+  _toggleScheduleFields();
+  if (!_scopeDirsLoaded) _loadScopeDirCheckboxes([]);
+  form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  setTimeout(function(){ document.getElementById('ntLabel').focus(); }, 300);
+}
+
+function cancelNewTask() {
+  _editingTaskId = null;
+  document.getElementById('newTaskForm').style.display = 'none';
+  document.getElementById('taskFormTitle').textContent = '+ New Custom AI Task';
+  document.getElementById('taskFormSubmitBtn').textContent = '✓ Create Task';
+  ['ntLabel','ntPrompt','ntFirstDue','ntReportFolder'].forEach(function(id){ document.getElementById(id).value = ''; });
+  document.getElementById('ntSchedule').value = 'none';
+  document.getElementById('ntDayOfWeek').value = '';
+  document.getElementById('ntDailyStart').value = '09:00';
+  document.getElementById('ntDailyEnd').value = '17:00';
+  document.getElementById('ntDailyTimes').value = '1';
+  document.getElementById('ntLearnings').checked = true;
+  document.getElementById('ntReport').checked = false;
+  document.getElementById('ntEmail').checked = false;
+  document.querySelectorAll('#ntScopeDirs input[type=checkbox]').forEach(function(cb){ cb.checked = false; });
+  document.getElementById('ntError').style.display = 'none';
+  _toggleScheduleFields();
+}
+
+async function submitNewTask() {
+  const label    = document.getElementById('ntLabel').value.trim();
+  const prompt   = document.getElementById('ntPrompt').value.trim();
+  const schedule = document.getElementById('ntSchedule').value;
+  const firstDue = document.getElementById('ntFirstDue').value;
+  const dayOfWeek = document.getElementById('ntDayOfWeek').value;
+  const dailyStart = document.getElementById('ntDailyStart').value || '09:00';
+  const dailyEnd   = document.getElementById('ntDailyEnd').value || '17:00';
+  const dailyTimes = parseInt(document.getElementById('ntDailyTimes').value, 10) || 1;
+  const learnings = document.getElementById('ntLearnings').checked;
+  const report   = document.getElementById('ntReport').checked;
+  const email    = document.getElementById('ntEmail').checked;
+  const reportFolder = document.getElementById('ntReportFolder').value.trim();
+  const scopeDirs = _getCheckedScopeDirs();
+  const errEl    = document.getElementById('ntError');
+  errEl.style.display = 'none';
+  if (!label)  { errEl.textContent = 'Label is required';  errEl.style.display = 'block'; return; }
+  if (!prompt) { errEl.textContent = 'Prompt is required'; errEl.style.display = 'block'; return; }
+  if (!learnings && !report && !email) {
+    errEl.textContent = 'Select at least one output: Learnings, Document, or Email';
+    errEl.style.display = 'block';
+    return;
+  }
+  const args = {
+    label, prompt, schedule,
+    output_learnings: learnings, output_report: report, output_email: email,
+  };
+  if (firstDue) args.first_due = firstDue;
+  if (reportFolder) args.report_folder = reportFolder;
+  if (scopeDirs.length) args.scope_dirs = scopeDirs;
+  if (schedule === 'weekly' || schedule === 'biweekly' || schedule === 'monthly') {
+    // "" (Not pinned) -> None/unpinned; a digit string -> that weekday.
+    args.schedule_day_of_week = dayOfWeek === '' ? null : parseInt(dayOfWeek, 10);
+  }
+  if (schedule === 'daily') {
+    args.daily_start_time = dailyStart;
+    args.daily_end_time = dailyEnd;
+    args.daily_times_per_day = dailyTimes;
+  }
+  try {
+    let r;
+    if (_editingTaskId) {
+      args.task_id = _editingTaskId;
+      r = await api('update_analysis_task', args);
+    } else {
+      r = await api('create_analysis_task', args);
+    }
+    if (r.ok) {
+      toast('✅ Task ' + (_editingTaskId ? 'updated' : 'created') + ': ' + label);
+      cancelNewTask();
+      await loadTasks();
+    } else {
+      errEl.textContent = r.error || 'Failed';
+      errEl.style.display = 'block';
+    }
+  } catch(e) {
+    errEl.textContent = 'Error: ' + String(e);
+    errEl.style.display = 'block';
+  }
+}
+
+// ── Learnings ──────────────────────────────────────────────────────────────
+async function loadLearnings() {
+  await Promise.all([loadLearnStats(), loadLearnList()]);
+}
+
+async function loadLearnStats() {
+  try {
+    const r = await api('get_learning_stats');
+    if (r.ok) {
+      const m = (r.result||'').match(/(\d+)\s+(?:total|active|learning)/i);
+      if (m) document.getElementById('learnStats').textContent = m[1] + ' learnings';
+    }
+  } catch(e) {}
+}
+
+async function loadLearnList() {
+  const el = document.getElementById('learnList');
+  if (!el) return;
+  el.innerHTML = '<div class="spinner"></div>';
+  try {
+    const r = await api('list_learnings');
+    if (!r.ok) { el.innerHTML = '<div class="empty">Could not load learnings</div>'; return; }
+    const txt = (r.result || '').trim();
+    if (!txt || txt.toLowerCase().includes('no learning')) {
+      el.innerHTML = '<div class="empty">No learnings yet — tap + Add Learning to create one</div>';
+      return;
+    }
+    el.innerHTML = renderLearnings(txt);
+  } catch(e) { el.innerHTML = '<div class="empty">Error: ' + esc(String(e)) + '</div>'; }
+}
+
+async function searchLearnings() {
+  const q = document.getElementById('learnSearch').value.trim();  if (!q) { loadLearnList(); return; }  const el = document.getElementById('learnList');  el.innerHTML = '<div class="spinner"></div>';  try {    const r = await apiSlow('search_learnings', { query: q, top_k: 10 });    if (!r.ok) { el.innerHTML = '<div class="empty">Search error</div>'; return; }    const txt = (r.result||'').trim();    if (!txt || txt.toLowerCase().includes('no result')) {      el.innerHTML = '<div class="empty">No learnings found for: ' + esc(q) + '</div>';      return;    }    el.innerHTML = renderLearnings(txt);  } catch(e) { el.innerHTML = '<div class="empty">Search error</div>'; }}function renderLearnings(txt) {
+  if (!txt || txt.trim().length < 10) return '<div class="empty">No learnings</div>';
+  var blocks = txt.split(/\n(?=\[\d+\])/).map(function(b){ return b.trim(); }).filter(function(b){ return b.length > 4; });
+  if (!blocks.length) return '<div class="empty">No learnings found</div>';
+  return blocks.map(function(block) {
+    var lines = block.split('\n');
+    var title = '', id = '', content = '', category = '', created = '';
+    var firstLine = lines[0] || '';
+    var titleMatch = firstLine.match(/^\[\d+\]\s+\S+\s+(.+)/);
+    title = titleMatch ? titleMatch[1].trim() : firstLine.replace(/^\[\d+\]\s*/, '').trim();
+    lines.slice(1).forEach(function(l) {
+      var lt = l.trim();
+      if (lt.startsWith('ID:')) { id = lt.replace('ID:', '').trim(); }
+      else if (lt.startsWith('\u2192') || lt.startsWith('->')) { content = lt.replace(/^[\u2192\->]+\s*/, '').trim(); }
+      else if (lt.startsWith('Created:')) { created = lt.replace('Created:', '').trim().split('T')[0]; }
+      else if (lt.match(/^[a-z_]+\s*\|/)) { category = lt.split('|')[0].trim(); }
+    });
+    if (!title) return '';
+    var catColors = {'business_lesson':'#a78bfa','client_preference':'#60a5fa','best_practice':'#34d399',
+      'technical_note':'#fbbf24','process_improvement':'#f87171','mistake_learned':'#fb923c',
+      'project_insight':'#38bdf8','fact_correction':'#e879f9','general':'#9ca3af'};
+    var catColor = catColors[category] || 'var(--dim)';
+    return '<div style="padding:12px 0;border-bottom:1px solid var(--border)">' +
+      '<div style="display:flex;align-items:flex-start;gap:8px">' +
+        '<div style="flex:1;min-width:0">' +
+          '<div style="font-size:14px;font-weight:700;margin-bottom:4px;line-height:1.3">' + esc(title) + '</div>' +
+          (content ? '<div style="font-size:12px;color:var(--dim);line-height:1.4;margin-bottom:6px">' + esc(content.slice(0,200)) + (content.length>200?'\u2026':'') + '</div>' : '') +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">' +
+            (category ? '<span style="font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;background:rgba(0,0,0,.3);color:'+catColor+'">' + esc(category) + '</span>' : '') +
+            (created  ? '<span style="font-size:10px;color:var(--dim2)">' + esc(created) + '</span>' : '') +
+            (id ? '<span style="font-size:9px;font-family:monospace;color:var(--dim2)">' + esc(id.slice(0,8)) + '\u2026</span>' : '') +
+          '</div>' +
+        '</div>' +
+        (id ? '<button data-action="delete-learning" data-id="' + esc(id) + '" data-title="' + esc(title) + '" ' +
+          'style="background:none;border:1px solid var(--red);color:var(--red);border-radius:6px;' +
+          'padding:3px 8px;font-size:11px;cursor:pointer;flex-shrink:0">' +
+          '&#128465; Delete</button>' : '') +
+      '</div>' +
+    '</div>';
+  }).filter(function(s){ return s.length > 0; }).join('');
+}
+async function deleteLearning(id, title) {
+  if (!confirm('Delete learning:\n"' + title + '"?\n\nThis cannot be undone.')) return;
+  try {
+    const r = await api('delete_learning', { learning_id: id });
+    if (r.ok) { toast('✅ Deleted: ' + title); await loadLearnings(); }
+    else { toast('❌ ' + (r.error || 'Delete failed')); }
+  } catch(e) { toast('❌ Error: ' + String(e)); }
+}
+
+function toggleLearnForm() {
+  const el = document.getElementById('learnForm');
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+  if (el.style.display === 'block') document.getElementById('lnTitle').focus();
+}
+
+function cancelLearnForm() {
+  document.getElementById('learnForm').style.display = 'none';
+  ['lnTitle','lnContent','lnTags','lnContext'].forEach(function(id){ document.getElementById(id).value = ''; });
+  document.getElementById('lnCategory').value = 'general';
+  document.getElementById('lnOutcome').value = 'unknown';
+  document.getElementById('lnError').style.display = 'none';
+}
+
+async function submitLearning() {
+  const title   = document.getElementById('lnTitle').value.trim();
+  const content = document.getElementById('lnContent').value.trim();
+  const errEl   = document.getElementById('lnError');
+  errEl.style.display = 'none';
+  if (!title)   { errEl.textContent = 'Title is required';   errEl.style.display = 'block'; return; }
+  if (!content) { errEl.textContent = 'Content is required'; errEl.style.display = 'block'; return; }
+  const args = {
+    title, content,
+    category: document.getElementById('lnCategory').value,
+    outcome:  document.getElementById('lnOutcome').value,
+    tags:     document.getElementById('lnTags').value.trim(),
+    context:  document.getElementById('lnContext').value.trim(),
+  };
+  try {
+    const r = await api('record_learning', args);
+    if (r.ok) { toast('✅ Learning saved: ' + title); cancelLearnForm(); await loadLearnings(); }
+    else { errEl.textContent = r.error || 'Failed'; errEl.style.display = 'block'; }
+  } catch(e) { errEl.textContent = 'Error: ' + String(e); errEl.style.display = 'block'; }
+}
+
+// ── Global click handler for Learn tab (delete-learning) ──────────────────
+document.addEventListener('click', function(e) {
+  const btn = e.target.closest('button[data-action="delete-learning"]');
+  if (!btn) return;
+  const id    = btn.getAttribute('data-id');
+  const title = btn.getAttribute('data-title');
+  deleteLearning(id, title);
+});
+</script>
+</body>
+</html>

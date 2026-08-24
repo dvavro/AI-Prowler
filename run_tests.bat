@@ -34,6 +34,16 @@ REM      run_tests.bat tests\subscription\test_worker_api.py -v -m live_worker
 REM =====================================================================
 setlocal
 
+REM ── Database sandbox ──────────────────────────────────────────────────────────
+REM AIPROWLER_TEST_STATE_DIR is read by rag_preprocessor.py at module import
+REM time to redirect CHROMA_DB_PATH away from ~/AI-Prowler/rag_database to a
+REM throwaway temp directory.  Without this, any test that bypasses isolated_env
+REM (or that loses the monkeypatch through a subprocess boundary) writes to the
+REM real production database and can corrupt it via the ChromaDB HNSW cold-init
+REM race condition (v9.0.1 — see rag_preprocessor.get_chroma_client() docstring).
+set AIPROWLER_TEST_STATE_DIR=%TEMP%\ai_prowler_test_%RANDOM%
+echo [run_tests] Sandbox DB: %AIPROWLER_TEST_STATE_DIR%
+
 set PYTHON=%LocalAppData%\Programs\Python\Python311\python.exe
 
 REM Fall back to "python" on PATH only if the explicit path doesn't exist.
@@ -50,7 +60,7 @@ REM Auto-install pytest and pyflakes if missing (gets uninstalled with AI-Prowle
 
 REM Default to tests\ with verbose output if no args given.
 if "%~1"=="" (
-    "%PYTHON%" -m pytest tests\ -v
+    "%PYTHON%" -m pytest tests\ -v -m "not e2e and not manual and not live_remote"
 ) else (
     "%PYTHON%" -m pytest %*
 )

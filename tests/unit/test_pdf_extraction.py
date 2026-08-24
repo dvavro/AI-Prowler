@@ -7,9 +7,9 @@ tested end-to-end:
 
   1. PDF with NO tables    — text is returned; no spurious table blocks appear
   2. PDF WITH tables       — tables are rendered as "Column: Value" blocks that
-                             mirror the xlsx/xls format, keyed by page and table
+                              mirror the xlsx/xls format, keyed by page and table
   3. Scanned (image) PDF   — OCR path fires; table extraction is skipped
-                             (no text layer means no tables to extract)
+                              (no text layer means no tables to extract)
 
 All tests mock pdfplumber and the OCR helper so this suite runs without any
 PDF files on disk and without Tesseract installed.  That keeps it fast and
@@ -17,10 +17,28 @@ deterministic — the mocked surface matches exactly what pdfplumber returns
 in production.
 
 Naming convention: PDF_NN matches the plan ID in the V8.0.0 test-plan doc.
+
+Found 2026-08-23 — mock_raw_open(): load_pdf() was updated to read the file's
+raw bytes once via Python's own open() (triggers the OneDrive Files-On-Demand
+download if the target is a cloud placeholder) BEFORE ever handing them to
+pdfplumber.open(_io.BytesIO(...)) — see load_pdf()'s own docstring section on
+this. Every test below previously mocked ONLY pdfplumber.open, so on a
+filename like "dummy.pdf" that doesn't exist on disk, load_pdf's own raw
+open() call raised FileNotFoundError and returned "" immediately — the
+mocked pdfplumber.open() was never even reached. All 12 tests below now also
+patch builtins.open via mock_raw_open() so real disk I/O never happens;
+pdfplumber.open remains the thing under direct control, exactly as each
+test's own mock (pdf_cm / side_effect) already specifies. Two tests
+(PDF_06, PDF_08... actually PDF_06 and PDF_12) were silently passing for the
+wrong reason before this fix — an empty-string return from the early
+FileNotFoundError bail-out vacuously satisfied their "must NOT contain X"
+assertions without ever exercising the code path they're named for. Fixed
+the same way as every other test here so they now genuinely test what they
+claim to.
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, mock_open
 
 import pytest
 
@@ -55,6 +73,15 @@ def _open_pdf(pages: list[MagicMock]) -> MagicMock:
     return pdf_cm
 
 
+def _mock_raw_open():
+    """Patch for the real, unmocked open(filepath, "rb") load_pdf() now does
+    to read bytes before ever reaching pdfplumber.open(). The actual byte
+    content is irrelevant — pdfplumber.open is separately and fully mocked
+    in every test below, so whatever BytesIO gets built from these fake
+    bytes is never inspected."""
+    return patch("builtins.open", mock_open(read_data=b"%PDF-1.4 fake bytes for mocked open()"))
+
+
 # ===========================================================================
 # PDF_01 — plain-text PDF (no tables)
 # ===========================================================================
@@ -69,7 +96,7 @@ def test_PDF_01_plain_text_no_tables_returns_text_only(rag_module):
     page = _make_page(text=prose, tables=[])
     pdf_cm = _open_pdf([page])
 
-    with patch("pdfplumber.open", return_value=pdf_cm):
+    with _mock_raw_open(), patch("pdfplumber.open", return_value=pdf_cm):
         result = rag_module.load_pdf("dummy.pdf")
 
     assert prose.strip() in result, "Prose text must appear in the result"
@@ -103,7 +130,7 @@ def test_PDF_02_single_table_extracted_structurally(rag_module):
     page = _make_page(text=prose, tables=[table])
     pdf_cm = _open_pdf([page])
 
-    with patch("pdfplumber.open", return_value=pdf_cm):
+    with _mock_raw_open(), patch("pdfplumber.open", return_value=pdf_cm):
         result = rag_module.load_pdf("dummy.pdf")
 
     assert "--- Extracted Tables ---" in result, "Table separator must appear"
@@ -140,7 +167,7 @@ def test_PDF_03_multiple_tables_multiple_pages(rag_module):
     page2 = _make_page(text="Orders page. "     * 20, tables=[orders_table])
     pdf_cm = _open_pdf([page1, page2])
 
-    with patch("pdfplumber.open", return_value=pdf_cm):
+    with _mock_raw_open(), patch("pdfplumber.open", return_value=pdf_cm):
         result = rag_module.load_pdf("dummy.pdf")
 
     assert "[PDF Table: page 1, table 1] [Row 1]" in result, "Page-1 table missing"
@@ -163,7 +190,7 @@ def test_PDF_04_two_tables_on_same_page_get_distinct_indices(rag_module):
     page = _make_page(text="Parts manifest. " * 20, tables=[table_a, table_b])
     pdf_cm = _open_pdf([page])
 
-    with patch("pdfplumber.open", return_value=pdf_cm):
+    with _mock_raw_open(), patch("pdfplumber.open", return_value=pdf_cm):
         result = rag_module.load_pdf("dummy.pdf")
 
     assert "[PDF Table: page 1, table 1] [Row 1]" in result
@@ -189,7 +216,7 @@ def test_PDF_05_blank_rows_inside_table_are_skipped(rag_module):
     page = _make_page(text="Results table follows. " * 20, tables=[table])
     pdf_cm = _open_pdf([page])
 
-    with patch("pdfplumber.open", return_value=pdf_cm):
+    with _mock_raw_open(), patch("pdfplumber.open", return_value=pdf_cm):
         result = rag_module.load_pdf("dummy.pdf")
 
     # Row numbering preserves the original table position (including blank rows),
@@ -216,7 +243,7 @@ def test_PDF_06_header_only_table_is_skipped(rag_module):
     page = _make_page(text="Empty table follows. " * 20, tables=[table])
     pdf_cm = _open_pdf([page])
 
-    with patch("pdfplumber.open", return_value=pdf_cm):
+    with _mock_raw_open(), patch("pdfplumber.open", return_value=pdf_cm):
         result = rag_module.load_pdf("dummy.pdf")
 
     assert "[PDF Table:" not in result, (
@@ -240,7 +267,7 @@ def test_PDF_07_table_extraction_error_is_non_fatal(rag_module):
 
     pdf_cm = _open_pdf([page])
 
-    with patch("pdfplumber.open", return_value=pdf_cm):
+    with _mock_raw_open(), patch("pdfplumber.open", return_value=pdf_cm):
         result = rag_module.load_pdf("dummy.pdf")   # must NOT raise
 
     assert prose.strip() in result, (
@@ -265,12 +292,17 @@ def test_PDF_08_scanned_pdf_falls_back_to_ocr_no_tables(rag_module):
     page = _make_page(text="", tables=[])
     pdf_cm = _open_pdf([page])
 
-    with patch("pdfplumber.open", return_value=pdf_cm), \
+    with _mock_raw_open(), \
+         patch("pdfplumber.open", return_value=pdf_cm), \
          patch("rag_preprocessor._ocr_pdf", return_value=ocr_text) as mock_ocr:
 
         result = rag_module.load_pdf("scanned.pdf")
 
-    mock_ocr.assert_called_once_with("scanned.pdf"), (
+    # _ocr_pdf() now also accepts the bytes load_pdf() already read (see
+    # _ocr_pdf's own docstring — avoids a second open() on a potentially
+    # slow/locked OneDrive virtual filesystem), so the real call now
+    # includes _pdf_bytes as a kwarg rather than being filepath-only.
+    mock_ocr.assert_called_once_with("scanned.pdf", _pdf_bytes=b"%PDF-1.4 fake bytes for mocked open()"), (
         "_ocr_pdf must be called exactly once for a scanned PDF"
     )
     assert ocr_text.strip() in result, "OCR text must be returned"
@@ -293,7 +325,8 @@ def test_PDF_09_sparse_text_triggers_ocr(rag_module):
     page = _make_page(text=sparse_text, tables=[])
     pdf_cm = _open_pdf([page])
 
-    with patch("pdfplumber.open", return_value=pdf_cm), \
+    with _mock_raw_open(), \
+         patch("pdfplumber.open", return_value=pdf_cm), \
          patch("rag_preprocessor._ocr_pdf", return_value=ocr_text):
 
         result = rag_module.load_pdf("sparse.pdf")
@@ -315,7 +348,7 @@ def test_PDF_10_tables_appended_after_prose(rag_module):
     page = _make_page(text=prose, tables=[table])
     pdf_cm = _open_pdf([page])
 
-    with patch("pdfplumber.open", return_value=pdf_cm):
+    with _mock_raw_open(), patch("pdfplumber.open", return_value=pdf_cm):
         result = rag_module.load_pdf("dummy.pdf")
 
     prose_pos = result.find(prose[:30])
@@ -343,7 +376,7 @@ def test_PDF_11_none_cells_treated_as_empty_and_omitted(rag_module):
     page = _make_page(text="Staff directory. " * 20, tables=[table])
     pdf_cm = _open_pdf([page])
 
-    with patch("pdfplumber.open", return_value=pdf_cm):
+    with _mock_raw_open(), patch("pdfplumber.open", return_value=pdf_cm):
         result = rag_module.load_pdf("dummy.pdf")
 
     assert "Name: Alice"  in result
@@ -359,7 +392,7 @@ def test_PDF_11_none_cells_treated_as_empty_and_omitted(rag_module):
 def test_PDF_12_pdfplumber_open_failure_returns_empty_string(rag_module):
     """If pdfplumber.open() itself raises (e.g. corrupted PDF), load_pdf must
     return an empty string rather than propagating the exception."""
-    with patch("pdfplumber.open", side_effect=Exception("corrupt PDF stream")):
+    with _mock_raw_open(), patch("pdfplumber.open", side_effect=Exception("corrupt PDF stream")):
         result = rag_module.load_pdf("corrupted.pdf")
 
     assert isinstance(result, str), "load_pdf must always return a string"

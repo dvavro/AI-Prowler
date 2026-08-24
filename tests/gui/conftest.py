@@ -240,9 +240,20 @@ def gui(isolated_env, dialogs, monkeypatch, _tk_root):
     rag = isolated_env.rag
 
     # The GUI's `from rag_preprocessor import …` left it with stale aliases.
-    # Repoint the names that touch on-disk state at the patched values.
+    # Repoint ALL names that touch on-disk state at the patched values.
+    # CHROMA_DB_PATH is critical: if it isn't patched here the GUI's own
+    # module-level alias still points at ~/AI-Prowler/rag_database, so any
+    # GUI code path that calls get_chroma_client() through the gui_mod alias
+    # writes to the real production database and can corrupt it.
     monkeypatch.setattr(gui_mod, "TRACKING_DB",      rag.TRACKING_DB)
     monkeypatch.setattr(gui_mod, "AUTO_UPDATE_LIST", rag.AUTO_UPDATE_LIST)
+    # Patch CHROMA_DB_PATH on the gui module if it imported it directly.
+    if hasattr(gui_mod, "CHROMA_DB_PATH"):
+        monkeypatch.setattr(gui_mod, "CHROMA_DB_PATH", rag.CHROMA_DB_PATH)
+    # Also patch on _rag_engine if rag_gui imported rag_preprocessor as a module
+    # alias (some GUI code paths call _rag_engine.get_chroma_client() directly).
+    if hasattr(gui_mod, "_rag_engine"):
+        monkeypatch.setattr(gui_mod._rag_engine, "CHROMA_DB_PATH", rag.CHROMA_DB_PATH)
 
     root = _tk_root
 

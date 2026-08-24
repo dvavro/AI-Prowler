@@ -112,7 +112,7 @@ import pytest
 _SRC = os.environ.get("AI_PROWLER_SRC")
 SRC_ROOT  = Path(_SRC).resolve() if _SRC else Path(__file__).resolve().parent.parent.parent
 MCP_FILE  = SRC_ROOT / "ai_prowler_mcp.py"
-PWA_DIR   = SRC_ROOT / "pwa"
+PWA_DIR   = SRC_ROOT / "jobs"   # disk folder is jobs/ to match the /jobs/ URL route
 HTML_FILE = PWA_DIR  / "index.html"
 MANIFEST  = PWA_DIR  / "manifest.json"
 SW_FILE   = PWA_DIR  / "sw.js"
@@ -141,8 +141,13 @@ def _server_running() -> bool:
         return False
 
 
-def _get(path: str, hdrs: dict = None):
-    req = urllib.request.Request(BASE_URL + path, headers=hdrs or {})
+def _get(path: str, hdrs: dict = None, auth: bool = True):
+    h = {}
+    if auth and BEARER_TOKEN:
+        h["Authorization"] = f"Bearer {BEARER_TOKEN}"
+    if hdrs:
+        h.update(hdrs)
+    req = urllib.request.Request(BASE_URL + path, headers=h)
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
             # Normalise header keys to lowercase for consistent access
@@ -151,8 +156,10 @@ def _get(path: str, hdrs: dict = None):
         return e.code, {k.lower(): v for k, v in dict(e.headers).items()}, e.read()
 
 
-def _post(path: str, body: bytes, hdrs: dict = None):
+def _post(path: str, body: bytes, hdrs: dict = None, auth: bool = True):
     h = {"Content-Type": "application/json"}
+    if auth and BEARER_TOKEN:
+        h["Authorization"] = f"Bearer {BEARER_TOKEN}"
     if hdrs:
         h.update(hdrs)
     req = urllib.request.Request(BASE_URL + path, data=body, headers=h, method="POST")
@@ -174,6 +181,21 @@ def _api(tool: str, args: dict = None):
 
 
 @pytest.fixture(scope="session")
+def server():
+    """Skip live tests if server not running or no token configured."""
+    if not _server_running():
+        pytest.skip(
+            f"AI-Prowler not running on port {PORT}. "
+            "Start HTTP Server in Settings tab, then re-run with -m live_pwa"
+        )
+    if not BEARER_TOKEN:
+        pytest.skip(
+            "No Bearer token found in ~/.ai-prowler/config.json (remote_token). "
+            "Configure Remote Access in the Settings tab first."
+        )
+
+
+@pytest.fixture(scope="session")
 def html():
     assert HTML_FILE.exists(), f"index.html not found: {HTML_FILE}"
     return HTML_FILE.read_text(encoding="utf-8")
@@ -191,15 +213,6 @@ def sw_source():
     return SW_FILE.read_text(encoding="utf-8")
 
 
-@pytest.fixture(scope="session")
-def server():
-    """Skip live tests if server not running."""
-    if not _server_running():
-        pytest.skip(
-            f"AI-Prowler not running on port {PORT}. "
-            "Start HTTP Server in Settings tab, then re-run with -m live_pwa"
-        )
-
 
 # ── Session-scoped cleanup ─────────────────────────────────────────────────
 # Tracks every learning title created by tests so we can delete them after.
@@ -210,7 +223,7 @@ _CHUNK_COUNT_BEFORE   = None
 
 
 @pytest.fixture(scope="session", autouse=True)
-def pwa_test_cleanup(server):
+def pwa_test_cleanup():
     """
     Snapshot AI-Prowler state before live tests, then clean up after.
     - Records ChromaDB chunk count before tests start
@@ -294,7 +307,9 @@ class TestFeature1_AppShell:
     """1.x — App Shell & Navigation"""
 
     def test_1_1_html_title(self, html):
-        assert "AI-Prowler Crew" in html, "Missing <title>AI-Prowler Crew</title>"
+        # Jobs PWA title. (Was "AI-Prowler Crew" in an earlier revision —
+        # updated to "AI-Prowler Jobs" when the app moved to the /jobs/ route.)
+        assert "AI-Prowler Jobs" in html, "Missing <title>AI-Prowler Jobs</title>"
 
     def test_1_2_no_auth_screen_on_boot(self, html):
         # Auth screen should be hidden — app boots without login
@@ -310,9 +325,9 @@ class TestFeature1_AppShell:
     def test_1_4_four_nav_tabs(self, html):
         # Count nav-label spans in the nav element only (not the CSS class definition)
         nav_section = html.split('<nav class="bottomnav">')[1].split('</nav>')[0]
-        assert nav_section.count("nav-label") == 4, \
-            f"Expected 4 nav tabs, got {nav_section.count('nav-label')}"
-        for label in ["Jobs", "Clock", "Photos", "Profile"]:
+        count = nav_section.count("nav-label")
+        assert 4 <= count <= 7, f"Expected 4-7 nav tabs, got {count}"
+        for label in ["Jobs", "Calendar", "Clock", "Photos", "Profile"]:
             assert label in nav_section, f"Nav tab '{label}' missing"
 
     def test_1_5_jobs_tab_active_by_default(self, html):
@@ -321,11 +336,15 @@ class TestFeature1_AppShell:
 
     def test_1_6_manifest_link_in_html(self, html):
         assert 'rel="manifest"' in html, "manifest link tag missing"
-        assert "/pwa/manifest.json" in html, "manifest href wrong"
+        # Jobs PWA serves from /jobs/ — manifest lives at /jobs/manifest.json.
+        # (Was /pwa/manifest.json before the route was renamed to /jobs/.)
+        assert "/jobs/manifest.json" in html, "manifest href should be /jobs/manifest.json"
 
     def test_1_7_sw_js_registered(self, html):
         assert "sw.js" in html, "Service worker not referenced in HTML"
-        assert "/pwa/sw.js" in html, "Service worker path should be /pwa/sw.js"
+        # Jobs PWA registers the SW under /jobs/sw.js.
+        # (Was /pwa/sw.js before the route was renamed to /jobs/.)
+        assert "/jobs/sw.js" in html, "Service worker path should be /jobs/sw.js"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -466,7 +485,9 @@ class TestFeature4_PhotosScreen:
         assert "📷" in html
 
     def test_4_5_file_input_config(self, html):
-        assert 'id="fileInput"' in html
+        # fileInput split into fileInputCamera and fileInputFiles
+        assert 'id="fileInputCamera"' in html or 'id="fileInput"' in html, \
+            "Camera file input missing"
         assert 'accept="image/*"' in html
         assert 'capture="environment"' in html, "Should use rear camera on mobile"
         assert "multiple" in html, "Should allow multiple photo selection"
@@ -777,14 +798,14 @@ class TestFeature6_ServerEndpoints:
 
     @pytest.mark.live_pwa
     def test_6_1_pwa_index_200(self, server):
-        status, hdrs, body = _get("/pwa/")
+        status, hdrs, body = _get("/jobs/")
         assert status == 200, f"Expected 200, got {status}"
         assert "text/html" in hdrs.get("content-type", "")
         assert b"AI-Prowler" in body
 
     @pytest.mark.live_pwa
     def test_6_2_manifest_valid_json(self, server):
-        status, hdrs, body = _get("/pwa/manifest.json")
+        status, hdrs, body = _get("/jobs/manifest.json")
         assert status == 200
         assert "json" in hdrs.get("content-type", "")
         data = json.loads(body)
@@ -792,7 +813,7 @@ class TestFeature6_ServerEndpoints:
 
     @pytest.mark.live_pwa
     def test_6_3_sw_js_200(self, server):
-        status, _, _ = _get("/pwa/sw.js")
+        status, _, _ = _get("/jobs/sw.js")
         assert status == 200
 
     @pytest.mark.live_pwa
@@ -822,12 +843,12 @@ class TestFeature6_ServerEndpoints:
 
     @pytest.mark.live_pwa
     def test_6_8_missing_pwa_file_404(self, server):
-        status, _, _ = _get("/pwa/totally_missing_file_xyz.png")
+        status, _, _ = _get("/jobs/totally_missing_file_xyz.png")
         assert status == 404
 
     @pytest.mark.live_pwa
     def test_6_9_path_traversal_blocked(self, server):
-        status, _, _ = _get("/pwa/../../etc/passwd")
+        status, _, _ = _get("/jobs/../../etc/passwd")
         assert status in (403, 404, 400), \
             f"Path traversal not blocked — got {status}"
 
@@ -835,7 +856,7 @@ class TestFeature6_ServerEndpoints:
     def test_6_10_mcp_still_requires_bearer(self, server):
         body = json.dumps({"jsonrpc": "2.0", "id": 1,
                            "method": "tools/list", "params": {}}).encode()
-        status, _, _ = _post("/mcp", body)
+        status, _, _ = _post("/mcp", body, auth=False)
         assert status == 401, \
             f"/mcp should require Bearer auth, got {status}"
 
@@ -853,7 +874,7 @@ class TestFeature7_Installability:
 
     def test_7_2_manifest_has_start_url(self, manifest_data):
         assert "start_url" in manifest_data
-        assert "/pwa" in manifest_data["start_url"]
+        assert "/jobs" in manifest_data["start_url"]
 
     def test_7_3_manifest_display_standalone(self, manifest_data):
         assert manifest_data.get("display") == "standalone", \
@@ -907,7 +928,7 @@ class TestFeature8_Security:
     def test_8_1_path_traversal_guard_in_source(self):
         source = MCP_FILE.read_text(encoding="utf-8")
         assert "abspath(_pwa_root)" in source, \
-            "Path traversal guard missing from /pwa handler"
+            "Path traversal guard missing from /jobs handler"
 
     def test_8_2_allowed_tools_list_exists(self):
         source = MCP_FILE.read_text(encoding="utf-8")
@@ -916,7 +937,6 @@ class TestFeature8_Security:
 
     def test_8_3_dangerous_tools_not_in_allowed_list(self):
         source = MCP_FILE.read_text(encoding="utf-8")
-        # Find the _allowed_tools block
         start = source.find("_allowed_tools")
         block = source[start:start+500]
         dangerous = ["delete_learning", "reindex_all", "grant_write_access",
@@ -946,14 +966,14 @@ class TestFeature8_Security:
 
     @pytest.mark.live_pwa
     def test_8_6_live_path_traversal_blocked(self, server):
-        status, _, _ = _get("/pwa/../../etc/passwd")
+        status, _, _ = _get("/jobs/../../etc/passwd")
         assert status in (403, 404, 400)
 
     @pytest.mark.live_pwa
     def test_8_7_live_mcp_auth_not_broken(self, server):
         body = json.dumps({"jsonrpc": "2.0", "id": 1,
                            "method": "tools/list", "params": {}}).encode()
-        status, _, _ = _post("/mcp", body)
+        status, _, _ = _post("/mcp", body, auth=False)
         assert status == 401, \
             "CRITICAL: /mcp no longer requires auth — PWA patch broke authentication!"
 

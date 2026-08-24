@@ -1531,6 +1531,36 @@ def prompt_for_license():
 # FILE LOADERS
 # ═══════════════════════════════════════════════════════════
 
+# ── Cloud-sync placeholder detection (OneDrive/SharePoint "Files On-Demand") ──
+# Found 2026-08-22: a folder can be fully "synced" (present in the folder
+# listing, correct name/size/mtime) while its content is still a cloud-only
+# placeholder on disk — Windows downloads it transparently on the FIRST real
+# read, but that read now costs a live network round-trip instead of a local
+# disk seek. Indexing a large un-hydrated OneDrive tree can look "stuck" or
+# silently "not working" simply because it's crawling through hundreds of
+# per-file downloads (matches the existing team learning that a full OneDrive
+# root index took ~6 hours). Detecting this lets AI-Prowler say so explicitly
+# instead of leaving the user to guess.
+FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x00400000
+_INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
+
+def is_cloud_only_placeholder(filepath: str) -> bool:
+    """True if filepath is a OneDrive/SharePoint Files-On-Demand placeholder
+    that has not been downloaded to disk yet. Windows-only; returns False on
+    any error or on non-Windows platforms (fail-closed to "just try to read
+    it normally" rather than false-flagging ordinary files)."""
+    if os.name != 'nt':
+        return False
+    try:
+        import ctypes
+        attrs = ctypes.windll.kernel32.GetFileAttributesW(str(filepath))
+        if attrs == _INVALID_FILE_ATTRIBUTES:
+            return False
+        return bool(attrs & FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS)
+    except Exception:
+        return False
+
+
 def load_text_file(filepath: str) -> str:
     """Load plain text files with various encodings"""
     encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
@@ -1577,16 +1607,24 @@ def _pdf_page_to_pil(pdf_doc, page_index: int, dpi: int = 300) -> '_PILImage.Ima
     return bitmap.to_pil()
 
 
-def _ocr_pdf(filepath: str) -> str:
+def _ocr_pdf(filepath: str, _pdf_bytes: bytes = None) -> str:
     """
     OCR an image-only (scanned) PDF using pypdfium2 + Tesseract.
 
     pypdfium2 renders each page to a PIL Image at 300 DPI — no poppler needed.
     Tesseract then extracts text from each image.
+
+    _pdf_bytes: optional pre-read bytes — passed by load_pdf() when it has
+    already read the file into memory (OneDrive / Files-On-Demand support),
+    avoiding a second open() call on a potentially slow virtual filesystem.
     """
     global _last_ocr_text, _last_ocr_source
     try:
-        pdf_doc = pdfium.PdfDocument(filepath)
+        import io as _io
+        if _pdf_bytes is not None:
+            pdf_doc = pdfium.PdfDocument(_pdf_bytes)
+        else:
+            pdf_doc = pdfium.PdfDocument(filepath)
         parts   = []
         n_pages = len(pdf_doc)
         for i in range(n_pages):
@@ -1622,8 +1660,11 @@ def load_image_ocr(filepath: str) -> str:
         print(f"⚠️  Skipping {os.path.basename(filepath)} — pillow-heif not installed.")
         print("   Run: pip install pillow-heif")
         return ""
+    import io as _io
     try:
-        img  = _PILImage.open(filepath)
+        with open(filepath, "rb") as _fh:
+            _img_bytes = _fh.read()
+        img = _PILImage.open(_io.BytesIO(_img_bytes))
         # HEIC images may arrive in a non-RGB mode (e.g. RGBA, P).
         # Convert to RGB before handing to Tesseract so colour-space errors
         # don't abort the OCR.
@@ -1658,11 +1699,24 @@ def load_pdf(filepath: str) -> str:
        (Scanned PDFs have no text layer, so table extraction is skipped.)
 
     Both paths always run — no user toggle required.
+
+    OneDrive / Files-On-Demand: bytes are read once via Python's own I/O
+    (which triggers the OneDrive download if the file is a cloud placeholder)
+    and reused for both pdfplumber and OCR, avoiding repeated opens on a
+    potentially slow or locked virtual filesystem.
     """
+    import io as _io
+    try:
+        with open(filepath, "rb") as _fh:
+            _pdf_bytes = _fh.read()
+    except Exception as e:
+        print(f"⚠️  Error reading PDF {filepath}: {e}")
+        return ""
+
     text = ""
     table_parts = []
     try:
-        with pdfplumber.open(filepath) as pdf:
+        with pdfplumber.open(_io.BytesIO(_pdf_bytes)) as pdf:
             for page_num, page in enumerate(pdf.pages, 1):
                 page_text = page.extract_text()
                 if page_text:
@@ -1704,7 +1758,7 @@ def load_pdf(filepath: str) -> str:
     # (Scanned PDFs have no text layer so table_parts will always be empty here.)
     fname = os.path.basename(filepath)
     print(f"   🔍 Scanned PDF detected: '{fname}' — running Tesseract OCR…")
-    ocr_text = _ocr_pdf(filepath)
+    ocr_text = _ocr_pdf(filepath, _pdf_bytes=_pdf_bytes)
     if ocr_text.strip():
         print(f"   ✅ OCR complete: extracted {len(ocr_text.split()):,} words from '{fname}'")
         return ocr_text
@@ -1719,9 +1773,21 @@ def load_docx(filepath: str) -> str:
     all table content (financial tables, schedules, data grids, etc.).
     This version reads paragraphs first, then appends all table rows as
     pipe-separated lines so no content is missed.
+
+    OneDrive / Files-On-Demand: passing the path string directly to
+    DocxDocument (which opens the file as a ZIP internally) fails on
+    OneDrive placeholder files with "Package not found" because the stub
+    file on disk isn't a valid ZIP until OneDrive downloads it — and even
+    fully-synced files can be held by OneDrive's sync lock. Reading raw
+    bytes first via Python's own I/O triggers the OneDrive download if
+    needed and bypasses the sync-lock window, then we hand python-docx a
+    BytesIO stream which it handles identically to a real file path.
     """
+    import io as _io
     try:
-        doc = DocxDocument(filepath)
+        with open(filepath, "rb") as _fh:
+            _data = _fh.read()
+        doc = DocxDocument(_io.BytesIO(_data))
         parts = []
         # Body paragraphs
         for para in doc.paragraphs:
@@ -1750,8 +1816,11 @@ def load_pptx(filepath: str) -> str:
     if not _PPTX_AVAILABLE:
         print(f"⚠️  python-pptx missing — skipping .pptx: {filepath}")
         return ""
+    import io as _io
     try:
-        prs = _PptxPresentation(filepath)
+        with open(filepath, "rb") as _fh:
+            _data = _fh.read()
+        prs = _PptxPresentation(_io.BytesIO(_data))
         parts = []
         for slide_num, slide in enumerate(prs.slides, 1):
             slide_texts = []
@@ -1877,8 +1946,11 @@ def load_odt(filepath: str) -> str:
     if not _ODFPY_AVAILABLE:
         print(f"⚠️  odfpy missing — skipping .odt file: {filepath}")
         return ""
+    import io as _io
     try:
-        doc = _odf_load(filepath)
+        with open(filepath, "rb") as _fh:
+            _data = _fh.read()
+        doc = _odf_load(_io.BytesIO(_data))
         parts = []
         for para in doc.getElementsByType(_OdfP):
             text = ''.join(
@@ -1916,8 +1988,11 @@ def load_xlsx(filepath: str) -> str:
     if not _OPENPYXL_AVAILABLE:
         print(f"⚠️  openpyxl missing — skipping proper .xlsx extraction for {filepath}")
         return load_text_file(filepath)
+    import io as _io
     try:
-        wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
+        with open(filepath, "rb") as _fh:
+            _data = _fh.read()
+        wb = openpyxl.load_workbook(_io.BytesIO(_data), read_only=True, data_only=True)
         parts = []
         for sheet_name in wb.sheetnames:
             ws = wb[sheet_name]
@@ -1981,8 +2056,11 @@ def load_xls(filepath: str) -> str:
     if not _XLRD_AVAILABLE:
         print(f"⚠️  xlrd missing — skipping proper .xls extraction for {filepath}")
         return ""
+    import io as _io
     try:
-        wb = xlrd.open_workbook(filepath)
+        with open(filepath, "rb") as _fh:
+            _data = _fh.read()
+        wb = xlrd.open_workbook(file_contents=_data)
         parts = []
         for sheet_name in wb.sheet_names():
             ws = wb.sheet_by_name(sheet_name)
@@ -2107,10 +2185,12 @@ def load_eml(filepath: str) -> str:
 
 def load_msg(filepath: str) -> str:
     """Load .msg Outlook email file"""
+    import io as _io
     try:
         import extract_msg
-        
-        msg = extract_msg.Message(filepath)
+        with open(filepath, "rb") as _fh:
+            _data = _fh.read()
+        msg = extract_msg.Message(_io.BytesIO(_data))
         
         content_parts = []
         content_parts.append(f"Subject: {msg.subject or '[No Subject]'}")
@@ -2556,7 +2636,17 @@ def load_file(filepath: str) -> Optional[Dict[str, str]]:
 
     if ext not in SUPPORTED_EXTENSIONS:
         return None
-    
+
+    # OneDrive/SharePoint Files-On-Demand: this file is present in the
+    # folder listing but not actually downloaded yet. A normal read below
+    # will trigger Windows to hydrate it transparently, but that costs a
+    # live network round-trip instead of a disk seek — call it out so a
+    # slow or failing indexing run over a large un-synced OneDrive tree is
+    # explainable instead of looking silently broken.
+    if is_cloud_only_placeholder(filepath):
+        print(f"   ☁️  Downloading from OneDrive (not yet on disk): "
+              f"{os.path.basename(filepath)}")
+
     # Determine loader
     if ext == '.pdf':
         content = load_pdf(filepath)
@@ -3311,7 +3401,16 @@ def build_scope_resolver(users_json_path: str = None) -> "callable | None":
     if users_json_path is None:
         _test_state_dir = _os.environ.get("AIPROWLER_TEST_STATE_DIR", "").strip()
         if _test_state_dir:
-            users_json_path = str(_Path(_test_state_dir) / "users.json")
+            _sandbox_path = _Path(_test_state_dir) / "users.json"
+            if _sandbox_path.exists():
+                users_json_path = str(_sandbox_path)
+            else:
+                # AIPROWLER_TEST_STATE_DIR is set (run_tests.bat sandbox) but
+                # the test wrote users.json via monkeypatch(Path.home, ...) into
+                # isolated_env.tmp_path, not into the bat-level sandbox dir.
+                # Fall back to the standard home-relative path so isolated_env
+                # tests that monkeypatch Path.home() still find their fixture data.
+                users_json_path = str(_Path.home() / ".ai-prowler" / "users.json")
         else:
             users_json_path = str(_Path.home() / ".ai-prowler" / "users.json")
 
@@ -3475,14 +3574,35 @@ def scan_directory(directory: str, recursive: bool = True) -> dict:
         return result
 
     # ── Directory path ────────────────────────────────────────────────────────
+    # AI-Prowler's own runtime state dir (~/.ai-prowler) has "jobs" and "logs"
+    # subfolders that are pure operational artifacts (run_script job manifests,
+    # rotating server logs) — not reference material anyone wants to search.
+    # Found 2026-08-22: .ai-prowler/jobs accumulated 837 files including
+    # multi-megabyte logs, and indexing them during Update All produced
+    # minutes of embedding work that made the GUI go "Not Responding". Scoped
+    # to the state dir specifically (by normalised path, not by bare folder
+    # name) so a legitimately-named "jobs" or "logs" folder anywhere else in
+    # a user's real document tree is never affected.
+    import os as _os_sd
+    _state_dir_norm = normalise_path(
+        str(Path(_os_sd.environ.get("AIPROWLER_TEST_STATE_DIR", "")).resolve())
+        if _os_sd.environ.get("AIPROWLER_TEST_STATE_DIR", "").strip()
+        else str(Path.home() / ".ai-prowler")
+    ).lower()
+    _STATE_DIR_NOISE_SUBDIRS = {'jobs', 'logs'}
+
     if recursive:
         for root, dirs, files in os.walk(directory):
+            _root_norm = normalise_path(root).lower()
+            _extra_prune = _STATE_DIR_NOISE_SUBDIRS if _root_norm == _state_dir_norm else set()
+
             # Prune and record skipped directories
             pruned = [d for d in dirs
-                      if d.startswith('.') or d in SKIP_DIRECTORIES]
+                      if d.startswith('.') or d in SKIP_DIRECTORIES or d in _extra_prune]
             result['skipped_dir'].extend(pruned)
             dirs[:] = [d for d in dirs
-                       if not d.startswith('.') and d not in SKIP_DIRECTORIES]
+                       if not d.startswith('.') and d not in SKIP_DIRECTORIES
+                       and d not in _extra_prune]
 
             for fname in files:
                 if fname.startswith('.'):
@@ -3736,9 +3856,23 @@ def _index_file_list_impl(file_paths: list, label: str = "",
             _rel = os.path.join(
                 os.path.basename(os.path.dirname(filepath)),
                 os.path.basename(filepath))
-            print(f"{prefix}{progress} WARNING: SKIPPED "
-                  f"{_rel}"
-                  f" (empty, unreadable, or format not supported)")
+            if is_cloud_only_placeholder(filepath):
+                # Read was attempted (see load_file's "Downloading from
+                # OneDrive" line above) but the file is STILL a cloud-only
+                # placeholder afterward — hydration didn't complete. Distinct
+                # from "empty, unreadable, or format not supported" so this
+                # doesn't look like file corruption: check that OneDrive is
+                # running, online, and not paused, or right-click the file/
+                # folder in Explorer → "Always keep on this device".
+                print(f"{prefix}{progress} WARNING: SKIPPED "
+                      f"{_rel}"
+                      f" (OneDrive/SharePoint file could not be downloaded — "
+                      f"check OneDrive is running and online, or mark "
+                      f"'Always keep on this device')")
+            else:
+                print(f"{prefix}{progress} WARNING: SKIPPED "
+                      f"{_rel}"
+                      f" (empty, unreadable, or format not supported)")
             # Even though we can't index this file, purge any stale chunks so
             # an empty overwrite doesn't leave old content in ChromaDB.
             try:

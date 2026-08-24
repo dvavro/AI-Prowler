@@ -1,4 +1,4 @@
-# AI-Prowler v8.0.0 - Python Dependencies
+# AI-Prowler v9.1.0 - Python Dependencies
 # Install with: pip install -r requirements.txt
 
 # ── Pinning policy (added after the 2026-07-28 `mcp` incident) ───────────────

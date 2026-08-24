@@ -54,29 +54,40 @@ except Exception:
 
 # ── Helpers ───────────────────────────────────────────────────────────────
 
-def _get(path: str, headers: dict = None) -> tuple[int, dict, bytes]:
-    """Make a GET request. Returns (status, headers, body)."""
+def _get(path: str, headers: dict = None, auth: bool = True) -> tuple[int, dict, bytes]:
+    """Make a GET request. Returns (status, headers, body).
+    auth=True (default) sends the Bearer token so the PWA login is satisfied.
+    Pass auth=False to test unauthenticated behaviour."""
     url = BASE_URL + path
-    req = urllib.request.Request(url, headers=headers or {})
+    h = {}
+    if auth and BEARER_TOKEN:
+        h["Authorization"] = f"Bearer {BEARER_TOKEN}"
+    if headers:
+        h.update(headers)
+    req = urllib.request.Request(url, headers=h)
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-            return r.status, dict(r.headers), r.read()
+            return r.status, {k.lower(): v for k, v in dict(r.headers).items()}, r.read()
     except urllib.error.HTTPError as e:
-        return e.code, dict(e.headers), e.read()
+        return e.code, {k.lower(): v for k, v in dict(e.headers).items()}, e.read()
 
 
-def _post(path: str, body: bytes, headers: dict = None) -> tuple[int, dict, bytes]:
-    """Make a POST request. Returns (status, headers, body)."""
+def _post(path: str, body: bytes, headers: dict = None, auth: bool = True) -> tuple[int, dict, bytes]:
+    """Make a POST request. Returns (status, headers, body).
+    auth=True (default) sends the Bearer token so the PWA login is satisfied.
+    Pass auth=False to test unauthenticated behaviour."""
     url = BASE_URL + path
-    h   = {"Content-Type": "application/json"}
+    h = {"Content-Type": "application/json"}
+    if auth and BEARER_TOKEN:
+        h["Authorization"] = f"Bearer {BEARER_TOKEN}"
     if headers:
         h.update(headers)
     req = urllib.request.Request(url, data=body, headers=h, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-            return r.status, dict(r.headers), r.read()
+            return r.status, {k.lower(): v for k, v in dict(r.headers).items()}, r.read()
     except urllib.error.HTTPError as e:
-        return e.code, dict(e.headers), e.read()
+        return e.code, {k.lower(): v for k, v in dict(e.headers).items()}, e.read()
 
 
 def _server_running() -> bool:
@@ -89,7 +100,7 @@ def _server_running() -> bool:
         return False
 
 
-# ── Skip if server not running ────────────────────────────────────────────
+# ── Skip if server not running or no token configured ─────────────────────
 pytestmark = pytest.mark.live_pwa
 
 @pytest.fixture(scope="session", autouse=True)
@@ -99,6 +110,11 @@ def require_server():
             f"AI-Prowler HTTP server is not running on port {PORT}. "
             f"Start it in the Settings tab then re-run with -m live_pwa."
         )
+    if not BEARER_TOKEN:
+        pytest.skip(
+            "No Bearer token found in ~/.ai-prowler/config.json (remote_token). "
+            "Configure Remote Access in the Settings tab first."
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -107,35 +123,35 @@ def require_server():
 
 class TestPwaStaticLive:
 
-    def test_index_html_200(self):
-        status, hdrs, body = _get("/pwa/")
-        assert status == 200, f"Expected 200, got {status}"
-        assert "text/html" in hdrs.get("Content-Type", ""), \
-            f"Expected text/html, got {hdrs.get('Content-Type')}"
-        assert b"AI-Prowler" in body, "index.html missing AI-Prowler content"
+      def test_index_html_200(self):
+          status, hdrs, body = _get("/jobs/")
+          assert status == 200, f"Expected 200, got {status}"
+          assert "text/html" in hdrs.get("content-type", ""), \
+              f"Expected text/html, got {hdrs.get('content-type')}"
+          assert b"AI-Prowler" in body, "index.html missing AI-Prowler content"
 
-    def test_manifest_json_200(self):
-        status, hdrs, body = _get("/pwa/manifest.json")
-        assert status == 200, f"Expected 200, got {status}"
-        assert "json" in hdrs.get("Content-Type", ""), \
-            f"Expected JSON content-type, got {hdrs.get('Content-Type')}"
-        data = json.loads(body)
-        assert "name" in data, "manifest.json missing 'name' field"
+      def test_manifest_json_200(self):
+          status, hdrs, body = _get("/jobs/manifest.json")
+          assert status == 200, f"Expected 200, got {status}"
+          assert "json" in hdrs.get("content-type", ""), \
+              f"Expected JSON content-type, got {hdrs.get('content-type')}"
+          data = json.loads(body)
+          assert "name" in data, "manifest.json missing 'name' field"
 
-    def test_sw_js_200(self):
-        status, hdrs, body = _get("/pwa/sw.js")
-        assert status == 200, f"Expected 200, got {status}"
-        assert b"cache" in body.lower() or b"service" in body.lower(), \
-            "sw.js content looks wrong"
+      def test_sw_js_200(self):
+          status, hdrs, body = _get("/jobs/sw.js")
+          assert status == 200, f"Expected 200, got {status}"
+          assert b"cache" in body.lower() or b"service" in body.lower(), \
+              "sw.js content looks wrong"
 
-    def test_missing_file_404(self):
-        status, _, _ = _get("/pwa/does_not_exist_xyz.png")
-        assert status == 404, f"Expected 404 for missing file, got {status}"
+      def test_missing_file_404(self):
+          status, _, _ = _get("/jobs/does_not_exist_xyz.png")
+          assert status == 404, f"Expected 404 for missing file, got {status}"
 
-    def test_path_traversal_blocked(self):
-        status, _, _ = _get("/pwa/../../../etc/passwd")
-        assert status in (403, 404, 400), \
-            f"Path traversal should be blocked, got {status}"
+      def test_path_traversal_blocked(self):
+          status, _, _ = _get("/jobs/../../../etc/passwd")
+          assert status in (403, 404, 400), \
+              f"Path traversal should be blocked, got {status}"
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -150,8 +166,8 @@ class TestPwaTokenLive:
 
     def test_pwa_token_returns_json(self):
         status, hdrs, body = _get("/pwa-token")
-        assert "json" in hdrs.get("Content-Type", ""), \
-            f"Expected JSON, got {hdrs.get('Content-Type')}"
+        assert "json" in hdrs.get("content-type", ""), \
+            f"Expected JSON, got {hdrs.get('content-type')}"
         data = json.loads(body)
         assert "token" in data, "Response missing 'token' field"
 
@@ -208,8 +224,8 @@ class TestPwaApiLive:
     def test_response_is_json(self):
         body = json.dumps({"tool": "read_job_spreadsheet", "args": {}}).encode()
         status, hdrs, _ = _post("/pwa-api", body)
-        assert "json" in hdrs.get("Content-Type", ""), \
-            f"Expected JSON response, got {hdrs.get('Content-Type')}"
+        assert "json" in hdrs.get("content-type", ""), \
+            f"Expected JSON response, got {hdrs.get('content-type')}"
 
     def test_check_status_tool_works(self):
         body = json.dumps({"tool": "check_ai_prowler_status", "args": {}}).encode()
@@ -231,7 +247,7 @@ class TestMcpAuthStillWorksLive:
         """The /mcp endpoint must still require Bearer auth."""
         body = json.dumps({"jsonrpc": "2.0", "id": 1,
                            "method": "tools/list", "params": {}}).encode()
-        status, _, _ = _post("/mcp", body)
+        status, _, _ = _post("/mcp", body, auth=False)
         assert status == 401, \
             f"Expected 401 from /mcp without token, got {status}. " \
             f"PWA routes may have accidentally removed auth from /mcp!"

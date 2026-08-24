@@ -8,23 +8,26 @@ PASS criteria:
   - No permission_denials
   - Result contains "AI-Prowler" (real response, not error)
 
-Run this test before and after changes to ai_prowler_mcp.py to verify
-the prewarm fix holds. The baseline (unfixed) was ~72s.
+Run explicitly (requires live claude CLI + OAuth token):
+  python -m pytest tests/mcp/test_mcp_response_timing.py -m manual -v
+
+Excluded from the default test run (pytest.ini: -m "not manual") because
+it needs a real OAuth token on disk and spawns the live claude CLI.
 """
 import subprocess, time, json, os
 from pathlib import Path
+
+import pytest
 
 # ── Config ────────────────────────────────────────────────────────────────
 PASS_THRESHOLD_SECONDS = 20   # fail if slower than this
 TOOL_NAME = "check_ai_prowler_status"
 PYTHON_EXE = r'C:\Users\david\AppData\Local\Programs\Python\Python311\python.exe'
-WORKDIR_MCP = Path(r'C:\Users\david\AI-Prowler_V812_to_V900_work\AI-Prowler\ai_prowler_mcp.py')
+WORKDIR_MCP = Path(__file__).resolve().parents[2] / 'ai_prowler_mcp.py'
 HOME = Path.home() / '.ai-prowler'
 TOKEN_FILE = HOME / 'claude_oauth_token.txt'
 
-# MCP config pointing to WORK DIR ai_prowler_mcp.py
-# AI_PROWLER_HEADLESS=1 → prewarm skipped (headless runner path)
-# Without it → prewarm + 15s watchdog (Claude Desktop path)
+
 def make_mcp_config(headless: bool) -> Path:
     cfg_path = HOME / f'claude_mcp_config_test_{"headless" if headless else "interactive"}.json'
     cfg = {
@@ -44,6 +47,7 @@ def make_mcp_config(headless: bool) -> Path:
     }
     cfg_path.write_text(json.dumps(cfg, indent=2), encoding='utf-8')
     return cfg_path
+
 
 def run_check(label: str, headless: bool, timeout: int = 60) -> dict:
     """Run check_ai_prowler_status via Claude CLI and return timing + result."""
@@ -106,7 +110,6 @@ def run_check(label: str, headless: bool, timeout: int = 60) -> dict:
         data = json.loads(r.stdout)
         result['denials'] = len(data.get('permission_denials', []))
         result['result_text'] = data.get('result', '')
-        # PASS: fast enough, no denials, real response
         result['passed'] = (
             elapsed < PASS_THRESHOLD_SECONDS and
             result['denials'] == 0 and
@@ -122,47 +125,50 @@ def run_check(label: str, headless: bool, timeout: int = 60) -> dict:
 
     return result
 
-# ── Run tests ──────────────────────────────────────────────────────────────
-print("=" * 60)
-print("  check_ai_prowler_status timing test")
-print(f"  PASS threshold: < {PASS_THRESHOLD_SECONDS}s")
-print(f"  Baseline (pre-fix): ~72s")
-print("=" * 60)
 
-results = []
+# ── Pytest test functions ──────────────────────────────────────────────────
 
-# Test 1: Headless mode (AI_PROWLER_HEADLESS=1) — prewarm skipped
-results.append(run_check(
-    "Test 1: Headless mode (AI_PROWLER_HEADLESS=1)",
-    headless=True,
-    timeout=30
-))
+@pytest.mark.manual
+def test_response_timing_headless():
+    """Headless mode (AI_PROWLER_HEADLESS=1) — prewarm skipped.
+    Must respond in < 20s. Baseline pre-fix was ~72s."""
+    if not TOKEN_FILE.exists():
+        pytest.skip(f"OAuth token not found at {TOKEN_FILE}")
+    if not WORKDIR_MCP.exists():
+        pytest.skip(f"ai_prowler_mcp.py not found at {WORKDIR_MCP}")
 
-# Test 2: Interactive mode (no headless flag) — prewarm + 15s watchdog
-results.append(run_check(
-    "Test 2: Interactive mode (prewarm + 15s watchdog)",
-    headless=False,
-    timeout=30
-))
+    result = run_check(
+        "Test 1: Headless mode (AI_PROWLER_HEADLESS=1)",
+        headless=True,
+        timeout=30,
+    )
 
-# ── Summary ────────────────────────────────────────────────────────────────
-print(f"\n{'='*60}")
-print("  SUMMARY")
-print(f"{'='*60}")
-all_passed = True
-for r in results:
-    status = '✅ PASS' if r['passed'] else ('⏱ TIMEOUT' if r['timed_out'] else '❌ FAIL')
-    print(f"  {status}  {r['elapsed']:.1f}s  {r['label']}")
-    if not r['passed']:
-        all_passed = False
-        if r.get('error'):
-            print(f"         error: {r['error']}")
-        if r.get('denials', 0):
-            print(f"         denials: {r['denials']}")
+    assert not result['timed_out'], f"Timed out after {result['elapsed']:.1f}s"
+    assert result['denials'] == 0, f"Permission denials: {result['denials']}"
+    assert 'AI-Prowler' in result['result_text'], (
+        f"Unexpected result: {result['result_text'][:200]}")
+    assert result['elapsed'] < PASS_THRESHOLD_SECONDS, (
+        f"Too slow: {result['elapsed']:.1f}s >= {PASS_THRESHOLD_SECONDS}s threshold")
 
-print()
-if all_passed:
-    print("  ✅ ALL TESTS PASSED — prewarm fix is working")
-else:
-    print("  ❌ SOME TESTS FAILED — check output above")
-print(f"{'='*60}")
+
+@pytest.mark.manual
+def test_response_timing_interactive():
+    """Interactive mode (prewarm + 15s watchdog).
+    Must still respond in < 20s after the prewarm fix."""
+    if not TOKEN_FILE.exists():
+        pytest.skip(f"OAuth token not found at {TOKEN_FILE}")
+    if not WORKDIR_MCP.exists():
+        pytest.skip(f"ai_prowler_mcp.py not found at {WORKDIR_MCP}")
+
+    result = run_check(
+        "Test 2: Interactive mode (prewarm + 15s watchdog)",
+        headless=False,
+        timeout=30,
+    )
+
+    assert not result['timed_out'], f"Timed out after {result['elapsed']:.1f}s"
+    assert result['denials'] == 0, f"Permission denials: {result['denials']}"
+    assert 'AI-Prowler' in result['result_text'], (
+        f"Unexpected result: {result['result_text'][:200]}")
+    assert result['elapsed'] < PASS_THRESHOLD_SECONDS, (
+        f"Too slow: {result['elapsed']:.1f}s >= {PASS_THRESHOLD_SECONDS}s threshold")

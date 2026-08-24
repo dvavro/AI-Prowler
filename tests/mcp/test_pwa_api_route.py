@@ -112,8 +112,20 @@ class TestPwaApiStructure:
         assert ln is not None, '/pwa-token route missing.'
 
     def test_pwa_static_route_present(self, lines):
-        ln = self._find(lines, 'path.startswith("/pwa")')
-        assert ln is not None, '/pwa static route missing.'
+        ln = self._find(lines, 'path.startswith("/jobs")')
+        assert ln is not None, '/jobs static route missing.'
+
+    def test_email_invoice_in_allowed_tools(self, lines):
+        """Structural check only — confirms email_invoice is reachable via
+        /pwa-api's tool whitelist. Does NOT call the tool or send an email."""
+        allowed_ln = self._find(lines, "_allowed_tools = {")
+        assert allowed_ln is not None, "_allowed_tools block not found."
+        # search the next ~15 lines for the closing brace
+        window = "\n".join(lines[allowed_ln - 1: allowed_ln + 14])
+        assert '"email_invoice"' in window, (
+            "email_invoice missing from /pwa-api's _allowed_tools whitelist "
+            "— the PWA's Send Invoice button would get 'Unknown tool'."
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════

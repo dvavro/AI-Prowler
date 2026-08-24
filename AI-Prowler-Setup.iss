@@ -1,6 +1,6 @@
 ; ============================================================
 ; AI-Prowler Installer (Admin Mode, 64-bit Compatible)
-; Version 9.0.0
+; Version 9.1.0
 ;
 ; PURPOSE:
 ;   - Installs the AI-Prowler application into Program Files
@@ -144,6 +144,18 @@
 ;   sms_backends.py         — SMS provider abstraction (Twilio/SignalWire/Vonage/free gateway)
 ;   sms_inbox.py            — Local inbound SMS/WhatsApp inbox store
 ;
+; NEW FILES IN v9.1.0:
+;   sms_consent.py          — SMS opt-in consent record management (list_sms_consents,
+;                             delete_sms_consent MCP tools). Imported by ai_prowler_mcp.py.
+;   jobs\                   — Jobs PWA (Progressive Web App) for owner/personal mode.
+;                             Field crew job management interface served at /jobs/.
+;                             Files: index.html, manifest.json, sw.js, icon-192.png,
+;                                    icon-512.png, icon.png
+;   remote\                 — Remote PWA for field crew in Business Server mode.
+;                             Crew-facing interface served at /remote/.
+;                             Files: index.html, manifest.json, sw.js, icon-192.png,
+;                                    icon-512.png
+;
 ; FILE ORGANIZATION:
 ;   - All source files (RAG_RUN.bat, requirements.txt, python installer,
 ;     ai_prowler_mcp.py) must reside in the same directory as this .iss
@@ -264,6 +276,40 @@ Source: "cloudflared_service_helper.py"; DestDir: "{app}"; Flags: ignoreversion
 ;                   get_sms_thread, list_sms_contacts_with_replies, check_whatsapp_replies.
 Source: "sms_backends.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "sms_inbox.py"; DestDir: "{app}"; Flags: ignoreversion
+
+; --- v9.1.0 SMS consent management ---
+; sms_consent.py : SMS opt-in consent record management. Provides list_sms_consents
+;                  and delete_sms_consent MCP tool implementations. Records are stored
+;                  at %USERPROFILE%\.ai-prowler\sms_consents.json and kept in sync
+;                  with STOP/START webhook replies automatically.
+;                  NOT present before v9.1.0 — fresh installs and in-app updates
+;                  both require this file for the consent tools to work.
+Source: "sms_consent.py"; DestDir: "{app}"; Flags: ignoreversion
+
+; --- v9.1.0 Jobs PWA (Progressive Web App — owner/personal mode) ---
+; Served at /jobs/ by the HTTP MCP server (ai_prowler_mcp.py --transport http).
+; Provides a native-app-style field crew interface: live job list, clock in/out,
+; photo upload, two-way SMS messaging, spreadsheet viewer, and payment workflows
+; (Email Invoice, Text Invoice, Email Receipt, Text Receipt).
+; Installable as a home screen app on both iPhone (Safari) and Android (Chrome).
+; All files ship into {app}\jobs\ alongside the Python code.
+Source: "jobs\index.html"; DestDir: "{app}\jobs"; Flags: ignoreversion
+Source: "jobs\manifest.json"; DestDir: "{app}\jobs"; Flags: ignoreversion
+Source: "jobs\sw.js"; DestDir: "{app}\jobs"; Flags: ignoreversion
+Source: "jobs\icon-192.png"; DestDir: "{app}\jobs"; Flags: ignoreversion
+Source: "jobs\icon-512.png"; DestDir: "{app}\jobs"; Flags: ignoreversion
+Source: "jobs\icon.png"; DestDir: "{app}\jobs"; Flags: ignoreversion
+
+; --- v9.1.0 Remote PWA (Progressive Web App — field crew / server mode) ---
+; Served at /remote/ by the HTTP MCP server when running in Business Server mode.
+; Identical layout to the Jobs PWA but scoped per-user: crew members see only
+; their own jobs, enforced server-side by read_job_spreadsheet's row filtering.
+; Installable as a home screen app on both iPhone and Android.
+Source: "remote\index.html"; DestDir: "{app}\remote"; Flags: ignoreversion
+Source: "remote\manifest.json"; DestDir: "{app}\remote"; Flags: ignoreversion
+Source: "remote\sw.js"; DestDir: "{app}\remote"; Flags: ignoreversion
+Source: "remote\icon-192.png"; DestDir: "{app}\remote"; Flags: ignoreversion
+Source: "remote\icon-512.png"; DestDir: "{app}\remote"; Flags: ignoreversion
 
 ; --- v8.0.0 Analysis Tasks & Scheduling ---
 ; custom_tasks_manager.py  : My Custom Analyses CRUD, scheduling, due-date logic,
@@ -2083,15 +2129,18 @@ begin
     // already handles.  Skipped if any Claude_* package folder exists.
     // NOTE: User must sign in to Claude Desktop once after first launch.
     // ----------------------------------------------------------
-    begin
-      PsFile := MakeTempFile('claude_check');
-      PsFile := Copy(PsFile, 1, Length(PsFile) - 4) + '.ps1';
-      PsContents :=
-        '$found = Get-ChildItem "$env:LOCALAPPDATA\Packages" -Directory -Filter "Claude_*"' +
-          ' -ErrorAction SilentlyContinue | Select-Object -First 1' + #13#10 +
-        'if ($found) { Write-Host "FOUND" } else { Write-Host "NOT_FOUND" }' + #13#10;
-      SaveStringToFile(PsFile, PsContents, False);
-    end;
+      begin
+        PsFile := MakeTempFile('claude_check');
+        PsFile := Copy(PsFile, 1, Length(PsFile) - 4) + '.ps1';
+        PsContents :=
+          '$found = Get-ChildItem "$env:LOCALAPPDATA\Packages" -Directory -Filter "Claude_*"' +
+            ' -ErrorAction SilentlyContinue | Select-Object -First 1' + #13#10 +
+          'if ($found) { Write-Host "FOUND" } else { Write-Host "NOT_FOUND" }' + #13#10;
+        SaveStringToFile(PsFile, PsContents, False);
+        // Script is created here but run later; delete it after the installer
+        // is fully done with it to avoid accumulating stale .ps1 files in logs/.
+        DeleteFileIfExists(PsFile);
+      end;
 
     begin
       // Run the check script and read its output to decide whether to install
@@ -2423,6 +2472,27 @@ begin
           //   eng: https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata
           //   spa: https://github.com/tesseract-ocr/tessdata/raw/main/spa.traineddata
 
+          // Wait for Windows Defender to finish scanning the freshly-extracted
+          // Tesseract files before attempting to write lang packs into tessdata\.
+          //
+          // ROOT CAUSE OF SPA.TRAINEDDATA FAILURE: NSIS extracts eng.traineddata
+          // and other bundled files into tessdata\ as part of its silent install.
+          // Defender Real-Time Protection scans every new file as it lands, and
+          // large binary files (.traineddata ~17 MB each) take several seconds
+          // to clear. While Defender holds a scan lock on tessdata\, any write
+          // to that directory fails with rc=1 — exactly the symptom seen on two
+          // consecutive installs. The Repair OCR button and manual download always
+          // succeed because they run minutes after install, well past this window.
+          //
+          // Fix: sleep 15s here to let Defender finish. Conservative — Defender
+          // typically clears in 5-10s, but this gives margin for slower machines
+          // and third-party AV. The retry loop on the download itself is a second
+          // safety net if 15s is still not enough on a particularly slow machine.
+          AppendInstallLog('[Tesseract] Pausing 15s for Defender to release tessdata scan lock...');
+          SetProgress(87, 'Waiting for antivirus scan to complete...');
+          Sleep(15000);
+          AppendInstallLog('[Tesseract] Pause complete — proceeding with lang pack downloads.');
+
           SetProgress(87, 'Downloading Tesseract language packs (eng + spa)...');
 
           TessMissingLangs := '';
@@ -2456,34 +2526,49 @@ begin
           else
             AppendInstallLog('[Tesseract] eng.traineddata present - skipping download.');
 
-          // --- spa ---
-          if not FileExists(TessFolder + '\tessdata\spa.traineddata') then
-          begin
-            TessMissingLangs := TessMissingLangs + 'spa ';
-            AppendInstallLog('[Tesseract] spa.traineddata not present - downloading...');
-            TessLangPsFile := ExpandConstant('{tmp}\tess_lang_spa.ps1');
-            TessLangPsContents :=
-              '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;' + #13#10 +
-              'try {' + #13#10 +
-              '  $wc = New-Object System.Net.WebClient;' + #13#10 +
-              '  $wc.Headers["User-Agent"] = "AI-Prowler-OCR-Installer";' + #13#10 +
-              '  $wc.DownloadFile(''https://github.com/tesseract-ocr/tessdata/raw/main/spa.traineddata'', ' +
-              '''' + TessFolder + '\tessdata\spa.traineddata'');' + #13#10 +
-              '  Write-Host "spa OK"' + #13#10 +
-              '} catch { Write-Host "spa FAILED: $_"; exit 1 }';
-            SaveStringToFile(TessLangPsFile, TessLangPsContents, False);
-            Exec('powershell.exe',
-              '-NoProfile -ExecutionPolicy Bypass -File "' + TessLangPsFile + '"',
-              '', SW_HIDE, ewWaitUntilTerminated, TessLangDownloadResult);
-            DeleteFileIfExists(TessLangPsFile);
-            if FileExists(TessFolder + '\tessdata\spa.traineddata') then
-              AppendInstallLog('[Tesseract] spa.traineddata downloaded OK.')
+            // --- spa ---
+            // Retry loop: 3 attempts with 5s delay between each, plus a size
+            // check (>1 MB) to catch truncated downloads. The previous single-
+            // shot WebClient.DownloadFile() failed silently on two consecutive
+            // installs due to transient GitHub CDN connection resets, leaving
+            // spa.traineddata absent and breaking all OCR (pytesseract fails
+            // if ANY requested lang is missing, even for English documents).
+            if not FileExists(TessFolder + '\tessdata\spa.traineddata') then
+            begin
+              TessMissingLangs := TessMissingLangs + 'spa ';
+              AppendInstallLog('[Tesseract] spa.traineddata not present - downloading (up to 3 attempts)...');
+              TessLangPsFile := ExpandConstant('{tmp}\tess_lang_spa.ps1');
+              TessLangPsContents :=
+                '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;' + #13#10 +
+                '$dest = ''' + TessFolder + '\tessdata\spa.traineddata'';' + #13#10 +
+                '$url  = ''https://github.com/tesseract-ocr/tessdata/raw/main/spa.traineddata'';' + #13#10 +
+                '$ok   = $false;' + #13#10 +
+                'for ($i = 1; $i -le 3; $i++) {' + #13#10 +
+                '  try {' + #13#10 +
+                '    Write-Host "spa attempt $i of 3...";' + #13#10 +
+                '    $wc = New-Object System.Net.WebClient;' + #13#10 +
+                '    $wc.Headers["User-Agent"] = "AI-Prowler-OCR-Installer";' + #13#10 +
+                '    $wc.DownloadFile($url, $dest);' + #13#10 +
+                '    if ((Test-Path $dest) -and (Get-Item $dest).Length -gt 1MB) {' + #13#10 +
+                '      Write-Host "spa OK on attempt $i"; $ok = $true; break' + #13#10 +
+                '    } else { Write-Host "spa attempt $i: file missing or too small" }' + #13#10 +
+                '  } catch { Write-Host "spa attempt $i failed: $_" }' + #13#10 +
+                '  if ($i -lt 3) { Start-Sleep -Seconds 5 }' + #13#10 +
+                '}' + #13#10 +
+                'if (-not $ok) { Write-Host "spa FAILED after 3 attempts"; exit 1 }';
+              SaveStringToFile(TessLangPsFile, TessLangPsContents, False);
+              Exec('powershell.exe',
+                '-NoProfile -ExecutionPolicy Bypass -File "' + TessLangPsFile + '"',
+                '', SW_HIDE, ewWaitUntilTerminated, TessLangDownloadResult);
+              DeleteFileIfExists(TessLangPsFile);
+              if FileExists(TessFolder + '\tessdata\spa.traineddata') then
+                AppendInstallLog('[Tesseract] spa.traineddata downloaded OK.')
+              else
+                AppendInstallLog('[Tesseract] spa.traineddata download FAILED after 3 attempts (rc='
+                  + IntToStr(TessLangDownloadResult) + '). Use Install/Repair OCR in the app.');
+            end
             else
-              AppendInstallLog('[Tesseract] spa.traineddata download FAILED (rc='
-                + IntToStr(TessLangDownloadResult) + '). Use Install/Repair OCR in the app.');
-          end
-          else
-            AppendInstallLog('[Tesseract] spa.traineddata present - skipping download.');
+              AppendInstallLog('[Tesseract] spa.traineddata present - skipping download.');
 
           if TessMissingLangs <> '' then
             AppendInstallLog('[Tesseract] Lang packs missing after NSIS and download attempted: '

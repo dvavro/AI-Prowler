@@ -78,6 +78,8 @@ def mock_sms_config(tmp_path, monkeypatch):
         "twilio_account_sid": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
         "twilio_auth_token": AUTH_TOKEN,
         "twilio_from_number": "+13865550100",
+        "sms_help_reply_text": "AI-Prowler support: test@example.com, or reply "
+                                "STOP to unsubscribe. Msg&data rates may apply.",
     }
     cfg_dir = tmp_path / ".ai-prowler"
     cfg_dir.mkdir(exist_ok=True)
@@ -106,7 +108,14 @@ def _make_test_app(tmp_path):
 
     async def sms_webhook(request: Request):
         body_bytes = await request.body()
-        params = dict(urllib.parse.parse_qsl(body_bytes.decode("utf-8", errors="replace")))
+        # keep_blank_values=True — required so Twilio's signature calc
+        # (which includes blank-valued fields like ToState=/ToCity=) can be
+        # correctly reproduced. Dropping blank values here silently breaks
+        # signature validation for any inbound message where a location
+        # field happens to be empty. See ai_prowler_mcp.py for the real
+        # fix; this test harness must mirror it or tests give false confidence.
+        params = dict(urllib.parse.parse_qsl(
+            body_bytes.decode("utf-8", errors="replace"), keep_blank_values=True))
         if not params:
             return PlainTextResponse("Bad Request", status_code=400)
 
@@ -121,22 +130,49 @@ def _make_test_app(tmp_path):
             if not valid:
                 return PlainTextResponse("Forbidden", status_code=403)
 
+        from_num = params.get("From", "")
+        body_text = params.get("Body", "")
+
         sms_inbox_append(
             message_id   = params.get("MessageSid", ""),
-            from_number  = params.get("From", ""),
+            from_number  = from_num,
             to_number    = params.get("To", ""),
-            body         = params.get("Body", ""),
+            body         = body_text,
             provider     = provider,
             contact_name = "",
             timestamp    = "",
         )
+
+        # Consent lifecycle — mirrors ai_prowler_mcp.py's sms_webhook Phase 1.5.
+        _kw = None
+        try:
+            from sms_consent import classify_keyword, consent_set_state
+            _kw = classify_keyword(body_text)
+            if _kw == "opt_out":
+                consent_set_state(from_num, consented=False)
+            elif _kw == "opt_in":
+                consent_set_state(from_num, consented=True)
+        except Exception:
+            pass
+
+        if _kw == "info":
+            _help_text = str(cfg.get("sms_help_reply_text", "") or "").strip()
+            if _help_text:
+                import xml.sax.saxutils as _xmlsax
+                _help_body = _xmlsax.escape(_help_text)
+                return PlainTextResponse(
+                    f"<?xml version='1.0' encoding='UTF-8'?>"
+                    f"<Response><Message>{_help_body}</Message></Response>",
+                    media_type="text/xml", status_code=200)
+
         return PlainTextResponse(
             "<?xml version='1.0' encoding='UTF-8'?><Response/>",
             media_type="text/xml", status_code=200)
 
     async def whatsapp_webhook(request: Request):
         body_bytes = await request.body()
-        params = dict(urllib.parse.parse_qsl(body_bytes.decode("utf-8", errors="replace")))
+        params = dict(urllib.parse.parse_qsl(
+            body_bytes.decode("utf-8", errors="replace"), keep_blank_values=True))
         if not params:
             return PlainTextResponse("Bad Request", status_code=400)
 
@@ -365,3 +401,165 @@ class TestSignalWireWebhook:
         from sms_inbox import validate_signalwire_signature
         assert not validate_signalwire_signature("wrong", "BADSIG==",
                                                   "https://example.com/", {})
+
+
+# ─── HELP auto-reply and STOP/START-via-webhook (Phase 1.5) ─────────────────
+# These exercise the FULL webhook route, not just sms_consent.py directly —
+# confirms classify_keyword() + consent_set_state() + the TwiML response
+# actually wire together correctly end-to-end through the real request path.
+
+def _inbound(body: str, from_num: str = "+13865550101") -> dict:
+    return {
+        "MessageSid": "SM_kw_test",
+        "From": from_num,
+        "To":   "+13865550100",
+        "Body": body,
+        "NumMedia": "0",
+    }
+
+
+class TestHelpAutoReply:
+    def test_help_returns_populated_twiml_with_escaped_ampersand(self, client, isolated_state):
+        params = _inbound("HELP")
+        sig = _twilio_sig(AUTH_TOKEN, "http://testserver/sms-webhook", params)
+        resp = client.post(
+            "/sms-webhook",
+            content=_form_encode(params),
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "X-Twilio-Signature": sig,
+            },
+        )
+        assert resp.status_code == 200
+        assert "<Message>" in resp.text
+        assert "test@example.com" in resp.text
+        assert "STOP" in resp.text
+        # The literal "&" in "Msg&data" MUST be XML-escaped as "&amp;" —
+        # unescaped, this would be invalid XML and could break Twilio's parser.
+        assert "&amp;data" in resp.text
+        assert "Msg&data" not in resp.text  # raw unescaped form must not appear
+
+        # And the response must be well-formed XML, not just string-matching.
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(resp.text)
+        assert root.tag == "Response"
+        assert root.find("Message") is not None
+
+    def test_help_does_not_change_consent_state(self, client, isolated_state, tmp_path):
+        """HELP is informational only — must never flip an existing
+        consent record's state."""
+        import os
+        os.environ["AIPROWLER_TEST_STATE_DIR"] = str(tmp_path)
+        import importlib, sms_consent
+        importlib.reload(sms_consent)
+        sms_consent.consent_signup_upsert(name="Jane", phone="+13865550101", consented=True)
+
+        params = _inbound("HELP")
+        sig = _twilio_sig(AUTH_TOKEN, "http://testserver/sms-webhook", params)
+        client.post("/sms-webhook", content=_form_encode(params),
+                    headers={"Content-Type": "application/x-www-form-urlencoded",
+                             "X-Twilio-Signature": sig})
+
+        records = sms_consent.consent_list()
+        assert len(records) == 1
+        assert records[0]["consented"] is True
+        assert records[0]["opted_out_at"] is None
+
+    def test_ordinary_message_gets_empty_twiml_not_help_reply(self, client, isolated_state):
+        """Regression guard: an unrelated message must NOT accidentally
+        trigger the HELP auto-reply."""
+        params = _inbound("On my way, 10 min out")
+        sig = _twilio_sig(AUTH_TOKEN, "http://testserver/sms-webhook", params)
+        resp = client.post(
+            "/sms-webhook",
+            content=_form_encode(params),
+            headers={"Content-Type": "application/x-www-form-urlencoded",
+                     "X-Twilio-Signature": sig},
+        )
+        assert resp.status_code == 200
+        assert "<Response/>" in resp.text
+        assert "<Message>" not in resp.text
+
+    def test_blank_help_config_falls_back_to_no_reply(self, isolated_state, tmp_path):
+        """Safe-default check: if sms_help_reply_text is unset/blank (the
+        out-of-the-box state for a new AI-Prowler install), HELP must fall
+        through to empty TwiML rather than sending some generic/hardcoded
+        message pointing at the wrong business. Uses its own config —
+        deliberately NOT the mock_sms_config fixture, which always sets a
+        help text — to isolate exactly this unconfigured case."""
+        from starlette.testclient import TestClient
+
+        cfg = {
+            "sms_provider": "twilio",
+            "twilio_sms_enabled": True,
+            "twilio_account_sid": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "twilio_auth_token": AUTH_TOKEN,
+            "twilio_from_number": "+13865550100",
+            # sms_help_reply_text intentionally omitted — the unconfigured case.
+        }
+        cfg_dir = tmp_path / ".ai-prowler"
+        cfg_dir.mkdir(exist_ok=True)
+        (cfg_dir / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+
+        with patch("sms_backends.load_sms_config", return_value=cfg):
+            app = _make_test_app(tmp_path)
+            local_client = TestClient(app, raise_server_exceptions=True)
+
+            params = _inbound("HELP")
+            sig = _twilio_sig(AUTH_TOKEN, "http://testserver/sms-webhook", params)
+            resp = local_client.post(
+                "/sms-webhook",
+                content=_form_encode(params),
+                headers={"Content-Type": "application/x-www-form-urlencoded",
+                         "X-Twilio-Signature": sig},
+            )
+
+        assert resp.status_code == 200
+        assert "<Response/>" in resp.text
+        assert "<Message>" not in resp.text
+
+
+class TestStopStartViaWebhook:
+    """End-to-end: a real STOP/START reply through the actual webhook route
+    updates sms_consent.json, not just via direct sms_consent.py calls."""
+
+    def test_stop_via_webhook_updates_consent(self, client, isolated_state, tmp_path):
+        import os
+        os.environ["AIPROWLER_TEST_STATE_DIR"] = str(tmp_path)
+        import importlib, sms_consent
+        importlib.reload(sms_consent)
+        sms_consent.consent_signup_upsert(name="Jane", phone="+13865550101", consented=True)
+
+        params = _inbound("STOP")
+        sig = _twilio_sig(AUTH_TOKEN, "http://testserver/sms-webhook", params)
+        resp = client.post("/sms-webhook", content=_form_encode(params),
+                            headers={"Content-Type": "application/x-www-form-urlencoded",
+                                     "X-Twilio-Signature": sig})
+
+        assert resp.status_code == 200
+        assert "<Response/>" in resp.text  # STOP gets empty TwiML, not a HELP-style reply
+        records = sms_consent.consent_list()
+        assert records[0]["consented"] is False
+        assert records[0]["opted_out_at"] is not None
+
+    def test_blank_form_field_does_not_break_signature_validation(self, client, isolated_state):
+        """Regression test for the keep_blank_values bug: a request with a
+        blank-valued field (e.g. ToState=) must still validate correctly,
+        not silently drop the field and fail signature verification."""
+        params = dict(TWILIO_INBOUND)
+        params["ToState"] = ""   # blank value — parse_qsl drops this by
+        params["ToCity"]  = ""   # default unless keep_blank_values=True
+        sig = _twilio_sig(AUTH_TOKEN, "http://testserver/sms-webhook", params)
+
+        resp = client.post(
+            "/sms-webhook",
+            content=_form_encode(params),
+            headers={"Content-Type": "application/x-www-form-urlencoded",
+                     "X-Twilio-Signature": sig},
+        )
+        assert resp.status_code == 200, (
+            "Blank-valued form fields broke signature validation — this is "
+            "the exact bug found in production on 2026-08-15 (parse_qsl "
+            "silently drops blank values without keep_blank_values=True)."
+        )
+

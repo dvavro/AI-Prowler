@@ -157,6 +157,18 @@ def isolated_env(tmp_path, rag, monkeypatch):
     # against the new path.
     rag.invalidate_chroma_cache()
 
+    # ── Production-database guard ─────────────────────────────────────────────
+    # Record the real production database path and its mtime BEFORE the test
+    # runs so teardown can assert it was never written to.  This turns a silent
+    # corruption event into a loud, immediately-actionable test failure.
+    _real_db_path = Path.home() / "AI-Prowler" / "rag_database"
+    _real_db_mtime_before: float | None = None
+    if _real_db_path.exists():
+        try:
+            _real_db_mtime_before = _real_db_path.stat().st_mtime
+        except OSError:
+            pass
+
     class Env:
         pass
     env = Env()
@@ -187,6 +199,29 @@ def isolated_env(tmp_path, rag, monkeypatch):
     gc.collect()
     gc.collect()
     gc.collect()
+
+    # ── Post-test production-database integrity check ─────────────────────────
+    # If the real production database directory was modified during this test,
+    # something bypassed the isolation sandbox and wrote to the live install.
+    # Fail loudly NOW (at teardown) so pytest identifies the exact test
+    # responsible, rather than letting the corruption silently accumulate and
+    # only surface as a crash when the user next clicks Reindex in the GUI.
+    if _real_db_mtime_before is not None and _real_db_path.exists():
+        try:
+            _real_db_mtime_after = _real_db_path.stat().st_mtime
+            assert _real_db_mtime_after == _real_db_mtime_before, (
+                f"\n\n*** PRODUCTION DATABASE CORRUPTED BY THIS TEST ***\n"
+                f"    Path:   {_real_db_path}\n"
+                f"    Before: {_real_db_mtime_before}\n"
+                f"    After:  {_real_db_mtime_after}\n"
+                f"The test bypassed isolated_env isolation and wrote to the real\n"
+                f"~/AI-Prowler/rag_database. Fix: ensure the test uses `isolated_env`\n"
+                f"and that rag_preprocessor.CHROMA_DB_PATH was patched before any\n"
+                f"ChromaDB call, OR ensure AIPROWLER_TEST_STATE_DIR is set in the\n"
+                f"environment (run_tests.bat sets this automatically)."
+            )
+        except OSError:
+            pass  # can't stat after — don't crash teardown over a missing dir
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 # AI-Prowler — Complete User Guide
-## Version 9.0.0
+## Version 9.1.0
 
 ---
 
@@ -96,6 +96,12 @@ This produces dramatically better results — equivalent to having a skilled res
 - **`fuzzy_replace_in_file` removed** — this whitespace-tolerant file-editing tool (added in v8.0.0) had a bug where, if its stricter matching strategies failed and it fell back to whitespace-collapse matching, that normalization was applied to the *entire file* rather than just the matched region, risking corruption of unrelated content. Removed entirely; `str_replace_in_file` (exact match) and `line_replace_in_file` (by line number) remain as the two-tool escalation path for surgical file edits. See **Section 6.2c** and **Section 6 → Code Tools — Write-Side**.
 - **Total tools: 82** — down from 83, reflecting the `fuzzy_replace_in_file` removal above.
 - **Auto-updater now refreshes the Documents\AI-Prowler user guide copy** — `update_manifest.json` has included `COMPLETE_USER_GUIDE.md` since v8.1.0, but the in-app updater (`RAG_RUN.bat`) only ever applied staged files into the install directory (`C:\Program Files\AI-Prowler`), never to the separate `%USERPROFILE%\Documents\AI-Prowler\COMPLETE_USER_GUIDE.md` copy the installer seeds — which is both the copy most users actually open and the one tracked for ChromaDB indexing, so Claude's own answers about AI-Prowler went stale after every auto-update even though the app code updated correctly. `RAG_RUN.bat` now also copies the updated guide into Documents\AI-Prowler if a copy already exists there. See **Section 23 → Update Notifications**.
+
+**New in v9.1.0:**
+
+- **Create Invoice from the Jobs PWA** — the job-detail popup now has a green 🧾 Create Invoice button for any unpaid, un-invoiced job. Tapping it opens a pre-filled form (quote, discount, tax rate, service type, description, payment terms) with a live Taxable / Tax / Total Due strip that recalculates on every keystroke using ceiling rounding on tax. Submitting calls `create_invoice` via the `/pwa-api` endpoint and works in both personal and server mode. Email Invoice / Text Invoice buttons are enabled immediately after the invoice is created. See **Section 22 → Jobs PWA**.
+- **Live invoice totals use ceiling rounding on tax** — the PWA's `ifRecalc()` function now applies `Math.ceil` (ceiling to the nearest penny) on the tax amount and `Math.round` (half-up, 2 dp) on taxable and total, with `Number.EPSILON` added before each operation to prevent IEEE-754 float drift. This ensures the pre-submission display never under-states what will be collected.
+- **Invoices sheet header row now frozen** — the Invoices tab in `AI-Prowler_Job_Tracker.xlsx` now freezes rows 1–2 (title banner + column headers) at `A3`, matching the Customers, Jobs_Schedule, and TimeLog sheets. Scrolling vertically through invoice rows keeps the column headers visible.
 
 **New in v9.0.0:**
 
@@ -266,7 +272,7 @@ When you ask Claude a question with AI-Prowler connected, Claude follows this pa
 
 ## 6. MCP Tools Reference
 
-AI-Prowler exposes **83 tools** total to Claude across thirteen categories (this doc's own category breakdown — a separate, narrower ten-family grouping is used internally by the `how_to_use_ai_prowler` tool's guide text; 81 of the 83 shipped in v8.0.0, `list_analysis_tasks` and `cleanup_job_logs` were added since). Exactly how many are actually *visible* on a given connection depends on mode — see the table below.
+AI-Prowler exposes **85 tools** total to Claude across thirteen categories (this doc's own category breakdown — a separate, narrower ten-family grouping is used internally by the `how_to_use_ai_prowler` tool's guide text; 81 of the 83 shipped in v8.0.0, `list_analysis_tasks` and `cleanup_job_logs` were added since, and `list_sms_consents`/`delete_sms_consent` were added with the SMS consent capture feature). Exactly how many are actually *visible* on a given connection depends on mode — see the table below.
 
 ### 6.1 Tool Counts by Mode
 
@@ -411,13 +417,13 @@ This scoping applies independently of Tier B role gating (§6.3) — even an own
 | `geocode_address` | Converts a street address to GPS coordinates via Nominatim / OpenStreetMap — free, no API key. | Personal + Server |
 | `optimize_route` | Solves the Traveling Salesman Problem for a list of job stops using real street routing via OSRM. Returns stops in optimal order with estimated arrival times. | Personal + Server |
 | `build_maps_url` | Generates a tap-to-navigate Google Maps (or Apple Maps) URL with all stops pre-loaded in optimized order. Splits into multiple leg links for routes over 9 stops. | Personal + Server |
-| `read_job_spreadsheet` | Reads job data from the AI-Prowler Job Tracker spreadsheet. Supports date filtering to show today's or a specific day's jobs. | Personal + Server |
-| `update_job_spreadsheet` | Updates a row in the job tracker after a job is completed — status, invoice number, duration, actual amount, etc. Auto-backs up the spreadsheet before writing. | Personal + Server |
+| `read_job_spreadsheet` | Reads job data from the AI-Prowler Job Tracker spreadsheet. Supports date filtering to show today's or a specific day's jobs. **Server mode, `Jobs_Schedule` sheet only:** staff/field_crew see only rows where `Crew / Technician` matches their own name; owner/manager see every row. Doesn't apply to the `Customers` sheet (stays fully readable for `send_email`/`send_sms` lookups) or to anyone on their own per-employee spreadsheet file — those rows already belong to them by construction. | Personal + Server |
+| `update_job_spreadsheet` | Updates a row in the job tracker after a job is completed — status, invoice number, duration, actual amount, etc. Auto-backs up the spreadsheet before writing. **Server mode, `Jobs_Schedule` sheet only:** rejected if the row isn't assigned to you; owner/manager and anyone on their own per-employee file are unrestricted. | Personal + Server |
 | `check_tools_status` | Field-service health check. Reports which action tools are ready to use and which need configuration (SMTP, spreadsheet path, routing APIs). **Server mode:** the dev-tools/file-editing section reflects the caller's actual availability — most dev tools (code execution, backups, `list_directory`) are unavailable in server mode; the write/edit tools show a live check of whether the caller currently has a personal directory configured. | Personal + Server |
 
 ---
 
-#### SMS & WhatsApp Tools (5 tools — New in v8.0.0)
+#### SMS & WhatsApp Tools (7 tools — 5 New in v8.0.0, 2 added later)
 
 These tools enable two-way SMS and WhatsApp communication between field crew, registered server users, and spreadsheet customers. `check_sms_inbox` and `check_sms_replies` are mode-exclusive — see §6.2 and §6.2b — because they answer the same underlying question ("what's come in?") with different scoping that only makes sense in one mode or the other.
 
@@ -428,10 +434,12 @@ These tools enable two-way SMS and WhatsApp communication between field crew, re
 | `check_sms_inbox` | Reads the entire local SMS/WhatsApp inbox (populated in real time via the `/sms-webhook` and `/whatsapp-webhook` endpoints) — every inbound message from any sender, not just people you've texted. Filterable by provider and unread-only; `since_hours=0` returns everything ever received. Personal mode only — it has no per-user scoping, so it's suppressed in server mode to prevent one employee from reading everyone's messages. | Personal |
 | `check_sms_replies` | Checks for inbound SMS replies, scoped to threads **you personally sent** — in server mode, Mike sees only Karen's reply, not Jake's or Bob's. Server mode only — with a single personal-install user this attribution is meaningless, so `check_sms_inbox` covers personal mode instead. | Server |
 | `check_whatsapp_replies` | Checks for inbound WhatsApp messages. **Server mode:** scoped to threads you personally sent — same per-user isolation as `check_sms_replies` (it no longer delegates to `check_sms_inbox` internally, which would have bypassed that scoping entirely). | Personal + Server |
+| `list_sms_consents` | Lists SMS opt-in records captured via the `/consent-signup` website widget, kept in sync with STOP/START replies. Filterable to currently-opted-in only, or a time window. See §11 → SMS Consent Capture. | Personal + Server |
+| `delete_sms_consent` | Permanently deletes a consent record by phone number or record ID — for CCPA/GDPR-style removal requests. Distinct from an opt-out (STOP), which marks a record inactive but keeps it. | Personal + Server |
 
 **SMS Setup (Personal Mode):** Tell Claude your Twilio (or SignalWire/Vonage) Account SID, Auth Token, and from-number. Claude calls `configure_sms` once and credentials are saved. For inbound messages, configure your Twilio phone number's webhook URL to point to `https://your-tunnel-domain/sms-webhook`.
 
-**SMS Setup (Server Mode):** Configure SMS credentials directly in the AI-Prowler GUI under **Settings → SMS Configuration**. The webhook endpoints `/sms-webhook` and `/whatsapp-webhook` are registered automatically when the HTTP server starts.
+**SMS Setup (Server Mode):** Configure SMS credentials directly in the AI-Prowler GUI under **Settings → SMS Configuration**. The webhook endpoints `/sms-webhook`, `/whatsapp-webhook`, and `/consent-signup` are registered automatically when the HTTP server starts.
 
 **SMS Recipients:** Recipients are resolved by name or partial match against:
 1. Registered server users in `users.json` (with `cell_phone` and `cell_carrier` set in the Admin tab)
@@ -530,8 +538,8 @@ Two different status tools — know which to call:
 
 | Tool | What It Does | Mode |
 |---|---|---|
-| `log_time_entry` | Clocks in or out for a job. Records start/stop times and computes duration in the TimeLog sheet of the Job Tracker spreadsheet. Requires an exact, unambiguous job match — an identifier matching zero or multiple jobs is rejected rather than guessed. **Server mode:** the `Crew / Technician` field is stamped with the caller's own name (not the job's pre-assigned crew), and a new `Logged By (User ID)` column tracks ownership — you can only clock out an entry you personally opened, and one teammate's open shift never blocks another's on the same job. | Personal + Server |
-| `email_invoice` | Reads the Invoices sheet and emails a branded HTML invoice directly to the customer. | Personal + Server |
+| `log_time_entry` | Clocks in or out for a job. Records start/stop times and computes duration in the TimeLog sheet of the Job Tracker spreadsheet. Requires an exact, unambiguous job match — an identifier matching zero or multiple jobs is rejected rather than guessed. **Server mode:** rejected outright if the job isn't assigned to you (`Crew / Technician` column) — checked before any TimeLog entry is written, not just stamped afterward. Owner/manager and anyone on their own per-employee spreadsheet file are unrestricted. The `Crew / Technician` field is then stamped with the caller's own name, and a new `Logged By (User ID)` column tracks ownership — you can only clock out an entry you personally opened, and one teammate's open shift never blocks another's on the same job. | Personal + Server |
+| `email_invoice` | Reads the Invoices sheet and emails a branded HTML invoice directly to the customer. **Server mode:** rejected if the invoice's job isn't assigned to you (cross-referenced against `Jobs_Schedule`'s `Crew / Technician` column, since Invoices has no crew column of its own). Owner/manager and anyone on their own per-employee spreadsheet file are unrestricted. | Personal + Server |
 | `schedule_next_recurring_job` | Auto-creates the next recurring job entry (weekly, bi-weekly, monthly, quarterly) after a job is marked complete. Requires an exact, unambiguous job match — a `job_identifier` matching zero or multiple jobs is rejected with a candidate list rather than guessed. Accepts a `when` argument in **both** modes — `"today"` (default if omitted, in both modes), `"tomorrow"`, `"yesterday"`, `"this_week"`, `"next_week"`, `"any"` (no date restriction), or an explicit `"YYYY-MM-DD"` — to scope which jobs are searched by date. **Server mode:** staff/field_crew only search jobs assigned to them (`Crew / Technician` matches their own name); owner/manager search every crew's jobs. | Personal + Server |
 | `get_ar_aging_report` | Generates an Accounts Receivable aging report from the Invoices sheet, broken into Current / 1–30 / 31–60 / 61–90 / 90+ day buckets. | Personal + Server |
 | `save_contact` | Saves or updates a personal contact (phone and/or email) so future `send_sms` / `send_email` calls can resolve them by name. Merges with any existing saved fields rather than overwriting. **Server mode:** each user gets their own separate file (`contacts_cache_<user_id>.json`) — genuinely private, not a shared company address book; the confirmation message shows exactly which file it saved to. | Personal + Server |
@@ -968,7 +976,20 @@ Every job-spreadsheet tool (`read_job_spreadsheet`, `update_job_spreadsheet`, `e
 - **Shared master (default)** — everyone reads and writes the exact file at that path. Simple, and the whole crew stays in sync automatically.
 - **Per-user tracking** — drop additional files named exactly `<user_id>.xlsx` (e.g. `jake-r.xlsx`, `vicki-vavro.xlsx` — the user's ID from the Admin tab, not their display name) into the **same folder** as the master file. A user with a matching file gets their own private tracker instead of the shared one; anyone without one still falls back to the master. No separate setting to configure — it's entirely folder-based.
 
+**Row-level scoping on the shared master:** which *file* gets used is only half the story. On the shared master, `read_job_spreadsheet`, `update_job_spreadsheet`, `log_time_entry`, and `email_invoice` additionally restrict staff/field_crew to only the `Jobs_Schedule` rows where `Crew / Technician` matches their own name — a blank crew field is treated as unassigned, not as "visible to everyone." Owner/manager are never restricted. Anyone on their own per-user file needs no additional row filtering — every row in that file already belongs to them by construction, so filtering is skipped entirely there.
+
 **Concurrent writes:** `update_job_spreadsheet`, `schedule_next_recurring_job`, and `log_time_entry` are serialized behind an internal write lock, so two crew members saving at the same moment queue up instead of one silently overwriting the other's change. Combined with the automatic pre-write backup (see below), this means a bad or conflicting write is always recoverable, and simultaneous writes are always applied cleanly one after another rather than racing.
+
+#### The Jobs App (Server Mode)
+
+Beyond talking to Claude directly, each server-mode employee also gets a dedicated mobile app screen for the field — reachable at `/jobs/` on your tunnel URL, installable to the phone's home screen like any other app ("Add to Home Screen," no app store).
+
+- **Filtered automatically** to the employee's own jobs, using the exact same row-level scoping described above.
+- **Clock in / clock out**, **attach job photos** straight from the camera, and **email invoices** — all without opening a Claude conversation.
+- **Log in once.** An employee enters their personal token the first time they open the app; the login persists (stored on the device, not tied to the browser tab or app staying open) until they explicitly tap **Sign Out / Change Device** in the app's profile screen — closing or restarting the app never signs them out.
+- **Personal mode** gets the same app and the same one-time login screen, but checks the entered password against the single owner token fetched automatically from AI-Prowler's own config — nothing to set up per employee, since there's only one user.
+
+The Jobs App and talking to Claude directly are two paths into the same data, not two separate systems — an employee can clock in from the app in the truck, then later ask Claude "what's my schedule tomorrow?" from the same phone's browser, and both are reading and writing the identical spreadsheet.
 
 #### Sheets
 
@@ -1243,7 +1264,7 @@ Claude updates the Customers sheet in the Job Tracker spreadsheet with the new r
 
 ### Overview
 
-v8.0.0 introduces full two-way SMS and WhatsApp messaging for AI-Prowler. Field crew can send and receive messages from Claude.ai on their phone — no separate app or desktop required.
+v8.0.0 introduces full two-way SMS and WhatsApp messaging for AI-Prowler. Field crew can send and receive messages from Claude.ai on their phone — no separate app or desktop required. A later update adds a configurable outbound message footer, a HELP auto-reply, and a website SMS-consent capture widget so a business can collect opt-ins directly from their own site.
 
 ### Provider Support
 
@@ -1256,19 +1277,92 @@ AI-Prowler uses a provider abstraction layer. Switching between SMS providers is
 | Vonage | SMS | Good international coverage. |
 | WhatsApp Business API | WhatsApp | Via Twilio. Works worldwide. No carrier gateway issues. |
 
+### Setting Up Twilio for Your Business
+
+This walks through connecting a real Twilio account to AI-Prowler from scratch, in the GUI's **Settings → SMS / Text Messaging** tab.
+
+1. **Create a Twilio account** at [twilio.com/try-twilio](https://www.twilio.com/try-twilio) — trial credit is available, no upfront payment required to start testing.
+2. **Get a phone number.** In the Twilio Console, go to Phone Numbers → Buy a Number. Toll-free and local (long code) numbers both work; a toll-free number typically activates faster but has the HELP-keyword limitation described below.
+3. **Find your credentials.** On the Twilio Console home page, note your **Account SID** (starts with `AC...`) and **Auth Token** (click "Show" to reveal it) — both live under Account Info on the dashboard.
+4. **Enter everything in AI-Prowler.** Open Settings → SMS / Text Messaging, select **Twilio** as the provider, check **Enable SMS Messaging**, then paste the Account SID, Auth Token, and From Number (your new Twilio number, in `+1XXXXXXXXXX` format).
+5. **Test outbound.** Enter your own phone number in "Test recipient" and click **Send Test SMS**. If a text arrives, sending works.
+6. **Save Config.**
+7. **Copy the Inbound Webhook URL.** The same settings panel shows a unique webhook URL for your install (e.g. `https://your-tunnel-domain.ai-prowler.com/sms-webhook`). Click Copy.
+8. **Paste it into Twilio.** In the Twilio Console, open your phone number → Messaging Configuration → "A message comes in" → paste the copied URL, set the method to **HTTP POST**, and save.
+9. **Test inbound.** Text your Twilio number from your own phone, then ask Claude "check my SMS inbox" (`check_sms_inbox` in personal mode, `check_sms_replies` in server mode). The message should appear within seconds — no polling delay.
+
 ### Inbound Messages — Webhook Architecture
 
 AI-Prowler captures inbound SMS and WhatsApp messages in real time via webhook endpoints registered on the HTTP server:
 
 - `/sms-webhook` — receives inbound SMS from Twilio/SignalWire/Vonage
 - `/whatsapp-webhook` — receives inbound WhatsApp from Twilio
+- `/consent-signup` — receives website opt-in form submissions (see **SMS Consent Capture** below)
 
 Messages are stored locally in `sms_inbox.json` and isolated per crew member (thread isolation). There is no polling — messages arrive instantly when the webhook fires.
 
-**Setting up Twilio inbound webhook:**
-1. In your Twilio Console, open your phone number
-2. Under Messaging → Webhook, set the URL to: `https://your-tunnel-domain/sms-webhook`
-3. Method: HTTP POST
+### Outbound Message Footer — Callback Signature & STOP Disclosure
+
+Every message sent via `send_sms` can automatically carry two short lines appended to the end, both configured in Settings → SMS / Text Messaging:
+
+- **Callback signature** — a free-text line (e.g. *"Call/text David back: 480-747-0358"*) so a customer who doesn't recognize the business's SMS number knows how to reach a real person. Leave blank to disable.
+- **Include "Reply STOP to opt out"** — checkbox, on by default. Adds the standard opt-out disclosure line that carriers and TCPA generally expect on business texts. Twilio separately auto-blocks future delivery to any number that replies STOP regardless of this setting — the checkbox only controls whether the disclosure *text* itself is included in outbound messages.
+
+### HELP Auto-Reply
+
+Optionally configure a message Claude sends automatically when a customer texts **HELP** — typically your support contact info plus a STOP reminder. Configured in the same SMS settings panel. Leave blank to send no reply, which is the safe default: a blank field means no message goes out pointing customers at the wrong business.
+
+> **Platform limitation:** on Toll-Free US numbers that aren't part of a Twilio Messaging Service, Twilio intercepts HELP at the carrier level and replies with its own canned message before it ever reaches AI-Prowler — this setting has no effect for those numbers, and the message never appears in `check_sms_inbox`. STOP and START are unaffected and always reach AI-Prowler normally regardless of number type. To customize HELP's reply on a Toll-Free number, the number needs to be placed in a Twilio Messaging Service with Advanced Opt-Out enabled — that's a Twilio Console configuration, not an AI-Prowler one.
+
+### SMS Consent Capture — Website Opt-In Widget
+
+Every AI-Prowler install can collect SMS opt-in signups directly from the business's own website — fully decentralized, with no data passing through AI-Prowler LLC's infrastructure. Each business's consent records live only on that business's own AI-Prowler install, the same way inbound SMS already does.
+
+**How it works**
+
+1. AI-Prowler exposes a public `/consent-signup` endpoint alongside the existing SMS webhooks. Find your install's unique URL in Settings → SMS / Text Messaging → **SMS Consent Form Endpoint URL**.
+2. Embed a small widget script on your website, pointed at that URL.
+3. When a visitor submits the form, their name, phone number, and consent choice are recorded locally in `sms_consent.json` — instantly available to ask Claude about.
+
+**Embedding the form**
+
+The widget script is hosted once at `https://ai-prowler.com/consent-widget.js` and used by every AI-Prowler customer. Two ways to use it:
+
+*Fastest — auto-rendered default form:*
+```html
+<div data-ai-prowler-consent-widget></div>
+<script src="https://ai-prowler.com/consent-widget.js"
+        data-endpoint="YOUR_CONSENT_FORM_ENDPOINT_URL"></script>
+```
+
+*Full control — your own custom-styled form:* build the HTML yourself with fields named `name` and `phone`, and a `consent` checkbox, add `data-ai-prowler-consent-form` to the `<form>` tag, and include the same script tag. The widget only wires up the submit handler over `fetch()` — your styling is untouched.
+
+**Reading the list**
+
+Ask Claude *"who's opted in for SMS?"* or *"show me my consent list"* — calls `list_sms_consents`. Filter to only currently opted-in contacts, or see everyone including people who submitted the form without checking the consent box, useful for a full audit trail.
+
+**Staying in sync with SMS replies**
+
+If someone who signed up on the website later replies **STOP** to a text, AI-Prowler automatically flips their consent record to opted-out — the list stays accurate without manual bookkeeping. Replying **START** or **UNSTOP** restores it, preserving their original signup details (name, signup date, source).
+
+**Deleting a record**
+
+For a CCPA/GDPR-style removal request, ask Claude *"delete the consent record for [phone number]"* — calls `delete_sms_consent`. This permanently erases the record, unlike an opt-out (via STOP) which just marks it inactive while keeping the history.
+
+### Using Claude as Your Twilio Setup Assistant — What to Expect
+
+Claude can walk through the entire Twilio setup and troubleshooting process conversationally, but it's worth knowing the actual division of labor:
+
+- **Claude cannot log into your Twilio Console directly** — there's no browser automation into Twilio's dashboard. You click through the Twilio Console yourself; Claude tells you exactly where to go and what to enter.
+- **Claude can fully inspect the AI-Prowler side** — current SMS settings, the server log, whether a webhook request actually arrived, and the contents of the local SMS inbox and consent list — to pinpoint exactly which step is failing rather than guessing.
+- **Screenshots close the loop.** If something looks wrong, a screenshot of the relevant Twilio Console page (phone number configuration, messaging logs, etc.) lets Claude review it directly and spot common mistakes — wrong webhook URL, wrong HTTP method, a setting that didn't actually save.
+- **Real test texts are the fastest way to verify.** Sending a real text and then asking Claude to check the inbox is more reliable than reasoning about configuration in the abstract — it either shows up or it doesn't.
+
+**The most common setup problems, in order of likelihood:**
+1. The webhook URL wasn't actually saved in the Twilio Console (always double-check by re-opening the page after saving).
+2. The AI-Prowler server or Cloudflare Tunnel isn't running, so the webhook has nowhere to reach.
+3. Account SID / Auth Token typo, or the wrong pair (e.g. an API Key's SID/Secret instead of the account's main Auth Token — signature validation specifically needs the main Auth Token).
+4. HELP not being received — check whether the number is a standalone Toll-Free number first (see the platform limitation above) before assuming it's an AI-Prowler configuration issue.
 
 ### Recipient Lookup
 
@@ -1937,6 +2031,17 @@ Error 1033 means `cloudflared` is running but cannot reach the local AI-Prowler 
 3. Check `mcp_server.log` for any webhook POST entries
 4. In server mode, `check_sms_replies` only shows replies to threads *you* personally sent — if the reply was to a text a different employee sent, ask them to check instead, or the owner can pull it from `sms_inbox.json` directly.
 
+**Problem: HELP auto-reply not being sent, or a generic message is sent instead of the configured one**
+1. Confirm a message is actually entered in Settings → SMS / Text Messaging → HELP reply message — a blank field means no reply is sent by design.
+2. Check `check_sms_inbox` for the HELP message itself — if it never appears there at all, Twilio intercepted it before it reached AI-Prowler. This is expected, unavoidable behavior on standalone Toll-Free numbers (see §11 → HELP Auto-Reply); it is not an AI-Prowler bug.
+3. If the number is a long code (not Toll-Free) and HELP still doesn't appear in the inbox, treat it the same as any other inbound-SMS-not-appearing problem above.
+
+**Problem: Website consent form submits but nothing shows in `list_sms_consents`**
+1. Confirm the `<script>` tag's `data-endpoint` attribute matches exactly the URL shown in Settings → SMS / Text Messaging → SMS Consent Form Endpoint URL (copy-paste it rather than retyping).
+2. Verify the HTTP server and Cloudflare Tunnel are running — the endpoint is unreachable if either is down.
+3. Open the browser DevTools Console on the page with the form and check for a fetch error after submitting — a "Failed to fetch" with no other detail usually means the tunnel is down or the URL is wrong, not a form problem.
+4. If the form has a field named `website`, make sure it's genuinely empty on submission — that field is a spam honeypot and any value in it causes the submission to be silently discarded by design.
+
 ---
 
 ## 20. Troubleshooting
@@ -2155,4 +2260,4 @@ To upgrade: `pip install --upgrade mcp`
 
 *AI-Prowler — Your Personal Agentic RAG Knowledge Base*
 *Copyright © 2026 David Kevin Vavro · david.vavro1@gmail.com*
-*Version 9.0.0 — Updated August 2026*
+*Version 9.1.0 — Updated August 2026*

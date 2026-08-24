@@ -2548,6 +2548,35 @@ on my way" reads and writes the exact same shared spreadsheet in real
 time. There's no separate mobile app to install or sync — it's the same
 Claude conversation, on any device with a browser.
 
+## The Jobs App — A Dedicated Screen for the Truck, Not a Chat Window
+
+Alongside talking to Claude directly, each employee also gets their own
+lightweight app screen purpose-built for the field: tap Jobs on their
+phone's home screen (added once from the browser, no app store) and they
+land straight on today's schedule — filtered to just their own jobs
+automatically, same as everywhere else in Server mode.
+
+- **Clock in / clock out** with one tap — writes straight to the `TimeLog`
+  sheet and back to `Jobs_Schedule`, same as asking Claude to do it.
+- **Snap and attach job photos** directly from the camera — before/after
+  shots, damage documentation — saved and linked to the job automatically.
+- **Email an invoice** for a job right from the app, no need to open a
+  conversation with Claude to ask for it.
+- **Log in once, stay logged in.** An employee enters their personal
+  token the first time they open the app; after that, it's just a tap to
+  open, exactly like any other app on their phone — no re-entering
+  anything on every visit. Signing out (e.g. handing the phone to a
+  different crew member) is a single button in the app's profile screen.
+- **Same scoping as everywhere else.** Whichever spreadsheet model you've
+  set up above — shared master or per-employee file — the Jobs app
+  respects it automatically. An employee can only clock in, upload
+  photos, or send invoices for jobs actually assigned to them.
+
+This is a second way in, not a replacement — an employee can use the Jobs
+app for quick field actions and still talk to Claude directly (in the same
+browser or in Claude.ai) for anything more open-ended, like rescheduling a
+week's worth of jobs or asking which customers are overdue on payment.
+
 ## QuickBooks + Claude — Filling the Spreadsheet Without Retyping
 
 If you connect the QuickBooks Online MCP connector in Claude.ai (Settings
@@ -6557,7 +6586,7 @@ or from the Help menu."""
             p = _Path.home() / ".ai-prowler" / "pending_tasks.json"
             try:
                 tasks = _json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
-                pending = [t for t in tasks if t.get("status") == "pending"]
+                pending = [t for t in tasks if t.get("status") not in ("completed",)]
                 n = len(pending)
             except Exception:
                 n = 0
@@ -6577,7 +6606,7 @@ or from the Help menu."""
             p = _Path.home() / ".ai-prowler" / "pending_tasks.json"
             try:
                 tasks = _json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
-                pending = [t for t in tasks if t.get("status") == "pending"]
+                pending = [t for t in tasks if t.get("status") not in ("completed",)]
             except Exception:
                 pending = []
 
@@ -10867,8 +10896,14 @@ or from the Help menu."""
         model_combo.pack(fill='x', pady=5)
         model_combo.bind('<<ComboboxSelected>>', self.on_model_change)
         self._model_combo_widget = model_combo   # ref for _rebuild_model_combo
-        # Background poller starts at app launch — list is always fresh
-        self.root.after(500, self._start_model_poller)
+        # Background poller keeps the model list fresh every 10s.
+        # Only start it when the local-LLM feature is enabled — it polls
+        # localhost:11434 (Ollama) and on machines where Ollama is not
+        # installed it hammers the port every 10s indefinitely, flooding
+        # the MCP server log and wasting threads. SUPPORT_LOCAL_HW_LLM=False
+        # means Claude MCP is the only AI interface, so no Ollama is needed.
+        if SUPPORT_LOCAL_HW_LLM:
+            self.root.after(500, self._start_model_poller)
 
         if self._system_ram_gb > 0:
             ram_lbl = ttk.Label(model_frame,
@@ -11494,7 +11529,29 @@ or from the Help menu."""
         ttk.Label(_shared_frame, text='e.g.  — Call/text Dave back: 386-555-0100',
                   font=('Segoe UI', 7), foreground='gray').grid(row=2, column=1, sticky='w', padx=6)
 
-        # ── Webhook URL display ────────────────────────────────────────────
+        _sms_optout_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(_shared_frame, text='Include "Reply STOP to opt out"',
+                        variable=_sms_optout_var).grid(row=3, column=0, columnspan=2, sticky='w', pady=(4,0))
+        ttk.Label(_shared_frame, text='Recommended -- carriers/TCPA expect opt-out disclosure on business texts',
+                  font=('Segoe UI', 8), foreground='gray').grid(row=3, column=2, sticky='w')
+
+        ttk.Label(_shared_frame, text='HELP reply message:').grid(row=4, column=0, sticky='e', **_sp)
+        _sms_help_var = tk.StringVar()
+        ttk.Entry(_shared_frame, textvariable=_sms_help_var, width=40).grid(row=4, column=1, **_sp)
+        ttk.Label(_shared_frame, text='Auto-reply sent when a customer texts HELP',
+                  font=('Segoe UI', 8)).grid(row=4, column=2, sticky='w')
+        ttk.Label(_shared_frame,
+                  text='e.g.  — Support: you@yourbusiness.com, or reply STOP to unsubscribe. Msg&data rates may apply.',
+                  font=('Segoe UI', 7), foreground='gray').grid(row=5, column=1, sticky='w', padx=6)
+        ttk.Label(_shared_frame, text='Leave blank to send no reply to HELP (Twilio still handles STOP automatically either way)',
+                  font=('Segoe UI', 7), foreground='gray').grid(row=6, column=1, sticky='w', padx=6)
+        ttk.Label(_shared_frame,
+                  text='Note: on Toll-Free numbers not in a Messaging Service, Twilio intercepts HELP\n'
+                       'and replies with its own canned message before this ever reaches AI-Prowler --\n'
+                       'this box has no effect for those numbers. STOP/START are unaffected.',
+                  font=('Segoe UI', 7), foreground='#b35900', justify='left').grid(row=7, column=1, sticky='w', padx=6, pady=(2,0))
+
+        # -- Webhook URL display -------------------------------------------
         _wh_lf = ttk.LabelFrame(_sms_fields_frame, text=' Inbound Webhook URL ', padding=(6,4))
         _wh_lf.grid(row=3, column=0, columnspan=3, sticky='w', pady=(10,0), padx=6)
         ttk.Label(_wh_lf, justify='left', font=('Segoe UI', 8), foreground='gray',
@@ -11538,9 +11595,48 @@ or from the Help menu."""
             except Exception:
                 _wh_url_var.set('Start the remote server to see your webhook URL')
 
+        # -- Consent Form Endpoint URL display ------------------------------
+        _cs_lf = ttk.LabelFrame(_sms_fields_frame, text=' SMS Consent Form Endpoint URL ', padding=(6,4))
+        _cs_lf.grid(row=4, column=0, columnspan=3, sticky='w', pady=(10,0), padx=6)
+        ttk.Label(_cs_lf, justify='left', font=('Segoe UI', 8), foreground='gray',
+                  text=(
+                      'Give this URL to your web developer to wire up an SMS opt-in\n'
+                      'form on your OWN website (name + phone + consent checkbox).\n'
+                      'Submissions are recorded here in AI-Prowler -- ask "who\'s opted\n'
+                      'in for SMS" any time to see the list.'
+                  )).pack(anchor='w')
+        _cs_url_row = ttk.Frame(_cs_lf)
+        _cs_url_row.pack(fill='x', pady=(4,0))
+        _cs_url_var = tk.StringVar(value='Start the remote server to see your consent form URL')
+        ttk.Entry(_cs_url_row, textvariable=_cs_url_var, state='readonly', width=56).pack(side='left')
+
+        def _copy_consent_url():
+            sms_frame.clipboard_clear()
+            sms_frame.clipboard_append(_cs_url_var.get())
+            _sms_status_var.set('Consent form endpoint URL copied to clipboard.')
+        ttk.Button(_cs_url_row, text='Copy', command=_copy_consent_url).pack(side='left', padx=(6,0))
+
+        def _update_consent_url(*_):
+            try:
+                import json as _j
+                p = Path.home() / '.ai-prowler' / 'config.json'
+                cfg = _j.loads(p.read_text(encoding='utf-8-sig')) if p.exists() else {}
+                raw_base = cfg.get('public_base', '').strip()
+                if not raw_base:
+                    td = cfg.get('tunnel_domain', '').strip()
+                    if td:
+                        raw_base = f'https://{td}'
+                base = raw_base.rstrip('/')
+                if base:
+                    _cs_url_var.set(f'{base}/consent-signup')
+                else:
+                    _cs_url_var.set('Start the remote server to see your consent form URL')
+            except Exception:
+                _cs_url_var.set('Start the remote server to see your consent form URL')
+
         _sms_status_var = tk.StringVar(value='')
         ttk.Label(_sms_fields_frame, textvariable=_sms_status_var,
-                  font=('Segoe UI', 9)).grid(row=4, column=0, columnspan=3, sticky='w', padx=6, pady=(4,0))
+                  font=('Segoe UI', 9)).grid(row=5, column=0, columnspan=3, sticky='w', padx=6, pady=(4,0))
 
         def _on_provider_change(*_):
             pid = _prov_id()
@@ -11548,6 +11644,7 @@ or from the Help menu."""
             {'twilio': _tw_frame, 'signalwire': _sw_frame, 'vonage': _vn_frame}.get(pid, _tw_frame).grid()
             _sms_signup_lbl.config(text=_prov_hint())
             _update_webhook_url()
+            _update_consent_url()
 
         _prov_combo.bind('<<ComboboxSelected>>', _on_provider_change)
 
@@ -11588,6 +11685,8 @@ or from the Help menu."""
                     _vn_secret_var.set(d.get('vonage_api_secret', ''))
                     _vn_from_var.set(d.get('vonage_from_number', ''))
                 _sms_sig_var.set(d.get('sms_callback_signature', ''))
+                _sms_optout_var.set(bool(d.get('sms_optout_enabled', True)))
+                _sms_help_var.set(d.get('sms_help_reply_text', ''))
                 if _sms_enabled_var.get(): _sms_status_var.set(f'Loaded {pid.title()} config.')
             except Exception as _e:
                 _sms_status_var.set(f'Could not load config: {_e}')
@@ -11605,11 +11704,14 @@ or from the Help menu."""
                       'signalwire_project_id','signalwire_auth_token',
                       'signalwire_space_url','signalwire_from_number',
                       'vonage_api_key','vonage_api_secret','vonage_from_number',
-                      'sms_provider','sms_callback_signature'):
+                      'sms_provider','sms_callback_signature','sms_optout_enabled',
+                      'sms_help_reply_text'):
                 existing.pop(k, None)
             if _sms_enabled_var.get():
                 existing['sms_provider'] = pid
                 existing['sms_callback_signature'] = _sms_sig_var.get().strip()
+                existing['sms_optout_enabled'] = _sms_optout_var.get()
+                existing['sms_help_reply_text'] = _sms_help_var.get().strip()
                 if pid == 'twilio':
                     sid=_sms_sid_var.get().strip(); tok=_sms_token_var.get().strip(); frm=_sms_from_var.get().strip()
                     if not (sid and tok and frm): _sms_status_var.set('Account SID, Auth Token, and From Number are required.'); return
@@ -11639,8 +11741,13 @@ or from the Help menu."""
                 import sys as _sys
                 _sys.path.insert(0, str(Path(__file__).parent))
                 from sms_backends import get_sms_backend, load_sms_config
-                ok, msg = get_sms_backend(load_sms_config()).send(
-                    to, 'AI-Prowler SMS test — if you got this, your SMS provider is configured correctly!')
+                _test_msg = 'AI-Prowler SMS test — if you got this, your SMS provider is configured correctly!'
+                _sig = _sms_sig_var.get().strip()
+                if _sig and _sig not in _test_msg:
+                    _test_msg = f'{_test_msg}\n{_sig}'
+                if _sms_optout_var.get() and 'stop' not in _test_msg.lower():
+                    _test_msg = f'{_test_msg}\nReply STOP to opt out.'
+                ok, msg = get_sms_backend(load_sms_config()).send(to, _test_msg)
                 _sms_status_var.set('✅ ' + msg if ok else msg)
             except Exception as _e:
                 _sms_status_var.set(f'❌ Test failed: {_e}')
@@ -11657,13 +11764,14 @@ or from the Help menu."""
                           'signalwire_project_id','signalwire_auth_token',
                           'signalwire_space_url','signalwire_from_number',
                           'vonage_api_key','vonage_api_secret','vonage_from_number',
-                          'sms_provider','sms_callback_signature'): ex.pop(k, None)
+                        'sms_provider','sms_callback_signature','sms_optout_enabled',
+                        'sms_help_reply_text'): ex.pop(k, None)
                 p.write_text(_j.dumps(ex, indent=2), encoding='utf-8')
             except Exception as _e: _sms_status_var.set(f'❌ Could not clear: {_e}'); return
             for v in (_sms_sid_var,_sms_token_var,_sms_from_var,
                       _sw_project_var,_sw_token_var,_sw_space_var,_sw_from_var,
                       _vn_key_var,_vn_secret_var,_vn_from_var,
-                      _sms_test_to_var,_sms_sig_var): v.set('')
+                      _sms_test_to_var,_sms_sig_var,_sms_help_var): v.set('')
             _sms_enabled_var.set(False); _wa_enabled_var.set(False)
             _toggle_sms_fields()
             _sms_status_var.set('✅ SMS settings cleared.')
@@ -11672,7 +11780,7 @@ or from the Help menu."""
 
         # Button row
         _sms_btn_row = ttk.Frame(_sms_fields_frame)
-        _sms_btn_row.grid(row=5, column=0, columnspan=3, pady=(8,0), sticky='w', padx=6)
+        _sms_btn_row.grid(row=6, column=0, columnspan=3, pady=(8,0), sticky='w', padx=6)
         ttk.Button(_sms_btn_row, text='💾 Save Config',
                    command=_save_sms_cfg).pack(side='left', padx=(0,6))
         ttk.Button(_sms_btn_row, text='📱 Send Test SMS',
@@ -14626,6 +14734,97 @@ or from the Help menu."""
                   text="← paste this into Claude.ai → Settings → Connectors → Add custom connector",
                   font=('Arial', 8), foreground='gray').pack(side='left')
 
+        # ── Remote Control App URL ────────────────────────────────────────────
+        # Shows https://<domain>/remote/ so the owner can open it on their phone.
+        remote_url_row = ttk.Frame(act_frame)
+        remote_url_row.pack(fill='x', pady=(0, 6))
+        ttk.Label(remote_url_row, text="Remote Control URL:", width=18, anchor='w').pack(side='left')
+        _remote_url_var = tk.StringVar()
+
+        def _update_remote_url(*_):
+            d = _tun_domain_var.get().strip().replace('https://', '').replace('http://', '').rstrip('/')
+            _remote_url_var.set(f"https://{d}/remote/" if d else "")
+
+        _tun_domain_var.trace_add('write', _update_remote_url)
+        _update_remote_url()
+
+        _remote_url_entry = ttk.Entry(remote_url_row, textvariable=_remote_url_var,
+                                      width=40, state='readonly')
+        _remote_url_entry.pack(side='left', padx=(4, 4))
+
+        def _copy_remote_url():
+            url = _remote_url_var.get()
+            if not url:
+                messagebox.showwarning("No hostname",
+                    "Enter your Public hostname above first.")
+                return
+            try:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(url)
+                self.root.update()
+                self.status_var.set(f"Copied: {url}")
+                self.root.after(3000, lambda: self.status_var.set("Ready"))
+            except Exception as _e:
+                messagebox.showerror("Copy failed", str(_e))
+
+        def _email_remote_url():
+            import smtplib as _smr, ssl as _slr, base64 as _b64r, json as _jmr, pathlib as _plr
+            from email.mime.text import MIMEText as _MTr
+            url = _remote_url_var.get()
+            if not url:
+                messagebox.showwarning("No URL", "Enter your Public hostname above first.")
+                return
+            cfg_p = _plr.Path.home() / '.ai-prowler' / 'email_config.json'
+            if not cfg_p.exists():
+                messagebox.showwarning("No Email Config",
+                    "Configure your email in Settings \u2192 Email first.")
+                return
+            try:
+                ecfg = _jmr.loads(cfg_p.read_text(encoding='utf-8'))
+                host     = ecfg.get('smtp_host', '')
+                port     = int(ecfg.get('smtp_port', 587))
+                username = ecfg.get('username', '')
+                password = _b64r.b64decode(ecfg.get('_password_b64', '')).decode()
+                from_name = ecfg.get('from_name', username)
+                to_addr  = ecfg.get('default_to', username)
+                use_tls  = ecfg.get('use_tls', True)
+            except Exception as _er:
+                messagebox.showerror("Email Config Error", str(_er))
+                return
+            body = (
+                f"Open this link on your phone to access AI-Prowler Remote Control:\n\n"
+                f"  {url}\n\n"
+                f"Tip: tap the browser menu and choose 'Add to Home Screen' to install as an app."
+            )
+            msg = _MTr(body, 'plain')
+            msg['Subject'] = "AI-Prowler Remote Control"
+            msg['From']    = f"{from_name} <{username}>"
+            msg['To']      = to_addr
+            try:
+                if use_tls:
+                    ctx = _slr.create_default_context()
+                    with _smr.SMTP(host, port) as srv:
+                        srv.ehlo(); srv.starttls(context=ctx)
+                        srv.login(username, password)
+                        srv.sendmail(username, to_addr, msg.as_string())
+                else:
+                    with _smr.SMTP_SSL(host, port) as srv:
+                        srv.login(username, password)
+                        srv.sendmail(username, to_addr, msg.as_string())
+                messagebox.showinfo("Email Sent", f"Remote Control link sent to {to_addr}")
+                self.status_var.set(f"\U0001f4e7  Remote link emailed to {to_addr}")
+                self.root.after(4000, lambda: self.status_var.set("Ready"))
+            except Exception as _es:
+                messagebox.showerror("Send Failed", str(_es))
+
+        ttk.Button(remote_url_row, text="\U0001f4cb Copy",
+                   command=_copy_remote_url).pack(side='left', padx=(0, 4))
+        ttk.Button(remote_url_row, text="\U0001f4e7 Email",
+                   command=_email_remote_url).pack(side='left', padx=(0, 8))
+        ttk.Label(remote_url_row,
+                  text="\u2190 open on your phone to remote control AI-Prowler",
+                  font=('Arial', 8), foreground='gray').pack(side='left')
+
         # Tunnel token row
         _tun_token_var  = tk.StringVar()
         _tun_tok_show   = tk.BooleanVar(value=False)
@@ -15656,6 +15855,111 @@ or from the Help menu."""
         ttk.Button(xl_btn_row, text="📖  Multi-Employee & QuickBooks Guide",
                    command=self.show_job_tracker_guide).pack(side='left')
 
+
+        # ── Jobs App (PWA) URL ────────────────────────────────────────────────
+        # Mobile URL for crew phones. Reads tunnel_domain from config.json.
+        pwa_lf = ttk.LabelFrame(xl_outer,
+                                 text="📱 Jobs App — Mobile URL for Job Updates",
+                                 padding=(8, 4))
+        pwa_lf.pack(fill='x', pady=(8, 0))
+
+
+        def _load_jobs_url():
+            try:
+                import json as _jm, pathlib as _pl
+                _cfg = _jm.loads(
+                    (_pl.Path.home() / '.ai-prowler' / 'config.json')
+                    .read_text(encoding='utf-8'))
+                d = (_cfg.get('tunnel_domain', '')
+                     .strip().replace('https://','').replace('http://','')
+                     .rstrip('/'))
+                return f"https://{d}/jobs/" if d else ""
+            except Exception:
+                return ""
+
+        _jobs_url_var = tk.StringVar(value=_load_jobs_url())
+        pwa_url_row = ttk.Frame(pwa_lf)
+        pwa_url_row.pack(fill='x')
+        ttk.Entry(pwa_url_row, textvariable=_jobs_url_var, width=44,
+                  state='readonly', font=('Courier New', 9)
+                  ).pack(side='left', padx=(0, 4))
+
+        def _copy_jobs_url():
+            url = _jobs_url_var.get()
+            if not url:
+                messagebox.showwarning("No URL",
+                    "Activate Remote Access in Settings tab first.")
+                return
+            self.root.clipboard_clear()
+            self.root.clipboard_append(url)
+            self.root.update()
+            self.status_var.set(f"📋  Copied: {url}")
+            self.root.after(3000, lambda: self.status_var.set("Ready"))
+
+        def _email_jobs_url():
+            import json as _jm, pathlib as _pl, base64 as _b64
+            import smtplib, ssl
+            from email.mime.text import MIMEText
+            url = _jobs_url_var.get()
+            if not url:
+                messagebox.showwarning("No URL",
+                    "Activate Remote Access in Settings tab first.")
+                return
+            # Load SMTP config from ~/.ai-prowler/email_config.json
+            cfg_path = _pl.Path.home() / '.ai-prowler' / 'email_config.json'
+            if not cfg_path.exists():
+                messagebox.showwarning("No Email Config",
+                    "Configure your email in Settings → Email first.")
+                return
+            try:
+                ecfg = _jm.loads(cfg_path.read_text(encoding='utf-8'))
+                host     = ecfg.get('smtp_host', '')
+                port     = int(ecfg.get('smtp_port', 587))
+                username = ecfg.get('username', '')
+                password = _b64.b64decode(ecfg.get('_password_b64', '')).decode()
+                from_name = ecfg.get('from_name', username)
+                to_addr  = ecfg.get('default_to', username)
+                use_tls  = ecfg.get('use_tls', True)
+            except Exception as _e:
+                messagebox.showerror("Email Config Error", str(_e))
+                return
+            body = (
+                f"Open this link on your phone to access the Jobs App:\n\n"
+                f"  {url}\n\n"
+                f"Tip: tap the browser menu and choose 'Add to Home Screen' "
+                f"to install it as an app icon."
+            )
+            msg = MIMEText(body, 'plain')
+            msg['Subject'] = "AI-Prowler Jobs App"
+            msg['From']    = f"{from_name} <{username}>"
+            msg['To']      = to_addr
+            try:
+                if use_tls:
+                    ctx = ssl.create_default_context()
+                    with smtplib.SMTP(host, port) as srv:
+                        srv.ehlo()
+                        srv.starttls(context=ctx)
+                        srv.login(username, password)
+                        srv.sendmail(username, to_addr, msg.as_string())
+                else:
+                    with smtplib.SMTP_SSL(host, port) as srv:
+                        srv.login(username, password)
+                        srv.sendmail(username, to_addr, msg.as_string())
+                messagebox.showinfo("Email Sent",
+                    f"Jobs App link sent to {to_addr}")
+                self.status_var.set(f"📧  Jobs App link emailed to {to_addr}")
+                self.root.after(4000, lambda: self.status_var.set("Ready"))
+            except Exception as _e:
+                messagebox.showerror("Send Failed", str(_e))
+
+        ttk.Button(pwa_url_row, text="📋 Copy",
+                   command=_copy_jobs_url).pack(side='left', padx=(0, 4))
+        ttk.Button(pwa_url_row, text="📧 Email to user",
+                   command=_email_jobs_url).pack(side='left', padx=(0, 8))
+
+        ttk.Label(pwa_url_row, text="← send to crew phones",
+                  font=('Arial', 8), foreground='gray').pack(side='left')
+
         ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
 
         # ── 4. ROUTE & NAVIGATION NOTES ──────────────────────────────────────
@@ -15762,6 +16066,106 @@ or from the Help menu."""
         ttk.Button(cw_btn_row, text="⚙  Open Settings (to configure Email / SMS)",
                    command=lambda: self.notebook.select(self._TAB_INDEX_SETTINGS)
                    ).pack(side='left')
+
+        # ── Payment Link Settings ────────────────────────────────────────────
+        pay_lf = ttk.LabelFrame(cw_outer,
+                                 text="💳 Online Payment Links (optional — added to emailed invoices)",
+                                 padding=(8, 6))
+        pay_lf.pack(fill="x", pady=(10, 0))
+        ttk.Label(pay_lf, justify="left", font=("Arial", 8), foreground="gray",
+                  text=("Enter a Secret Key / Access Token below and every invoice gets its own\n"
+                        "checkout link with the correct amount filled in automatically. Leave the\n"
+                        "key blank and paste a static URL instead for a simple fixed-price link\n"
+                        "(the amount won't match each invoice automatically in that case).")
+                  ).pack(anchor="w", pady=(0, 8))
+
+        try:
+            import json as _jcfg, pathlib as _plcfg
+            _cfg_pay = _jcfg.loads((_plcfg.Path.home() / ".ai-prowler" / "config.json").read_text(encoding="utf-8"))
+        except Exception:
+            _cfg_pay = {}
+
+        def _masked_row(parent, label, var, width=44, placeholder=""):
+            row = ttk.Frame(parent)
+            row.pack(fill="x", pady=(0, 4))
+            ttk.Label(row, text=label, width=16, anchor="w").pack(side="left")
+            entry = ttk.Entry(row, textvariable=var, width=width, show="•")
+            entry.pack(side="left", padx=(4, 6))
+            show_var = tk.BooleanVar(value=False)
+            def _toggle():
+                entry.configure(show="" if show_var.get() else "•")
+            ttk.Checkbutton(row, text="Show", variable=show_var, command=_toggle).pack(side="left")
+            if placeholder:
+                ttk.Label(row, text=placeholder, font=("Arial", 7), foreground="gray").pack(side="left", padx=(6, 0))
+            return row
+
+        def _plain_row(parent, label, var, width=44, placeholder=""):
+            row = ttk.Frame(parent)
+            row.pack(fill="x", pady=(0, 4))
+            ttk.Label(row, text=label, width=16, anchor="w").pack(side="left")
+            ttk.Entry(row, textvariable=var, width=width).pack(side="left", padx=(4, 6))
+            if placeholder:
+                ttk.Label(row, text=placeholder, font=("Arial", 7), foreground="gray").pack(side="left")
+            return row
+
+        # ── Stripe ────────────────────────────────────────────────────────────
+        ttk.Label(pay_lf, text="Stripe", font=("Arial", 9, "bold")).pack(anchor="w", pady=(4, 2))
+        _stripe_secret_var = tk.StringVar(value=_cfg_pay.get("stripe_secret_key", ""))
+        _masked_row(pay_lf, "Secret Key:", _stripe_secret_var,
+                    placeholder="sk_live_... — enables automatic correct-amount checkout")
+        _stripe_var = tk.StringVar(value=_cfg_pay.get("stripe_payment_url", ""))
+        _plain_row(pay_lf, "Fallback URL:", _stripe_var,
+                    placeholder="https://buy.stripe.com/your-link (used only if no Secret Key set)")
+
+        # ── Square ────────────────────────────────────────────────────────────
+        ttk.Label(pay_lf, text="Square", font=("Arial", 9, "bold")).pack(anchor="w", pady=(10, 2))
+        _square_token_var = tk.StringVar(value=_cfg_pay.get("square_access_token", ""))
+        _masked_row(pay_lf, "Access Token:", _square_token_var,
+                    placeholder="enables automatic correct-amount checkout")
+        _square_location_var = tk.StringVar(value=_cfg_pay.get("square_location_id", ""))
+        _plain_row(pay_lf, "Location ID:", _square_location_var,
+                    placeholder="required alongside Access Token")
+        _square_var = tk.StringVar(value=_cfg_pay.get("square_payment_url", ""))
+        _plain_row(pay_lf, "Fallback URL:", _square_var,
+                    placeholder="https://square.link/u/your-link (used only if no Access Token set)")
+
+        ttk.Separator(pay_lf, orient="horizontal").pack(fill="x", pady=(8, 6))
+
+        # Email links default ON — preserves the feature's original,
+        # already-shipped behavior (unconditional whenever a URL was set).
+        _email_link_var = tk.BooleanVar(value=bool(_cfg_pay.get("email_payment_link_enabled", True)))
+        ttk.Checkbutton(pay_lf, text="Include Pay Now buttons in emailed invoices",
+                        variable=_email_link_var).pack(anchor="w")
+
+        # SMS links default OFF — a newer, more exposed channel. Real SMS
+        # traffic with a link shouldn't go out until the toll-free
+        # verification's sample message has been updated to include one —
+        # see Settings → SMS / Text Messaging for the registered use case.
+        _sms_link_var = tk.BooleanVar(value=bool(_cfg_pay.get("sms_payment_link_enabled", False)))
+        ttk.Checkbutton(pay_lf, text="Include payment link when texting invoice notifications",
+                        variable=_sms_link_var).pack(anchor="w", pady=(2, 0))
+        ttk.Label(pay_lf, justify="left", font=("Arial", 7), foreground="gray",
+                  text=("Off by default — confirm your toll-free number's registered sample\n"
+                        "message includes a link example before turning this on. The Jobs\n"
+                        "App and every other client respect this setting automatically.")
+                  ).pack(anchor="w", padx=(20, 0))
+
+        def _save_pay_links():
+            _save_cfg({
+                "stripe_secret_key":  _stripe_secret_var.get().strip(),
+                "stripe_payment_url": _stripe_var.get().strip(),
+                "square_access_token": _square_token_var.get().strip(),
+                "square_location_id":  _square_location_var.get().strip(),
+                "square_payment_url":  _square_var.get().strip(),
+                "email_payment_link_enabled": _email_link_var.get(),
+                "sms_payment_link_enabled":   _sms_link_var.get(),
+            })
+            self.status_var.set("✅  Payment links saved")
+            self.root.after(3000, lambda: self.status_var.set("Ready"))
+
+        ttk.Button(pay_lf, text="💾 Save Payment Links",
+                   command=_save_pay_links).pack(anchor="w", pady=(6, 0))
+
 
         ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
 
@@ -22419,8 +22823,34 @@ or from the Help menu."""
                     else:
                         # Tracked directory — use standard directory update
                         self.output_queue.put(('update', f"\n[{i}/{len(dirs)}] Updating: {entry_name}\n"))
-                        command_update(entry, recursive=True, auto_confirm=True,
-                                       collection_resolver=_col_resolver)
+                        # Found 2026-08-22: command_update() was called here with
+                        # no try/except, unlike the tracked-FILE branch above.
+                        # command_update()'s own internal purge/add passes each
+                        # have per-file try/excepts, but chromadb's HNSW
+                        # compactor can raise "Error executing plan: Error
+                        # sending backfill request to compactor: Failed to
+                        # apply logs to the hnsw segment writer" from outside
+                        # those loops (async compaction surfacing on a later,
+                        # unrelated call — see get_chroma_client()'s "Cold-init
+                        # settle delay" docstring for the underlying upstream
+                        # chromadb/HNSW race this stems from). Unprotected,
+                        # that one directory's transient compactor hiccup
+                        # aborted the ENTIRE Update All batch — every remaining
+                        # tracked directory was left un-updated — and froze the
+                        # GUI behind a blocking modal. Now it's logged and the
+                        # batch continues, matching every other per-item error
+                        # in this function.
+                        try:
+                            command_update(entry, recursive=True, auto_confirm=True,
+                                           collection_resolver=_col_resolver)
+                        except Exception as _de:
+                            self.output_queue.put((
+                                'update',
+                                f"   ⚠️  Error updating {entry_name}: {_de}\n"
+                                f"   (Skipping this directory — other tracked "
+                                f"items will still be processed. Run Update "
+                                f"All again to retry it.)\n"
+                            ))
 
                 self.output_queue.put(('update', "\n✅ All tracked items updated.\n"))
             self.output_queue.put(('status', 'Update complete — index synced & stale chunks purged'))

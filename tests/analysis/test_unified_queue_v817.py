@@ -226,69 +226,18 @@ class TestUnifiedReArmBehavior:
 
 
 # ---------------------------------------------------------------------------
-# sync_due_tasks_to_queue()
+# sync_due_tasks_to_queue() — REMOVED in v9.1.0
 # ---------------------------------------------------------------------------
+# This tool was deprecated and fully removed from ai_prowler_mcp.py.
+# The comment in AI-Prowler-Setup.iss (line 741–745) documents the removal:
+#   "sync_due_tasks_to_queue, a third tool from this same redesign, was later
+#    fully removed — deprecated once the real usage model turned out to be
+#    'user adds tasks to the queue manually only, no auto-syncing' — so it no
+#    longer needs an entry here at all."
+# The three tests that called mcp.sync_due_tasks_to_queue() have been removed
+# rather than marked xfail — the function no longer exists, so asserting
+# anything about its behaviour would be misleading.
 
-class TestSyncDueTasksToQueue:
-
-    def _patch(self, custom_tasks, pending):
-        saved = {"custom": list(custom_tasks), "pending": list(pending)}
-
-        def _load_custom():
-            return [e.copy() for e in saved["custom"]]
-
-        def _load_pending():
-            return [e.copy() for e in saved["pending"]]
-
-        def _save_pending(tasks):
-            saved["pending"] = tasks
-
-        ctx = (
-            patch("custom_tasks_manager.load_custom_tasks", side_effect=_load_custom),
-            patch("ai_prowler_mcp._load_pending_tasks", side_effect=_load_pending),
-            patch("ai_prowler_mcp._save_pending_tasks", side_effect=_save_pending),
-        )
-        return ctx, saved
-
-    def test_due_task_gets_queued(self, mcp):
-        custom_tasks = [{
-            "task_id": "c1", "label": "Due Task", "prompt": "Analyze.",
-            "schedule": "weekly", "next_due": _today(),
-            "output_learnings": True, "output_report": False,
-            "scope_dirs": [], "report_folder": "C:\\reports",
-        }]
-        ctx, saved = self._patch(custom_tasks, [])
-        with ctx[0], ctx[1], ctx[2]:
-            result = mcp.sync_due_tasks_to_queue()
-        assert "Queued 1 due task" in result
-        assert len(saved["pending"]) == 1
-        assert saved["pending"][0]["source_id"] == "c1"
-
-    def test_not_due_task_skipped(self, mcp):
-        custom_tasks = [{
-            "task_id": "c1", "label": "Future", "prompt": "x",
-            "schedule": "weekly", "next_due": _tomorrow(),
-        }]
-        ctx, saved = self._patch(custom_tasks, [])
-        with ctx[0], ctx[1], ctx[2]:
-            result = mcp.sync_due_tasks_to_queue()
-        assert "No custom task definitions are due" in result
-        assert len(saved["pending"]) == 0
-
-    def test_already_queued_due_task_not_duplicated(self, mcp):
-        custom_tasks = [{
-            "task_id": "c1", "label": "Due Task", "prompt": "x",
-            "schedule": "weekly", "next_due": _today(),
-        }]
-        existing_entry = {
-            "task_id": "c1_20260701_000000_000000_0",
-            "source_id": "c1", "status": "pending", "label": "Due Task",
-        }
-        ctx, saved = self._patch(custom_tasks, [existing_entry])
-        with ctx[0], ctx[1], ctx[2]:
-            result = mcp.sync_due_tasks_to_queue()
-        assert "already have a live queue entry" in result
-        assert len(saved["pending"]) == 1  # unchanged, not duplicated
 
 
 # ---------------------------------------------------------------------------
@@ -439,16 +388,13 @@ class TestUpdateAnalysisTask:
 
 
 # ---------------------------------------------------------------------------
-# Tier A suppression — the 3 new tools must be personal-install-only,
-# matching every other analysis-queue tool (get_pending_analysis_tasks,
-# complete_analysis_task, save_analysis_report, create_analysis_task,
-# list_analysis_tasks). There is no server-mode caller for any of them.
+# Tier A suppression — analysis-queue tools must be personal-install-only;
+# there is no server-mode caller for any of them.
+# Note: sync_due_tasks_to_queue was removed from ai_prowler_mcp.py entirely
+# in v9.1.0 and is therefore absent from _TIER_A_SUPPRESSED as well.
 # ---------------------------------------------------------------------------
 
 class TestTierASuppression:
-
-    def test_sync_due_tasks_to_queue_is_tier_a_suppressed(self, mcp):
-        assert "sync_due_tasks_to_queue" in mcp._TIER_A_SUPPRESSED
 
     def test_delete_analysis_task_is_tier_a_suppressed(self, mcp):
         assert "delete_analysis_task" in mcp._TIER_A_SUPPRESSED
@@ -457,10 +403,11 @@ class TestTierASuppression:
         assert "update_analysis_task" in mcp._TIER_A_SUPPRESSED
 
     def test_grouped_with_all_analysis_queue_siblings(self, mcp):
+        # sync_due_tasks_to_queue removed in v9.1.0 — not in this set
         family = {
             "get_pending_analysis_tasks", "complete_analysis_task",
             "save_analysis_report", "create_analysis_task",
-            "list_analysis_tasks", "sync_due_tasks_to_queue",
-            "delete_analysis_task", "update_analysis_task",
+            "list_analysis_tasks", "delete_analysis_task",
+            "update_analysis_task",
         }
         assert family.issubset(mcp._TIER_A_SUPPRESSED)

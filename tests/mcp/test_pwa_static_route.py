@@ -107,25 +107,34 @@ class TestPwaStructure:
     def source_lines(self):
         return MCP_FILE.read_text(encoding="utf-8").splitlines()
 
-    def _find_line(self, lines, pattern):
+    def _find_line(self, lines, pattern, after_pattern=None):
+        after_line = 0
+        if after_pattern:
+            for i, line in enumerate(lines, 1):
+                if after_pattern in line:
+                    after_line = i
+                    break
         for i, line in enumerate(lines, 1):
-            if pattern in line:
+            if i > after_line and pattern in line:
                 return i
         return None
 
     def test_pwa_route_present(self, source_lines):
-        ln = self._find_line(source_lines, 'path.startswith("/pwa")')
+        # Find /jobs route inside _RouterASGI (personal mode), not _ServerRouterASGI
+        ln = self._find_line(source_lines, 'path.startswith("/jobs")',
+                             after_pattern='class _RouterASGI:')
         assert ln is not None, (
-            "PWA route missing: path.startswith(\"/pwa\") not found. "
+            "PWA route missing inside _RouterASGI. "
             "The patch was not applied."
         )
 
     def test_pwa_before_bearer_check(self, source_lines):
         """
-        The /pwa block MUST appear before the Bearer token check.
+        The /jobs block MUST appear before the Bearer token check.
         If it appears after, phones get 401 trying to load the PWA.
         """
-        pwa_ln    = self._find_line(source_lines, 'path.startswith("/pwa")')
+        pwa_ln    = self._find_line(source_lines, 'path.startswith("/jobs")',
+                              after_pattern='class _RouterASGI:')
         bearer_ln = self._find_line(
             source_lines,
             "Everything else (including /mcp) — check Bearer token first"
@@ -148,7 +157,8 @@ class TestPwaStructure:
     def test_pwa_inside_router_asgi(self, source_lines):
         """PWA block must be inside _RouterASGI (personal mode), not _ServerRouterASGI."""
         router_ln = self._find_line(source_lines, "class _RouterASGI:")
-        pwa_ln    = self._find_line(source_lines, 'path.startswith("/pwa")')
+        pwa_ln    = self._find_line(source_lines, 'path.startswith("/jobs")',
+                                    after_pattern='class _RouterASGI:')
         assert router_ln is not None, "_RouterASGI class not found."
         assert pwa_ln    is not None, "PWA route not found."
         assert pwa_ln > router_ln, (
@@ -167,7 +177,8 @@ class TestPwaStructure:
         (if/startswith line), max is <= 24 (deepest nested body).
         And that py_compile already passed (test_no_syntax_error).
         """
-        pwa_start = self._find_line(source_lines, 'path.startswith("/pwa")')
+        pwa_start = self._find_line(source_lines, 'path.startswith("/jobs")',
+                                    after_pattern='class _RouterASGI:')
         pwa_end   = self._find_line(source_lines, "end PWA static server")
         assert pwa_start is not None, "PWA block start not found."
         assert pwa_end   is not None, "PWA block end marker not found."

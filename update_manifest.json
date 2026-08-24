@@ -1,21 +1,21 @@
 {
-  "version": "9.0.0",
-  "generated": "2026-08-11T13:28:01",
+  "version": "9.1.0",
+  "generated": "2026-08-24T18:24:47",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "9483b62d8fb87778bdae89a473d13de59c22cd177715a32321072caede66c401",
-      "bytes": 1246204
+      "sha256": "0275b3731769927aee4436261e877ee8ca9e3f83dc935b8d12fdfcc989d437ba",
+      "bytes": 1271009
     },
     {
       "path": "rag_preprocessor.py",
-      "sha256": "9462bb8566bfe754e2e79d0b3fddda382987c7a47988d4464cc00b4dde232de2",
-      "bytes": 306629
+      "sha256": "30505f3594342e3fa9821132cf0dbd45eef43057a2572010037a3f7ab9362d1c",
+      "bytes": 313642
     },
     {
       "path": "ai_prowler_mcp.py",
-      "sha256": "184ef0451d5e6b428e0c1db8f57fb4907bf3052ed33cc19e25c90d5e51856679",
-      "bytes": 784669
+      "sha256": "89f6cdd59441781601ee3586b6dc2bbb0ff8c9e1fe773ff5631deb8144743eb0",
+      "bytes": 963701
     },
     {
       "path": "mcp_diagnostics.py",
@@ -39,7 +39,7 @@
     },
     {
       "path": "requirements.txt",
-      "sha256": "6a16c4badf8953a981e0fc524f1d0224f40c311a2721e3537c0d420a6e404588",
+      "sha256": "751340036370dbdab107488d7d4ae9a5c9e104b9390f2d299cd5f7fe9ad74079",
       "bytes": 8882
     },
     {
@@ -59,12 +59,12 @@
     },
     {
       "path": "COMPLETE_USER_GUIDE.md",
-      "sha256": "245a22005e8da66a594f45c05ce284ca7fbdf59a6211fee6fafbe3eab9c0652f",
-      "bytes": 163570
+      "sha256": "f75f65eb552f1ad48415d1e33066c87e1bc6175daaed1d64aac00ea49111e6fe",
+      "bytes": 178041
     },
     {
       "path": "VERSION",
-      "sha256": "cdecb300baad839a6f62791229f551a4fa33f3cbdca08e378dc976466354e778",
+      "sha256": "077ee5b3a3a7fc2622ceff6466fea0c28f3fb08b24653dcc7f4baab29b9aef36",
       "bytes": 6
     },
     {
@@ -124,8 +124,8 @@
     },
     {
       "path": "task_queue_automation.py",
-      "sha256": "9541eb0b62b541e2d11f8db33a34415afe9d49d7201843d8f278bd9c096ebe0a",
-      "bytes": 140482
+      "sha256": "747f11fa2112288336119574bf74138e2f11b85599a8d10dc17fe64fc6008101",
+      "bytes": 142640
     },
     {
       "path": ".claude/settings.json",
@@ -141,6 +141,66 @@
       "path": ".claude/skills/ai-prowler-tasks/SKILL.md",
       "sha256": "3adb919aebab44e567fbeea638135010ddd89fe7ab63b76c41361aa954e84a63",
       "bytes": 6255
+    },
+    {
+      "path": "sms_consent.py",
+      "sha256": "afeacc112c7554b8c921c583238e129cd8fd35ece3acc0e2dbf7218955a44d7e",
+      "bytes": 10791
+    },
+    {
+      "path": "jobs/index.html",
+      "sha256": "468c8ae1e7522223c7839bb4251cb9bbfe95f0988025a1188250a322581a909a",
+      "bytes": 513438
+    },
+    {
+      "path": "jobs/manifest.json",
+      "sha256": "453bcbc6f6de9800bb551035733d17126c6705c4a531e26741a30878e39a83ad",
+      "bytes": 584
+    },
+    {
+      "path": "jobs/sw.js",
+      "sha256": "f52d3e3191ceca3395e22c53c73266d8e1f7e6eccc47c801e4b35255e835d936",
+      "bytes": 2525
+    },
+    {
+      "path": "jobs/icon-192.png",
+      "sha256": "ee918204c090330e56e2141d62b0727dd76c1e40fac573a0889fe07cf6054a34",
+      "bytes": 78694
+    },
+    {
+      "path": "jobs/icon-512.png",
+      "sha256": "d74443af03bf306c010cc37a5abccbedc10de97f1a9915b0a6add0fb5a434c5b",
+      "bytes": 365256
+    },
+    {
+      "path": "jobs/icon.png",
+      "sha256": "55e7d25759606c4b8fdb89a508eec23a17bfa92e0dfb814e9fb243acb8ce41f2",
+      "bytes": 124249
+    },
+    {
+      "path": "remote/index.html",
+      "sha256": "51442014ee93014d6fe42d3149d7c1424fd193363e2b63d8f95f20dc6ca16c4e",
+      "bytes": 94999
+    },
+    {
+      "path": "remote/manifest.json",
+      "sha256": "cc58dc079535edfef10303c1056149ecae5d14480178e89899fa44295887e280",
+      "bytes": 537
+    },
+    {
+      "path": "remote/sw.js",
+      "sha256": "49b46d2b6533f950afbddf6f1cd4c4840c2d6a723784d7146e3e66c1e384dd72",
+      "bytes": 1819
+    },
+    {
+      "path": "remote/icon-192.png",
+      "sha256": "ee918204c090330e56e2141d62b0727dd76c1e40fac573a0889fe07cf6054a34",
+      "bytes": 78694
+    },
+    {
+      "path": "remote/icon-512.png",
+      "sha256": "d74443af03bf306c010cc37a5abccbedc10de97f1a9915b0a6add0fb5a434c5b",
+      "bytes": 365256
     }
   ]
 }

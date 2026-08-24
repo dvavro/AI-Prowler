@@ -1445,10 +1445,45 @@ def purge_old_jobs(max_age_days: int = 3) -> None:
                         continue
                 except Exception:
                     pass  # Unreadable manifest — purge it anyway
-                # Remove manifest and matching log together
+                # Remove manifest, matching log, AND matching wrapper script
+                # together. Found 2026-08-23: this only ever deleted the
+                # .json/.log pair — the third file every job produces
+                # (<job_id>_wrapper.py, same naming convention
+                # cleanup_job_logs() and run_script_start() both already
+                # use) was never touched, so it accumulated forever even
+                # though this function has been running successfully the
+                # whole time. Confirmed from the real jobs directory: every
+                # job older than a few days had already lost its .json/.log
+                # pair here, while its _wrapper.py sat untouched back to
+                # the earliest days AI-Prowler had been running.
                 mani_path.unlink(missing_ok=True)
                 log_path = mani_path.with_suffix(".log")
                 log_path.unlink(missing_ok=True)
+                wrapper_path = mani_path.with_name(mani_path.stem + "_wrapper.py")
+                wrapper_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        # Second pass — orphaned wrapper scripts with no manifest left to key
+        # off of. These are the backlog from the missing-wrapper-deletion bug
+        # above: every run before this fix already lost its .json/.log pair
+        # here, leaving the _wrapper.py behind with nothing to pair it to.
+        # Aged off by the wrapper file's own mtime instead, since there's no
+        # manifest left to read a status from — a wrapper script itself is
+        # never "running" (the launched process runs independently of it;
+        # the wrapper's job is done the moment it starts that process), so
+        # there's no in-progress state to protect here the way the manifest
+        # loop above protects a running job.
+        for wrapper_path in jobs_dir.glob("*_wrapper.py"):
+            try:
+                if wrapper_path.stat().st_mtime >= cutoff:
+                    continue  # Recent enough — keep it
+                mani_path = wrapper_path.with_name(
+                    wrapper_path.name[: -len("_wrapper.py")] + ".json"
+                )
+                if mani_path.exists():
+                    continue  # Has a manifest — handled by the loop above
+                wrapper_path.unlink(missing_ok=True)
             except Exception:
                 pass
     except Exception:
