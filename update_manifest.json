@@ -1,11 +1,11 @@
 {
   "version": "9.1.0",
-  "generated": "2026-08-25T09:36:26",
+  "generated": "2026-08-25T09:59:24",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "2957b2427af23c97cf25db7be9611406cc6a2db925da2ab13c67eb0d20a32572",
-      "bytes": 1273753
+      "sha256": "3750a631986cd6573b30b31c9d6f96a4392a209a590179b17f0c29604bf28263",
+      "bytes": 1275748
     },
     {
       "path": "rag_preprocessor.py",
@@ -59,8 +59,8 @@
     },
     {
       "path": "COMPLETE_USER_GUIDE.md",
-      "sha256": "f75f65eb552f1ad48415d1e33066c87e1bc6175daaed1d64aac00ea49111e6fe",
-      "bytes": 178041
+      "sha256": "a7d15b1f1ffa8151905243677f71a7abfca2fb5886788f8f175a975624dc5e90",
+      "bytes": 178507
     },
     {
       "path": "VERSION",

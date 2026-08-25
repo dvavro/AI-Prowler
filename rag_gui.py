@@ -4160,6 +4160,38 @@ or from the Help menu."""
             return
 
         def _do_download():
+            # ── Update debug log ──────────────────────────────────────────────
+            # Written to ~/.ai-prowler/update_debug.log so every attempt,
+            # retry, wait, hash result and failure is captured on disk even
+            # though the GUI shows no console. Each run APPENDS so multiple
+            # click attempts are all in one file for comparison.
+            import datetime as _dt, socket as _socket
+            _log_path = Path.home() / '.ai-prowler' / 'update_debug.log'
+            _log_path.parent.mkdir(parents=True, exist_ok=True)
+
+            def _ulog(msg: str) -> None:
+                ts  = _dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                line = f"[{ts}] {msg}\n"
+                try:
+                    with open(_log_path, 'a', encoding='utf-8') as _lf:
+                        _lf.write(line)
+                except Exception:
+                    pass
+                print(f"[UPDATE] {msg}", flush=True)  # keep console output too
+
+            _ulog("=" * 60)
+            _ulog(f"Update session start — target v{version}")
+            _ulog(f"APP_VERSION={APP_VERSION}  python={__import__('sys').version.split()[0]}")
+            try:
+                _ulog(f"hostname={_socket.gethostname()}")
+            except Exception:
+                pass
+            try:
+                import ssl as _ssl
+                _ulog(f"ssl={_ssl.OPENSSL_VERSION}")
+            except Exception:
+                pass
+
             try:
                 self.status_var.set(f"Downloading AI-Prowler v{version}...")
 
@@ -4233,31 +4265,25 @@ or from the Help menu."""
                 # Probe the tag once before committing to it. If the tag
                 # doesn't exist on GitHub, fall back to main.
                 _base = _tag_base
+                _ulog(f"tag_base={_tag_base}")
                 try:
                     _probe_url = f"{_tag_base}{_files[0]}"
+                    _ulog(f"Probing tag: {_probe_url}")
                     _probe_req = urllib.request.Request(
                         _probe_url,
                         headers={"User-Agent": f"AI-Prowler/{APP_VERSION}"})
                     with urllib.request.urlopen(_probe_req,
                                                   timeout=15) as _probe:
                         if _probe.status == 200:
-                            print(f"[UPDATE] Using tag v{version}")
+                            _ulog(f"Tag probe OK — using tag v{version}")
                 except urllib.error.HTTPError as _http_exc:
                     if _http_exc.code == 404:
-                        print(f"[UPDATE] Tag v{version} not found on "
-                              f"GitHub — falling back to main branch.")
+                        _ulog(f"Tag v{version} not found (404) — falling back to main")
                         _base = _main_base
                     else:
-                        # Other HTTP errors (rate limit, 5xx) — still try
-                        # the tag; the per-file loop will surface real
-                        # download failures.
-                        print(f"[UPDATE] Tag probe returned HTTP "
-                              f"{_http_exc.code} — proceeding with tag.")
+                        _ulog(f"Tag probe HTTP {_http_exc.code} — proceeding with tag")
                 except Exception as _probe_exc:
-                    # Network glitch on the probe — proceed with tag and
-                    # let the per-file loop handle real failures.
-                    print(f"[UPDATE] Tag probe failed ({_probe_exc}) — "
-                          f"proceeding with tag.")
+                    _ulog(f"Tag probe exception {type(_probe_exc).__name__}: {_probe_exc} — proceeding with tag")
 
                 # ── Fetch the update manifest from the resolved base ──────
                 # update_manifest.json lists every file that belongs in an
@@ -4292,9 +4318,8 @@ or from the Help menu."""
                             _files = _resolved
                             _file_hashes = _resolved_hashes
                             _n_hashed = sum(1 for v in _file_hashes.values() if v)
-                            print(f"[UPDATE] Manifest loaded — "
-                                  f"{len(_files)} file(s) to update "
-                                  f"({_n_hashed} with integrity hashes).")
+                            _ulog(f"Manifest loaded — {len(_files)} file(s) "
+                                  f"({_n_hashed} with integrity hashes)")
                         else:
                             # Empty manifest — raise so the except block aborts.
                             raise ValueError(
@@ -4365,28 +4390,34 @@ or from the Help menu."""
                     _content      = None
                     _last_exc     = None
 
+                    _ulog(f"--- {fname} (expected_hash={str(_expected)[:16] if _expected else 'none'})")
                     for _attempt in range(1, _MAX_ATTEMPTS + 1):
+                        _t0 = _time_upd.time()
                         try:
                             _req = urllib.request.Request(
                                 _url,
                                 headers={"User-Agent": f"AI-Prowler/{APP_VERSION}"})
                             with urllib.request.urlopen(_req, timeout=30) as _resp:
                                 _content = _resp.read()
+                            _elapsed = _time_upd.time() - _t0
+                            _ulog(f"  attempt {_attempt}/{_MAX_ATTEMPTS} OK "
+                                  f"({len(_content):,} bytes in {_elapsed:.2f}s)")
                             _last_exc = None
-                            break   # success — stop retrying
+                            break
                         except Exception as _exc:
+                            _elapsed = _time_upd.time() - _t0
                             _last_exc = _exc
+                            _ulog(f"  attempt {_attempt}/{_MAX_ATTEMPTS} FAILED "
+                                  f"after {_elapsed:.2f}s — "
+                                  f"{type(_exc).__name__}: {_exc}")
                             if _attempt < _MAX_ATTEMPTS:
                                 _wait = 2 ** (_attempt - 1)  # 1, 2, 4 s
-                                print(f"[UPDATE] {fname}: attempt {_attempt} "
-                                      f"failed ({_exc}), retrying in {_wait}s…")
+                                _ulog(f"  waiting {_wait}s before retry…")
                                 _time_upd.sleep(_wait)
                             else:
-                                print(f"[UPDATE] {fname}: all {_MAX_ATTEMPTS} "
-                                      f"attempts failed — {_exc}")
+                                _ulog(f"  ALL {_MAX_ATTEMPTS} attempts exhausted — giving up on {fname}")
 
                     if _last_exc is not None:
-                        # All attempts exhausted — record as failure
                         _failures.append((fname, str(_last_exc)))
                         continue
 
@@ -4396,18 +4427,26 @@ or from the Help menu."""
                         _verify_bytes = (_content if _is_bin
                                          else _content.replace(b"\r\n", b"\n"))
                         _actual = _hashlib_upd.sha256(_verify_bytes).hexdigest()
-                        if _actual != _expected:
+                        _hash_ok = _actual == _expected
+                        _ulog(f"  hash {'OK' if _hash_ok else 'MISMATCH'} "
+                              f"(bin={_is_bin}) "
+                              f"expected={_expected[:16]} got={_actual[:16]}")
+                        if not _hash_ok:
                             _failures.append(
                                 (fname,
                                  f"integrity check failed (expected "
                                  f"{_expected[:12]}…, got "
                                  f"{_actual[:12]}…)"))
-                            print(f"[UPDATE] HASH MISMATCH: {fname}")
                             continue
 
                     _downloaded_content[fname] = _content
-                    _tag_str = "verified" if _expected else "downloaded"
-                    print(f"[UPDATE] {fname}: {_tag_str}")
+                    _ulog(f"  -> staged ({'verified' if _expected else 'unverified'})")
+
+                _ulog(f"Download loop complete — "
+                      f"{len(_downloaded_content)} staged, "
+                      f"{len(_failures)} failed")
+                for _ff, _fr in _failures:
+                    _ulog(f"  FAILED: {_ff} — {_fr}")
 
                 if _failures:
                     # Nothing gets staged — current install is completely
