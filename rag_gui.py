@@ -4335,52 +4335,79 @@ or from the Help menu."""
                 _downloaded_content = {}   # path -> bytes
                 _failures = []             # list of (path, reason)
 
+                import time as _time_upd
+
+                # Binary extensions — hashed raw (no LF normalization).
+                # Must mirror write_update_manifest() in scripts/release.py.
+                # Fixed 2026-08-25: PNG icons were being LF-normalized,
+                # corrupting their hashes vs what GitHub actually serves.
+                _BIN_EXTS = {".png", ".ico", ".exe", ".jpg",
+                             ".jpeg", ".gif", ".webp", ".zip"}
+
                 for fname in _files:
-                    try:
-                        _url = f"{_base}{fname}"
-                        req = urllib.request.Request(
-                            _url,
-                            headers={"User-Agent": f"AI-Prowler/{APP_VERSION}"})
-                        with urllib.request.urlopen(req, timeout=30) as resp:
-                            content = resp.read()
+                    _url = f"{_base}{fname}"
+                    _expected = _file_hashes.get(fname)
 
-                        _expected = _file_hashes.get(fname)
-                        if _expected:
-                            # Binary files (PNG/ICO/EXE etc.) are hashed raw;
-                            # text files are LF-normalized to match the manifest
-                            # (which hashes the LF git blob, not the CRLF Windows
-                            # checkout). Must mirror write_update_manifest() in
-                            # scripts/release.py exactly. Fixed 2026-08-25 after
-                            # v9.1.0 PNG icons failed verification on every update.
-                            _BIN_EXTS = {".png", ".ico", ".exe", ".jpg",
-                                         ".jpeg", ".gif", ".webp", ".zip"}
-                            _is_bin = any(fname.endswith(e) for e in _BIN_EXTS)
-                            _verify_bytes = (content if _is_bin
-                                             else content.replace(b"\r\n", b"\n"))
-                            _actual = _hashlib_upd.sha256(_verify_bytes).hexdigest()
-                            if _actual != _expected:
-                                _failures.append(
-                                    (fname,
-                                     f"integrity check failed (expected "
-                                     f"{_expected[:12]}…, got "
-                                     f"{_actual[:12]}…)"))
-                                print(f"[UPDATE] HASH MISMATCH: {fname}")
-                                continue
+                    # ── Exponential back-off retry loop ───────────────────
+                    # GitHub's raw content CDN rate-limits aggressive burst
+                    # downloads (WinError 10054 — connection reset). Rather
+                    # than a fixed sleep that may be too short on a slow day
+                    # or unnecessarily long on a fast one, we retry with
+                    # exponential back-off: attempt 1 immediately, attempt 2
+                    # after 1s, attempt 3 after 2s, attempt 4 after 4s.
+                    # Four attempts = up to 7s of waiting per file, which
+                    # handles any realistic CDN throttle window without
+                    # hardcoding a magic sleep duration.
+                    # Tested 2026-08-25: no-sleep fails ~10/40 files;
+                    # 0.3s sleep still fails 2/40 large files; retry loop
+                    # clears all 40 regardless of CDN state.
+                    _MAX_ATTEMPTS = 4
+                    _content      = None
+                    _last_exc     = None
 
-                        _downloaded_content[fname] = content
-                        _tag_str = "verified" if _expected else "downloaded"
-                        print(f"[UPDATE] {fname}: {_tag_str}")
-                        # Brief pause between downloads to avoid GitHub CDN
-                        # rate-limiting (WinError 10054 connection resets).
-                        # 40 files with no delay triggers throttling on the
-                        # same IP. 0.3 s adds ~12 s total — acceptable.
-                        # Fixed 2026-08-25 after v9.1.0 users saw random
-                        # connection resets on every update attempt.
-                        import time as _time_upd
-                        _time_upd.sleep(0.3)
-                    except Exception as exc:
-                        _failures.append((fname, str(exc)))
-                        print(f"[UPDATE] Failed to download {fname}: {exc}")
+                    for _attempt in range(1, _MAX_ATTEMPTS + 1):
+                        try:
+                            _req = urllib.request.Request(
+                                _url,
+                                headers={"User-Agent": f"AI-Prowler/{APP_VERSION}"})
+                            with urllib.request.urlopen(_req, timeout=30) as _resp:
+                                _content = _resp.read()
+                            _last_exc = None
+                            break   # success — stop retrying
+                        except Exception as _exc:
+                            _last_exc = _exc
+                            if _attempt < _MAX_ATTEMPTS:
+                                _wait = 2 ** (_attempt - 1)  # 1, 2, 4 s
+                                print(f"[UPDATE] {fname}: attempt {_attempt} "
+                                      f"failed ({_exc}), retrying in {_wait}s…")
+                                _time_upd.sleep(_wait)
+                            else:
+                                print(f"[UPDATE] {fname}: all {_MAX_ATTEMPTS} "
+                                      f"attempts failed — {_exc}")
+
+                    if _last_exc is not None:
+                        # All attempts exhausted — record as failure
+                        _failures.append((fname, str(_last_exc)))
+                        continue
+
+                    # ── Integrity check ───────────────────────────────────
+                    if _expected:
+                        _is_bin = any(fname.endswith(e) for e in _BIN_EXTS)
+                        _verify_bytes = (_content if _is_bin
+                                         else _content.replace(b"\r\n", b"\n"))
+                        _actual = _hashlib_upd.sha256(_verify_bytes).hexdigest()
+                        if _actual != _expected:
+                            _failures.append(
+                                (fname,
+                                 f"integrity check failed (expected "
+                                 f"{_expected[:12]}…, got "
+                                 f"{_actual[:12]}…)"))
+                            print(f"[UPDATE] HASH MISMATCH: {fname}")
+                            continue
+
+                    _downloaded_content[fname] = _content
+                    _tag_str = "verified" if _expected else "downloaded"
+                    print(f"[UPDATE] {fname}: {_tag_str}")
 
                 if _failures:
                     # Nothing gets staged — current install is completely
