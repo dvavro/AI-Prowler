@@ -4346,7 +4346,18 @@ or from the Help menu."""
 
                         _expected = _file_hashes.get(fname)
                         if _expected:
-                            _actual = _hashlib_upd.sha256(content).hexdigest()
+                            # Binary files (PNG/ICO/EXE etc.) are hashed raw;
+                            # text files are LF-normalized to match the manifest
+                            # (which hashes the LF git blob, not the CRLF Windows
+                            # checkout). Must mirror write_update_manifest() in
+                            # scripts/release.py exactly. Fixed 2026-08-25 after
+                            # v9.1.0 PNG icons failed verification on every update.
+                            _BIN_EXTS = {".png", ".ico", ".exe", ".jpg",
+                                         ".jpeg", ".gif", ".webp", ".zip"}
+                            _is_bin = any(fname.endswith(e) for e in _BIN_EXTS)
+                            _verify_bytes = (content if _is_bin
+                                             else content.replace(b"\r\n", b"\n"))
+                            _actual = _hashlib_upd.sha256(_verify_bytes).hexdigest()
                             if _actual != _expected:
                                 _failures.append(
                                     (fname,

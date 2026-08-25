@@ -1,11 +1,11 @@
 {
   "version": "9.1.0",
-  "generated": "2026-08-24T18:24:47",
+  "generated": "2026-08-25T08:54:31",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "0275b3731769927aee4436261e877ee8ca9e3f83dc935b8d12fdfcc989d437ba",
-      "bytes": 1271009
+      "sha256": "b39c03fd062bd4190b9a5d2f6c151f47afaa3e617d6ce43b1f879fa82746b54d",
+      "bytes": 1271876
     },
     {
       "path": "rag_preprocessor.py",
@@ -164,18 +164,18 @@
     },
     {
       "path": "jobs/icon-192.png",
-      "sha256": "ee918204c090330e56e2141d62b0727dd76c1e40fac573a0889fe07cf6054a34",
-      "bytes": 78694
+      "sha256": "b7eeae056947d15fd7a15b33450fc22573b83b20e5d220cb684a5bf4a0dce5ba",
+      "bytes": 78696
     },
     {
       "path": "jobs/icon-512.png",
-      "sha256": "d74443af03bf306c010cc37a5abccbedc10de97f1a9915b0a6add0fb5a434c5b",
-      "bytes": 365256
+      "sha256": "d272bd001dee979426bbaabe167910ea17c603f3cbbd788cc59494ae96fab354",
+      "bytes": 365262
     },
     {
       "path": "jobs/icon.png",
-      "sha256": "55e7d25759606c4b8fdb89a508eec23a17bfa92e0dfb814e9fb243acb8ce41f2",
-      "bytes": 124249
+      "sha256": "ce791012313a32d0ed170f335d4743b232c6cee1fcced2871800485629aa1cac",
+      "bytes": 124251
     },
     {
       "path": "remote/index.html",
@@ -194,13 +194,13 @@
     },
     {
       "path": "remote/icon-192.png",
-      "sha256": "ee918204c090330e56e2141d62b0727dd76c1e40fac573a0889fe07cf6054a34",
-      "bytes": 78694
+      "sha256": "b7eeae056947d15fd7a15b33450fc22573b83b20e5d220cb684a5bf4a0dce5ba",
+      "bytes": 78696
     },
     {
       "path": "remote/icon-512.png",
-      "sha256": "d74443af03bf306c010cc37a5abccbedc10de97f1a9915b0a6add0fb5a434c5b",
-      "bytes": 365256
+      "sha256": "d272bd001dee979426bbaabe167910ea17c603f3cbbd788cc59494ae96fab354",
+      "bytes": 365262
     }
   ]
 }

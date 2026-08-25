@@ -635,7 +635,19 @@ def write_update_manifest(new_version: str) -> None:
         # actually downloaded. Found and fixed 2026-07-09 by testing the
         # live tag URL end-to-end and comparing against a fresh `git show
         # v8.0.0:{path}` blob read, which surfaced the mismatch.
-        normalized = raw_bytes.replace(b"\r\n", b"\n")
+        # Binary files (PNG, ICO, EXE, etc.) must NOT be LF-normalized —
+        # they can contain the byte sequence 0x0D 0x0A as valid binary data,
+        # and replacing it corrupts both the hash and the byte count. The
+        # updater hashes binary files raw, so the manifest must match.
+        # Text files still need normalization: git stores LF internally but
+        # Windows checkout produces CRLF, so raw local bytes != what GitHub
+        # serves at the tag URL (the LF git blob).
+        # Fixed 2026-08-25 after v9.1.0 PNG icons caused hash mismatches on
+        # every update attempt (5 of 40 files failing every time).
+        _BINARY_EXTS = {".png", ".ico", ".exe", ".jpg", ".jpeg",
+                        ".gif", ".webp", ".zip", ".whl", ".pdf"}
+        is_binary = fp.suffix.lower() in _BINARY_EXTS
+        normalized = raw_bytes if is_binary else raw_bytes.replace(b"\r\n", b"\n")
         digest = hashlib.sha256(normalized).hexdigest()
         entries.append({
             "path": rel,
