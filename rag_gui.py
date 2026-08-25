@@ -4370,6 +4370,14 @@ or from the Help menu."""
                         _downloaded_content[fname] = content
                         _tag_str = "verified" if _expected else "downloaded"
                         print(f"[UPDATE] {fname}: {_tag_str}")
+                        # Brief pause between downloads to avoid GitHub CDN
+                        # rate-limiting (WinError 10054 connection resets).
+                        # 40 files with no delay triggers throttling on the
+                        # same IP. 0.3 s adds ~12 s total — acceptable.
+                        # Fixed 2026-08-25 after v9.1.0 users saw random
+                        # connection resets on every update attempt.
+                        import time as _time_upd
+                        _time_upd.sleep(0.3)
                     except Exception as exc:
                         _failures.append((fname, str(exc)))
                         print(f"[UPDATE] Failed to download {fname}: {exc}")
