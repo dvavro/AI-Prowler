@@ -1266,8 +1266,8 @@ class TestScheduleNextRecurringJob:
             )
 
         assert isinstance(result, str)
-        # Base date 2026-03-30 + 1 month = 2026-04-30
-        assert "2026-04-30" in result or "April" in result
+        # Base date 2026-03-30 + 1 month = 2026-04-30 (now displayed MM/DD/YYYY)
+        assert "04/30/2026" in result or "April" in result
 
     def test_CT_13_biweekly_customer_gets_next_job_plus_14_days(self, mcp_module, tmp_path):
         """Biweekly customer: next job should be 14 days after last service date."""
@@ -1280,8 +1280,8 @@ class TestScheduleNextRecurringJob:
             )
 
         assert isinstance(result, str)
-        # Base date 2026-03-16 + 14 days = 2026-03-30
-        assert "2026-03-30" in result
+        # Base date 2026-03-16 + 14 days = 2026-03-30 (now displayed MM/DD/YYYY)
+        assert "03/30/2026" in result
 
     def test_CT_14_new_job_written_to_jobs_schedule(self, mcp_module, tmp_path):
         """After scheduling, the new job row must exist in the spreadsheet."""
@@ -1410,7 +1410,7 @@ class TestScheduleNextRecurringJobExpandedFrequencies:
             result = mcp_module.schedule_next_recurring_job(
                 job_identifier="JOB-0099", filepath=str(fp), when="any",
             )
-        assert "2026-05-01" in result
+        assert "05/01/2026" in result
 
     def test_bi_monthly_short_code_bm_also_works(self, mcp_module, tmp_path):
         """Short code, for backward compatibility with any existing data
@@ -1420,7 +1420,7 @@ class TestScheduleNextRecurringJobExpandedFrequencies:
             result = mcp_module.schedule_next_recurring_job(
                 job_identifier="JOB-0099", filepath=str(fp), when="any",
             )
-        assert "2026-05-01" in result
+        assert "05/01/2026" in result
 
     def test_semi_annually_gets_next_job_plus_six_months(self, mcp_module, tmp_path):
         fp = self._make_customer_and_job(tmp_path, "Semi-Annually", "2026-01-15")
@@ -1428,7 +1428,7 @@ class TestScheduleNextRecurringJobExpandedFrequencies:
             result = mcp_module.schedule_next_recurring_job(
                 job_identifier="JOB-0099", filepath=str(fp), when="any",
             )
-        assert "2026-07-15" in result
+        assert "07/15/2026" in result
 
     def test_annually_gets_next_job_plus_twelve_months(self, mcp_module, tmp_path):
         fp = self._make_customer_and_job(tmp_path, "Annually", "2026-06-01")
@@ -1436,7 +1436,7 @@ class TestScheduleNextRecurringJobExpandedFrequencies:
             result = mcp_module.schedule_next_recurring_job(
                 job_identifier="JOB-0099", filepath=str(fp), when="any",
             )
-        assert "2027-06-01" in result
+        assert "06/01/2027" in result
 
     def test_month_end_day_overflow_does_not_crash(self, mcp_module, tmp_path):
         """The actual bug this fix addresses: a base date of Jan 31 plus
@@ -1449,7 +1449,7 @@ class TestScheduleNextRecurringJobExpandedFrequencies:
             )
         assert isinstance(result, str)
         assert not result.startswith("❌")
-        assert "2026-02-28" in result
+        assert "02/28/2026" in result
 
     def test_bi_monthly_month_end_day_overflow_also_capped(self, mcp_module, tmp_path):
         """Same day-overflow protection, exercised through a 2-month
@@ -1461,7 +1461,7 @@ class TestScheduleNextRecurringJobExpandedFrequencies:
             )
         assert isinstance(result, str)
         assert not result.startswith("❌")
-        assert "2026-02-28" in result
+        assert "02/28/2026" in result
 
     def test_unrecognized_frequency_error_message_lists_full_expanded_set(self, mcp_module, tmp_path):
         """The error message must reflect the actual expanded vocabulary,

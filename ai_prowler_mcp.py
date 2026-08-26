@@ -4294,9 +4294,50 @@ def update_job_spreadsheet(
         updated:    list[str] = []
         not_found:  list[str] = []
 
+        import datetime as _dt   # needed by _coerce_date and the isinstance check below
+
+        # Column names that hold dates — used to coerce string values to
+        # real Excel date serials so the cell stores a native date rather
+        # than a text string. This keeps Excel display (MM/DD/YYYY via the
+        # cell's number_format) consistent with what the PWA writes and what
+        # read_job_spreadsheet returns (also MM/DD/YYYY). Standardized
+        # 2026-08-25 as part of the full MM/DD/YYYY format alignment.
+        _DATE_COL_KEYWORDS = (
+            'service date', 'end date', 'invoice date', 'due date',
+            'invoice sent date', 'payment date', 'last service date',
+            'next sched', 'start date',
+        )
+        _DATE_FMTS = ('%m/%d/%Y', '%Y-%m-%d', '%m-%d-%Y', '%d/%m/%Y')
+
+        def _coerce_date(col: str, val):
+            """Convert a string date value to datetime.date if the column
+            is a date column. Returns the original value unchanged if the
+            column is not a date column or the value can't be parsed."""
+            import datetime as _dt
+            if val is None or val == '':
+                return val
+            col_lower = col.lower().replace('\n', ' ')
+            if not any(kw in col_lower for kw in _DATE_COL_KEYWORDS):
+                return val
+            if isinstance(val, (_dt.datetime, _dt.date)):
+                return val.date() if isinstance(val, _dt.datetime) else val
+            for fmt in _DATE_FMTS:
+                try:
+                    return _dt.datetime.strptime(str(val).strip(), fmt).date()
+                except ValueError:
+                    continue
+            return val  # unparseable — write as-is, don't corrupt the value
+
         for col_name, new_val in updates.items():
             if col_name in headers:
-                found_row[headers[col_name] - 1].value = new_val
+                cell = found_row[headers[col_name] - 1]
+                coerced = _coerce_date(col_name, new_val)
+                cell.value = coerced
+                # Apply MM/DD/YYYY number_format whenever we successfully
+                # coerced to a real date — this is what makes Excel display
+                # the date as 08/25/2026 rather than a raw serial number.
+                if isinstance(coerced, (_dt.date, _dt.datetime)):
+                    cell.number_format = 'MM/DD/YYYY'
                 updated.append(f"{col_name} → {new_val}")
             else:
                 not_found.append(col_name)
@@ -4491,11 +4532,43 @@ def _create_job_impl(updates: dict, filepath: str, backup: bool, ctx) -> str:
     # placeholder shown in the Jobs PWA's add-job form.)
     written:   list[str] = []
     not_found: list[str] = []
+
+    # Same date coercion as update_job_spreadsheet — string dates become
+    # real Excel date serials with MM/DD/YYYY number_format so Excel
+    # displays them consistently whether the row was added via the PWA
+    # or typed directly into the sheet.
+    _CJ_DATE_KEYWORDS = (
+        'service date', 'end date', 'invoice date', 'due date',
+        'invoice sent date', 'payment date', 'last service date',
+        'next sched', 'start date',
+    )
+    _CJ_DATE_FMTS = ('%m/%d/%Y', '%Y-%m-%d', '%m-%d-%Y', '%d/%m/%Y')
+
+    def _cj_coerce_date(col: str, val):
+        import datetime as _dt
+        if val is None or val == '':
+            return val
+        col_lower = col.lower().replace('\n', ' ')
+        if not any(kw in col_lower for kw in _CJ_DATE_KEYWORDS):
+            return val
+        if isinstance(val, (_dt.datetime, _dt.date)):
+            return val.date() if isinstance(val, _dt.datetime) else val
+        for fmt in _CJ_DATE_FMTS:
+            try:
+                return _dt.datetime.strptime(str(val).strip(), fmt).date()
+            except ValueError:
+                continue
+        return val
+
     for col_name, new_val in (updates or {}).items():
         if col_name == id_col_name:
             continue
         if col_name in headers:
-            ws.cell(row=new_row_num, column=headers[col_name]).value = new_val
+            cell = ws.cell(row=new_row_num, column=headers[col_name])
+            coerced = _cj_coerce_date(col_name, new_val)
+            cell.value = coerced
+            if isinstance(coerced, (_dt.date, _dt.datetime)):
+                cell.number_format = 'MM/DD/YYYY'
             written.append(f"{col_name} → {new_val}")
         else:
             not_found.append(col_name)
@@ -4788,7 +4861,7 @@ def read_job_spreadsheet(
                 except ValueError:
                     continue
             if date_filter is None:
-                return f"❌ Could not parse filter_date '{filter_date}'. Use YYYY-MM-DD or MM/DD/YYYY."
+                return f"❌ Could not parse filter_date '{filter_date}'. Use MM/DD/YYYY."
 
     svc_date_col = None
     end_date_col = None
@@ -4852,7 +4925,7 @@ def read_job_spreadsheet(
     if not rows_out:
         msg = f"📋 No rows found in sheet '{target_sheet}'"
         if date_filter:
-            msg += f" for date {date_filter.strftime('%Y-%m-%d')}"
+            msg += f" for date {date_filter.strftime('%m/%d/%Y')}"
         if _rjs_restrict:
             msg += " assigned to you"
         return msg + "."
@@ -4869,7 +4942,7 @@ def read_job_spreadsheet(
 
     lines = [
         f"📋 {target_sheet}  —  {os.path.basename(fp)}",
-        f"   {len(rows_out)} row(s)" + (f" for {date_filter.strftime('%Y-%m-%d')}" if date_filter else ""),
+        f"   {len(rows_out)} row(s)" + (f" for {date_filter.strftime('%m/%d/%Y')}" if date_filter else ""),
         "─" * 60,
     ]
     for row_vals in rows_out:
@@ -4881,9 +4954,9 @@ def read_job_spreadsheet(
             if val is None or str(val).strip() == '':
                 continue
             if isinstance(val, _dt.datetime):
-                val = val.strftime('%Y-%m-%d')
+                val = val.strftime('%m/%d/%Y')
             elif isinstance(val, _dt.date):
-                val = val.strftime('%Y-%m-%d')
+                val = val.strftime('%m/%d/%Y')
             lines.append(f"  {col_name}: {val}")
     lines.append("")
     lines.append("─" * 60)
@@ -5195,6 +5268,41 @@ def check_tools_status(ctx: "Context | None" = None) -> str:
 # where a dollar amount belongs.
 
 
+def _read_settings_tax_rate(filepath: str, fallback: float = 0.07) -> float:
+    """Read the Tax Rate from the Settings sheet in the Job Tracker spreadsheet.
+
+    Looks for a row where column A = "Tax Rate" and reads the value from
+    column B.  The value is stored as a decimal fraction (0.07 = 7%) when
+    openpyxl reads a percentage-formatted cell, or as a string "7%" / "0.07"
+    when entered as text — all three forms are handled.
+
+    Returns `fallback` (default 0.07) if the Settings sheet doesn't exist,
+    the Tax Rate row is missing, or the value can't be parsed.
+    """
+    try:
+        import openpyxl as _opx
+        _wb = _opx.load_workbook(filepath, data_only=True, read_only=True)
+        if "Settings" not in _wb.sheetnames:
+            return fallback
+        _ws = _wb["Settings"]
+        for _row in _ws.iter_rows(min_row=3, values_only=True):
+            if _row and str(_row[0] or "").strip() == "Tax Rate":
+                _raw = _row[1]
+                if _raw is None:
+                    return fallback
+                # openpyxl returns percentage cells as decimals (0.07 for 7%)
+                if isinstance(_raw, (int, float)):
+                    # if someone entered 7 instead of 7% or 0.07, normalise
+                    return float(_raw) if float(_raw) <= 1.0 else float(_raw) / 100.0
+                # string form: "7%", "7", or "0.07"
+                _s = str(_raw).strip().rstrip("%")
+                _v = float(_s)
+                return _v if _v <= 1.0 else _v / 100.0
+    except Exception:
+        pass
+    return fallback
+
+
 def _create_invoice_impl(
     job_identifier: str,
     quote_amount:   "float | None",
@@ -5209,8 +5317,6 @@ def _create_invoice_impl(
 ) -> str:
     """Implementation body, called under _spreadsheet_write_lock. See
     create_invoice() for the public docstring."""
-    _telemetry_increment_tool_count("create_invoice")
-
     try:
         import openpyxl as _ci_opx
     except ImportError:
@@ -5225,6 +5331,17 @@ def _create_invoice_impl(
             "Set one in AI-Prowler → Settings → Small Business → Default Spreadsheet Path,\n"
             "or pass the full filepath argument explicitly."
         )
+
+    # ── Resolve tax rate from Settings sheet ──────────────────────────────────
+    # tax_rate == -1.0 means "read from Settings sheet" (the default).
+    # Any explicit value passed overrides the sheet (e.g. the PWA form sends
+    # the user-edited value directly).
+    # Falls back to 7% if the Settings sheet can't be read or the value
+    # can't be parsed.
+    if tax_rate < 0:
+        tax_rate = _read_settings_tax_rate(filepath)
+
+    _telemetry_increment_tool_count("create_invoice")
 
     fp = filepath.replace("\\", "/")
     if not os.path.exists(fp):
@@ -5513,7 +5630,7 @@ def create_invoice(
     discount:       "float | None" = None,
     description:    str = "",
     service_type:   str = "",
-    tax_rate:       float = 0.07,
+    tax_rate:       float = -1.0,   # -1 = read from Settings sheet; pass explicit value to override
     due_days:       int = 30,
     filepath:       str = "",
     backup:         bool = True,
@@ -5554,9 +5671,10 @@ def create_invoice(
                           Service Details / Notes.
         service_type:    E.g. "Window", "Pressure Wash". Omit to use the
                           job's own Service Type.
-        tax_rate:        Fraction, e.g. 0.07 for 7% (matches the spreadsheet
-                          template's built-in rate). Override if your rate
-                          differs.
+        tax_rate:        Decimal fraction e.g. 0.07 for 7%. Defaults to
+                          reading Tax Rate from the Settings sheet in the
+                          spreadsheet — change it there once to update all
+                          tools at once. Pass an explicit value to override.
         due_days:        Payment terms in days from today. Default 30
                           (Net 30, matching the sheet's own column header).
         filepath:        Path to the .xlsx job tracker. Uses the default
@@ -7743,7 +7861,7 @@ def _schedule_next_recurring_job_impl(job_identifier: str, filepath: str, when: 
         "City ★ AI Route":           cust_city,
         "State":                     str(found_job.get("State", "") or ""),
         "ZIP ★ AI Route":            cust_zip,
-        "Service Date":              next_date.strftime('%Y-%m-%d'),
+        "Service Date":              next_date.strftime('%m/%d/%Y'),
         "Day of Week":               next_date.strftime('%A'),
         "Service Type":              svc_type,
         "Service Details / Notes":   svc_notes,
@@ -7767,8 +7885,8 @@ def _schedule_next_recurring_job_impl(job_identifier: str, filepath: str, when: 
         f"   New Job ID:   {new_job_id}\n"
         f"   Customer:     {cust_name}\n"
         f"   Frequency:    {frequency}  ({freq_norm})\n"
-        f"   Last Service: {base_date.strftime('%Y-%m-%d')}\n"
-        f"   Next Service: {next_date.strftime('%Y-%m-%d')} ({next_date.strftime('%A')})\n"
+        f"   Last Service: {base_date.strftime('%m/%d/%Y')}\n"
+        f"   Next Service: {next_date.strftime('%m/%d/%Y')} ({next_date.strftime('%A')})\n"
         f"   Crew:         {crew or '(unassigned)'}\n"
         f"   Service:      {svc_type}\n"
         f"   {backup_msg}"
@@ -8319,7 +8437,7 @@ def get_ar_aging_report(
             else:
                 bucket_key = "over_90"
 
-        due_str  = due_date.strftime('%Y-%m-%d') if due_date else "—"
+        due_str  = due_date.strftime('%m/%d/%Y') if due_date else "—"
         days_str = (f"{(as_of - due_date).days}d overdue" if due_date and (as_of - due_date).days > 0
                     else ("due " + due_date.strftime('%m/%d') if due_date else "no due date"))
         row_line = f"  {inv_id:<12}  {customer:<28}  ${balance:>9,.2f}   {days_str}"
@@ -8331,14 +8449,14 @@ def get_ar_aging_report(
 
     if rows_processed == 0:
         return (
-            f"✅ No outstanding invoices as of {as_of.strftime('%Y-%m-%d')}.\n"
+            f"✅ No outstanding invoices as of {as_of.strftime('%m/%d/%Y')}.\n"
             "   All invoices are paid or have zero balance."
         )
 
     # ── Build report ──────────────────────────────────────────────────────────
     lines = [
         f"💰 AR AGING REPORT",
-        f"   As of: {as_of.strftime('%B %d, %Y')}",
+        f"   As of: {as_of.strftime('%m/%d/%Y')}",
         f"   File:  {os.path.basename(fp)}",
         "═" * 60,
         "",

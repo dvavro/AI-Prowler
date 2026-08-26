@@ -567,6 +567,24 @@ MANIFEST_FILES = [
     "cloudflared_service_helper.py",
     "sms_backends.py",
     "sms_inbox.py",
+    # Added 2026-08-25: spreadsheet schema migration engine.
+    # Runs at startup to migrate existing user spreadsheets to the current
+    # schema version without overwriting user data. Must be in MANIFEST_FILES
+    # so auto-updated clients receive it alongside rag_gui.py which imports it.
+    "migrate_spreadsheet.py",
+    # Added 2026-08-26: the Program Files reference copy of the template
+    # spreadsheet (NOT the user's live Documents copy — that one is never
+    # auto-updated, by design). migrate_spreadsheet.py's _get_template_path()
+    # reads this exact file as the schema "source of truth" a user's
+    # spreadsheet gets diffed against. Without it here, an auto-updated
+    # client's Program Files copy of this file goes stale the moment the
+    # schema bumps again — migrate_spreadsheet.py would ship in the same
+    # update, but it would compare against last release's template, silently
+    # producing an incomplete migration (missing whatever changed in between)
+    # instead of the "Template not found" failure a first-time missing file
+    # would cause. Found alongside the [Files] entry gap for the same file in
+    # AI-Prowler-Setup.iss (see that file's comment at the equivalent line).
+    "AI-Prowler_Job_Tracker.xlsx",
     "custom_tasks_manager.py",
     "scheduler_jobs.py",
     "scheduler_engine.py",
@@ -645,7 +663,17 @@ def write_update_manifest(new_version: str) -> None:
         # Fixed 2026-08-25 after v9.1.0 PNG icons caused hash mismatches on
         # every update attempt (5 of 40 files failing every time).
         _BINARY_EXTS = {".png", ".ico", ".exe", ".jpg", ".jpeg",
-                        ".gif", ".webp", ".zip", ".whl", ".pdf"}
+                        ".gif", ".webp", ".zip", ".whl", ".pdf",
+                        # Added 2026-08-26: .xlsx is a ZIP/Office-Open-XML
+                        # container — arbitrary compressed binary content that
+                        # can incidentally contain the 0x0D 0x0A byte pair.
+                        # AI-Prowler_Job_Tracker.xlsx joined MANIFEST_FILES
+                        # this same day (see that entry's comment) and would
+                        # have hit the exact same "hash mismatch on every
+                        # update attempt" bug already fixed for PNGs above,
+                        # just never triggered yet since no .xlsx had shipped
+                        # through this manifest before now.
+                        ".xlsx"}
         is_binary = fp.suffix.lower() in _BINARY_EXTS
         normalized = raw_bytes if is_binary else raw_bytes.replace(b"\r\n", b"\n")
         digest = hashlib.sha256(normalized).hexdigest()

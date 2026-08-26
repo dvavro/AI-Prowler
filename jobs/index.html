@@ -439,8 +439,8 @@ textarea::placeholder{color:#c0c6d8}
                   <label style="font-size:13px;color:#aaa">ZIP<br><input id="jfZip" style="width:100%;margin-top:4px;padding:8px;border-radius:8px;background:#0d0d20;border:1px solid #333;color:#fff;font-size:14px"></label>
                 </div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-                  <label style="font-size:13px;color:#aaa">Service Date<br><input id="jfDate" type="date" style="width:100%;margin-top:4px;padding:8px;border-radius:8px;background:#0d0d20;border:1px solid #333;color:#fff;font-size:14px"></label>
-                  <label style="font-size:13px;color:#aaa">End Date (blank=single day)<br><input id="jfEndDate" type="date" style="width:100%;margin-top:4px;padding:8px;border-radius:8px;background:#0d0d20;border:1px solid #333;color:#fff;font-size:14px"></label>
+                  <label style="font-size:13px;color:#aaa">Service Date<br><input id="jfDate" type="text" placeholder="MM/DD/YYYY" pattern="\d{2}/\d{2}/\d{4}" style="width:100%;margin-top:4px;padding:8px;border-radius:8px;background:#0d0d20;border:1px solid #333;color:#fff;font-size:14px"></label>
+                  <label style="font-size:13px;color:#aaa">End Date (blank=single day)<br><input id="jfEndDate" type="text" placeholder="MM/DD/YYYY" pattern="\d{2}/\d{2}/\d{4}" style="width:100%;margin-top:4px;padding:8px;border-radius:8px;background:#0d0d20;border:1px solid #333;color:#fff;font-size:14px"></label>
                 </div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
                   <label style="font-size:13px;color:#aaa">Start Time<br><input id="jfStart" type="time" style="width:100%;margin-top:4px;padding:8px;border-radius:8px;background:#0d0d20;border:1px solid #333;color:#fff;font-size:14px"></label>
@@ -492,7 +492,7 @@ textarea::placeholder{color:#c0c6d8}
                 </div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
                   <label style="font-size:13px;color:#aaa">Invoice ID<br><input id="jfInvoiceId" placeholder="INV-####" style="width:100%;margin-top:4px;padding:8px;border-radius:8px;background:#0d0d20;border:1px solid #333;color:#fff;font-size:14px"></label>
-                  <label style="font-size:13px;color:#aaa">Invoice Sent Date<br><input id="jfInvoiceSentDate" type="date" style="width:100%;margin-top:4px;padding:8px;border-radius:8px;background:#0d0d20;border:1px solid #333;color:#fff;font-size:14px"></label>
+                  <label style="font-size:13px;color:#aaa">Invoice Sent Date<br><input id="jfInvoiceSentDate" type="text" placeholder="MM/DD/YYYY" pattern="\d{2}/\d{2}/\d{4}" style="width:100%;margin-top:4px;padding:8px;border-radius:8px;background:#0d0d20;border:1px solid #333;color:#fff;font-size:14px"></label>
                 </div>
                 <!-- Read-only: filled in by AI-Prowler's own geocode / route
                      optimize / weather-check tools, not meant for hand-editing —
@@ -1251,8 +1251,8 @@ function isJobComplete(j) {
 function parseJobDate(s) {
   if (!s) return null;
   s = s.trim();
-  // Job dates come out of the spreadsheet in either format depending on
-  // how the row was entered — YYYY-MM-DD or M/D/YYYY.
+  // Job dates come from the spreadsheet as MM/DD/YYYY (standard as of v9.1.0).
+  // Both formats are still parsed for backward compatibility with older data.
   let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
   if (m) return new Date(+m[1], +m[2]-1, +m[3]);
   m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
@@ -1262,9 +1262,9 @@ function parseJobDate(s) {
 
 // ── CALENDAR ──────────────────────────────────────────────────────────────
 function _dkey(d) {
-  // Local-date key (not toISOString, which shifts by timezone offset and
-  // can land on the wrong day) — YYYY-MM-DD, matching how job dates are
-  // already stored/compared elsewhere in this file.
+  // Local-date key for internal calendar indexing — always YYYY-MM-DD
+  // internally (JavaScript Date arithmetic), regardless of the MM/DD/YYYY
+  // format used everywhere else for display and storage.
   return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
 }
 
@@ -2401,7 +2401,7 @@ function _round2dp(v) {
   return n.toFixed(2);
 }
 
-// ── JOBS SPREADSHEET SCREEN (all 8 tabs) ─────────────────────────────────────
+// ── JOBS SPREADSHEET SCREEN (all 9 tabs) ─────────────────────────────────────
 var _SHEETS = [
   {name:'Jobs_Schedule',    label:'📋 Jobs',      addable:true},
   {name:'Customers',        label:'👤 Customers',  addable:false},
@@ -2410,7 +2410,8 @@ var _SHEETS = [
   {name:'TimeLog',          label:'⏱ TimeLog',    addable:false},
   {name:'Route_Planner',    label:'🗺 Route',      addable:false},
   {name:'Services_Pricing', label:'💰 Pricing',    addable:false},
-  {name:'AI-Prowler-Commands',label:'⚙ Commands', addable:false},
+  {name:'Settings',         label:'⚙ Settings',   addable:false},
+  {name:'AI-Prowler-Commands',label:'📖 Commands', addable:false},
 ];
 var _activeSheet = 'Jobs_Schedule';
 
@@ -2474,7 +2475,166 @@ async function _switchSheet(name) {
   await loadSheet(name);
 }
 
-// Found 2026-08-23: this used to be a hardcoded array of tasks/prompts/
+// ── SETTINGS CARD ─────────────────────────────────────────────────────────────
+// Reads the Settings sheet via read_job_spreadsheet and renders a clean
+// card UI — category section headers, each setting as label + bold value
+// with a note line underneath. Read-only in the PWA; edits are made in
+// the spreadsheet directly. Auto-refreshes on every tab visit so changes
+// made in Excel are reflected immediately without restarting the app.
+async function _renderSettingsCard() {
+  var raw;
+  try {
+    raw = await mcpCall('read_job_spreadsheet',
+                        { sheet_name: 'Settings', max_rows: 100 });
+  } catch (err) {
+    return '<div style="padding:16px;color:#f87171">Could not load Settings sheet: '
+           + esc(String(err)) + '</div>';
+  }
+
+  if (!raw || !raw.trim()) {
+    return '<div style="padding:16px;color:#aaa">Settings sheet is empty. '
+           + 'Open the spreadsheet and fill in your business details.</div>';
+  }
+
+  // ── Parse raw key:value output from read_job_spreadsheet ──────────────────
+  // Each row comes back as:
+  //   Setting: Business Name
+  //   Value: Florida Cleaning Services
+  //   Notes: Appears on invoices...
+  //   (blank line between rows)
+  //
+  // Category divider rows have Setting value only (no Value field) and their
+  // Setting text is ALL CAPS — we use that to detect section headers.
+  var blocks = raw.split(/\n{2,}|─{3,}/)
+    .map(function(b){ return b.trim(); })
+    .filter(function(b){
+      return b.length > 0
+        && !b.startsWith('📋')
+        && !b.match(/^\d+ row/);
+    });
+
+  var sections   = [];
+  var curSection = { title: null, items: [] };
+
+  blocks.forEach(function(block) {
+    var obj = {};
+    block.split('\n').forEach(function(line) {
+      var m = line.match(/^([^:]+):\s*(.*)$/);
+      if (m) obj[m[1].trim()] = m[2].trim();
+    });
+    if (!obj['Setting']) return;
+
+    var setting = obj['Setting'];
+    var value   = obj['Value']  || '';
+    var note    = obj['Notes']  || '';
+
+    // Category header — ALL CAPS, no value
+    if (!value && setting === setting.toUpperCase() && setting.length > 2) {
+      if (curSection.items.length || curSection.title) {
+        sections.push(curSection);
+      }
+      // Title-case the section name for display
+      var titled = setting.replace(/\w\S*/g, function(w) {
+        var KEEP = ['&','AND','OR','OF','THE','A','AN','LLC','SMS','AR','AI','GPS','URL','ID'];
+        if (KEEP.indexOf(w.toUpperCase()) !== -1) return w.toLowerCase();
+        return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+      });
+      curSection = { title: titled, items: [] };
+      return;
+    }
+
+    curSection.items.push({ setting: setting, value: value, note: note });
+  });
+  if (curSection.items.length || curSection.title) sections.push(curSection);
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+  var html = '<div style="padding:12px 4px 24px">';
+
+  // Header strip
+  html += '<div style="display:flex;align-items:center;gap:10px;'
+        + 'padding:14px 16px;margin-bottom:12px;'
+        + 'background:linear-gradient(135deg,#1a237e,#283593);'
+        + 'border-radius:12px">'
+        + '<span style="font-size:22px">⚙</span>'
+        + '<div>'
+        + '<div style="font-size:16px;font-weight:700;color:#fff">Business Settings</div>'
+        + '<div style="font-size:11px;color:#90caf9;margin-top:2px">'
+        + 'Read-only here — edit values directly in the Settings sheet in Excel'
+        + '</div>'
+        + '</div>'
+        + '</div>';
+
+  sections.forEach(function(sec) {
+    if (!sec.items.length) return;
+
+    // Section header
+    if (sec.title) {
+      html += '<div style="font-size:10px;font-weight:700;color:var(--cyan);'
+            + 'letter-spacing:.1em;text-transform:uppercase;'
+            + 'padding:14px 16px 6px;margin-top:4px">'
+            + esc(sec.title) + '</div>';
+    }
+
+    // Settings card
+    html += '<div style="background:#0e1018;border:1px solid #2a2f45;'
+          + 'border-radius:12px;overflow:hidden;margin-bottom:10px">';
+
+    sec.items.forEach(function(item, idx) {
+      var border = idx < sec.items.length - 1
+                 ? 'border-bottom:1px solid #1a1f35' : '';
+      var isEmpty = !item.value || item.value === '0' || item.value === '0.00%';
+
+      html += '<div style="padding:11px 16px;' + border + '">'
+            + '<div style="display:flex;justify-content:space-between;'
+            + 'align-items:baseline;gap:12px">'
+
+            // Label
+            + '<div style="font-size:13px;color:#a0a8c0;flex-shrink:0;'
+            + 'min-width:160px">' + esc(item.setting) + '</div>'
+
+            // Value — amber if empty/zero so user knows to fill it in
+            + '<div style="font-size:14px;font-weight:700;text-align:right;'
+            + 'color:' + (isEmpty ? '#f59e0b' : '#e8eaf6') + '">'
+            + (isEmpty
+               ? '<span style="font-style:italic;font-size:12px">'
+                 + 'Not set — edit in Excel</span>'
+               : esc(item.value))
+            + '</div>'
+            + '</div>';
+
+      // Note line
+      if (item.note) {
+        html += '<div style="font-size:11px;color:#555e7a;margin-top:3px;'
+              + 'font-style:italic">' + esc(item.note) + '</div>';
+      }
+
+      // Special highlight for Tax Rate — most important constant
+      if (item.setting === 'Tax Rate' && item.value) {
+        html += '<div style="display:inline-block;margin-top:4px;'
+              + 'padding:2px 8px;border-radius:4px;'
+              + 'background:#1a2e1a;border:1px solid #2d6a2d;'
+              + 'font-size:10px;color:#4caf50">'
+              + '✓ Referenced by Jobs, Invoices & Quotes formulas'
+              + '</div>';
+      }
+
+      html += '</div>';  // close row
+    });
+
+    html += '</div>';  // close section card
+  });
+
+  html += '<div style="padding:8px 16px;font-size:11px;color:#555e7a;'
+        + 'text-align:center">'
+        + 'To update any value: open AI-Prowler_Job_Tracker.xlsx → Settings tab → '
+        + 'edit the Value column → save. Refresh this tab to see changes.'
+        + '</div>';
+
+  html += '</div>';
+  return html;
+}
+
+// ── COMMANDS CARD ──────────────────────────────────────────────────────────────
 // tools — a second, manually-maintained copy of the actual
 // AI-Prowler_Commands sheet in the real spreadsheet, which is exactly
 // how they drifted out of sync (e.g. the sheet's "Check outstanding AR"
@@ -2578,6 +2738,11 @@ async function loadSheet(sheetName) {
   var el = document.getElementById('sheetContent');
   if (!el) return;
 
+  if (sheetName === 'Settings') {
+    el.innerHTML = '<div style="text-align:center;padding:24px;color:#aaa"><div class="spinner"></div> Loading Settings...</div>';
+    el.innerHTML = await _renderSettingsCard();
+    return;
+  }
   if (sheetName === 'AI-Prowler-Commands' || sheetName === 'AI-Prowler_Commands') {
     el.innerHTML = '<div style="text-align:center;padding:24px;color:#aaa"><div class="spinner"></div> Loading Commands...</div>';
     el.innerHTML = await _renderCommandsCard();
@@ -3005,7 +3170,7 @@ async function _openGenericEditModal(sheetName, rowId, rowData, rowIdx) {
 
     // Choose input type based on column name hints
     var inputType = 'text';
-    if (/date/i.test(col)) inputType = 'date';
+    if (/date/i.test(col)) inputType = 'text';
     else if (/time/i.test(col) && !/lifetime|one-time/i.test(col)) inputType = 'time';
     else if (/\(\$\)|price|cost|amount|quote|subtotal|discount|revenue|charge|labor|material/i.test(col)) inputType = 'number';
     else if (/duration|qty|units|sq ft|multiplier/i.test(col)) inputType = 'number';
@@ -3026,6 +3191,12 @@ async function _openGenericEditModal(sheetName, rowId, rowData, rowIdx) {
       el.value = val || '';
       el.dataset.colName = col;
       if (inputType === 'number') { el.step = '0.01'; el.min = '0'; }
+      // Date columns: MM/DD/YYYY placeholder + pattern, consistent with
+      // read_job_spreadsheet output and update_job_spreadsheet input.
+      if (/date/i.test(col) && !/lifetime|one-time/i.test(col)) {
+        el.placeholder = 'MM/DD/YYYY';
+        el.pattern = '\\d{2}/\\d{2}/\\d{4}';
+      }
       lbl.innerHTML = esc(colName) + '<br>';
       lbl.appendChild(el);
     }
@@ -3090,7 +3261,7 @@ function openAddJobModal() {
    'jfLatitude','jfLongitude','jfRouteStop','jfRouteMapUrl','jfWeatherCheck'].forEach(id => {
     document.getElementById(id).value = '';
   });
-  document.getElementById('jfDate').value   = new Date().toISOString().split('T')[0];
+  document.getElementById('jfDate').value   = (function(){var d=new Date();return String(d.getMonth()+1).padStart(2,'0')+'/'+String(d.getDate()).padStart(2,'0')+'/'+d.getFullYear();})();
   document.getElementById('jfService').value = 'Window';
   document.getElementById('jfStatus').value  = 'Scheduled';
   document.getElementById('jfJobId').placeholder = 'Auto-assigned';

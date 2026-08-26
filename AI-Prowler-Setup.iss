@@ -241,6 +241,23 @@ Source: "VERSION"; DestDir: "{app}"; Flags: ignoreversion
 ; ChromaDB path / HF cache). Same class of bug as VERSION above:
 ; referenced by rag_gui.py but never listed here, so it would have failed
 ; the same way the moment anything called it unconditionally.
+Source: "migrate_spreadsheet.py"; DestDir: "{app}"; Flags: ignoreversion
+; AI-Prowler_Job_Tracker.xlsx — Program Files reference copy, NOT the user's
+; live data copy (that one is deployed separately below to
+; Documents\AI-Prowler with onlyifdoesntexist — see the "Small Business Job
+; Tracker template spreadsheet" block further down). migrate_spreadsheet.py's
+; _get_template_path() reads this exact path (_APP_DIR / the .xlsx filename,
+; which resolves to {app} once frozen) as the schema "source of truth" that a
+; user's spreadsheet is diffed against and migrated toward. Before this line
+; existed there was NO [Files] entry that ever placed a copy here at all, so
+; on every real install (fresh or upgrade) get_migration_plan() /
+; check_and_migrate() would find nothing at {app}\AI-Prowler_Job_Tracker.xlsx
+; and the entire migration feature would fail with "Template not found" —
+; found 2026-08-26 auditing the v9.1.0 migration feature end-to-end.
+; ignoreversion (not onlyifdoesntexist): this copy must always reflect the
+; CURRENT release's schema, so every reinstall/upgrade should overwrite it —
+; unlike the user's own working copy, it is not live data.
+Source: "AI-Prowler_Job_Tracker.xlsx"; DestDir: "{app}"; Flags: ignoreversion
 Source: "startup_log.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "rag_gui.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "rag_preprocessor.py"; DestDir: "{app}"; Flags: ignoreversion

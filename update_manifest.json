@@ -1,11 +1,11 @@
 {
   "version": "9.1.0",
-  "generated": "2026-08-25T09:59:24",
+  "generated": "2026-08-26T13:17:09",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "3750a631986cd6573b30b31c9d6f96a4392a209a590179b17f0c29604bf28263",
-      "bytes": 1275748
+      "sha256": "b43b43bc28b3cef4c07308a84bd674b2e93f702dd6cce86f80ebaf460fcf8617",
+      "bytes": 1295214
     },
     {
       "path": "rag_preprocessor.py",
@@ -14,8 +14,8 @@
     },
     {
       "path": "ai_prowler_mcp.py",
-      "sha256": "89f6cdd59441781601ee3586b6dc2bbb0ff8c9e1fe773ff5631deb8144743eb0",
-      "bytes": 963701
+      "sha256": "a69fb465d26c4e43a9354581ce1048bd45683b404519f422957520bdad4811ee",
+      "bytes": 969449
     },
     {
       "path": "mcp_diagnostics.py",
@@ -59,8 +59,8 @@
     },
     {
       "path": "COMPLETE_USER_GUIDE.md",
-      "sha256": "a7d15b1f1ffa8151905243677f71a7abfca2fb5886788f8f175a975624dc5e90",
-      "bytes": 178507
+      "sha256": "5c0706d7c72ff2c784f8cb581f288ceb11aad1a5c7bad2f835c48c90510a6403",
+      "bytes": 182040
     },
     {
       "path": "VERSION",
@@ -108,6 +108,16 @@
       "bytes": 18904
     },
     {
+      "path": "migrate_spreadsheet.py",
+      "sha256": "84b452465a038134e339ed42fbe3fc3652c45f31499d130e1b482e9c01845c6e",
+      "bytes": 43812
+    },
+    {
+      "path": "AI-Prowler_Job_Tracker.xlsx",
+      "sha256": "3084fed2825a373204601bc4da845d7f053a4abb4c7e203a85c7a11b6b2efe30",
+      "bytes": 75685
+    },
+    {
       "path": "custom_tasks_manager.py",
       "sha256": "20ca5627ed20712c904d53605e3e2538c3c50c7ff38b008835d90a25c7eaf91a",
       "bytes": 51874
@@ -149,8 +159,8 @@
     },
     {
       "path": "jobs/index.html",
-      "sha256": "468c8ae1e7522223c7839bb4251cb9bbfe95f0988025a1188250a322581a909a",
-      "bytes": 513438
+      "sha256": "4df80f2d6a173838fb14e55057feed49ab49ceb78270bb782c7b0cb3b3e51a4f",
+      "bytes": 520926
     },
     {
       "path": "jobs/manifest.json",

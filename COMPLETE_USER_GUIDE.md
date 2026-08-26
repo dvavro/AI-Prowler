@@ -99,6 +99,8 @@ This produces dramatically better results — equivalent to having a skilled res
 
 **New in v9.1.0:**
 
+- **Spreadsheet schema migration** — existing users' `AI-Prowler_Job_Tracker.xlsx` can now be upgraded in place to match the current release's sheet/column structure (new sheets, new columns, corrected freeze panes) without ever touching or losing existing data. Strictly manual and opt-in — nothing runs automatically at startup. A red/green indicator on the **Small Business tab** shows whether an update is available; clicking **Update Spreadsheet Now** shows exactly what will change and where the automatic backup will be saved before anything is touched, and a result dialog confirms success or (on any failure) that the original file was fully restored from that backup. See **Section 10 → Spreadsheet Schema Migration**.
+- **Small Business tab condensed** — the tab used to list every tool's description, setup requirements, and example prompts inline, which grew long and went stale as tools were added. That content — the full tool catalog (including the newer tools built for the Jobs PWA below), an end-to-end daily workflow walkthrough from morning schedule check through route, invoicing, and AR aging, and example voice prompts for each step — now lives in a single **🔧 View All Service Tools & Example Prompts** popup opened from the tab, keeping the tab itself down to just the spreadsheet path, Jobs App URL, spreadsheet update indicator, and Online Payment Links configuration.
 - **Create Invoice from the Jobs PWA** — the job-detail popup now has a green 🧾 Create Invoice button for any unpaid, un-invoiced job. Tapping it opens a pre-filled form (quote, discount, tax rate, service type, description, payment terms) with a live Taxable / Tax / Total Due strip that recalculates on every keystroke using ceiling rounding on tax. Submitting calls `create_invoice` via the `/pwa-api` endpoint and works in both personal and server mode. Email Invoice / Text Invoice buttons are enabled immediately after the invoice is created. See **Section 22 → Jobs PWA**.
 - **Live invoice totals use ceiling rounding on tax** — the PWA's `ifRecalc()` function now applies `Math.ceil` (ceiling to the nearest penny) on the tax amount and `Math.round` (half-up, 2 dp) on taxable and total, with `Number.EPSILON` added before each operation to prevent IEEE-754 float drift. This ensures the pre-submission display never under-states what will be collected.
 - **Invoices sheet header row now frozen** — the Invoices tab in `AI-Prowler_Job_Tracker.xlsx` now freezes rows 1–2 (title banner + column headers) at `A3`, matching the Customers, Jobs_Schedule, and TimeLog sheets. Scrolling vertically through invoice rows keeps the column headers visible.
@@ -951,14 +953,24 @@ A folder with no scope assigned at all defaults to `shared` once it's tracked an
 
 The Small Business tab provides configuration and quick-reference for the field service automation MCP tools. These tools let Claude act as your field service assistant from a conversation.
 
-### Free Tools Panel
+### Free Tools
 
-Four tools require no setup and work immediately:
+Four tools require no setup and work immediately: `get_weather` (Open-Meteo + Nominatim), `geocode_address` (Nominatim / OpenStreetMap), `optimize_route` (OSRM public routing server), and `build_maps_url` (Google Maps / Apple Maps URL scheme). None need an API key.
 
-- `get_weather` — Open-Meteo + Nominatim (no API key)
-- `geocode_address` — Nominatim / OpenStreetMap (no API key)
-- `optimize_route` — OSRM public routing server (no API key)
-- `build_maps_url` — Google Maps / Apple Maps URL scheme (no API key)
+> As of v9.1.0 these are documented, along with every other Small Business tool, an end-to-end daily workflow, and example prompts, in the **🔧 View All Service Tools & Example Prompts** popup opened from the Small Business tab — they no longer have a dedicated always-visible panel there.
+
+### Spreadsheet Schema Migration
+
+Each release may add new sheets, new columns, or corrected formatting to `AI-Prowler_Job_Tracker.xlsx`. Existing users' spreadsheets don't pick these up automatically — the installer's `onlyifdoesntexist` behavior deliberately never overwrites a live working file. The Spreadsheet Schema Migration feature closes that gap safely.
+
+**How it works:**
+
+- The **Small Business tab** shows a status light: 🔴 **Update required** or 🟢 **Up to date**, based on comparing your spreadsheet's recorded schema version (`spreadsheet_schema_version` in `~/.ai-prowler/config.json`) against the version this release targets.
+- This check is purely informational — **nothing runs automatically**, including at startup. The only way a migration ever runs is by clicking **Update Spreadsheet Now**.
+- Clicking it shows a consent dialog stating exactly which file will be updated, where the automatic backup will be saved (a timestamped copy in a `_backups` subfolder next to your spreadsheet), and a plain-English list of what will change (new sheets, new columns, freeze-pane corrections) — plus which of your own custom sheets and columns will be left untouched. You choose **✅ Migrate Now** or **Cancel — Do It Later**.
+- On success, a result dialog confirms what changed and where the backup is. On any failure, the original file is automatically restored from that backup before you see the failure dialog — your data is never left in a partially-migrated state.
+- A copy of the new template (`AI-Prowler_Job_Tracker_TEMPLATE_v<N>.xlsx`) is placed alongside your file after a successful migration, so you (or Claude) can compare it against your working copy if needed.
+- Every migration attempt — success or failure, including the full error and stack trace on failure — is logged to `~/.ai-prowler/spreadsheet_migration.log`.
 
 ### Job Tracker Spreadsheet
 

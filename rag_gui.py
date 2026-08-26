@@ -972,6 +972,15 @@ class RAGGui:
         # the subscription status check to complete first.
         self.root.after(6000, self._auto_start_http_server)
 
+        # ── Spreadsheet schema migration ──────────────────────────────────────
+        # INTENTIONALLY MANUAL-ONLY (do not re-add an app.after(...) call here).
+        # Migration must never run automatically on startup — it only runs
+        # when the user opens the Small Biz tab (where the red/green
+        # indicator shows current status) and explicitly clicks
+        # "Update Spreadsheet Now", which routes through the consent dialog
+        # (backup path + file to be migrated + Migrate Now / Cancel) before
+        # anything is touched. See _on_demand_migration / _show_migration_consent.
+
         # ----- Code Tools write-side: approval-queue poll -----
         # The Code Tools write-side tools (create_file, write_file,
         # str_replace_in_file, etc.) queue write-approval requests to
@@ -981,7 +990,353 @@ class RAGGui:
         # user can grant or deny access. Poll runs every 5 seconds.
         self.root.after(5000, self._schedule_write_approval_poll)
 
-    # ====== Code Tools write-side: approval-queue dialog ======
+    # ════════════════════════════════════════════════════════════════════════
+    # Spreadsheet schema migration
+    # ════════════════════════════════════════════════════════════════════════
+
+    def _trigger_spreadsheet_migration(self):
+        """Called by after(9000,...) at startup. Checks schema version and,
+        if a migration is needed, computes the plan and shows the consent
+        dialog — never runs migration without explicit user approval."""
+        import threading as _thr
+        try:
+            import migrate_spreadsheet as _ms
+        except ImportError:
+            return
+
+        if _ms._get_schema_version() >= _ms.CURRENT_SCHEMA_VERSION:
+            return
+
+        def _compute_plan():
+            plan = _ms.get_migration_plan()
+            self.output_queue.put(('migration_plan_ready', plan))
+
+        _thr.Thread(target=_compute_plan, daemon=True,
+                    name="spreadsheet-migration-plan").start()
+
+    def _show_migration_consent(self, plan):
+        """Show consent dialog — tell the user exactly what will change,
+        what file will be migrated, and what the backup will be called.
+        User must click Migrate Now to proceed, or Cancel to defer."""
+        import tkinter as _tk
+        import tkinter.ttk as _ttk
+        try:
+            import migrate_spreadsheet as _ms
+        except ImportError:
+            return
+
+        if not plan.needed:
+            self._update_migration_indicator(needed=False)
+            return
+
+        # Update indicator to amber (needed, not yet done)
+        self._update_migration_indicator(needed=True)
+
+        if plan.error:
+            self._show_toast_or_status(
+                f"⚠️ Spreadsheet migration check failed: {plan.error}",
+                duration_ms=8000)
+            return
+
+        win = _tk.Toplevel(self.root)
+        win.title("Job Tracker Spreadsheet Update Available")
+        win.resizable(False, False)
+        win.grab_set()
+        win.update_idletasks()
+        px = self.root.winfo_x() + self.root.winfo_width()  // 2
+        py = self.root.winfo_y() + self.root.winfo_height() // 2
+        win.geometry(f"580x580+{px - 290}+{py - 290}")
+
+        frame = _ttk.Frame(win, padding=20)
+        frame.pack(fill="both", expand=True)
+
+        # Header
+        _tk.Label(frame,
+                  text="🔄  Job Tracker Spreadsheet Update Available",
+                  font=("Segoe UI", 13, "bold")).pack(anchor="w", pady=(0, 4))
+        _tk.Label(frame,
+                  text=(f"A structural update is available for your spreadsheet "
+                        f"(schema v{plan.from_version} → v{plan.to_version}).\n"
+                        f"The Mobile Jobs App requires this update to work correctly."),
+                  wraplength=530, justify="left").pack(anchor="w", pady=(0, 10))
+
+        # File to be migrated
+        _tk.Label(frame, text="File that will be updated:",
+                  font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        _tk.Label(frame, text=f"  {plan.user_path}",
+                  fg="#0066cc", wraplength=530,
+                  justify="left").pack(anchor="w", pady=(0, 6))
+
+        # Backup info
+        _tk.Label(frame, text="Backup will be saved as:",
+                  font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        _tk.Label(frame,
+                  text=f"  {plan.backup_dir}\\\n  {plan.backup_name}",
+                  fg="#555", wraplength=530,
+                  justify="left").pack(anchor="w", pady=(0, 10))
+
+        # What will change
+        _tk.Label(frame, text="What this update will do:",
+                  font=("Segoe UI", 9, "bold")).pack(anchor="w")
+
+        changes_frame = _ttk.Frame(frame)
+        changes_frame.pack(fill="x", pady=(2, 8))
+
+        def _bullet(text, color="#212121"):
+            _tk.Label(changes_frame, text=f"  • {text}",
+                      fg=color, wraplength=510,
+                      justify="left").pack(anchor="w")
+
+        if plan.sheets_to_add:
+            _bullet(f"Add sheet(s): {', '.join(plan.sheets_to_add)}")
+        if plan.sheets_to_replace:
+            _bullet(f"Refresh command reference: {', '.join(plan.sheets_to_replace)}")
+        for sheet, cols in plan.columns_to_add.items():
+            _bullet(f"{sheet}: add column(s): {', '.join(cols[:4])}"
+                    + (" …" if len(cols) > 4 else ""))
+        if plan.freeze_fixes:
+            _bullet(f"Fix freeze panes: {', '.join(plan.freeze_fixes)}")
+
+        if plan.sheets_preserved:
+            _bullet(f"Your custom sheet(s) will NOT be touched: "
+                    f"{', '.join(plan.sheets_preserved)}", color="#2d6a2d")
+        for sheet, cols in plan.columns_preserved.items():
+            _bullet(f"{sheet}: your custom column(s) preserved: "
+                    f"{', '.join(cols)}", color="#2d6a2d")
+
+        _tk.Label(frame,
+                  text="Your data is never deleted. A full backup is made before any changes.",
+                  font=("Segoe UI", 9, "italic"),
+                  fg="#2d6a2d").pack(anchor="w", pady=(0, 12))
+
+        # Buttons
+        btn_frame = _ttk.Frame(frame)
+        btn_frame.pack(fill="x")
+
+        def _do_migrate():
+            win.destroy()
+            self._run_migration_now()
+
+        def _cancel():
+            win.destroy()
+            self._show_toast_or_status(
+                "ℹ️ Spreadsheet update deferred — use the Small Business tab to run later.",
+                duration_ms=6000)
+
+        _ttk.Button(btn_frame, text="✅  Migrate Now",
+                    command=_do_migrate, width=18).pack(side="left", padx=(0, 8))
+        _ttk.Button(btn_frame, text="Cancel — Do It Later",
+                    command=_cancel, width=20).pack(side="left")
+
+    def _run_migration_now(self):
+        """Run the actual migration in a background thread after user consent."""
+        import threading as _thr
+        try:
+            import migrate_spreadsheet as _ms
+        except ImportError:
+            return
+
+        self.status_var.set("🔄  Migrating Job Tracker spreadsheet…")
+
+        def _run():
+            result = _ms.check_and_migrate()
+            self.output_queue.put(('migration_result', result))
+
+        _thr.Thread(target=_run, daemon=True,
+                    name="spreadsheet-migration").start()
+
+    def _update_migration_indicator(self, needed: bool):
+        """Update the red/green indicator in the Small Biz tab if it exists."""
+        try:
+            lbl = getattr(self, '_migration_indicator_lbl', None)
+            btn = getattr(self, '_migration_run_btn', None)
+            if lbl:
+                if needed:
+                    lbl.config(text="🔴  Update required", foreground="#c0392b")
+                else:
+                    lbl.config(text="🟢  Up to date", foreground="#27ae60")
+            if btn:
+                btn.config(state="normal" if needed else "disabled")
+        except Exception:
+            pass
+
+    def _check_migration_status(self):
+        """Quick non-blocking status check — updates the indicator light only,
+        does NOT trigger migration. Called when the Small Biz tab is built."""
+        try:
+            import migrate_spreadsheet as _ms
+            needed = _ms._get_schema_version() < _ms.CURRENT_SCHEMA_VERSION
+            self._update_migration_indicator(needed=needed)
+        except Exception:
+            pass
+
+    def _on_demand_migration(self):
+        """Called when user clicks 'Update Spreadsheet Now' in Small Biz tab.
+        Computes the plan first and shows the consent dialog."""
+        import threading as _thr
+        try:
+            import migrate_spreadsheet as _ms
+        except ImportError:
+            return
+
+        def _compute():
+            plan = _ms.get_migration_plan()
+            self.output_queue.put(('migration_plan_ready', plan))
+
+        _thr.Thread(target=_compute, daemon=True,
+                    name="spreadsheet-migration-ondemand").start()
+
+    def _show_migration_dialog(self, result):
+        """Display the spreadsheet migration result to the user.
+        Called from the main Tk thread after the background migration completes."""
+        import tkinter as _tk
+        import tkinter.ttk as _ttk
+        try:
+            import migrate_spreadsheet as _ms
+        except ImportError:
+            return
+
+        # Refresh the Small Biz tab red/green indicator now that a migration
+        # has actually run. This used to never happen — the dialog below
+        # showed "Updated" but the indicator stayed stuck on red regardless
+        # of outcome, since nothing ever called _update_migration_indicator
+        # after check_and_migrate() returned. Re-reading the schema version
+        # (rather than trusting result.success) is correct either way: on
+        # success it was just bumped to CURRENT_SCHEMA_VERSION so this goes
+        # green; on failure check_and_migrate() restores the backup without
+        # touching the version, so this correctly stays red.
+        self._check_migration_status()
+
+        # ── Not needed ────────────────────────────────────────────────────────
+        if not result.needed:
+            return
+
+        # ── File locked (Excel open) ──────────────────────────────────────────
+        if result.error and "open in Excel" in result.error:
+            self._show_toast_or_status(
+                "⚠️ Job Tracker spreadsheet is open in Excel — "
+                "close it and restart AI-Prowler to apply the update.",
+                duration_ms=10000
+            )
+            return
+
+        win = _tk.Toplevel(self.root)
+        win.title("Job Tracker Spreadsheet Update")
+        win.resizable(False, False)
+        win.grab_set()
+
+        # Centre on parent
+        win.update_idletasks()
+        px = self.root.winfo_x() + self.root.winfo_width()  // 2
+        py = self.root.winfo_y() + self.root.winfo_height() // 2
+        win.geometry(f"540x480+{px - 270}+{py - 240}")
+
+        frame = _ttk.Frame(win, padding=20)
+        frame.pack(fill="both", expand=True)
+
+        if result.success:
+            # ── SUCCESS ───────────────────────────────────────────────────────
+            icon  = "✅"
+            title = "Job Tracker Spreadsheet Updated"
+            color = "#2d6a2d"
+
+            _tk.Label(frame, text=f"{icon}  {title}",
+                      font=("Segoe UI", 13, "bold"),
+                      fg=color).pack(anchor="w", pady=(0, 8))
+
+            _tk.Label(frame,
+                      text=f"Your spreadsheet has been updated from "
+                           f"v{result.from_version} → v{result.to_version}.\n"
+                           f"A backup of your original file was saved before any changes.",
+                      wraplength=480, justify="left").pack(anchor="w")
+
+            if result.changes:
+                _tk.Label(frame, text="Changes applied:",
+                          font=("Segoe UI", 10, "bold")).pack(
+                    anchor="w", pady=(10, 2))
+                for c in result.changes:
+                    _tk.Label(frame, text=f"  • {c}",
+                              wraplength=460, justify="left").pack(anchor="w")
+
+            if result.backup_path:
+                _tk.Label(frame, text=f"\nBackup: {result.backup_path}",
+                          fg="gray", font=("Segoe UI", 8),
+                          wraplength=480, justify="left").pack(anchor="w")
+
+            # ── Integrity check results ───────────────────────────────────────
+            warnings = [p for p in getattr(result, 'integrity_problems', [])
+                        if p.startswith("WARNING")]
+            if warnings:
+                _tk.Label(frame,
+                          text="\n⚠️  Non-critical integrity notes "
+                               "(your data is intact):",
+                          font=("Segoe UI", 10, "bold"),
+                          fg="#856404").pack(anchor="w", pady=(8, 2))
+                for w in warnings[:5]:
+                    _tk.Label(frame, text=f"  • {w[9:]}",
+                              wraplength=460, justify="left",
+                              fg="#856404").pack(anchor="w")
+                _tk.Label(frame,
+                          text="See the migration log for full details.",
+                          fg="gray", font=("Segoe UI", 9),
+                          wraplength=480).pack(anchor="w")
+
+        else:
+            # ── FAILURE ───────────────────────────────────────────────────────
+            icon  = "❌"
+            title = "Spreadsheet Update Failed — Your Data is Safe"
+            color = "#8b0000"
+
+            _tk.Label(frame, text=f"{icon}  {title}",
+                      font=("Segoe UI", 12, "bold"),
+                      fg=color, wraplength=480).pack(anchor="w", pady=(0, 8))
+
+            _tk.Label(frame,
+                      text="Your original spreadsheet has been fully restored "
+                           "from backup. No data was lost.",
+                      wraplength=480, justify="left",
+                      font=("Segoe UI", 10, "bold")).pack(anchor="w")
+
+            _tk.Label(frame,
+                      text=f"\nError: {result.error}",
+                      wraplength=480, justify="left",
+                      fg="#8b0000").pack(anchor="w", pady=(6, 0))
+
+            if result.template_path:
+                _tk.Label(frame,
+                          text=f"\nA copy of the new template has been placed "
+                               f"alongside your file:\n{result.template_path}\n\n"
+                               f"You can ask Claude to help migrate your data to "
+                               f"the new template, or copy it manually.",
+                          wraplength=480, justify="left",
+                          fg="#555").pack(anchor="w", pady=(6, 0))
+
+        # ── Log link ──────────────────────────────────────────────────────────
+        log_frame = _ttk.Frame(frame)
+        log_frame.pack(anchor="w", pady=(12, 0), fill="x")
+        _tk.Label(log_frame, text="Migration log:",
+                  font=("Segoe UI", 9)).pack(side="left")
+        log_lbl = _tk.Label(log_frame,
+                            text=result.log_path,
+                            fg="#0066cc", cursor="hand2",
+                            font=("Segoe UI", 9, "underline"))
+        log_lbl.pack(side="left", padx=(4, 0))
+        log_lbl.bind("<Button-1>", lambda _: os.startfile(result.log_path)
+                     if os.name == "nt" else None)
+
+        # ── OK button ─────────────────────────────────────────────────────────
+        _ttk.Button(frame, text="OK", command=win.destroy,
+                    width=10).pack(pady=(16, 0))
+
+    def _show_toast_or_status(self, msg: str, duration_ms: int = 5000):
+        """Best-effort status bar message — falls back to print if unavailable."""
+        try:
+            if hasattr(self, 'status_var'):
+                self.status_var.set(msg)
+                self.root.after(duration_ms,
+                                lambda: self.status_var.set(""))
+        except Exception:
+            pass
     # These two methods support the write-side filesystem tools added in
     # ai_prowler_mcp.py (create_file, write_file, str_replace_in_file, etc).
     # The tools queue approval requests; this dialog grants the access.
@@ -2628,6 +2983,157 @@ fits what you actually need done.
 - **Real accounting data when you want it** — QuickBooks integration adds
   true financials on top of the operational data already in the sheet,
   without forcing every business to set up QuickBooks first.
+"""
+
+    def show_service_tools_guide(self):
+        """Show the full Small Business Service Tools catalog in a popup —
+        every MCP tool grouped by category (including the newer ones added
+        to support the Jobs PWA mobile app), plus the example-prompt cheat
+        sheet. Opened from the Small Business tab overview banner so the
+        banner itself can stay short instead of listing every tool inline.
+        v9.1.x."""
+        self.show_help_window("Small Business Service Tools",
+                              self.get_service_tools_guide_content())
+
+    def get_service_tools_guide_content(self):
+        """Markdown content for the Service Tools catalog popup. This is a
+        curated, human-readable summary of the @mcp.tool() registrations in
+        ai_prowler_mcp.py — not auto-generated — so add newly shipped tools
+        here by hand. Keep the 'New — Built for the Jobs PWA' section
+        current as mobile-specific tools are added."""
+        return """# Small Business Service Tools
+
+Claude acts as your field-service assistant through these MCP tools — ask
+in a normal conversation, no forms to fill out, no menus to navigate.
+Free tools (weather, routing, maps) work immediately with no setup.
+Spreadsheet tools use the default path from Settings if you don't specify
+a file. Contractor tools (invoicing, SMS, time logging, AR aging) need
+Twilio and/or SMTP configured — see Settings, or ask Claude to run
+`check_tools_status()` for a full readiness report.
+
+## End-to-End Workflow — A Typical Day
+
+This is the whole loop, start to finish — everything happens by talking to
+Claude. Nothing here requires opening this app, a browser, or the
+spreadsheet itself; the Jobs App PWA link at the top of this tab covers the
+mobile side of the same workflow.
+
+**1. Check the morning schedule**
+> *"What's on my schedule today?"*
+Claude reads `Jobs_Schedule` and lists today's jobs.
+
+**2. Add or update a job or customer, if needed**
+> *"Add a new customer: Sunshine Realty LLC, 125 Harbor Blvd, New Smyrna Beach FL 32168, monthly window cleaning, contact Karen at karen@sunshine.com."*
+> *"Schedule a window cleaning for the Walsh account next Monday at 8am."*
+Claude writes the new row(s) straight into the Job Tracker spreadsheet.
+
+**3. Check the weather before heading out**
+> *"What's the weather forecast for New Smyrna Beach today?"*
+Flags rain risk so you can reschedule outdoor jobs before you're already on the road.
+
+**4. Optimize the route**
+> *"Optimize my route for today's jobs."*
+Claude calls `optimize_route()` and returns the fastest stop order with estimated arrival times.
+
+**5. Get a tap-to-navigate link and send it to your phone**
+> *"Email me a Google Maps link for that route."*  /  *"Text me the route."*
+Claude calls `build_maps_url()` and sends the link via `send_alert()` or `send_sms()` — open it on your phone, tap it, and Google/Apple Maps opens in navigation mode. Connect to CarPlay or Android Auto from there.
+
+**6. Clock in at the job site**
+> *"Clock me in on the Miller Windows job."*
+The Jobs App PWA passes your GPS location automatically.
+
+**7. Complete the job and invoice on the spot**
+> *"Mark the Miller Windows job complete and create an invoice for $312."*
+Claude updates the job status and calls `create_invoice()` — no trip back to the office needed.
+
+**8. Send the invoice**
+> *"Email that invoice to the customer."*  /  *"Text them the invoice."*
+
+**9. Clock out**
+> *"Clock me out."*
+
+**10. Repeat for the rest of the day's stops**, then wrap up:
+> *"Schedule the next recurring visit for the Miller account."*
+> *"Show me my accounts receivable aging report."*  /  *"Who owes me money?"*
+
+## New — Built for the Jobs PWA Mobile App
+
+These exist specifically so a technician standing at a job site, on their
+phone, can run the whole workflow without a laptop:
+
+| Tool | What it enables on mobile |
+|---|---|
+| `get_sheet_columns(sheet_name)` | Powers the Jobs App's row-edit form — returns every column the sheet has (even ones blank on this row) plus real Excel dropdown options, so the phone shows a proper editable field and select list instead of guessing. |
+| `create_invoice(job_identifier, …)` | On-the-spot invoicing — a tech can adjust price and service notes right at the job and create the invoice immediately, instead of it waiting for office entry. |
+| `log_time_entry(job_identifier, action, gps_coords)` | Clock in/out from the job site; the Jobs App PWA passes GPS coordinates automatically with each punch for accurate job costing. |
+| `check_email_configured()` / `check_sms_configured()` | Fast yes/no checks the Jobs App calls *before* a button is tapped, so "Email Invoice" or "Text Invoice" are dimmed out up front instead of failing after the tap. |
+| `schedule_next_recurring_job(job_identifier)` | Auto-creates the next visit (weekly/biweekly/monthly/quarterly) right after a recurring job is marked complete — no manual re-booking. |
+| `create_job(updates)` | Add a brand-new job row from a plain-English description — usable by any crew role, not just the owner. |
+
+## Free Tools — No API Key or Setup Required
+
+| Tool | What it does |
+|---|---|
+| `get_weather(location, days)` | Current conditions + multi-day forecast. Flags rain ≥ 50% — check before scheduling outdoor jobs. |
+| `geocode_address(address)` | Street address → GPS coordinates. |
+| `optimize_route(stops, origin, …)` | Reorders your stops into the fastest driving sequence with estimated arrival times. |
+| `build_maps_url(stops, origin, app)` | Tap-to-navigate Google/Apple Maps link, auto-split into legs for routes over 9 stops. |
+
+## Spreadsheet & Job Tools
+
+| Tool | What it does |
+|---|---|
+| `update_job_spreadsheet(job_identifier, updates)` | Finds a customer/job row by name and writes new values to any column. |
+| `create_job(updates)` | Appends a brand-new job row with an auto-assigned JobID. |
+| `read_job_spreadsheet(sheet_name, filter_date)` | Reads jobs, customers, or any other sheet — "what's on today's schedule?" |
+| `get_sheet_columns(sheet_name)` | Full column list + dropdown options for a sheet. |
+| `get_ar_aging_report()` | Accounts-receivable aging — current / 1-30 / 31-60 / 61-90 / 90+ days overdue. |
+| `schedule_next_recurring_job(job_identifier)` | Books the next recurring visit automatically after a job is completed. |
+| `log_time_entry(job_identifier, action)` | Clock in / clock out — writes actual duration back to the schedule. |
+
+## Invoicing & Billing
+
+| Tool | What it does |
+|---|---|
+| `create_invoice(job_identifier, …)` | Creates a new invoice for a job (one per job). |
+| `email_invoice(invoice_identifier, to)` | Sends a formatted HTML invoice by email, with an optional SMS follow-up. |
+| `text_invoice(invoice_identifier)` | SMS-only invoice notification with amount due (and payment link, if enabled). |
+| `email_receipt(invoice_identifier, payment_method)` | Payment-received confirmation by email — for cash/check/offline payments. |
+| `text_receipt(invoice_identifier, payment_method)` | Same as above, by text. |
+
+## Messaging
+
+| Tool | What it does |
+|---|---|
+| `send_sms(to, message)` | Text a crew member, customer, or saved contact. |
+| `send_whatsapp(to, message)` | WhatsApp message via the same Twilio credentials as SMS. |
+| `send_email(to, subject, body)` | Email a crew member or customer, with an optional attachment. |
+| `send_alert(message, to)` | Quick one-line alert email — good for "on my way" type pings. |
+| `check_sms_inbox()` / `get_sms_thread(contact)` | Read incoming texts and full two-way conversation threads. |
+
+## Status & Configuration Checks
+
+| Tool | What it does |
+|---|---|
+| `check_tools_status()` | Full readiness report across every tool category — call this first if unsure what's set up. |
+| `check_email_configured()` | Quick yes/no — is SMTP configured? |
+| `check_sms_configured()` | Quick yes/no — is an SMS provider configured? |
+| `configure_email(smtp_host, …)` | One-time SMTP setup — after this, invoicing and receipts work automatically. |
+
+## Example Prompts to Use with Claude
+
+| Category | Try saying… |
+|---|---|
+| 🌤 Weather | "What's the weather forecast for New Smyrna Beach for the next 3 days?" |
+| 🗺 Route | "Optimize my route for these 6 jobs today and give me a Google Maps link." |
+| 📊 Spreadsheet | "Mark the Miller Windows job complete in my jobs.xlsx and record invoice #1048." |
+| 🧾 Invoice | "Create an invoice for the Torres job for $220 and email it to them." |
+| ⏱ Time log | "Clock me in on job J-205." |
+| 📱 SMS | "Text the Johnson job that I am on my way." |
+| 💰 AR aging | "Show me my accounts receivable aging report." |
+| 🔁 Recurring jobs | "Schedule the next recurring job after today's Crabby's visit." |
+| 🔍 Status check | "Call check_tools_status() and tell me what is ready to use." |
 """
 
     def get_quick_start_content(self):
@@ -15715,10 +16221,14 @@ or from the Help menu."""
         Dedicated tab for the Small Business / Field Service MCP action tools.
 
         Sections (in order):
-          1. Overview banner — what these tools do and how to invoke them
-          2. Free Tools panel — weather, geocode, route, maps URL (no setup)
-          3. Job Spreadsheet Updater panel — usage guide + open-file shortcut
-          4. Route & Navigation panel — OSRM/Nominatim notes + open Google Maps
+          1. Overview banner — short summary + buttons opening the Job
+             Tracker guide and the full Service Tools popup (tool catalog,
+             end-to-end workflow, and example prompts all live there now —
+             see get_service_tools_guide_content() — to keep this tab short)
+          2. Job Spreadsheet Updater panel — usage guide + open-file shortcut
+          3. Jobs App (PWA) URL panel — mobile link, copy/email shortcuts
+          4. Online Payment Links panel — real config (Stripe/Square keys,
+             writes to config.json), not documentation
 
         Configuration is read from / written to:
             ~/.ai-prowler/config.json
@@ -15749,17 +16259,25 @@ or from the Help menu."""
             _cfg_path.write_text(_json.dumps(d, indent=2), encoding='utf-8')
 
         # ── 1. OVERVIEW BANNER ────────────────────────────────────────────────
+        # v9.1.x: this used to list all 12 tools + 8 example prompts inline,
+        # which grew stale the moment newer tools (get_sheet_columns,
+        # create_invoice, check_email_configured, check_sms_configured,
+        # log_time_entry GPS tagging, schedule_next_recurring_job, create_job
+        # — all added to support the Jobs PWA mobile app) shipped without
+        # this banner being updated, and it ate a lot of vertical space on a
+        # tab meant to be a quick jumping-off point. The full tool catalog +
+        # example prompts now live in a popup instead — see
+        # get_service_tools_guide_content() — kept short here on purpose.
         banner = ttk.LabelFrame(f, text="🔧 Small Business Service Tools — Overview",
                                 padding=(12, 8))
         banner.pack(fill='x', padx=16, pady=(10, 6))
 
         ttk.Label(banner, justify='left', font=('Arial', 9),
                   text=(
-                      "12 MCP tools that let Claude act as your field-service assistant (plus check_tools_status for a quick status report).\n"
-                      "Ask Claude in a conversation — no forms to fill out, no menus to navigate.\n\n"
-                      "Free tools (weather, routing, maps) work immediately — no setup.\n"
-                      "Spreadsheet tools use the default path from Settings if filepath is omitted.\n"
-                        "Contractor tools (invoicing, SMS, time logging, AR aging) require Twilio/SMTP — see Settings."
+                      "Claude acts as your field-service assistant through these MCP tools — "
+                      "ask in a conversation, no forms to fill out.\n"
+                      "Free tools (weather, routing, maps) work immediately. Contractor tools "
+                      "(invoicing, SMS, time logging, AR aging) need Twilio/SMTP — see Settings."
                   )).pack(anchor='w')
 
         # v8.1.3: the Job Tracker's real value — multi-employee scheduling,
@@ -15770,75 +16288,20 @@ or from the Help menu."""
                    command=self.show_job_tracker_guide
                    ).pack(anchor='w', pady=(8, 0))
 
-        # Claude prompt examples
-        ex_frame = ttk.LabelFrame(banner, text="Example prompts to use with Claude",
-                                  padding=(8, 4))
-        ex_frame.pack(fill='x', pady=(8, 0))
-
-        examples = [
-            ("🌤  Weather",      '"What is the weather forecast for New Smyrna Beach for the next 3 days?"'),
-            ("🗺  Route",        '"Optimize my route for these 6 jobs today and give me a Google Maps link."'),
-            ("📊  Spreadsheet",  '"Mark the Miller Windows job complete in my jobs.xlsx and record invoice #1048."'),
-            ("🧾  Invoice",      '"Email invoice #1048 to the Miller account."'),
-            ("⏱  Time log",     '"Clock me in on job J-205."'),
-            ("📱  SMS",          '"Text the Johnson job that I am on my way."'),
-            ("💰  AR aging",     '"Show me my accounts receivable aging report."'),
-            ("🔍  Status check", '"Call check_tools_status() and tell me what is ready to use."'),
-        ]
-        for icon_label, prompt in examples:
-            row = ttk.Frame(ex_frame)
-            row.pack(fill='x', pady=1)
-            ttk.Label(row, text=icon_label, font=('Arial', 8, 'bold'),
-                      width=16, anchor='w').pack(side='left')
-            ttk.Label(row, text=prompt, font=('Arial', 8),
-                      foreground='#555555', anchor='w').pack(side='left')
+        # v9.1.x: replaces the inline "Example prompts" LabelFrame — see
+        # note above the banner LabelFrame for why.
+        ttk.Button(banner, text="🔧  View All Service Tools & Example Prompts  →",
+                   command=self.show_service_tools_guide
+                   ).pack(anchor='w', pady=(6, 0))
 
         ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
 
         # ── 2. FREE TOOLS PANEL ───────────────────────────────────────────────
-        free_frame = ttk.LabelFrame(f,
-                                    text="✅ Free Tools — No API Key or Setup Required",
-                                    padding=(12, 8))
-        free_frame.pack(fill='x', padx=16, pady=(0, 6))
-
-        free_tools = [
-            ("get_weather(location, days)",
-             "Current conditions + multi-day forecast via Open-Meteo.\n"
-             "Flags rain ≥ 50 % with ⚠️. Use before scheduling outdoor jobs.",
-             "Open-Meteo + Nominatim — free, no key"),
-
-            ("geocode_address(address)",
-             "Convert a street address to GPS coordinates (lat/lon).\n"
-             "Useful for verifying job addresses before route planning.",
-             "Nominatim / OpenStreetMap — free, no key"),
-
-                ("optimize_route(stops, origin, …)",
-               "Traveling Salesman solver — reorders your stops into the fastest\n"
-             "driving sequence with estimated arrival times per stop.\n"
-             "Geocodes ~20 addresses in ~6 s (0.35 s/address courtesy delay).",
-             "OSRM public server + Nominatim — free, no key"),
-
-            ("build_maps_url(stops, origin, app)",
-             "Tap-to-navigate Google Maps (or Apple Maps) URL.\n"
-             "Auto-splits routes > 9 stops into legs.\n"
-             "Works on iPhone, Android, CarPlay, Android Auto.",
-             "Google/Apple Maps URL scheme — free, no key"),
-        ]
-
-        for tool_name, description, backend in free_tools:
-            tool_row = ttk.Frame(free_frame)
-            tool_row.pack(fill='x', pady=(0, 8))
-            ttk.Label(tool_row, text=f"✅  {tool_name}",
-                      font=('Courier New', 9, 'bold'), foreground='#1a7a1a'
-                      ).pack(anchor='w')
-            ttk.Label(tool_row, text=description,
-                      font=('Arial', 8), justify='left', foreground='#333333'
-                      ).pack(anchor='w', padx=(20, 0))
-            ttk.Label(tool_row, text=f"  {backend}",
-                      font=('Arial', 8), foreground='gray'
-                      ).pack(anchor='w', padx=(20, 0))
-
-        ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
+        # v9.1.x: removed — this duplicated content now covered by the
+        # "Free Tools — No API Key or Setup Required" section of the popup
+        # opened from the "View All Service Tools & Example Prompts" button
+        # above (see get_service_tools_guide_content()). Keeping the tab
+        # itself short is the point of that popup existing.
 
         # ── 3. JOB SPREADSHEET UPDATER ────────────────────────────────────────
         xl_outer = ttk.LabelFrame(f,
@@ -15939,6 +16402,44 @@ or from the Help menu."""
                    command=_open_xl).pack(side='left', padx=(0, 8))
         ttk.Button(xl_btn_row, text="📖  Multi-Employee & QuickBooks Guide",
                    command=self.show_job_tracker_guide).pack(side='left')
+
+        # ── Spreadsheet migration indicator ───────────────────────────────────
+        mig_frame = ttk.LabelFrame(
+            xl_outer,
+            text="📋  Spreadsheet Schema Update",
+            padding=(8, 6))
+        mig_frame.pack(fill='x', pady=(10, 0))
+
+        mig_top = ttk.Frame(mig_frame)
+        mig_top.pack(fill='x')
+
+        # Status indicator — updated by _update_migration_indicator()
+        self._migration_indicator_lbl = ttk.Label(
+            mig_top,
+            text="⬤  Checking…",
+            foreground="gray",
+            font=("Segoe UI", 10, "bold"))
+        self._migration_indicator_lbl.pack(side='left')
+
+        # On-demand run button — enabled when migration is needed
+        self._migration_run_btn = ttk.Button(
+            mig_top,
+            text="🔄  Update Spreadsheet Now",
+            command=self._on_demand_migration,
+            state="disabled")
+        self._migration_run_btn.pack(side='right')
+
+        ttk.Label(mig_frame,
+                  text=("Updates the spreadsheet structure to work with the latest "
+                        "version of AI-Prowler. Required for the Mobile Jobs App. "
+                        "Your data is never deleted — a full backup is made first."),
+                  font=("Arial", 8),
+                  foreground="gray",
+                  justify="left",
+                  wraplength=480).pack(anchor='w', pady=(4, 0))
+
+        # Trigger initial status check (non-blocking)
+        self.root.after(500, self._check_migration_status)
 
 
         # ── Jobs App (PWA) URL ────────────────────────────────────────────────
@@ -16048,115 +16549,27 @@ or from the Help menu."""
         ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
 
         # ── 4. ROUTE & NAVIGATION NOTES ──────────────────────────────────────
-        route_outer = ttk.LabelFrame(f,
-                                     text="🗺  Route Optimization & Navigation  —  Free, No Key",
-                                     padding=(12, 8))
-        route_outer.pack(fill='x', padx=16, pady=(0, 10))
+        # v9.1.x: removed this whole panel. Real usage never goes through
+        # the GUI at all — the user just tells Claude to map the route and
+        # email/text the tap-to-navigate URL, then opens that on their phone
+        # to hand off to CarPlay/Android Auto. The optimize_route() /
+        # build_maps_url() reference content that used to live here now
+        # lives in the expanded "End-to-End Workflow" section of the Service
+        # Tools popup instead — see get_service_tools_guide_content().
 
-        route_info = (
-            "optimize_route(stops, origin, optimize_for, departure_hour, return_to_origin)\n"
-            "  • Geocoding:   Nominatim / OpenStreetMap  (0.35 s/address courtesy delay)\n"
-            "  • TSP solver:  OSRM public /trip endpoint — real street routing, free, no key\n"
-            "  • Returns:     optimised stop order with estimated arrival time per stop\n"
-            "  • Tip: 20 stops takes ~7 seconds to geocode — this is normal, not a bug\n\n"
-            "build_maps_url(stops, origin, app='google')\n"
-            "  • Generates a Google Maps URL with all stops pre-loaded in optimised order\n"
-            "  • Auto-splits routes > 9 stops into legs (Google Maps URL limit)\n"
-            "  • Works on iPhone (Google Maps app), Android, CarPlay, Android Auto\n"
-            "  • Pass app='apple' for Apple Maps — iPhone/iPad only\n\n"
-            "Typical workflow:\n"
-            "  1. Tell Claude: \"Optimize my route for today's jobs\"\n"
-            "  2. Claude calls optimize_route() → get optimised order\n"
-            "  3. Claude calls build_maps_url() → tap-to-navigate link\n"
-            "  4. Tap the link on your phone — Google Maps opens in navigation mode"
-        )
-        ttk.Label(route_outer, text=route_info, font=('Arial', 8),
-                  foreground='#333333', justify='left').pack(anchor='w')
+        # ── 5. ONLINE PAYMENT LINKS (real config, not documentation) ────────────
+        # v9.1.x: the old "Contractor Workflow Tools" wrapper LabelFrame that
+        # used to live here (and its tool-description list, removed above)
+        # duplicated content now covered by the Service Tools popup, so it's
+        # gone, same as the Free Tools and Route panels earlier in this tab.
+        # This payment-link block is real configuration that writes to
+        # config.json, not documentation, so it stays — promoted to its own
+        # top-level panel now that the wrapper serves no other purpose.
 
-        route_btn_row = ttk.Frame(route_outer)
-        route_btn_row.pack(fill='x', pady=(10, 0))
-        ttk.Button(route_btn_row, text="🌐  Open Google Maps",
-                   command=lambda: webbrowser.open("https://maps.google.com")
-                   ).pack(side='left', padx=(0, 8))
-        ttk.Button(route_btn_row, text="🍎  Open Apple Maps",
-                   command=lambda: webbrowser.open("https://maps.apple.com")
-                   ).pack(side='left')
-
-        ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
-
-        # ── 5. CONTRACTOR WORKFLOW TOOLS ──────────────────────────────────────
-        cw_outer = ttk.LabelFrame(f,
-                                  text="🧰 Contractor Workflow Tools — Require Setup (SMTP / Twilio)",
-                                  padding=(12, 8))
-        cw_outer.pack(fill='x', padx=16, pady=(0, 6))
-
-        ttk.Label(cw_outer, justify='left', font=('Arial', 8), foreground='gray',
-                  text=(
-                      "Five tools that automate the admin side of running a service business.\n"
-                      "email_invoice and schedule_next_recurring_job require SMTP email (configure in Settings → Email).\n"
-                      "send_sms requires a Twilio account (configure in Settings → Small Business → SMS)."
-                  )).pack(anchor='w', pady=(0, 8))
-
-        contractor_tools = [
-            (
-                "email_invoice(invoice_id, to, filepath)",
-                "Reads the Invoices sheet in your job tracker, builds a branded HTML invoice,\n"
-                "and emails it directly to the customer — no copy-paste, no manual attachment.\n"
-                'Example: "Email invoice #1048 to the Miller account."',
-                "Requires SMTP email configured in Settings",
-            ),
-            (
-                "send_sms(to, message)",
-                "Sends an SMS text message to a customer or crew member via Twilio.\n"
-                "Perfect for on-my-way notifications, reminders, and appointment confirmations.\n"
-                'Example: "Text the Johnson job that I am 20 minutes out."',
-                "Requires Twilio account SID, auth token, and From number in Settings",
-            ),
-            (
-                "schedule_next_recurring_job(job_id, filepath)",
-                "After completing a recurring job, auto-creates the next scheduled instance\n"
-                "based on the customer's service frequency (Weekly / Bi-weekly / Monthly / Quarterly).\n"
-                'Example: "Schedule the next recurring visit for the Smith account."',
-                "Uses the default spreadsheet path — set in Settings → Small Business",
-            ),
-            (
-                "log_time_entry(job_id, action, filepath)",
-                "Clocks you in or out on a specific job. Records timestamps to the TimeLog sheet\n"
-                "and writes the Actual Duration back to the Jobs_Schedule row when you clock out.\n"
-                'Example: "Clock me in on job J-205." / "Clock me out of J-205."',
-                "Uses the default spreadsheet path — set in Settings → Small Business",
-            ),
-            (
-                "get_ar_aging_report(filepath, as_of_date)",
-                "Generates an Accounts Receivable aging report from your Invoices sheet,\n"
-                "bucketed into Current / 1-30 / 31-60 / 61-90 / 90+ days outstanding.\n"
-                'Example: "Show me my AR aging report." / "Who owes me money past 30 days?"',
-                "Uses the default spreadsheet path — set in Settings → Small Business",
-            ),
-        ]
-
-        for tool_name, description, requirement in contractor_tools:
-            tool_row = ttk.Frame(cw_outer)
-            tool_row.pack(fill='x', pady=(0, 10))
-            ttk.Label(tool_row, text=f"🔧 {tool_name}", font=('Courier New', 9, 'bold'),
-                      foreground='#7c3400').pack(anchor='w')
-            ttk.Label(tool_row, text=description, font=('Arial', 8), justify='left',
-                      foreground='#333333').pack(anchor='w', padx=(20, 0))
-            ttk.Label(tool_row, text=f"  ⚙ {requirement}", font=('Arial', 8),
-                      foreground='#888888').pack(anchor='w', padx=(20, 0))
-
-        # Quick-link to Settings for setup
-        cw_btn_row = ttk.Frame(cw_outer)
-        cw_btn_row.pack(fill='x', pady=(4, 0))
-        ttk.Button(cw_btn_row, text="⚙  Open Settings (to configure Email / SMS)",
-                   command=lambda: self.notebook.select(self._TAB_INDEX_SETTINGS)
-                   ).pack(side='left')
-
-        # ── Payment Link Settings ────────────────────────────────────────────
-        pay_lf = ttk.LabelFrame(cw_outer,
+        pay_lf = ttk.LabelFrame(f,
                                  text="💳 Online Payment Links (optional — added to emailed invoices)",
                                  padding=(8, 6))
-        pay_lf.pack(fill="x", pady=(10, 0))
+        pay_lf.pack(fill="x", padx=16, pady=(0, 6))
         ttk.Label(pay_lf, justify="left", font=("Arial", 8), foreground="gray",
                   text=("Enter a Secret Key / Access Token below and every invoice gets its own\n"
                         "checkout link with the correct amount filled in automatically. Leave the\n"
@@ -16255,19 +16668,10 @@ or from the Help menu."""
         ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
 
         # ── 6. READ SPREADSHEET TOOL ──────────────────────────────────────────
-        rs_outer = ttk.LabelFrame(f,
-                                  text="📖 Read Spreadsheet — read_job_spreadsheet()",
-                                  padding=(12, 8))
-        rs_outer.pack(fill='x', padx=16, pady=(0, 10))
-        ttk.Label(rs_outer, justify='left', font=('Arial', 8), foreground='#333333',
-                  text=(
-                      "read_job_spreadsheet(filepath, sheet, date, max_rows)\n"
-                      "  • Reads any sheet in your job tracker — Jobs_Schedule, Customers, Invoices, etc.\n"
-                      "  • Supports date filtering: specify a date to see only that day's jobs.\n"
-                      "  • Returns structured data Claude can reason over and summarise.\n\n"
-                      'Example: "What jobs do I have scheduled for tomorrow?"\n'
-                      'Example: "Show me all open invoices from the Invoices sheet."'
-                  )).pack(anchor='w')
+        # v9.1.x: removed — duplicated content now covered by the
+        # "Spreadsheet & Job Tools" section of the Service Tools popup (see
+        # get_service_tools_guide_content()), same as the Free Tools, Route,
+        # and Contractor Workflow Tools panels removed earlier in this tab.
 
     # ══════════════════════════════════════════════════════════════════════════
     # 🧠  SELF-LEARNING TAB
@@ -24660,6 +25064,15 @@ or from the Help menu."""
                     self._mic_reset_button()
                     self._mic_status_var.set(f"❌ {msg_data}")
                     self.status_var.set("Ready")
+
+                elif msg_type == 'migration_plan_ready':
+                    # Migration plan computed in background — show consent dialog
+                    self._show_migration_consent(msg_data)
+
+                elif msg_type == 'migration_result':
+                    # Spreadsheet schema migration completed in background thread.
+                    # Show the result dialog on the main thread.
+                    self._show_migration_dialog(msg_data)
 
                 elif msg_type == 'gpu_status':
                     self._gpu_status_set(msg_data)
