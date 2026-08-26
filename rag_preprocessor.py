@@ -3164,38 +3164,75 @@ class _SentenceTransformerEmbedding:
     def __init__(self, model_name: str, device: str = 'cpu'):
         import warnings
         import shutil
+        import time
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
             from sentence_transformers import SentenceTransformer
+
+            def _load():
+                return SentenceTransformer(model_name, device=device)
+
             try:
-                self._model = SentenceTransformer(model_name, device=device)
+                self._model = _load()
             except OSError as e:
                 if e.errno != 22:
-                    raise  # unrelated OS error — don't swallow it
-                # ── Errno 22: corrupted HuggingFace model cache ───────────────
-                # The cache folder was written by an old huggingface_hub version
-                # that produced a double-backslash path on Windows 10. Even after
-                # upgrading the library, the stale metadata on disk reproduces the
-                # bad path. Fix: delete just the model subfolder and retry once —
-                # SentenceTransformer will re-download a clean copy automatically.
-                hf_cache = os.environ.get(
-                    'HF_HUB_CACHE',
-                    os.path.join(os.path.expanduser('~'), '.cache', 'huggingface', 'hub')
-                )
-                # Convert model name "all-MiniLM-L6-v2" ->
-                #   "models--sentence-transformers--all-MiniLM-L6-v2"
-                cache_subfolder = 'models--sentence-transformers--' + model_name
-                corrupt_path = os.path.join(hf_cache, cache_subfolder)
-                print(f'⚠️  Errno 22 detected — corrupted model cache at:')
-                print(f'   {corrupt_path}')
-                if os.path.isdir(corrupt_path):
-                    print(f'🗑️  Deleting corrupted cache — model will re-download...')
-                    shutil.rmtree(corrupt_path, ignore_errors=True)
-                    print(f'✅ Cache cleared. Re-downloading model (one-time, ~90 MB)...')
+                    # v9.1.x: retry with backoff instead of an immediate
+                    # raise for anything that isn't the known Errno-22
+                    # cache-corruption case. transformers.utils.hub.cached_file
+                    # wraps ALL download failures — including a transient
+                    # HuggingFace CDN "429 Too Many Requests" — in a plain
+                    # EnvironmentError (== OSError), so a genuine rate-limit
+                    # was falling into this same branch and crashing startup
+                    # immediately with zero retry. Confirmed on a real
+                    # install (Vicki, 2026-08-26): install_log.txt showed the
+                    # install-time embedding warm-up hit exactly this 429; the
+                    # installer correctly treated that as non-fatal and moved
+                    # on (the app's own retry at first launch is the designed
+                    # fallback for precisely this), but startup.log showed
+                    # the app dying at "importing rag_preprocessor" — the
+                    # app-level retry hit the same still-active rate limit
+                    # and had no backoff to wait it out, since this retry
+                    # path didn't exist yet. HF rate limits are normally
+                    # short-lived, so a few short waits are usually enough;
+                    # if they aren't, the original exception is still raised
+                    # after the last attempt — nothing is silently swallowed.
+                    last_err = e
+                    for attempt, wait_s in enumerate((2, 4, 8), start=1):
+                        print(f'⚠️  Embedding model load failed ({last_err}); '
+                              f'retrying in {wait_s}s (attempt {attempt}/3)...')
+                        time.sleep(wait_s)
+                        try:
+                            self._model = _load()
+                            break
+                        except Exception as retry_err:
+                            last_err = retry_err
+                    else:
+                        raise last_err
                 else:
-                    print(f'⚠️  Cache folder not found — retrying load anyway...')
-                # Retry — SentenceTransformer downloads fresh on cache miss
-                self._model = SentenceTransformer(model_name, device=device)
+                    # ── Errno 22: corrupted HuggingFace model cache ───────────────
+                    # The cache folder was written by an old huggingface_hub version
+                    # that produced a double-backslash path on Windows 10. Even after
+                    # upgrading the library, the stale metadata on disk reproduces the
+                    # bad path. Fix: delete just the model subfolder and retry once —
+                    # SentenceTransformer will re-download a clean copy automatically.
+                    hf_cache = os.environ.get(
+                        'HF_HUB_CACHE',
+                        os.path.join(os.path.expanduser('~'), '.cache', 'huggingface', 'hub')
+                    )
+                    # Convert model name "all-MiniLM-L6-v2" ->
+                    #   "models--sentence-transformers--all-MiniLM-L6-v2"
+                    cache_subfolder = 'models--sentence-transformers--' + model_name
+                    corrupt_path = os.path.join(hf_cache, cache_subfolder)
+                    print(f'⚠️  Errno 22 detected — corrupted model cache at:')
+                    print(f'   {corrupt_path}')
+                    if os.path.isdir(corrupt_path):
+                        print(f'🗑️  Deleting corrupted cache — model will re-download...')
+                        shutil.rmtree(corrupt_path, ignore_errors=True)
+                        print(f'✅ Cache cleared. Re-downloading model (one-time, ~90 MB)...')
+                    else:
+                        print(f'⚠️  Cache folder not found — retrying load anyway...')
+                    # Retry — SentenceTransformer downloads fresh on cache miss
+                    self._model = _load()
         self._device     = device
         self._batch_size = 128 if device in ('cuda', 'mps') else 32
         print(f'\u2705 Embedding model loaded on {device.upper()} '

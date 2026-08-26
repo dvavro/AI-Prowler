@@ -1640,9 +1640,129 @@ var
   MsgDummy: DWORD;
   PythonReady: Boolean;
   DefenderPs, DefenderPsFile: String;
+  SacState: DWORD;
+  SacErrCode: Integer;
 begin
   if CurStep = ssPostInstall then
   begin
+    // ----------------------------------------------------------
+    // WINDOWS SMART APP CONTROL (SAC) DETECTION — warn BEFORE the long
+    // Python/dependency install even starts, so a doomed install doesn't
+    // waste 10+ minutes before the user finds out.
+    //
+    // SAC is a SEPARATE mechanism from Windows Defender's real-time
+    // antivirus scanner (see the WINDOWS DEFENDER EXCLUSIONS block
+    // further below) — Add-MpPreference exclusions have NO effect on it,
+    // and this warning is NOT covered by that fix. SAC blocks unsigned/
+    // low-reputation binaries by policy, independent of whether they're
+    // actually malicious, and — unlike Defender AV — exposes NO
+    // supported path-exclusion mechanism at all. Once pip installs
+    // hundreds of unsigned compiled .pyd/.dll files from upstream
+    // packages (charset_normalizer, numpy, torch, tokenizers, etc.), a
+    // SAC-enforced machine will refuse to let Python load them, with a
+    // "did not meet the Enterprise signing level requirements" Code
+    // Integrity block.
+    //
+    // Found 2026-08-26 on a real install (Vicki): the popup she saw
+    // read "md.cp311-win_amd64.pyd" (charset_normalizer's compiled
+    // extension, misheard/reported as "MD.311"). Neither Get-MpThreat
+    // nor Get-MpThreatDetection showed anything — this isn't a malware
+    // detection, it's a policy block, logged instead as Event IDs
+    // 3033/3077/3118 in Microsoft-Windows-CodeIntegrity/Operational.
+    // Confirmed via VerifiedAndReputablePolicyState = 1 in the registry
+    // (0 = off, 1 = on/enforcing, 2 = evaluation mode).
+    //
+    // The ONLY supported fix is the user turning SAC off themselves via
+    // Windows Security > App & browser control > Smart App Control
+    // settings > Off — there is no registry/PowerShell workaround
+    // Microsoft supports, so we don't attempt one. On most non-Enterprise
+    // Windows installs this is a ONE-WAY switch: once off, SAC cannot be
+    // turned back on without a full Windows reset — so we warn clearly
+    // and let the user decide, rather than silently working around it or
+    // silently letting the install proceed toward a guaranteed failure.
+    // Signing every third-party .pyd we ship is impractical (same
+    // reasoning as the Defender exclusion block below); a proper
+    // long-term fix means re-packaging AI-Prowler as a single signed
+    // executable instead of raw pip-installed wheels — out of scope for
+    // this release.
+    // ----------------------------------------------------------
+    begin
+      SacState := 0;
+      if RegQueryDWordValue(HKLM, 'SYSTEM\CurrentControlSet\Control\CI\Policy',
+                             'VerifiedAndReputablePolicyState', SacState) then
+      begin
+        AppendInstallLog('[SAC] Smart App Control policy state: ' + IntToStr(SacState) +
+                          ' (0=off, 1=on/enforcing, 2=evaluation)');
+        if SacState = 1 then
+        begin
+          AppendInstallLog('[SAC] WARNING: Smart App Control is ON and enforcing. ' +
+            'AI-Prowler''s Python dependencies (torch, numpy, tokenizers, charset_normalizer, ' +
+            'etc.) include unsigned compiled extensions that Smart App Control will very ' +
+            'likely block from loading, even though the install itself will appear to succeed.');
+
+          // v9.1.x: offer a one-click deep link straight to the Smart App
+          // Control settings page instead of just printing navigation
+          // instructions. windowsdefender://smartapp/ is the documented
+          // URI Windows Security itself registers for this exact page.
+          // We CANNOT and deliberately do not attempt to flip the setting
+          // for the user — Smart App Control's registry state is tied to a
+          // signed, Secure-Boot-measured Code Integrity policy, and its
+          // enforcement is intentionally only changeable through this UI
+          // (if any installer could silently disable it, any malware
+          // could too — that would defeat the feature's entire purpose).
+          // ShellExecAsOriginalUser (not plain ShellExec) is required here:
+          // this installer runs elevated (PrivilegesRequired=admin), and
+          // UWP-hosted pages like Windows Security generally won't launch
+          // correctly under an elevated integrity level — the URI needs to
+          // open in the context of the actual logged-in user.
+          if MsgBox(
+            'Windows Smart App Control is turned on and enforcing on this PC.' + #13#10 + #13#10 +
+            'AI-Prowler installs several Python packages (for search and AI features) that ' +
+            'include compiled files Microsoft has not yet built up a reputation for. With ' +
+            'Smart App Control on, Windows will likely BLOCK these files from running, even ' +
+            'though this installer will complete normally.' + #13#10 + #13#10 +
+            'Open Smart App Control settings now so you can turn it off before continuing?' + #13#10 + #13#10 +
+            'Note: on many PCs a recent Windows update now allows turning it back on later ' +
+            'without a full reset — but that capability is still rolling out gradually, so it ' +
+            'may still be a one-way switch on this PC. The settings page will tell you more.',
+            mbConfirmation, MB_YESNO) = IDYES then
+          begin
+            AppendInstallLog('[SAC] User chose to open Smart App Control settings.');
+            if ShellExecAsOriginalUser('open', 'windowsdefender://smartapp/', '', '',
+                                        SW_SHOWNORMAL, ewNoWait, SacErrCode) then
+            begin
+              AppendInstallLog('[SAC] Opened windowsdefender://smartapp/ for the user.');
+              MsgBox(
+                'Take your time in the window that just opened.' + #13#10 + #13#10 +
+                'Turn Smart App Control off there, then come back and click OK here to ' +
+                'continue installing AI-Prowler.',
+                mbInformation, MB_OK);
+            end
+            else
+              AppendInstallLog('[SAC] Could not open windowsdefender://smartapp/ (error code ' +
+                IntToStr(SacErrCode) + '). User will need to navigate there manually: ' +
+                'Windows Security > App & browser control > Smart App Control settings.');
+          end
+          else
+            AppendInstallLog('[SAC] User declined to open Smart App Control settings.');
+
+          if MsgBox(
+            'Continue installing AI-Prowler now?' + #13#10 + #13#10 +
+            'If Smart App Control is still on, some Python-dependent features may not work ' +
+            'until you turn it off and reinstall — but the app itself will install normally.',
+            mbConfirmation, MB_YESNO) = IDNO then
+          begin
+            AppendInstallLog('[SAC] User cancelled install after Smart App Control warning.');
+            Abort;
+          end;
+          AppendInstallLog('[SAC] User chose to continue despite Smart App Control being on.');
+        end;
+      end
+      else
+        AppendInstallLog('[SAC] Could not read Smart App Control policy state ' +
+          '(older Windows version, or key not present) — skipping check.');
+    end;
+
     // ----------------------------------------------------------
     // PYTHON INSTALL  (progress 10 -> 30)
     // ----------------------------------------------------------
@@ -1866,8 +1986,12 @@ begin
       // mattered. Python pip-installed compiled extensions (.pyd, .dll) are
       // not signed by us — they come from upstream packages like cffi,
       // numpy, torch, onnxruntime, chromadb, Pillow, tokenizers, etc. —
-      // and Windows Smart App Control / Defender reputation-checks each
+      // and Windows Defender's real-time protection reputation-checks each
       // binary individually, scanning it the moment pip writes it to disk.
+      // (This exclusion is specifically for Defender's AV scanner — Smart
+      // App Control is a separate mechanism with no exclusion mechanism
+      // at all; see the SAC DETECTION block above, added the same day
+      // this comment was corrected, for that half of the picture.)
       // Real-time protection can flag and quarantine/delete a file outright,
       // not just delay it; an exclusion added afterward only stops FUTURE
       // scans, it cannot undo a quarantine that already happened. Since the

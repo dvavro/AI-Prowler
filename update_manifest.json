@@ -1,6 +1,6 @@
 {
   "version": "9.1.0",
-  "generated": "2026-08-26T15:08:15",
+  "generated": "2026-08-26T18:11:31",
   "files": [
     {
       "path": "rag_gui.py",
@@ -9,8 +9,8 @@
     },
     {
       "path": "rag_preprocessor.py",
-      "sha256": "30505f3594342e3fa9821132cf0dbd45eef43057a2572010037a3f7ab9362d1c",
-      "bytes": 313642
+      "sha256": "71b9dd1324b202124eedd5a12323c6786dac08a6943d0bd897f4d1db2b004190",
+      "bytes": 315848
     },
     {
       "path": "ai_prowler_mcp.py",
