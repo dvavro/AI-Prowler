@@ -1040,14 +1040,37 @@ class RAGGui:
 
         win = _tk.Toplevel(self.root)
         win.title("Job Tracker Spreadsheet Update Available")
-        win.resizable(False, False)
+        # v9.1.x bugfix: was resizable(False, False) with everything —
+        # including the Migrate Now / Cancel buttons — packed into one
+        # fixed-height, non-scrolling frame. A plan with enough content
+        # (several new sheets/columns, freeze fixes, preserved-columns
+        # notes) overflowed the fixed window with no way to resize or
+        # scroll to reach the buttons at all. Now: the window is
+        # resizable, the body scrolls (reusing _make_scrollable_tab, the
+        # same canvas+scrollbar pattern already used for tabs elsewhere in
+        # this app), and the buttons live in a separate footer frame
+        # packed to the bottom BEFORE the scrollable body — so they always
+        # stay visible regardless of how long the body's content gets or
+        # how far the user has scrolled.
+        win.resizable(True, True)
+        win.minsize(480, 360)
         win.grab_set()
         win.update_idletasks()
         px = self.root.winfo_x() + self.root.winfo_width()  // 2
         py = self.root.winfo_y() + self.root.winfo_height() // 2
-        win.geometry(f"580x580+{px - 290}+{py - 290}")
+        win.geometry(f"600x600+{px - 300}+{py - 300}")
 
-        frame = _ttk.Frame(win, padding=20)
+        # Footer (buttons) — packed first/bottom so its space is reserved
+        # and it is never pushed off-screen or scrolled away from.
+        btn_frame = _ttk.Frame(win, padding=(20, 10))
+        btn_frame.pack(side="bottom", fill="x")
+        _ttk.Separator(win, orient="horizontal").pack(side="bottom", fill="x")
+
+        # Scrollable body — everything above the buttons.
+        body_outer = _ttk.Frame(win)
+        body_outer.pack(side="top", fill="both", expand=True)
+        inner = self._make_scrollable_tab(body_outer)
+        frame = _ttk.Frame(inner, padding=20)
         frame.pack(fill="both", expand=True)
 
         # Header
@@ -1108,10 +1131,6 @@ class RAGGui:
                   text="Your data is never deleted. A full backup is made before any changes.",
                   font=("Segoe UI", 9, "italic"),
                   fg="#2d6a2d").pack(anchor="w", pady=(0, 12))
-
-        # Buttons
-        btn_frame = _ttk.Frame(frame)
-        btn_frame.pack(fill="x")
 
         def _do_migrate():
             win.destroy()
@@ -1222,16 +1241,35 @@ class RAGGui:
 
         win = _tk.Toplevel(self.root)
         win.title("Job Tracker Spreadsheet Update")
-        win.resizable(False, False)
+        # v9.1.x bugfix: same fix as _show_migration_consent above — was
+        # resizable(False, False) with the OK button packed into the same
+        # fixed-height, non-scrolling frame as the (potentially long)
+        # changes/warnings/error content. See that method's comment for
+        # the full rationale; same pattern here: resizable window,
+        # scrollable body via _make_scrollable_tab, OK button in a footer
+        # frame packed to the bottom before the scrollable body so it's
+        # always visible.
+        win.resizable(True, True)
+        win.minsize(440, 320)
         win.grab_set()
 
         # Centre on parent
         win.update_idletasks()
         px = self.root.winfo_x() + self.root.winfo_width()  // 2
         py = self.root.winfo_y() + self.root.winfo_height() // 2
-        win.geometry(f"540x480+{px - 270}+{py - 240}")
+        win.geometry(f"560x520+{px - 280}+{py - 260}")
 
-        frame = _ttk.Frame(win, padding=20)
+        # Footer (OK button) — packed first/bottom so its space is
+        # reserved and it is never pushed off-screen or scrolled away from.
+        btn_footer = _ttk.Frame(win, padding=(20, 10))
+        btn_footer.pack(side="bottom", fill="x")
+        _ttk.Separator(win, orient="horizontal").pack(side="bottom", fill="x")
+
+        # Scrollable body — everything above the OK button.
+        body_outer = _ttk.Frame(win)
+        body_outer.pack(side="top", fill="both", expand=True)
+        inner = self._make_scrollable_tab(body_outer)
+        frame = _ttk.Frame(inner, padding=20)
         frame.pack(fill="both", expand=True)
 
         if result.success:
@@ -1325,8 +1363,8 @@ class RAGGui:
                      if os.name == "nt" else None)
 
         # ── OK button ─────────────────────────────────────────────────────────
-        _ttk.Button(frame, text="OK", command=win.destroy,
-                    width=10).pack(pady=(16, 0))
+        _ttk.Button(btn_footer, text="OK", command=win.destroy,
+                    width=10).pack()
 
     def _show_toast_or_status(self, msg: str, duration_ms: int = 5000):
         """Best-effort status bar message — falls back to print if unavailable."""

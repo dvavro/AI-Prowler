@@ -1860,6 +1860,69 @@ begin
       AppendInstallLog('[Env] Broadcast WM_SETTINGCHANGE - running processes will now see new env vars.');
 
       // ----------------------------------------------------------
+      // WINDOWS DEFENDER EXCLUSIONS  (progress 33 — BEFORE dependency install)
+      // MOVED HERE 2026-08-26 — was previously the very last step of the
+      // whole installer (progress 99), which was too late by the time it
+      // mattered. Python pip-installed compiled extensions (.pyd, .dll) are
+      // not signed by us — they come from upstream packages like cffi,
+      // numpy, torch, onnxruntime, chromadb, Pillow, tokenizers, etc. —
+      // and Windows Smart App Control / Defender reputation-checks each
+      // binary individually, scanning it the moment pip writes it to disk.
+      // Real-time protection can flag and quarantine/delete a file outright,
+      // not just delay it; an exclusion added afterward only stops FUTURE
+      // scans, it cannot undo a quarantine that already happened. Since the
+      // "Installing Python dependencies" step below writes hundreds of
+      // files — including torch's ~122 MB wheel — into site-packages, the
+      // exclusion has to exist BEFORE that step runs, not after.
+      //
+      // Confirmed on a real install (Vicki, 2026-08-26): install_log.txt
+      // showed this exclusion step completing successfully at its old
+      // position, but startup.log showed AI-Prowler dying immediately
+      // after "importing rag_preprocessor (ChromaDB + sentence_transformers)
+      // ..." — consistent with a torch/onnxruntime/tokenizers native
+      // extension having already been quarantined during the earlier,
+      // unprotected pip install. Same root-cause class as the documented
+      // Tesseract tessdata scan-lock issue elsewhere in this file (search
+      // "ROOT CAUSE OF SPA.TRAINEDDATA FAILURE") — that one is handled with
+      // a Sleep() since it's only a few large files taking a few seconds to
+      // clear; this one needed the exclusion to exist pre-emptively since a
+      // full quarantine can't be waited out.
+      //
+      // Signing thousands of third-party .pyd files is impractical, so
+      // we exclude the Python site-packages tree and the AI-Prowler app
+      // folder from real-time scanning instead. Both are read-only after
+      // install and contain no user data.
+      //
+      // Add-MpPreference requires elevation — we already run elevated
+      // (PrivilegesRequired=admin) so no extra UAC prompt is needed.
+      // ----------------------------------------------------------
+      SetProgress(33, 'Configuring Windows Defender exclusions...');
+      begin
+        DefenderPsFile := MakeTempFile('defender_excl');
+        DefenderPsFile := Copy(DefenderPsFile, 1, Length(DefenderPsFile) - 4) + '.ps1';
+        DefenderPs :=
+          '$ErrorActionPreference = "SilentlyContinue"' + #13#10 +
+          '$sitePackages = "$env:LOCALAPPDATA\Programs\Python\Python311\Lib\site-packages"' + #13#10 +
+          '$appFolder    = "' + ExpandConstant('{app}') + '"' + #13#10 +
+          'try {' + #13#10 +
+          '    Add-MpPreference -ExclusionPath $sitePackages' + #13#10 +
+          '    Add-MpPreference -ExclusionPath $appFolder' + #13#10 +
+          '    Write-Host "Defender exclusions added for: $sitePackages"' + #13#10 +
+          '    Write-Host "Defender exclusions added for: $appFolder"' + #13#10 +
+          '} catch {' + #13#10 +
+          '    Write-Host "WARNING: Could not add Defender exclusions: $_"' + #13#10 +
+          '    Write-Host "Add these paths manually in Windows Security > Virus & threat protection > Exclusions:"' + #13#10 +
+          '    Write-Host "  $sitePackages"' + #13#10 +
+          '    Write-Host "  $appFolder"' + #13#10 +
+          '}' + #13#10;
+        SaveStringToFile(DefenderPsFile, DefenderPs, False);
+        ExecWithLogging(True, '[Defender]', 'powershell.exe',
+          '-NoProfile -ExecutionPolicy Bypass -File "' + DefenderPsFile + '"');
+        DeleteFileIfExists(DefenderPsFile);
+        AppendInstallLog('[Defender] Exclusion step complete (added before dependency install this time).');
+      end;
+
+      // ----------------------------------------------------------
       // REQUIREMENTS  (progress 45 -> 65)
       // ----------------------------------------------------------
       SetProgress(45, 'Installing Python dependencies...');
@@ -2920,46 +2983,32 @@ begin
     GrantBatchLogonRight();
 
     // ----------------------------------------------------------
-    // WINDOWS DEFENDER EXCLUSIONS  (progress 99)
-    // Python pip-installed compiled extensions (.pyd, .dll) are not
-    // signed by us — they come from upstream packages like cffi,
-    // numpy, torch, chromadb, Pillow, tokenizers, etc. Windows Smart
-    // App Control / Defender reputation-checks each binary individually
-    // and will block or warn on any unsigned .pyd it hasn't seen before.
-    //
-    // Signing thousands of third-party .pyd files is impractical, so
-    // we exclude the Python site-packages tree and the AI-Prowler app
-    // folder from real-time scanning instead. Both are read-only after
-    // install and contain no user data.
-    //
-    // Add-MpPreference requires elevation — we already run elevated
-    // (PrivilegesRequired=admin) so no extra UAC prompt is needed.
+    // WINDOWS DEFENDER EXCLUSIONS — MOVED 2026-08-26.
+    // This step used to live here, at progress 99 (the very last thing the
+    // installer does). That was too late: pip installs torch, onnxruntime,
+    // chromadb, tokenizers, etc. — hundreds of files including unsigned
+    // compiled .pyd/.dll binaries that are classic Defender real-time-scan
+    // false-positive targets — at progress 45, a full 54 percentage points
+    // (and, on a slow machine, several minutes) BEFORE the exclusion
+    // existed. Defender's real-time protection scans every file as pip
+    // writes it; if it flags and quarantines/deletes something during that
+    // window, adding the exclusion afterward does nothing to undo it — an
+    // exclusion only stops FUTURE scans, it doesn't restore an already-
+    // quarantined file. Confirmed on a real install (Vicki, 2026-08-26):
+    // install_log.txt showed the exclusion step completing successfully,
+    // but startup.log showed AI-Prowler dying immediately after
+    // "importing rag_preprocessor (ChromaDB + sentence_transformers)..." —
+    // consistent with a torch/onnxruntime/tokenizers native extension
+    // having already been quarantined during the earlier, unprotected pip
+    // install. Moved to run BEFORE the "Installing Python dependencies"
+    // step (see the REQUIREMENTS section above) so site-packages is
+    // excluded before pip ever writes a single file into it. Same root-
+    // cause class as the documented Tesseract tessdata scan-lock issue
+    // below (search for "ROOT CAUSE OF SPA.TRAINEDDATA FAILURE") — that
+    // one is handled with a Sleep() since it's just a few large files
+    // taking a few seconds to clear; this one needed the exclusion to
+    // exist pre-emptively since a full quarantine can't be waited out.
     // ----------------------------------------------------------
-    SetProgress(99, 'Configuring Windows Defender exclusions...');
-    begin
-      DefenderPsFile := MakeTempFile('defender_excl');
-      DefenderPsFile := Copy(DefenderPsFile, 1, Length(DefenderPsFile) - 4) + '.ps1';
-      DefenderPs :=
-        '$ErrorActionPreference = "SilentlyContinue"' + #13#10 +
-        '$sitePackages = "$env:LOCALAPPDATA\Programs\Python\Python311\Lib\site-packages"' + #13#10 +
-        '$appFolder    = "' + ExpandConstant('{app}') + '"' + #13#10 +
-        'try {' + #13#10 +
-        '    Add-MpPreference -ExclusionPath $sitePackages' + #13#10 +
-        '    Add-MpPreference -ExclusionPath $appFolder' + #13#10 +
-        '    Write-Host "Defender exclusions added for: $sitePackages"' + #13#10 +
-        '    Write-Host "Defender exclusions added for: $appFolder"' + #13#10 +
-        '} catch {' + #13#10 +
-        '    Write-Host "WARNING: Could not add Defender exclusions: $_"' + #13#10 +
-        '    Write-Host "Add these paths manually in Windows Security > Virus & threat protection > Exclusions:"' + #13#10 +
-        '    Write-Host "  $sitePackages"' + #13#10 +
-        '    Write-Host "  $appFolder"' + #13#10 +
-        '}' + #13#10;
-      SaveStringToFile(DefenderPsFile, DefenderPs, False);
-      ExecWithLogging(True, '[Defender]', 'powershell.exe',
-        '-NoProfile -ExecutionPolicy Bypass -File "' + DefenderPsFile + '"');
-      DeleteFileIfExists(DefenderPsFile);
-      AppendInstallLog('[Defender] Exclusion step complete.');
-    end;
 
     SetProgress(99, 'AI-Prowler ready.');
 
