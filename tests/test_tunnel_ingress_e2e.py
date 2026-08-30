@@ -115,6 +115,14 @@ requires_sc = pytest.mark.skipif(
     reason="subscription_client not importable from work dir"
 )
 
+# NOTE: requires_mcp / requires_cloudflared / requires_tunnel are evaluated
+# ONCE at collection time.  That means they correctly skip when the server
+# was never started, but they cannot catch "server stopped between collection
+# and execution."  The _skip_if_no_domain() runtime helper inside each test
+# body handles that case (it re-checks liveness immediately before the
+# assertion).  Do NOT replace these decorators with runtime-only checks —
+# the decorator still gives a clean SKIP (not FAIL) when pytest -m collects
+# these on a machine that has never had the server running.
 requires_mcp = pytest.mark.skipif(
     not _local_mcp_running(),
     reason="Local MCP server not running on port 8000"
@@ -146,12 +154,36 @@ class TestExistingTunnel:
     """
 
     def _skip_if_no_domain(self):
+        """
+        Runtime guard — re-checks liveness immediately before each test so
+        that a server stopped AFTER collection still produces a clean SKIP
+        rather than a confusing FAIL.
+
+        Skips when:
+          • No tunnel_domain in config.json
+          • Local MCP server not responding (port 8000 down)
+          • Tunnel returns 0 (connection failure — tunnel down)
+          • Tunnel returns 502 (Cloudflare can reach the tunnel but the local
+            server is not answering — cloudflared is up, AI-Prowler is not)
+          • Any status that isn't 200, 401, or 403 (unhealthy tunnel)
+        """
         domain = _get_current_tunnel_domain()
         if not domain:
             pytest.skip("No tunnel_domain in config.json — activate a subscription first")
-        status, _ = _curl(f"https://{domain}/health", timeout=5)
-        if status == 0:
-            pytest.skip(f"Tunnel {domain} is not reachable — skipping existing-tunnel tests")
+
+        # Runtime local-server check (decorator may be stale from collection)
+        if not _local_mcp_running():
+            pytest.skip("Local MCP server not running on port 8000 (checked at test time)")
+
+        status, body = _curl(f"https://{domain}/health", timeout=5)
+        # 0   = tunnel process down entirely
+        # 502 = Cloudflare reached cloudflared but local server not answering
+        # anything other than a meaningful HTTP response = unhealthy
+        if status in (0, 502, 503, 504):
+            pytest.skip(
+                f"Tunnel {domain} not healthy (status={status}) — "
+                "AI-Prowler server may not be running or tunnel is down"
+            )
         return domain
 
     @requires_mcp
@@ -159,6 +191,9 @@ class TestExistingTunnel:
     @requires_tunnel
     def test_local_health(self):
         """Local MCP server responds with OK."""
+        # Runtime check — decorator may be stale if server stopped after collection
+        if not _local_mcp_running():
+            pytest.skip("Local MCP server not running on port 8000 (checked at test time)")
         status, body = _curl("http://127.0.0.1:8000/health")
         assert status == 200
         assert "ok" in body.lower(), f"Expected 'ok' in body, got: {body!r}"

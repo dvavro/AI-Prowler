@@ -3188,20 +3188,22 @@ powerful MCP tools to search, cross-reference, and synthesize
 answers from your own documents. You ask a question;
 Claude researches your knowledge base and answers it.
 
-Two ways to talk to Claude:
+AI-Prowler has two operating modes. Choose the one that
+fits your situation:
 
-  📱  Claude.ai (web or mobile app)  — PREFERRED
-      Works on phone, tablet, and desktop browsers.
-      Requires an active AI-Prowler Mobile Access subscription.
-      Subscribe and configure in one click from Settings.
+  🖥️  Path 1 — Claude Desktop only (no subscription needed)
+      Use Claude on your Windows PC only. Full RAG capability,
+      no HTTP server or tunnel required, works with any
+      Claude account including free.
 
-  💻  Claude Desktop  — desktop-only alternative
-      Connects locally via stdio. No tunnel needed.
-      Free to install alongside Claude.ai.
+  📱  Path 2 — Desktop + Mobile/Web (subscription required)
+      Use Claude.ai on your phone, tablet, or any browser.
+      Requires an AI-Prowler Personal subscription ($10/month).
+      Also unlocks the Remote Control PWA and Jobs PWA.
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  STEP 1: INDEX YOUR DOCUMENTS
+  STEP 1: INDEX YOUR DOCUMENTS  (both paths)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 1. Click the "📚 Index Documents" tab
@@ -3220,68 +3222,97 @@ re-processed on subsequent runs. No need to start over.
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  STEP 2 — OPTION A: CLAUDE.AI (PREFERRED)
+  PATH 1 — CLAUDE DESKTOP (DESKTOP ONLY)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Access your knowledge base from your phone, tablet, or
-any browser — with full agentic RAG capability.
+Use this when you only need Claude on this Windows PC.
+No subscription, no HTTP server, no tunnel required.
+
+  ✅ Full agentic RAG — all 98 personal-mode MCP tools
+  ✅ Self-learning system, file editing, code execution
+  ✅ Send email, SMS, and WhatsApp to field crew/customers
+  ✅ Job tracker — read and update the spreadsheet
+  ✅ Scheduling and autonomous analysis task queue
+  ✅ Works with a free Claude account
+  ✅ Completely local MCP connection — no network needed
+  ❌ No phone/tablet/browser access
+  ❌ No Remote Control PWA or Jobs PWA
+  ❌ Inbound SMS replies not received (needs HTTP server)
+
+Setup:
+  1. The installer already registered AI-Prowler with
+     Claude Desktop automatically — no config needed.
+  2. Open the 🔗 Quick Links tab → click 🚀 Launch Claude Desktop
+     (First time? Click ⬇ Install Claude Desktop first)
+  3. Start a new conversation and ask a research question:
+
+     "Summarize the key risks in my Q3 contracts"
+     "What does my insurance policy say about flooding?"
+     "Find everything related to Project Alpha"
+
+  Claude calls multiple search tools, follows leads, and
+  synthesizes a comprehensive answer automatically.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PATH 2 — CLAUDE.AI (MOBILE + WEB ACCESS)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Use this when you want Claude on your phone, tablet,
+or any web browser — in addition to Claude Desktop.
+
+What you get beyond Path 1:
+  ✅ Claude.ai on any phone, tablet, or browser
+  ✅ Remote Control PWA (/remote/) — search, upload,
+     and download files from your phone
+  ✅ Jobs PWA (/jobs/) — field crew mobile app for jobs,
+     clock-in/out, photos, and creating invoices
+  ✅ Inbound SMS/WhatsApp replies (HTTP server running)
+  ✅ File transfer — download tracked PC files to phone,
+     upload phone photos into your knowledge base
+  ✅ Permanent public HTTPS URL (Cloudflare Tunnel,
+     provisioned automatically — no Cloudflare account needed)
 
 Requirements:
-  • Claude Pro plan on Claude.ai
-  • Active AI-Prowler Mobile Access subscription
+  • AI-Prowler Personal subscription ($10/month)
+  • A Claude.ai account — the FREE TIER IS SUFFICIENT
+    for AI-Prowler Personal (free tier allows 1 custom
+    MCP connector, which is all Personal mode needs).
+    Claude Pro is only required if you also use other
+    MCP connectors at the same time (e.g. a Business
+    server alongside your personal instance).
 
-Setup (one time — everything is automated):
+Setup (one time — fully automated):
   1. Go to Settings → 📡 Remote Access
   2. Enter a Bearer token and click Save Token
   3. Click ▶ Start HTTP Server
-  4. Click Subscribe — Personal (or Business)
+  4. Click 🛒 Subscribe — Personal
      → complete Stripe checkout
-     → check email for activation code
+     → check email for activation code (APRO-XXXX-XXXX-XXXX)
   5. Paste activation code → click ⚡ Configure Mobile Access
-     → tunnel is provisioned and started automatically
+     → Cloudflare tunnel is provisioned automatically
   6. Click the red 📖 Connect Claude.ai (auto) button
-     → reads instructions → click OK
-     → Claude.ai opens with connector form
-     → paste URL → name it AI-Prowler → click Add
+     → popup copies your MCP URL → click OK
+     → Claude.ai opens with the Add Custom Connector form
+     → paste URL → name it "AI-Prowler Local" → click Add
      → enter Bearer token when prompted
      → set Always Allow for all tools
+  7. Open Claude.ai on your phone — you should see
+     AI-Prowler tools in the tools panel
 
-Daily use — the server and tunnel auto-start on login.
+Daily use: the HTTP server and tunnel auto-start on login.
+
+Note: Once mobile is activated, use Claude.ai for all
+AI-Prowler sessions. Running Claude Desktop and Claude.ai
+simultaneously on the same AI-Prowler install can cause
+conflicts (two MCP sessions writing to the same database).
 
 Subscription info:  Help → User Guide → Section 8
 Support:            david.vavro1@gmail.com
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  STEP 2 — OPTION B: CLAUDE DESKTOP (DESKTOP ONLY)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Good alternative when you only need access from this PC.
-No Cloudflare Tunnel needed, no subscription beyond
-a free Claude account.
-
-  1. Open the 🔗 Quick Links tab
-  2. Click "🚀 Launch Claude Desktop"
-     • First time? Click "⬇ Install Claude Desktop" first
-  3. Start a NEW conversation and ask a research question:
-
-     "Summarize the key risks in my Q3 contracts"
-     "What does my insurance policy say about flooding?"
-     "Find everything related to Project Alpha"
-
-Claude calls multiple search tools, follows leads, and
-synthesizes a comprehensive answer automatically.
-
-  ✅ No HTTP server needed for Claude Desktop
-  ✅ Works with a free Claude account
-  ✅ Completely local — no internet required for the RAG connection
-
-Note: The installer registers AI-Prowler with Claude
-Desktop automatically. No config files to edit.
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  🧠  SELF-LEARNING
+  🧠  SELF-LEARNING  (both paths)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 AI-Prowler remembers what you tell it across sessions.
@@ -3291,11 +3322,11 @@ AI-Prowler remembers what you tell it across sessions.
   "What do we know about Client Alpha?"  → finds it instantly
 
 Manage saved learnings from the 🧠 Learnings tab — browse,
-filter, archive, or delete. See Help → User Guide → Section 20.
+filter, archive, or delete. See Help → User Guide → Section 22.
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  📧  EMAIL, SMS & WHATSAPP
+  📧  EMAIL, SMS & WHATSAPP  (both paths)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Configure once in Settings → Email Configuration (Gmail,
@@ -3308,11 +3339,17 @@ your job spreadsheet or saved as a contact.
   "Send me an alert — the Johnson job is running late"
   "Email the job tracker spreadsheet to myself"
   "WhatsApp Torres a reminder about tomorrow's appointment"
-  "Did anyone reply to my texts today?"
+
+Note: Outbound email and SMS work in both Claude Desktop
+and Claude.ai (Path 1 and Path 2). Checking inbound SMS
+replies requires the HTTP server to be running so Twilio
+can POST webhook notifications to AI-Prowler — this is
+automatic in Path 2; in Path 1, start the HTTP server
+manually in Settings → Remote Access if you need it.
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  🔄  KEEPING YOUR INDEX CURRENT
+  🔄  KEEPING YOUR INDEX CURRENT  (both paths)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 • Click "🔄 Update Index" tab → "Update All" after
@@ -4713,7 +4750,12 @@ or from the Help menu."""
             _log_path = Path.home() / '.ai-prowler' / 'update_debug.log'
             _log_path.parent.mkdir(parents=True, exist_ok=True)
 
+            _update_debug_enabled = json.loads(CONFIG_PATH.read_text(encoding='utf-8')).get('debug_logging', False) if CONFIG_PATH.exists() else False
+
             def _ulog(msg: str) -> None:
+                print(f"[UPDATE] {msg}", flush=True)  # always keep console output
+                if not _update_debug_enabled:
+                    return
                 ts  = _dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
                 line = f"[{ts}] {msg}\n"
                 try:
@@ -4721,7 +4763,6 @@ or from the Help menu."""
                         _lf.write(line)
                 except Exception:
                     pass
-                print(f"[UPDATE] {msg}", flush=True)  # keep console output too
 
             _ulog("=" * 60)
             _ulog(f"Update session start — target v{version}")
@@ -14546,9 +14587,13 @@ or from the Help menu."""
         _HTTP_LED_DEBUG_LOG = Path.home() / '.ai-prowler' / 'http_led_debug.log'
 
         def _log_http_led_debug(msg):
-            """Developer-only trail of LED decisions. Never shown in the UI —
-            open %USERPROFILE%\\.ai-prowler\\http_led_debug.log to read it."""
+            """Developer-only trail of LED decisions. Only written when
+            debug_logging=true in config.json — silent in release builds."""
             try:
+                import json as _json_led
+                _cfg_led = json.loads(CONFIG_PATH.read_text(encoding='utf-8')) if CONFIG_PATH.exists() else {}
+                if not _cfg_led.get('debug_logging'):
+                    return
                 _HTTP_LED_DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
                 import datetime as _dtm
                 ts = _dtm.datetime.now().strftime('%Y-%m-%d %H:%M:%S')

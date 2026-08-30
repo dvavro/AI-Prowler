@@ -629,9 +629,20 @@ class TestRemoteAllowedTools:
         assert '/remote/download' in mcp_src,             "/remote/download route missing from ai_prowler_mcp.py"
 
     def test_upload_uses_run_in_executor(self, mcp_src):
-        idx = mcp_src.find('/remote/upload')
+        # Anchor on the route handler if-block, not the first string occurrence
+        # (the Tier A comment also contains '/remote/upload' and appears earlier
+        # in the file, so a naive find() would miss the actual handler).
+        idx = mcp_src.find('path == "/remote/upload"')
+        if idx == -1:
+            idx = mcp_src.find("path == '/remote/upload'")
+        if idx == -1:
+            # Fall back to raw string but skip any hit inside a comment block
+            idx = mcp_src.find('/remote/upload": ')
+        assert idx != -1, "/remote/upload route handler not found in ai_prowler_mcp.py"
         block = mcp_src[idx:idx+8000]
-        assert "run_in_executor" in block,             "/remote/upload handler doesn't use run_in_executor — "             "will block ASGI event loop and timeout"
+        assert "run_in_executor" in block, \
+            "/remote/upload handler doesn't use run_in_executor — " \
+            "will block ASGI event loop and timeout"
 
 
     def test_remote_api_uses_run_in_executor(self, mcp_src):

@@ -1177,13 +1177,14 @@ begin
   if ExistingJson = '' then
   begin
     // Fresh install — write the complete starter config.
-    NewJson :=
-      '{' + #13#10 +
-      '  "edition": "' + EditionStr + '",' + #13#10 +
-      '  "mode": "' + ModeStr + '",' + #13#10 +
-      '  "telemetry_enabled": true,' + #13#10 +
-      '  "default_spreadsheet_path": "' + ExistingPath + '"' + #13#10 +
-      '}';
+      NewJson :=
+        '{' + #13#10 +
+        '  "edition": "' + EditionStr + '",' + #13#10 +
+        '  "mode": "' + ModeStr + '",' + #13#10 +
+        '  "telemetry_enabled": true,' + #13#10 +
+        '  "debug_logging": false,' + #13#10 +
+        '  "default_spreadsheet_path": "' + ExistingPath + '"' + #13#10 +
+        '}';
     AppendInstallLog('[Config] Fresh install — writing edition=' + EditionStr +
                      ' mode=' + ModeStr);
   end
@@ -1246,9 +1247,13 @@ begin
       AppendInstallLog('[Config] Added missing mode=' + ModeStr);
     end;
 
-    // Add telemetry_enabled if missing
-    if Pos('"telemetry_enabled"', ExistingJson) = 0 then
-      NewJson := NewJson + ',' + #13#10 + '  "telemetry_enabled": true';
+      // Add telemetry_enabled if missing
+      if Pos('"telemetry_enabled"', ExistingJson) = 0 then
+        NewJson := NewJson + ',' + #13#10 + '  "telemetry_enabled": true';
+
+      // Add debug_logging if missing — always false in release builds
+      if Pos('"debug_logging"', ExistingJson) = 0 then
+        NewJson := NewJson + ',' + #13#10 + '  "debug_logging": false';
 
     // Add default_spreadsheet_path if missing or empty
     if (Pos('"default_spreadsheet_path"', ExistingJson) = 0) or

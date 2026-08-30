@@ -502,7 +502,7 @@ if exist "{OAUTH_TOKEN_PLAIN_PATH}" (
 
 """
 
-    return f"""@echo off
+    return rf"""@echo off
 chcp 65001 >nul
 REM v8.1.16 fix: chcp 65001 switches THIS cmd.exe process to the UTF-8
 REM codepage before anything else runs. Without it, cmd.exe defaults to
@@ -535,18 +535,14 @@ REM fully non-elevated and writable, and is already where every other piece
 REM of AI-Prowler's own state lives.
 cd /d "{AI_PROWLER_HOME}"
 
-REM v8.1.17: append a persistent, timestamped copy of this script's own
-REM content to command_debug.log before invoking claude -- unlike
-REM last_headless_run.json (overwritten every run, only the MOST RECENT
-REM invocation is ever visible), this is append-only, so past runs stay
-REM inspectable for later debugging. `type "%~f0"` streams this file's own
-REM bytes verbatim -- no new escaping/quoting risk introduced, since
-REM nothing is being re-embedded into a new echo statement (exactly the
-REM class of bug this whole debugging session kept finding elsewhere).
+REM command_debug.log — only written when debug_logging=true in config.json
+for /f "tokens=*" %%G in ('{_self_gate_python_invocation()} -c "import json,pathlib; c=json.loads(pathlib.Path.home().joinpath('.ai-prowler','config.json').read_text()); print('1' if c.get('debug_logging') else '0')" 2^>nul') do set _DBG=%%G
+if "%_DBG%"=="1" (
 echo. >> "%USERPROFILE%\.ai-prowler\command_debug.log"
 echo ================================================================ >> "%USERPROFILE%\.ai-prowler\command_debug.log"
 echo [%date% %time%] SCHEDULED QUEUE RUN -- full script below: >> "%USERPROFILE%\.ai-prowler\command_debug.log"
 type "%~f0" >> "%USERPROFILE%\.ai-prowler\command_debug.log"
+)
 
 REM v9.0.0: rotate the audit log before each run so it never grows without
 REM bound. Two backup files kept: .log.1 (previous run) and .log.2 (oldest).
@@ -1685,7 +1681,7 @@ if exist "{OAUTH_TOKEN_PLAIN_PATH}" (
 """
 
     escaped_prompt = _sanitize_prompt_for_batch(prompt).replace('"', '""')
-    return f"""@echo off
+    return rf"""@echo off
 chcp 65001 >nul
 REM v8.1.16 fix: see build_wrapper_script_content()'s matching comment for
 REM the full discovery story (UTF-8 BOM tried first, reverted -- broke
@@ -1753,20 +1749,11 @@ def run_single_prompt_now(prompt: str, mcp_config_path: str, allowed_tools: str,
                                                        use_api_key)
     script_path.write_text(bat_content, encoding="utf-8")
 
-    # ── NOW-button debug log ─────────────────────────────────────────────
-    # Written BEFORE the run so it exists even if claude -p hangs/crashes.
-    # Appended-to (not overwritten) so every attempt is preserved.
-    # Captures: MCP config used, .bat content, exit code, stdout, stderr,
-    # and the contents of last_single_run.json after the run completes.
-    _debug_log = AI_PROWLER_HOME / "now_button_debug.log"
+    # NOW-button debug log removed — run-now feature defeatured in v9.1.0
     import datetime as _dt
 
     def _dbg(msg: str):
-        try:
-            with open(_debug_log, "a", encoding="utf-8") as _f:
-                _f.write(msg + "\n")
-        except Exception:
-            pass
+        pass  # debug logging removed
 
     _ts = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     _dbg(f"\n{'='*70}")
@@ -1794,7 +1781,7 @@ def run_single_prompt_now(prompt: str, mcp_config_path: str, allowed_tools: str,
                   f"{_out_file.read_text(encoding='utf-8', errors='replace')[-3000:]}")
         else:
             _dbg(f"  last_single_run.json: empty or missing (claude -p never wrote output)")
-        return False, f"Run timed out after {timeout}s — check now_button_debug.log in ~/.ai-prowler/"
+        return False, f"Run timed out after {timeout}s"
     except Exception as e:
         _dbg(f"[{_dt.datetime.now().strftime('%H:%M:%S')}] EXCEPTION: {e}")
         return False, str(e)

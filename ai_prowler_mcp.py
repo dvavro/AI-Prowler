@@ -81,21 +81,29 @@ import traceback
 _LOG_PATH = Path.home() / ".ai-prowler" / "logs" / "mcp_server.log"
 _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-# Keep last 3 log files by rotating on each startup
-import glob as _glob, shutil as _shutil
+# Rotating log: 5 MB per file, keep 3 backups (15 MB total max).
+# Also rotates on each startup so each server session begins in a fresh file.
+# Startup rotation: .log -> .log.1 -> .log.2 (oldest), then open fresh.
+import shutil as _shutil
 for _i in range(2, 0, -1):
     _old = _LOG_PATH.with_suffix(f".log.{_i}")
     _prev = _LOG_PATH.with_suffix(f".log.{_i-1}") if _i > 1 else _LOG_PATH
     if _prev.exists():
         _shutil.copy2(str(_prev), str(_old))
 
+from logging.handlers import RotatingFileHandler as _RotatingFileHandler
+_log_handler = _RotatingFileHandler(
+    str(_LOG_PATH),
+    mode="w",           # fresh file each startup (startup rotation already done above)
+    maxBytes=5 * 1024 * 1024,   # 5 MB per file
+    backupCount=3,              # keep .log.1 .log.2 .log.3 (15 MB total max)
+    encoding="utf-8",
+)
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s [%(levelname)-8s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S.%f",   # millisecond precision for timing diagnosis
-    handlers=[
-        logging.FileHandler(str(_LOG_PATH), mode="w", encoding="utf-8"),
-    ],
+    datefmt="%Y-%m-%d %H:%M:%S.%f",
+    handlers=[_log_handler],
 )
 _log = logging.getLogger("ai_prowler_mcp")
 
@@ -757,6 +765,16 @@ _TIER_A_SUPPRESSED: frozenset = frozenset({
     # per-user equivalent in a multi-user server — there's no meaningful
     # "whose home address" to resolve for a shared company install.
     "get_home_address",
+    # File transfer tools (v9.1.0) — personal-install-only.
+    # get_file_download_url / get_file_upload_url bridge Claude directly to
+    # the /remote/download and /remote/upload HTTP endpoints already built
+    # into the Remote Control PWA.  Both endpoints themselves already gate
+    # on personal mode (server mode → 403), so Tier A suppression + the
+    # runtime _IS_SERVER_MODE guard in the tool body form two independent
+    # enforcement layers.  Multi-user server installs use role-scoped file
+    # access through the normal RAG / write-tool path instead.
+    "get_file_download_url",
+    "get_file_upload_url",
 })
 
 _log.info(
@@ -1016,8 +1034,8 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "AI-Prowler — Agentic RAG Knowledge Base\n"
         + "=" * 50 + "\n\n"
 
-        "TOOL CATEGORIES (96 tools total — 95 visible in personal mode,\n"
-        "64 visible in server mode; call check_tools_status() for a precise\n"
+        "TOOL CATEGORIES (99 tools total — 98 visible in personal mode,\n"
+        "65 visible in server mode; call check_tools_status() for a precise\n"
         "per-tool breakdown on this connection)\n"
         + "-" * 30 + "\n"
         "AI-Prowler exposes ten tool families. Most question-answering\n"
@@ -1075,6 +1093,24 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "      untrack_directory, get_database_stats, check_ai_prowler_status,\n"
         "      reindex_file, reindex_directory, reindex_all,\n"
         "      list_writable_directories, grant_write_access, revoke_write_access\n\n"
+
+        "  • File transfer (personal mode only — Tier A suppressed in server mode):\n"
+        "      CONVENTION: download = file flows OUT of AI-Prowler to phone/browser;\n"
+        "                  upload   = file flows INTO AI-Prowler from phone/browser.\n\n"
+        "      get_file_download_url(file_path) — returns a signed HTTPS URL that\n"
+        "        the Remote PWA or Jobs PWA (phone/browser) can use to download a\n"
+        "        tracked file FROM AI-Prowler.  Bridges to /remote/download;\n"
+        "        enforces tracked-dir membership, extension allowlist, 50 MB limit,\n"
+        "        and bearer-token auth.\n"
+        "        ⚠️  Claude itself CANNOT use web_fetch() on this URL — Claude.ai\n"
+        "        only allows web_fetch() on URLs that appeared in prior search\n"
+        "        results.  This tool is for phone/PWA file retrieval only.\n"
+        "      get_file_upload_url(filename, target_directory) — returns a signed\n"
+        "        HTTPS URL + multipart field instructions so the Remote PWA, Jobs\n"
+        "        PWA, or a browser artifact can upload a file INTO AI-Prowler.\n"
+        "        Bridges to /remote/upload; enforces writable-allowlist and\n"
+        "        tracked-dir membership; auto-indexes on save.\n"
+        "        Call grant_write_access(dir) first for new destinations.\n\n"
 
         "  • Agentic analysis tasks (personal mode only — this entire\n"
         "    group is Tier A suppressed and invisible to any server-mode\n"
@@ -4962,6 +4998,348 @@ def read_job_spreadsheet(
     lines.append("─" * 60)
     lines.append("✅ Read complete. Use update_job_spreadsheet() to write changes back.")
     return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FILE TRANSFER TOOLS (v9.1.0) — personal mode only
+# get_file_download_url  — gives Claude a signed URL to fetch any tracked file
+# get_file_upload_url    — gives Claude a signed URL + instructions to PUT a file
+#
+# Both tools bridge Claude directly to the /remote/download and /remote/upload
+# HTTP endpoints that already exist in the Remote Control PWA.  The endpoints
+# handle auth, path-traversal protection, and tracked-dir enforcement — these
+# tools just assemble the URL and hand it back so Claude can web_fetch() it
+# (download) or instruct the user / an artifact to PUT to it (upload).
+#
+# Server-mode enforcement — THREE independent layers:
+#   1. Tier A suppression: both names are in _TIER_A_SUPPRESSED above, so
+#      they are invisible in the MCP tool list whenever server_mode=True.
+#   2. Runtime guard: tool bodies check _IS_SERVER_MODE and return an error
+#      immediately if somehow called on a server install.
+#   3. Endpoint gate: /remote/download and /remote/upload already return 403
+#      with "Remote app not available in server mode yet" for any server-mode
+#      install, independent of which tool assembled the URL.
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def get_file_download_url(file_path: str) -> str:
+    """
+    Return a signed HTTPS URL that the Remote PWA or Jobs PWA (phone/browser)
+    can use to download a tracked file FROM AI-Prowler.
+
+    CONVENTION: download = file flows OUT of AI-Prowler to the phone/browser.
+
+    PERSONAL MODE ONLY.  This tool is invisible in server mode (Tier A
+    suppressed) and returns an error if somehow called on a server install.
+
+    ⚠️  Claude itself cannot use web_fetch() on the returned URL.  Claude.ai
+    only allows web_fetch() on URLs that appeared in prior search results —
+    a URL generated by a tool call is rejected.  This tool is intended for
+    the Remote PWA and Jobs PWA to pull files from AI-Prowler to a phone
+    or browser, not for Claude to read files inline.
+
+    How it works
+    ------------
+    The URL points at the /remote/download endpoint in the Remote Control PWA.
+    That endpoint enforces:
+      • Bearer-token auth (token embedded in the URL query string)
+      • Path must resolve inside a tracked readable directory
+      • Extension allowlist: pdf, docx, xlsx, xls, doc, pptx, jpg, jpeg,
+        png, gif, webp, heic, mp4, mov, avi, txt, md, csv, json, log,
+        py, js, html, css
+      • 50 MB size limit
+      • 20 downloads per bearer-token per hour (rate limit)
+
+    Workflow (phone/PWA)
+    --------------------
+    1. Claude calls get_file_download_url(file_path)
+    2. Tool returns a download_url
+    3. The phone/PWA browser fetches that URL to download the file
+
+    Args:
+        file_path: Absolute Windows path to the file to download.
+                   Must be inside a tracked directory.
+
+    Returns:
+        A JSON-formatted string with:
+          download_url  — the full HTTPS URL for the phone/PWA to fetch
+          filename      — basename of the file
+          size_bytes    — file size in bytes
+          note          — usage reminder
+        Or an error string if the file is not found, not tracked, the
+        extension is not allowed, or the install is in server mode.
+    """
+    _telemetry_increment_tool_count("get_file_download_url")
+
+    # ── Layer 2: runtime server-mode guard ───────────────────────────────────
+    if _IS_SERVER_MODE:
+        return (
+            "⛔ get_file_download_url is not available in server mode. "
+            "File access for server-mode users goes through the normal "
+            "RAG search tools (search_documents, read_document) and the "
+            "write-tool path for any files in the caller's personal directory."
+        )
+
+    import os as _os_dlu, json as _json_dlu, pathlib as _pl_dlu
+
+    # ── Resolve and validate the path ────────────────────────────────────────
+    try:
+        _abs = _os_dlu.path.abspath(file_path)
+    except Exception as _e:
+        return f"❌ Invalid path: {_e}"
+
+    if not _os_dlu.path.isfile(_abs):
+        return f"❌ File not found: {_abs}"
+
+    # ── Extension allowlist (mirrors /remote/download server-side check) ─────
+    _ALLOWED_EXT_DLU = {
+        ".pdf", ".docx", ".xlsx", ".doc", ".xls", ".pptx",
+        ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic",
+        ".mp4", ".mov", ".avi",
+        ".txt", ".md", ".csv", ".json", ".log",
+        ".py", ".js", ".html", ".css",
+    }
+    _ext_dlu = _os_dlu.path.splitext(_abs)[1].lower()
+    if _ext_dlu not in _ALLOWED_EXT_DLU:
+        return (
+            f"❌ File type '{_ext_dlu}' is not in the download allowlist. "
+            f"Allowed types: {', '.join(sorted(_ALLOWED_EXT_DLU))}"
+        )
+
+    # ── Must be inside a tracked readable directory ───────────────────────────
+    try:
+        from rag_preprocessor import load_auto_update_list as _load_dlu
+        _readable_dirs = _load_dlu() or []
+    except Exception:
+        _readable_dirs = []
+
+    _in_tracked_dlu = any(
+        _abs.lower().startswith(_os_dlu.path.abspath(str(d)).lower())
+        for d in _readable_dirs if d
+    )
+    if not _in_tracked_dlu:
+        return (
+            f"❌ '{_abs}' is not inside a tracked directory. "
+            "Use index_path() to track the directory first, or choose a "
+            "file that is already inside a tracked directory."
+        )
+
+    # ── Size check (client-side warning, server enforces 50 MB hard limit) ───
+    _size_dlu = _os_dlu.path.getsize(_abs)
+    if _size_dlu > 52_428_800:
+        return (
+            f"❌ File is {_size_dlu:,} bytes — exceeds the 50 MB download limit. "
+            "Split or compress the file first."
+        )
+
+    # ── Load config to build the tunnel URL ───────────────────────────────────
+    try:
+        _cfg_dlu = _json_dlu.loads(
+            (_pl_dlu.Path.home() / ".ai-prowler" / "config.json")
+            .read_text(encoding="utf-8")
+        )
+        _tunnel_dlu = _cfg_dlu.get("tunnel_domain", "").strip().strip("/")
+        _token_dlu  = _cfg_dlu.get("remote_token",  "").strip()
+    except Exception as _e:
+        return f"❌ Could not read config.json to build URL: {_e}"
+
+    if not _tunnel_dlu:
+        return (
+            "❌ No tunnel_domain configured. Set up Cloudflare Tunnel under "
+            "Settings → Remote Access first, then try again."
+        )
+    if not _token_dlu:
+        return (
+            "❌ No remote_token configured. Set up Remote Access under "
+            "Settings → Remote Access first, then try again."
+        )
+
+    # ── Build the signed URL ─────────────────────────────────────────────────
+    import urllib.parse as _urlparse_dlu
+    _encoded_path = _urlparse_dlu.quote(_abs, safe="")
+    _encoded_token = _urlparse_dlu.quote(_token_dlu, safe="")
+    _base_dlu = f"https://{_tunnel_dlu}"
+    _url_dlu = f"{_base_dlu}/remote/download?path={_encoded_path}&token={_encoded_token}"
+
+    return _json_dlu.dumps({
+        "download_url": _url_dlu,
+        "filename":     _os_dlu.path.basename(_abs),
+        "size_bytes":   _size_dlu,
+        "note": (
+            "Share this URL with the Remote PWA or Jobs PWA so the phone/browser "
+            "can download the file from AI-Prowler. "
+            "⚠️ Claude cannot use web_fetch() on this URL — Claude.ai only allows "
+            "web_fetch() on URLs from prior search results, not tool-generated URLs."
+        ),
+    }, indent=2)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def get_file_upload_url(filename: str, target_directory: str) -> str:
+    """
+    Return a signed upload URL and multipart POST instructions so Claude
+    (or a browser artifact) can PUT a file directly into any writable
+    tracked directory — without base64 encoding.
+
+    PERSONAL MODE ONLY.  This tool is invisible in server mode (Tier A
+    suppressed) and returns an error if somehow called on a server install.
+
+    How it works
+    ------------
+    The URL points at the /remote/upload endpoint that already exists in
+    the Remote Control PWA.  That endpoint enforces:
+      • Bearer-token auth (token embedded in the multipart body field
+        named "token", same as the Remote PWA upload flow)
+      • Directory must be in the writable allowlist (grant_write_access
+        must have been called for it first)
+      • File is saved to target_directory/filename and immediately indexed
+        into the ChromaDB knowledge base
+
+    Workflow (for Claude uploading a generated file)
+    ------------------------------------------------
+    1. Claude calls get_file_upload_url(filename, target_directory)
+    2. Tool returns upload instructions including the URL, required fields,
+       and a curl example Claude can run via run_script() if needed
+    3. Claude can use the returned curl command via run_script() to upload
+       any file it has access to on the local filesystem
+
+    Workflow (for an artifact / browser upload)
+    -------------------------------------------
+    1. Claude calls get_file_upload_url and displays the returned URL and
+       field names to the user or passes them to a React/HTML artifact
+    2. The artifact POSTs multipart/form-data with fields: file, dir, token
+    3. AI-Prowler saves the file and re-indexes the target directory
+
+    Args:
+        filename:         The filename to save as (e.g. "report.md").
+                          The file will land at target_directory/filename.
+        target_directory: Absolute Windows path to the destination directory.
+                          Must be in the writable allowlist — call
+                          grant_write_access(target_directory) first if
+                          this is a new destination.
+
+    Returns:
+        A JSON-formatted string with:
+          upload_url       — the full HTTPS URL to POST multipart/form-data to
+          fields           — dict of form fields required: file, dir, token
+          curl_example     — a ready-to-run curl command (use with run_script)
+          note             — usage instructions
+        Or an error string if the directory is not writable, not tracked,
+        or the install is in server mode.
+    """
+    _telemetry_increment_tool_count("get_file_upload_url")
+
+    # ── Layer 2: runtime server-mode guard ───────────────────────────────────
+    if _IS_SERVER_MODE:
+        return (
+            "⛔ get_file_upload_url is not available in server mode. "
+            "File writes for server-mode users go through the write tools "
+            "(create_file, write_file, str_replace_in_file) scoped to the "
+            "caller's personal directory."
+        )
+
+    import os as _os_ulu, json as _json_ulu, pathlib as _pl_ulu
+
+    # ── Resolve and validate the target directory ─────────────────────────────
+    try:
+        _abs_dir = _os_ulu.path.abspath(target_directory)
+    except Exception as _e:
+        return f"❌ Invalid target_directory: {_e}"
+
+    # ── Must be in the writable allowlist ────────────────────────────────────
+    try:
+        _wr_ulu = _writable_allowlist_load()
+        _in_writable = any(
+            _abs_dir.lower().startswith(_os_ulu.path.abspath(str(w)).lower())
+            for w in _wr_ulu
+        )
+    except Exception as _e:
+        return f"❌ Could not load writable allowlist: {_e}"
+
+    if not _in_writable:
+        return (
+            f"❌ '{_abs_dir}' is not in the writable allowlist. "
+            "Call grant_write_access(directory) first to enable uploads "
+            "to this directory, then try get_file_upload_url again."
+        )
+
+    # ── Must also be inside a tracked readable directory ─────────────────────
+    try:
+        from rag_preprocessor import load_auto_update_list as _load_ulu
+        _readable_dirs = _load_ulu() or []
+    except Exception:
+        _readable_dirs = []
+
+    _in_tracked_ulu = any(
+        _abs_dir.lower().startswith(_os_ulu.path.abspath(str(d)).lower())
+        for d in _readable_dirs if d
+    )
+    if not _in_tracked_ulu:
+        return (
+            f"❌ '{_abs_dir}' is not inside a tracked directory. "
+            "Use index_path() to track the directory first, then call "
+            "grant_write_access() on it, then try again."
+        )
+
+    # ── Sanitise filename (no path separators) ────────────────────────────────
+    _safe_fname = _os_ulu.path.basename(filename.strip())
+    if not _safe_fname:
+        return "❌ filename must not be empty."
+
+    # ── Load config ───────────────────────────────────────────────────────────
+    try:
+        _cfg_ulu = _json_ulu.loads(
+            (_pl_ulu.Path.home() / ".ai-prowler" / "config.json")
+            .read_text(encoding="utf-8")
+        )
+        _tunnel_ulu = _cfg_ulu.get("tunnel_domain", "").strip().strip("/")
+        _token_ulu  = _cfg_ulu.get("remote_token",  "").strip()
+    except Exception as _e:
+        return f"❌ Could not read config.json to build URL: {_e}"
+
+    if not _tunnel_ulu:
+        return (
+            "❌ No tunnel_domain configured. Set up Cloudflare Tunnel under "
+            "Settings → Remote Access first, then try again."
+        )
+    if not _token_ulu:
+        return (
+            "❌ No remote_token configured. Set up Remote Access under "
+            "Settings → Remote Access first, then try again."
+        )
+
+    # ── Build the upload URL and curl example ────────────────────────────────
+    _base_ulu = f"https://{_tunnel_ulu}"
+    _url_ulu  = f"{_base_ulu}/remote/upload"
+    _dest_file = _os_ulu.path.join(_abs_dir, _safe_fname)
+
+    _curl = (
+        f'curl -X POST "{_url_ulu}" '
+        f'-F "file=@/path/to/local/{_safe_fname}" '
+        f'-F "dir={_abs_dir}" '
+        f'-F "token={_token_ulu}"'
+    )
+
+    return _json_ulu.dumps({
+        "upload_url": _url_ulu,
+        "fields": {
+            "file":  f"(attach file content as multipart field named 'file', "
+                     f"filename='{_safe_fname}')",
+            "dir":   _abs_dir,
+            "token": _token_ulu,
+        },
+        "destination": _dest_file,
+        "curl_example": _curl,
+        "note": (
+            "POST multipart/form-data with three fields: 'file' (the file "
+            "bytes), 'dir' (the target directory path), and 'token' (the "
+            "bearer token). The server will save the file and re-index the "
+            "directory automatically. Use run_script() to execute the "
+            "curl_example if you have the source file on the local filesystem."
+        ),
+    }, indent=2)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -19924,381 +20302,424 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
             # Serves files from the remote/ folder next to this script.
             # Login required — Bearer token stored in sessionStorage same as /jobs/.
             if path.startswith("/remote"):
-                # Server mode: not yet supported
+                _log.info("REMOTE: entered handler path=%s method=%s", path, method)
                 try:
-                    import json as _jrc, pathlib as _plrc
-                    _mode_cfg = _jrc.loads(
-                        (_plrc.Path.home() / ".ai-prowler" / "config.json")
-                        .read_text(encoding="utf-8"))
-                except Exception:
-                    _mode_cfg = {}
-                if _mode_cfg.get("mode", "personal") != "personal":
-                    await send({"type": "http.response.start", "status": 403,
-                                "headers": [[b"content-type", b"text/plain"]]})
-                    await send({"type": "http.response.body",
-                                "body": b"Remote app not available in server mode yet",
-                                "more_body": False})
-                    return
-
-                # ── /remote/download — file download endpoint ─────────────────
-                # GET /remote/download?path=<encoded>&token=<bearer>
-                # Token in query param because browser <a download> can't set headers.
-                if path == "/remote/download":
-                    import urllib.parse as _up5, mimetypes as _mt5, os as _os5
-                    _qs5 = dict(_up5.parse_qsl(scope.get("query_string", b"").decode()))
-                    _dl_tok   = _qs5.get("token", "").strip()
-                    _dl_path  = _qs5.get("path",  "").strip()
-
-                    # Validate token
-                    if _dl_tok not in _access_tokens:
-                        await send({"type": "http.response.start", "status": 401,
-                                    "headers": [[b"content-type", b"application/json"]]})
-                        await send({"type": "http.response.body",
-                                    "body": b'{"error":"unauthorized"}',
-                                    "more_body": False})
-                        return
-
-                    # Rate limiting — 20 downloads per token per hour
-                    import time as _time5
-                    _REMOTE_DL_COUNTS = getattr(_RouterASGI, "_dl_counts", {})
-                    _RouterASGI._dl_counts = _REMOTE_DL_COUNTS
-                    _now5 = _time5.time()
-                    _tok_counts = _REMOTE_DL_COUNTS.get(_dl_tok, [])
-                    _tok_counts = [t for t in _tok_counts if _now5 - t < 3600]
-                    if len(_tok_counts) >= 20:
-                        await send({"type": "http.response.start", "status": 429,
-                                    "headers": [[b"content-type", b"application/json"]]})
-                        await send({"type": "http.response.body",
-                                      "body": b'{"error":"rate limit - max 20 downloads per hour"}',
-                                    "more_body": False})
-                        return
-                    _tok_counts.append(_now5)
-                    _REMOTE_DL_COUNTS[_dl_tok] = _tok_counts
-
-                    # Allowed extensions
-                    _ALLOWED_EXT5 = {
-                        ".pdf", ".docx", ".xlsx", ".doc", ".xls", ".pptx",
-                        ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic",
-                        ".mp4", ".mov", ".avi",
-                        ".txt", ".md", ".csv", ".json", ".log",
-                        ".py",  ".js",  ".html", ".css",
-                    }
-                    _dl_ext = _os5.path.splitext(_dl_path)[1].lower()
-                    if _dl_ext not in _ALLOWED_EXT5:
-                        await send({"type": "http.response.start", "status": 403,
-                                    "headers": [[b"content-type", b"application/json"]]})
-                        await send({"type": "http.response.body",
-                                    "body": b'{"error":"file type not allowed for download"}',
-                                    "more_body": False})
-                        return
-
-                    # Path must be inside a tracked readable directory
-                    _abs_dl = _os5.path.abspath(_dl_path)
+                    # Server mode: not yet supported
                     try:
-                        import json as _jrt
-                        _tdb = str(_plrc.Path.home() / ".ai-prowler" / "tracking_db.json")
-                        _tdata = _jrt.loads(open(_tdb, encoding="utf-8").read())
-                        _readable = [d.get("path","") for d in _tdata.get("directories",[])]
+                        import json as _jrc, pathlib as _plrc
+                        _mode_cfg = _jrc.loads(
+                            (_plrc.Path.home() / ".ai-prowler" / "config.json")
+                            .read_text(encoding="utf-8"))
                     except Exception:
-                        _readable = []
-                    _in_tracked = any(
-                        _abs_dl.startswith(_os5.path.abspath(str(d)))
-                        for d in _readable
-                    )
-                    if not _in_tracked:
+                        _mode_cfg = {}
+                    if _mode_cfg.get("mode", "personal") != "personal":
                         await send({"type": "http.response.start", "status": 403,
-                                    "headers": [[b"content-type", b"application/json"]]})
+                                    "headers": [[b"content-type", b"text/plain"]]})
                         await send({"type": "http.response.body",
-                                    "body": b'{"error":"path not in tracked directories"}',
+                                    "body": b"Remote app not available in server mode yet",
                                     "more_body": False})
+                        _log.info("REMOTE: return (no response sent) at line %d", 20311)
                         return
 
-                    if not _os5.path.isfile(_abs_dl):
+                    # ── /remote/download — file download endpoint ─────────────────
+                    # GET /remote/download?path=<encoded>&token=<bearer>
+                    # Token in query param because browser <a download> can't set headers.
+                    if path == "/remote/download":
+                        _log.info("REMOTE: >> /remote/download qs=%s", scope.get("query_string", b"")[:120])
+                        import urllib.parse as _up5, mimetypes as _mt5, os as _os5
+                        _qs5 = dict(_up5.parse_qsl(scope.get("query_string", b"").decode()))
+                        _dl_tok   = _qs5.get("token", "").strip()
+                        _dl_path  = _qs5.get("path",  "").strip()
+
+                        # Validate token
+                        _log.info("REMOTE: /remote/download token_len=%d path=%s", len(_dl_tok), _dl_path[:80])
+                        if _dl_tok not in _access_tokens:
+                            await send({"type": "http.response.start", "status": 401,
+                                        "headers": [[b"content-type", b"application/json"]]})
+                            await send({"type": "http.response.body",
+                                        "body": b'{"error":"unauthorized"}',
+                                        "more_body": False})
+                            _log.info("REMOTE: return (no response sent) at line %d", 20329)
+                            return
+
+                        # Rate limiting — 20 downloads per token per hour
+                        import time as _time5
+                        _REMOTE_DL_COUNTS = getattr(_RouterASGI, "_dl_counts", {})
+                        _RouterASGI._dl_counts = _REMOTE_DL_COUNTS
+                        _now5 = _time5.time()
+                        _tok_counts = _REMOTE_DL_COUNTS.get(_dl_tok, [])
+                        _tok_counts = [t for t in _tok_counts if _now5 - t < 3600]
+                        if len(_tok_counts) >= 20:
+                            await send({"type": "http.response.start", "status": 429,
+                                        "headers": [[b"content-type", b"application/json"]]})
+                            await send({"type": "http.response.body",
+                                          "body": b'{"error":"rate limit - max 20 downloads per hour"}',
+                                        "more_body": False})
+                            _log.info("REMOTE: return (no response sent) at line %d", 20344)
+                            return
+                        _tok_counts.append(_now5)
+                        _REMOTE_DL_COUNTS[_dl_tok] = _tok_counts
+
+                        # Allowed extensions
+                        _ALLOWED_EXT5 = {
+                            ".pdf", ".docx", ".xlsx", ".doc", ".xls", ".pptx",
+                            ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic",
+                            ".mp4", ".mov", ".avi",
+                            ".txt", ".md", ".csv", ".json", ".log",
+                            ".py",  ".js",  ".html", ".css",
+                        }
+                        _dl_ext = _os5.path.splitext(_dl_path)[1].lower()
+                        if _dl_ext not in _ALLOWED_EXT5:
+                            await send({"type": "http.response.start", "status": 403,
+                                        "headers": [[b"content-type", b"application/json"]]})
+                            await send({"type": "http.response.body",
+                                        "body": b'{"error":"file type not allowed for download"}',
+                                        "more_body": False})
+                            _log.info("REMOTE: return (no response sent) at line %d", 20363)
+                            return
+
+                        # Path must be inside a tracked readable directory
+                        _abs_dl = _os5.path.abspath(_dl_path)
+                        try:
+                            from rag_preprocessor import load_auto_update_list as _lau5
+                            _readable = _lau5() or []
+                        except Exception:
+                            _readable = []
+                        _in_tracked = any(
+                            _abs_dl.startswith(_os5.path.abspath(str(d)))
+                            for d in _readable
+                        )
+                        if not _in_tracked:
+                            await send({"type": "http.response.start", "status": 403,
+                                        "headers": [[b"content-type", b"application/json"]]})
+                            await send({"type": "http.response.body",
+                                        "body": b'{"error":"path not in tracked directories"}',
+                                        "more_body": False})
+                            _log.info("REMOTE: return (no response sent) at line %d", 20382)
+                            return
+
+                        if not _os5.path.isfile(_abs_dl):
+                            await send({"type": "http.response.start", "status": 404,
+                                        "headers": [[b"content-type", b"text/plain"]]})
+                            await send({"type": "http.response.body",
+                                        "body": b"File not found", "more_body": False})
+                            _log.info("REMOTE: return (no response sent) at line %d", 20389)
+                            return
+
+                        # Size limit: 50MB
+                        _dl_size = _os5.path.getsize(_abs_dl)
+                        if _dl_size > 52_428_800:
+                            await send({"type": "http.response.start", "status": 413,
+                                        "headers": [[b"content-type", b"application/json"]]})
+                            await send({"type": "http.response.body",
+                                        "body": b'{"error":"file exceeds 50MB limit"}',
+                                        "more_body": False})
+                            _log.info("REMOTE: return (no response sent) at line %d", 20399)
+                            return
+
+                        _mime5, _ = _mt5.guess_type(_abs_dl)
+                        _mime5 = (_mime5 or "application/octet-stream").encode()
+                        _fname5 = _os5.path.basename(_abs_dl).encode("utf-8",
+                                                                       errors="replace")
+                        import asyncio as _aio5
+                        _loop5 = _aio5.get_event_loop()
+                        def _read_file5():
+                            with open(_abs_dl, "rb") as _fh5r:
+                                return _fh5r.read()
+                        # run_in_executor: never block the ASGI event loop with sync I/O
+                        # (blocks the MCP SSE stream and crashes uvicorn on Windows)
+                        _dl_body = await _loop5.run_in_executor(None, _read_file5)
+                        _log.info("REMOTE: /remote/download file_read OK size=%d", len(_dl_body))
+                        await send({"type": "http.response.start", "status": 200,
+                                    "headers": [
+                                        [b"content-type",        _mime5],
+                                        [b"content-length",      str(len(_dl_body)).encode()],
+                                        [b"content-disposition", b"attachment; filename=\""
+                                                                 + _fname5 + b"\""],
+                                        [b"cache-control",       b"no-store"],
+                                    ]})
+                        await send({"type": "http.response.body", "body": _dl_body,
+                                    "more_body": False})
+                        _log.info("REMOTE: return (no response sent) at line %d", 20423)
+                        return
+
+                    # ── /remote-api/ — MCP tool bridge ───────────────────────────
+                    # Owner-only tool allowlist — broader than /pwa-api/ but
+                    # read-only except for Permissions tools (grant/revoke write access).
+                    if path == "/remote-api":
+                        _log.info("REMOTE: >> /remote-api")
+                        import json as _json5
+                        _body5_chunks = []
+                        while True:
+                            _msg5 = await receive()
+                            _body5_chunks.append(_msg5.get("body", b""))
+                            if not _msg5.get("more_body", False):
+                                break
+                        _raw5 = b"".join(_body5_chunks)
+
+                        # Bearer token required for /remote-api/
+                        _ra_headers = {k.lower(): v
+                                       for k, v in scope.get("headers", [])}
+                        _ra_auth = _ra_headers.get(b"authorization", b"").decode(
+                            "utf-8", errors="ignore")
+                        _ra_tok = (_ra_auth[7:].strip()
+                                   if _ra_auth.lower().startswith("bearer ")
+                                   else "")
+                        if _ra_tok not in _access_tokens:
+                            _resp5 = b'{"error":"unauthorized","error_description":"Invalid or missing Bearer token"}'
+                            try:
+                                import json as _jb5, pathlib as _pb5
+                                _b5cfg = _jb5.loads(
+                                    (_pb5.Path.home() / ".ai-prowler" / "config.json")
+                                    .read_text(encoding="utf-8"))
+                                _base5 = "https://" + _b5cfg.get("tunnel_domain","").strip("/")
+                            except Exception:
+                                _base5 = "https://ai-prowler.local"
+                            _www5  = (f'Bearer realm="{_base5}", '
+                                      f'resource_metadata="{_base5}/.well-known/oauth-protected-resource"')
+                            await send({"type": "http.response.start", "status": 401,
+                                        "headers": [
+                                            [b"content-type",     b"application/json"],
+                                            [b"www-authenticate", _www5.encode()],
+                                            [b"content-length",   str(len(_resp5)).encode()],
+                                        ]})
+                            await send({"type": "http.response.body",
+                                        "body": _resp5, "more_body": False})
+                            _log.info("REMOTE: return (no response sent) at line %d", 20466)
+                            return
+
+                        try:
+                            _req5  = _json5.loads(_raw5)
+                            _tool5 = _req5.get("tool", "")
+                            _args5 = _req5.get("args", {})
+                            _REMOTE_ALLOWED = {
+                                # Status & health
+                                "check_ai_prowler_status",
+                                # Knowledge base browsing
+                                "list_indexed_directories",
+                                "list_indexed_documents",
+                                "list_directory",
+                                "read_file_lines",
+                                "search_documents",
+                                # Learnings (read + write + delete)
+                                "list_learnings",
+                                "search_learnings",
+                                "record_learning",
+                                "update_learning",
+                                "delete_learning",
+                                "get_learning_stats",
+                                "get_database_stats",
+                                # Permissions management
+                                "list_tracked_directories",
+                                "list_writable_directories",
+                                "grant_write_access",
+                                "revoke_write_access",
+                                # Task queue management
+                                "list_analysis_tasks",
+                                "get_pending_analysis_tasks",
+                                "create_analysis_task",
+                                "update_analysis_task",
+                                "delete_analysis_task",
+                                "complete_analysis_task",
+                                "sync_due_tasks_to_queue",
+                                "queue_single_task",
+                                "get_all_queued_tasks",
+                            }
+                            _g5 = globals()
+                            if _tool5 not in _REMOTE_ALLOWED or _tool5 not in _g5:
+                                _resp5 = _json5.dumps(
+                                    {"ok": False,
+                                     "error": f"Tool not available in remote API: {_tool5}"}
+                                ).encode()
+                                _status5 = 400
+                            else:
+                                _fn5 = _g5[_tool5]
+                                import inspect as _inspect5, asyncio as _aio5, functools as _ft5
+                                try:
+                                    if _inspect5.iscoroutinefunction(_fn5):
+                                        _result5 = await _fn5(**_args5)
+                                    else:
+                                        # Run blocking tools in thread executor to
+                                        # avoid blocking the ASGI event loop
+                                        _loop5 = _aio5.get_event_loop()
+                                        _result5 = await _loop5.run_in_executor(
+                                            None,
+                                            _ft5.partial(_fn5, **_args5)
+                                        )
+                                except Exception as _call5:
+                                    raise _call5
+                                if _tool5 == 'list_directory':
+                                    _log.info("REMOTE: list_directory result type=%s repr=%s",
+                                              type(_result5).__name__, repr(str(_result5))[:300])
+                                _resp5 = _json5.dumps(
+                                    {"ok": True, "result": str(_result5)}
+                                ).encode()
+                                _status5 = 200
+                        except Exception as _exc5:
+                            _resp5 = _json5.dumps(
+                                {"ok": False, "error": str(_exc5)}
+                            ).encode()
+                            _status5 = 400
+
+                        await send({"type": "http.response.start", "status": _status5,
+                                    "headers": [
+                                        [b"content-type",   b"application/json"],
+                                        [b"content-length", str(len(_resp5)).encode()],
+                                        [b"cache-control",  b"no-store"],
+                                        [b"access-control-allow-origin", b"*"],
+                                    ]})
+                        await send({"type": "http.response.body", "body": _resp5,
+                                    "more_body": False})
+                        _log.info("REMOTE: return (no response sent) at line %d", 20547)
+                        return
+
+                    # ── /remote/upload — file upload endpoint ────────────────────
+                    # POST multipart/form-data: file, dir, token
+                    # Saves to dir (must be writable), indexes the file into RAG.
+                    if path == "/remote/upload":
+                        _log.info("REMOTE: >> /remote/upload")
+                        import os as _os7
+                        # Read body
+                        _up_chunks = []
+                        while True:
+                            _up_msg = await receive()
+                            _up_chunks.append(_up_msg.get("body", b""))
+                            if not _up_msg.get("more_body", False):
+                                break
+                        _up_raw = b"".join(_up_chunks)
+                        # Get content-type header
+                        _ct_hdr = ""
+                        for _hk, _hv in scope.get("headers", []):
+                            if _hk == b"content-type":
+                                _ct_hdr = _hv.decode("utf-8", errors="ignore")
+                                break
+                        try:
+                            import email.parser as _ep5, email.policy as _epo5, json as _jup5
+                            _raw_msg = ("Content-Type: " + _ct_hdr + "\r\n\r\n").encode() + _up_raw
+                            _msg5 = _ep5.BytesParser(policy=_epo5.default).parsebytes(_raw_msg)
+                            _up_file_data, _up_fname, _up_dir, _up_tok = None, "", "", ""
+                            for _part in _msg5.iter_parts():
+                                _cd = _part.get("Content-Disposition", "")
+                                if 'name="file"' in _cd:
+                                    if 'filename="' in _cd:
+                                        _up_fname = _cd.split('filename="')[1].split('"')[0]
+                                    _up_file_data = _part.get_payload(decode=True)
+                                elif 'name="dir"' in _cd:
+                                    _up_dir = (_part.get_payload() or "").strip()
+                                elif 'name="token"' in _cd:
+                                    _up_tok = (_part.get_payload() or "").strip()
+                            # Validate token
+                            if _up_tok not in _access_tokens:
+                                _ub = b'{"ok":false,"error":"unauthorized"}'
+                                await send({"type":"http.response.start","status":401,
+                                            "headers":[[b"content-type",b"application/json"]]})
+                                await send({"type":"http.response.body","body":_ub,"more_body":False})
+                                _log.info("REMOTE: return (no response sent) at line %d", 20589)
+                                return
+                            if _up_file_data is None or not _up_dir:
+                                _ub = b'{"ok":false,"error":"missing file or dir"}'
+                                await send({"type":"http.response.start","status":400,
+                                            "headers":[[b"content-type",b"application/json"]]})
+                                await send({"type":"http.response.body","body":_ub,"more_body":False})
+                                _log.info("REMOTE: return (no response sent) at line %d", 20595)
+                                return
+                            # Check writable
+                            _up_dir_abs = _os7.path.abspath(_up_dir)
+                            _wr5 = _writable_allowlist_load()
+                            _in_w = any(_up_dir_abs.lower().startswith(
+                                _os7.path.abspath(str(w)).lower()) for w in _wr5)
+                            if not _in_w:
+                                _ub = b'{"ok":false,"error":"directory not writable"}'
+                                await send({"type":"http.response.start","status":403,
+                                            "headers":[[b"content-type",b"application/json"]]})
+                                await send({"type":"http.response.body","body":_ub,"more_body":False})
+                                _log.info("REMOTE: return (no response sent) at line %d", 20606)
+                                return
+                            # Save file + index in thread executor (blocking ops)
+                            _safe_name = _os7.path.basename(_up_fname) or "upload"
+                            _dest5 = _os7.path.join(_up_dir_abs, _safe_name)
+                            import asyncio as _aio7, functools as _ft7
+                            def _do_save_and_index():
+                                _os7.makedirs(_up_dir_abs, exist_ok=True)
+                                with open(_dest5, "wb") as _fout5:
+                                    _fout5.write(_up_file_data)
+                                try:
+                                    index_path(directory=_up_dir_abs, recursive=False)
+                                except Exception:
+                                    pass
+                            _loop7 = _aio7.get_event_loop()
+                            await _loop7.run_in_executor(None, _do_save_and_index)
+                            _ub = _jup5.dumps({"ok": True, "filename": _safe_name,
+                                               "size": len(_up_file_data)}).encode()
+                            await send({"type":"http.response.start","status":200,
+                                        "headers":[[b"content-type",b"application/json"],
+                                                   [b"content-length",str(len(_ub)).encode()]]})
+                            await send({"type":"http.response.body","body":_ub,"more_body":False})
+                        except Exception as _ue5:
+                            import json as _jue5
+                            _ub = _jue5.dumps({"ok":False,"error":str(_ue5)}).encode()
+                            await send({"type":"http.response.start","status":500,
+                                        "headers":[[b"content-type",b"application/json"]]})
+                            await send({"type":"http.response.body","body":_ub,"more_body":False})
+                        _log.info("REMOTE: return (no response sent) at line %d", 20633)
+                        return
+                    # ── end /remote/upload ──────────────────────────────────────────
+
+                    # ── /remote/ static file server ───────────────────────────────
+                    import mimetypes as _mt6, os as _os6
+                    _remote_root = _os6.path.join(
+                        _os6.path.dirname(_os6.path.abspath(__file__)), "remote")
+                    _rel6 = path[7:].lstrip("/") or "index.html"
+                    _file6 = _os6.path.join(_remote_root, _rel6)
+
+                    # Path traversal guard
+                    if not _os6.path.abspath(_file6).startswith(
+                            _os6.path.abspath(_remote_root)):
+                        await send({"type": "http.response.start", "status": 403,
+                                    "headers": [[b"content-type", b"text/plain"]]})
+                        await send({"type": "http.response.body",
+                                    "body": b"Forbidden", "more_body": False})
+                        _log.info("REMOTE: return (no response sent) at line %d", 20650)
+                        return
+
+                    if _os6.path.isfile(_file6):
+                        _mime6, _ = _mt6.guess_type(_file6)
+                        _mime6 = (_mime6 or "application/octet-stream").encode()
+                        with open(_file6, "rb") as _fh6:
+                            _body6 = _fh6.read()
+                        _body6 = _patch_sw_cache_version(_rel6, _remote_root, _body6)
+                        await send({"type": "http.response.start", "status": 200,
+                                    "headers": [
+                                        [b"content-type",   _mime6],
+                                        [b"content-length", str(len(_body6)).encode()],
+                                        [b"cache-control",  b"no-cache"],
+                                    ]})
+                        await send({"type": "http.response.body", "body": _body6,
+                                    "more_body": False})
+                    else:
                         await send({"type": "http.response.start", "status": 404,
                                     "headers": [[b"content-type", b"text/plain"]]})
                         await send({"type": "http.response.body",
-                                    "body": b"File not found", "more_body": False})
-                        return
-
-                    # Size limit: 50MB
-                    _dl_size = _os5.path.getsize(_abs_dl)
-                    if _dl_size > 52_428_800:
-                        await send({"type": "http.response.start", "status": 413,
-                                    "headers": [[b"content-type", b"application/json"]]})
-                        await send({"type": "http.response.body",
-                                    "body": b'{"error":"file exceeds 50MB limit"}',
+                                    "body": b"Remote file not found",
                                     "more_body": False})
-                        return
-
-                    _mime5, _ = _mt5.guess_type(_abs_dl)
-                    _mime5 = (_mime5 or "application/octet-stream").encode()
-                    _fname5 = _os5.path.basename(_abs_dl).encode("utf-8",
-                                                                   errors="replace")
-                    with open(_abs_dl, "rb") as _fh5:
-                        _dl_body = _fh5.read()
-                    await send({"type": "http.response.start", "status": 200,
-                                "headers": [
-                                    [b"content-type",        _mime5],
-                                    [b"content-length",      str(len(_dl_body)).encode()],
-                                    [b"content-disposition", b"attachment; filename=\""
-                                                             + _fname5 + b"\""],
-                                    [b"cache-control",       b"no-store"],
-                                ]})
-                    await send({"type": "http.response.body", "body": _dl_body,
-                                "more_body": False})
+                    _log.info("REMOTE: return (no response sent) at line %d", 20672)
                     return
+                # ── end /remote/ handler ──────────────────────────────────────────
 
-                # ── /remote-api/ — MCP tool bridge ───────────────────────────
-                # Owner-only tool allowlist — broader than /pwa-api/ but
-                # read-only except for Permissions tools (grant/revoke write access).
-                if path == "/remote-api":
-                    import json as _json5
-                    _body5_chunks = []
-                    while True:
-                        _msg5 = await receive()
-                        _body5_chunks.append(_msg5.get("body", b""))
-                        if not _msg5.get("more_body", False):
-                            break
-                    _raw5 = b"".join(_body5_chunks)
-
-                    # Bearer token required for /remote-api/
-                    _ra_headers = {k.lower(): v
-                                   for k, v in scope.get("headers", [])}
-                    _ra_auth = _ra_headers.get(b"authorization", b"").decode(
-                        "utf-8", errors="ignore")
-                    _ra_tok = (_ra_auth[7:].strip()
-                               if _ra_auth.lower().startswith("bearer ")
-                               else "")
-                    if _ra_tok not in _access_tokens:
-                        _resp5 = b'{"error":"unauthorized","error_description":"Invalid or missing Bearer token"}'
-                        try:
-                            import json as _jb5, pathlib as _pb5
-                            _b5cfg = _jb5.loads(
-                                (_pb5.Path.home() / ".ai-prowler" / "config.json")
-                                .read_text(encoding="utf-8"))
-                            _base5 = "https://" + _b5cfg.get("tunnel_domain","").strip("/")
-                        except Exception:
-                            _base5 = "https://ai-prowler.local"
-                        _www5  = (f'Bearer realm="{_base5}", '
-                                  f'resource_metadata="{_base5}/.well-known/oauth-protected-resource"')
-                        await send({"type": "http.response.start", "status": 401,
-                                    "headers": [
-                                        [b"content-type",     b"application/json"],
-                                        [b"www-authenticate", _www5.encode()],
-                                        [b"content-length",   str(len(_resp5)).encode()],
-                                    ]})
+                # Everything else (including /mcp) — check Bearer token first
+                except Exception as _remote_exc:
+                    import traceback as _tb_remote
+                    _log.error("REMOTE: UNHANDLED EXCEPTION in /remote/ handler: %s\n%s",
+                               _remote_exc, _tb_remote.format_exc())
+                    try:
+                        await send({"type": "http.response.start", "status": 500,
+                                    "headers": [[b"content-type", b"text/plain"]]})
                         await send({"type": "http.response.body",
-                                    "body": _resp5, "more_body": False})
-                        return
-
-                    try:
-                        _req5  = _json5.loads(_raw5)
-                        _tool5 = _req5.get("tool", "")
-                        _args5 = _req5.get("args", {})
-                        _REMOTE_ALLOWED = {
-                            # Status & health
-                            "check_ai_prowler_status",
-                            # Knowledge base browsing
-                            "list_indexed_directories",
-                            "list_indexed_documents",
-                            "list_directory",
-                            "read_file_lines",
-                            "search_documents",
-                            # Learnings (read + write + delete)
-                            "list_learnings",
-                            "search_learnings",
-                            "record_learning",
-                            "update_learning",
-                            "delete_learning",
-                            "get_learning_stats",
-                            "get_database_stats",
-                            # Permissions management
-                            "list_tracked_directories",
-                            "list_writable_directories",
-                            "grant_write_access",
-                            "revoke_write_access",
-                            # Task queue management
-                            "list_analysis_tasks",
-                            "get_pending_analysis_tasks",
-                            "create_analysis_task",
-                            "update_analysis_task",
-                            "delete_analysis_task",
-                            "complete_analysis_task",
-                            "sync_due_tasks_to_queue",
-                            "queue_single_task",
-                            "get_all_queued_tasks",
-                        }
-                        _g5 = globals()
-                        if _tool5 not in _REMOTE_ALLOWED or _tool5 not in _g5:
-                            _resp5 = _json5.dumps(
-                                {"ok": False,
-                                 "error": f"Tool not available in remote API: {_tool5}"}
-                            ).encode()
-                            _status5 = 400
-                        else:
-                            _fn5 = _g5[_tool5]
-                            import inspect as _inspect5, asyncio as _aio5, functools as _ft5
-                            try:
-                                if _inspect5.iscoroutinefunction(_fn5):
-                                    _result5 = await _fn5(**_args5)
-                                else:
-                                    # Run blocking tools in thread executor to
-                                    # avoid blocking the ASGI event loop
-                                    _loop5 = _aio5.get_event_loop()
-                                    _result5 = await _loop5.run_in_executor(
-                                        None,
-                                        _ft5.partial(_fn5, **_args5)
-                                    )
-                            except Exception as _call5:
-                                raise _call5
-                            _resp5 = _json5.dumps(
-                                {"ok": True, "result": str(_result5)}
-                            ).encode()
-                            _status5 = 200
-                    except Exception as _exc5:
-                        _resp5 = _json5.dumps(
-                            {"ok": False, "error": str(_exc5)}
-                        ).encode()
-                        _status5 = 400
-
-                    await send({"type": "http.response.start", "status": _status5,
-                                "headers": [
-                                    [b"content-type",   b"application/json"],
-                                    [b"content-length", str(len(_resp5)).encode()],
-                                    [b"cache-control",  b"no-store"],
-                                    [b"access-control-allow-origin", b"*"],
-                                ]})
-                    await send({"type": "http.response.body", "body": _resp5,
-                                "more_body": False})
+                                    "body": str(_remote_exc).encode()[:500],
+                                    "more_body": False})
+                    except Exception:
+                        pass
                     return
-
-                # ── /remote/upload — file upload endpoint ────────────────────
-                # POST multipart/form-data: file, dir, token
-                # Saves to dir (must be writable), indexes the file into RAG.
-                if path == "/remote/upload":
-                    import os as _os7
-                    # Read body
-                    _up_chunks = []
-                    while True:
-                        _up_msg = await receive()
-                        _up_chunks.append(_up_msg.get("body", b""))
-                        if not _up_msg.get("more_body", False):
-                            break
-                    _up_raw = b"".join(_up_chunks)
-                    # Get content-type header
-                    _ct_hdr = ""
-                    for _hk, _hv in scope.get("headers", []):
-                        if _hk == b"content-type":
-                            _ct_hdr = _hv.decode("utf-8", errors="ignore")
-                            break
-                    try:
-                        import email.parser as _ep5, email.policy as _epo5, json as _jup5
-                        _raw_msg = ("Content-Type: " + _ct_hdr + "\r\n\r\n").encode() + _up_raw
-                        _msg5 = _ep5.BytesParser(policy=_epo5.default).parsebytes(_raw_msg)
-                        _up_file_data, _up_fname, _up_dir, _up_tok = None, "", "", ""
-                        for _part in _msg5.iter_parts():
-                            _cd = _part.get("Content-Disposition", "")
-                            if 'name="file"' in _cd:
-                                if 'filename="' in _cd:
-                                    _up_fname = _cd.split('filename="')[1].split('"')[0]
-                                _up_file_data = _part.get_payload(decode=True)
-                            elif 'name="dir"' in _cd:
-                                _up_dir = (_part.get_payload() or "").strip()
-                            elif 'name="token"' in _cd:
-                                _up_tok = (_part.get_payload() or "").strip()
-                        # Validate token
-                        if _up_tok not in _access_tokens:
-                            _ub = b'{"ok":false,"error":"unauthorized"}'
-                            await send({"type":"http.response.start","status":401,
-                                        "headers":[[b"content-type",b"application/json"]]})
-                            await send({"type":"http.response.body","body":_ub,"more_body":False})
-                            return
-                        if _up_file_data is None or not _up_dir:
-                            _ub = b'{"ok":false,"error":"missing file or dir"}'
-                            await send({"type":"http.response.start","status":400,
-                                        "headers":[[b"content-type",b"application/json"]]})
-                            await send({"type":"http.response.body","body":_ub,"more_body":False})
-                            return
-                        # Check writable
-                        _up_dir_abs = _os7.path.abspath(_up_dir)
-                        _wr5 = _writable_allowlist_load()
-                        _in_w = any(_up_dir_abs.lower().startswith(
-                            _os7.path.abspath(str(w)).lower()) for w in _wr5)
-                        if not _in_w:
-                            _ub = b'{"ok":false,"error":"directory not writable"}'
-                            await send({"type":"http.response.start","status":403,
-                                        "headers":[[b"content-type",b"application/json"]]})
-                            await send({"type":"http.response.body","body":_ub,"more_body":False})
-                            return
-                        # Save file + index in thread executor (blocking ops)
-                        _safe_name = _os7.path.basename(_up_fname) or "upload"
-                        _dest5 = _os7.path.join(_up_dir_abs, _safe_name)
-                        import asyncio as _aio7, functools as _ft7
-                        def _do_save_and_index():
-                            _os7.makedirs(_up_dir_abs, exist_ok=True)
-                            with open(_dest5, "wb") as _fout5:
-                                _fout5.write(_up_file_data)
-                            try:
-                                index_path(directory=_up_dir_abs, recursive=False)
-                            except Exception:
-                                pass
-                        _loop7 = _aio7.get_event_loop()
-                        await _loop7.run_in_executor(None, _do_save_and_index)
-                        _ub = _jup5.dumps({"ok": True, "filename": _safe_name,
-                                           "size": len(_up_file_data)}).encode()
-                        await send({"type":"http.response.start","status":200,
-                                    "headers":[[b"content-type",b"application/json"],
-                                               [b"content-length",str(len(_ub)).encode()]]})
-                        await send({"type":"http.response.body","body":_ub,"more_body":False})
-                    except Exception as _ue5:
-                        import json as _jue5
-                        _ub = _jue5.dumps({"ok":False,"error":str(_ue5)}).encode()
-                        await send({"type":"http.response.start","status":500,
-                                    "headers":[[b"content-type",b"application/json"]]})
-                        await send({"type":"http.response.body","body":_ub,"more_body":False})
-                    return
-                # ── end /remote/upload ──────────────────────────────────────────
-
-                # ── /remote/ static file server ───────────────────────────────
-                import mimetypes as _mt6, os as _os6
-                _remote_root = _os6.path.join(
-                    _os6.path.dirname(_os6.path.abspath(__file__)), "remote")
-                _rel6 = path[7:].lstrip("/") or "index.html"
-                _file6 = _os6.path.join(_remote_root, _rel6)
-
-                # Path traversal guard
-                if not _os6.path.abspath(_file6).startswith(
-                        _os6.path.abspath(_remote_root)):
-                    await send({"type": "http.response.start", "status": 403,
-                                "headers": [[b"content-type", b"text/plain"]]})
-                    await send({"type": "http.response.body",
-                                "body": b"Forbidden", "more_body": False})
-                    return
-
-                if _os6.path.isfile(_file6):
-                    _mime6, _ = _mt6.guess_type(_file6)
-                    _mime6 = (_mime6 or "application/octet-stream").encode()
-                    with open(_file6, "rb") as _fh6:
-                        _body6 = _fh6.read()
-                    _body6 = _patch_sw_cache_version(_rel6, _remote_root, _body6)
-                    await send({"type": "http.response.start", "status": 200,
-                                "headers": [
-                                    [b"content-type",   _mime6],
-                                    [b"content-length", str(len(_body6)).encode()],
-                                    [b"cache-control",  b"no-cache"],
-                                ]})
-                    await send({"type": "http.response.body", "body": _body6,
-                                "more_body": False})
-                else:
-                    await send({"type": "http.response.start", "status": 404,
-                                "headers": [[b"content-type", b"text/plain"]]})
-                    await send({"type": "http.response.body",
-                                "body": b"Remote file not found",
-                                "more_body": False})
-                return
-            # ── end /remote/ handler ──────────────────────────────────────────
-
-            # Everything else (including /mcp) — check Bearer token first
             headers = {k.lower(): v for k, v in scope.get("headers", [])}
             auth_raw = headers.get(b"authorization", b"")
             auth = auth_raw.decode("utf-8", errors="ignore")

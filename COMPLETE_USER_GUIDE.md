@@ -105,6 +105,10 @@ This produces dramatically better results — equivalent to having a skilled res
 - **Live invoice totals use ceiling rounding on tax** — the PWA's `ifRecalc()` function now applies `Math.ceil` (ceiling to the nearest penny) on the tax amount and `Math.round` (half-up, 2 dp) on taxable and total, with `Number.EPSILON` added before each operation to prevent IEEE-754 float drift. This ensures the pre-submission display never under-states what will be collected.
 - **Invoices sheet header row now frozen** — the Invoices tab in `AI-Prowler_Job_Tracker.xlsx` now freezes rows 1–2 (title banner + column headers) at `A3`, matching the Customers, Jobs_Schedule, and TimeLog sheets. Scrolling vertically through invoice rows keeps the column headers visible.
 - **Auto-updater: exponential back-off retry** — the in-app updater now retries each file up to 4 times (waiting 1 s, 2 s, then 4 s between attempts) instead of failing immediately on a GitHub CDN connection reset (WinError 10054). PNG and other binary files are now hashed correctly (raw bytes, no LF normalization). A full debug log of every download attempt, retry, timing, and hash result is written to `~/.ai-prowler/update_debug.log` for future diagnostics.
+- **File transfer MCP tools** — two new personal-mode-only tools let Claude read and write files directly via the Remote Control PWA's existing HTTP endpoints, with no base64 encoding and no context-window bloat. See **Section 7 → File Transfer Tools** for the full workflow.
+  - `get_file_download_url(file_path)` — returns a signed HTTPS URL that Claude passes to `web_fetch()` to read any tracked file directly into the conversation. Enforces tracked-directory membership, an extension allowlist (pdf, docx, xlsx, txt, md, csv, py, js, html, json, log, png, jpg, and more), a 50 MB size limit, and bearer-token auth. Text files are readable inline; binary files arrive as content Claude can describe or summarise.
+  - `get_file_upload_url(filename, target_directory)` — returns a signed HTTPS URL and `multipart/form-data` field instructions so Claude can upload a file via `run_script(curl …)`, or hand the URL to a React/HTML artifact for browser-side upload. The target directory must be in the writable allowlist (call `grant_write_access(directory)` first if needed); the file is saved and re-indexed into ChromaDB automatically.
+  - Both tools are **personal mode only** — invisible to server-mode installs (Tier A suppressed from the MCP tool list) and return a clear ⛔ error if somehow called on a server install. The underlying `/remote/download` and `/remote/upload` endpoints also enforce the personal-mode gate independently.
 
 **New in v9.0.0:**
 
@@ -691,6 +695,86 @@ The **Keep It Running** panel ensures Windows doesn't interrupt your MCP server.
 7. Click **Add** — Claude.ai connects to your tunnel and prompts for auth
 8. Enter your Bearer token
 9. Set **Always Allow** for all tools in the connector panel
+
+---
+
+### File Transfer Tools (v9.1.0 — Personal Mode Only)
+
+Two MCP tools let Claude read and write files directly via the Remote Control PWA's existing HTTP endpoints, with no base64 encoding and no context-window overhead. Both tools are **personal mode only** — they are invisible in the MCP tool list on server-mode installs (Tier A suppressed) and return a ⛔ error if somehow called on a server install. The underlying HTTP endpoints enforce the same gate independently.
+
+#### Prerequisites
+
+- Remote Access must be configured (Cloudflare Tunnel active, bearer token set)
+- The file must be inside a **tracked directory** (use `index_path()` if not already tracked)
+- For uploads: the destination directory must be in the **writable allowlist** — call `grant_write_access(directory)` first if it's a new destination
+
+#### `get_file_download_url(file_path)` — Reading files without base64
+
+Returns a signed HTTPS URL that Claude passes straight to `web_fetch()` to read any tracked file directly into the conversation.
+
+**The workflow:**
+```
+You: "Read the contents of C:\Users\david\Documents\Misc\notes.md"
+Claude: [calls get_file_download_url("C:\Users\david\Documents\Misc\notes.md")]
+Claude: [tool returns {"download_url": "https://your-tunnel.../remote/download?path=...&token=..."}]
+Claude: [calls web_fetch(download_url)]
+Claude: [file content arrives inline — readable in the conversation]
+```
+
+**What the endpoint enforces:**
+- Bearer-token auth (embedded in the URL query string)
+- File must be inside a tracked readable directory
+- Extension allowlist: `.pdf`, `.docx`, `.xlsx`, `.doc`, `.xls`, `.pptx`, `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.heic`, `.mp4`, `.mov`, `.avi`, `.txt`, `.md`, `.csv`, `.json`, `.log`, `.py`, `.js`, `.html`, `.css`
+- 50 MB size limit
+- 20 downloads per bearer-token per hour (rate limit)
+
+**Text files** (`.txt`, `.md`, `.csv`, `.py`, `.js`, `.html`, `.json`, `.log`) arrive fully readable inline in the conversation. **Binary files** (`.pdf`, `.docx`, `.xlsx`, images, video) arrive as describable content Claude can summarise or comment on.
+
+**Common errors:**
+- `❌ File not found` — check the path is correct and the file exists on disk
+- `❌ not in the download allowlist` — file type not supported; convert or use a supported extension
+- `❌ not inside a tracked directory` — call `index_path(directory)` to track the parent folder first
+- `❌ exceeds the 50 MB download limit` — split or compress the file
+- `❌ No tunnel_domain configured` — set up Remote Access (Cloudflare Tunnel) in Settings first
+- `❌ No remote_token configured` — set a Bearer Token in Settings → Remote Access first
+
+#### `get_file_upload_url(filename, target_directory)` — Uploading files without base64
+
+Returns a signed HTTPS URL and `multipart/form-data` field instructions so Claude can upload a file to any writable tracked directory. The file is saved and automatically re-indexed into ChromaDB so it immediately becomes searchable.
+
+**Workflow — Claude uploads a file it generated (via `run_script`):**
+```
+You: "Save this report to C:\Users\david\Documents\Misc\report.md"
+Claude: [calls get_file_upload_url("report.md", "C:\Users\david\Documents\Misc")]
+Claude: [tool returns {"upload_url": "...", "curl_example": "curl -X POST ..."}]
+Claude: [creates the file locally, then calls run_script(curl_example)]
+```
+
+**Workflow — Browser artifact upload:**
+```
+Claude: [calls get_file_upload_url("data.csv", target_dir)]
+Claude: [builds a React/HTML artifact with the returned upload_url and field names]
+You: [drag-drop your file into the artifact — it POSTs directly to AI-Prowler]
+```
+
+**What the endpoint enforces:**
+- Bearer-token auth (token in the `token` form field)
+- Directory must be in the writable allowlist
+- File is saved as `target_directory\filename` and the directory is re-indexed immediately
+- Any existing file with the same name is overwritten
+
+**Multipart fields (for custom artifact/curl use):**
+| Field | Value |
+|---|---|
+| `file` | The file bytes, with the correct filename |
+| `dir` | Absolute Windows path to the target directory |
+| `token` | Your bearer token (from `config.json → remote_token`) |
+
+**Common errors:**
+- `❌ not in the writable allowlist` — call `grant_write_access(target_directory)` first, then retry
+- `❌ not inside a tracked directory` — call `index_path(directory)` to track the folder, then `grant_write_access()` to make it writable, then retry
+- `❌ filename must not be empty` — provide a non-empty filename
+- `❌ No tunnel_domain configured` — set up Remote Access first
 
 ---
 

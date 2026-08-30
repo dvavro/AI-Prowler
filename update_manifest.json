@@ -1,11 +1,11 @@
 {
   "version": "9.1.0",
-  "generated": "2026-08-26T18:11:31",
+  "generated": "2026-08-30T10:01:38",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "363c8666ad182d21376cdf773d6ee7b83365941d663dae7cac4d072a50131cd6",
-      "bytes": 1297621
+      "sha256": "31f23eca4d9ef897711a6ff90b31f1c139746e59dc0fcd29a9c250af8c1f68b6",
+      "bytes": 1300117
     },
     {
       "path": "rag_preprocessor.py",
@@ -14,8 +14,8 @@
     },
     {
       "path": "ai_prowler_mcp.py",
-      "sha256": "a69fb465d26c4e43a9354581ce1048bd45683b404519f422957520bdad4811ee",
-      "bytes": 969449
+      "sha256": "b6fed9055ef6708503e91ed0e287ee3e7c3008dbc5ba77af8e1eea167926ffdd",
+      "bytes": 992593
     },
     {
       "path": "mcp_diagnostics.py",
@@ -59,8 +59,8 @@
     },
     {
       "path": "COMPLETE_USER_GUIDE.md",
-      "sha256": "5c0706d7c72ff2c784f8cb581f288ceb11aad1a5c7bad2f835c48c90510a6403",
-      "bytes": 182040
+      "sha256": "da2e9b518b7d58b31e602fd916f0f8a5729f95f36e7fa3ade7233b0fc25274d7",
+      "bytes": 188116
     },
     {
       "path": "VERSION",
@@ -89,8 +89,8 @@
     },
     {
       "path": "mobile_activator.py",
-      "sha256": "0ab0f4f5ea3480949df44e0145923ceec51008b2b5a226c3887535f06ce75cd2",
-      "bytes": 28433
+      "sha256": "0c9f80a9582785d60cc065f3a09221690fae38548775efb35fe86416a6cc6568",
+      "bytes": 28694
     },
     {
       "path": "cloudflared_service_helper.py",
@@ -134,8 +134,8 @@
     },
     {
       "path": "task_queue_automation.py",
-      "sha256": "747f11fa2112288336119574bf74138e2f11b85599a8d10dc17fe64fc6008101",
-      "bytes": 142640
+      "sha256": "083441fa1b2197439f340da8f5720392e480278f8adc047ea4764de36c3ce4d9",
+      "bytes": 141806
     },
     {
       "path": ".claude/settings.json",
@@ -189,8 +189,8 @@
     },
     {
       "path": "remote/index.html",
-      "sha256": "51442014ee93014d6fe42d3149d7c1424fd193363e2b63d8f95f20dc6ca16c4e",
-      "bytes": 94999
+      "sha256": "034c932a4821c15507e39ffb58302a08726d9094c6c6f9cff565081c7aa0a93a",
+      "bytes": 104285
     },
     {
       "path": "remote/manifest.json",

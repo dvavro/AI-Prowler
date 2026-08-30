@@ -290,10 +290,14 @@ html,body{height:100%;background:var(--bg);color:var(--text);
     <!-- Files -->
     <div class="screen" id="screenFiles">
       <div class="card" style="background:rgba(155,93,229,.07);border-color:rgba(155,93,229,.3);padding:12px 14px;margin-bottom:4px">
-        <div style="font-size:13px;font-weight:700;color:var(--accent);margin-bottom:4px">&#128228; Upload to AI-Prowler</div>
-        <div style="font-size:12px;color:var(--dim);margin-bottom:8px">Tap <strong style="color:var(--text)">Upload</strong> next to any writable folder to choose a file or photo from your device. It will be saved to that folder and indexed into AI-Prowler automatically.</div>
-        <div id="uploadStatus" style="font-size:12px;margin-top:4px;display:none;padding:6px 10px;border-radius:8px;background:var(--surface)"></div>
-      </div>
+          <div style="font-size:13px;font-weight:700;color:var(--accent);margin-bottom:4px">&#128228; Upload to AI-Prowler</div>
+          <div style="font-size:12px;color:var(--dim);margin-bottom:8px">Tap <strong style="color:var(--text)">Upload</strong> next to any writable folder to choose a file or photo from your device. It will be saved to that folder and indexed into AI-Prowler automatically.</div>
+          <div id="uploadStatus" style="font-size:12px;margin-top:4px;display:none;padding:6px 10px;border-radius:8px;background:var(--surface)"></div>
+        </div>
+        <div class="card" style="background:rgba(52,199,89,.07);border-color:rgba(52,199,89,.3);padding:12px 14px;margin-bottom:4px">
+          <div style="font-size:13px;font-weight:700;color:#34c759;margin-bottom:4px">&#128229; Download from AI-Prowler</div>
+          <div style="font-size:12px;color:var(--dim)">Tap <strong style="color:var(--text)">Download</strong> next to any folder to browse its files, then tap a file to download it to your device.</div>
+        </div>
       <div id="breadcrumb" style="font-size:12px;color:var(--dim);padding:4px 0 6px 2px;display:flex;gap:4px;flex-wrap:wrap;align-items:center"></div>
       <div id="fileList"><div class="spinner"></div></div>
       <div class="preview-wrap" id="previewWrap">
@@ -872,20 +876,35 @@ async function api(tool, args) {
   }
 }
 
-// Download a file — token injected at click time so it's always current
-function downloadFile(path) {
-  if (!BEARER) {
-    alert('Not authenticated. Please refresh and log in again.');
-    return;
-  }
+// Download a file — uses fetch+blob so mobile browsers stay in the PWA
+// instead of navigating away to the download URL.
+async function downloadFile(path) {
+  if (!BEARER) { alert('Not authenticated. Please refresh and log in again.'); return; }
+  const fname = path.split('\\').pop() || path.split('/').pop() || 'file';
   const url = '/remote/download?path=' + encodeURIComponent(path) +
               '&token=' + encodeURIComponent(BEARER);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = path.split('\\').pop() || path.split('/').pop() || 'file';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+  dbg('downloadFile: fetching ' + url.slice(0, 80));
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      const txt = await resp.text();
+      alert('Download failed: ' + (txt || resp.status));
+      return;
+    }
+    const blob = await resp.blob();
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objUrl;
+    a.download = fname;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    // Revoke after short delay so the download has time to start
+    setTimeout(() => URL.revokeObjectURL(objUrl), 3000);
+    dbg('downloadFile: triggered blob download for ' + fname);
+  } catch(e) {
+    alert('Download error: ' + e);
+  }
 }
 
 // Slow API call with 30s timeout for search/RAG operations
@@ -1028,34 +1047,210 @@ async function loadFilesList() {
       return l.replace(/[^\x20-\x7E]/g,'').trim().replace(/^\d+\.\s*/, '').trim();
     }).filter(l => l.length > 3 && /[:\\/]/.test(l));
 
-    if (!dirs.length) { el.innerHTML = '<div class="empty">No tracked directories</div>'; return; }
+      if (!dirs.length) { el.innerHTML = '<div class="empty">No tracked directories</div>'; return; }
 
-    el.innerHTML = '<div class="card">' + dirs.map((d, i) => {
-      const isW = wSet.has(d.toLowerCase());
-      // Use label wrapping a file input — guaranteed to work on all mobile browsers
-      // The label click IS the file input click — no programmatic .click() needed
-      const uid = 'upl_' + i;
-      const action = isW
-        ? '<label for="' + uid + '" class="btn-primary" ' +
-          'style="width:auto;padding:6px 12px;font-size:12px;border-radius:8px;cursor:pointer;display:inline-block">' +
-          '&#128247; Upload' +
-          '<input type="file" id="' + uid + '" accept="*/*" ' +
-          'style="display:none" ' +
-          'data-dir="' + esc(d) + '" ' +
-          'onchange="handleUpload(this)">' +
-          '</label>'
-        : '<span style="font-size:11px;color:var(--dim)">&#128274; Read only</span>';
-      return '<div class="row">' +
-        '<div class="ri">&#128193;</div>' +
-        '<div class="rm">' +
-          '<div class="rn">' + esc(tail(d)) + (isW ? '' : ' <span style="font-size:10px;color:var(--dim)">[R]</span>') + '</div>' +
-          '<div class="rs" style="font-size:10px;font-family:monospace">' + esc(d) + '</div>' +
-        '</div>' +
-        '<div class="ra">' + action + '</div>' +
-      '</div>';
-    }).join('') + '</div>';
-  } catch(e) { el.innerHTML = '<div class="empty">Error: ' + esc(String(e)) + '</div>'; }
-}
+      el.innerHTML = '<div class="card">' + dirs.map((d, i) => {
+        const isW = wSet.has(d.toLowerCase());
+        const uid = 'upl_' + i;
+        const did = 'dlp_' + i;
+
+        // Detect if this tracked entry is a single file (has extension after last separator)
+        const basename = d.split('\\').pop().split('/').pop();
+        const isSingleFile = basename.includes('.') && !basename.startsWith('.');
+
+        const uploadBtn = (!isSingleFile && isW)
+          ? '<label for="' + uid + '" class="btn-primary" ' +
+            'style="width:auto;padding:6px 12px;font-size:12px;border-radius:8px;cursor:pointer;display:inline-block">' +
+            '&#128247; Upload' +
+            '<input type="file" id="' + uid + '" accept="*/*" ' +
+            'style="display:none" ' +
+            'data-dir="' + esc(d) + '" ' +
+            'onchange="handleUpload(this)">' +
+            '</label>'
+          : (!isSingleFile ? '<span style="font-size:11px;color:var(--dim)">&#128274; Read only</span>' : '');
+
+        // Single tracked file: direct Get button. Directory: picker button.
+        const downloadBtn = isSingleFile
+          ? '<button class="dl-direct-btn" data-path="' + esc(d) + '" ' +
+            'style="background:#34c759;border:none;color:#fff;' +
+            'border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;margin-left:6px">' +
+            '&#11015; Get</button>'
+          : '<button class="dl-picker-btn" data-dir="' + esc(d) + '" data-picker="' + did + '" ' +
+            'style="background:rgba(52,199,89,.15);border:1px solid rgba(52,199,89,.4);color:#34c759;' +
+            'border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;margin-left:6px">' +
+            '&#128229; Download</button>';
+
+        const icon = isSingleFile ? '&#128196;' : '&#128193;';
+        return '<div>' +
+          '<div class="row">' +
+            '<div class="ri">' + icon + '</div>' +
+            '<div class="rm">' +
+              '<div class="rn">' + esc(basename) + (isW || isSingleFile ? '' : ' <span style="font-size:10px;color:var(--dim)">[R]</span>') + '</div>' +
+              '<div class="rs" style="font-size:10px;font-family:monospace">' + esc(d) + '</div>' +
+            '</div>' +
+            '<div class="ra" style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">' +
+              uploadBtn + downloadBtn +
+            '</div>' +
+          '</div>' +
+          (isSingleFile ? '' : '<div id="' + did + '" style="display:none;padding:4px 0 4px 36px"></div>') +
+        '</div>';
+      }).join('') + '</div>';
+
+      // Direct download buttons (single tracked files)
+      el.querySelectorAll('.dl-direct-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const p = btn.getAttribute('data-path');
+          dbg('Direct download clicked path=' + p);
+          downloadFile(p);
+        });
+      });
+      // Download picker buttons (directories)
+      el.querySelectorAll('.dl-picker-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const dir = btn.getAttribute('data-dir');
+          const picker = btn.getAttribute('data-picker');
+          dbg('Download picker clicked dir=' + dir + ' picker=' + picker);
+          toggleDownloadPicker(dir, picker);
+        });
+      });
+    } catch(e) { el.innerHTML = '<div class="empty">Error: ' + esc(String(e)) + '</div>'; }
+  }
+
+  // ── Download file browser ─────────────────────────────────────────────────
+  // toggleDownloadPicker: open/close the browser panel for a tracked root dir
+  async function toggleDownloadPicker(dirPath, pickerId) {
+    const el = document.getElementById(pickerId);
+    if (!el) { dbg('toggleDownloadPicker: no element ' + pickerId); return; }
+    if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+    el.style.display = 'block';
+    await browseDownloadDir(dirPath, el, dirPath);
+  }
+
+  // browseDownloadDir: render the contents of dirPath inside containerEl.
+  // rootPath is always the tracked root so the Back button can't go above it.
+  async function browseDownloadDir(dirPath, containerEl, rootPath) {
+    containerEl.innerHTML = '<div class="spinner" style="margin:6px 0"></div>';
+
+    const r = await api('list_directory', { dirpath: dirPath });
+    if (!r.ok) {
+      containerEl.innerHTML = '<div style="font-size:12px;color:var(--red);padding:4px 0">' +
+        'Cannot list folder: ' + esc(r.error || 'unknown') + '</div>';
+      return;
+    }
+
+    const raw = r.result || '';
+    const base = dirPath.replace(/[/\\]+$/, '');
+
+      // Parse subdirs — lines with 📁 emoji AND trailing slash AND no colon (not the header line)
+      const subdirs = raw.split('\n')
+        .filter(l => l.indexOf('📁') !== -1 && l.trim().endsWith('/') && l.indexOf(':') === -1)
+        .map(l => l.replace(/📁/gu, '').replace(/\//g, '').trim())
+        .filter(n => n.length > 0 && n !== '.' && n !== '..');
+
+    // Parse files — lines with 📄 emoji
+    const files = raw.split('\n')
+      .filter(l => l.indexOf('📄') !== -1)
+      .map(l => l.replace(/📄/gu, '').replace(/\s*\([\d,]+ bytes\)\s*$/, '').trim())
+      .filter(n => n.length > 0);
+
+    dbg('browseDownloadDir: path=' + dirPath + ' subdirs=' + subdirs.length + ' files=' + files.length);
+
+    // ── Build the panel HTML ──────────────────────────────────────────────
+    const isRoot = (dirPath === rootPath);
+
+    // Breadcrumb — show path relative to root
+    let crumb = dirPath;
+    if (dirPath.startsWith(rootPath)) {
+      const rel = dirPath.slice(rootPath.length).replace(/^[/\\]+/, '');
+      crumb = rel.length ? rel : '📁 ' + rootPath.split('\\').pop();
+    }
+
+    let html = '';
+
+    // Back button (not shown at root)
+    if (!isRoot) {
+      const parent = base.includes('\\')
+        ? base.substring(0, base.lastIndexOf('\\'))
+        : base.substring(0, base.lastIndexOf('/'));
+      html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">' +
+        '<button class="dl-back-btn" data-path="' + esc(parent) + '" ' +
+        'style="background:var(--surface);border:1px solid var(--border);color:var(--text);' +
+        'border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer">← Back</button>' +
+        '<span style="font-size:11px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+        esc(crumb) + '</span>' +
+        '</div>';
+    }
+
+    // Empty state
+    if (!subdirs.length && !files.length) {
+      html += '<div style="font-size:12px;color:var(--dim);padding:4px 0">Empty folder</div>';
+      containerEl.innerHTML = html;
+      attachBrowseHandlers(containerEl, rootPath);
+      return;
+    }
+
+    // Subdirectories
+    subdirs.forEach(name => {
+      const fullPath = base + '\\' + name;
+      html += '<div class="dl-subdir-row" style="display:flex;align-items:center;' +
+        'padding:5px 8px;border-radius:6px;margin-bottom:2px;background:var(--surface);cursor:pointer">' +
+        '<span style="margin-right:6px">📁</span>' +
+        '<span style="font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+        esc(name) + '</span>' +
+        '<button class="dl-subdir-btn" data-path="' + esc(fullPath) + '" ' +
+        'style="background:var(--surface);border:1px solid var(--border);color:var(--accent);' +
+        'border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;white-space:nowrap">' +
+        'Open →</button>' +
+        '</div>';
+    });
+
+    // Files
+    files.forEach(name => {
+      const fullPath = base + '\\' + name;
+      html += '<div class="dl-file-row" style="display:flex;align-items:center;' +
+        'padding:5px 8px;border-radius:6px;margin-bottom:2px;background:var(--surface)">' +
+        '<span style="margin-right:6px">📄</span>' +
+        '<span style="font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+        esc(name) + '</span>' +
+        '<button class="dl-btn" data-path="' + esc(fullPath) + '" ' +
+        'style="background:#34c759;border:none;color:#fff;border-radius:6px;' +
+        'padding:4px 10px;font-size:11px;cursor:pointer;white-space:nowrap">' +
+        '⬇ Get</button>' +
+        '</div>';
+    });
+
+    containerEl.innerHTML = html;
+    attachBrowseHandlers(containerEl, rootPath);
+  }
+
+  // attachBrowseHandlers: wire up Back, Open, and Get buttons after innerHTML set
+  function attachBrowseHandlers(containerEl, rootPath) {
+    // Back button
+    const backBtn = containerEl.querySelector('.dl-back-btn');
+    if (backBtn) {
+      backBtn.addEventListener('click', () => {
+        const p = backBtn.getAttribute('data-path');
+        dbg('Browse back to: ' + p);
+        browseDownloadDir(p, containerEl, rootPath);
+      });
+    }
+    // Subdir open buttons
+    containerEl.querySelectorAll('.dl-subdir-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const p = btn.getAttribute('data-path');
+        dbg('Browse into subdir: ' + p);
+        browseDownloadDir(p, containerEl, rootPath);
+      });
+    });
+    // File download buttons
+    containerEl.querySelectorAll('.dl-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const p = btn.getAttribute('data-path');
+        dbg('Download file: ' + p);
+        downloadFile(p);
+      });
+    });
+  }
 
 // pickUpload replaced by label+input pattern
 
