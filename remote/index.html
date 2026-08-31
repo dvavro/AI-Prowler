@@ -53,6 +53,14 @@ html,body{height:100%;background:var(--bg);color:var(--text);
 .btn-primary{background:var(--accent);color:#fff;border:none;border-radius:10px;
   padding:14px;font-size:15px;font-weight:600;cursor:pointer;width:100%;}
 .btn-primary:hover{background:var(--accent2);}
+/* Auth eye button — matches Jobs PWA style */
+.auth-inp-wrap{position:relative;width:100%;}
+.auth-inp-wrap input{padding-right:46px;}
+.auth-eye-btn{position:absolute;right:6px;top:50%;transform:translateY(-50%);
+  width:34px;height:34px;background:none;border:none;font-size:17px;line-height:1;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;
+  color:var(--dim);opacity:.85;}
+.auth-eye-btn:active{opacity:.6;}
 /* App */
 #app{display:none;flex-direction:column;height:100vh;height:100dvh;}
 .topbar{min-height:var(--topbar-h);padding-top:var(--safe-top);background:var(--surface);
@@ -64,8 +72,15 @@ html,body{height:100%;background:var(--bg);color:var(--text);
 .topbar-title{font-size:15px;font-weight:700;color:var(--accent);}
 .topbar-sub{font-size:11px;color:var(--dim);}
 .conn-dot{width:8px;height:8px;border-radius:50%;background:var(--dim2);
-  margin-left:auto;transition:background .3s;}
+  transition:background .3s;}
 .conn-dot.live{background:var(--green);}
+.topbar-refresh{margin-left:auto;background:none;border:none;color:var(--dim);
+  font-size:18px;cursor:pointer;padding:4px 6px;border-radius:8px;
+  display:flex;align-items:center;transition:color .2s;-webkit-tap-highlight-color:transparent;}
+.topbar-refresh:hover{color:var(--accent);}
+.topbar-refresh:disabled{opacity:.4;cursor:default;}
+.topbar-refresh .ri{display:inline-block;transition:transform .3s;}
+.topbar-refresh.spinning .ri{animation:spin .7s linear infinite;}
 .screens{flex:1;overflow:hidden;position:relative;}
 .screen{position:absolute;inset:0;overflow-y:auto;padding:16px;
   display:none;flex-direction:column;gap:14px;}
@@ -199,10 +214,13 @@ html,body{height:100%;background:var(--bg);color:var(--text);
   <div class="auth-title">AI-Prowler Remote</div>
   <div class="auth-sub">Enter your Bearer token to access remote control</div>
   <div class="auth-card">
-    <label for="authInput">Bearer Token</label>
-    <input type="password" id="authInput" placeholder="Your bearer token"
-      autocomplete="current-password"
-      onkeydown="if(event.key==='Enter')doAuth()">
+      <label for="authInput">Bearer Token</label>
+      <div class="auth-inp-wrap">
+        <input type="password" id="authInput" placeholder="Your bearer token"
+          autocomplete="current-password"
+          onkeydown="if(event.key==='Enter')doAuth()">
+        <button type="button" class="auth-eye-btn" id="authEyeBtn" onclick="toggleAuthShow()" aria-label="Show token" tabindex="-1">&#x1F441;&#xFE0F;</button>
+      </div>
     <div class="auth-err" id="authErr">Incorrect token. Check Settings &#8594; Remote Access.</div>
     <button class="btn-primary" onclick="doAuth()">Unlock Remote</button>
   </div>
@@ -225,7 +243,10 @@ html,body{height:100%;background:var(--bg);color:var(--text);
       <div class="topbar-title">AI-Prowler Remote</div>
       <div class="topbar-sub" id="topbarSub">Personal</div>
     </div>
-    <div class="conn-dot" id="connDot"></div>
+      <button class="topbar-refresh" id="refreshBtn" onclick="refreshAll()" title="Refresh all data">
+        <span class="ri">&#8635;</span>
+      </button>
+      <div class="conn-dot" id="connDot" style="margin-left:8px"></div>
   </div>
 
   <div class="screens">
@@ -692,6 +713,20 @@ async function loadToken() {
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────
+function toggleAuthShow() {
+  const inp = document.getElementById('authInput');
+  const btn = document.getElementById('authEyeBtn');
+  if (inp.type === 'password') {
+    inp.type = 'text';
+    btn.innerHTML = '&#x1F648;';
+    btn.setAttribute('aria-label', 'Hide token');
+  } else {
+    inp.type = 'password';
+    btn.innerHTML = '&#x1F441;&#xFE0F;';
+    btn.setAttribute('aria-label', 'Show token');
+  }
+}
+
 async function doAuth() {
   const v = document.getElementById('authInput').value.trim();
   document.getElementById('authErr').style.display = 'none';
@@ -996,6 +1031,36 @@ function switchTab(tab) {
   if (tab === 'tasks')  loadTasks();
   if (tab === 'learn')  loadLearnings();
   _maybeReshowUpdateBanner();
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────
+let _toastTimer = null;
+function showToast(msg, ms=2200) {
+  const el = document.getElementById('toast');
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove('show'), ms);
+}
+
+// ── Refresh All ───────────────────────────────────────────────────────────
+async function refreshAll() {
+  const btn = document.getElementById('refreshBtn');
+  if (btn) { btn.disabled = true; btn.classList.add('spinning'); }
+  try {
+    await Promise.allSettled([
+      loadDash(),
+      loadFilesList(),
+      loadPerms(),
+      loadLearnings(),
+      loadTasks(),
+      loadSystem(),
+    ]);
+    showToast('Refreshed ✓');
+  } finally {
+    if (btn) { btn.disabled = false; btn.classList.remove('spinning'); }
+  }
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────

@@ -29,7 +29,8 @@ Instead:
     write status.
 
 Also covers: the stale "85 tools total" -> "80 tools total" fix (drifted
-out of sync after job image tools were removed earlier this session).
+out of sync after job image tools were removed earlier this session),
+and subsequent updates: 96 -> 99 total in v9.1.0 (+3 new tools).
 """
 
 import sys
@@ -161,7 +162,8 @@ class TestToolCountFixed:
         assert "81 tools total" not in result
         assert "83 tools total" not in result
         assert "84 tools total" not in result
-        assert "96 tools total" in result  # updated v9.1.0: 96 total, 95 personal, 64 server
+        assert "96 tools total" not in result
+        assert "99 tools total" in result  # v9.1.0: 99 total, 98 personal, 65 server
 
     def test_count_correct_in_server_mode_too(self, mcp_mod, monkeypatch):
         user = _user("owner")
@@ -172,7 +174,8 @@ class TestToolCountFixed:
         assert "81 tools total" not in result
         assert "83 tools total" not in result
         assert "84 tools total" not in result
-        assert "96 tools total" in result  # updated v9.1.0: 96 total, 95 personal, 64 server
+        assert "96 tools total" not in result
+        assert "99 tools total" in result  # v9.1.0: 99 total, 98 personal, 65 server
 
 
 class TestFooterVariesCorrectly:

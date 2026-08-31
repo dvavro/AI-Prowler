@@ -1150,7 +1150,22 @@ async function loadJobs() {
     renderJobsList(); populateSelects(); setConn(true);
   } catch(err) {
     setConn(false);
-    list.innerHTML = `<div class="empty"><div class="empty-icon">⚠️</div><h3>Could not reach AI-Prowler</h3><p>${err.message}</p></div><button class="btn btn-ghost mt-12" onclick="loadJobs()">Retry</button>`;
+    // Detect missing-spreadsheet config — gives a clear action instead of
+    // a generic "could not reach" error on fresh installs.
+    const msg = (err.message || '').toLowerCase();
+    const noSheet = msg.includes('spreadsheet') || msg.includes('no such file')
+                 || msg.includes('default_spreadsheet_path') || msg.includes('not configured');
+    if (noSheet) {
+      list.innerHTML = `<div class="empty"><div class="empty-icon">📋</div>
+        <h3>No job spreadsheet configured</h3>
+        <p>Open <strong>AI-Prowler</strong> on your PC, go to the
+        <strong>Small Business</strong> tab, and click
+        <strong>&#x1F4BE; Save Default Path</strong> to set the spreadsheet location.</p>
+        <p style="font-size:0.85em;color:var(--text-dim)">Error: ${err.message}</p></div>
+        <button class="btn btn-ghost mt-12" onclick="loadJobs()">Retry</button>`;
+    } else {
+      list.innerHTML = `<div class="empty"><div class="empty-icon">&#x26A0;&#xFE0F;</div><h3>Could not reach AI-Prowler</h3><p>${err.message}</p></div><button class="btn btn-ghost mt-12" onclick="loadJobs()">Retry</button>`;
+    }
   } finally {
     if (refreshBtn) refreshBtn.disabled = false;
     if (refreshIcon) refreshIcon.classList.remove('spinning');

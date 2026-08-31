@@ -1,11 +1,11 @@
 {
   "version": "9.1.0",
-  "generated": "2026-08-30T10:01:38",
+  "generated": "2026-08-31T13:15:45",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "31f23eca4d9ef897711a6ff90b31f1c139746e59dc0fcd29a9c250af8c1f68b6",
-      "bytes": 1300117
+      "sha256": "2ceae233de036bb531cf87eebd878a6fc751182be47cc7227faea8b18f657bfb",
+      "bytes": 1301466
     },
     {
       "path": "rag_preprocessor.py",
@@ -159,8 +159,8 @@
     },
     {
       "path": "jobs/index.html",
-      "sha256": "4df80f2d6a173838fb14e55057feed49ab49ceb78270bb782c7b0cb3b3e51a4f",
-      "bytes": 520926
+      "sha256": "6833ef4590728dee1b98575bbbd9cf1dea219ca4349220b91614216fdbeb9535",
+      "bytes": 521848
     },
     {
       "path": "jobs/manifest.json",
@@ -189,8 +189,8 @@
     },
     {
       "path": "remote/index.html",
-      "sha256": "034c932a4821c15507e39ffb58302a08726d9094c6c6f9cff565081c7aa0a93a",
-      "bytes": 104285
+      "sha256": "889fbb70bed6758b85c8b23d60b2e32ba0b25dd0acc5217da37faff35a2429c5",
+      "bytes": 107125
     },
     {
       "path": "remote/manifest.json",

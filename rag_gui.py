@@ -13611,6 +13611,17 @@ or from the Help menu."""
                             # ── v8.0.0: auto-refresh all config fields ───────────────
                             _license_key_var.set(result.get('license_key', ''))
                             _tun_domain_var.set(result.get('domain', ''))
+                            # Bug fix: refresh the Jobs App URL in the Small Biz tab
+                            # immediately — that widget is in a separate closure and
+                            # was only populated at tab-build time, so it stayed blank
+                            # after activation until the user restarted AI-Prowler.
+                            try:
+                                d = result.get('domain', '').strip()
+                                d = d.replace('https://','').replace('http://','').rstrip('/')
+                                if d and hasattr(self, '_jobs_url_var'):
+                                    self._jobs_url_var.set(f"https://{d}/jobs/")
+                            except Exception:
+                                pass
                             try:
                                 import json as _jcfg_r
                                 _cfgr = Path.home() / '.ai-prowler' / 'config.json'
@@ -16442,7 +16453,13 @@ or from the Help menu."""
                     pass
             return ''
 
-        _xl_path_var.set(_detect_default_xl_path())
+        _detected = _detect_default_xl_path()
+        _xl_path_var.set(_detected)
+        # Bug fix: if config had no stored path but we found the file on disk,
+        # persist it immediately so the MCP tools can use it without the user
+        # having to click "Save Default Path" or "Default" first.
+        if _detected and not _load_cfg().get('default_spreadsheet_path', '').strip():
+            _save_cfg({'default_spreadsheet_path': _detected})
         ttk.Entry(xl_path_row, textvariable=_xl_path_var, width=44
                   ).pack(side='left', padx=4)
 
@@ -16547,6 +16564,9 @@ or from the Help menu."""
                 return ""
 
         _jobs_url_var = tk.StringVar(value=_load_jobs_url())
+        # Expose on self so the mobile activation callback can refresh it
+        # without needing to be inside this closure.
+        self._jobs_url_var = _jobs_url_var
         pwa_url_row = ttk.Frame(pwa_lf)
         pwa_url_row.pack(fill='x')
         ttk.Entry(pwa_url_row, textvariable=_jobs_url_var, width=44,
