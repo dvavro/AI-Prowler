@@ -1034,8 +1034,8 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "AI-Prowler — Agentic RAG Knowledge Base\n"
         + "=" * 50 + "\n\n"
 
-        "TOOL CATEGORIES (99 tools total — 98 visible in personal mode,\n"
-        "65 visible in server mode; call check_tools_status() for a precise\n"
+        "TOOL CATEGORIES (103 tools total — 102 visible in personal mode,\n"
+        "68 visible in server mode; call check_tools_status() for a precise\n"
         "per-tool breakdown on this connection)\n"
         + "-" * 30 + "\n"
         "AI-Prowler exposes ten tool families. Most question-answering\n"
@@ -1059,10 +1059,34 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
 
         "  • Field service actions (free public APIs, no key needed):\n"
         "      geocode_address, get_weather, optimize_route,\n"
-        "      build_maps_url, read_job_spreadsheet, update_job_spreadsheet,\n"
-        "      create_job, get_sheet_columns, check_tools_status\n"
+        "      build_maps_url, build_daily_route, read_job_spreadsheet,\n"
+        "      update_job_spreadsheet, create_job, create_customer,\n"
+        "      create_quote, get_sheet_columns, check_tools_status\n"
         "      get_home_address (personal mode only — Settings tab's Home\n"
-        "      address is a single-owner concept with no server-mode caller)\n\n"
+        "      address is a single-owner concept with no server-mode caller)\n"
+        "    NOTE — create_customer/create_quote ALWAYS append a new row;\n"
+        "    to edit an existing customer or quote (e.g. mark inactive,\n"
+        "    approve a quote) use update_job_spreadsheet with\n"
+        "    sheet_name='Customers' or sheet_name='Quotes' instead.\n"
+        "    NOTE — build_daily_route rebuilds Route_Planner from scratch for\n"
+        "    ONE date (clearing whatever was there before — it's a single-day\n"
+        "    view, never a history). It may return a pre-flight SAVINGS ALERT\n"
+        "    instead of building the route, if a different visit order would\n"
+        "    save 10+ minutes over the jobs' currently recorded Start Times —\n"
+        "    call it again with accept_reorder=True to proceed anyway. On a\n"
+        "    successful build it emails the route link BY DEFAULT\n"
+        "    (email_link=True) — set email_link=False to skip. If email isn't\n"
+        "    configured, sending is skipped with a clear note pointing to the\n"
+        "    Route_Planner tab instead — the route still builds either way.\n"
+        "    The Waypoint Map URL is written as a REAL clickable hyperlink in\n"
+        "    both the spreadsheet cell (blue/underlined, tap-to-navigate) and\n"
+        "    the Jobs PWA — not just a plain-text URL string. It's ALSO\n"
+        "    persisted onto each matched job's own Jobs_Schedule row (that\n"
+        "    sheet's existing 'Route Map URL ★ AI Prowler' column) — unlike\n"
+        "    Route_Planner (single-day view, overwritten by the next build),\n"
+        "    this per-job copy survives building routes for OTHER dates, so\n"
+        "    routes can be built for several future/past dates in advance and\n"
+        "    each day's jobs keep their own link.\n\n"
 
         "  • Contractor / business workflow:\n"
         "      email_invoice, text_invoice, email_receipt, text_receipt,\n"
@@ -1073,10 +1097,14 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "  • Communications (email + SMS + WhatsApp — every role in both\n"
         "    personal and server mode):\n"
         "      configure_email, send_email, send_alert, send_file,\n"
-        "      send_sms, check_sms_replies, check_sms_inbox,\n"
-        "      check_sms_configured, check_email_configured,\n"
+        "      list_outlook_accounts, send_sms, check_sms_replies,\n"
+        "      check_sms_inbox, check_sms_configured, check_email_configured,\n"
         "      send_whatsapp, check_whatsapp_replies,\n"
-        "      list_sms_consents, delete_sms_consent\n\n"
+        "      list_sms_consents, delete_sms_consent\n"
+        "    NOTE — multi-account Outlook: if you have Gmail AND Yahoo (or any\n"
+        "    other accounts) configured in Outlook, call list_outlook_accounts()\n"
+        "    to see all available addresses and which is the default. Pass\n"
+        "    from_account='you@yahoo.com' to send_email() to override per-send.\n\n"
 
         "  • File editing (write tools — see EDITING FILES section below):\n"
         "      create_file, write_file, str_replace_in_file,\n"
@@ -3707,11 +3735,29 @@ def optimize_route(
     total_mins    = total_dur_s  / 60.0
     legs          = trip.get("legs", [])
 
-    # OSRM returns waypoints sorted by trip visit order via trips_index/waypoint_index
-    sorted_wps = sorted(
-        waypoints,
-        key=lambda w: w.get("trips_index", 0) * 1000 + w.get("waypoint_index", 0)
-    )
+    # BUG FIX (found while building build_daily_route's own routing logic):
+    # waypoints[] is positionally aligned with the INPUT coordinates
+    # (all_addresses) — each waypoint's own "waypoint_index" field is its
+    # VISIT POSITION in the optimized trip, NOT a re-usable index back into
+    # the input array. The previous code sorted the waypoint objects BY
+    # waypoint_index, then re-read that SAME field off the now-sorted
+    # object as if it were the original input index — since sorting puts
+    # waypoint_index values in ascending 0..n-1 order, that re-read always
+    # just equals the loop position again, silently reproducing the
+    # ORIGINAL INPUT ORDER every time rather than the true optimized visit
+    # order (while still reporting a correct AGGREGATE duration/distance
+    # for the real optimal trip, since those totals come from trip-level
+    # fields untouched by this bug — only the per-stop labels were wrong).
+    # Correct reconstruction: place each input position k at output slot
+    # waypoints[k]["waypoint_index"].
+    _n_wp = len(waypoints)
+    _order_of_input_idx = [None] * _n_wp
+    for _k, _wp in enumerate(waypoints):
+        _vi = _wp.get("waypoint_index", _k)
+        if 0 <= _vi < _n_wp:
+            _order_of_input_idx[_vi] = _k
+    visit_order_infos = [valid[_k] for _k in _order_of_input_idx
+                         if _k is not None and _k < len(valid)]
 
     # ── Step 3: Build human-readable schedule ────────────────────────────────
     now        = _dt.datetime(2026, 1, 1, departure_hour, 0, 0)
@@ -3734,12 +3780,7 @@ def optimize_route(
     lines.append("OPTIMIZED SEQUENCE:")
     lines.append("")
 
-    for i, wp in enumerate(sorted_wps):
-        wp_idx = wp.get("waypoint_index", i)
-        if wp_idx >= len(valid):
-            continue
-        info = valid[wp_idx]
-
+    for i, info in enumerate(visit_order_infos):
         if i == 0:
             lines.append(f"  🏠 ORIGIN")
             lines.append(f"     {info['address']}")
@@ -4089,6 +4130,22 @@ def _backup_spreadsheet(fp: str, keep_days: int = 30) -> str:
     Prunes backups older than keep_days days.
 
     Returns a short status string (success path or warning message).
+
+    TIMESTAMP COLLISION FIX: the destination filename includes microseconds
+    (not just whole seconds) and, if a file at that exact path somehow still
+    exists (e.g. two calls landing in the same microsecond, or a clock
+    resolution limitation on some filesystems), an incrementing numeric
+    suffix is added until a free filename is found. Without this, multiple
+    backups taken in rapid succession — e.g. several create_job() or
+    update_job_spreadsheet() calls seconds or even a fraction of a second
+    apart, both entirely normal usage — could silently collide on the old
+    whole-second-only filename format, with the LATER backup overwriting
+    and destroying the EARLIER one's point-in-time snapshot. Found via
+    test_route_scheduling_e2e.py seeding 3 jobs in a tight loop: the
+    "pre-suite" backup captured for restore-on-pass ended up silently
+    overwritten with a partially-contaminated mid-test snapshot, because
+    two of the four backup calls in that test (1 explicit + 3 internal to
+    create_job) landed in the same wall-clock second.
     """
     import shutil as _shutil
     import datetime as _dt
@@ -4100,8 +4157,16 @@ def _backup_spreadsheet(fp: str, keep_days: int = 30) -> str:
     except Exception as exc:
         return f"⚠️  Could not create backup folder: {exc}"
 
-    ts  = _dt.datetime.now().strftime('%Y-%m-%d_%H%M%S')
+    ts  = _dt.datetime.now().strftime('%Y-%m-%d_%H%M%S_%f')  # %f = microseconds
     dst = backup_dir / f"{src.stem}_{ts}{src.suffix}"
+    # Belt-and-suspenders: if a file at this exact path still exists (e.g.
+    # extremely low-resolution filesystem clock, or two calls that somehow
+    # landed on the identical microsecond), append an incrementing suffix
+    # rather than silently overwriting whatever backup is already there.
+    _suffix_n = 1
+    while dst.exists():
+        dst = backup_dir / f"{src.stem}_{ts}_{_suffix_n}{src.suffix}"
+        _suffix_n += 1
     try:
         _shutil.copy2(str(src), str(dst))
     except Exception as exc:
@@ -4180,7 +4245,11 @@ def update_job_spreadsheet(
                         Example: "C:/Users/Dave/Documents/jobs.xlsx"
         id_column:      Column header to search in (default "Customer").
                         Ignored when row_index is given.
-        sheet_name:     Sheet to use (default: first/active sheet).
+        sheet_name:     Sheet to use. Defaults to "Jobs_Schedule" if that sheet
+                        exists in the workbook (the common case for this tool);
+                        otherwise falls back to Excel's active sheet. Pass this
+                        explicitly to target a different sheet (e.g. "Invoices",
+                        "Customers", "Route_Planner").
         backup:         If True (default), a timestamped backup copy of the
                         spreadsheet is saved in a _backups subfolder next to
                         the file before any changes are written.
@@ -4242,8 +4311,25 @@ def update_job_spreadsheet(
         except Exception as exc:
             return f"❌ Could not open spreadsheet: {exc}"
 
-        ws = (wb[sheet_name] if sheet_name and sheet_name in wb.sheetnames
-              else wb.active)
+        # Sheet resolution order:
+        #   1. Explicit sheet_name, if given and it exists.
+        #   2. "Jobs_Schedule", if it exists — this tool is used overwhelmingly
+        #      for job updates (crew, status, notes, pricing), and a voice-driven
+        #      caller ("set the crew to Carlos") has no natural way to know or
+        #      say which sheet is Excel's current "active" tab. Relying on
+        #      wb.active here silently wrote to whatever sheet happened to be
+        #      selected when the file was last saved (e.g. a Quotes sheet),
+        #      which could look like a successful update while actually
+        #      updating the wrong sheet or erroring on a job that only exists
+        #      in Jobs_Schedule.
+        #   3. wb.active — unchanged fallback for spreadsheets with no
+        #      Jobs_Schedule sheet at all (e.g. Route_Planner-only workbooks).
+        if sheet_name and sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+        elif "Jobs_Schedule" in wb.sheetnames:
+            ws = wb["Jobs_Schedule"]
+        else:
+            ws = wb.active
 
         # ── Detect header row (skip title/banner rows, same logic as read tool) ───
         # Scans the first 5 rows and uses the first row that has ≥ 3 non-empty
@@ -4556,9 +4642,16 @@ def _create_job_impl(updates: dict, filepath: str, backup: bool, ctx) -> str:
     new_job_id = f"JOB-{next_num:04d}"
 
     # ── Find the next empty row ─────────────────────────────────────────────
+    # Anchor on the last row that actually has a JobID, not "the last row
+    # with any non-empty cell anywhere" — a stray formatting artifact
+    # (leftover fill/border, an empty-string remnant from a deleted row,
+    # a merged-cell ghost) far below the real data can make a cell look
+    # non-empty to openpyxl even though nothing was ever entered there,
+    # which previously caused new jobs to land dozens or hundreds of rows
+    # below the last real job instead of immediately after it.
     last_row = header_row_num
     for row in ws.iter_rows(min_row=header_row_num + 1):
-        if any(c.value for c in row):
+        if row[id_col_idx - 1].value:
             last_row = row[0].row
     new_row_num = last_row + 1
 
@@ -4568,6 +4661,8 @@ def _create_job_impl(updates: dict, filepath: str, backup: bool, ctx) -> str:
     # placeholder shown in the Jobs PWA's add-job form.)
     written:   list[str] = []
     not_found: list[str] = []
+
+    import datetime as _dt
 
     # Same date coercion as update_job_spreadsheet — string dates become
     # real Excel date serials with MM/DD/YYYY number_format so Excel
@@ -4634,6 +4729,1057 @@ def _create_job_impl(updates: dict, filepath: str, backup: bool, ctx) -> str:
         "\n📑 Re-index the spreadsheet to keep AI-Prowler search results current:\n"
         "   Call update_tracked_directories() after updating the file."
     )
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Shared helper — append a new row to any sheet with an auto-generated ID.
+# Used by create_customer and create_quote below. create_job is NOT
+# refactored onto this helper in this pass — it predates it and has its
+# own Jobs_Schedule-specific wording/return format that existing callers
+# (the Jobs PWA) may depend on; consolidating it is a separate, lower-risk
+# follow-up rather than something to fold into this same change.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _append_sheet_row_impl(
+    sheet_name: str,
+    id_col_names: tuple,
+    id_prefix: str,
+    id_digits: int,
+    updates: dict,
+    filepath: str,
+    backup: bool,
+    ctx,
+    date_keywords: tuple = (
+        'date', 'valid until', 'due date', 'next sched', 'last service',
+    ),
+) -> str:
+    """
+    Generic "append a new row with an auto-generated ID" implementation,
+    shared by create_customer() and create_quote(). Mirrors create_job()'s
+    row-placement and date-coercion logic exactly (including the row-501
+    bug fix: anchor "next empty row" on the last row with a real ID value
+    in the id column, never on "any cell anywhere has any value").
+
+    Args:
+        sheet_name:    Sheet to append to, e.g. "Customers", "Quotes".
+        id_col_names:  Tuple of acceptable header names for the ID column,
+                       checked in order, e.g. ("CustomerID (CUST-####)",
+                       "CustomerID").
+        id_prefix:     ID prefix, e.g. "CUST", "QTE".
+        id_digits:     Zero-padded digit width, e.g. 4 for CUST-0001.
+        updates:       Dict of {column_header: new_value} pairs.
+        filepath:      Path to the .xlsx tracker, or "" for the default.
+        backup:        Whether to back up before writing.
+        ctx:           MCP context.
+        date_keywords: Substrings (lowercase) that mark a column as a date
+                       column for string→Excel-date coercion.
+
+    Returns:
+        Formatted confirmation string including NEW_<PREFIX>_ID=... on its
+        own line for machine parsing, matching create_job()'s convention.
+    """
+    try:
+        import openpyxl as _opx
+    except ImportError:
+        return "❌ openpyxl not installed. Run: pip install openpyxl"
+
+    filepath = _resolve_job_spreadsheet_path(ctx, filepath)
+    if not filepath:
+        return (
+            "❌ No spreadsheet path provided and no default path configured.\n"
+            "Set one in AI-Prowler → Settings → Small Business → Default Spreadsheet Path,\n"
+            "or pass the full filepath argument explicitly."
+        )
+
+    fp = filepath.replace("\\", "/")
+    if not os.path.exists(fp):
+        return f"❌ Spreadsheet not found: {fp}"
+    if not fp.lower().endswith(".xlsx"):
+        return (
+            "❌ Only .xlsx files are supported for updates.\n"
+            "Save the spreadsheet as .xlsx in Excel first."
+        )
+
+    backup_msg = ""
+    if backup:
+        backup_msg = _backup_spreadsheet(fp)
+        if backup_msg.startswith("⚠️") or backup_msg.startswith("❌"):
+            return (
+                f"{backup_msg}\n"
+                "Spreadsheet was NOT modified. Fix the backup issue or pass backup=False to skip."
+            )
+
+    try:
+        wb = _opx.load_workbook(fp)
+    except Exception as exc:
+        return f"❌ Could not open spreadsheet: {exc}"
+
+    if sheet_name not in wb.sheetnames:
+        return (f"❌ '{sheet_name}' sheet not found in spreadsheet.\n"
+                f"Available sheets: {', '.join(wb.sheetnames)}")
+    ws = wb[sheet_name]
+
+    # ── Detect header row (same logic as create_job / update_job_spreadsheet) ──
+    header_row_num: "int | None" = None
+    headers: dict = {}
+    for r in ws.iter_rows(min_row=1, max_row=5):
+        non_empty = [c for c in r if c.value is not None]
+        if len(non_empty) >= 3:
+            header_row_num = r[0].row
+            for col_idx, cell in enumerate(r, 1):
+                if cell.value is not None:
+                    raw = str(cell.value).strip()
+                    headers[raw] = col_idx
+                    normalised = raw.replace('\n', ' ')
+                    if normalised != raw:
+                        headers.setdefault(normalised, col_idx)
+            break
+
+    if header_row_num is None or not headers:
+        return (
+            f"❌ Could not detect a header row in {sheet_name}.\n"
+            "Expected a row with at least 3 non-empty cells in the first 5 rows."
+        )
+
+    id_col_name = next((c for c in id_col_names if c in headers), None)
+    if id_col_name is None:
+        avail = [k for k in headers.keys() if '\n' not in k][:15]
+        return (
+            f"❌ Could not find the ID column in {sheet_name} "
+            f"(looked for: {', '.join(id_col_names)}).\n"
+            f"Available columns: {', '.join(avail)}"
+        )
+    id_col_idx = headers[id_col_name]
+
+    # ── Generate next ID ─────────────────────────────────────────────────────
+    existing_ids = []
+    for row in ws.iter_rows(min_row=header_row_num + 1):
+        id_cell = row[id_col_idx - 1].value
+        if id_cell and str(id_cell).startswith(f"{id_prefix}-"):
+            try:
+                existing_ids.append(int(str(id_cell).split("-")[1]))
+            except ValueError:
+                pass
+    next_num = (max(existing_ids) + 1) if existing_ids else 1
+    new_id = f"{id_prefix}-{next_num:0{id_digits}d}"
+
+    # ── Find the next empty row — anchor on the last row with a real ID ────
+    # value in the id column, NOT "any cell anywhere has any value" (the
+    # create_job row-501 bug: a stray formatting artifact far below the
+    # real data can otherwise push the new row hundreds of rows down).
+    last_row = header_row_num
+    for row in ws.iter_rows(min_row=header_row_num + 1):
+        if row[id_col_idx - 1].value:
+            last_row = row[0].row
+    new_row_num = last_row + 1
+
+    # ── Write provided fields, then force the auto-generated ID ────────────
+    written:   list = []
+    not_found: list = []
+
+    import datetime as _dt
+    _date_fmts = ('%m/%d/%Y', '%Y-%m-%d', '%m-%d-%Y', '%d/%m/%Y')
+
+    def _coerce_date(col: str, val):
+        if val is None or val == '':
+            return val
+        col_lower = col.lower().replace('\n', ' ')
+        if not any(kw in col_lower for kw in date_keywords):
+            return val
+        if isinstance(val, (_dt.datetime, _dt.date)):
+            return val.date() if isinstance(val, _dt.datetime) else val
+        for fmt in _date_fmts:
+            try:
+                return _dt.datetime.strptime(str(val).strip(), fmt).date()
+            except ValueError:
+                continue
+        return val
+
+    for col_name, new_val in (updates or {}).items():
+        if col_name == id_col_name:
+            continue
+        if col_name in headers:
+            cell = ws.cell(row=new_row_num, column=headers[col_name])
+            coerced = _coerce_date(col_name, new_val)
+            cell.value = coerced
+            if isinstance(coerced, (_dt.date, _dt.datetime)):
+                cell.number_format = 'MM/DD/YYYY'
+            written.append(f"{col_name} → {new_val}")
+        else:
+            not_found.append(col_name)
+    ws.cell(row=new_row_num, column=id_col_idx).value = new_id
+
+    try:
+        wb.save(fp)
+    except Exception as exc:
+        return f"❌ Could not save spreadsheet: {exc}"
+
+    lines = [
+        f"✅ {sheet_name[:-1] if sheet_name.endswith('s') else sheet_name} created: {new_id}",
+        f"   Row:  {new_row_num}",
+        f"   Set:  {', '.join(written) if written else '(no fields provided)'}",
+    ]
+    if backup_msg:
+        lines.append(f"   {backup_msg}")
+    if not_found:
+        lines.append(
+            f"   ⚠️  Columns not found (check spelling): {', '.join(not_found)}"
+        )
+    lines.append(f"NEW_{id_prefix}_ID={new_id}")
+    lines.append(
+        "\n📑 Re-index the spreadsheet to keep AI-Prowler search results current:\n"
+        "   Call update_tracked_directories() after updating the file."
+    )
+    return "\n".join(lines)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 5b-2 — create_customer
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def create_customer(
+    updates:    dict,
+    filepath:   str = "",
+    backup:     bool = True,
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Add a new customer — appends a brand-new row to the Customers sheet,
+    auto-assigning the next CustomerID (CUST-####).
+
+    Before this tool existed there was no way to add a customer at all —
+    update_job_spreadsheet only edits EXISTING rows, and create_job only
+    appends to Jobs_Schedule. This is the Customers-sheet equivalent of
+    create_job: same auto-ID pattern, same "always appends, never edits an
+    existing row" behavior. To edit an existing customer (e.g. mark them
+    inactive), use update_job_spreadsheet with sheet_name="Customers"
+    instead — this tool always creates a new row.
+
+    Uses openpyxl — already installed, no new package needed.
+    Works only on .xlsx files.
+
+    If filepath is omitted, the default spreadsheet path configured in
+    AI-Prowler Settings → Small Business → Default Spreadsheet Path is used
+    automatically.
+
+    Available to every role in every mode — personal and ALL server-mode
+    roles (owner, manager, staff, field_crew) — no DB-management or
+    communications gate applies, same as create_job.
+
+    Args:
+        updates:  Dict of {column_header: new_value} pairs for the new
+                  customer. Example: {"Company Name": "Blue Wave Cafe",
+                  "First Name": "Jane", "Last Name": "Smith",
+                  "Phone": "386-555-0101", "Email": "jane@example.com",
+                  "Street Address ★ AI Route": "42 Beachside Dr",
+                  "City ★ AI Route": "New Smyrna Beach", "State": "FL",
+                  "ZIP ★ AI Route": "32168",
+                  "Service Type(s) Win/Press/Both": "Window",
+                  "Frequency": "Monthly",
+                  "Status Active/Inactive": "Active"}
+                  A "CustomerID (CUST-####)" key, if passed, is ignored —
+                  the next CustomerID is always auto-generated from the
+                  highest existing CUST-#### number in the sheet.
+        filepath: Full path to the Excel spreadsheet (.xlsx). If omitted,
+                  uses the path saved in AI-Prowler Settings.
+        backup:   If True (default), a timestamped backup copy of the
+                  spreadsheet is saved before any changes are written.
+
+    Returns:
+        Confirmation with the new CustomerID, or an error if the file or
+        the Customers sheet's header row could not be found.
+
+    Voice examples:
+        "Add a new customer: Blue Wave Cafe, jane@example.com, monthly window washing"
+        "Create a customer for Jane Smith at 42 Beachside Dr, biweekly pressure washing"
+    """
+    with _spreadsheet_write_lock:
+        _telemetry_increment_tool_count("create_customer")
+        return _append_sheet_row_impl(
+            sheet_name="Customers",
+            id_col_names=("CustomerID (CUST-####)", "CustomerID"),
+            id_prefix="CUST",
+            id_digits=4,
+            updates=updates,
+            filepath=filepath,
+            backup=backup,
+            ctx=ctx,
+            date_keywords=('date', 'next sched', 'last service'),
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 5b-3 — create_quote
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def create_quote(
+    updates:    dict,
+    filepath:   str = "",
+    backup:     bool = True,
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Create a new quote — appends a brand-new row to the Quotes sheet,
+    auto-assigning the next QuoteID (QTE-####).
+
+    Before this tool existed there was no way to create a quote at all —
+    update_job_spreadsheet only edits EXISTING rows. This is the Quotes-
+    sheet equivalent of create_job. To edit an existing quote (e.g. change
+    its Status from Open to Approved, or adjust pricing), use
+    update_job_spreadsheet with sheet_name="Quotes" instead — this tool
+    always creates a new row.
+
+    Uses openpyxl — already installed, no new package needed.
+    Works only on .xlsx files.
+
+    If filepath is omitted, the default spreadsheet path configured in
+    AI-Prowler Settings → Small Business → Default Spreadsheet Path is used
+    automatically.
+
+    Available to every role in every mode — personal and ALL server-mode
+    roles (owner, manager, staff, field_crew) — no DB-management or
+    communications gate applies, same as create_job.
+
+    Args:
+        updates:  Dict of {column_header: new_value} pairs for the new
+                  quote. Example: {"Customer Name / Company": "Jane Smith",
+                  "CustomerID": "CUST-0002", "Address": "42 Beachside Dr",
+                  "City": "New Smyrna Beach", "Quote Date": "2026-09-11",
+                  "Valid Until": "2026-10-11", "Service Type": "Window",
+                  "Service Description": "Exterior windows, 10 panes",
+                  "Subtotal ($)": 150.00, "Status (Open/Approved/Declined)": "Open"}
+                  A "QuoteID (QTE-####)" key, if passed, is ignored — the
+                  next QuoteID is always auto-generated from the highest
+                  existing QTE-#### number in the sheet. This tool does NOT
+                  compute totals/tax/discount math for you — pass the
+                  amounts you want written directly (mirroring the manual
+                  quoting workflow this replaces).
+        filepath: Full path to the Excel spreadsheet (.xlsx). If omitted,
+                  uses the path saved in AI-Prowler Settings.
+        backup:   If True (default), a timestamped backup copy of the
+                  spreadsheet is saved before any changes are written.
+
+    Returns:
+        Confirmation with the new QuoteID, or an error if the file or the
+        Quotes sheet's header row could not be found.
+
+    Voice examples:
+        "Create a quote for Jane Smith — window washing, $150, valid for 30 days"
+        "Quote the Blue Wave Cafe job at $300 for pressure washing"
+    """
+    with _spreadsheet_write_lock:
+        _telemetry_increment_tool_count("create_quote")
+        return _append_sheet_row_impl(
+            sheet_name="Quotes",
+            id_col_names=("QuoteID (QTE-####)", "QuoteID"),
+            id_prefix="QTE",
+            id_digits=4,
+            updates=updates,
+            filepath=filepath,
+            backup=backup,
+            ctx=ctx,
+            date_keywords=('date', 'valid until'),
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 5b-5 — build_daily_route
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def build_daily_route(
+    route_date:  str,
+    crew:        str = "",
+    departure_hour: int = 7,
+    filepath:    str = "",
+    backup:      bool = True,
+    accept_reorder: bool = False,
+    email_link:  bool = True,
+    email_to:    str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Build the optimized route for ALL jobs scheduled on a given date, replacing
+    whatever is currently in the Route_Planner sheet — Route_Planner always shows
+    exactly ONE day's stops, never a history of past routes. Call this again for
+    a different date and the previous day's stops are cleared and replaced.
+
+    What this does, end to end:
+      1. Finds every Jobs_Schedule row whose Service Date matches route_date
+         (optionally filtered to one crew via the crew argument).
+      2. For any matching job missing Latitude/Longitude, geocodes its address
+         automatically (Nominatim, free, no API key) and WRITES the result back
+         into that job's own Jobs_Schedule row — so the next route build for
+         that job skips geocoding. If an address fails to geocode, that job is
+         EXCLUDED from the route (a job with no location can't be routed) and
+         clearly flagged in a "GEOCODING FAILED" warning — never silently
+         dropped without saying so.
+      3. Computes the optimal visit order and real drive times between stops
+         (OSRM /trip, the same routing engine optimize_route() uses), starting
+         and ending at your home address (get_home_address()).
+      4. PRE-FLIGHT SAVINGS CHECK: also computes total drive time for the
+         "as-scheduled" order — visiting jobs in the order of their own
+         recorded Start Time, exactly as currently planned — using OSRM's
+         /route endpoint for that FIXED sequence. If the optimal order would
+         save 10+ minutes of drive time over the as-scheduled order, this
+         tool STOPS HERE and returns an alert comparing both orders and the
+         time savings — Route_Planner is NOT modified and no geocoding is
+         written back. Call again with accept_reorder=True to proceed and
+         commit the optimal-order route. If there's no meaningful savings
+         (or accept_reorder=True is already passed), it proceeds straight to
+         steps 5-6 below in this same call.
+      5. Checks the computed schedule for two further problems and surfaces
+         them as clear warnings — the job stays on the route either way,
+         this is advisory, not a block:
+           - LATE ARRIVAL: the route's computed arrival at a stop is more than
+             10 minutes after that job's own recorded Start Time — the
+             customer may be expecting you earlier than the route can
+             actually deliver.
+           - SCHEDULE OVERLAP: two jobs that day have overlapping Start Time /
+             Duration windows, independent of routing — a scheduling
+             conflict that exists no matter what order you visit them in.
+      6. Clears every existing data row in Route_Planner, then writes the new
+         day's stops in optimized visit order, including a per-stop tap-to-
+         navigate Waypoint Map URL.
+
+    Uses openpyxl and the same free Nominatim/OSRM services optimize_route()
+    uses — no API keys needed. Works only on .xlsx files.
+
+    If filepath is omitted, the default spreadsheet path configured in
+    AI-Prowler Settings → Small Business → Default Spreadsheet Path is used.
+
+    Args:
+        route_date:      Date to build the route for, e.g. "2026-09-22".
+        crew:            Optional — if given, only jobs assigned to this
+                          Crew / Technician are included. If omitted, ALL
+                          jobs scheduled that date are included (each stop
+                          keeps its own job's own Crew / Technician value).
+        departure_hour:  Hour to leave home in 24h format (default 7 = 7am).
+        filepath:        Full path to the Excel spreadsheet (.xlsx). If
+                          omitted, uses the path saved in AI-Prowler Settings.
+        backup:          If True (default), a timestamped backup copy of the
+                          spreadsheet is saved before any changes are written.
+        accept_reorder:  Set True to proceed with the optimal-order route
+                          after already having seen (and accepted) a savings
+                          alert from a previous call. Ignored — has no
+                          effect — when no savings alert would fire anyway.
+        email_link:      If True (default), email the day's Waypoint Map
+                          URL(s) after a successful build. Skipped with a
+                          clear note (not an error) if email isn't
+                          configured — the route is still built and the
+                          link is still available as a clickable cell in
+                          the Route_Planner tab either way. Also skipped
+                          if the pre-flight savings alert fires instead of
+                          a real build — nothing to email yet in that case.
+                          Set False to build without ever sending email.
+        email_to:        Recipient for the route-link email. If omitted,
+                          uses the account's own configured default_to or
+                          username from Settings → Email Configuration.
+                          Ignored when email_link is False.
+
+    Returns:
+        Either a pre-flight SAVINGS ALERT (Route_Planner untouched — call
+        again with accept_reorder=True to proceed) or the full built route
+        (stop order, arrival/departure times, drive times) plus any
+        GEOCODING FAILED / LATE ARRIVAL / SCHEDULE OVERLAP warnings and
+        confirmation of how many rows were cleared/written.
+
+    Voice examples:
+        "Build the route for tomorrow"
+        "Plan the route for September 22nd for Carlos"
+    """
+    with _spreadsheet_write_lock:
+        _telemetry_increment_tool_count("build_daily_route")
+        return _build_daily_route_impl(
+            route_date=route_date, crew=crew, departure_hour=departure_hour,
+            filepath=filepath, backup=backup, accept_reorder=accept_reorder,
+            email_link=email_link, email_to=email_to, ctx=ctx,
+        )
+
+
+
+def _build_daily_route_impl(route_date: str, crew: str, departure_hour: int,
+                             filepath: str, backup: bool, accept_reorder: bool,
+                             email_link: bool, email_to: str, ctx) -> str:
+    try:
+        import openpyxl as _opx
+    except ImportError:
+        return "❌ openpyxl not installed. Run: pip install openpyxl"
+    import requests as _req
+    import datetime as _bdt
+    import time as _btime
+
+    fp = _resolve_job_spreadsheet_path(ctx, filepath)
+    if not fp:
+        return (
+            "❌ No spreadsheet path provided and no default path configured.\n"
+            "Set one in AI-Prowler → Settings → Small Business → Default Spreadsheet Path,\n"
+            "or pass the full filepath argument explicitly."
+        )
+    fp = fp.replace("\\", "/")
+    if not os.path.exists(fp):
+        return f"❌ Spreadsheet not found: {fp}"
+    if not fp.lower().endswith(".xlsx"):
+        return "❌ Only .xlsx files are supported. Save the spreadsheet as .xlsx in Excel first."
+
+    try:
+        target_date = _bdt.datetime.strptime(route_date.strip(), "%Y-%m-%d").date()
+    except ValueError:
+        return f"❌ route_date must be YYYY-MM-DD format, got: {route_date!r}"
+
+    home_address = get_home_address()
+    if "❌" in home_address or "not configured" in home_address.lower():
+        return (
+            f"❌ Could not determine home address: {home_address}\n"
+            "Set one in AI-Prowler Settings before building a route."
+        )
+
+    try:
+        wb = _opx.load_workbook(fp)
+    except Exception as exc:
+        return f"❌ Could not open spreadsheet: {exc}"
+
+    if "Jobs_Schedule" not in wb.sheetnames:
+        return "❌ 'Jobs_Schedule' sheet not found in spreadsheet."
+    if "Route_Planner" not in wb.sheetnames:
+        return "❌ 'Route_Planner' sheet not found in spreadsheet."
+    ws_jobs = wb["Jobs_Schedule"]
+    ws_route = wb["Route_Planner"]
+
+    def _detect_header(ws):
+        for r in ws.iter_rows(min_row=1, max_row=5):
+            non_empty = [c for c in r if c.value is not None]
+            if len(non_empty) >= 3:
+                hdr_row = r[0].row
+                hdrs = {}
+                for col_idx, cell in enumerate(r, 1):
+                    if cell.value is not None:
+                        raw = str(cell.value).strip()
+                        hdrs[raw] = col_idx
+                        norm = raw.replace('\n', ' ')
+                        if norm != raw:
+                            hdrs.setdefault(norm, col_idx)
+                return hdr_row, hdrs
+        return None, {}
+
+    jobs_hdr_row, jobs_hdrs = _detect_header(ws_jobs)
+    if jobs_hdr_row is None:
+        return "❌ Could not detect header row in Jobs_Schedule."
+
+    def _jcol(name):
+        return jobs_hdrs.get(name)
+
+    # ── Find all jobs on route_date (optionally filtered by crew) ───────────
+    matching_jobs = []
+    sd_idx = _jcol("Service Date")
+    for row in ws_jobs.iter_rows(min_row=jobs_hdr_row + 1):
+        if not sd_idx:
+            break
+        sd_val = row[sd_idx - 1].value
+        if sd_val is None:
+            continue
+        if isinstance(sd_val, _bdt.datetime):
+            sd_date = sd_val.date()
+        elif isinstance(sd_val, _bdt.date):
+            sd_date = sd_val
+        else:
+            sd_date = None
+            for fmt in ("%Y-%m-%d", "%m/%d/%Y"):
+                try:
+                    sd_date = _bdt.datetime.strptime(str(sd_val).strip(), fmt).date()
+                    break
+                except ValueError:
+                    continue
+            if sd_date is None:
+                continue
+        if sd_date != target_date:
+            continue
+
+        def _cell(name, _row=row):
+            idx = _jcol(name)
+            return _row[idx - 1].value if idx else None
+
+        job_crew = str(_cell("Crew / Technician") or "").strip()
+        if crew.strip() and job_crew.lower() != crew.strip().lower():
+            continue
+
+        street = str(_cell("Street Address ★ AI Route") or "").strip()
+        city   = str(_cell("City ★ AI Route") or "").strip()
+        state  = str(_cell("State") or "").strip()
+        zipc   = str(_cell("ZIP ★ AI Route") or "").strip()
+        full_address = ", ".join(p for p in [street, city, f"{state} {zipc}".strip()] if p)
+        if not full_address:
+            continue
+
+        lat = _cell("Latitude (AI Geocode)")
+        lon = _cell("Longitude (AI Geocode)")
+
+        matching_jobs.append({
+            "row_num":   row[0].row,
+            "job_id":    _cell("JobID (JOB-####)"),
+            "cust_id":   _cell("CustomerID (Customers!A)"),
+            "cust_name": _cell("Customer Name / Company"),
+            "street": street, "city": city, "state": state, "zip": zipc,
+            "address": full_address,
+            "lat": float(lat) if isinstance(lat, (int, float)) else None,
+            "lon": float(lon) if isinstance(lon, (int, float)) else None,
+            "service_type": _cell("Service Type"),
+            "start_time": _cell("Start Time"),
+            "duration":   _cell("Est. Duration"),
+            "duration_unit": str(_cell("Est. Duration Unit") or "min").strip().lower(),
+            "crew": job_crew,
+        })
+
+    if not matching_jobs:
+        crew_note = f" for crew {crew!r}" if crew.strip() else ""
+        return (
+            f"ℹ️  No jobs scheduled on {target_date.isoformat()}{crew_note}.\n"
+            "Nothing to route — Route_Planner was not modified."
+        )
+
+    def _duration_minutes(job):
+        d = job["duration"]
+        if not isinstance(d, (int, float)):
+            return 0
+        unit = job["duration_unit"]
+        if unit.startswith("hour"):
+            return d * 60
+        if unit.startswith("day"):
+            return d * 480  # treat a "day" duration unit as an 8-hour workday
+        return d
+
+    def _as_time(val):
+        if isinstance(val, _bdt.time):
+            return val
+        if isinstance(val, _bdt.datetime):
+            return val.time()
+        if isinstance(val, str) and ":" in val:
+            try:
+                h, m = val.split(":")[:2]
+                return _bdt.time(int(h), int(m))
+            except ValueError:
+                return None
+        return None
+
+    # ── SCHEDULE OVERLAP check — independent of routing, from each job's own
+    # recorded Start Time + Duration ─────────────────────────────────────────
+    overlap_warnings = []
+    timed_jobs = []
+    for j in matching_jobs:
+        st = _as_time(j["start_time"])
+        if st is None:
+            continue
+        start_dt = _bdt.datetime.combine(target_date, st)
+        end_dt = start_dt + _bdt.timedelta(minutes=_duration_minutes(j))
+        timed_jobs.append((j, start_dt, end_dt))
+    timed_jobs.sort(key=lambda t: t[1])
+    for i in range(len(timed_jobs) - 1):
+        j_a, _sa, end_a = timed_jobs[i]
+        j_b, start_b, _eb = timed_jobs[i + 1]
+        if end_a > start_b:
+            overlap_warnings.append(
+                f"⚠️  SCHEDULE OVERLAP: {j_a['cust_name']} ({j_a['job_id']}) is "
+                f"scheduled until {end_a.strftime('%I:%M %p')}, but "
+                f"{j_b['cust_name']} ({j_b['job_id']}) is scheduled to start "
+                f"at {start_b.strftime('%I:%M %p')} — before the first job ends."
+            )
+
+    # ── Auto-geocode any job missing coordinates, writing results back to
+    # Jobs_Schedule ──────────────────────────────────────────────────────────
+    geocode_failures = []
+    for j in matching_jobs:
+        if j["lat"] is not None and j["lon"] is not None:
+            continue
+        _btime.sleep(0.35)
+        try:
+            geo = _req.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={"q": j["address"], "format": "json", "limit": 1},
+                headers={"User-Agent": "AI-Prowler/5.0 (field-service-tool)"},
+                timeout=10,
+            ).json()
+        except Exception as exc:
+            geocode_failures.append(f"{j['cust_name']} ({j['job_id']}) — {j['address']}: {exc}")
+            continue
+        if not geo:
+            geocode_failures.append(f"{j['cust_name']} ({j['job_id']}) — {j['address']}: no match found")
+            continue
+        j["lat"] = float(geo[0]["lat"])
+        j["lon"] = float(geo[0]["lon"])
+        lat_col = _jcol("Latitude (AI Geocode)")
+        lon_col = _jcol("Longitude (AI Geocode)")
+        if lat_col:
+            ws_jobs.cell(row=j["row_num"], column=lat_col).value = j["lat"]
+        if lon_col:
+            ws_jobs.cell(row=j["row_num"], column=lon_col).value = j["lon"]
+
+    routable_jobs = [j for j in matching_jobs if j["lat"] is not None and j["lon"] is not None]
+    if not routable_jobs:
+        return (
+            "❌ None of the day's jobs could be geocoded — no route can be built.\n"
+            "GEOCODING FAILED:\n" + "\n".join(f"  - {f}" for f in geocode_failures)
+        )
+
+    _btime.sleep(0.35)
+    try:
+        home_geo = _req.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": home_address, "format": "json", "limit": 1},
+            headers={"User-Agent": "AI-Prowler/5.0 (field-service-tool)"},
+            timeout=10,
+        ).json()
+    except Exception as exc:
+        return f"❌ Could not geocode home address: {exc}"
+    if not home_geo:
+        return f"❌ Could not geocode home address: {home_address}"
+    home_lat, home_lon = float(home_geo[0]["lat"]), float(home_geo[0]["lon"])
+
+    # ── OSRM /trip — optimal order + real drive times ────────────────────────
+    all_points = [(home_lat, home_lon)] + [(j["lat"], j["lon"]) for j in routable_jobs]
+    coord_str = ";".join(f"{lon},{lat}" for lat, lon in all_points)
+    try:
+        osrm_resp = _req.get(
+            f"http://router.project-osrm.org/trip/v1/driving/{coord_str}",
+            params={"roundtrip": "true", "source": "first", "destination": "any",
+                    "annotations": "false"},
+            timeout=30,
+        ).json()
+    except Exception as exc:
+        return f"❌ Route optimization request failed: {exc}"
+    if osrm_resp.get("code") != "Ok":
+        return f"❌ OSRM routing error: {osrm_resp.get('message', 'Unknown error')}"
+
+    trips = osrm_resp.get("trips", [])
+    waypoints = osrm_resp.get("waypoints", [])
+    if not trips or not waypoints:
+        return "❌ No route returned from OSRM."
+    legs = trips[0].get("legs", [])
+
+    # CORRECT waypoint-index reconstruction: waypoints[] is positionally
+    # aligned with the INPUT coordinates (all_points); each waypoint's own
+    # "waypoint_index" field is its VISIT POSITION in the optimized trip —
+    # NOT a re-usable index into the input array. To recover visit order,
+    # place each input position k at output slot waypoints[k]["waypoint_index"].
+    n = len(waypoints)
+    order_of_input_idx = [None] * n
+    for k, wp in enumerate(waypoints):
+        vi = wp.get("waypoint_index", k)
+        if 0 <= vi < n:
+            order_of_input_idx[vi] = k
+    ordered_point_idxs = [x for x in order_of_input_idx if x is not None]
+
+    # ── PRE-FLIGHT SAVINGS CHECK ─────────────────────────────────────────────
+    # Compare the TSP-optimal order (just computed) against the "as-scheduled"
+    # order — visiting jobs in the order of their own recorded Start Time,
+    # exactly as currently planned — using OSRM's /route endpoint (which
+    # computes drive time for a GIVEN FIXED sequence, unlike /trip which
+    # reorders for the optimum). If reordering to the optimal sequence would
+    # save 10+ minutes AND the two orders actually differ, stop here and
+    # alert rather than silently committing a different visit order than
+    # what the jobs' own Start Times implied — the caller gets a chance to
+    # revisit those Start Times (or just accept the reorder) before anything
+    # is written.
+    optimal_total_min = trips[0].get("duration", 0) / 60.0
+    optimal_job_order = [routable_jobs[idx - 1]["job_id"]
+                         for idx in ordered_point_idxs if idx != 0]
+
+    as_scheduled_jobs = sorted(
+        routable_jobs,
+        key=lambda j: (_as_time(j["start_time"]) is None,
+                       _as_time(j["start_time"]) or _bdt.time(23, 59)),
+    )
+    as_scheduled_job_order = [j["job_id"] for j in as_scheduled_jobs]
+
+    savings_alert = None
+    if not accept_reorder and optimal_job_order != as_scheduled_job_order:
+        as_sched_points = [(home_lat, home_lon)] + [
+            (j["lat"], j["lon"]) for j in as_scheduled_jobs
+        ] + [(home_lat, home_lon)]
+        as_sched_coord_str = ";".join(f"{lon},{lat}" for lat, lon in as_sched_points)
+        try:
+            as_sched_resp = _req.get(
+                f"http://router.project-osrm.org/route/v1/driving/{as_sched_coord_str}",
+                params={"overview": "false"},
+                timeout=30,
+            ).json()
+            as_scheduled_total_min = (
+                as_sched_resp["routes"][0]["duration"] / 60.0
+                if as_sched_resp.get("code") == "Ok" else None
+            )
+        except Exception:
+            as_scheduled_total_min = None
+
+        if as_scheduled_total_min is not None:
+            savings_min = as_scheduled_total_min - optimal_total_min
+            if savings_min >= 10:
+                alert_lines = [
+                    f"🔔 ROUTE SAVINGS AVAILABLE for {target_date.isoformat()}",
+                    "─" * 50,
+                    f"  As currently scheduled (by Start Time): "
+                    f"{as_scheduled_total_min:.0f} min drive",
+                    f"  Optimal visit order:                    "
+                    f"{optimal_total_min:.0f} min drive",
+                    f"  Potential savings:                      "
+                    f"{savings_min:.0f} min",
+                    "",
+                    "  As-scheduled order:",
+                ]
+                for i, j in enumerate(as_scheduled_jobs, 1):
+                    st = _as_time(j["start_time"])
+                    st_str = st.strftime("%I:%M %p") if st else "(no start time)"
+                    alert_lines.append(f"    {i}. {j['cust_name']} ({j['job_id']}) — {st_str}")
+                alert_lines.append("")
+                alert_lines.append("  Optimal order:")
+                for i, jid in enumerate(optimal_job_order, 1):
+                    j = next(jj for jj in routable_jobs if jj["job_id"] == jid)
+                    alert_lines.append(f"    {i}. {j['cust_name']} ({j['job_id']})")
+                alert_lines.append("")
+                alert_lines.append(
+                    "Nothing has been written yet. If you'd like to keep this "
+                    "faster order, either adjust these jobs' Start Times to "
+                    "match it, or call build_daily_route again with "
+                    "accept_reorder=True to proceed with the optimal order "
+                    "as-is (this may also trigger LATE ARRIVAL warnings for "
+                    "jobs whose recorded Start Time no longer matches when "
+                    "the route would actually arrive)."
+                )
+                savings_alert = "\n".join(alert_lines)
+
+    if savings_alert:
+        return savings_alert
+
+    # ── Compute arrival/departure schedule + LATE ARRIVAL warnings ──────────
+    cur_time = _bdt.datetime.combine(target_date, _bdt.time(departure_hour, 0))
+    late_warnings = []
+    stops_out = []
+    for seq_i, point_idx in enumerate(ordered_point_idxs):
+        if point_idx == 0:
+            continue  # home/origin, not a job stop
+        job = routable_jobs[point_idx - 1]
+        leg_idx = seq_i - 1
+        drive_min = 0.0
+        if 0 <= leg_idx < len(legs):
+            drive_min = legs[leg_idx].get("duration", 0) / 60.0
+            cur_time += _bdt.timedelta(minutes=drive_min)
+        arrival = cur_time
+        dur_min = _duration_minutes(job)
+        departure = arrival + _bdt.timedelta(minutes=dur_min)
+        cur_time = departure
+
+        sched_start = _as_time(job["start_time"])
+        if sched_start is not None:
+            sched_dt = _bdt.datetime.combine(target_date, sched_start)
+            if arrival > sched_dt + _bdt.timedelta(minutes=10):
+                late_warnings.append(
+                    f"⚠️  LATE ARRIVAL: {job['cust_name']} ({job['job_id']}) is "
+                    f"scheduled for {sched_dt.strftime('%I:%M %p')} but the "
+                    f"optimized route arrives at {arrival.strftime('%I:%M %p')} "
+                    f"— {int((arrival - sched_dt).total_seconds() / 60)} min late."
+                )
+
+        stops_out.append({
+            "stop_num": len(stops_out) + 1,
+            "job": job,
+            "drive_from_prev": round(drive_min),
+            "arrival": arrival,
+            "departure": departure,
+        })
+
+    # ── Backup now — right before the actual write, not earlier — so a
+    # pre-flight-savings-alert call (which returns above and writes nothing)
+    # never creates a wasted backup. Also covers the Latitude/Longitude
+    # geocoding write-back that already happened above in ws_jobs, in the
+    # same wb object about to be saved.
+    backup_msg = ""
+    if backup:
+        backup_msg = _backup_spreadsheet(fp)
+        if backup_msg.startswith("⚠️") or backup_msg.startswith("❌"):
+            return f"{backup_msg}\nSpreadsheet was NOT modified."
+
+    # ── Clear existing Route_Planner data rows — this sheet shows ONE day
+    # only, never a history ───────────────────────────────────────────────
+    route_hdr_row, route_hdrs = _detect_header(ws_route)
+    if route_hdr_row is None:
+        return "❌ Could not detect header row in Route_Planner."
+    existing_data_rows = max(ws_route.max_row - route_hdr_row, 0)
+    if existing_data_rows > 0:
+        ws_route.delete_rows(route_hdr_row + 1, existing_data_rows)
+
+    def _rcol(name):
+        return route_hdrs.get(name)
+
+    ordered_addresses = [s["job"]["address"] for s in stops_out]
+    maps_url_full = build_maps_url(stops=ordered_addresses, origin=home_address)
+    url_line = next((ln for ln in maps_url_full.splitlines() if ln.startswith("http")), "")
+    all_url_lines = [ln for ln in maps_url_full.splitlines() if ln.startswith("http")]
+
+    for i, s in enumerate(stops_out):
+        r = route_hdr_row + 1 + i
+        j = s["job"]
+
+        def _set(name, value, _r=r):
+            idx = _rcol(name)
+            if idx:
+                ws_route.cell(row=_r, column=idx).value = value
+
+        _set("Route Date", target_date)
+        _set("Crew / Technician", j["crew"])
+        _set("Stop #", s["stop_num"])
+        _set("JobID", j["job_id"])
+        _set("CustomerID", j["cust_id"])
+        _set("Customer Name / Company", j["cust_name"])
+        _set("Street Address ★ AI Geocode", j["address"])
+        _set("City", j["city"])
+        _set("State", j["state"])
+        _set("ZIP", j["zip"])
+        _set("Latitude (AI Fill)", j["lat"])
+        _set("Longitude (AI Fill)", j["lon"])
+        _set("Sched. Arrival", s["arrival"].strftime("%H:%M"))
+        _set("Sched. Depart", s["departure"].strftime("%H:%M"))
+        _set("Drive Time from Prev. (min)", s["drive_from_prev"])
+        _set("Service Type", j["service_type"])
+        _set("Duration (min)", _duration_minutes(j))
+
+        # Real clickable Excel hyperlink. cell.value stays the RAW URL
+        # string (not a friendly label) deliberately — the Jobs PWA's own
+        # link rendering (jobs/index.html) detects clickable columns by
+        # checking whether the cell VALUE itself starts with http(s)://,
+        # since it reads values only, not openpyxl hyperlink targets. A
+        # friendly label here would render correctly in Excel but silently
+        # stop being clickable in the PWA. Excel still shows this as a
+        # normal blue/underlined hyperlink either way.
+        _url_col_idx = _rcol("Waypoint Map URL ★ AI Prowler")
+        if _url_col_idx and url_line:
+            _url_cell = ws_route.cell(row=r, column=_url_col_idx)
+            _url_cell.value = url_line
+            _url_cell.hyperlink = url_line
+            _url_cell.font = _opx.styles.Font(color="0563C1", underline="single")
+
+        # ALSO persist this same URL onto the job's own Jobs_Schedule row
+        # (the sheet's existing "Route Map URL ★ AI Prowler" column, unused
+        # by this tool until now) — Route_Planner only ever shows the LAST
+        # date a route was built for (it's a single-day working view, by
+        # design), so without this a route built for a future/past date
+        # would have its link disappear the moment a different day's route
+        # gets built. Storing it per-job here means each job carries its
+        # own persistent link regardless of what Route_Planner currently
+        # shows — this is what lets "today's jobs" / calendar-style PWA
+        # views surface a job's route link even for a day that isn't the
+        # single day currently in Route_Planner.
+        _jobs_url_col = _jcol("Route Map URL ★ AI Prowler")
+        if _jobs_url_col and url_line:
+            _jobs_url_cell = ws_jobs.cell(row=j["row_num"], column=_jobs_url_col)
+            _jobs_url_cell.value = url_line
+            _jobs_url_cell.hyperlink = url_line
+            _jobs_url_cell.font = _opx.styles.Font(color="0563C1", underline="single")
+
+    try:
+        wb.save(fp)
+    except Exception as exc:
+        return f"❌ Could not save spreadsheet: {exc}"
+
+    lines = [
+        f"🗺️  Route built for {target_date.isoformat()}"
+        + (f" — crew: {crew}" if crew.strip() else ""),
+        "─" * 50,
+        f"  Stops:  {len(stops_out)}",
+    ]
+    if existing_data_rows > 0:
+        lines.append(f"  Cleared {existing_data_rows} previous row(s) from Route_Planner")
+    lines.append("")
+    for s in stops_out:
+        j = s["job"]
+        lines.append(
+            f"  {s['stop_num']}. {j['cust_name']} ({j['job_id']}) — {j['address']}\n"
+            f"     Drive from prev: {s['drive_from_prev']} min   "
+            f"Arrive: {s['arrival'].strftime('%I:%M %p')}   "
+            f"Depart: {s['departure'].strftime('%I:%M %p')}"
+        )
+    lines.append("")
+
+    if geocode_failures:
+        lines.append("⚠️  GEOCODING FAILED (excluded from route):")
+        lines.extend(f"  - {f}" for f in geocode_failures)
+        lines.append("")
+    if late_warnings:
+        lines.extend(late_warnings)
+        lines.append("")
+    if overlap_warnings:
+        lines.extend(overlap_warnings)
+        lines.append("")
+
+    if geocode_failures or late_warnings or overlap_warnings:
+        lines.append("🚨 Review the warnings above before dispatching this route.")
+    else:
+        lines.append("✅ No scheduling conflicts detected.")
+
+    if backup_msg:
+        lines.append(f"\n{backup_msg}")
+
+    # ── Optional: email the route link(s) — opt-in only, never sent
+    # automatically. A send failure or missing config never turns an
+    # otherwise-successful route build into an error — it's reported as
+    # a plain informational note appended to the same response.
+    if email_link:
+        cfg = _email_config_load()
+        if not cfg:
+            lines.append(
+                "\nℹ️  Email not sent — email isn't configured. Click the "
+                "link in the Route_Planner tab instead, or set up email "
+                "in Settings → Email Configuration."
+            )
+        else:
+            to = (email_to or cfg.get("default_to") or cfg.get("username") or "").strip()
+            if not to:
+                lines.append(
+                    "\nℹ️  Email not sent — no recipient could be "
+                    "determined. Click the link in the Route_Planner tab "
+                    "instead, or pass email_to explicitly, or set a "
+                    "default_to/username in Settings → Email Configuration."
+                )
+            else:
+                subject = (
+                    f"Route for {target_date.isoformat()} — {len(stops_out)} stop"
+                    f"{'s' if len(stops_out) != 1 else ''}"
+                    + (f" ({crew})" if crew.strip() else "")
+                )
+                body_parts = [
+                    f"Route for {target_date.isoformat()}"
+                    + (f" — crew: {crew}" if crew.strip() else "") + "\n",
+                ]
+                for s in stops_out:
+                    j = s["job"]
+                    body_parts.append(
+                        f"{s['stop_num']}. {j['cust_name']} — {j['address']}\n"
+                        f"   Arrive {s['arrival'].strftime('%I:%M %p')}, "
+                        f"depart {s['departure'].strftime('%I:%M %p')}"
+                    )
+                body_parts.append("")
+                if len(all_url_lines) > 1:
+                    body_parts.append(
+                        f"Route split into {len(all_url_lines)} legs "
+                        f"(Google Maps supports 9 waypoints per link) — "
+                        f"tap each when the previous leg is complete:\n"
+                    )
+                    for i, u in enumerate(all_url_lines, 1):
+                        body_parts.append(f"Leg {i}: {u}")
+                else:
+                    body_parts.append(f"Tap to navigate: {url_line}")
+                body = "\n".join(body_parts)
+
+                try:
+                    email_ok, email_msg = _send_smtp(to, subject, body)
+                except Exception as exc:
+                    email_ok, email_msg = False, str(exc)
+                if email_ok:
+                    lines.append(f"\n📧 Route link emailed to {to}")
+                else:
+                    lines.append(f"\n⚠️  Route built, but the email failed to "
+                                 f"send: {email_msg}")
+
     return "\n".join(lines)
 
 
@@ -5681,6 +6827,48 @@ def _read_settings_tax_rate(filepath: str, fallback: float = 0.07) -> float:
     return fallback
 
 
+def _read_business_info(filepath: str) -> dict:
+    """Read the COMPANY INFORMATION block from the Settings sheet.
+
+    Returns a dict with keys: name, phone, email, address, website, license.
+    Any key whose row is missing, blank, or the sheet itself doesn't exist
+    returns "" for that key — callers should treat an empty string as
+    "omit this from the invoice/receipt header" rather than erroring, since
+    Website and License are explicitly marked optional in the sheet's own
+    Notes column, and a fresh install may not have filled in the rest yet.
+
+    Used by email_invoice() and email_receipt() to print who the customer
+    is actually paying — the Business Name row's own Notes column says
+    "Appears on invoices and email headers", but until this helper existed
+    nothing actually read it; invoices showed no sender identity at all.
+    """
+    _keys = {
+        "Business Name":         "name",
+        "Business Phone":        "phone",
+        "Business Email":        "email",
+        "Business Address":      "address",
+        "Website":               "website",
+        "License / LLC Number":  "license",
+    }
+    info = {v: "" for v in _keys.values()}
+    try:
+        import openpyxl as _opx
+        _wb = _opx.load_workbook(filepath, data_only=True, read_only=True)
+        if "Settings" not in _wb.sheetnames:
+            return info
+        _ws = _wb["Settings"]
+        for _row in _ws.iter_rows(min_row=3, values_only=True):
+            if not _row:
+                continue
+            _label = str(_row[0] or "").strip()
+            if _label in _keys:
+                _val = _row[1]
+                info[_keys[_label]] = str(_val).strip() if _val is not None else ""
+    except Exception:
+        pass
+    return info
+
+
 def _create_invoice_impl(
     job_identifier: str,
     quote_amount:   "float | None",
@@ -6412,6 +7600,27 @@ def email_invoice(
     balance   = _fmt_money("Balance Due ($)")
     pmt_status= _fv("Payment Status", "Unpaid")
 
+    # Business identity — Settings sheet's own Notes column says these
+    # rows "Appear on invoices and email headers" / "Printed on invoices",
+    # but nothing previously read them, so every invoice looked like it
+    # came from "AI-Prowler" with no indication of which business the
+    # customer is actually paying.
+    _biz = _read_business_info(fp)
+    _biz_name    = _biz["name"] or "Your Business"
+    _biz_lines   = []
+    if _biz["address"]:
+        _biz_lines.append(_biz["address"])
+    if _biz["phone"]:
+        _biz_lines.append(_biz["phone"])
+    if _biz["email"]:
+        _biz_lines.append(_biz["email"])
+    if _biz["website"]:
+        _biz_lines.append(_biz["website"])
+    _biz_subline = " &nbsp;|&nbsp; ".join(_biz_lines)
+    _biz_license = (f'<p style="margin:2px 0 0;font-size:11px;opacity:0.7;">'
+                    f'License/LLC: {_biz["license"]}</p>'
+                    if _biz["license"] else "")
+
     html_body = f"""<!DOCTYPE html>
 <html>
 <head><meta charset="UTF-8">
@@ -6419,16 +7628,19 @@ def email_invoice(
   body {{ font-family: Arial, sans-serif; color: #333; max-width: 650px; margin: 0 auto; }}
   .header {{ background: #1a3c5e; color: white; padding: 24px 32px; }}
   .header h1 {{ margin: 0; font-size: 28px; letter-spacing: 1px; }}
+  .header .biz-name {{ margin: 0 0 6px; font-size: 16px; font-weight: bold; }}
   .header p  {{ margin: 4px 0 0; font-size: 13px; opacity: 0.85; }}
-  .section   {{ padding: 20px 32px; }}
-  .row       {{ display: flex; justify-content: space-between; margin: 6px 0; }}
-  .label     {{ color: #666; font-size: 14px; }}
-  .value     {{ font-weight: 600; font-size: 14px; }}
+  .section   {{ padding: 14px 32px; }}
+  .row-table {{ width: 100%; border-collapse: collapse; }}
+  .label     {{ color: #666; font-size: 14px; text-align: left; padding: 4px 0; }}
+  .value     {{ font-weight: 600; font-size: 14px; text-align: right; padding: 4px 0; }}
   table      {{ width: 100%; border-collapse: collapse; margin-top: 8px; }}
   th         {{ background: #f0f4f8; text-align: left; padding: 10px; font-size: 13px; color: #555; }}
   td         {{ padding: 10px; border-bottom: 1px solid #eee; font-size: 14px; }}
-  .totals    {{ background: #f9f9f9; padding: 16px 32px; }}
-  .total-row {{ display: flex; justify-content: space-between; padding: 4px 0; font-size: 14px; }}
+  .totals    {{ background: #f9f9f9; padding: 12px 32px; }}
+  .total-td  {{ padding: 3px 0; font-size: 14px; }}
+  .total-label {{ text-align: left; }}
+  .total-value {{ text-align: right; }}
   .grand     {{ font-size: 18px; font-weight: bold; color: #1a3c5e; border-top: 2px solid #1a3c5e; margin-top: 8px; padding-top: 8px; }}
   .footer    {{ background: #f0f4f8; padding: 16px 32px; font-size: 12px; color: #888; }}
   .badge     {{ display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold;
@@ -6438,15 +7650,20 @@ def email_invoice(
 </head>
 <body>
 <div class="header">
+  <p class="biz-name">{_biz_name}</p>
   <h1>INVOICE</h1>
   <p>{inv_id} &nbsp;|&nbsp; {job_id}</p>
+  {f'<p>{_biz_subline}</p>' if _biz_subline else ''}
+  {_biz_license}
 </div>
 <div class="section">
-  <div class="row"><span class="label">Bill To</span><span class="value">{cust}</span></div>
-  <div class="row"><span class="label">Service Date</span><span class="value">{svc_date}</span></div>
-  <div class="row"><span class="label">Invoice Date</span><span class="value">{inv_date}</span></div>
-  <div class="row"><span class="label">Due Date</span><span class="value">{due_date}</span></div>
-  <div class="row"><span class="label">Status</span><span class="value"><span class="badge">{pmt_status}</span></span></div>
+  <table class="row-table" cellpadding="0" cellspacing="0">
+    <tr><td class="label">Bill To</td><td class="value">{cust}</td></tr>
+    <tr><td class="label">Service Date</td><td class="value">{svc_date}</td></tr>
+    <tr><td class="label">Invoice Date</td><td class="value">{inv_date}</td></tr>
+    <tr><td class="label">Due Date</td><td class="value">{due_date}</td></tr>
+    <tr><td class="label">Status</td><td class="value"><span class="badge">{pmt_status}</span></td></tr>
+  </table>
 </div>
 <div class="section">
   <table>
@@ -6455,11 +7672,13 @@ def email_invoice(
   </table>
 </div>
 <div class="totals">
-  <div class="total-row"><span>Subtotal</span><span>{subtotal}</span></div>
-  <div class="total-row"><span>Discount</span><span>({discount})</span></div>
-  <div class="total-row"><span>Tax (7%)</span><span>{tax}</span></div>
-  <div class="total-row grand"><span>TOTAL DUE</span><span>{total_due}</span></div>
-  {"" if pmt_status == "Paid" else f'<div class="total-row" style="color:#e65100"><span>Balance Due</span><span>{balance}</span></div>'}
+  <table class="row-table" cellpadding="0" cellspacing="0">
+    <tr><td class="total-td total-label">Subtotal</td><td class="total-td total-value">{subtotal}</td></tr>
+    <tr><td class="total-td total-label">Discount</td><td class="total-td total-value">({discount})</td></tr>
+    <tr><td class="total-td total-label">Tax (7%)</td><td class="total-td total-value">{tax}</td></tr>
+    <tr class="grand"><td class="total-td total-label">TOTAL DUE</td><td class="total-td total-value">{total_due}</td></tr>
+    {"" if pmt_status == "Paid" else f'<tr><td class="total-td total-label" style="color:#e65100">Balance Due</td><td class="total-td total-value" style="color:#e65100">{balance}</td></tr>'}
+  </table>
 </div>
 <div class="footer">
   <p>Thank you for your business! Questions? Reply to this email.</p>
@@ -6527,7 +7746,17 @@ def email_invoice(
 
     subject = f"Invoice {inv_id} — {cust} — {total_due}"
 
-    # ── Send via existing send_email infrastructure ───────────────────────────
+    # ── Send via the shared, backend-aware _send_smtp() router ────────────────
+    # This was previously a separate, hardcoded raw-SMTP-only implementation
+    # that never consulted the configured backend (Outlook / SMTP /
+    # Outlook+SMTP) — it always tried plain SMTP regardless of Settings,
+    # so a user with Outlook configured (no password needed) would still
+    # get an SMTP authentication failure if their SMTP app password was
+    # blank, stale, or never set. _send_smtp() is the same function
+    # send_email()/email_receipt() already use — it correctly tries Outlook
+    # first when configured, only falling back to SMTP if Outlook fails or
+    # isn't set up, exactly matching what the Settings panel's backend
+    # checkboxes promise ("No password needed for Outlook").
     cfg = _email_config_load()
     if not cfg:
         return ("❌ Email not configured. Call configure_email() first.")
@@ -6536,44 +7765,31 @@ def email_invoice(
     if not to:
         return "❌ Could not determine recipient email address."
 
-    import smtplib as _smtp
-    import email.mime.multipart as _mp
-    import email.mime.text as _mt
+    _plain_body = (
+        f"Invoice {inv_id} for {cust}\n"
+        f"Service: {svc_type}\n"
+        f"Total Due: {total_due}\n"
+        f"Due Date: {due_date}\n\n"
+        f"View this invoice in HTML format if your email client supports it."
+    )
 
     try:
-        msg = _mp.MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"]    = f"{cfg.get('from_name','AI-Prowler')} <{cfg.get('from_address', cfg.get('username',''))}>"
-        msg["To"]      = to
-        msg.attach(_mt.MIMEText(html_body, "html", "utf-8"))
-
-        port = int(cfg.get("smtp_port", 587))
-        host = cfg.get("smtp_host", "")
-        user = cfg.get("username", "")
-        pwd  = cfg.get("password", "")
-        from_addr = cfg.get("from_address", user)
-
-        if port == 465:
-            with _smtp.SMTP_SSL(host, port, timeout=30) as server:
-                server.login(user, pwd)
-                server.sendmail(from_addr, [to], msg.as_string())
-        else:
-            with _smtp.SMTP(host, port, timeout=30) as server:
-                server.ehlo()
-                server.starttls()
-                server.login(user, pwd)
-                server.sendmail(from_addr, [to], msg.as_string())
-
-        _email_result_msg = (
-            f"✅ Invoice emailed\n"
-            f"   Invoice:   {inv_id}  ({job_id})\n"
-            f"   Customer:  {cust}\n"
-            f"   Total Due: {total_due}\n"
-            f"   Sent to:   {to}\n"
-            f"   Subject:   {subject}"
-        )
+        _ei_ok, _ei_msg = _send_smtp(
+            to, subject, _plain_body, body_html=html_body)
     except Exception as exc:
         return f"❌ Email send failed: {exc}"
+
+    if not _ei_ok:
+        return f"❌ Email send failed: {_ei_msg}"
+
+    _email_result_msg = (
+        f"✅ Invoice emailed\n"
+        f"   Invoice:   {inv_id}  ({job_id})\n"
+        f"   Customer:  {cust}\n"
+        f"   Total Due: {total_due}\n"
+        f"   Sent to:   {to}\n"
+        f"   Subject:   {subject}"
+    )
 
     # ── also_sms: companion SMS notification (optional) ───────────────────────
     # Reuses the checkout URL(s) already built above — one session, two channels.
@@ -6758,6 +7974,7 @@ def email_receipt(
         return _er_lookup["error"]
     wb      = _er_lookup["wb"]
     inv_row = _er_lookup["inv_row"]
+    fp      = _er_lookup["fp"]
 
     # ── Resolve recipient email ────────────────────────────────────────────────
     if not to:
@@ -6810,16 +8027,38 @@ def email_receipt(
     svc_type  = _rv("Service Type")
     desc      = _rv("Description")
     subtotal  = _rfmt("Subtotal ($)")
-    tax       = _rfmt("Tax ($)")
+    tax       = _rfmt("Tax 7% ($)")
     total_due = _rfmt("TOTAL DUE ($)")
     address   = _rv("Service Address")
     paid_date = _dt.date.today().strftime("%B %d, %Y")
     pm        = (payment_method or "Cash").strip()
 
+    # Business identity — same rationale as email_invoice()'s identical fix.
+    _biz = _read_business_info(fp)
+    _biz_name = _biz["name"] or "Your Business"
+    _biz_lines = [v for v in (_biz["address"], _biz["phone"], _biz["email"])
+                  if v]
+    _biz_subline = " &nbsp;|&nbsp; ".join(_biz_lines)
+
     # ── Build HTML receipt ─────────────────────────────────────────────────────
     html_body = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
-<title>Payment Receipt — {inv_id}</title></head>
+<title>Payment Receipt — {inv_id}</title>
+<style>
+  /* Same proven row-table pattern used by email_invoice() — the user
+     specifically confirmed this spacing looks right in Outlook, unlike
+     the receipt's earlier per-row-border/inline-style approach. No
+     border-bottom on individual rows here; just clean class-based
+     padding, matching invoice's Bill To section exactly. */
+  .row-table {{ width: 100%; border-collapse: collapse; }}
+  .label     {{ color: #666; font-size: 14px; text-align: left; padding: 4px 0; }}
+  .value     {{ font-weight: 600; font-size: 14px; text-align: right; padding: 4px 0; }}
+  .total-td  {{ padding: 3px 0; font-size: 14px; }}
+  .total-label {{ text-align: left; color: #666; }}
+  .total-value {{ text-align: right; font-weight: 600; }}
+  .grand     {{ font-size: 16px; font-weight: bold; color: #2e7d32; border-top: 2px solid #2e7d32; padding-top: 6px; }}
+</style>
+</head>
 <body style="margin:0;padding:0;background:#f5f5f5;font-family:Arial,sans-serif;">
 <table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f5f5;padding:32px 0;">
 <tr><td align="center">
@@ -6827,10 +8066,12 @@ def email_receipt(
   box-shadow:0 2px 8px rgba(0,0,0,.12);overflow:hidden;max-width:600px;">
 
   <tr><td style="background:#1a3c5e;padding:28px 32px;">
+    <p style="margin:0 0 8px;color:#ffffff;font-size:15px;font-weight:bold;">{_biz_name}</p>
     <h1 style="margin:0;color:#ffffff;font-size:22px;font-weight:700;">
       ✅ Payment Received — Thank You!
     </h1>
     <p style="margin:6px 0 0;color:#a8c4d8;font-size:13px;">Receipt #{inv_id}</p>
+    {f'<p style="margin:4px 0 0;color:#a8c4d8;font-size:12px;">{_biz_subline}</p>' if _biz_subline else ''}
   </td></tr>
 
   <tr><td style="padding:28px 32px;">
@@ -6840,35 +8081,21 @@ def email_receipt(
       payment in full. Please keep this receipt for your records.
     </p>
 
-    <table width="100%" cellpadding="0" cellspacing="0"
-      style="border:1px solid #e0e0e0;border-radius:6px;overflow:hidden;margin-bottom:24px;">
-      <tr style="background:#f8f9ff;">
-        <td colspan="2" style="padding:12px 16px;font-weight:700;font-size:13px;
-          color:#1a3c5e;border-bottom:1px solid #e0e0e0;">Receipt Details</td>
-      </tr>
-      <tr><td style="padding:10px 16px;color:#666;font-size:13px;border-bottom:1px solid #f0f0f0;">Receipt #</td>
-          <td style="padding:10px 16px;font-size:13px;border-bottom:1px solid #f0f0f0;">{inv_id}</td></tr>
-      <tr><td style="padding:10px 16px;color:#666;font-size:13px;border-bottom:1px solid #f0f0f0;">Job #</td>
-          <td style="padding:10px 16px;font-size:13px;border-bottom:1px solid #f0f0f0;">{job_id}</td></tr>
-      <tr><td style="padding:10px 16px;color:#666;font-size:13px;border-bottom:1px solid #f0f0f0;">Date Paid</td>
-          <td style="padding:10px 16px;font-size:13px;border-bottom:1px solid #f0f0f0;">{paid_date}</td></tr>
-      <tr><td style="padding:10px 16px;color:#666;font-size:13px;border-bottom:1px solid #f0f0f0;">Payment Method</td>
-          <td style="padding:10px 16px;font-size:13px;border-bottom:1px solid #f0f0f0;">{pm}</td></tr>
-      <tr><td style="padding:10px 16px;color:#666;font-size:13px;border-bottom:1px solid #f0f0f0;">Service Date</td>
-          <td style="padding:10px 16px;font-size:13px;border-bottom:1px solid #f0f0f0;">{svc_date}</td></tr>
-      <tr><td style="padding:10px 16px;color:#666;font-size:13px;border-bottom:1px solid #f0f0f0;">Service</td>
-          <td style="padding:10px 16px;font-size:13px;border-bottom:1px solid #f0f0f0;">{svc_type}</td></tr>
-      <tr><td style="padding:10px 16px;color:#666;font-size:13px;border-bottom:1px solid #f0f0f0;">Description</td>
-          <td style="padding:10px 16px;font-size:13px;border-bottom:1px solid #f0f0f0;">{desc}</td></tr>
-      {'<tr><td style="padding:10px 16px;color:#666;font-size:13px;border-bottom:1px solid #f0f0f0;">Address</td><td style="padding:10px 16px;font-size:13px;border-bottom:1px solid #f0f0f0;">' + address + '</td></tr>' if address != '—' else ''}
-      <tr><td style="padding:10px 16px;color:#666;font-size:13px;border-bottom:1px solid #f0f0f0;">Subtotal</td>
-          <td style="padding:10px 16px;font-size:13px;border-bottom:1px solid #f0f0f0;">{subtotal}</td></tr>
-      <tr><td style="padding:10px 16px;color:#666;font-size:13px;border-bottom:1px solid #f0f0f0;">Tax</td>
-          <td style="padding:10px 16px;font-size:13px;border-bottom:1px solid #f0f0f0;">{tax}</td></tr>
-      <tr style="background:#e8f5e9;">
-        <td style="padding:12px 16px;font-weight:700;color:#2e7d32;font-size:15px;">AMOUNT PAID</td>
-        <td style="padding:12px 16px;font-weight:700;color:#2e7d32;font-size:15px;">{total_due}</td>
-      </tr>
+    <table class="row-table" cellpadding="0" cellspacing="0">
+      <tr><td class="label">Receipt #</td><td class="value">{inv_id}</td></tr>
+      <tr><td class="label">Job #</td><td class="value">{job_id}</td></tr>
+      <tr><td class="label">Date Paid</td><td class="value">{paid_date}</td></tr>
+      <tr><td class="label">Payment Method</td><td class="value">{pm}</td></tr>
+      <tr><td class="label">Service Date</td><td class="value">{svc_date}</td></tr>
+      <tr><td class="label">Service</td><td class="value">{svc_type}</td></tr>
+      <tr><td class="label">Description</td><td class="value">{desc}</td></tr>
+      {'<tr><td class="label">Address</td><td class="value">' + address + '</td></tr>' if address != '—' else ''}
+    </table>
+
+    <table class="row-table" cellpadding="0" cellspacing="0" style="margin-top:16px;">
+      <tr><td class="total-td total-label">Subtotal</td><td class="total-td total-value">{subtotal}</td></tr>
+      <tr><td class="total-td total-label">Tax (7%)</td><td class="total-td total-value">{tax}</td></tr>
+      <tr class="grand"><td class="total-td total-label">AMOUNT PAID</td><td class="total-td total-value">{total_due}</td></tr>
     </table>
 
     <p style="margin:0;font-size:13px;color:#888;text-align:center;">
@@ -6887,33 +8114,27 @@ def email_receipt(
     if not cfg:
         return "❌ Email not configured. Call configure_email() first."
 
-    import smtplib as _smtp2
-    import email.mime.multipart as _mp2
-    import email.mime.text as _mt2
+    # Send via the shared, backend-aware _send_smtp() router — see the
+    # identical fix and rationale in email_invoice() just above. This was
+    # previously a hardcoded raw-SMTP-only send that ignored the configured
+    # backend entirely, so an Outlook-configured user (no password needed)
+    # would still fail here on a blank/stale SMTP app password.
+    _to = to.strip()
+    _plain_body = (
+        f"Payment Receipt #{inv_id} for {cust}\n"
+        f"Amount Paid: {total_due}\n"
+        f"Payment Method: {pm}\n\n"
+        f"Thank you for your business!"
+    )
 
     try:
-        msg = _mp2.MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"]    = f"{cfg.get('from_name','AI-Prowler')} <{cfg.get('from_address', cfg.get('username',''))}>"
-        msg["To"]      = to.strip()
-        msg.attach(_mt2.MIMEText(html_body, "html", "utf-8"))
-
-        port = int(cfg.get("smtp_port", 587))
-        host = cfg.get("smtp_host", "")
-        user = cfg.get("username", "")
-        pwd  = cfg.get("password", "")
-        from_addr = cfg.get("from_address", user)
-
-        if port == 465:
-            with _smtp2.SMTP_SSL(host, port, timeout=30) as srv:
-                srv.login(user, pwd)
-                srv.sendmail(from_addr, [to.strip()], msg.as_string())
-        else:
-            with _smtp2.SMTP(host, port, timeout=30) as srv:
-                srv.ehlo(); srv.starttls(); srv.login(user, pwd)
-                srv.sendmail(from_addr, [to.strip()], msg.as_string())
+        _er_ok, _er_msg = _send_smtp(
+            _to, subject, _plain_body, body_html=html_body)
     except Exception as exc:
         return f"❌ Email send failed: {exc}"
+
+    if not _er_ok:
+        return f"❌ Email send failed: {_er_msg}"
 
     return (
         f"✅ Receipt emailed\n"
@@ -6921,7 +8142,7 @@ def email_receipt(
         f"   Customer:  {cust}\n"
         f"   Amount:    {total_due}\n"
         f"   Method:    {pm}\n"
-        f"   Sent to:   {to.strip()}"
+        f"   Sent to:   {_to}"
     )
 
 
@@ -8143,7 +9364,19 @@ def _schedule_next_recurring_job_impl(job_identifier: str, filepath: str, when: 
                 cid   = str(crow.get("CustomerID (CUST-####)", "") or "")
                 cn    = str(crow.get("Company Name", "") or crow.get("First Name", "") or "")
                 if (cust_id and cid == cust_id) or (cust_name and cust_name.lower() in str(cvals).lower()):
-                    frequency = str(crow.get("Frequency W/BW/M/Q/OT", "") or "")
+                    # Column is "Frequency" in the current Customers sheet
+                    # schema (confirmed via get_sheet_columns). The old
+                    # "Frequency W/BW/M/Q/OT" header name this used to look
+                    # for doesn't exist in ANY current spreadsheet — that
+                    # made frequency always resolve to "" for every
+                    # customer, real or test, silently turning every
+                    # customer into a false "one-time customer" regardless
+                    # of what was actually set in their Frequency column.
+                    # Check "Frequency" first (current schema), fall back
+                    # to the legacy name for any older exported sheet that
+                    # still uses it.
+                    frequency = str(crow.get("Frequency", "")
+                                    or crow.get("Frequency W/BW/M/Q/OT", "") or "")
                     pref_day  = str(crow.get("Preferred Day(s)", "") or "")
                     pref_time = str(crow.get("Pref. Time Window", "") or "")
                     break
@@ -8224,10 +9457,13 @@ def _schedule_next_recurring_job_impl(job_identifier: str, filepath: str, when: 
     new_job_id = f"JOB-{next_num:04d}"
 
     # ── Build new row matching Jobs_Schedule columns ──────────────────────────
-    # Find the next empty row
+    # Find the next empty row — anchor on the last row with a real JobID in
+    # column A, not "any non-empty cell anywhere" (see create_job's identical
+    # fix for why: a stray formatting artifact far below the real data can
+    # otherwise push the new row dozens/hundreds of rows down).
     last_row = job_hdr_row
     for row in ws_jobs.iter_rows(min_row=job_hdr_row + 1):
-        if any(c.value for c in row):
+        if row[0].value:
             last_row = row[0].row
 
     new_row_data = {
@@ -8239,7 +9475,7 @@ def _schedule_next_recurring_job_impl(job_identifier: str, filepath: str, when: 
         "City ★ AI Route":           cust_city,
         "State":                     str(found_job.get("State", "") or ""),
         "ZIP ★ AI Route":            cust_zip,
-        "Service Date":              next_date.strftime('%m/%d/%Y'),
+        "Service Date":              next_date,
         "Day of Week":               next_date.strftime('%A'),
         "Service Type":              svc_type,
         "Service Details / Notes":   svc_notes,
@@ -8251,7 +9487,22 @@ def _schedule_next_recurring_job_impl(job_identifier: str, filepath: str, when: 
     new_row_num = last_row + 1
     for col_idx, col_name in enumerate(job_hdrs, 1):
         if col_name in new_row_data:
-            ws_jobs.cell(row=new_row_num, column=col_idx).value = new_row_data[col_name]
+            _val = new_row_data[col_name]
+            _cell = ws_jobs.cell(row=new_row_num, column=col_idx)
+            _cell.value = _val
+            # Match create_job's date handling: a real date/datetime value
+            # gets an explicit Excel number format so it displays and reads
+            # back as a proper date, not the serial number Excel would
+            # otherwise show for an unformatted date cell. Previously this
+            # wrote next_date.strftime('%m/%d/%Y') — a STRING that looked
+            # fine when read for display, but meant the Service Date column
+            # silently mixed real dates (from create_job) with plain text
+            # dates (from this tool) in the same column — breaking any
+            # code that filters/sorts/compares Service Date as a real date
+            # (e.g. read_job_spreadsheet's filter_date, or this tool's own
+            # date-range matching on a job created by ITS OWN prior run).
+            if isinstance(_val, (_dt.date, _dt.datetime)):
+                _cell.number_format = 'MM/DD/YYYY'
 
     try:
         wb.save(fp)
@@ -8641,8 +9892,25 @@ def _log_time_entry_impl(job_identifier: str, action: str, filepath: str, ctx, g
                     row_text = " ".join(str(v) for v in vals if v)
                     if job_id_found.lower() in row_text.lower():
                         for col_idx, col_name in enumerate(job_hdrs2, 1):
-                            if "Actual" in col_name and "Duration" in col_name:
+                            # Match "Actual Duration" exactly — NOT "Actual
+                            # Duration Unit", which also contains both
+                            # substrings and would otherwise get overwritten
+                            # with the numeric elapsed_mins value, clobbering
+                            # its correct unit string (e.g. "min").
+                            if ("Actual" in col_name and "Duration" in col_name
+                                    and "Unit" not in col_name):
                                 ws_jobs.cell(row=row[0].row, column=col_idx).value = elapsed_mins
+                            # elapsed_mins is always computed in minutes above
+                            # (elapsed_td.total_seconds() / 60), so whenever we
+                            # write a numeric Actual Duration we also stamp its
+                            # Unit as "min" — but only if that cell is currently
+                            # blank, so a job someone deliberately set to a
+                            # different unit (e.g. "hour") beforehand keeps its
+                            # own label instead of being silently overridden.
+                            elif "Actual" in col_name and "Duration" in col_name and "Unit" in col_name:
+                                _unit_cell = ws_jobs.cell(row=row[0].row, column=col_idx)
+                                if not _unit_cell.value:
+                                    _unit_cell.value = "min"
                         break
 
         try:
@@ -13817,17 +15085,28 @@ def _contact_save(name: str, phone: str = "", email: str = "",
 
 
 def _email_config_load() -> "dict | None":
-    """Load email config from disk. Returns None if not configured."""
+    """Load email config from disk. Returns None if not configured.
+
+    Accepts both SMTP configs (must have smtp_host) and Outlook configs
+    (backend='outlook' — no smtp_host required).
+    """
     try:
         if _EMAIL_CONFIG_PATH().exists():
             raw = json.loads(_EMAIL_CONFIG_PATH().read_text(encoding="utf-8"))
-            if isinstance(raw, dict) and raw.get("smtp_host"):
-                # Decode obfuscated password
-                raw = dict(raw)
-                enc = raw.get("_password_b64", "")
-                if enc:
-                    raw["password"] = _b64.b64decode(enc.encode()).decode("utf-8")
-                return raw
+            if isinstance(raw, dict):
+                # Outlook backend (or Outlook+SMTP) — valid without smtp_host
+                if raw.get("backend") in ("outlook", "outlook+smtp") \
+                        and raw.get("username"):
+                    raw = dict(raw)
+                    # No password to decode for Outlook configs
+                    return raw
+                # SMTP backend (or legacy config without 'backend' key)
+                if raw.get("smtp_host"):
+                    raw = dict(raw)
+                    enc = raw.get("_password_b64", "")
+                    if enc:
+                        raw["password"] = _b64.b64decode(enc.encode()).decode("utf-8")
+                    return raw
     except Exception as _e:
         _log.warning("email_config load failed: %s", _e)
     return None
@@ -13893,30 +15172,238 @@ def _email_config_save(cfg: dict) -> bool:
         return False
 
 
+def _outlook_is_available() -> bool:
+    """Return True if classic Outlook (with COM interface) is available.
+
+    The NEW Outlook for Windows (olk.exe / Windows Store app, released 2023+)
+    does NOT expose a COM interface — it raises REGDB_E_CLASSNOTREG (-2147221005)
+    on every COM strategy.  This function intentionally returns False for the new
+    Outlook because AI-Prowler's send_email / email_invoice tools require the COM
+    interface to send silently in the background without user interaction.
+
+    For new Outlook users, SMTP with an app password is the correct backend.
+
+    Detection strategies (classic Outlook only):
+    1. GetActiveObject  — safe; connects to an already-running Outlook instance
+                          without launching anything. Returns True instantly.
+    2. Registry probe   — safe; reads HKLM/HKCU App Paths for OUTLOOK.EXE.
+                          Never launches any process. Explicitly excludes olk.exe.
+    NOTE: Dispatch("Outlook.Application") is intentionally NOT used — it cold-starts
+    the OUTLOOK.EXE process as a side effect, which conflicts with new Outlook (olk.exe)
+    and causes the "Only one version of Outlook can run at a time" error on startup.
+    """
+    try:
+        import win32com.client as _wc
+
+        # Strategy 1 — GetActiveObject: connects to a RUNNING Outlook instance.
+        # SAFE — never launches Outlook, only checks if it is already open.
+        try:
+            _app = _wc.GetActiveObject("Outlook.Application")
+            _ = _app.Version
+            return True
+        except Exception:
+            pass
+
+        # ── Strategy 2 (Dispatch) intentionally REMOVED ──────────────────────
+        # wc.Dispatch("Outlook.Application") cold-starts the Outlook COM server,
+        # which actually LAUNCHES the OUTLOOK.EXE process as a side effect.
+        # When the new Outlook (olk.exe) is also running, this triggers the
+        # "Only one version of Outlook can run at a time" conflict error.
+        # GetActiveObject (Strategy 1) and the registry probe (Strategy 3) are
+        # sufficient to detect classic Outlook without launching it.
+        # ─────────────────────────────────────────────────────────────────────
+
+        # Strategy 3 — Registry probe: checks for OUTLOOK.EXE in App Paths.
+        # SAFE — reads registry only, never launches any process.
+        # Explicitly excludes olk.exe (new Outlook) which has no COM server.
+        try:
+            import winreg as _reg
+            for _hive in (_reg.HKEY_LOCAL_MACHINE, _reg.HKEY_CURRENT_USER):
+                try:
+                    _k = _reg.OpenKey(
+                        _hive,
+                        r"SOFTWARE\Microsoft\Windows\CurrentVersion"
+                        r"\App Paths\OUTLOOK.EXE")
+                    _val, _ = _reg.QueryValueEx(_k, "")
+                    if _val and "olk" not in _val.lower():
+                        return True   # classic OUTLOOK.EXE registered
+                except OSError:
+                    pass
+        except Exception:
+            pass
+
+        return False
+
+    except ImportError:
+        # win32com (pywin32) not installed
+        return False
+
+
+def _new_outlook_is_running() -> bool:
+    """Return True if the new Outlook for Windows (olk.exe) is running.
+
+    The new Outlook has no COM interface, so email must go via SMTP.
+    This helper lets the GUI show an accurate status message.
+    """
+    try:
+        import subprocess as _sp
+        _r = _sp.run(
+            'tasklist /FI "IMAGENAME eq olk.exe" /NH',
+            capture_output=True, text=True, shell=True)
+        return "olk.exe" in _r.stdout.lower()
+    except Exception:
+        return False
+
+
+def _new_outlook_is_installed() -> bool:
+    """Return True if the new Outlook for Windows (olk.exe) is installed."""
+    try:
+        import winreg as _reg, os as _os
+        for _hive in (_reg.HKEY_LOCAL_MACHINE, _reg.HKEY_CURRENT_USER):
+            try:
+                _k = _reg.OpenKey(
+                    _hive,
+                    r"SOFTWARE\Microsoft\Windows\CurrentVersion"
+                    r"\App Paths\olk.exe")
+                _val, _ = _reg.QueryValueEx(_k, "")
+                if _val and _os.path.exists(_val):
+                    return True
+            except (OSError, FileNotFoundError):
+                pass
+    except Exception:
+        pass
+    return False
+
+
+def _send_via_outlook(to: str, subject: str, body: str,
+                      attachment_path: "str | None" = None,
+                      body_html: "str | None" = None,
+                      reply_to: "str | None" = None,
+                      sender_display: "str | None" = None,
+                      from_account_email: "str | None" = None) -> tuple:
+    """Send email through the local Outlook COM interface.
+
+    Uses whichever Outlook account is set as default, or the account whose
+    address matches from_account_email when multiple accounts are configured.
+    Outlook does NOT need to be open — COM activates it in the background.
+    No password is required; Outlook uses its cached credentials (including
+    MS365 / Exchange OAuth tokens stored by Windows).
+
+    Returns (ok: bool, message: str).
+    """
+    try:
+        import win32com.client as _wc
+        _app   = _wc.Dispatch("Outlook.Application")
+        _ns    = _app.GetNamespace("MAPI")
+        _mail  = _app.CreateItem(0)  # 0 = olMailItem
+
+        _mail.To      = to
+        _mail.Subject = subject
+
+        # Choose the sending account when the user has multiple Outlook accounts
+        # (personal + work, or multiple MS365 tenants).
+        if from_account_email:
+            _target = from_account_email.strip().lower()
+            for _acct in _ns.Accounts:
+                if _acct.SmtpAddress.lower() == _target:
+                    _mail.SendUsingAccount = _acct
+                    break
+
+        # Body — prefer HTML; plain-text fallback
+        if body_html:
+            _mail.HTMLBody = body_html
+        else:
+            _mail.Body = body
+
+        # Reply-To (used in server mode so replies go to the employee, not company)
+        if reply_to:
+            _mail.ReplyRecipients.Add(reply_to)
+
+        # Optional attachment
+        if attachment_path:
+            _mail.Attachments.Add(attachment_path)
+
+        _mail.Send()
+        _log.info("Outlook email sent to %s subject=%r", to, subject)
+        return (True, f"✅ Email sent to {to} via Outlook")
+
+    except Exception as _oe:
+        _log.warning("Outlook send failed: %s", _oe)
+        return (False, f"❌ Outlook send failed: {_oe}")
+
+
 def _send_smtp(to: str, subject: str, body: str,
                attachment_path: "str | None" = None,
                body_html: "str | None" = None,
                reply_to: "str | None" = None,
-               sender_display: "str | None" = None) -> tuple:
-    """Core SMTP send. Returns (ok: bool, message: str). Uses stored config.
+               sender_display: "str | None" = None,
+               from_account_override: "str | None" = None) -> tuple:
+    """Core email send. Returns (ok: bool, message: str). Uses stored config.
 
-    reply_to:       Optional Reply-To header value (e.g. employee's personal
-                    email). When set, the mail client's Reply button goes to
-                    this address rather than the From address.
-    sender_display: Optional override for the From display name — used in
-                    server mode to show the employee's name alongside the
-                    company address (e.g. 'Jake Smith via ABC Cleaning').
+    from_account_override: optional email address to send FROM — Outlook backend
+    only. Overrides the account saved in config for this one send. Ignored for
+    SMTP (which has a single account by definition).
+    Routes automatically based on email_config.json:
+      • backend = "outlook"  → send via local Outlook COM (no password needed,
+                               works with any account Outlook has configured,
+                               including MS365 / Exchange / personal Outlook.com).
+      • backend = "smtp"     → send via SMTP with app password (Gmail, Yahoo,
+                               iCloud, custom servers, or Outlook when Outlook
+                               is not installed on the PC).
+
+    reply_to:       Optional Reply-To header (employee's personal email in
+                    server mode so the customer's Reply goes to them directly).
+    sender_display: Optional From display-name override (server mode:
+                    "Jake Smith via ABC Cleaning").
     """
+    cfg = _email_config_load()
+    if not cfg:
+        return (False, "Email not configured. Call configure_email() first.")
+
+    backend = cfg.get("backend", "smtp")
+
+    # ── Outlook backend (or Outlook-primary with SMTP fallback) ───────────
+    if backend in ("outlook", "outlook+smtp"):
+        # from_account_override (per-send) takes priority over saved config username
+        from_acct     = (from_account_override or
+                         cfg.get("username", "").strip() or None)
+        smtp_fallback = backend == "outlook+smtp" or bool(
+            cfg.get("smtp_host", "").strip())
+
+        ok, msg = _send_via_outlook(
+            to=to, subject=subject, body=body,
+            attachment_path=attachment_path,
+            body_html=body_html,
+            reply_to=reply_to,
+            sender_display=sender_display,
+            from_account_email=from_acct,
+        )
+        if not ok and smtp_fallback:
+            _log.warning(
+                "Outlook send failed — falling back to SMTP: %s", msg)
+            return _send_smtp_core(cfg, to, subject, body,
+                                   attachment_path, body_html,
+                                   reply_to, sender_display)
+        return (ok, msg)
+
+    # ── SMTP-only backend ─────────────────────────────────────────────────
+    return _send_smtp_core(cfg, to, subject, body,
+                           attachment_path, body_html,
+                           reply_to, sender_display)
+
+
+def _send_smtp_core(cfg: dict, to: str, subject: str, body: str,
+                    attachment_path: "str | None" = None,
+                    body_html: "str | None" = None,
+                    reply_to: "str | None" = None,
+                    sender_display: "str | None" = None) -> tuple:
+    """Raw SMTP send using a pre-loaded config dict. Internal use only."""
     import smtplib
     import ssl as _ssl
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
     from email.mime.base import MIMEBase
     from email import encoders as _enc
-
-    cfg = _email_config_load()
-    if not cfg:
-        return (False, "Email not configured. Call configure_email() first.")
 
     smtp_host = cfg.get("smtp_host", "").strip()
     smtp_port = int(cfg.get("smtp_port", 587))
@@ -13935,19 +15422,15 @@ def _send_smtp(to: str, subject: str, body: str,
     msg["From"]    = f"{from_name} <{from_addr}>" if from_name else from_addr
     msg["To"]      = to
 
-    # Reply-To — directs replies to the employee's personal email rather than
-    # the server's shared SMTP address. Works with all providers.
     if reply_to:
         msg["Reply-To"] = reply_to
 
-    # Body — prefer HTML if provided, plain-text fallback
     alt_part = MIMEMultipart("alternative")
     alt_part.attach(MIMEText(body, "plain", "utf-8"))
     if body_html:
         alt_part.attach(MIMEText(body_html, "html", "utf-8"))
     msg.attach(alt_part)
 
-    # Optional attachment
     if attachment_path:
         try:
             ap = Path(attachment_path)
@@ -13961,25 +15444,25 @@ def _send_smtp(to: str, subject: str, body: str,
         except Exception as _ae:
             return (False, f"Could not attach file: {_ae}")
 
-    # Connect and send
     try:
         context = _ssl.create_default_context()
+        # msg.as_string() — NOT .as_bytes(). smtplib.sendmail()'s msg arg
+        # must be a str (bytes here broke email_invoice/email_receipt's
+        # parsing of the sent message once routed through this shared fn).
         if smtp_port == 465:
-            # SMTPS — SSL from the start
             with smtplib.SMTP_SSL(smtp_host, smtp_port,
                                   context=context, timeout=20) as server:
                 server.login(username, password)
-                server.sendmail(from_addr, [to], msg.as_bytes())
+                server.sendmail(from_addr, [to], msg.as_string())
         else:
-            # STARTTLS (port 587 typical)
             with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
                 server.ehlo()
                 if use_tls:
                     server.starttls(context=context)
                     server.ehlo()
                 server.login(username, password)
-                server.sendmail(from_addr, [to], msg.as_bytes())
-        _log.info("Email sent to %s subject=%r", to, subject)
+                server.sendmail(from_addr, [to], msg.as_string())
+        _log.info("SMTP email sent to %s subject=%r", to, subject)
         return (True, f"✅ Email sent to {to}")
     except smtplib.SMTPAuthenticationError:
         return (False,
@@ -14064,69 +15547,180 @@ def _send_sms_cap(user: "dict | None") -> tuple:
 
 
 @mcp.tool()
-def configure_email(smtp_host: str, smtp_port: int, username: str,
-                    password: str, from_name: str = "AI-Prowler",
+def configure_email(username: str,
+                    backend: str = "auto",
+                    smtp_host: str = "",
+                    smtp_port: int = 587,
+                    password: str = "",
+                    from_name: str = "AI-Prowler",
                     default_to: str = "",
                     ctx: Context = None) -> str:
     """
-    Configure SMTP email settings for AI-Prowler. One-time setup — all other
-    email tools use the saved config automatically after this.
+    Configure email for AI-Prowler. One-time setup — all other email tools
+    use the saved config automatically after this.
 
-    configure_email is personal-mode only — it sets YOUR SMTP account, and
-    a shared company server's SMTP is configured once by an admin instead.
-    Once that's done, send_email / send_alert work for every server role
-    (owner, manager, staff, field_crew); only configure_email itself,
-    send_file, and send_learnings_report remain personal-install-only.
+    configure_email is personal-mode only — it sets YOUR email account.
+    In server mode the admin configures a shared company SMTP account once
+    via Settings, then send_email / send_alert work for every role.
 
-    Supports any SMTP provider:
-      • Gmail   : smtp.gmail.com  port 587  (requires a 16-digit App Password,
-                  NOT your account password. Create one at:
-                  myaccount.google.com → Security → App passwords)
-      • Outlook : smtp.office365.com  port 587
-      • Yahoo   : smtp.mail.yahoo.com  port 587
-      • Any other SMTP server your provider documents
+    ── BACKENDS ──────────────────────────────────────────────────────────
+    backend="auto"    (default) — detects whether Outlook is installed and
+                      uses it automatically.  No password needed.  Falls
+                      back to SMTP if Outlook is not found.
+
+    backend="outlook" — send via the local Outlook application (Outlook
+                      Desktop or Microsoft 365).  Works with any account
+                      Outlook has configured, including Exchange, MS365,
+                      Outlook.com, and personal accounts.  Outlook does NOT
+                      need to be open.  No password is required — Windows
+                      uses cached credentials / OAuth tokens.
+
+    backend="smtp"    — send via SMTP with an app password.  Required when
+                      Outlook is not installed, or for Gmail, Yahoo, iCloud,
+                      Apple Mail, Zoho, or any custom mail server.
+                      smtp_host and password are required for this backend.
+
+    ── SMTP PROVIDERS (backend="smtp") ───────────────────────────────────
+      • Gmail        : smtp.gmail.com  port 587  (16-digit App Password —
+                       create at myaccount.google.com → Security → App passwords)
+      • Outlook.com  : smtp-mail.outlook.com  port 587  (App Password)
+      • Microsoft 365: smtp.office365.com     port 587  (App Password)
+      • Yahoo        : smtp.mail.yahoo.com    port 587  (App Password)
+      • iCloud       : smtp.mail.me.com       port 587  (App-Specific Password)
+      • Zoho         : smtp.zoho.com          port 587  (App Password)
+      • Any SMTP     : use your provider's documented host and port
 
     Args:
-        smtp_host:  SMTP server hostname (e.g. 'smtp.gmail.com')
-        smtp_port:  SMTP port — 587 for STARTTLS (most common),
-                    465 for SMTPS, 25 for plain (not recommended)
-        username:   Your email address / SMTP login
-        password:   App password or SMTP password (stored obfuscated)
-        from_name:  Display name shown in the From field (default: 'AI-Prowler')
-        default_to: Default recipient email address. Tools that take a 'to'
-                    argument use this when none is supplied.
-        ctx:        MCP context (injected automatically)
+        username:   Your email address (used as From address and SMTP login).
+        backend:    "auto" (default), "outlook", or "smtp".
+        smtp_host:  SMTP server hostname — required for backend="smtp".
+                    Auto-filled by the GUI when you type your email address.
+        smtp_port:  SMTP port (default 587 STARTTLS; use 465 for SMTPS).
+        password:   App password — required for backend="smtp".
+                    NOT your account login password.
+        from_name:  Display name in the From field (default: "AI-Prowler").
+        default_to: Default recipient when no 'to' is given to send_email.
+        ctx:        MCP context (injected automatically).
 
     Returns:
         Confirmation string, or an error if the config could not be saved.
     """
     _telemetry_increment_tool_count("configure_email")
 
-    # Personal-mode only
     user = _current_user(ctx)
     allowed, why = _email_allowed_for_user(user)
     if not allowed:
         return f"❌ {why}"
 
-    smtp_host = smtp_host.strip()
-    username  = username.strip()
-    if not smtp_host:
-        return "❌ smtp_host is required."
+    username  = (username or "").strip()
+    smtp_host = (smtp_host or "").strip()
+    backend   = (backend or "auto").strip().lower()
+
     if not username:
         return "❌ username (your email address) is required."
+    if backend not in ("auto", "outlook", "smtp"):
+        return "❌ backend must be 'auto', 'outlook', or 'smtp'."
+
+    # ── Resolve "auto" ────────────────────────────────────────────────────
+    if backend == "auto":
+        backend = "outlook" if _outlook_is_available() else "smtp"
+
+    # ── Outlook backend — no password needed ──────────────────────────────
+    if backend == "outlook":
+        if not _outlook_is_available():
+            return (
+                "❌ Outlook is not installed or not accessible on this PC.\n"
+                "   Use backend='smtp' with an app password instead, or\n"
+                "   install Microsoft Outlook and try again."
+            )
+        cfg = {
+            "backend":      "outlook",
+            "username":     username,
+            "from_address": username,
+            "from_name":    from_name.strip() or "AI-Prowler",
+            "default_to":   default_to.strip() or username,
+        }
+        # Preserve any existing SMTP config as a fallback in case Outlook
+        # becomes unavailable later (uninstalled, profile removed) —
+        # including the app password itself. _email_config_save() does a
+        # FULL FILE OVERWRITE with no merge against the existing file, so
+        # any field not present in `cfg` here is gone from disk after this
+        # call. The password is stored on disk as "_password_b64" (already
+        # base64-obfuscated), not "password" — carrying it forward as-is
+        # (not re-encoding it) avoids double-encoding while still
+        # preserving it. Without this, every call to
+        # configure_email(backend="outlook") silently deleted the real
+        # SMTP app password — found via code review while designing this
+        # tool's own E2E test, before ever running it against real config,
+        # specifically because this is the same class of bug already found
+        # and fixed once in the Settings GUI's _save_smtp_cfg() — a
+        # separate code path that reaches the same email_config.json file
+        # and had the identical flaw.
+        existing = _email_config_load() or {}
+        if existing.get("smtp_host"):
+            cfg["smtp_host"] = existing["smtp_host"]
+            cfg["smtp_port"] = existing.get("smtp_port", 587)
+            if existing.get("_password_b64"):
+                cfg["_password_b64"] = existing["_password_b64"]
+
+        if not _email_config_save(cfg):
+            return "❌ Could not save email config. Check disk permissions."
+
+        # List all Outlook accounts so the user knows which one will send
+        acct_lines = []
+        try:
+            import win32com.client as _wc
+            _ns = _wc.Dispatch("Outlook.Application").GetNamespace("MAPI")
+            for _a in _ns.Accounts:
+                marker = " ← will use (matches username)" \
+                         if _a.SmtpAddress.lower() == username.lower() else ""
+                acct_lines.append(f"   • {_a.SmtpAddress}{marker}")
+        except Exception:
+            pass
+
+        lines = [
+            "✅ Email configured — Outlook backend.",
+            f"   Sending as : {username}",
+            f"   From name  : {cfg['from_name']}",
+            "   Password   : not required (Outlook uses Windows cached credentials)",
+        ]
+        if acct_lines:
+            lines.append("   Outlook accounts found:")
+            lines.extend(acct_lines)
+        lines += [
+            "",
+            "Outlook does not need to be open to send — it runs in the background.",
+            "To test: call send_alert() or send_email() with a test message.",
+        ]
+        return "\n".join(lines)
+
+    # ── SMTP backend ──────────────────────────────────────────────────────
+    if not smtp_host:
+        return (
+            "❌ smtp_host is required for backend='smtp'.\n"
+            "   Examples: smtp.gmail.com, smtp-mail.outlook.com,\n"
+            "             smtp.office365.com, smtp.mail.yahoo.com"
+        )
     if not password:
-        return "❌ password is required."
+        return (
+            "❌ password (app password) is required for backend='smtp'.\n"
+            "   Use an App Password, not your account login password.\n"
+            "   Gmail: myaccount.google.com → Security → App passwords\n"
+            "   Microsoft: account.live.com/proofs/AppPassword\n"
+            "   Yahoo: login.yahoo.com/account/security/app-passwords"
+        )
     if smtp_port < 1 or smtp_port > 65535:
-        return f"❌ smtp_port {smtp_port} is invalid (must be 1-65535)."
+        return f"❌ smtp_port {smtp_port} is invalid (must be 1–65535)."
 
     cfg = {
+        "backend":      "smtp",
         "smtp_host":    smtp_host,
         "smtp_port":    smtp_port,
         "username":     username,
         "password":     password,
         "from_address": username,
         "from_name":    from_name.strip() or "AI-Prowler",
-        "default_to":   default_to.strip(),
+        "default_to":   default_to.strip() or username,
         "use_tls":      smtp_port != 465,
     }
 
@@ -14134,7 +15728,7 @@ def configure_email(smtp_host: str, smtp_port: int, username: str,
         return "❌ Could not save email config. Check disk permissions."
 
     lines = [
-        "✅ Email configured successfully.",
+        "✅ Email configured — SMTP backend.",
         f"   SMTP host  : {smtp_host}:{smtp_port}",
         f"   Account    : {username}",
         f"   From name  : {cfg['from_name']}",
@@ -14144,8 +15738,92 @@ def configure_email(smtp_host: str, smtp_port: int, username: str,
     lines += [
         "",
         "To test: call send_alert() or send_email() with a test message.",
-        "Note: for Gmail use a 16-digit App Password — your account",
-        "password will not work (Google blocks it for security).",
+    ]
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def list_outlook_accounts(ctx: Context = None) -> str:
+    """
+    List all email accounts configured in the local Microsoft Outlook installation.
+
+    Use this when the Outlook backend is active and you want to know which accounts
+    are available to send from, or to help the user choose one for a specific email.
+
+    Returns a numbered list of SMTP addresses with a note showing which one is
+    currently set as the default in AI-Prowler's config.
+
+    Voice examples:
+        "Which email accounts does Outlook have?"
+        "What email addresses can I send from?"
+        "Show me my Outlook accounts"
+
+    Personal mode only — not available in server mode.
+    """
+    _telemetry_increment_tool_count("list_outlook_accounts")
+
+    user = _current_user(ctx)
+    if user is not None:
+        return "❌ list_outlook_accounts is only available in personal mode."
+
+    cfg          = _email_config_load() or {}
+    saved_acct   = cfg.get("username", "").strip().lower()
+    backend      = cfg.get("backend", "smtp")
+
+    if backend not in ("outlook", "outlook+smtp"):
+        return (
+            "ℹ️  The Outlook backend is not currently active "
+            f"(configured backend: '{backend}').\n"
+            "To use Outlook accounts, run configure_email() with "
+            "backend='outlook' or backend='outlook+smtp'."
+        )
+
+    if not _outlook_is_available():
+        return (
+            "❌ Classic Outlook (OUTLOOK.EXE) is not available on this machine.\n"
+            "The New Outlook (olk.exe) has no COM interface — use SMTP instead."
+        )
+
+    try:
+        import win32com.client as _wc
+        # Try GetActiveObject first (Outlook already open — instant, no side effects).
+        # Fall back to Dispatch (Outlook installed but not open — starts it silently
+        # in the background just long enough to read accounts, same as _send_via_outlook).
+        try:
+            _app = _wc.GetActiveObject("Outlook.Application")
+        except Exception:
+            # Outlook not currently open — cold-start via Dispatch.
+            # This is safe here because the user has explicitly asked to list accounts,
+            # and Dispatch is only blocked from _outlook_is_available() to prevent
+            # the conflict error at AI-Prowler startup (before the user has asked
+            # anything). At this point the user has deliberately invoked the tool.
+            _app = _wc.Dispatch("Outlook.Application")
+        _ns   = _app.GetNamespace("MAPI")
+        accts = [_a.SmtpAddress for _a in _ns.Accounts
+                 if _a.SmtpAddress]
+    except Exception as _e:
+        return (f"❌ Could not enumerate Outlook accounts: {_e}\n"
+                "Make sure classic Outlook (OUTLOOK.EXE) is installed.\n"
+                "If the New Outlook (olk.exe) is also installed and running,\n"
+                "close it first — only one version of Outlook can run at a time.")
+
+    if not accts:
+        return "⚠️  No email accounts found in Outlook."
+
+    lines = ["Outlook accounts available to send from:\n"]
+    for i, addr in enumerate(accts, 1):
+        is_default = addr.strip().lower() == saved_acct
+        marker     = "  ← current default" if is_default else ""
+        lines.append(f"  {i}. {addr}{marker}")
+
+    lines += [
+        "",
+        "To send from a specific account, use the from_account parameter:",
+        f'  send_email(to="...", subject="...", body="...", '
+        f'from_account="{accts[0]}")',
+        "",
+        "To change the default, call configure_email() with the desired address:",
+        f'  configure_email(username="{accts[0]}", backend="outlook")',
     ]
     return "\n".join(lines)
 
@@ -14154,9 +15832,10 @@ def configure_email(smtp_host: str, smtp_port: int, username: str,
 def send_email(to: str, subject: str, body: str,
                attachment_path: str = "",
                body_html: str = "",
+               from_account: str = "",
                ctx: Context = None) -> str:
     """
-    Send an email via the configured SMTP account.
+    Send an email via the configured email backend (Outlook or SMTP).
 
     In server mode, any role (owner, manager, staff, field_crew) may email:
       • Other registered users of this server (by email address or name).
@@ -14177,6 +15856,13 @@ def send_email(to: str, subject: str, body: str,
                          mail clients render the formatted version instead of
                          showing raw tags, with `body` kept as the plain-text
                          fallback.
+        from_account:    Optional — email address of the Outlook account to send
+                         FROM when the Outlook backend is active and multiple
+                         accounts are configured (e.g. "david@gmail.com" or
+                         "david@yahoo.com"). Overrides the account saved in
+                         Settings for this one send only. Has no effect when
+                         using the SMTP backend. Use list_outlook_accounts() to
+                         see all available accounts.
         ctx:             MCP context (injected automatically)
 
     Returns:
@@ -14187,6 +15873,8 @@ def send_email(to: str, subject: str, body: str,
         "Send the Blue Wave Cafe invoice to the customer"
         "Email Jake a summary of today's jobs"
         "Send Maria the updated schedule"
+        "Email the Torres invoice from my Yahoo account"
+        "Send this from my Gmail, not my work email"
     """
     _telemetry_increment_tool_count("send_email")
 
@@ -14277,7 +15965,8 @@ def send_email(to: str, subject: str, body: str,
 
     ok, msg = _send_smtp(to, subject, body, attachment_path=attach,
                          body_html=(body_html.strip() or None),
-                         reply_to=reply_to, sender_display=sender_display)
+                         reply_to=reply_to, sender_display=sender_display,
+                         from_account_override=(from_account.strip() or None))
     return msg
 
 
@@ -15104,7 +16793,7 @@ def save_analysis_report(task_id: str,
     Call this when a task has output_report=true. The report is saved to the
     task's configured report_folder (or ~/.ai-prowler/reports/ by default).
     After saving, record a completion learning via record_learning() with
-    category 'analysis_report' noting the file path and next scheduled run.
+    category 'general' noting the file path and next scheduled run.
 
     Args:
         task_id:       The task_id from get_pending_analysis_tasks().
@@ -15352,7 +17041,7 @@ def get_pending_analysis_tasks(ctx: Context = None) -> str:
                 "If output_report=true: call save_analysis_report() with the full "
                 "analysis as Markdown content. "
                 "If output_learnings=true: call record_learning() with key insights. "
-                "Always record a completion learning with category 'analysis_report' "
+                "Always record a completion learning with category 'general' "
                 "noting what was done and the next_due date. "
                 "Finally call complete_analysis_task(task_id, summary) to mark done "
                 "and auto-advance the next scheduled run date."
@@ -18294,9 +19983,15 @@ def _run_server_mode(port: int, token: str,
     p  {{ color: #aaa; font-size: 14px; margin: 0 0 24px; }}
     input {{ width: 100%; padding: 10px 12px; border-radius: 6px; border: 1px solid #333;
              background: #0f3460; color: #eee; font-size: 15px; box-sizing: border-box; }}
-    button {{ margin-top: 16px; width: 100%; padding: 11px; border-radius: 6px; border: none;
+    .connect-btn {{ margin-top: 16px; width: 100%; padding: 11px; border-radius: 6px; border: none;
               background: #4fc3f7; color: #111; font-size: 15px; font-weight: bold; cursor: pointer; }}
-    button:hover {{ background: #81d4fa; }}
+    .connect-btn:hover {{ background: #81d4fa; }}
+      .pw-wrap {{ position: relative; }}
+      .pw-wrap input {{ padding-right: 44px; }}
+      .eye-btn {{ position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+                 background: none; border: none; cursor: pointer;
+                 color: #aaa; font-size: 16px; padding: 0; width: auto; }}
+      .eye-btn:hover {{ color: #4fc3f7; }}
   </style>
 </head>
 <body>
@@ -18304,8 +19999,12 @@ def _run_server_mode(port: int, token: str,
     <h2>🐾 AI-Prowler</h2>
     <p>Enter your personal Bearer token to connect Claude to your knowledge base.</p>
     <form method="post">
-      <input type="password" name="token" placeholder="Bearer token" autofocus>
-      <button type="submit">Connect</button>
+      <div class="pw-wrap">
+        <input type="password" name="token" id="tok" placeholder="Bearer token" autofocus>
+        <button type="button" class="eye-btn" id="eyb" title="Show/hide token"
+          onclick="var i=document.getElementById('tok'),b=document.getElementById('eyb');if(i.type==='password'){{i.type='text';b.textContent='Hide';}}else{{i.type='password';b.textContent='👁';}}">&#x1F441;</button>
+      </div>
+      <button type="submit" class="connect-btn">Connect</button>
     </form>
     {error_msg}
   </div>
@@ -19552,9 +21251,15 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
     p  {{ color: #aaa; font-size: 14px; margin: 0 0 24px; }}
     input {{ width: 100%; padding: 10px 12px; border-radius: 6px; border: 1px solid #333;
              background: #0f3460; color: #eee; font-size: 15px; box-sizing: border-box; }}
-    button {{ margin-top: 16px; width: 100%; padding: 11px; border-radius: 6px; border: none;
+    .connect-btn {{ margin-top: 16px; width: 100%; padding: 11px; border-radius: 6px; border: none;
               background: #4fc3f7; color: #111; font-size: 15px; font-weight: bold; cursor: pointer; }}
-    button:hover {{ background: #81d4fa; }}
+    .connect-btn:hover {{ background: #81d4fa; }}
+      .pw-wrap {{ position: relative; }}
+      .pw-wrap input {{ padding-right: 44px; }}
+      .eye-btn {{ position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+                 background: none; border: none; cursor: pointer;
+                 color: #aaa; font-size: 16px; padding: 0; width: auto; }}
+      .eye-btn:hover {{ color: #4fc3f7; }}
   </style>
 </head>
 <body>
@@ -19562,8 +21267,12 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
     <h2>🐾 AI-Prowler</h2>
     <p>Enter your Bearer token to connect Claude to your knowledge base.</p>
     <form method="post">
-      <input type="password" name="token" placeholder="Bearer token" autofocus>
-      <button type="submit">Connect</button>
+      <div class="pw-wrap">
+        <input type="password" name="token" id="tok" placeholder="Bearer token" autofocus>
+        <button type="button" class="eye-btn" id="eyb" title="Show/hide token"
+          onclick="var i=document.getElementById('tok'),b=document.getElementById('eyb');if(i.type==='password'){{i.type='text';b.textContent='Hide';}}else{{i.type='password';b.textContent='👁';}}">&#x1F441;</button>
+      </div>
+      <button type="submit" class="connect-btn">Connect</button>
     </form>
     {error_msg}
     {sub_banner}

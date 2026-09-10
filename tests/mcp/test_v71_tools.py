@@ -96,12 +96,19 @@ def isolated_email_env(tmp_path, mcp_module, monkeypatch):
     """
     Redirect email_config.json and writable dirs JSON to a temp directory.
     Patch mcp_module._EMAIL_CONFIG_PATH and _WRITABLE_DIRS_FILE.
+
+    Also patches _outlook_is_available to return False so that
+    configure_email() defaults to the SMTP path on every machine,
+    regardless of whether Outlook happens to be installed locally.
+    Tests that specifically need the Outlook path mock it themselves.
     """
     email_cfg_path   = tmp_path / "email_config.json"
     writable_path    = tmp_path / "rag_writable_dirs.json"
 
     monkeypatch.setattr(mcp_module, "_EMAIL_CONFIG_PATH", lambda: email_cfg_path)
     monkeypatch.setattr(mcp_module, "_WRITABLE_DIRS_FILE", writable_path)
+    # Force SMTP path — Outlook detection must never depend on the test machine
+    monkeypatch.setattr(mcp_module, "_outlook_is_available", lambda: False)
 
     # Sample tracked directory for write-zone tests
     sample_dir = tmp_path / "sample_docs"

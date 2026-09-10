@@ -59,8 +59,19 @@ REM Auto-install pytest and pyflakes if missing (gets uninstalled with AI-Prowle
 "%PYTHON%" -c "import pytest" 2>nul || "%PYTHON%" -m pip install pytest pytest-mock pytest-asyncio pyflakes --quiet
 
 REM Default to tests\ with verbose output if no args given.
+REM Deliberately NOT passing an explicit -m here — pytest.ini's own addopts
+REM already carries the full, current exclusion list (e2e, manual,
+REM live_remote, live_pwa, live_db, job_sheet_e2e, mcp_tool_e2e). A second
+REM hardcoded -m HERE used to override that list on the command line
+REM (pytest takes the last -m it sees), and this one had drifted stale —
+REM missing job_sheet_e2e and mcp_tool_e2e entirely, so real-API-cost /
+REM real-state MCP tool E2E tests silently ran every time run_tests.bat
+REM was invoked with no arguments, alongside AIPROWLER_TEST_STATE_DIR
+REM sandboxing that makes those specific tests hang instead of failing
+REM cleanly. Single source of truth for the exclusion list is now
+REM pytest.ini alone — update it there, never re-add an -m here.
 if "%~1"=="" (
-    "%PYTHON%" -m pytest tests\ -v -m "not e2e and not manual and not live_remote"
+    "%PYTHON%" -m pytest tests\ -v
 ) else (
     "%PYTHON%" -m pytest %*
 )

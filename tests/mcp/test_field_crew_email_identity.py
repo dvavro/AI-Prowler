@@ -89,7 +89,7 @@ def _write_email_cfg(path: Path, from_name="ABC Window Cleaning",
 class _FakeSmtp:
     """Captures sendmail() calls so tests can inspect the sent message."""
     def __init__(self):
-        self.sent = []          # list of (from, to_list, msg_bytes)
+        self.sent = []          # list of (from, to_list, msg_str)
 
     def __call__(self, host, port, timeout=None):
         return self             # acts as context manager AND connection
@@ -109,12 +109,23 @@ class _FakeSmtp:
     def login(self, user, password):
         pass
 
-    def sendmail(self, from_addr, to_list, msg_bytes):
-        self.sent.append((from_addr, to_list, msg_bytes))
+    def sendmail(self, from_addr, to_list, msg_str):
+        self.sent.append((from_addr, to_list, msg_str))
 
 
-def _parse_msg(msg_bytes: bytes) -> _email_stdlib.message.Message:
-    return _email_stdlib.message_from_bytes(msg_bytes)
+def _parse_msg(msg_str: str) -> _email_stdlib.message.Message:
+    # _send_smtp_core() passes msg.as_string() to sendmail() (a real
+    # smtplib.SMTP.sendmail() call accepts either str or bytes for its
+    # msg argument — .as_string() is the safer/traditional convention:
+    # MIMEText's own charset encoding already makes it ASCII-safe, so
+    # there's no reason to hand smtplib a pre-encoded bytes object).
+    # This test file originally used message_from_bytes() here, written
+    # against an earlier .as_bytes() version of the production code — the
+    # PRODUCTION code changed (fixing a real bug: passing bytes into
+    # smtplib.sendmail() was crashing test_contractor_tools.py's own
+    # fake_sendmail via message_from_string() elsewhere in this project),
+    # so this harness needs to parse a string now, not bytes.
+    return _email_stdlib.message_from_string(msg_str)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

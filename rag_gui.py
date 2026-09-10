@@ -1623,7 +1623,7 @@ then ask Claude questions from your desktop or phone.
 ─────────────────────────────────────────────────
  KNOWLEDGE BASE (RAG)
 ─────────────────────────────────────────────────
-• 81 MCP tools across 12 categories
+• 100 MCP tools across 12 categories
 • 65+ file types: PDF, Word, Excel, PowerPoint, HTML,
 • Automatic OCR for scanned PDFs and images
 • Incremental indexing — only changed files reprocessed
@@ -1689,8 +1689,17 @@ then ask Claude questions from your desktop or phone.
 ─────────────────────────────────────────────────
  EMAIL, SMS & WHATSAPP
 ─────────────────────────────────────────────────
-• Send emails, alerts, file attachments, learnings reports
-• Gmail, iCloud, Outlook, or any SMTP provider
+• 9 email tools: send_email, send_alert, send_file, email_invoice,
+  email_receipt, send_learnings_report, list_outlook_accounts,
+  configure_email, check_email_configured
+• Outlook backend: Classic Outlook (OUTLOOK.EXE) — no password needed;
+  select default account in Settings, override per-send in Claude:
+  "Send this from my Yahoo account"
+• SMTP backend: Gmail, iCloud, Outlook.com, Microsoft 365, Yahoo,
+  or any custom SMTP server with an app password
+• Both backends can be active: Outlook primary, SMTP auto-fallback
+• Multi-account: list_outlook_accounts() shows all Outlook accounts;
+  from_account= parameter on send_email() picks the one to use
 • Text or WhatsApp anyone via Twilio, SignalWire, or Vonage
 • Reply checking with per-user attribution in server mode
 
@@ -3228,9 +3237,12 @@ re-processed on subsequent runs. No need to start over.
 Use this when you only need Claude on this Windows PC.
 No subscription, no HTTP server, no tunnel required.
 
-  ✅ Full agentic RAG — all 98 personal-mode MCP tools
+  ✅ Full agentic RAG — all 99 personal-mode MCP tools
   ✅ Self-learning system, file editing, code execution
-  ✅ Send email, SMS, and WhatsApp to field crew/customers
+  ✅ Email via Classic Outlook (no password) or SMTP app password;
+     multi-account support — choose account in Settings or per-send
+  ✅ SMS and WhatsApp to field crew/customers
+
   ✅ Job tracker — read and update the spreadsheet
   ✅ Scheduling and autonomous analysis task queue
   ✅ Works with a free Claude account
@@ -3329,16 +3341,33 @@ filter, archive, or delete. See Help → User Guide → Section 22.
   📧  EMAIL, SMS & WHATSAPP  (both paths)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Configure once in Settings → Email Configuration (Gmail,
-iCloud, or any SMTP provider) and Settings → SMS / Text
-Messaging (Twilio, SignalWire, or Vonage), then ask Claude
-to text, WhatsApp, or email anyone — by name if they're in
-your job spreadsheet or saved as a contact.
+Email backend options (configure once in Settings → Email Configuration):
 
-  "Text Karen that we're 20 minutes away"
-  "Send me an alert — the Johnson job is running late"
-  "Email the job tracker spreadsheet to myself"
-  "WhatsApp Torres a reminder about tomorrow's appointment"
+  🖥️  Classic Outlook (OUTLOOK.EXE) — no app password needed
+      Works with any account Outlook has configured: Gmail, Yahoo,
+      Microsoft 365, Exchange, Outlook.com, and more.
+      Select the default account in Settings; override per-send:
+        "Send this from my Yahoo account"
+        "Email Torres from my Gmail"
+      Note: requires Classic Outlook — the New Outlook (olk.exe)
+      from the Microsoft Store does NOT support this. See Settings
+      → Email Configuration → "How to switch to Classic Outlook".
+
+  📧  SMTP with app password — fully automated background sending
+      Gmail · Outlook.com · Microsoft 365 · Yahoo · iCloud · custom
+      App passwords created at your provider's security settings page.
+      The Get App Password button in Settings links there directly.
+
+  ✅  Both backends can be active simultaneously — Outlook sends
+      first, SMTP is the automatic fallback if Outlook fails.
+
+Once configured, ask Claude:
+    "Text Karen that we're 20 minutes away"
+    "Send me an alert — the Johnson job is running late"
+    "Email the job tracker spreadsheet to myself"
+    "WhatsApp Torres a reminder about tomorrow's appointment"
+    "What Outlook accounts do I have?" → lists all configured accounts
+    "Send this invoice from my Yahoo account"
 
 Note: Outbound email and SMS work in both Claude Desktop
 and Claude.ai (Path 1 and Path 2). Checking inbound SMS
@@ -11746,7 +11775,24 @@ or from the Help menu."""
             padding=10)
         email_cfg_frame.pack(fill='x', padx=20, pady=(0, 10))
 
-        # Context hint — different message for each mode
+        # ── Detect Outlook — calls the authoritative MCP module function ──────
+        def _run_outlook_check() -> tuple:
+            """Returns (classic_available: bool, new_outlook: bool)."""
+            try:
+                import ai_prowler_mcp as _mcp
+                classic = _mcp._outlook_is_available()
+                new_ol  = (not classic) and (
+                    _mcp._new_outlook_is_running() or
+                    _mcp._new_outlook_is_installed())
+                return classic, new_ol
+            except Exception:
+                return False, False
+
+        _outlook_available, _new_outlook = _run_outlook_check()
+
+        _ep = {'padx': 6, 'pady': 3}
+
+        # ── Row 0: dynamic status label ───────────────────────────────────────
         if _settings_is_server_mode:
             ttk.Label(email_cfg_frame, justify='left',
                       font=('Segoe UI', 8), foreground='gray',
@@ -11755,33 +11801,378 @@ or from the Help menu."""
                           "Field crew send_email / send_alert use this account to send,\n"
                           "but each message is personalised with the employee's name and\n"
                           "Reply-To from their user record in the Admin tab."
-                      )).grid(row=0, column=0, columnspan=3, sticky='w', padx=6, pady=(0, 6))
+                      )).grid(row=0, column=0, columnspan=4, sticky='w',
+                              padx=6, pady=(0, 4))
             _email_row_start = 1
         else:
-            ttk.Label(email_cfg_frame, justify='left',
-                      font=('Segoe UI', 8), foreground='gray',
-                      text=(
-                          "Personal mode: configure your own email account here.\n"
-                          "Claude can also set this by telling it your email and app password\n"
-                          "in a conversation (configure_email() MCP tool)."
-                      )).grid(row=0, column=0, columnspan=3, sticky='w', padx=6, pady=(0, 6))
-            _email_row_start = 1
+            _ol_status_var = tk.StringVar()
 
-        _ep = {'padx': 6, 'pady': 3}
-        ttk.Label(email_cfg_frame, text='Your Email Address:').grid(
+            def _update_ol_status(classic: bool, new_ol: bool) -> None:
+                if classic:
+                    _ol_status_var.set(
+                        "Personal mode: configure your email account below.\n"
+                        "✅ Classic Outlook detected — can send silently via COM."
+                    )
+                elif new_ol:
+                    _ol_status_var.set(
+                        "Personal mode: configure your email account below.\n"
+                        "ℹ️  New Outlook (olk.exe) detected — no COM interface.\n"
+                        "    Use SMTP below to send automatically, or use the\n"
+                        "    Gmail connector in Claude for a no-password option."
+                    )
+                else:
+                    _ol_status_var.set(
+                        "Personal mode: configure your email account below.\n"
+                        "⚠️  No Outlook detected — use SMTP with an app password."
+                    )
+
+            _update_ol_status(_outlook_available, _new_outlook)
+
+            ttk.Label(email_cfg_frame, textvariable=_ol_status_var,
+                      justify='left', font=('Segoe UI', 8),
+                      foreground='gray').grid(
+                row=0, column=0, columnspan=3, sticky='w',
+                padx=6, pady=(0, 4))
+
+            # ── 'How to switch to Classic Outlook' help button ────────
+            # Shown only when New Outlook (olk.exe) is detected.
+            # Hidden when Classic Outlook found or no Outlook at all.
+            # _check_outlook_now() also shows/hides it on re-detection.
+            def _show_classic_outlook_help():
+                import tkinter.messagebox as _mb
+                _mb.showinfo(
+                    title='How to Switch to Classic Outlook',
+                    message=(
+                        'AI-Prowler requires Classic Outlook (OUTLOOK.EXE)\n'
+                        'for the Outlook email backend.\n\n'
+                        'You have the New Outlook for Windows (olk.exe),\n'
+                        'which has no COM interface and cannot send email\n'
+                        'silently in the background.\n\n'
+                        '── How to switch back ─────────────────\n\n'
+                        '1.  Open the Outlook app on your PC.\n\n'
+                        '2.  Look in the TOP-RIGHT corner of the main\n'
+                        '    inbox window for a toggle labelled\n'
+                        '    "New Outlook".\n\n'
+                        '3.  Flip the toggle OFF.\n\n'
+                        '4.  Windows downloads Classic Outlook in the\n'
+                        '    background (2-5 minutes). Your email\n'
+                        '    accounts stay configured.\n\n'
+                        '5.  Outlook restarts automatically when done.\n\n'
+                        '6.  Return here and click\n'
+                        '    "Check for Outlook" to confirm.\n\n'
+                        '── If the toggle is missing ────────\n\n'
+                        'Some Microsoft 365 installs remove the toggle.\n\n'
+                        '  Use SMTP with an app password (always works).\n\n'
+                        '  OR repair Office via:\n'
+                        '  Control Panel > Programs >\n'
+                        '  Microsoft 365 > Change > Quick Repair.\n\n'
+                        '── Conflict error? ─────────────────\n\n'
+                        'If you see "Only one version of Outlook\n'
+                        'can run at a time":\n\n'
+                        '  1.  Open Task Manager (Ctrl+Shift+Esc).\n'
+                        '  2.  Find olk.exe > End Task.\n'
+                        '  3.  Open Classic Outlook normally.\n'
+                    )
+                )
+
+            _new_ol_help_frame = ttk.Frame(email_cfg_frame)
+            ttk.Button(
+                _new_ol_help_frame,
+                text='i  How to switch to Classic Outlook  →',
+                command=_show_classic_outlook_help
+            ).pack(side='left')
+            _new_ol_help_frame.grid(
+                row=1, column=0, columnspan=4,
+                sticky='w', padx=6, pady=(0, 4))
+            if not _new_outlook:
+                _new_ol_help_frame.grid_remove()
+
+            _email_row_start = 2
+
+        # ── Backend selector — personal mode: checkboxes (both can be on) ───
+        # outlook_cb_var  = use Outlook as primary sender
+        # smtp_cb_var     = use SMTP (as sole sender, or as fallback for Outlook)
+        # This replaces the exclusive radio buttons with independent checkboxes
+        # so the user can have Outlook + SMTP-fallback active at the same time.
+        _outlook_cb_var = tk.BooleanVar(value=_outlook_available)
+        # SMTP always defaults to checked — it's always available and is the
+        # required backend when classic Outlook is absent (new Outlook or no Outlook).
+        _smtp_cb_var    = tk.BooleanVar(value=True)
+
+        if not _settings_is_server_mode:
+            # ── "Send via:" row with checkboxes + Check Now button ──────────
+            ttk.Label(email_cfg_frame, text='Send via:').grid(
+                row=_email_row_start+0, column=0, sticky='e', **_ep)
+
+            _backend_frame = ttk.Frame(email_cfg_frame)
+            _backend_frame.grid(row=_email_row_start+0, column=1,
+                                columnspan=3, sticky='w', **_ep)
+
+            _ol_cb = ttk.Checkbutton(
+                _backend_frame,
+                text='Microsoft Outlook  (no password needed)',
+                variable=_outlook_cb_var,
+                state='normal' if _outlook_available else 'disabled')
+            _ol_cb.pack(side='left', padx=(0, 10))
+
+            _smtp_cb = ttk.Checkbutton(
+                _backend_frame,
+                text='SMTP / App Password  (Gmail, Yahoo, iCloud, custom)',
+                variable=_smtp_cb_var)
+            _smtp_cb.pack(side='left', padx=(0, 16))
+
+            # ── "Check for Outlook" button ──────────────────────────────────
+            def _check_outlook_now():
+                """Re-run Outlook detection on demand."""
+                classic, new_ol = _run_outlook_check()
+                nonlocal _outlook_available, _new_outlook
+                _outlook_available = classic
+                _new_outlook       = new_ol
+                _update_ol_status(classic, new_ol)
+                # Show/hide the help button based on detection result
+                if new_ol and not classic:
+                    _new_ol_help_frame.grid()
+                else:
+                    _new_ol_help_frame.grid_remove()
+                if classic:
+                    _ol_cb.configure(state='normal')
+                    _outlook_cb_var.set(True)
+                    _ol_acct_frame.grid()
+                    _accts = _refresh_ol_accounts()
+                    _on_backend_change()
+                    # Update button label to reflect ongoing refresh role
+                    _chk_ol_btn.configure(
+                        text='🔄 Refresh Outlook Accounts')
+                    _n = len(_accts)
+                    _acct_list = ', '.join(_accts) if _accts else 'none'
+                    _email_cfg_status.set(
+                        f'✅ Outlook refreshed — {_n} account(s): {_acct_list}')
+                elif new_ol:
+                    _ol_cb.configure(state='disabled')
+                    _outlook_cb_var.set(False)
+                    _ol_acct_frame.grid_remove()
+                    _on_backend_change()
+                    _email_cfg_status.set(
+                        'ℹ️  New Outlook (olk.exe) detected — no COM interface. '
+                        'Use SMTP to send automatically.')
+                else:
+                    _ol_cb.configure(state='disabled')
+                    _outlook_cb_var.set(False)
+                    _ol_acct_frame.grid_remove()
+                    _on_backend_change()
+                    _email_cfg_status.set(
+                        '⚠️  No Outlook found. Use SMTP with an app password.')
+
+            _chk_ol_btn = ttk.Button(
+                _backend_frame, text='🔍 Check for Outlook',
+                command=_check_outlook_now)
+            _chk_ol_btn.pack(side='left')
+            # Rename button immediately if Outlook is already detected
+            if _outlook_available:
+                _chk_ol_btn.configure(text='🔄 Refresh Outlook Accounts')
+
+            # ── Backend hint label (updates when checkboxes change) ─────────
+            _backend_hint_var = tk.StringVar()
+
+            def _on_backend_change(*_a):
+                using_ol   = _outlook_cb_var.get()
+                using_smtp = _smtp_cb_var.get()
+                # Enable/disable SMTP detail fields
+                _smtp_state = 'normal' if using_smtp else 'disabled'
+                for _w in (_smtp_host_entry, _smtp_port_entry,
+                            _smtp_pass_entry, _smtp_show_cb):
+                    try:
+                        _w.configure(state=_smtp_state)
+                    except Exception:
+                        pass
+                # Update hint text
+                if using_ol and using_smtp:
+                    _backend_hint_var.set(
+                        "Outlook sends first — SMTP is the automatic backup "
+                        "if Outlook fails.\n"
+                        "No password needed for Outlook; app password used "
+                        "only for the SMTP fallback."
+                    )
+                elif using_ol:
+                    _backend_hint_var.set(
+                        "Outlook only — no SMTP fallback.\n"
+                        "Works with MS365, Exchange, Outlook.com, and personal "
+                        "accounts. No password needed."
+                    )
+                elif using_smtp:
+                    _backend_hint_var.set(
+                        "SMTP only — enter your app password below.\n"
+                        "SMTP host and port are filled automatically from your "
+                        "email address."
+                    )
+                else:
+                    _backend_hint_var.set(
+                        "⚠️  No backend selected — check at least one option above."
+                    )
+
+            _ol_cb.configure(command=_on_backend_change)
+            _smtp_cb.configure(command=_on_backend_change)
+
+            ttk.Label(email_cfg_frame, textvariable=_backend_hint_var,
+                      font=('Segoe UI', 8), foreground='#0066aa',
+                      justify='left').grid(
+                row=_email_row_start+1, column=0, columnspan=4,
+                sticky='w', padx=6, pady=(0, 4))
+
+            _email_row_start += 2
+
+        # ── Outlook account picker — always created, shown/hidden dynamically ─
+        # This frame is created unconditionally so _check_outlook_now() can
+        # call _ol_acct_frame.grid() / .grid_remove() at any time.
+        _ol_accounts   = []
+        _ol_acct_var   = tk.StringVar()
+        _ol_acct_combo = None
+
+        _ol_acct_frame = ttk.Frame(email_cfg_frame)
+
+        ttk.Label(_ol_acct_frame, text='Default account:').grid(
+            row=0, column=0, sticky='e', **_ep)
+        _ol_acct_combo = ttk.Combobox(
+            _ol_acct_frame, textvariable=_ol_acct_var,
+            values=[], width=32, state='readonly')
+        _ol_acct_combo.grid(row=0, column=1, **_ep)
+        ttk.Label(_ol_acct_frame,
+                  text='Default sending account (you can override per-send in Claude)',
+                  font=('Segoe UI', 8), foreground='#0066aa').grid(
+            row=0, column=2, sticky='w')
+
+        def _refresh_ol_accounts():
+            """Populate (or refresh) the Outlook account dropdown.
+
+            Tries GetActiveObject first (Outlook already running — instant,
+            zero side effects). Falls back to Dispatch (Outlook installed but
+            closed — starts it silently in the background).
+
+            NOTE on the "Choose Profile" popup: Dispatch() only triggers that
+            dialog when Outlook has PickLogonProfile=1 set, or multiple mail
+            profiles exist with no default chosen. On a normal single-profile
+            setup (the common case) Dispatch() starts Outlook silently with
+            no prompt at all.
+
+            HANG DETECTION: if Outlook IS configured to prompt, Dispatch()
+            blocks silently waiting for someone to click the hidden dialog —
+            no exception is raised, so a plain try/except can't detect it.
+            To catch this, the COM call runs on a dedicated worker thread
+            (with its own STA apartment via pythoncom.CoInitialize) and this
+            function waits up to _OL_REFRESH_TIMEOUT_SEC for it to finish.
+            If it times out, a hidden "Choose Profile" dialog is the most
+            likely cause — the status bar tells the user to open Outlook
+            manually (which surfaces and lets them dismiss the dialog),
+            then click Refresh again, which will find it already running
+            via the fast GetActiveObject path with no prompt.
+
+            Preserves the previously-selected account if it still exists
+            after refresh — so adding a new iCloud or Gmail account to
+            Outlook does not silently reset a saved preference.
+
+            Returns the list of account addresses found.
+            """
+            import threading as _th
+
+            _OL_REFRESH_TIMEOUT_SEC = 8
+            _result_box = {"accts": None, "error": None}
+
+            def _worker():
+                try:
+                    import pythoncom as _pycom
+                    _pycom.CoInitialize()
+                except Exception:
+                    _pycom = None
+                try:
+                    import win32com.client as _wc2
+                    try:
+                        _app2 = _wc2.GetActiveObject("Outlook.Application")
+                    except Exception:
+                        _app2 = _wc2.Dispatch("Outlook.Application")
+                    _ns2  = _app2.GetNamespace("MAPI")
+                    _result_box["accts"] = [
+                        _a.SmtpAddress for _a in _ns2.Accounts if _a.SmtpAddress]
+                except Exception as _e:
+                    _result_box["error"] = str(_e)
+                finally:
+                    if _pycom is not None:
+                        try:
+                            _pycom.CoUninitialize()
+                        except Exception:
+                            pass
+
+            _t = _th.Thread(target=_worker, daemon=True)
+            _t.start()
+            _t.join(timeout=_OL_REFRESH_TIMEOUT_SEC)
+
+            if _t.is_alive():
+                # Still running after the timeout — a hidden dialog (most
+                # likely "Choose Profile") is almost certainly blocking it.
+                # We deliberately do NOT wait longer or kill the thread —
+                # Python threads can't be forcibly killed safely, and the
+                # underlying Outlook process is still legitimately trying
+                # to start. Leave it running in the background; it will
+                # finish on its own once the user dismisses the dialog.
+                _ol_acct_combo['values'] = []
+                _email_cfg_status.set(
+                    '⚠️  Outlook did not respond within '
+                    f'{_OL_REFRESH_TIMEOUT_SEC}s — a hidden dialog '
+                    '(likely "Choose Profile") may be waiting for input. '
+                    'Open Outlook manually, dismiss any dialog, then click '
+                    'Refresh again.')
+                return []
+
+            accts = _result_box["accts"] or []
+            _ol_acct_combo['values'] = accts
+            if accts:
+                current = _ol_acct_var.get()
+                if current and current in accts:
+                    _ol_acct_var.set(current)
+                else:
+                    _ol_acct_var.set(accts[0])
+            return accts
+
+        # Initial population + show/hide based on whether Outlook was found
+        if not _settings_is_server_mode:
+            _refresh_ol_accounts()
+            _ol_acct_frame.grid(
+                row=_email_row_start, column=0,
+                columnspan=4, sticky='w', padx=0, pady=0)
+            if not _outlook_available:
+                _ol_acct_frame.grid_remove()   # hide until Check Now finds it
+            else:
+                _email_row_start += 1
+
+        # ── Email address / SMTP username ─────────────────────────────────────
+        ttk.Label(email_cfg_frame, text='Email address:').grid(
             row=_email_row_start+0, column=0, sticky='e', **_ep)
         _smtp_user_var = tk.StringVar()
         ttk.Entry(email_cfg_frame, textvariable=_smtp_user_var,
                   width=34).grid(row=_email_row_start+0, column=1, **_ep)
+        _user_hint = ('Used as From address'
+                      if not _settings_is_server_mode and _outlook_available
+                      else 'This is also your SMTP login')
         ttk.Label(email_cfg_frame,
-                  text='This is also your SMTP login',
+                  text=_user_hint,
                   font=('Segoe UI', 8)).grid(row=_email_row_start+0, column=2, sticky='w')
+
+        # When the user picks an Outlook account from the combo, auto-fill
+        # the email address field to match. Uses _outlook_cb_var (checkbox)
+        # not the old _backend_var (radio button) which no longer exists.
+        def _sync_email_from_ol_combo(*_a):
+            picked = _ol_acct_var.get()
+            if picked and (not _settings_is_server_mode
+                           and _outlook_cb_var.get()):
+                _smtp_user_var.set(picked)
+        if _ol_acct_combo is not None:
+            _ol_acct_var.trace_add('write', _sync_email_from_ol_combo)
 
         ttk.Label(email_cfg_frame, text='SMTP host:').grid(
             row=_email_row_start+1, column=0, sticky='e', **_ep)
         _smtp_host_var = tk.StringVar()
-        ttk.Entry(email_cfg_frame, textvariable=_smtp_host_var,
-                  width=34).grid(row=_email_row_start+1, column=1, **_ep)
+        _smtp_host_entry = ttk.Entry(email_cfg_frame, textvariable=_smtp_host_var,
+                                     width=34)
+        _smtp_host_entry.grid(row=_email_row_start+1, column=1, **_ep)
         ttk.Label(email_cfg_frame,
                   text='Auto-filled from your email address above',
                   font=('Segoe UI', 8)).grid(row=_email_row_start+1, column=2, sticky='w')
@@ -11789,13 +12180,14 @@ or from the Help menu."""
         ttk.Label(email_cfg_frame, text='Port:').grid(
             row=_email_row_start+2, column=0, sticky='e', **_ep)
         _smtp_port_var = tk.StringVar(value='587')
-        ttk.Entry(email_cfg_frame, textvariable=_smtp_port_var,
-                  width=8).grid(row=_email_row_start+2, column=1, sticky='w', **_ep)
+        _smtp_port_entry = ttk.Entry(email_cfg_frame, textvariable=_smtp_port_var,
+                                     width=8)
+        _smtp_port_entry.grid(row=_email_row_start+2, column=1, sticky='w', **_ep)
         ttk.Label(email_cfg_frame,
                   text='587 = STARTTLS (most common)  /  465 = SMTPS',
                   font=('Segoe UI', 8)).grid(row=_email_row_start+2, column=2, sticky='w')
 
-        ttk.Label(email_cfg_frame, text='Password:').grid(
+        ttk.Label(email_cfg_frame, text='App password:').grid(
             row=_email_row_start+3, column=0, sticky='e', **_ep)
         _smtp_pass_var = tk.StringVar()
         _smtp_pass_entry = ttk.Entry(email_cfg_frame,
@@ -11806,10 +12198,14 @@ or from the Help menu."""
         def _toggle_smtp_pass():
             _smtp_pass_entry.configure(
                 show='' if _smtp_show_var.get() else '\u25cf')
-        ttk.Checkbutton(email_cfg_frame, text='Show',
+        _smtp_show_cb = ttk.Checkbutton(email_cfg_frame, text='Show',
                         variable=_smtp_show_var,
-                        command=_toggle_smtp_pass).grid(
-            row=_email_row_start+3, column=2, sticky='w')
+                        command=_toggle_smtp_pass)
+        _smtp_show_cb.grid(row=_email_row_start+3, column=2, sticky='w')
+
+        # Apply initial backend state (hide SMTP fields if Outlook selected)
+        if not _settings_is_server_mode:
+            _on_backend_change()
 
         # ── Provider info: SMTP host/port + app-password link, keyed by domain ──
         # SMTP hosts/ports verified against each provider's official docs:
@@ -11950,21 +12346,37 @@ or from the Help menu."""
             import json as _j, base64 as _b
             p = Path.home() / '.ai-prowler' / 'email_config.json'
             if not p.exists():
-                # No saved config yet (first run) — leave the autofill flags
-                # armed so typing an email address fills in host/port.
+                # First run — apply initial checkbox field states
+                if not _settings_is_server_mode:
+                    _on_backend_change()
                 return
             try:
                 d = _j.loads(p.read_text(encoding='utf-8-sig')) or {}
+
+                # Restore checkboxes from saved backend key
+                # outlook+smtp → both checked
+                # outlook      → Outlook checked, SMTP unchecked
+                # smtp / legacy (no backend key) → SMTP checked
+                saved_backend = d.get('backend', 'smtp')
+                if not _settings_is_server_mode:
+                    uses_ol   = saved_backend in ('outlook', 'outlook+smtp')
+                    uses_smtp = saved_backend in ('smtp', 'outlook+smtp') \
+                                or 'smtp_host' in d   # legacy config always SMTP
+                    # Outlook only if classic COM Outlook is available
+                    _outlook_cb_var.set(uses_ol and _outlook_available)
+                    # SMTP: force True when no classic Outlook (new Outlook or none)
+                    _smtp_cb_var.set(uses_smtp or not _outlook_available)
+                    # Show/hide account picker
+                    if uses_ol and _outlook_available:
+                        _ol_acct_frame.grid()
+                    else:
+                        _ol_acct_frame.grid_remove()
+
+                # Populate SMTP fields (always, so they're ready as fallback)
                 saved_host = d.get('smtp_host', '')
                 saved_port = str(d.get('smtp_port', 587))
                 _smtp_host_var.set(saved_host)
                 _smtp_port_var.set(saved_port)
-                # A non-blank saved host/port means the user (or a prior
-                # auto-fill) already settled on a value — treat it as
-                # "manually set" so re-typing the same email doesn't
-                # silently overwrite a deliberately customised host.
-                # A blank saved value (older config, or never configured)
-                # leaves autofill armed so it still works for this user.
                 _host_autofilled['value'] = not bool(saved_host)
                 _port_autofilled['value'] = not bool(saved_port)
                 _smtp_user_var.set(d.get('username', ''))
@@ -11976,55 +12388,166 @@ or from the Help menu."""
                     except Exception:
                         pass
                 _smtp_pass_var.set(pw)
-                _email_cfg_status.set('Loaded existing config.')
+
+                # Restore Outlook account picker selection
+                saved_user = d.get('username', '')
+                current_accts = list(_ol_acct_combo['values'])
+                if saved_user in current_accts:
+                    _ol_acct_var.set(saved_user)
+                elif current_accts:
+                    _ol_acct_var.set(current_accts[0])
+
+                # Apply field-enable/disable state
+                if not _settings_is_server_mode:
+                    _on_backend_change()
+
+                labels = {
+                    'outlook+smtp': 'Outlook + SMTP fallback',
+                    'outlook':      'Outlook only',
+                    'smtp':         'SMTP only',
+                }
+                _email_cfg_status.set(
+                    f"Loaded existing config "
+                    f"({labels.get(saved_backend, saved_backend)} backend).")
             except Exception as _e:
                 _email_cfg_status.set(f'Could not load config: {_e}')
 
         def _save_smtp_cfg():
             import json as _j, base64 as _b
-            host  = _smtp_host_var.get().strip()
-            port_s = _smtp_port_var.get().strip()
-            user  = _smtp_user_var.get().strip()
-            pw    = _smtp_pass_var.get()
-            if not host or not user:
-                _email_cfg_status.set('SMTP host and username are required.')
+
+            # Determine backend from the two checkboxes
+            if _settings_is_server_mode:
+                using_ol   = False
+                using_smtp = True
+            else:
+                using_ol   = _outlook_cb_var.get()
+                using_smtp = _smtp_cb_var.get()
+
+            if not using_ol and not using_smtp:
+                _email_cfg_status.set(
+                    'Select at least one backend (Outlook or SMTP).')
                 return
-            try:
-                port = int(port_s)
-            except ValueError:
-                _email_cfg_status.set('Port must be a number.')
+
+            # For Outlook backend, the dropdown is the authoritative account —
+            # override the Email address field which may not have synced yet.
+            if using_ol and not _settings_is_server_mode:
+                ol_pick = _ol_acct_var.get().strip()
+                if ol_pick:
+                    _smtp_user_var.set(ol_pick)
+
+            user = _smtp_user_var.get().strip()
+            if not user:
+                _email_cfg_status.set('Email address is required.')
                 return
+
+            # Resolve backend key
+            if using_ol and using_smtp:
+                backend_key = 'outlook+smtp'
+            elif using_ol:
+                backend_key = 'outlook'
+            else:
+                backend_key = 'smtp'
+
+            # Build the config dict
             cfg = {
-                'smtp_host':     host,
-                'smtp_port':     port,
-                'username':      user,
-                '_password_b64': _b.b64encode(pw.encode()).decode(),
-                'from_name':     _smtp_from_var.get().strip() or 'AI-Prowler',
-                'use_tls':       True,
-                # v8.1.5 fix: Proactive Alerts (scheduler_engine._read_default_to_email)
-                # and this panel's own _read_default_to() both read cfg['default_to'],
-                # but this dict never wrote that key — so Morning Briefing and every
-                # other alert always saw "no default recipient configured" even with
-                # SMTP fully set up. Default the recipient to the same address used
-                # for SMTP login, since for personal use they're normally the same
-                # inbox. (documented in COMPLETE_USER_GUIDE.md as settable here)
-                'default_to':    user,
+                'backend':      backend_key,
+                'username':     user,
+                'from_address': user,
+                'from_name':    _smtp_from_var.get().strip() or 'AI-Prowler',
+                'default_to':   user,
             }
+
+            # Outlook account override (pick the selected account from the combo)
+            if using_ol and _ol_acct_var.get():
+                cfg['username']     = _ol_acct_var.get()
+                cfg['from_address'] = _ol_acct_var.get()
+
+            # SMTP credentials — required when SMTP is part of the config
+            if using_smtp:
+                host   = _smtp_host_var.get().strip()
+                port_s = _smtp_port_var.get().strip()
+                pw     = _smtp_pass_var.get()
+                if not host:
+                    _email_cfg_status.set(
+                        'SMTP host is required when SMTP is enabled.')
+                    return
+                try:
+                    port = int(port_s)
+                except ValueError:
+                    _email_cfg_status.set('Port must be a number.')
+                    return
+                cfg['smtp_host'] = host
+                cfg['smtp_port'] = port
+                cfg['use_tls']   = True
+                if pw:
+                    cfg['_password_b64'] = _b.b64encode(pw.encode()).decode()
+            else:
+                # SMTP is disabled — preserve existing SMTP credentials from disk
+                # so the app password is not wiped when the user temporarily
+                # switches to Outlook-only and then re-enables SMTP later.
+                _p2 = Path.home() / '.ai-prowler' / 'email_config.json'
+                try:
+                    _existing = _j.loads(
+                        _p2.read_text(encoding='utf-8')) if _p2.exists() else {}
+                except Exception:
+                    _existing = {}
+                for _k in ('smtp_host', 'smtp_port', 'use_tls', '_password_b64'):
+                    if _k in _existing:
+                        cfg[_k] = _existing[_k]
+
             p = Path.home() / '.ai-prowler' / 'email_config.json'
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(_j.dumps(cfg, indent=2), encoding='utf-8')
-            _email_cfg_status.set('Email config saved.')
+
+            labels = {
+                'outlook+smtp': 'Outlook + SMTP fallback',
+                'outlook':      'Outlook only',
+                'smtp':         'SMTP only',
+            }
+            _email_cfg_status.set(
+                f"✅ Email config saved ({labels[backend_key]}).")
 
         def _test_smtp_cfg():
+            # Read checkbox state BEFORE saving — save may alter state
+            # so capture what the user sees on screen right now.
+            if not _settings_is_server_mode:
+                using_ol   = _outlook_cb_var.get()
+                using_smtp = _smtp_cb_var.get()
+            else:
+                using_ol   = False
+                using_smtp = True
+            # Save config so the test uses the current on-screen settings
+            _save_smtp_cfg()
             _email_cfg_status.set('Sending test email...')
             scrollable_frame.update_idletasks()
+            # Build subject and body to reflect the actual backend being tested
+            if not _settings_is_server_mode:
+                pass  # using_ol / using_smtp already set above
+                if using_ol and using_smtp:
+                    backend_label = 'Outlook + SMTP fallback'
+                    detail = ('Sent via Outlook COM. SMTP fallback is also '
+                              'configured and will activate automatically if '
+                              'Outlook becomes unavailable.')
+                elif using_ol:
+                    backend_label = 'Outlook'
+                    detail = ('Sent via Outlook COM — no app password required.')
+                else:
+                    backend_label = 'SMTP'
+                    detail = ('Sent via SMTP — your app password is configured '
+                              'correctly.')
+            else:
+                backend_label = 'SMTP'
+                detail = 'Sent via SMTP (server mode shared account).'
+
             ok, msg = self._admin_send_email_direct(
                 _smtp_user_var.get().strip(),
-                'AI-Prowler SMTP Test',
-                'This is a test email from AI-Prowler. '
-                'If you received this, SMTP is configured correctly.')
+                f'AI-Prowler {backend_label} Test',
+                f'This is a test email from AI-Prowler. '
+                f'If you received this, your {backend_label} email backend '
+                f'is configured correctly.\n\n{detail}')
             _email_cfg_status.set(
-                'Test email sent.' if ok else f'Test failed: {msg}')
+                f'✅ Test email sent via {backend_label}.'
+                if ok else f'Test failed: {msg}')
 
         _load_smtp_cfg()
         _smtp_btn_row = ttk.Frame(email_cfg_frame)
@@ -19052,10 +19575,19 @@ or from the Help menu."""
         err_lbl.pack(anchor='w', pady=(0, 4))
 
         tok_var = tk.StringVar()
-        tok_entry = ttk.Entry(frm, textvariable=tok_var, show='●', width=34,
+        tok_row = ttk.Frame(frm)
+        tok_row.pack(fill='x', pady=(0, 12))
+        tok_entry = ttk.Entry(tok_row, textvariable=tok_var, show='●', width=30,
                               font=('Consolas', 10))
-        tok_entry.pack(fill='x', pady=(0, 12))
+        tok_entry.pack(side='left', padx=(0, 4))
         tok_entry.focus_set()
+
+        _tok_show_var = tk.BooleanVar(value=False)
+        def _toggle_tok_show():
+            tok_entry.configure(show='' if _tok_show_var.get() else '●')
+        ttk.Checkbutton(tok_row, text='👁 Show',
+                        variable=_tok_show_var,
+                        command=_toggle_tok_show).pack(side='left')
 
         result = [False]   # mutable so inner functions can write it
 
@@ -19124,71 +19656,40 @@ or from the Help menu."""
     # who forget their bearer token.
 
     def _admin_email_configured(self):
-        """Return True if email_config.json exists and has smtp_host + username."""
+        """Return True if email_config.json exists and has a usable config.
+
+        Accepts both SMTP configs (smtp_host + username) and Outlook configs
+        (backend='outlook' or 'outlook+smtp' with username).
+        """
         import json as _j
         p = Path.home() / ".ai-prowler" / "email_config.json"
         if not p.exists():
             return False
         try:
             d = _j.loads(p.read_text(encoding="utf-8")) or {}
-            return bool(d.get("smtp_host", "").strip()) and                    bool(d.get("username", "").strip())
+            backend = d.get("backend", "smtp")
+            username = d.get("username", "").strip()
+            if not username:
+                return False
+            if backend in ("outlook", "outlook+smtp"):
+                return True   # Outlook — no smtp_host needed
+            return bool(d.get("smtp_host", "").strip())
         except Exception:
             return False
 
     def _admin_send_email_direct(self, to, subject, body):
         """Send an email directly from the GUI using email_config.json.
-        Returns (success: bool, message: str)."""
-        import json as _j, smtplib, ssl as _ssl, base64 as _b
-        from email.mime.multipart import MIMEMultipart as _MM
-        from email.mime.text import MIMEText as _MT
 
-        p = Path.home() / ".ai-prowler" / "email_config.json"
-        if not p.exists():
-            return (False, "Email not configured. "
-                           "Configure SMTP in Settings -> Email Configuration.")
+        Routes through the MCP _send_smtp() function which handles both
+        the Outlook COM backend and the SMTP backend correctly.
+        Returns (success: bool, message: str).
+        """
         try:
-            cfg = _j.loads(p.read_text(encoding="utf-8")) or {}
+            import ai_prowler_mcp as _mcp
+            ok, msg = _mcp._send_smtp(to, subject, body)
+            return (ok, msg)
         except Exception as e:
-            return (False, f"Could not read email config: {e}")
-
-        if "_password_b64" in cfg:
-            try:
-                cfg["password"] = _b.b64decode(cfg["_password_b64"]).decode()
-            except Exception:
-                pass
-
-        smtp_host = cfg.get("smtp_host", "").strip()
-        smtp_port = int(cfg.get("smtp_port", 587))
-        username  = cfg.get("username", "").strip()
-        password  = cfg.get("password", "")
-        from_name = cfg.get("from_name", "AI-Prowler")
-
-        if not smtp_host or not username:
-            return (False, "Incomplete email config.")
-
-        msg = _MM("mixed")
-        msg["From"]    = f"{from_name} <{username}>"
-        msg["To"]      = to
-        msg["Subject"] = subject
-        msg.attach(_MT(body, "plain", "utf-8"))
-
-        try:
-            ctx = _ssl.create_default_context()
-            if smtp_port == 465:
-                with smtplib.SMTP_SSL(smtp_host, smtp_port,
-                                      context=ctx, timeout=20) as s:
-                    s.login(username, password)
-                    s.sendmail(username, [to], msg.as_bytes())
-            else:
-                with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as s:
-                    s.ehlo()
-                    if cfg.get("use_tls", True):
-                        s.starttls(context=ctx)
-                    s.login(username, password)
-                    s.sendmail(username, [to], msg.as_bytes())
-            return (True, f"Sent to {to}")
-        except Exception as e:
-            return (False, str(e))
+            return (False, f"Send failed: {e}")
 
     def _admin_recovery_eligible_users(self):
         """Return list of (display_name, user_key, user_record) tuples for

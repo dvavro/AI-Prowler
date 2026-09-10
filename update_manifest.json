@@ -1,11 +1,11 @@
 {
   "version": "9.1.0",
-  "generated": "2026-08-31T13:15:45",
+  "generated": "2026-09-09T20:53:09",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "2ceae233de036bb531cf87eebd878a6fc751182be47cc7227faea8b18f657bfb",
-      "bytes": 1301466
+      "sha256": "fa47e7935b5b32a2e0a748ca88ffc56bd69e99b43078e68f9a12c9915dcf4b05",
+      "bytes": 1325551
     },
     {
       "path": "rag_preprocessor.py",
@@ -14,8 +14,8 @@
     },
     {
       "path": "ai_prowler_mcp.py",
-      "sha256": "b6fed9055ef6708503e91ed0e287ee3e7c3008dbc5ba77af8e1eea167926ffdd",
-      "bytes": 992593
+      "sha256": "2aa73bab8437176418de852c9e563325dc09df02f453fa33799444eec096f98f",
+      "bytes": 1076067
     },
     {
       "path": "mcp_diagnostics.py",
@@ -59,8 +59,8 @@
     },
     {
       "path": "COMPLETE_USER_GUIDE.md",
-      "sha256": "da2e9b518b7d58b31e602fd916f0f8a5729f95f36e7fa3ade7233b0fc25274d7",
-      "bytes": 188116
+      "sha256": "0e282deeb4590fde1947cbbca0eb009b52c6923a030bcd4312ea2d1b57263194",
+      "bytes": 189873
     },
     {
       "path": "VERSION",
@@ -159,8 +159,8 @@
     },
     {
       "path": "jobs/index.html",
-      "sha256": "6833ef4590728dee1b98575bbbd9cf1dea219ca4349220b91614216fdbeb9535",
-      "bytes": 521848
+      "sha256": "31784f6773893769116f64a3a24696d9ebe22e1afada5f2b58cf60d75bb94358",
+      "bytes": 529017
     },
     {
       "path": "jobs/manifest.json",

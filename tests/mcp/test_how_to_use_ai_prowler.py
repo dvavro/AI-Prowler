@@ -30,7 +30,7 @@ Instead:
 
 Also covers: the stale "85 tools total" -> "80 tools total" fix (drifted
 out of sync after job image tools were removed earlier this session),
-and subsequent updates: 96 -> 99 total in v9.1.0 (+3 new tools).
+and subsequent updates: 96 -> 99 -> 100 total in v9.1.x (+list_outlook_accounts).
 """
 
 import sys
@@ -163,7 +163,15 @@ class TestToolCountFixed:
         assert "83 tools total" not in result
         assert "84 tools total" not in result
         assert "96 tools total" not in result
-        assert "99 tools total" in result  # v9.1.0: 99 total, 98 personal, 65 server
+        assert "99 tools total" not in result
+        assert "100 tools total" not in result
+        assert "102 tools total" not in result
+        # v9.1.x: 103 total, 102 personal, 68 server — bumped from 102/101/67
+        # when build_daily_route was added (previously there was no tool
+        # that rebuilt Route_Planner from the day's Jobs_Schedule rows,
+        # auto-geocoded, checked for late-arrival/overlap conflicts, and
+        # alerted on a lower-drive-time reorder before committing).
+        assert "103 tools total" in result
 
     def test_count_correct_in_server_mode_too(self, mcp_mod, monkeypatch):
         user = _user("owner")
@@ -175,7 +183,10 @@ class TestToolCountFixed:
         assert "83 tools total" not in result
         assert "84 tools total" not in result
         assert "96 tools total" not in result
-        assert "99 tools total" in result  # v9.1.0: 99 total, 98 personal, 65 server
+        assert "99 tools total" not in result
+        assert "100 tools total" not in result
+        assert "102 tools total" not in result
+        assert "103 tools total" in result
 
 
 class TestFooterVariesCorrectly:

@@ -248,6 +248,7 @@ textarea::placeholder{color:#c0c6d8}
       </div>
       <p class="section-sub" id="jobsDateLabel">Loading schedule...</p>
       <div id="activeClock"></div>
+      <div id="todayRouteBanner"></div>
       <div id="jobsList"><div class="loader"><div class="spinner"></div> Loading jobs...</div></div>
     </div>
 
@@ -388,6 +389,9 @@ textarea::placeholder{color:#c0c6d8}
       <!-- Sheet tabs row (top) -->
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;flex-shrink:0">
         <div id="sheetTabs" style="display:flex;gap:4px;overflow-x:auto;flex:1;padding-bottom:2px"></div>
+        <button class="btn btn-ghost" style="width:auto;padding:8px 10px;flex-shrink:0" onclick="refreshCurrentSheet()" id="refreshSheetBtn" title="Refresh this sheet">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px" id="refreshSheetIcon"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+        </button>
         <button id="sheetAddBtn" onclick="openAddJobModal()" style="display:none;flex-shrink:0;background:#7c3aed;border:none;color:#fff;border-radius:8px;padding:5px 10px;font-size:12px;font-weight:700;cursor:pointer">+ Add</button>
       </div>
       <!-- Sheet content — fills all remaining vertical space and scrolls -->
@@ -502,7 +506,7 @@ textarea::placeholder{color:#c0c6d8}
                   <label style="font-size:12px;color:#666">Longitude<br><input id="jfLongitude" readonly style="width:100%;margin-top:4px;padding:8px;border-radius:8px;background:#0a0a18;border:1px solid #333;color:#666;font-size:14px"></label>
                   <label style="font-size:12px;color:#666">Route Stop #<br><input id="jfRouteStop" readonly style="width:100%;margin-top:4px;padding:8px;border-radius:8px;background:#0a0a18;border:1px solid #333;color:#666;font-size:14px"></label>
                 </div>
-                <label style="font-size:12px;color:#666">Route Map URL<br><input id="jfRouteMapUrl" readonly style="width:100%;margin-top:4px;padding:8px;border-radius:8px;background:#0a0a18;border:1px solid #333;color:#666;font-size:13px"></label>
+                <label style="font-size:12px;color:#666">Route Map URL<br><div id="jfRouteMapUrl" style="width:100%;margin-top:4px;padding:8px;border-radius:8px;background:#0a0a18;border:1px solid #333;color:#666;font-size:13px;min-height:1.2em"></div></label>
                 <label style="font-size:12px;color:#666">Weather Check<br><input id="jfWeatherCheck" readonly style="width:100%;margin-top:4px;padding:8px;border-radius:8px;background:#0a0a18;border:1px solid #333;color:#666;font-size:13px"></label>
               </div>
             </div>
@@ -679,7 +683,10 @@ textarea::placeholder{color:#c0c6d8}
     <div class="modal-header">
       <div class="job-id" id="calDayModalDate"></div>
     </div>
-    <div class="modal-body" id="calDayModalList"></div>
+    <div class="modal-body">
+      <div id="calDayModalRoute"></div>
+      <div id="calDayModalList"></div>
+    </div>
   </div>
 </div>
 
@@ -1249,6 +1256,12 @@ function parseJobs(raw, taxRatePercent) {
         tax: tax, invoiceTotal: invoiceTotal,
         recurrence: g('Recurrence'), invoiceId: g('InvoiceID'),
         invoiceSentDate: g('Invoice Sent Date'),
+        // Persisted per-job by build_daily_route() (backend) onto each
+        // matched job's own row — survives Route_Planner being rebuilt for
+        // a different day, unlike anything read from Route_Planner itself.
+        // Used by the "today's route" banner and the calendar day-modal's
+        // route link.
+        routeMapUrl: g('Route Map URL'),
     };
   }).filter(j=>j.id&&j.id.startsWith('JOB-'));
 }
@@ -1443,8 +1456,17 @@ function _render2WeekAgenda(byDate) {
     const key = _dkey(d);
     const jobsToday = (byDate[key] || []).slice().sort(function(a,b){ return (a.start||'').localeCompare(b.start||''); });
     const isToday = i === 0;
+    // Route indicator — same per-job persisted Route Map URL used by the
+    // Jobs tab banner and the day-tap modal. Every job on a built day
+    // carries the identical URL, so the first one found is enough.
+    const routeJob = jobsToday.find(function(j) { return j.routeMapUrl; });
+    const routeLinkHtml = routeJob
+      ? '<a href="' + esc(routeJob.routeMapUrl) + '" target="_blank" rel="noopener noreferrer" '
+        + 'onclick="event.stopPropagation()" title="Route built for this day — tap to navigate" '
+        + 'style="display:inline-flex;margin-top:2px;font-size:14px;text-decoration:none">📍</a>'
+      : '';
     html += '<div class="cal-week-row' + (isToday ? ' today' : '') + '">'
-      + '<div class="cal-week-date"><div class="dow">' + (isToday ? 'Today' : DOW[d.getDay()]) + '</div><div class="dom">' + d.getDate() + '</div></div>'
+      + '<div class="cal-week-date"><div class="dow">' + (isToday ? 'Today' : DOW[d.getDay()]) + '</div><div class="dom">' + d.getDate() + '</div>' + routeLinkHtml + '</div>'
       + '<div style="flex:1;min-width:0">'
       + '<div class="cal-week-jobs">'
       + (jobsToday.length ? jobsToday.map(_calChip).join('') : '<span class="cal-week-empty">No jobs scheduled</span>')
@@ -1505,8 +1527,19 @@ function _renderMonthGrid(year, monthIndex, byDate) {
       return '<div class="devent' + evCls + '">' + esc(label) + '</div>';
     }).join('') + (extra > 0 ? '<div class="dmore">+' + extra + ' more</div>' : '');
 
+    // Same per-job persisted Route Map URL used everywhere else (Jobs tab
+    // banner, 2-week agenda, day-tap modal) — a small tappable indicator
+    // next to the day number, independent of the cell's own onclick (which
+    // opens the day modal where the full link also appears).
+    const routeJob = jobsToday.find(function(j) { return j.routeMapUrl; });
+    const routeLinkHtml = routeJob
+      ? '<a href="' + esc(routeJob.routeMapUrl) + '" target="_blank" rel="noopener noreferrer" '
+        + 'onclick="event.stopPropagation()" title="Route built for this day — tap to navigate" '
+        + 'style="text-decoration:none;font-size:11px;margin-left:3px">📍</a>'
+      : '';
+
     cells += '<div class="' + cls.join(' ') + '"' + onclick + '>'
-      + '<span class="dnum">' + day + '</span>'
+      + '<span class="dnum">' + day + routeLinkHtml + '</span>'
       + '<div class="devents">' + eventsHtml + '</div>'
       + (jobsToday.length ? _occBarHtml(jobsToday, true) : '')
       + '</div>';
@@ -1527,6 +1560,21 @@ function openCalDay(dateKey) {
     ? d.toLocaleDateString(undefined, {weekday:'long', month:'long', day:'numeric', year:'numeric'})
     : dateKey;
   const listEl = document.getElementById('calDayModalList');
+  // Same day-level route link shown on the Jobs tab's banner — a route
+  // built for THIS date (past or future, via build_daily_route()) is
+  // persisted per-job onto Jobs_Schedule, so it survives Route_Planner
+  // later being rebuilt for a different day. Shown above the job list
+  // whenever any job that day carries one.
+  var routeJob = jobsToday.find(function(j) { return j.routeMapUrl; });
+  var routeBannerEl = document.getElementById('calDayModalRoute');
+  if (routeBannerEl) {
+    routeBannerEl.innerHTML = routeJob
+      ? '<a href="' + esc(routeJob.routeMapUrl) + '" target="_blank" rel="noopener noreferrer" '
+        + 'style="display:flex;align-items:center;gap:8px;text-decoration:none;color:#60a5fa;'
+        + 'background:rgba(96,165,250,0.1);border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:14px">'
+        + '📍 Route for this day — tap to navigate</a>'
+      : '';
+  }
   listEl.innerHTML = jobsToday.map(function(j) {
     return '<div class="cal-day-list-row" onclick="closeCalDayModal();openModal(\'' + j.id + '\')">'
       + '<div class="l"><div class="id">' + esc(j.id) + '</div><div class="cust">' + esc(j.customer||'') + '</div></div>'
@@ -1558,6 +1606,7 @@ function jobCardHtml(j) {
 
 function renderJobsList() {
   renderClockBanner();
+  renderRouteLinkBanner();
   const list = document.getElementById('jobsList');
   // Completed/cancelled jobs are hidden entirely, not just deprioritized.
   const active = state.jobs.filter(j=>!isJobComplete(j));
@@ -2046,6 +2095,26 @@ function renderClockBanner() {
     : '';
 }
 
+function renderRouteLinkBanner() {
+  // Every job on a given day carries the SAME route URL (build_daily_route
+  // writes the identical day's Waypoint Map URL onto each matched job's
+  // own row — see ai_prowler_mcp.py), so finding it on any one of today's
+  // jobs is enough to show a single day-level banner here.
+  const el = document.getElementById('todayRouteBanner');
+  if (!el) return;
+  const todayMidnight = new Date(); todayMidnight.setHours(0,0,0,0);
+  const todayJob = state.jobs.find(j => {
+    const d = parseJobDate(j.date);
+    return d && d.getTime() === todayMidnight.getTime() && j.routeMapUrl;
+  });
+  el.innerHTML = todayJob
+    ? `<a href="${esc(todayJob.routeMapUrl)}" target="_blank" rel="noopener noreferrer" class="active-clock-banner" style="text-decoration:none;display:flex;align-items:center;gap:8px">
+         <div class="dot" style="background:#60a5fa"></div>
+         <p style="color:#60a5fa">📍 Today's route is ready — tap to navigate</p>
+       </a>`
+    : '';
+}
+
 // ── PHOTOS ────────────────────────────────────────────────────────────────
 function handleFiles(files) {
   Array.from(files).slice(0,10-state.photos.length).forEach(f=>{
@@ -2196,6 +2265,15 @@ function showScreen(name, btn) {
     pwaDbg('showScreen: no element for "' + name + '"', '#f87171');
   }
   if (btn) btn.classList.add('active');
+  // Auto-refresh on navigation — data changed elsewhere (another device,
+  // or an MCP tool call from a Claude conversation) should show up the
+  // moment the user taps back to a data-driven tab, not require a manual
+  // refresh tap first. Clock and Messages are deliberately NOT auto-
+  // refreshed here: clock history renders from already-loaded client-side
+  // state (nothing stale to re-fetch), and SMS reply-checking is
+  // intentionally manual (checkSMSReplies(), a button press) to avoid
+  // firing an API call on every tab visit.
+  if (name === 'jobs') loadJobs();
   if (name === 'sheet') loadSheetScreen();
   if (name === 'calendar') loadCalendar();
   _maybeReshowUpdateBanner();
@@ -2488,6 +2566,23 @@ async function _switchSheet(name) {
   var sheet  = _SHEETS.find(function(s){ return s.name === name; });
   if (addBtn) addBtn.style.display = (sheet && sheet.addable) ? '' : 'none';
   await loadSheet(name);
+}
+
+async function refreshCurrentSheet() {
+  // Manual re-fetch of whichever sheet tab is currently open, without
+  // navigating away and back — switching tabs already re-fetches (see
+  // _switchSheet above), but there was previously no way to refresh the
+  // CURRENTLY selected one in place.
+  var btn = document.getElementById('refreshSheetBtn');
+  var icon = document.getElementById('refreshSheetIcon');
+  if (btn) btn.disabled = true;
+  if (icon) icon.classList.add('spinning');
+  try {
+    await loadSheet(_activeSheet);
+  } finally {
+    if (btn) btn.disabled = false;
+    if (icon) icon.classList.remove('spinning');
+  }
 }
 
 // ── SETTINGS CARD ─────────────────────────────────────────────────────────────
@@ -2992,7 +3087,16 @@ function _renderGenericTable(el, raw, sheetName, fullCols) {
       var isId = c.toLowerCase().includes('id') && i === 0;
       var style = 'padding:6px 10px;white-space:nowrap;border-bottom:1px solid #1a1a2e;font-size:12px;';
       if (c.toLowerCase().includes('id') && v.match(/^[A-Z]+-\d+/)) style += 'color:#7c3aed;font-weight:700;';
-      return '<td style="' + style + '">' + esc(v) + '</td>';
+      // URL-looking cell values (Route Map URL / Waypoint Map URL, and any
+      // future computed link column) render as a real clickable <a>
+      // instead of plain escaped text — same fix already applied to the
+      // generic row-edit modal's read-only field display; this is the
+      // separate table/list rendering path that also needed it.
+      var cellHtml = /^https?:\/\//i.test(String(v).trim())
+        ? '<a href="' + esc(v) + '" target="_blank" rel="noopener noreferrer" '
+          + 'style="color:#60a5fa;text-decoration:underline" onclick="event.stopPropagation()">📍 Open in Maps</a>'
+        : esc(v);
+      return '<td style="' + style + '">' + cellHtml + '</td>';
     }).join('');
     var firstId = cols[0] ? (r[cols[0]] || '') : '';
     return '<tr style="background:' + bg + '">' + cells +
@@ -3148,11 +3252,24 @@ async function _openGenericEditModal(sheetName, rowId, rowData, rowIdx) {
   allCols.forEach(function(col) {
     var val = rowData[col];
     if (readOnly.has(col)) {
-      // Show as read-only display
+      // Show as read-only display — URL-looking values (Route Map URL /
+      // Waypoint Map URL, and any future computed link column) render as
+      // a real clickable <a> instead of escaped plain text, so a tech
+      // can actually tap through to Google Maps from here rather than
+      // needing to copy/paste the URL out of a read-only field.
       var lbl = document.createElement('label');
       lbl.style.cssText = 'font-size:13px;color:#666';
+      var valStr = String(val || '');
+      var displayHtml;
+      if (/^https?:\/\//i.test(valStr.trim())) {
+        displayHtml = '<a href="' + esc(valStr) + '" target="_blank" '
+          + 'rel="noopener noreferrer" style="color:#60a5fa;text-decoration:underline;word-break:break-all">'
+          + '📍 Open in Maps</a>';
+      } else {
+        displayHtml = esc(valStr);
+      }
       lbl.innerHTML = esc(col) + ' <span style="color:#555">(computed)</span><br>'
-        + '<div style="' + style + ';background:#0a0a18;color:#666;padding:8px;border-radius:8px">' + esc(String(val||'')) + '</div>';
+        + '<div style="' + style + ';background:#0a0a18;color:#666;padding:8px;border-radius:8px">' + displayHtml + '</div>';
       inp.appendChild(lbl);
       return;
     }
@@ -3261,7 +3378,14 @@ function openEditJobModal(jobId) {
   document.getElementById('jfLatitude').value           = j.latitude      || '';
   document.getElementById('jfLongitude').value          = j.longitude     || '';
   document.getElementById('jfRouteStop').value          = j.routeStop     || '';
-  document.getElementById('jfRouteMapUrl').value        = j.routeMapUrl   || '';
+  (function() {
+    var rmuEl = document.getElementById('jfRouteMapUrl');
+    var rmuVal = j.routeMapUrl || '';
+    rmuEl.innerHTML = /^https?:\/\//i.test(rmuVal.trim())
+      ? '<a href="' + esc(rmuVal) + '" target="_blank" rel="noopener noreferrer" '
+        + 'style="color:#60a5fa;text-decoration:underline;word-break:break-all">📍 Open in Maps</a>'
+      : esc(rmuVal);
+  })();
   document.getElementById('jfWeatherCheck').value       = j.weatherCheck  || '';
   document.getElementById('jobFormError').style.display = 'none';
   document.getElementById('jobFormModal').style.display = 'flex';
@@ -3273,9 +3397,10 @@ function openAddJobModal() {
   ['jfJobId','jfCustomer','jfAddress','jfCity','jfState',
    'jfStart','jfEnd','jfNotes','jfCrew','jfQuote',
    'jfActualAmount','jfTax','jfInvoiceTotal',
-   'jfLatitude','jfLongitude','jfRouteStop','jfRouteMapUrl','jfWeatherCheck'].forEach(id => {
+   'jfLatitude','jfLongitude','jfRouteStop','jfWeatherCheck'].forEach(id => {
     document.getElementById(id).value = '';
   });
+  document.getElementById('jfRouteMapUrl').innerHTML = '';
   document.getElementById('jfDate').value   = (function(){var d=new Date();return String(d.getMonth()+1).padStart(2,'0')+'/'+String(d.getDate()).padStart(2,'0')+'/'+d.getFullYear();})();
   document.getElementById('jfService').value = 'Window';
   document.getElementById('jfStatus').value  = 'Scheduled';
