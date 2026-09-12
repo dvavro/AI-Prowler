@@ -974,26 +974,37 @@ async function handleUpload(inp) {
   inp.value = '';
   const statusEl = document.getElementById('uploadStatus');
   statusEl.style.display = 'block';
-  statusEl.textContent = 'Uploading ' + file.name + '\u2026';
+  statusEl.textContent = 'Uploading ' + file.name + '…';
   statusEl.style.color = 'var(--accent)';
 
   try {
-    const fd = new FormData();
-    fd.append('file', file);
-    fd.append('dir', dirPath);
-    fd.append('token', BEARER);
-    const r = await fetch('/remote/upload', { method: 'POST', body: fd });
+    // v9.1.x -- base64 JSON body instead of multipart FormData+File.
+    // Same iOS Safari WebKit fix applied to the Jobs PWA photo upload:
+    // fetch()+FormData+File was confirmed to deliver a genuinely empty
+    // request body on iPhone (0 bytes received server-side, even for a
+    // 2 KB test file). This sidesteps FormData/File entirely.
+    const fileData = await new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve((fr.result || '').split(',')[1] || '');
+      fr.onerror = reject;
+      fr.readAsDataURL(file);
+    });
+    const r = await fetch('/remote/upload', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ file_data: fileData, filename: file.name, dir: dirPath, token: BEARER }),
+    });
     const data = await r.json().catch(() => ({}));
     if (r.ok && data.ok) {
-      statusEl.textContent = '\u2705 Uploaded: ' + file.name + ' (' + Math.round((data.size||0)/1024) + ' KB) — indexed into AI-Prowler';
+      statusEl.textContent = '✅ Uploaded: ' + file.name + ' (' + Math.round((data.size||0)/1024) + ' KB) — indexed into AI-Prowler';
       statusEl.style.color = 'var(--green)';
       browseDir(dirPath);  // refresh listing
     } else {
-      statusEl.textContent = '\u274c Failed: ' + (data.error || ('HTTP ' + r.status));
+      statusEl.textContent = '❌ Failed: ' + (data.error || ('HTTP ' + r.status));
       statusEl.style.color = 'var(--red)';
     }
   } catch(e) {
-    statusEl.textContent = '\u274c Error: ' + String(e);
+    statusEl.textContent = '❌ Error: ' + String(e);
     statusEl.style.color = 'var(--red)';
   }
   setTimeout(() => { statusEl.style.display = 'none'; }, 6000);

@@ -78,27 +78,100 @@ from typing import Optional
 import logging
 import traceback
 
-_LOG_PATH = Path.home() / ".ai-prowler" / "logs" / "mcp_server.log"
+_log_dir_override = os.environ.get("AIPROWLER_TEST_STATE_DIR", "").strip()
+if _log_dir_override:
+    # v9.1.x fix: every pytest run (and any other subprocess that imports
+    # this module, e.g. check_python_import) executes this module-level
+    # logging setup again in a FRESH process. Without this check, that
+    # process opens the REAL ~/.ai-prowler/logs/mcp_server.log in mode="w",
+    # truncating and fighting over the live server's own open file handle —
+    # exactly the same class of collision as the rotation-lock hang fixed
+    # just above, except self-inflicted by running tests while the real
+    # server is up. config.json/users.json/ChromaDB already redirect under
+    # AIPROWLER_TEST_STATE_DIR (see _state_dir() below); logs now do too.
+    _LOG_PATH = Path(_log_dir_override) / "logs" / "mcp_server.log"
+else:
+    _LOG_PATH = Path.home() / ".ai-prowler" / "logs" / "mcp_server.log"
 _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 # Rotating log: 5 MB per file, keep 3 backups (15 MB total max).
 # Also rotates on each startup so each server session begins in a fresh file.
 # Startup rotation: .log -> .log.1 -> .log.2 (oldest), then open fresh.
+#
+# v9.1.x HARDENING — root-caused a real production hang (2026-09-10): on
+# Windows, a rename-based rotation step fails with PermissionError if ANY
+# process has the target file open without FILE_SHARE_DELETE — e.g. a text
+# editor/log viewer just tailing the live log, which is a completely normal
+# thing to be doing while the server runs. Once that happens on the stock
+# logging.handlers.RotatingFileHandler, every subsequent log call re-attempts
+# (and re-fails) rotation and prints a traceback to stderr via handleError().
+# If something upstream captures this process's stderr into a pipe (e.g. the
+# GUI's log display) and isn't draining it as fast as the failures pile up,
+# that pipe's OS buffer fills and the next stderr write blocks forever.
+# Logging happens synchronously inside request handling, so that single
+# blocked write freezes the whole single-threaded event loop — the server
+# just stops responding, with no crash and no further log output. Everything
+# below exists to make that specific failure mode structurally impossible:
+# a rotation failure should make the log file too big, never make the server
+# unresponsive.
 import shutil as _shutil
 for _i in range(2, 0, -1):
     _old = _LOG_PATH.with_suffix(f".log.{_i}")
     _prev = _LOG_PATH.with_suffix(f".log.{_i-1}") if _i > 1 else _LOG_PATH
     if _prev.exists():
-        _shutil.copy2(str(_prev), str(_old))
+        try:
+            _shutil.copy2(str(_prev), str(_old))
+        except Exception:
+            pass  # e.g. previous log locked by a viewer — skip, non-fatal
 
 from logging.handlers import RotatingFileHandler as _RotatingFileHandler
-_log_handler = _RotatingFileHandler(
-    str(_LOG_PATH),
-    mode="w",           # fresh file each startup (startup rotation already done above)
-    maxBytes=5 * 1024 * 1024,   # 5 MB per file
-    backupCount=3,              # keep .log.1 .log.2 .log.3 (15 MB total max)
-    encoding="utf-8",
-)
+
+class _SafeRotatingFileHandler(_RotatingFileHandler):
+    """
+    RotatingFileHandler that can never propagate a rotation failure up to
+    handleError()/stderr — see the block comment above for why that matters.
+    If doRollover() fails (locked file, permissions, anything), this just
+    keeps writing to the current file instead of raising. A log file that
+    temporarily exceeds maxBytes is a minor annoyance; a hung server isn't.
+    """
+    def shouldRollover(self, record):
+        try:
+            return super().shouldRollover(record)
+        except Exception:
+            return 0  # never let even the SIZE CHECK block emit()
+
+    def doRollover(self):
+        try:
+            super().doRollover()
+        except Exception:
+            # Rotation failed. Make sure we still have a writable stream on
+            # SOME file before returning, so emit() can proceed normally —
+            # but never let opening that stream raise either.
+            try:
+                if self.stream is None or self.stream.closed:
+                    self.stream = self._open()
+            except Exception:
+                pass
+
+try:
+    _log_handler = _SafeRotatingFileHandler(
+        str(_LOG_PATH),
+        mode="w",           # fresh file each startup (startup rotation already done above)
+        maxBytes=5 * 1024 * 1024,   # 5 MB per file
+        backupCount=3,              # keep .log.1 .log.2 .log.3 (15 MB total max)
+        encoding="utf-8",
+    )
+except Exception:
+    # Even the initial open failed (e.g. mcp_server.log itself locked by a
+    # viewer at startup) — fall back to a uniquely-named file rather than
+    # crashing the whole server over a logging path. Startup must not depend
+    # on nobody else having the log open.
+    import time as _boot_time
+    _fallback_path = _LOG_PATH.with_name(f"mcp_server_{int(_boot_time.time())}.log")
+    _log_handler = _SafeRotatingFileHandler(
+        str(_fallback_path), mode="w",
+        maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8",
+    )
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s [%(levelname)-8s] %(message)s",
@@ -3827,13 +3900,21 @@ def optimize_route(
 @mcp.tool()
 def build_maps_url(
     stops: list[str],
-    origin: str,
+    origin: str = "",
     app: str = "google",
 ) -> str:
     """
     Build a tap-to-navigate multi-stop directions URL.
     The user taps the link on their phone and Google Maps (or Apple Maps) opens
     immediately in navigation mode with all stops pre-loaded in the correct order.
+
+    This is always an OPEN path ending at the LAST stop — it never assumes a
+    return trip back to origin (or anywhere else). If origin is omitted (the
+    default), the link has no starting point at all, so Google/Apple Maps use
+    the phone's live GPS location the moment it's opened — usually more
+    accurate than any stored address anyway, since the person navigating
+    rarely starts exactly from a fixed point. Only pass origin when the
+    person explicitly says where they're starting from for this route.
 
     Google Maps supports 9 waypoints per URL. For larger routes the tool
     automatically splits the day into legs (each with its own tap-to-navigate
@@ -3843,9 +3924,11 @@ def build_maps_url(
     Works on iPhone, Android, CarPlay, Android Auto, and desktop Chrome.
 
     Args:
-        stops:  Job addresses in the OPTIMIZED visit order
-                (use the sequence returned by optimize_route()).
-        origin: Starting address (home base or depot).
+        stops:  Job addresses in the visit order (use the sequence returned
+                by optimize_route(), or your own order).
+        origin: Optional — starting address for this link. Omit to let
+                Google/Apple Maps default to the phone's current location
+                when opened.
         app:    "google" (default, all devices) or "apple" (iPhone/iPad only).
 
     Returns:
@@ -3866,8 +3949,9 @@ def build_maps_url(
             "",
         ]
         for i, stop in enumerate(stops, 1):
+            saddr = _enc(origin) if (i == 1 and origin) else "Current+Location"
             url = (
-                "http://maps.apple.com/?saddr=Current+Location"
+                f"http://maps.apple.com/?saddr={saddr}"
                 f"&daddr={_enc(stop)}&dirflg=d"
             )
             lines.append(f"  Stop {i}: {stop}")
@@ -3875,10 +3959,13 @@ def build_maps_url(
             lines.append("")
         return "\n".join(lines)
 
-    # ── Google Maps ───────────────────────────────────────────────────────────
+    # ── Google Maps — always an OPEN path ending at the last stop; origin is
+    # only included in the URL if one was actually given ────────────────────
     def _google_url(orig: str, dest: str, waypoints: list[str]) -> str:
         base   = "https://www.google.com/maps/dir/?api=1"
-        params = f"&origin={_enc(orig)}&destination={_enc(dest)}&travelmode=driving"
+        params = f"&destination={_enc(dest)}&travelmode=driving"
+        if orig:
+            params = f"&origin={_enc(orig)}" + params
         if waypoints:
             params += "&waypoints=" + "|".join(_enc(w) for w in waypoints)
         return base + params
@@ -3886,19 +3973,22 @@ def build_maps_url(
     if len(stops) <= GOOGLE_MAX:
         url = _google_url(
             orig      = origin,
-            dest      = origin,
-            waypoints = stops,
+            dest      = stops[-1],
+            waypoints = stops[:-1],
         )
+        start_note = f"from {origin}" if origin else "from your current location"
         return (
             f"📍 TAP TO NAVIGATE  —  {len(stops)} stops loaded\n\n"
             f"{url}\n\n"
-            f"Opens Google Maps with all {len(stops)} stops in optimized order.\n"
+            f"Opens Google Maps {start_note}, with all {len(stops)} stops in order.\n"
             f"Works on: iPhone (Google Maps app), Android, CarPlay, Android Auto,\n"
             f"          and desktop Chrome.\n"
             f"Tap 'Start' in Maps for turn-by-turn navigation."
         )
 
-    # Split into legs of GOOGLE_MAX stops each
+    # Split into legs of GOOGLE_MAX stops each. Only the FIRST leg uses the
+    # given origin (or none, for current-location) — every later leg chains
+    # from the end of the previous leg, same as before.
     leg_groups = [stops[i:i + GOOGLE_MAX] for i in range(0, len(stops), GOOGLE_MAX)]
     total_legs  = len(leg_groups)
     lines = [
@@ -3910,9 +4000,8 @@ def build_maps_url(
 
     leg_origin = origin
     for leg_num, group in enumerate(leg_groups, 1):
-        is_last_leg = leg_num == total_legs
-        leg_dest    = origin if is_last_leg else group[-1]
-        leg_wps     = group  if is_last_leg else group[:-1]
+        leg_dest = group[-1]
+        leg_wps  = group[:-1]
 
         stop_start = (leg_num - 1) * GOOGLE_MAX + 1
         stop_end   = min(leg_num * GOOGLE_MAX, len(stops))
@@ -4089,8 +4178,14 @@ def _job_crew_scope(ctx, fp: str) -> tuple[bool, str]:
     except Exception:
         pass
 
-    full_access, _ = _check_db_cap(user, "full")
-    if full_access:
+    # v9.1.x — "staff" is the crew-lead tier for a multi-crew company:
+    # unrestricted job-crew scope (sees/edits every crew's jobs, customers,
+    # invoices, and quotes), same as owner/manager, even though their
+    # manage_db capability stays "limited" (a separate, unrelated axis —
+    # see _check_db_cap, which governs knowledge-base tools, not job data).
+    # Only field_crew remains restricted to records tied to their own name.
+    role = (user.get("role") or "").strip().lower()
+    if role in ("owner", "manager", "staff"):
         return False, ""
 
     return True, (user.get("name") or "").strip().lower()
@@ -4122,6 +4217,80 @@ def _crew_name_in_cell(row_crew_lower: str, crew_name: str) -> bool:
     if not row_crew_lower or not crew_name:
         return False
     return crew_name in [n.strip() for n in row_crew_lower.split(',')]
+
+
+# v9.1.x — Customers-sheet columns a field_crew member may NOT write, even
+# for a customer already in their own scope (see _server_customer_in_crew_scope
+# below). These are business/master-record fields (pricing, billing
+# frequency, lifetime metrics, active status) that one crew member
+# shouldn't be able to silently change for the whole company. Everything
+# else on the Customers sheet — contact info, address, service
+# preferences, gate code/access notes, on-site contact, last/next service
+# date — stays editable, since that's exactly the kind of correction a
+# crew member makes on-site. staff/owner/manager are never subject to
+# this list (see _job_crew_scope).
+_FIELD_CREW_LOCKED_CUSTOMER_FIELDS = frozenset({
+    "CustomerID", "CustomerID (CUST-####)",
+    "Frequency",
+    "Standard Quote ($)",
+    "Discount (%)",
+    "Net Price ($)",
+    "Total Jobs Completed",
+    "Lifetime Revenue ($)",
+    "Status Active/Inactive",
+})
+
+
+def _server_customer_in_crew_scope(wb, crew_name: str, customer_id: str) -> bool:
+    """
+    v9.1.x — True if customer_id appears in a Jobs_Schedule row whose
+    "Crew / Technician" cell includes crew_name (already stripped+
+    lowercased by the caller). Used to scope a restricted field_crew
+    user's write access to Customers/Invoices/Quotes rows: they may only
+    touch a record for a customer they've actually worked a job for.
+
+    Both sheets are linked by CustomerID (Customers!A, referenced by
+    Jobs_Schedule/Invoices/Quotes' own CustomerID column) — see
+    get_sheet_columns() output for the exact header names this relies on.
+    Returns False (never grants access) if Jobs_Schedule is missing, the
+    CustomerID/Crew columns can't be found, or customer_id is blank —
+    fail closed, same posture as _crew_name_in_cell.
+    """
+    if not customer_id or "Jobs_Schedule" not in wb.sheetnames:
+        return False
+    js = wb["Jobs_Schedule"]
+    js_headers: dict[str, int] = {}
+    for r in js.iter_rows(min_row=1, max_row=5):
+        non_empty = [c for c in r if c.value is not None]
+        if len(non_empty) >= 3:
+            for col_idx, cell in enumerate(r, 1):
+                if cell.value is not None:
+                    raw = str(cell.value).strip()
+                    js_headers[raw] = col_idx
+                    # v9.1.x fix: header cells in this template can carry an
+                    # embedded line break (e.g. "CustomerID\n(Customers!A)")
+                    # for column-width readability in Excel. Every other
+                    # header-detection block in this file (update_job_
+                    # spreadsheet, _append_sheet_row_impl, create_job) folds
+                    # that to a space and indexes both forms — this helper
+                    # was missing that fold, so a raw "\n"-bearing header
+                    # never matched the space-joined lookup string below and
+                    # every field_crew Customers/Invoices/Quotes write was
+                    # silently denied regardless of actual ownership.
+                    normalised = raw.replace('\n', ' ')
+                    if normalised != raw:
+                        js_headers.setdefault(normalised, col_idx)
+            break
+    cid_col  = js_headers.get("CustomerID") or js_headers.get("CustomerID (Customers!A)")
+    crew_col = js_headers.get("Crew / Technician")
+    if not cid_col or not crew_col:
+        return False
+    for row in js.iter_rows(min_row=2):
+        row_cid  = str(row[cid_col - 1].value or "").strip().lower()
+        row_crew = str(row[crew_col - 1].value or "").strip().lower()
+        if row_cid == customer_id and _crew_name_in_cell(row_crew, crew_name):
+            return True
+    return False
 
 
 def _backup_spreadsheet(fp: str, keep_days: int = 30) -> str:
@@ -4227,8 +4396,28 @@ def update_job_spreadsheet(
     automatically — no need to specify the path every time.
 
     Available to every role in every mode — personal and ALL server-mode
-    roles (owner, manager, staff, field_crew) — no DB-management or
+    roles (owner, manager, staff, field_crew). No DB-management or
     communications gate applies here.
+
+    Server mode, field_crew only (v9.1.x): on the Jobs_Schedule sheet, a
+    row must be assigned to you (Crew / Technician). On Customers,
+    Invoices, and Quotes, a row's CustomerID must belong to a customer
+    you've actually worked a job for (linked via Jobs_Schedule's own
+    CustomerID column) — you can't touch a coworker's customer record.
+    On Customers specifically, pricing/frequency/status master fields
+    (Frequency, Standard Quote, Discount, Net Price, Status
+    Active/Inactive, Total Jobs Completed, Lifetime Revenue) additionally
+    require staff/manager/owner, even for a customer in your own scope —
+    everything else (contact info, address, service prefs, gate code,
+    on-site contact, last/next service date) stays editable. staff,
+    manager, and owner are unrestricted everywhere this tool touches.
+    None of this applies in personal mode.
+
+    By design, this tool — and every tool in AI-Prowler — never deletes a
+    row. There is no delete_customer, delete_job, delete_invoice, etc. To
+    retire a customer, set Status Active/Inactive to "Inactive" rather
+    than removing the row; the history stays intact and nothing a crew
+    member (or anyone else) does through the Jobs PWA can destroy data.
 
     Args:
         job_identifier: Value to search for in id_column. Ignored (may be
@@ -4412,6 +4601,41 @@ def update_job_spreadsheet(
                         f"(Crew / Technician column). This row is not assigned to you."
                     )
 
+        # ── Server-mode crew scoping for Customers/Invoices/Quotes (v9.1.x) ──
+        # Extends the same idea to the three sheets linked to Jobs_Schedule
+        # by CustomerID: a restricted (field_crew) user may only touch a
+        # record for a customer they've actually worked a job for. staff/
+        # owner/manager get restrict=False from _job_crew_scope and skip
+        # this entirely, same as they already do for Jobs_Schedule above.
+        elif ws.title in ("Customers", "Invoices", "Quotes"):
+            _cs_restrict, _cs_crew_name = _job_crew_scope(ctx, fp)
+            if _cs_restrict:
+                if ws.title == "Customers":
+                    # Customers' own identifying column is CustomerID itself
+                    # (column A) — there's no separate FK column to look up.
+                    _cs_cust_id = str(found_row[0].value or "").strip().lower()
+                else:
+                    _cs_cid_col = headers.get("CustomerID")
+                    _cs_cust_id = (str(found_row[_cs_cid_col - 1].value or "").strip().lower()
+                                    if _cs_cid_col else "")
+
+                if not _server_customer_in_crew_scope(wb, _cs_crew_name, _cs_cust_id):
+                    return (
+                        f"❌ You can only update {ws.title} records for a customer "
+                        f"you've actually worked a job for. This CustomerID isn't "
+                        f"linked to any job assigned to you."
+                    )
+
+                if ws.title == "Customers":
+                    _cs_locked = set(updates.keys()) & _FIELD_CREW_LOCKED_CUSTOMER_FIELDS
+                    if _cs_locked:
+                        return (
+                            f"❌ These Customers fields require staff/manager/owner "
+                            f"access: {', '.join(sorted(_cs_locked))}. Contact info, "
+                            f"address, service preferences, and access notes are "
+                            f"still fine to update."
+                        )
+
         # ── Apply updates ─────────────────────────────────────────────────────────
         updated:    list[str] = []
         not_found:  list[str] = []
@@ -4463,6 +4687,24 @@ def update_job_spreadsheet(
                 updated.append(f"{col_name} → {new_val}")
             else:
                 not_found.append(col_name)
+
+        # ── Audit trail stamp (BOTH modes, v9.1.x) ──────────────────────────────
+        # If this sheet has "Last Edited By" and/or "Last Edited At" columns,
+        # stamp them with who made this change and when. Purely additive and
+        # silent if the columns don't exist yet — add them to a sheet's header
+        # row (any position) to start getting audit history on it; nothing
+        # else in this tool changes based on their presence. _actor_display_name
+        # resolves the right identity in either mode: the authenticated user in
+        # server mode, or the configured owner name (falling back to
+        # "operator") in personal mode.
+        _aud_by_col = headers.get("Last Edited By")
+        if _aud_by_col:
+            found_row[_aud_by_col - 1].value = _actor_display_name(ctx)
+        _aud_at_col = headers.get("Last Edited At")
+        if _aud_at_col:
+            import datetime as _aud_dt
+            found_row[_aud_at_col - 1].value = _aud_dt.datetime.now()
+            found_row[_aud_at_col - 1].number_format = 'MM/DD/YYYY HH:MM'
 
         # ── Save ──────────────────────────────────────────────────────────────────
         try:
@@ -4705,6 +4947,12 @@ def _create_job_impl(updates: dict, filepath: str, backup: bool, ctx) -> str:
             not_found.append(col_name)
     ws.cell(row=new_row_num, column=id_col_idx).value = new_job_id
 
+    # ── Created By stamp (BOTH modes, v9.1.x) ──────────────────────────────
+    # Silent no-op if Jobs_Schedule has no "Created By" column yet.
+    _cj_created_by_col = headers.get("Created By")
+    if _cj_created_by_col:
+        ws.cell(row=new_row_num, column=_cj_created_by_col).value = _actor_display_name(ctx)
+
     try:
         wb.save(fp)
     except Exception as exc:
@@ -4910,6 +5158,13 @@ def _append_sheet_row_impl(
             not_found.append(col_name)
     ws.cell(row=new_row_num, column=id_col_idx).value = new_id
 
+    # ── Created By stamp (BOTH modes, v9.1.x) ──────────────────────────────
+    # Silent no-op if the sheet has no "Created By" column yet — same
+    # additive posture as update_job_spreadsheet's Last Edited By/At stamp.
+    _asr_created_by_col = headers.get("Created By")
+    if _asr_created_by_col:
+        ws.cell(row=new_row_num, column=_asr_created_by_col).value = _actor_display_name(ctx)
+
     try:
         wb.save(fp)
     except Exception as exc:
@@ -5093,6 +5348,7 @@ def create_quote(
 def build_daily_route(
     route_date:  str,
     crew:        str = "",
+    origin:      str = "",
     departure_hour: int = 7,
     filepath:    str = "",
     backup:      bool = True,
@@ -5117,19 +5373,24 @@ def build_daily_route(
          EXCLUDED from the route (a job with no location can't be routed) and
          clearly flagged in a "GEOCODING FAILED" warning — never silently
          dropped without saying so.
-      3. Computes the optimal visit order and real drive times between stops
-         (OSRM /trip, the same routing engine optimize_route() uses), starting
-         and ending at your home address (get_home_address()).
-      4. PRE-FLIGHT SAVINGS CHECK: also computes total drive time for the
-         "as-scheduled" order — visiting jobs in the order of their own
-         recorded Start Time, exactly as currently planned — using OSRM's
-         /route endpoint for that FIXED sequence. If the optimal order would
-         save 10+ minutes of drive time over the as-scheduled order, this
-         tool STOPS HERE and returns an alert comparing both orders and the
-         time savings — Route_Planner is NOT modified and no geocoding is
-         written back. Call again with accept_reorder=True to proceed and
-         commit the optimal-order route. If there's no meaningful savings
-         (or accept_reorder=True is already passed), it proceeds straight to
+      3. Orders the stops. NO starting address is assumed by default — pass
+         origin= explicitly to get real TSP-optimized ordering (OSRM /trip,
+         the same engine optimize_route() uses) from that point; without it,
+         stops are simply ordered by their own recorded Start Time, with
+         real inter-stop drive times still computed (OSRM /route) so arrival
+         estimates stay meaningful. Either way, this is an OPEN path — it
+         never assumes a return trip to anywhere. Route home yourself after
+         the last job.
+      4. PRE-FLIGHT SAVINGS CHECK (only runs when origin is given — with no
+         origin there's only one candidate order, nothing to compare it
+         against): also computes total drive time for the "as-scheduled"
+         order from that same origin. If the optimal order would save 10+
+         minutes of drive time over the as-scheduled order, this tool STOPS
+         HERE and returns an alert comparing both orders and the time
+         savings — Route_Planner is NOT modified and no geocoding is written
+         back. Call again with accept_reorder=True to proceed and commit the
+         optimal-order route. If there's no meaningful savings (or
+         accept_reorder=True is already passed), it proceeds straight to
          steps 5-6 below in this same call.
       5. Checks the computed schedule for two further problems and surfaces
          them as clear warnings — the job stays on the route either way,
@@ -5142,8 +5403,11 @@ def build_daily_route(
              Duration windows, independent of routing — a scheduling
              conflict that exists no matter what order you visit them in.
       6. Clears every existing data row in Route_Planner, then writes the new
-         day's stops in optimized visit order, including a per-stop tap-to-
-         navigate Waypoint Map URL.
+         day's stops in visit order, including a per-stop tap-to-navigate
+         Waypoint Map URL. That link never includes a starting point unless
+         origin was given for this call — with none, Google/Apple Maps
+         default to the phone's live GPS location the moment it's opened,
+         which is usually more accurate than any stored address anyway.
 
     Uses openpyxl and the same free Nominatim/OSRM services optimize_route()
     uses — no API keys needed. Works only on .xlsx files.
@@ -5157,7 +5421,21 @@ def build_daily_route(
                           Crew / Technician are included. If omitted, ALL
                           jobs scheduled that date are included (each stop
                           keeps its own job's own Crew / Technician value).
-        departure_hour:  Hour to leave home in 24h format (default 7 = 7am).
+        origin:          Optional — a starting address for THIS route, e.g.
+                          "123 Main St, Daytona Beach FL". Only use this
+                          when the person explicitly says where they're
+                          starting from. When given, stops are TSP-optimized
+                          from that point (real driving-time savings check
+                          included) and it's used as the origin on the
+                          tap-to-navigate link. When omitted (the default),
+                          nothing is assumed — stops are ordered by their
+                          own Start Time, and the map link has no starting
+                          point at all, so Google/Apple Maps use the
+                          phone's live location when opened. Either way,
+                          this never assumes a return trip — the crew
+                          navigates back wherever they're going manually
+                          after the last job.
+        departure_hour:  Hour to start the day in 24h format (default 7 = 7am).
         filepath:        Full path to the Excel spreadsheet (.xlsx). If
                           omitted, uses the path saved in AI-Prowler Settings.
         backup:          If True (default), a timestamped backup copy of the
@@ -5194,14 +5472,15 @@ def build_daily_route(
     with _spreadsheet_write_lock:
         _telemetry_increment_tool_count("build_daily_route")
         return _build_daily_route_impl(
-            route_date=route_date, crew=crew, departure_hour=departure_hour,
+            route_date=route_date, crew=crew, origin=origin,
+            departure_hour=departure_hour,
             filepath=filepath, backup=backup, accept_reorder=accept_reorder,
             email_link=email_link, email_to=email_to, ctx=ctx,
         )
 
 
 
-def _build_daily_route_impl(route_date: str, crew: str, departure_hour: int,
+def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_hour: int,
                              filepath: str, backup: bool, accept_reorder: bool,
                              email_link: bool, email_to: str, ctx) -> str:
     try:
@@ -5230,17 +5509,24 @@ def _build_daily_route_impl(route_date: str, crew: str, departure_hour: int,
     except ValueError:
         return f"❌ route_date must be YYYY-MM-DD format, got: {route_date!r}"
 
-    home_address = get_home_address()
-    if "❌" in home_address or "not configured" in home_address.lower():
-        return (
-            f"❌ Could not determine home address: {home_address}\n"
-            "Set one in AI-Prowler Settings before building a route."
-        )
-
     try:
         wb = _opx.load_workbook(fp)
     except Exception as exc:
         return f"❌ Could not open spreadsheet: {exc}"
+
+    # v9.1.x — a starting address is now OPTIONAL, never assumed. Previously
+    # this required a home/depot address (personal-mode Settings tab, or a
+    # server-mode fallback we briefly added) and hard-failed without one.
+    # Per product decision: don't default to any stored address at all —
+    # only use one if the caller explicitly passes origin= for this specific
+    # route request. With no origin, stops are ordered by their own recorded
+    # Start Time instead of TSP-optimized from an assumed starting point,
+    # and the tap-to-navigate link omits an origin entirely so Google/Apple
+    # Maps default to the phone's live location the moment it's opened —
+    # arguably more correct anyway, since crew rarely start exactly from
+    # "home." See _build_daily_route_impl's routable_jobs section below for
+    # where this branches.
+    effective_origin = origin.strip()
 
     if "Jobs_Schedule" not in wb.sheetnames:
         return "❌ 'Jobs_Schedule' sheet not found in spreadsheet."
@@ -5423,147 +5709,186 @@ def _build_daily_route_impl(route_date: str, crew: str, departure_hour: int,
             "GEOCODING FAILED:\n" + "\n".join(f"  - {f}" for f in geocode_failures)
         )
 
-    _btime.sleep(0.35)
-    try:
-        home_geo = _req.get(
-            "https://nominatim.openstreetmap.org/search",
-            params={"q": home_address, "format": "json", "limit": 1},
-            headers={"User-Agent": "AI-Prowler/5.0 (field-service-tool)"},
-            timeout=10,
-        ).json()
-    except Exception as exc:
-        return f"❌ Could not geocode home address: {exc}"
-    if not home_geo:
-        return f"❌ Could not geocode home address: {home_address}"
-    home_lat, home_lon = float(home_geo[0]["lat"]), float(home_geo[0]["lon"])
-
-    # ── OSRM /trip — optimal order + real drive times ────────────────────────
-    all_points = [(home_lat, home_lon)] + [(j["lat"], j["lon"]) for j in routable_jobs]
-    coord_str = ";".join(f"{lon},{lat}" for lat, lon in all_points)
-    try:
-        osrm_resp = _req.get(
-            f"http://router.project-osrm.org/trip/v1/driving/{coord_str}",
-            params={"roundtrip": "true", "source": "first", "destination": "any",
-                    "annotations": "false"},
-            timeout=30,
-        ).json()
-    except Exception as exc:
-        return f"❌ Route optimization request failed: {exc}"
-    if osrm_resp.get("code") != "Ok":
-        return f"❌ OSRM routing error: {osrm_resp.get('message', 'Unknown error')}"
-
-    trips = osrm_resp.get("trips", [])
-    waypoints = osrm_resp.get("waypoints", [])
-    if not trips or not waypoints:
-        return "❌ No route returned from OSRM."
-    legs = trips[0].get("legs", [])
-
-    # CORRECT waypoint-index reconstruction: waypoints[] is positionally
-    # aligned with the INPUT coordinates (all_points); each waypoint's own
-    # "waypoint_index" field is its VISIT POSITION in the optimized trip —
-    # NOT a re-usable index into the input array. To recover visit order,
-    # place each input position k at output slot waypoints[k]["waypoint_index"].
-    n = len(waypoints)
-    order_of_input_idx = [None] * n
-    for k, wp in enumerate(waypoints):
-        vi = wp.get("waypoint_index", k)
-        if 0 <= vi < n:
-            order_of_input_idx[vi] = k
-    ordered_point_idxs = [x for x in order_of_input_idx if x is not None]
-
-    # ── PRE-FLIGHT SAVINGS CHECK ─────────────────────────────────────────────
-    # Compare the TSP-optimal order (just computed) against the "as-scheduled"
-    # order — visiting jobs in the order of their own recorded Start Time,
-    # exactly as currently planned — using OSRM's /route endpoint (which
-    # computes drive time for a GIVEN FIXED sequence, unlike /trip which
-    # reorders for the optimum). If reordering to the optimal sequence would
-    # save 10+ minutes AND the two orders actually differ, stop here and
-    # alert rather than silently committing a different visit order than
-    # what the jobs' own Start Times implied — the caller gets a chance to
-    # revisit those Start Times (or just accept the reorder) before anything
-    # is written.
-    optimal_total_min = trips[0].get("duration", 0) / 60.0
-    optimal_job_order = [routable_jobs[idx - 1]["job_id"]
-                         for idx in ordered_point_idxs if idx != 0]
-
     as_scheduled_jobs = sorted(
         routable_jobs,
         key=lambda j: (_as_time(j["start_time"]) is None,
                        _as_time(j["start_time"]) or _bdt.time(23, 59)),
     )
-    as_scheduled_job_order = [j["job_id"] for j in as_scheduled_jobs]
 
-    savings_alert = None
-    if not accept_reorder and optimal_job_order != as_scheduled_job_order:
-        as_sched_points = [(home_lat, home_lon)] + [
-            (j["lat"], j["lon"]) for j in as_scheduled_jobs
-        ] + [(home_lat, home_lon)]
-        as_sched_coord_str = ";".join(f"{lon},{lat}" for lat, lon in as_sched_points)
+    # ── v9.1.x — order + drive times, branching on whether an origin was
+    # explicitly given for THIS call. No stored/assumed starting address is
+    # ever read here — see the effective_origin comment near the top. ──────
+    ordered_jobs = None            # final visit order, list[job dict]
+    leg_drive_minutes = None       # minutes of drive INTO each stop, same length/order
+
+    if effective_origin:
+        _btime.sleep(0.35)
         try:
-            as_sched_resp = _req.get(
-                f"http://router.project-osrm.org/route/v1/driving/{as_sched_coord_str}",
-                params={"overview": "false"},
+            origin_geo = _req.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={"q": effective_origin, "format": "json", "limit": 1},
+                headers={"User-Agent": "AI-Prowler/5.0 (field-service-tool)"},
+                timeout=10,
+            ).json()
+        except Exception as exc:
+            return f"❌ Could not geocode starting address: {exc}"
+        if not origin_geo:
+            return f"❌ Could not geocode starting address: {effective_origin}"
+        origin_lat, origin_lon = float(origin_geo[0]["lat"]), float(origin_geo[0]["lon"])
+
+        # OSRM /trip — optimal OPEN-PATH order from the given origin, ending
+        # at whichever job is the most efficient last stop. roundtrip=false:
+        # v9.1.x no longer assumes any return leg — the crew navigates home
+        # (or wherever) manually after the last job.
+        all_points = [(origin_lat, origin_lon)] + [(j["lat"], j["lon"]) for j in routable_jobs]
+        coord_str = ";".join(f"{lon},{lat}" for lat, lon in all_points)
+        try:
+            osrm_resp = _req.get(
+                f"http://router.project-osrm.org/trip/v1/driving/{coord_str}",
+                params={"roundtrip": "false", "source": "first", "destination": "any",
+                        "annotations": "false"},
                 timeout=30,
             ).json()
-            as_scheduled_total_min = (
-                as_sched_resp["routes"][0]["duration"] / 60.0
-                if as_sched_resp.get("code") == "Ok" else None
-            )
-        except Exception:
-            as_scheduled_total_min = None
+        except Exception as exc:
+            return f"❌ Route optimization request failed: {exc}"
+        if osrm_resp.get("code") != "Ok":
+            return f"❌ OSRM routing error: {osrm_resp.get('message', 'Unknown error')}"
 
-        if as_scheduled_total_min is not None:
-            savings_min = as_scheduled_total_min - optimal_total_min
-            if savings_min >= 10:
-                alert_lines = [
-                    f"🔔 ROUTE SAVINGS AVAILABLE for {target_date.isoformat()}",
-                    "─" * 50,
-                    f"  As currently scheduled (by Start Time): "
-                    f"{as_scheduled_total_min:.0f} min drive",
-                    f"  Optimal visit order:                    "
-                    f"{optimal_total_min:.0f} min drive",
-                    f"  Potential savings:                      "
-                    f"{savings_min:.0f} min",
-                    "",
-                    "  As-scheduled order:",
-                ]
-                for i, j in enumerate(as_scheduled_jobs, 1):
-                    st = _as_time(j["start_time"])
-                    st_str = st.strftime("%I:%M %p") if st else "(no start time)"
-                    alert_lines.append(f"    {i}. {j['cust_name']} ({j['job_id']}) — {st_str}")
-                alert_lines.append("")
-                alert_lines.append("  Optimal order:")
-                for i, jid in enumerate(optimal_job_order, 1):
-                    j = next(jj for jj in routable_jobs if jj["job_id"] == jid)
-                    alert_lines.append(f"    {i}. {j['cust_name']} ({j['job_id']})")
-                alert_lines.append("")
-                alert_lines.append(
-                    "Nothing has been written yet. If you'd like to keep this "
-                    "faster order, either adjust these jobs' Start Times to "
-                    "match it, or call build_daily_route again with "
-                    "accept_reorder=True to proceed with the optimal order "
-                    "as-is (this may also trigger LATE ARRIVAL warnings for "
-                    "jobs whose recorded Start Time no longer matches when "
-                    "the route would actually arrive)."
+        trips = osrm_resp.get("trips", [])
+        waypoints = osrm_resp.get("waypoints", [])
+        if not trips or not waypoints:
+            return "❌ No route returned from OSRM."
+        legs = trips[0].get("legs", [])
+
+        # CORRECT waypoint-index reconstruction: waypoints[] is positionally
+        # aligned with the INPUT coordinates (all_points); each waypoint's own
+        # "waypoint_index" field is its VISIT POSITION in the optimized trip —
+        # NOT a re-usable index into the input array. To recover visit order,
+        # place each input position k at output slot waypoints[k]["waypoint_index"].
+        n = len(waypoints)
+        order_of_input_idx = [None] * n
+        for k, wp in enumerate(waypoints):
+            vi = wp.get("waypoint_index", k)
+            if 0 <= vi < n:
+                order_of_input_idx[vi] = k
+        ordered_point_idxs = [x for x in order_of_input_idx if x is not None]
+
+        # ── PRE-FLIGHT SAVINGS CHECK ─────────────────────────────────────────
+        # Compare the TSP-optimal order (from the given origin) against the
+        # "as-scheduled" order — visiting jobs in the order of their own
+        # recorded Start Time. If reordering to the optimal sequence would
+        # save 10+ minutes AND the two orders actually differ, stop here and
+        # alert rather than silently committing a different visit order than
+        # what the jobs' own Start Times implied. Call again with
+        # accept_reorder=True to proceed with the optimal order as-is.
+        optimal_total_min = trips[0].get("duration", 0) / 60.0
+        optimal_job_order = [routable_jobs[idx - 1]["job_id"]
+                             for idx in ordered_point_idxs if idx != 0]
+        as_scheduled_job_order = [j["job_id"] for j in as_scheduled_jobs]
+
+        savings_alert = None
+        if not accept_reorder and optimal_job_order != as_scheduled_job_order:
+            # No trailing return-to-origin leg here either — v9.1.x compares
+            # two OPEN paths, both starting at the same origin.
+            as_sched_points = [(origin_lat, origin_lon)] + [
+                (j["lat"], j["lon"]) for j in as_scheduled_jobs
+            ]
+            as_sched_coord_str = ";".join(f"{lon},{lat}" for lat, lon in as_sched_points)
+            try:
+                as_sched_resp = _req.get(
+                    f"http://router.project-osrm.org/route/v1/driving/{as_sched_coord_str}",
+                    params={"overview": "false"},
+                    timeout=30,
+                ).json()
+                as_scheduled_total_min = (
+                    as_sched_resp["routes"][0]["duration"] / 60.0
+                    if as_sched_resp.get("code") == "Ok" else None
                 )
-                savings_alert = "\n".join(alert_lines)
+            except Exception:
+                as_scheduled_total_min = None
 
-    if savings_alert:
-        return savings_alert
+            if as_scheduled_total_min is not None:
+                savings_min = as_scheduled_total_min - optimal_total_min
+                if savings_min >= 10:
+                    alert_lines = [
+                        f"🔔 ROUTE SAVINGS AVAILABLE for {target_date.isoformat()}",
+                        "─" * 50,
+                        f"  As currently scheduled (by Start Time): "
+                        f"{as_scheduled_total_min:.0f} min drive",
+                        f"  Optimal visit order:                    "
+                        f"{optimal_total_min:.0f} min drive",
+                        f"  Potential savings:                      "
+                        f"{savings_min:.0f} min",
+                        "",
+                        "  As-scheduled order:",
+                    ]
+                    for i, j in enumerate(as_scheduled_jobs, 1):
+                        st = _as_time(j["start_time"])
+                        st_str = st.strftime("%I:%M %p") if st else "(no start time)"
+                        alert_lines.append(f"    {i}. {j['cust_name']} ({j['job_id']}) — {st_str}")
+                    alert_lines.append("")
+                    alert_lines.append("  Optimal order:")
+                    for i, jid in enumerate(optimal_job_order, 1):
+                        j = next(jj for jj in routable_jobs if jj["job_id"] == jid)
+                        alert_lines.append(f"    {i}. {j['cust_name']} ({j['job_id']})")
+                    alert_lines.append("")
+                    alert_lines.append(
+                        "Nothing has been written yet. If you'd like to keep this "
+                        "faster order, either adjust these jobs' Start Times to "
+                        "match it, or call build_daily_route again with "
+                        "accept_reorder=True to proceed with the optimal order "
+                        "as-is (this may also trigger LATE ARRIVAL warnings for "
+                        "jobs whose recorded Start Time no longer matches when "
+                        "the route would actually arrive)."
+                    )
+                    savings_alert = "\n".join(alert_lines)
+
+        if savings_alert:
+            return savings_alert
+
+        ordered_jobs = [routable_jobs[idx - 1] for idx in ordered_point_idxs if idx != 0]
+        leg_drive_minutes = []
+        for seq_i in range(1, len(ordered_point_idxs)):
+            leg_idx = seq_i - 1
+            leg_drive_minutes.append(
+                legs[leg_idx].get("duration", 0) / 60.0 if 0 <= leg_idx < len(legs) else 0.0
+            )
+
+    else:
+        # No starting address given for this call (the default) — order by
+        # each job's own recorded Start Time instead of TSP-optimizing from
+        # an assumed point nobody asked for. Still gets real inter-stop
+        # drive times via OSRM /route (fixed sequence, job-to-job only — no
+        # origin point involved), so arrival estimates stay meaningful. No
+        # pre-flight savings check either: there's only one candidate order
+        # here, nothing to compare it against. Pass origin="<address>" to
+        # get TSP-optimized ordering from a specific starting point instead.
+        ordered_jobs = as_scheduled_jobs
+        leg_drive_minutes = [0.0]  # nothing to drive from before the first stop
+        if len(ordered_jobs) > 1:
+            route_points = [(j["lat"], j["lon"]) for j in ordered_jobs]
+            coord_str = ";".join(f"{lon},{lat}" for lat, lon in route_points)
+            try:
+                route_resp = _req.get(
+                    f"http://router.project-osrm.org/route/v1/driving/{coord_str}",
+                    params={"overview": "false", "annotations": "false"},
+                    timeout=30,
+                ).json()
+                if route_resp.get("code") == "Ok":
+                    for leg in route_resp["routes"][0]["legs"]:
+                        leg_drive_minutes.append(leg.get("duration", 0) / 60.0)
+                else:
+                    leg_drive_minutes.extend([0.0] * (len(ordered_jobs) - 1))
+            except Exception:
+                leg_drive_minutes.extend([0.0] * (len(ordered_jobs) - 1))
 
     # ── Compute arrival/departure schedule + LATE ARRIVAL warnings ──────────
     cur_time = _bdt.datetime.combine(target_date, _bdt.time(departure_hour, 0))
     late_warnings = []
     stops_out = []
-    for seq_i, point_idx in enumerate(ordered_point_idxs):
-        if point_idx == 0:
-            continue  # home/origin, not a job stop
-        job = routable_jobs[point_idx - 1]
-        leg_idx = seq_i - 1
-        drive_min = 0.0
-        if 0 <= leg_idx < len(legs):
-            drive_min = legs[leg_idx].get("duration", 0) / 60.0
-            cur_time += _bdt.timedelta(minutes=drive_min)
+    for i, job in enumerate(ordered_jobs):
+        drive_min = leg_drive_minutes[i] if i < len(leg_drive_minutes) else 0.0
+        cur_time += _bdt.timedelta(minutes=drive_min)
         arrival = cur_time
         dur_min = _duration_minutes(job)
         departure = arrival + _bdt.timedelta(minutes=dur_min)
@@ -5576,7 +5901,7 @@ def _build_daily_route_impl(route_date: str, crew: str, departure_hour: int,
                 late_warnings.append(
                     f"⚠️  LATE ARRIVAL: {job['cust_name']} ({job['job_id']}) is "
                     f"scheduled for {sched_dt.strftime('%I:%M %p')} but the "
-                    f"optimized route arrives at {arrival.strftime('%I:%M %p')} "
+                    f"route arrives at {arrival.strftime('%I:%M %p')} "
                     f"— {int((arrival - sched_dt).total_seconds() / 60)} min late."
                 )
 
@@ -5612,7 +5937,7 @@ def _build_daily_route_impl(route_date: str, crew: str, departure_hour: int,
         return route_hdrs.get(name)
 
     ordered_addresses = [s["job"]["address"] for s in stops_out]
-    maps_url_full = build_maps_url(stops=ordered_addresses, origin=home_address)
+    maps_url_full = build_maps_url(stops=ordered_addresses, origin=effective_origin)
     url_line = next((ln for ln in maps_url_full.splitlines() if ln.startswith("http")), "")
     all_url_lines = [ln for ln in maps_url_full.splitlines() if ln.startswith("http")]
 
@@ -5687,6 +6012,14 @@ def _build_daily_route_impl(route_date: str, crew: str, departure_hour: int,
         "─" * 50,
         f"  Stops:  {len(stops_out)}",
     ]
+    if effective_origin:
+        lines.append(f"  Starting from: {effective_origin}")
+    else:
+        lines.append(
+            "  No starting address given — stops ordered by their own "
+            "Start Time; the tap-to-navigate link will use your current "
+            "location as the starting point when opened."
+        )
     if existing_data_rows > 0:
         lines.append(f"  Cleared {existing_data_rows} previous row(s) from Route_Planner")
     lines.append("")
@@ -5732,7 +6065,19 @@ def _build_daily_route_impl(route_date: str, crew: str, departure_hour: int,
                 "in Settings → Email Configuration."
             )
         else:
-            to = (email_to or cfg.get("default_to") or cfg.get("username") or "").strip()
+            # v9.1.x — recipient resolution, in order:
+            #   1. explicit email_to — always wins if given, unchanged.
+            #   2. the calling user's OWN email (server mode only —
+            #      _current_user is None in personal mode) — each crew
+            #      member gets their own route link by default instead of
+            #      everyone's going to the shared SMTP account.
+            #   3. the SMTP config's own default_to/username (personal
+            #      mode, or no email on file for this user) — the server
+            #      already has this configured, so no separate spreadsheet
+            #      lookup is needed as a further fallback.
+            _caller = _current_user(ctx)
+            _caller_email = (_caller.get("email") or "").strip() if _caller else ""
+            to = (email_to or _caller_email or cfg.get("default_to") or cfg.get("username") or "").strip()
             if not to:
                 lines.append(
                     "\nℹ️  Email not sent — no recipient could be "
@@ -5774,6 +6119,7 @@ def _build_daily_route_impl(route_date: str, crew: str, departure_hour: int,
                     email_ok, email_msg = _send_smtp(to, subject, body)
                 except Exception as exc:
                     email_ok, email_msg = False, str(exc)
+
                 if email_ok:
                     lines.append(f"\n📧 Route link emailed to {to}")
                 else:
@@ -7120,9 +7466,16 @@ def _create_invoice_impl(
     next_num = (max(existing_ids) + 1) if existing_ids else 1
     new_inv_id = f"INV-{next_num:04d}"
 
+    # v9.1.x fix: check the ID column specifically (row[0]), not "any cell
+    # in the row". The Invoices sheet can have formula columns (e.g. "Days
+    # Overdue (AI-AR)") pre-filled far down in advance — those always
+    # evaluate to a non-None value even on an otherwise-blank row, which
+    # made the old "any(c.value for c in row)" check treat hundreds of
+    # formula-only rows as occupied and push new invoices way past the
+    # real data. InvoiceID is only ever set by an actual invoice.
     last_row = inv_hdr_row
     for row in ws_inv.iter_rows(min_row=inv_hdr_row + 1):
-        if any(c.value for c in row):
+        if row[0].value not in (None, ""):
             last_row = row[0].row
     new_row_num = last_row + 1
 
@@ -7154,6 +7507,12 @@ def _create_invoice_impl(
         _c = _icol(_name)
         if _c is not None:
             ws_inv.cell(row=new_row_num, column=_c).value = _val
+
+    # ── Created By stamp (BOTH modes, v9.1.x) ──────────────────────────────
+    # Silent no-op if the Invoices sheet has no "Created By" column yet.
+    _ci_created_by_col = _icol("Created By")
+    if _ci_created_by_col is not None:
+        ws_inv.cell(row=new_row_num, column=_ci_created_by_col).value = _actor_display_name(ctx)
 
     # ── Write the new InvoiceID back onto the job row — this is what lets
     #    _find_invoice_row's crew-scope cross-reference, and a human
@@ -9739,6 +10098,30 @@ def _log_time_entry_impl(job_identifier: str, action: str, filepath: str, ctx, g
     _lte_uid = _lte_user.get('id', '') if _lte_user else ''
     _lte_display = _lte_user.get('name', _lte_uid) if _lte_user else ''
 
+    # v9.1.x fix: "Logged By (User ID)" is an OPTIONAL column — this
+    # template's TimeLog sheet doesn't have it at all. Previously, the
+    # ownership check compared rdict.get("Logged By (User ID)", "") (always
+    # "" when the column is absent) against _lte_uid (never blank in server
+    # mode) — an equality that can NEVER hold. That silently broke BOTH
+    # directions: on start(), your own already-open entry was never
+    # recognized (skipped as "someone else's"), letting you open a second
+    # duplicate; on stop(), your own open entry was ALWAYS treated as
+    # someone else's, blocking every clock-out. Falls back to matching by
+    # Crew / Technician name (which does exist, and is exactly what
+    # Jobs_Schedule crew-scoping already keys off of) when the ID column
+    # isn't present.
+    _lte_has_uid_col = "Logged By (User ID)" in log_hdrs
+
+    def _lte_entry_is_mine(rdict: dict) -> bool:
+        if _lte_user is None:
+            return True  # personal mode — single user, any open entry is "yours"
+        if _lte_has_uid_col:
+            return rdict.get("Logged By (User ID)", "") == _lte_uid
+        return _crew_name_in_cell(
+            str(rdict.get("Crew / Technician", "") or "").strip().lower(),
+            _lte_display.strip().lower(),
+        )
+
     if action == "start":
         # Check for an already-open entry. Server mode: scoped to THIS
         # user's own open entries — Jake starting a shift doesn't block
@@ -9752,7 +10135,7 @@ def _log_time_entry_impl(job_identifier: str, action: str, filepath: str, ctx, g
             if not (job_id_found.lower() in str(rdict.get("JobID", "")).lower()
                     and not rdict.get("Clock Out")):
                 continue
-            if _lte_user is not None and rdict.get("Logged By (User ID)", "") != _lte_uid:
+            if not _lte_entry_is_mine(rdict):
                 continue  # someone else's open entry — doesn't block you
             return (
                 f"⚠️  A clock-in for {job_id_found} is already open.\n"
@@ -9772,10 +10155,18 @@ def _log_time_entry_impl(job_identifier: str, action: str, filepath: str, ctx, g
         next_num  = (max(existing_ids) + 1) if existing_ids else 1
         entry_id  = f"TE-{next_num:04d}"
 
-        # Find next empty row
+        # Find next empty row. v9.1.x fix: check EntryID specifically
+        # (row[0]), not "any cell in the row". The TimeLog sheet's
+        # "Elapsed (min)" column has a live formula (=(Out-In)*1440)
+        # pre-filled hundreds of rows ahead of any real data — it always
+        # evaluates to a non-None value (0) even on an otherwise-blank
+        # row, so the old "any(c.value for c in row)" check treated every
+        # one of those formula-only rows as occupied and pushed new clock-
+        # ins far below the real data (e.g. row 501 instead of row 3).
+        # EntryID is only ever set by an actual clock-in.
         last_log_row = log_hdr_row
         for row in ws_log.iter_rows(min_row=log_hdr_row + 1):
-            if any(c.value for c in row):
+            if row[0].value not in (None, ""):
                 last_log_row = row[0].row
 
         # Server mode: the actual calling user's identity is authoritative
@@ -9833,7 +10224,7 @@ def _log_time_entry_impl(job_identifier: str, action: str, filepath: str, ctx, g
             if not (job_id_found.lower() in str(rdict.get("JobID", "")).lower()
                     and not rdict.get("Clock Out")):
                 continue
-            if _lte_user is not None and rdict.get("Logged By (User ID)", "") != _lte_uid:
+            if not _lte_entry_is_mine(rdict):
                 _stop_someone_elses_entry_exists = True
                 continue
             open_row_num = row[0].row
@@ -19045,6 +19436,27 @@ def _current_user(ctx) -> "dict | None":
         return None
 
 
+def _actor_display_name(ctx) -> str:
+    """
+    v9.1.x — Resolves "who did this" for audit-trail stamping (Created By /
+    Last Edited By), covering BOTH modes with a single call so every write
+    tool can stamp identity the same way regardless of mode:
+      - Server mode: the authenticated user's display name, via
+        _current_user(ctx) — e.g. "David Vavro".
+      - Personal mode (ctx has no user, or ctx is None): the owner name
+        configured in Settings, via _get_personal_owner_name() — falls
+        back to "operator" if never configured, same fallback
+        record_learning() already uses for its Source column.
+    Never raises; always returns a non-empty string.
+    """
+    user = _current_user(ctx)
+    if user is not None:
+        name = (user.get("name") or user.get("username") or "").strip()
+        if name:
+            return name
+    return _get_personal_owner_name() or "operator"
+
+
 # SCOPE_SIMPLIFICATION_SPEC.md section 3.7 (Phase 7 cleanup, 2026-07-17):
 # _allowed_collections() (the multi-collection READ enforcement list this
 # module used before the single-collection cutover) has been removed --
@@ -20307,8 +20719,23 @@ def _run_server_mode(port: int, token: str,
                     return
 
                 _chunks4 = []
+                _first_msg4_type = None
+                _first_msg4_keys = None
+                _msg4_count = 0
                 while True:
                     _msg4 = await receive()
+                    _msg4_count += 1
+                    if _first_msg4_type is None:
+                        _first_msg4_type = _msg4.get("type")
+                        _first_msg4_keys = sorted(_msg4.keys())
+                    # v9.1.x diagnostic: stop immediately (without ever
+                    # appending) on a disconnect -- previously this blindly
+                    # did _msg4.get("body", b"") on EVERY message type,
+                    # silently treating an http.disconnect the same as an
+                    # empty http.request and exiting the loop with 0 bytes
+                    # and no indication anything unusual happened.
+                    if _msg4.get("type") == "http.disconnect":
+                        break
                     _chunks4.append(_msg4.get("body", b""))
                     if not _msg4.get("more_body", False):
                         break
@@ -20321,54 +20748,82 @@ def _run_server_mode(port: int, token: str,
                         break
 
                 try:
-                    _bnd4 = None
-                    for _part in _ct4.split(";"):
-                        _part = _part.strip()
-                        if _part.startswith("boundary="):
-                            _bnd4 = _part[9:].strip().encode()
-                            break
-                    if not _bnd4:
-                        raise ValueError("No multipart boundary found")
-
                     _job_id4  = ""
                     _notes4   = ""
                     _photos4  = []
+                    _seen_field_names4 = []
 
-                    _delim4   = b"--" + _bnd4
-                    _parts4   = _raw4.split(_delim4)
+                    if _ct4.strip().lower().startswith("application/json"):
+                        # v9.1.x — base64 JSON upload path. Added to route
+                        # around a real iOS Safari WebKit bug: fetch() +
+                        # FormData + File reliably delivered a genuinely
+                        # empty body at the ASGI layer (confirmed via
+                        # diagnostics -- 0 raw bytes received, even for a
+                        # 2 KB test file, even after ruling out server-side
+                        # parsing, service-worker caching, and boundary
+                        # quoting as causes, and even after swapping in the
+                        # exact multipart-parsing approach already proven
+                        # working elsewhere in this codebase). A plain JSON
+                        # POST body sidesteps FormData/File entirely, so it
+                        # doesn't depend on that WebKit code path at all.
+                        # Expected shape:
+                        #   {"job_id": "...", "notes": "...",
+                        #    "photos": [{"filename": "...", "data": "<base64>"}]}
+                        _up_json4 = json.loads(_raw4.decode("utf-8"))
+                        _job_id4 = str(_up_json4.get("job_id") or "").strip()
+                        _notes4  = str(_up_json4.get("notes") or "").strip()
+                        import base64 as _b64_4
+                        for _p4 in (_up_json4.get("photos") or []):
+                            _fname_p4 = str(_p4.get("filename") or "photo.jpg").strip()
+                            try:
+                                _photo_bytes_p4 = _b64_4.b64decode(_p4.get("data") or "")
+                            except Exception:
+                                continue
+                            if _fname_p4 and _photo_bytes_p4:
+                                _photos4.append((_fname_p4, _photo_bytes_p4))
+                        _seen_field_names4 = list((_up_json4 or {}).keys())
+                    else:
+                        # v9.1.x fix: replaced the hand-rolled regex/byte-split
+                        # multipart parser with the SAME approach already proven
+                        # working on iPhone (including the installed standalone
+                        # PWA) in the /remote/upload endpoint -- Python's own
+                        # email.parser.BytesParser against a synthetic MIME
+                        # message (Content-Type header + raw body). This is a
+                        # real, RFC-compliant multipart parser instead of a
+                        # custom one, and matches known-good behavior exactly.
+                        import email.parser as _srv_p_ep, email.policy as _srv_p_epo
+                        _raw_msg4 = ("Content-Type: " + _ct4 + "\r\n\r\n").encode() + _raw4
+                        _msg4_parsed = _srv_p_ep.BytesParser(policy=_srv_p_epo.default).parsebytes(_raw_msg4)
 
-                    for _seg4 in _parts4[1:]:
-                        if _seg4.strip() in (b"", b"--", b"--\r\n"):
-                            continue
-                        if b"\r\n\r\n" in _seg4:
-                            _hdrs4, _body4 = _seg4.split(b"\r\n\r\n", 1)
-                        elif b"\n\n" in _seg4:
-                            _hdrs4, _body4 = _seg4.split(b"\n\n", 1)
-                        else:
-                            continue
-                        _body4 = _body4.rstrip(b"\r\n")
-                        _hdrs4_str = _hdrs4.decode(errors="replace")
-
-                        _fname4 = None
-                        _ffile4 = None
-                        _cd4 = ""
-                        for _hl4 in _hdrs4_str.splitlines():
-                            if _hl4.lower().startswith("content-disposition"):
-                                _cd4 = _hl4
-                        _nm4 = _srv_p_re.search(r'name="([^"]+)"', _cd4)
-                        _fn4 = _srv_p_re.search(r'filename="([^"]+)"', _cd4)
-                        _fname4 = _nm4.group(1) if _nm4 else ""
-                        _ffile4 = _fn4.group(1) if _fn4 else None
-
-                        if _fname4 == "job_id":
-                            _job_id4 = _body4.decode(errors="replace").strip()
-                        elif _fname4 == "notes":
-                            _notes4 = _body4.decode(errors="replace").strip()
-                        elif _fname4 == "photo" and _ffile4:
-                            _photos4.append((_ffile4, _body4))
+                        if _msg4_parsed.is_multipart():
+                            for _part4 in _msg4_parsed.iter_parts():
+                                _cd4 = _part4.get("Content-Disposition", "")
+                                _fname4 = ""
+                                if 'name="' in _cd4:
+                                    _fname4 = _cd4.split('name="')[1].split('"')[0]
+                                _seen_field_names4.append(_fname4)
+                                if _fname4 == "job_id":
+                                    _job_id4 = (_part4.get_payload(decode=True) or b"").decode(errors="replace").strip()
+                                elif _fname4 == "notes":
+                                    _notes4 = (_part4.get_payload(decode=True) or b"").decode(errors="replace").strip()
+                                elif _fname4 == "photo":
+                                    _ffile4 = ""
+                                    if 'filename="' in _cd4:
+                                        _ffile4 = _cd4.split('filename="')[1].split('"')[0]
+                                    _photo_bytes4 = _part4.get_payload(decode=True)
+                                    if _ffile4 and _photo_bytes4:
+                                        _photos4.append((_ffile4, _photo_bytes4))
 
                     if not _job_id4:
-                        raise ValueError("job_id field is required")
+                        raise ValueError(
+                            f"job_id field is required (content_type={_ct4!r}; "
+                            f"field names detected: {_seen_field_names4!r}; "
+                            f"raw body length: {len(_raw4)} bytes; "
+                            f"first msg type: {_first_msg4_type!r}; "
+                            f"first msg keys: {_first_msg4_keys!r}; "
+                            f"total msgs received: {_msg4_count}; "
+                            f"first 300 bytes of body: {_raw4[:300]!r})"
+                        )
 
                     # ── Server-mode crew scoping (Phase 4) ──────────────────
                     # Same duck-typed Context stand-in as /pwa-api, reusing
@@ -21847,57 +22302,60 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                         break
 
                 try:
-                    # ── Extract multipart boundary ──────────────────────────
-                    _bnd4 = None
-                    for _part in _ct4.split(";"):
-                        _part = _part.strip()
-                        if _part.startswith("boundary="):
-                            _bnd4 = _part[9:].strip().encode()
-                            break
-
-                    if not _bnd4:
-                        raise ValueError("No multipart boundary found")
-
-                    # ── Parse multipart fields ──────────────────────────────
                     _job_id4  = ""
                     _notes4   = ""
                     _photos4  = []   # list of (filename, bytes)
 
-                    _delim4   = b"--" + _bnd4
-                    _parts4   = _raw4.split(_delim4)
+                    if _ct4.strip().lower().startswith("application/json"):
+                        # v9.1.x -- base64 JSON upload path (same fix as
+                        # server mode). The Jobs PWA frontend always sends
+                        # JSON now (to route around the iOS Safari WebKit
+                        # FormData/File bug), so personal mode needs to
+                        # parse it too -- this branch was missing here,
+                        # which is exactly why AI-Prowler Local started
+                        # rejecting every upload with "job_id field is
+                        # required" even though a job was clearly selected.
+                        _up_json4 = json.loads(_raw4.decode("utf-8"))
+                        _job_id4 = str(_up_json4.get("job_id") or "").strip()
+                        _notes4  = str(_up_json4.get("notes") or "").strip()
+                        import base64 as _b64_4p
+                        for _p4 in (_up_json4.get("photos") or []):
+                            _fname_p4 = str(_p4.get("filename") or "photo.jpg").strip()
+                            try:
+                                _photo_bytes_p4 = _b64_4p.b64decode(_p4.get("data") or "")
+                            except Exception:
+                                continue
+                            if _fname_p4 and _photo_bytes_p4:
+                                _photos4.append((_fname_p4, _photo_bytes_p4))
+                    else:
+                        # ── Extract multipart boundary ──────────────────────────
+                        # v9.1.x fix: replaced the hand-rolled regex/byte-split multipart
+                        # parser with the SAME approach already proven working
+                        # (including on iPhone standalone PWAs) in the
+                        # /remote/upload endpoint -- Python's own
+                        # email.parser.BytesParser against a synthetic MIME
+                        # message (Content-Type header + raw body).
+                        import email.parser as _p_ep, email.policy as _p_epo
+                        _raw_msg4 = ("Content-Type: " + _ct4 + "\r\n\r\n").encode() + _raw4
+                        _msg4_parsed = _p_ep.BytesParser(policy=_p_epo.default).parsebytes(_raw_msg4)
 
-                    for _seg4 in _parts4[1:]:
-                        if _seg4.strip() in (b"", b"--", b"--\r\n"):
-                            continue
-                        # Split headers from body
-                        if b"\r\n\r\n" in _seg4:
-                            _hdrs4, _body4 = _seg4.split(b"\r\n\r\n", 1)
-                        elif b"\n\n" in _seg4:
-                            _hdrs4, _body4 = _seg4.split(b"\n\n", 1)
-                        else:
-                            continue
-                        # Strip trailing boundary marker
-                        _body4 = _body4.rstrip(b"\r\n")
-                        _hdrs4_str = _hdrs4.decode(errors="replace")
-
-                        # Extract field name and optional filename
-                        _fname4 = None
-                        _ffile4 = None
-                        _cd4 = ""
-                        for _hl4 in _hdrs4_str.splitlines():
-                            if _hl4.lower().startswith("content-disposition"):
-                                _cd4 = _hl4
-                        _nm4 = _re4.search(r'name="([^"]+)"', _cd4)
-                        _fn4 = _re4.search(r'filename="([^"]+)"', _cd4)
-                        _fname4 = _nm4.group(1) if _nm4 else ""
-                        _ffile4 = _fn4.group(1) if _fn4 else None
-
-                        if _fname4 == "job_id":
-                            _job_id4 = _body4.decode(errors="replace").strip()
-                        elif _fname4 == "notes":
-                            _notes4 = _body4.decode(errors="replace").strip()
-                        elif _fname4 == "photo" and _ffile4:
-                            _photos4.append((_ffile4, _body4))
+                        if _msg4_parsed.is_multipart():
+                            for _part4 in _msg4_parsed.iter_parts():
+                                _cd4 = _part4.get("Content-Disposition", "")
+                                _fname4 = ""
+                                if 'name="' in _cd4:
+                                    _fname4 = _cd4.split('name="')[1].split('"')[0]
+                                if _fname4 == "job_id":
+                                    _job_id4 = (_part4.get_payload(decode=True) or b"").decode(errors="replace").strip()
+                                elif _fname4 == "notes":
+                                    _notes4 = (_part4.get_payload(decode=True) or b"").decode(errors="replace").strip()
+                                elif _fname4 == "photo":
+                                    _ffile4 = ""
+                                    if 'filename="' in _cd4:
+                                        _ffile4 = _cd4.split('filename="')[1].split('"')[0]
+                                    _photo_bytes4 = _part4.get_payload(decode=True)
+                                    if _ffile4 and _photo_bytes4:
+                                        _photos4.append((_ffile4, _photo_bytes4))
 
                     if not _job_id4:
                         raise ValueError("job_id field is required")
@@ -21941,7 +22399,7 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                         # Photo uploads do not record learnings (product policy)
                         pass  # Learning log failure should not fail the upload
 
-                    _resp4 = _json4.dumps({
+                    _resp4 = json.dumps({
                         "ok":    True,
                         "saved": len(_saved4),
                         "dir":   str(_photo_dir4),
@@ -21950,7 +22408,7 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                     _status4 = 200
 
                 except Exception as _exc4:
-                    _resp4   = _json4.dumps({"ok": False, "error": str(_exc4)}).encode()
+                    _resp4   = json.dumps({"ok": False, "error": str(_exc4)}).encode()
                     _status4 = 400
 
                 await send({"type": "http.response.start", "status": _status4,
@@ -22304,19 +22762,37 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                                 break
                         try:
                             import email.parser as _ep5, email.policy as _epo5, json as _jup5
-                            _raw_msg = ("Content-Type: " + _ct_hdr + "\r\n\r\n").encode() + _up_raw
-                            _msg5 = _ep5.BytesParser(policy=_epo5.default).parsebytes(_raw_msg)
                             _up_file_data, _up_fname, _up_dir, _up_tok = None, "", "", ""
-                            for _part in _msg5.iter_parts():
-                                _cd = _part.get("Content-Disposition", "")
-                                if 'name="file"' in _cd:
-                                    if 'filename="' in _cd:
-                                        _up_fname = _cd.split('filename="')[1].split('"')[0]
-                                    _up_file_data = _part.get_payload(decode=True)
-                                elif 'name="dir"' in _cd:
-                                    _up_dir = (_part.get_payload() or "").strip()
-                                elif 'name="token"' in _cd:
-                                    _up_tok = (_part.get_payload() or "").strip()
+
+                            if _ct_hdr.strip().lower().startswith("application/json"):
+                                # v9.1.x -- base64 JSON body, same fix applied
+                                # to /photos/upload: a confirmed iOS Safari
+                                # WebKit bug delivers a genuinely empty body
+                                # for fetch()+FormData+File uploads. Expected
+                                # shape: {"file_data": "<base64>",
+                                # "filename": "...", "dir": "...", "token": "..."}
+                                import base64 as _b64_5
+                                _up_json5 = _jup5.loads(_up_raw.decode("utf-8"))
+                                _up_fname = str(_up_json5.get("filename") or "").strip()
+                                _up_dir   = str(_up_json5.get("dir") or "").strip()
+                                _up_tok   = str(_up_json5.get("token") or "").strip()
+                                try:
+                                    _up_file_data = _b64_5.b64decode(_up_json5.get("file_data") or "")
+                                except Exception:
+                                    _up_file_data = None
+                            else:
+                                _raw_msg = ("Content-Type: " + _ct_hdr + "\r\n\r\n").encode() + _up_raw
+                                _msg5 = _ep5.BytesParser(policy=_epo5.default).parsebytes(_raw_msg)
+                                for _part in _msg5.iter_parts():
+                                    _cd = _part.get("Content-Disposition", "")
+                                    if 'name="file"' in _cd:
+                                        if 'filename="' in _cd:
+                                            _up_fname = _cd.split('filename="')[1].split('"')[0]
+                                        _up_file_data = _part.get_payload(decode=True)
+                                    elif 'name="dir"' in _cd:
+                                        _up_dir = (_part.get_payload() or "").strip()
+                                    elif 'name="token"' in _cd:
+                                        _up_tok = (_part.get_payload() or "").strip()
                             # Validate token
                             if _up_tok not in _access_tokens:
                                 _ub = b'{"ok":false,"error":"unauthorized"}'

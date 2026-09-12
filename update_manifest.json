@@ -1,6 +1,6 @@
 {
   "version": "9.1.0",
-  "generated": "2026-09-09T20:53:09",
+  "generated": "2026-09-12T07:46:34",
   "files": [
     {
       "path": "rag_gui.py",
@@ -14,8 +14,8 @@
     },
     {
       "path": "ai_prowler_mcp.py",
-      "sha256": "2aa73bab8437176418de852c9e563325dc09df02f453fa33799444eec096f98f",
-      "bytes": 1076067
+      "sha256": "cc4b1c63b50881470fa5ab2749f7b2fec2401576802d3bf0249a5c9f719c3426",
+      "bytes": 1106056
     },
     {
       "path": "mcp_diagnostics.py",
@@ -109,13 +109,13 @@
     },
     {
       "path": "migrate_spreadsheet.py",
-      "sha256": "84b452465a038134e339ed42fbe3fc3652c45f31499d130e1b482e9c01845c6e",
-      "bytes": 43812
+      "sha256": "d0a4c7d1bcf6c11761742a8ad8ddadc17df4d38c104ecc1b9d6973faa26bea98",
+      "bytes": 45937
     },
     {
       "path": "AI-Prowler_Job_Tracker.xlsx",
-      "sha256": "3084fed2825a373204601bc4da845d7f053a4abb4c7e203a85c7a11b6b2efe30",
-      "bytes": 75685
+      "sha256": "54655cb893a0e8a09b7206f40c2b345e8598af9f820d1ad4b5fef77e2491d810",
+      "bytes": 182090
     },
     {
       "path": "custom_tasks_manager.py",
@@ -159,8 +159,8 @@
     },
     {
       "path": "jobs/index.html",
-      "sha256": "31784f6773893769116f64a3a24696d9ebe22e1afada5f2b58cf60d75bb94358",
-      "bytes": 529017
+      "sha256": "9162f045e601e8abe55d1e21d58885049e3dfaa9bbc23d9dcd5be4c5ec54caea",
+      "bytes": 530211
     },
     {
       "path": "jobs/manifest.json",
@@ -169,8 +169,8 @@
     },
     {
       "path": "jobs/sw.js",
-      "sha256": "f52d3e3191ceca3395e22c53c73266d8e1f7e6eccc47c801e4b35255e835d936",
-      "bytes": 2525
+      "sha256": "095822e1698386fff0c0b538ececabb4710ac02806f294e27aed6afde98c9b12",
+      "bytes": 3555
     },
     {
       "path": "jobs/icon-192.png",
@@ -189,8 +189,8 @@
     },
     {
       "path": "remote/index.html",
-      "sha256": "889fbb70bed6758b85c8b23d60b2e32ba0b25dd0acc5217da37faff35a2429c5",
-      "bytes": 107125
+      "sha256": "c0ff74a5644ceba00e8ee55fd3818694f918aedfec98659f111d14aeb4d5c971",
+      "bytes": 107730
     },
     {
       "path": "remote/manifest.json",

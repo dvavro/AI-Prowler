@@ -223,13 +223,26 @@ class TestUploadMechanism:
         assert "data-dir" in fn, \
             "handleUpload doesn't read 'data-dir' — upload target dir lost"
 
-    def test_handleUpload_uses_formdata(self, js):
+    def test_handleUpload_uses_base64_json(self, js):
+        """v9.1.x: FormData+File was replaced with a base64 JSON body — a
+        confirmed iOS Safari WebKit bug delivered a genuinely empty request
+        body for fetch()+FormData+File uploads (verified server-side: 0
+        bytes received, even for a 2 KB test file). This is a deliberate,
+        tested fix, not a regression — see the matching comment in
+        handleUpload() itself."""
         fn = _fn(js, "handleUpload")
-        assert "FormData" in fn, "handleUpload missing FormData"
-        assert "append('file'" in fn or 'append("file"' in fn, \
-            "handleUpload doesn't append file to FormData"
-        assert "append('dir'" in fn or 'append("dir"' in fn, \
-            "handleUpload doesn't append dir to FormData"
+        assert "new FormData(" not in fn, \
+            "handleUpload still instantiates FormData — should be base64 JSON (iOS Safari WebKit fix)"
+        assert "FileReader" in fn and "readAsDataURL" in fn, \
+            "handleUpload doesn't read the file as base64 via FileReader"
+        assert "JSON.stringify" in fn, \
+            "handleUpload doesn't send a JSON body"
+        assert "file_data" in fn, \
+            "handleUpload doesn't include file_data in the JSON payload"
+        assert "dir:" in fn or "'dir'" in fn or '"dir"' in fn, \
+            "handleUpload doesn't include dir in the JSON payload"
+        assert "application/json" in fn, \
+            "handleUpload doesn't set Content-Type: application/json"
 
     def test_handleUpload_posts_to_remote_upload(self, js):
         fn = _fn(js, "handleUpload")

@@ -36,8 +36,24 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   e.respondWith(
     fetch(e.request).then(function(res) {
-      var resClone = res.clone();
-      caches.open(CACHE).then(function(c) { c.put(e.request, resClone); }).catch(function(){});
+      // v9.1.x fix: only ever cache GET requests. The Cache API rejects
+      // anything else anyway (cache.put() throws for non-GET), but the
+      // deeper problem this was causing is that e.request's body is a
+      // ONE-TIME-READABLE STREAM -- passing the same e.request into both
+      // fetch(e.request) (which needs to read/send the body) and
+      // cache.put(e.request, ...) (which also touches it) raced the two
+      // consumers against each other. For POST requests with an actual
+      // body -- like the Job Photos upload -- that race could leave
+      // nothing for the real network fetch to send, so the server
+      // received a request with a completely empty body even though the
+      // browser reported the upload as having gone through fine. The
+      // previous .catch(function(){}) below silently swallowed the
+      // resulting cache.put() rejection, which is exactly why this had
+      // no visible error on the client side to point at.
+      if (e.request.method === 'GET') {
+        var resClone = res.clone();
+        caches.open(CACHE).then(function(c) { c.put(e.request, resClone); }).catch(function(){});
+      }
       return res;
     }).catch(function() {
       return caches.match(e.request).then(function(cached) {

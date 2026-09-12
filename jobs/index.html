@@ -927,10 +927,19 @@ function bootApp() {
     document.getElementById('profileRoleLabel').textContent = 'Mode';
     document.getElementById('profileRole').textContent = 'Personal';
     document.getElementById('profileCodeRow').style.display = 'none';
-    // Show Jobs Sheet tab in personal mode only
-    const navSheet = document.getElementById('navSheet');
-    if (navSheet) navSheet.style.display = '';
   }
+
+  // Show Jobs Sheet tab in BOTH modes. v9.1.x fix: this was previously
+  // gated inside the personal-mode-only branch above, which silently hid
+  // the whole Sheet screen -- including the Customers tab -- from every
+  // server-mode role (owner/manager/staff/field_crew alike). There's no
+  // backend reason to hide it: read_job_spreadsheet leaves the Customers
+  // sheet fully readable regardless of role (only Jobs_Schedule rows are
+  // crew-scoped server-side), and /pwa-api's server-mode allowed-tools set
+  // already includes read_job_spreadsheet. Field crew need to see customer
+  // records while working a job -- this is what unblocks that.
+  const navSheet = document.getElementById('navSheet');
+  if (navSheet) navSheet.style.display = '';
 
   loadJobs(); setConn(true);
   checkSmsConfiguredStatus();
@@ -2146,22 +2155,31 @@ async function uploadPhotos() {
   try {
     const notes = document.getElementById('photoNotes').value;
 
-    // Build real multipart/form-data with actual image bytes
-    const form = new FormData();
-    form.append('job_id', jobId);
-    form.append('notes',  notes || '');
-    for (const p of state.photos) {
-      form.append('photo', p.file, p.file.name);
-    }
+      // v9.1.x -- base64 JSON body instead of multipart FormData+File.
+      // A confirmed iOS Safari WebKit bug (fetch()+FormData+File) was
+      // delivering a genuinely empty request body on iPhone -- verified
+      // server-side (0 bytes received) even for a 2 KB test file, even
+      // after fixing the server's multipart parser and service-worker
+      // caching. This sidesteps FormData/File entirely: p.dataUrl is
+      // already a full "data:<mime>;base64,<data>" string from the
+      // FileReader used for the photo preview thumbnails, so no re-read
+      // is needed -- just strip the prefix up to the comma.
+      const photosPayload = state.photos.map(p => ({
+        filename: p.file.name,
+        data: p.dataUrl.split(',')[1] || '',
+      }));
 
-    const uploadHeaders = {};
-    if (state.serverMode && ACCESS_TOKEN) uploadHeaders['Authorization'] = 'Bearer ' + ACCESS_TOKEN;
-    const res = await fetch(window.location.origin + '/photos/upload', {
-      method: 'POST',
-      headers: uploadHeaders,
-      body: form
-      // Note: do NOT set Content-Type — browser sets it with correct boundary
-    });
+      const uploadHeaders = {'Content-Type': 'application/json'};
+      if (state.serverMode && ACCESS_TOKEN) uploadHeaders['Authorization'] = 'Bearer ' + ACCESS_TOKEN;
+      const res = await fetch(window.location.origin + '/photos/upload', {
+        method: 'POST',
+        headers: uploadHeaders,
+        body: JSON.stringify({
+          job_id: jobId,
+          notes:  notes || '',
+          photos: photosPayload,
+        }),
+      });
 
       if (res.status === 401) {
         handleAuthExpired();
@@ -2171,7 +2189,6 @@ async function uploadPhotos() {
         const err = await res.json().catch(() => ({error: `HTTP ${res.status}`}));
         throw new Error(err.error || `HTTP ${res.status}`);
       }
-
 
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || 'Upload failed');
