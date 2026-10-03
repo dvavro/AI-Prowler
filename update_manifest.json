@@ -1,11 +1,11 @@
 {
   "version": "9.2.0",
-  "generated": "2026-10-03T10:53:22",
+  "generated": "2026-10-03T14:47:37",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "1013784127faed298da15ca7063647fabfba3351480e1ef9636380c3fe6116c1",
-      "bytes": 1413697
+      "sha256": "6f706c346b566a149db431ca0cce7caa29d66b6de4b7f027d5228245c41ad16d",
+      "bytes": 1424206
     },
     {
       "path": "rag_preprocessor.py",

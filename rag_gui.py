@@ -4922,45 +4922,210 @@ or from the Help menu."""
         if not answer:
             return
 
+        # ── Download progress dialog ──────────────────────────────────
+        # The download runs in a background thread. Tkinter is not
+        # thread-safe, so the worker never touches widgets — it pushes
+        # progress tuples into _prog_queue and this dialog drains the
+        # queue via after() in the main thread.
+        #
+        # The dialog is modal (grab_set): while it is open the user
+        # cannot File → Exit the main window mid-download, which is the
+        # exact failure this dialog exists to prevent.
+        _prog_queue = queue.Queue()
+        _cancel_event = threading.Event()
+
+        def _fmt_bytes(n):
+            _n = float(n)
+            for _u in ("B", "KB", "MB", "GB"):
+                if _n < 1024.0 or _u == "GB":
+                    return f"{_n:,.0f} {_u}" if _u == "B" else f"{_n:,.1f} {_u}"
+                _n /= 1024.0
+            return f"{_n:,.1f} GB"
+
+        _prog_closed = {"done": False}
+
+        def _close_progress_dialog():
+            # Every exit path funnels through here — the dialog is
+            # destroyed exactly once.
+            if _prog_closed["done"]:
+                return
+            _prog_closed["done"] = True
+            try:
+                _prog.grab_release()
+            except Exception:
+                pass
+            try:
+                _prog.destroy()
+            except Exception:
+                pass
+
+        def _cancel_update():
+            # The Cancel button and the dialog X button behave
+            # identically: signal the worker, which aborts cleanly and
+            # reports back through the queue. The dialog itself is closed
+            # by the queue poller, never here.
+            if _cancel_event.is_set():
+                return
+            _cancel_event.set()
+            try:
+                _cancel_btn.config(state="disabled")
+            except Exception:
+                pass
+            _prog_file_var.set("Cancelling…")
+
+        def _show_final_dialog(kind, title, message, status_text):
+            # Runs in the main thread (called from the queue poller).
+            _close_progress_dialog()
+            if kind == "error":
+                messagebox.showerror(title, message)
+            elif kind == "warning":
+                messagebox.showwarning(title, message)
+            else:
+                messagebox.showinfo(title, message)
+            self.status_var.set(status_text)
+
+        _poll_state = {"total": None, "count": 0}
+
+        def _poll_progress():
+            # Runs in the main thread — the ONLY place widgets are touched.
+            _finished = None
+            try:
+                while True:
+                    _item = _prog_queue.get_nowait()
+                    _tag = _item[0]
+                    if _tag == "phase":
+                        _prog_file_var.set(_item[1])
+                        _prog_bytes_var.set("")
+                    elif _tag == "totals":
+                        _poll_state["total"] = _item[1]
+                        _poll_state["count"] = _item[2]
+                        _prog_bar["maximum"] = _item[1] if _item[1] else _item[2]
+                        _prog_bar["value"] = 0
+                    elif _tag == "progress":
+                        _, _fname, _cum = _item
+                        _total = _poll_state["total"]
+                        _prog_file_var.set(_fname)
+                        if _total:
+                            _pct = min(99, int(_cum * 100 / _total))
+                            _prog_bytes_var.set(
+                                f"{_fmt_bytes(_cum)} / {_fmt_bytes(_total)} ({_pct}%)")
+                            _prog_bar["value"] = _cum
+                    elif _tag == "file_done":
+                        _, _fname, _n = _item
+                        _prog_file_var.set(_fname)
+                        _prog_bytes_var.set(f"file {_n} of {_poll_state['count']}")
+                        _prog_bar["value"] = _n
+                    elif _tag == "done":
+                        _finished = _item[1:]
+            except queue.Empty:
+                pass
+            if _finished is not None:
+                _show_final_dialog(*_finished)
+                return
+            if not _dl_thread.is_alive() and _prog_queue.empty():
+                # Safety net: worker died without sending "done" — never
+                # leave the dialog hanging.
+                _show_final_dialog(
+                    "error", "Update Error",
+                    "The download stopped unexpectedly.\n\n"
+                    "Your current installation is unchanged.",
+                    "Ready")
+                return
+            try:
+                _prog.after(100, _poll_progress)
+            except tk.TclError:
+                pass
+
+        _prog = tk.Toplevel(self.root)
+        _prog.title(f"Downloading AI-Prowler v{version} update")
+        _prog.transient(self.root)
+        _prog.resizable(False, False)
+        _prog.geometry("460x170")
+        _prog.protocol("WM_DELETE_WINDOW", _cancel_update)
+
+        ttk.Label(_prog,
+                  text=f"Downloading AI-Prowler™ v{version}…",
+                  font=("Arial", 10, "bold")).pack(pady=(14, 6))
+        _prog_bar = ttk.Progressbar(_prog, orient="horizontal",
+                                    mode="determinate", length=400)
+        _prog_bar.pack(pady=(0, 6))
+        _prog_file_var = tk.StringVar(value="Preparing…")
+        ttk.Label(_prog, textvariable=_prog_file_var,
+                  font=("Arial", 9)).pack()
+        _prog_bytes_var = tk.StringVar(value="")
+        ttk.Label(_prog, textvariable=_prog_bytes_var,
+                  font=("Arial", 9)).pack(pady=(0, 10))
+        _cancel_btn = ttk.Button(_prog, text="Cancel", command=_cancel_update)
+        _cancel_btn.pack(pady=(0, 12))
+        _prog.grab_set()
+
         def _do_download():
-            # ── Update debug log ──────────────────────────────────────────────
-            # Written to ~/.ai-prowler/update_debug.log so every attempt,
-            # retry, wait, hash result and failure is captured on disk even
-            # though the GUI shows no console. Each run APPENDS so multiple
-            # click attempts are all in one file for comparison.
-            import datetime as _dt, socket as _socket
-            _log_path = Path.home() / '.ai-prowler' / 'update_debug.log'
-            _log_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                # ── Update debug log ──────────────────────────────────────────────
+                # Written to ~/.ai-prowler/update_debug.log so every attempt,
+                # retry, wait, hash result and failure is captured on disk even
+                # though the GUI shows no console. Each run APPENDS so multiple
+                # click attempts are all in one file for comparison.
+                import datetime as _dt, socket as _socket
+                _log_path = Path.home() / '.ai-prowler' / 'update_debug.log'
+                _log_path.parent.mkdir(parents=True, exist_ok=True)
 
-            _update_debug_enabled = json.loads(CONFIG_PATH.read_text(encoding='utf-8')).get('debug_logging', False) if CONFIG_PATH.exists() else False
-
-            def _ulog(msg: str) -> None:
-                print(f"[UPDATE] {msg}", flush=True)  # always keep console output
-                if not _update_debug_enabled:
-                    return
-                ts  = _dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-                line = f"[{ts}] {msg}\n"
+                _config_path = Path.home() / '.ai-prowler' / 'config.json'
                 try:
-                    with open(_log_path, 'a', encoding='utf-8') as _lf:
-                        _lf.write(line)
+                    _update_debug_enabled = bool(
+                        json.loads(_config_path.read_text(encoding='utf-8')).get('debug_logging', False)
+                    ) if _config_path.exists() else False
+                except Exception as _cfg_exc:
+                    # Unreadable/corrupt config: debug logging stays off, but the
+                    # failure is surfaced (not swallowed) so the user sees it.
+                    _update_debug_enabled = False
+                    print(f"[UPDATE] Could not read config.json: {_cfg_exc}")
+                    _prog_queue.put(("done", "error",
+                        "Update Error",
+                        f"The update download failed unexpectedly:\n\n"
+                        f"Could not read config.json ({_cfg_exc}).\n\n"
+                        f"Your current installation is unchanged.",
+                        "Ready"))
+                    return
+
+                def _ulog(msg: str) -> None:
+                    print(f"[UPDATE] {msg}", flush=True)  # always keep console output
+                    if not _update_debug_enabled:
+                        return
+                    ts  = _dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                    line = f"[{ts}] {msg}\n"
+                    try:
+                        with open(_log_path, 'a', encoding='utf-8') as _lf:
+                            _lf.write(line)
+                    except Exception:
+                        pass
+
+                def _abort_cancelled():
+                    # User hit Cancel (or the dialog X): stage nothing, leave
+                    # the install untouched. The "done" tuple makes the queue
+                    # poller close the progress dialog and show the notice.
+                    _ulog("Update cancelled by user — staging nothing")
+                    _prog_queue.put(("done", "info",
+                        "Update Cancelled",
+                        "The update download was cancelled.\n\n"
+                        "Your current installation is unchanged — "
+                        "nothing was downloaded or modified.",
+                        "Ready"))
+
+                _ulog("=" * 60)
+                _ulog(f"Update session start — target v{version}")
+                _ulog(f"APP_VERSION={APP_VERSION}  python={__import__('sys').version.split()[0]}")
+                try:
+                    _ulog(f"hostname={_socket.gethostname()}")
+                except Exception:
+                    pass
+                try:
+                    import ssl as _ssl
+                    _ulog(f"ssl={_ssl.OPENSSL_VERSION}")
                 except Exception:
                     pass
 
-            _ulog("=" * 60)
-            _ulog(f"Update session start — target v{version}")
-            _ulog(f"APP_VERSION={APP_VERSION}  python={__import__('sys').version.split()[0]}")
-            try:
-                _ulog(f"hostname={_socket.gethostname()}")
-            except Exception:
-                pass
-            try:
-                import ssl as _ssl
-                _ulog(f"ssl={_ssl.OPENSSL_VERSION}")
-            except Exception:
-                pass
-
-            try:
-                self.status_var.set(f"Downloading AI-Prowler v{version}...")
+                _prog_queue.put(("phase", f"Fetching update manifest for v{version}…"))
 
                 # Tag-based fetching — pin to the released git tag so that
                 # ongoing development on `main` never bleeds into an
@@ -5072,6 +5237,7 @@ or from the Help menu."""
                 # is what lets a release ship the user guide, icons, and any
                 # new modules without editing this code each time.
                 _file_hashes = {}   # path -> expected sha256, or None if unknown
+                _file_sizes = {}    # path -> expected byte size, or None if unknown
                 try:
                     _manifest_url = f"{_base}update_manifest.json"
                     _man_req = urllib.request.Request(
@@ -5087,17 +5253,21 @@ or from the Help menu."""
                         # verify integrity per file.
                         _resolved = []
                         _resolved_hashes = {}
+                        _resolved_sizes = {}
                         for _entry in _man_files:
                             if isinstance(_entry, str):
                                 _resolved.append(_entry)
                                 _resolved_hashes[_entry] = None
+                                _resolved_sizes[_entry] = None
                             elif isinstance(_entry, dict) and _entry.get("path"):
                                 _p = _entry["path"]
                                 _resolved.append(_p)
                                 _resolved_hashes[_p] = _entry.get("sha256")
+                                _resolved_sizes[_p] = _entry.get("bytes")
                         if _resolved:
                             _files = _resolved
                             _file_hashes = _resolved_hashes
+                            _file_sizes = _resolved_sizes
                             _n_hashed = sum(1 for v in _file_hashes.values() if v)
                             _ulog(f"Manifest loaded — {len(_files)} file(s) "
                                   f"({_n_hashed} with integrity hashes)")
@@ -5113,20 +5283,36 @@ or from the Help menu."""
                     # IS the authoritative file list — if we can't fetch
                     # it, abort and leave the current install untouched.
                     print(f"[UPDATE] Manifest fetch failed: {_man_exc} — aborting.")
-                    self.root.after(0, lambda _e=_man_exc: messagebox.showerror(
+                    _prog_queue.put(("done", "error",
                         "Update Aborted — Manifest Unavailable",
                         f"AI-Prowler could not fetch the update manifest for "
                         f"v{version}.\n\n"
-                        f"Reason: {_e}\n\n"
+                        f"Reason: {_man_exc}\n\n"
                         f"Your current installation is completely unchanged "
                         f"and safe to keep using.\n\n"
                         f"This is usually a temporary network or GitHub issue. "
-                        f"Click '📥 Download Update' again in a few minutes to retry."
-                    ))
-                    self.root.after(0, lambda: self.status_var.set(
+                        f"Click '📥 Download Update' again in a few minutes to retry.",
                         f"❌ Update v{version} aborted — manifest unavailable, "
                         f"your install is unchanged"))
                     return
+
+                if _cancel_event.is_set():
+                    _abort_cancelled()
+                    return
+
+                # Byte-driven progress when the manifest gave per-file
+                # sizes (scripts/release.py always writes them); otherwise
+                # fall back to per-file progress.
+                _byte_mode = bool(_file_sizes) and all(
+                    isinstance(_s, int) and _s >= 0
+                    for _s in _file_sizes.values())
+                if _byte_mode:
+                    _total_bytes = sum(_file_sizes.values())
+                    _ulog(f"Progress: byte mode, {_total_bytes:,} total bytes")
+                else:
+                    _total_bytes = None
+                    _ulog(f"Progress: file-count mode, {len(_files)} file(s)")
+                _prog_queue.put(("totals", _total_bytes, len(_files)))
 
                 # ── Download + verify everything into memory first ────────
                 # Nothing is written to the staging directory until EVERY
@@ -5140,6 +5326,8 @@ or from the Help menu."""
                 import hashlib as _hashlib_upd
                 _downloaded_content = {}   # path -> bytes
                 _failures = []             # list of (path, reason)
+                _cumulative_bytes = 0      # fully-downloaded bytes (byte mode)
+                _done_count = 0            # fully-downloaded files (count mode)
 
                 import time as _time_upd
 
@@ -5151,6 +5339,9 @@ or from the Help menu."""
                              ".jpeg", ".gif", ".webp", ".zip"}
 
                 for fname in _files:
+                    if _cancel_event.is_set():
+                        _abort_cancelled()
+                        return
                     _url = f"{_base}{fname}"
                     _expected = _file_hashes.get(fname)
 
@@ -5173,13 +5364,32 @@ or from the Help menu."""
 
                     _ulog(f"--- {fname} (expected_hash={str(_expected)[:16] if _expected else 'none'})")
                     for _attempt in range(1, _MAX_ATTEMPTS + 1):
+                        if _cancel_event.is_set():
+                            break
                         _t0 = _time_upd.time()
                         try:
                             _req = urllib.request.Request(
                                 _url,
                                 headers={"User-Agent": f"AI-Prowler/{APP_VERSION}"})
                             with urllib.request.urlopen(_req, timeout=30) as _resp:
-                                _content = _resp.read()
+                                # Chunked read: keeps the progress dialog live
+                                # on multi-MB files, and lets Cancel interrupt
+                                # mid-file instead of waiting for the whole
+                                # response to arrive.
+                                _chunks = []
+                                _got = 0
+                                while True:
+                                    if _cancel_event.is_set():
+                                        break
+                                    _piece = _resp.read(65536)
+                                    if not _piece:
+                                        break
+                                    _chunks.append(_piece)
+                                    _got += len(_piece)
+                                    if _byte_mode:
+                                        _prog_queue.put(("progress", fname,
+                                                         _cumulative_bytes + _got))
+                                _content = b"".join(_chunks)
                             _elapsed = _time_upd.time() - _t0
                             _ulog(f"  attempt {_attempt}/{_MAX_ATTEMPTS} OK "
                                   f"({len(_content):,} bytes in {_elapsed:.2f}s)")
@@ -5194,10 +5404,15 @@ or from the Help menu."""
                             if _attempt < _MAX_ATTEMPTS:
                                 _wait = 2 ** (_attempt - 1)  # 1, 2, 4 s
                                 _ulog(f"  waiting {_wait}s before retry…")
-                                _time_upd.sleep(_wait)
+                                if _cancel_event.wait(_wait):
+                                    _ulog("  cancelled during retry wait")
+                                    break
                             else:
                                 _ulog(f"  ALL {_MAX_ATTEMPTS} attempts exhausted — giving up on {fname}")
 
+                    if _cancel_event.is_set():
+                        _abort_cancelled()
+                        return
                     if _last_exc is not None:
                         _failures.append((fname, str(_last_exc)))
                         continue
@@ -5221,6 +5436,11 @@ or from the Help menu."""
                             continue
 
                     _downloaded_content[fname] = _content
+                    if _byte_mode:
+                        _cumulative_bytes += len(_content)
+                    else:
+                        _done_count += 1
+                        _prog_queue.put(("file_done", fname, _done_count))
                     _ulog(f"  -> staged ({'verified' if _expected else 'unverified'})")
 
                 _ulog(f"Download loop complete — "
@@ -5237,7 +5457,7 @@ or from the Help menu."""
                         for fn, reason in _failures[:8])
                     _more = (f"\n  …and {len(_failures) - 8} more file(s)"
                              if len(_failures) > 8 else "")
-                    self.root.after(0, lambda: messagebox.showerror(
+                    _prog_queue.put(("done", "error",
                         "Update Not Applied",
                         f"The update for v{version} could not be verified "
                         f"and was NOT installed.\n\n"
@@ -5246,9 +5466,7 @@ or from the Help menu."""
                         f"Your current AI-Prowler installation is "
                         f"unchanged and safe to keep using.\n\n"
                         f"This is usually a temporary network issue — "
-                        f"click '📥 Download Update' again to retry."
-                    ))
-                    self.root.after(0, lambda: self.status_var.set(
+                        f"click '📥 Download Update' again to retry.",
                         f"❌ Update v{version} failed integrity check — "
                         f"click Download Update to retry"))
                     return
@@ -5282,30 +5500,33 @@ or from the Help menu."""
                         f"Date: {datetime.now().isoformat()}\n",
                         encoding='utf-8'
                     )
-                    self.root.after(0, lambda: messagebox.showinfo(
+                    _prog_queue.put(("done", "info",
                         "Update Downloaded",
                         f"AI-Prowler™ v{version} downloaded and verified "
                         f"successfully.\n\n"
                         f"{downloaded} file(s) staged for install.\n\n"
                         f"The update will be applied automatically\n"
                         f"the next time you start AI-Prowler.\n\n"
-                        f"Go to File → Exit to restart now."
-                    ))
-                    self.root.after(0, lambda: self.status_var.set(
+                        f"Go to File → Exit to restart now.",
                         f"✅ Update v{version} ready — restart to apply"))
                 else:
-                    self.root.after(0, lambda: messagebox.showwarning(
+                    _prog_queue.put(("done", "warning",
                         "Download Failed",
                         "No files could be downloaded.\n"
-                        "Check your internet connection and try again."
-                    ))
-                    self.root.after(0, lambda: self.status_var.set("Ready"))
+                        "Check your internet connection and try again.",
+                        "Ready"))
 
             except Exception as exc:
                 print(f"[UPDATE] Download error: {exc}")
-                self.root.after(0, lambda: self.status_var.set("Ready"))
+                _prog_queue.put(("done", "error",
+                    "Update Error",
+                    f"The update download failed unexpectedly:\n\n{exc}\n\n"
+                    f"Your current installation is unchanged.",
+                    "Ready"))
 
-        threading.Thread(target=_do_download, daemon=True).start()
+        _dl_thread = threading.Thread(target=_do_download, daemon=True)
+        _dl_thread.start()
+        _prog.after(100, _poll_progress)
 
     def _display_notifications(self, data):
         """Display active notification banners on the Welcome tab."""
@@ -15827,7 +16048,7 @@ or from the Help menu."""
             debug_logging=true in config.json — silent in release builds."""
             try:
                 import json as _json_led
-                _cfg_led = json.loads(CONFIG_PATH.read_text(encoding='utf-8')) if CONFIG_PATH.exists() else {}
+                _cfg_led = json.loads((Path.home() / '.ai-prowler' / 'config.json').read_text(encoding='utf-8')) if (Path.home() / '.ai-prowler' / 'config.json').exists() else {}
                 if not _cfg_led.get('debug_logging'):
                     return
                 _HTTP_LED_DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
