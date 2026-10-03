@@ -225,10 +225,10 @@ class TestRouteSchedulingBehavior:
             result = mcp_module.create_job(
                 updates={
                     "Customer Name / Company": name,
-                    "Street Address ★ AI Route": street,
-                    "City ★ AI Route": city,
+                    "Street Address": street,
+                    "City": city,
                     "State": state,
-                    "ZIP ★ AI Route": zip_,
+                    "ZIP": zip_,
                     "Service Date": service_date,
                     "Start Time": start_time,
                     "Service Type": "Window Washing",
@@ -285,9 +285,9 @@ class TestRouteSchedulingBehavior:
                     if str(j.get("Customer Name / Company", "")).startswith(TEST_CUSTOMER_PREFIX)]
         chronological_addresses = [
             ", ".join(filter(None, [
-                j.get("Street Address ★ AI Route", ""),
-                j.get("City ★ AI Route", ""),
-                f"{j.get('State', '')} {j.get('ZIP ★ AI Route', '')}".strip(),
+                j.get("Street Address", ""),
+                j.get("City", ""),
+                f"{j.get('State', '')} {j.get('ZIP', '')}".strip(),
             ]))
             for j in our_jobs
         ]

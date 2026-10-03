@@ -87,7 +87,10 @@ class TestParseJobDate:
 
     def test_handles_us_slash_format(self, pwa_source):
         idx = pwa_source.index("function parseJobDate(s)")
-        nearby = pwa_source[idx:idx + 500]
+        # Widened from 500 -> 700 chars: a later explanatory comment on the
+        # ISO-vs-legacy-format distinction was added ahead of both regexes,
+        # pushing this second one just past the old window.
+        nearby = pwa_source[idx:idx + 700]
         assert r"(\d{1,2})\/(\d{1,2})\/(\d{4})" in nearby
 
     def test_blank_input_returns_null_not_throws(self, pwa_source):
@@ -151,11 +154,19 @@ class TestRenderJobsListGrouping:
 
 class TestJobCardHtmlEndDateBadge:
     def test_function_exists(self, pwa_source):
-        assert "function jobCardHtml(j)" in pwa_source
+        # Signature widened 2026-09-23 (unrelated later change): jobCardHtml
+        # gained a second `late` parameter for the overdue-flag feature —
+        # see its own "Real gap found live" comment. Matching the current
+        # two-param signature here, not the original single-param one the
+        # .bak files still show.
+        assert "function jobCardHtml(j, late)" in pwa_source
 
     def test_end_date_badge_only_shown_when_it_differs_from_start(self, pwa_source):
-        idx = pwa_source.index("function jobCardHtml(j)")
-        nearby = pwa_source[idx:idx + 400]
+        idx = pwa_source.index("function jobCardHtml(j, late)")
+        # Widened from 400 -> 700 chars: the function now opens with a
+        # multi-line explanatory comment (see test_function_exists) before
+        # reaching the dateBadge line, pushing it past the old window.
+        nearby = pwa_source[idx:idx + 700]
         assert "j.endDate && j.endDate !== j.date" in nearby
 
     def test_render_jobs_list_uses_shared_card_renderer(self, pwa_source):
@@ -181,7 +192,7 @@ class TestParseJobsIncludesEndDate:
 class TestModalShowsDateRange:
     def test_modal_date_row_includes_end_date_when_present(self, pwa_source):
         idx = pwa_source.index("function openModal(id)")
-        nearby = pwa_source[idx:idx + 1200]
+        nearby = pwa_source[idx:idx + 2500]   # comments added above the template 2026-09-26
         assert "j.endDate&&j.endDate!==j.date" in nearby
 
 

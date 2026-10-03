@@ -50,6 +50,45 @@ def _ar_aging() -> str:
     except Exception:
         return ""
 
+
+# R-067 (2026-09-29, found by the time-machine E2E TM-07): the AR aging report
+# writes its buckets as "31 – 60 days overdue" / "61 – 90 days overdue" (en
+# dash, spaces), and puts each invoice on its own line under that header. The
+# overdue alert and the briefing looked for the literal "31-60" / "61-90" on a
+# line, so a 31–90-day-overdue invoice never raised anything (only 90+ did,
+# and then only the header line, without the invoices). This reads the real
+# layout — every invoice row under an overdue (31+) header — and still accepts
+# a one-line "31-60 …" form.
+import re as _re
+_OD_BUCKET_RE = _re.compile(r"(31\s*[-–—]\s*60|61\s*[-–—]\s*90|90\+)")
+_BUCKET_HEADER_RE = _re.compile(
+    r"(Current \(not yet due\)|\d+\s*[-–—]\s*\d+\s+days overdue|90\+\s+days overdue)")
+
+
+def _overdue_ar_lines(ar: str) -> list:
+    """Lines of the AR aging report that are 31+ days overdue: each such
+    bucket's header, then its invoice rows (no rulers/column heads/subtotals)."""
+    out, in_od = [], False
+    for raw in (ar or "").splitlines():
+        l = raw.strip()
+        if not l:
+            continue
+        if _BUCKET_HEADER_RE.search(l):
+            in_od = bool(_OD_BUCKET_RE.search(l))
+            if in_od:
+                out.append(l)
+            continue
+        if l[0] in "═" or l.upper().startswith("TOTAL"):
+            in_od = False
+            continue
+        if in_od:
+            if l[0] == "─" or l.startswith("Invoice ") or l.startswith("Subtotal"):
+                continue
+            out.append(l)
+        elif _OD_BUCKET_RE.search(l):
+            out.append(l)   # a one-line "31-60 days: …" style report
+    return out
+
 def _sms_replies() -> str:
     try:
         from ai_prowler_mcp import list_sms_contacts_with_replies
@@ -98,103 +137,71 @@ def _job_rows(sheet: str = "Jobs_Schedule") -> list[str]:
         return []
 
 def _todays_jobs_structured() -> list[dict]:
-    """Read TODAY's rows directly from the Jobs_Schedule sheet as structured
-    dicts (not the pre-formatted multi-line-per-job text _job_rows() returns),
-    so callers can access each job's own City/State individually — needed for
-    per-job weather cross-referencing in the Morning Briefing.
+    """Read TODAY's rows directly from the jobs table as structured dicts
+    (not the pre-formatted multi-line-per-job text _job_rows() returns),
+    so callers can access each job's own City/State individually — needed
+    for per-job weather cross-referencing in the Morning Briefing.
 
-    Reuses the exact same header-detection (>=3 non-empty cells in the first
-    5 rows) and Service-Date matching logic as the tested read_job_spreadsheet
-    MCP tool, just returning structured rows instead of formatted text.
+    2026-09-13 fix: this was still fully openpyxl-based, opening the old
+    .xlsx Job Tracker directly — found during a system-wide openpyxl
+    audit. Since that file generally no longer exists (or isn't
+    maintained) once an install has moved to the SQLite-backed job store,
+    this had been silently returning [] every single day, meaning the
+    Morning Briefing's per-job weather feature quietly fell back to the
+    generic report unconditionally — not a crash, just a real feature
+    that stopped doing anything, with no visible error anywhere.
 
-    Returns a list of dicts, each with whatever of these keys were found as
-    actual columns (missing columns are simply absent, never guessed):
+    Returns a list of dicts, each with whatever of these keys were found
+    as actual columns (missing columns are simply absent, never guessed):
         customer, city, state, service_type, crew
-    Empty list on any error, missing file, or no matching rows — callers
-    must treat this as "couldn't determine, fall back to the generic
-    report", never a hard failure. Personal-mode only, matching this
-    module's own scope (see module docstring).
+    Empty list on any error, missing database, or no matching rows —
+    callers must treat this as "couldn't determine, fall back to the
+    generic report", never a hard failure. Personal-mode only, matching
+    this module's own scope (see module docstring).
     """
     try:
-        from ai_prowler_mcp import _get_default_spreadsheet_path
-        import openpyxl as _opx
+        from ai_prowler_mcp import _resolve_job_db_path
+        import sqlite3
         import datetime as _dt
 
-        fp = _get_default_spreadsheet_path()
-        if not fp or not Path(fp).exists():
+        db_path = _resolve_job_db_path(None, "")
+        if not db_path:
             return []
 
-        wb = _opx.load_workbook(fp, data_only=True)
-        if "Jobs_Schedule" not in wb.sheetnames:
-            return []
-        ws = wb["Jobs_Schedule"]
+        today_iso = _dt.date.today().isoformat()
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            # R-058: multi-day jobs worked today count too, not only ones starting
+            # today — and any job still open past its planned end (overrun)
+            from db_write_ops import job_day_number, working_days_conn
+            _wd = working_days_conn(conn)      # Settings → Working Days (default Mon–Fri)
+            rows = [r for r in conn.execute(
+                "SELECT customer_name, city, state, service_type, crew, service_date, end_date, "
+                "job_status FROM jobs WHERE service_date = ? OR (COALESCE(service_date, '') <> '' "
+                "AND service_date < ?)",
+                (today_iso, today_iso),
+            ).fetchall() if job_day_number(r["service_date"], r["end_date"], today_iso,
+                                           status=r["job_status"] or "", days=_wd)]
+        finally:
+            conn.close()
 
-        header_row_idx = None
-        headers: list = []
-        for r in ws.iter_rows(min_row=1, max_row=5):
-            non_empty = [c for c in r if c.value is not None]
-            if len(non_empty) >= 3:
-                header_row_idx = r[0].row
-                headers = [str(c.value).strip().replace('\n', ' ') if c.value else ''
-                          for c in r]
-                break
-        if header_row_idx is None or not headers:
-            return []
-
-        # Map the columns we actually care about — tolerant of the
-        # "★ AI Route" suffix used on City/Address/ZIP headers.
-        col_idx = {}
-        for idx, h in enumerate(headers):
-            hl = h.lower()
-            if 'customer name' in hl or 'company' in hl:
-                col_idx.setdefault('customer', idx)
-            elif hl.startswith('city'):
-                col_idx.setdefault('city', idx)
-            elif hl.strip() == 'state':
-                col_idx.setdefault('state', idx)
-            elif 'service type' in hl:
-                col_idx.setdefault('service_type', idx)
-            elif 'crew' in hl or 'technician' in hl:
-                col_idx.setdefault('crew', idx)
-            elif 'service' in hl and 'date' in hl:
-                col_idx.setdefault('service_date', idx)
-
-        if 'service_date' not in col_idx:
-            return []
-
-        today = _dt.date.today()
+        col_map = {
+            "customer_name": "customer",
+            "city": "city",
+            "state": "state",
+            "service_type": "service_type",
+            "crew": "crew",
+        }
         results = []
-        for row in ws.iter_rows(min_row=header_row_idx + 1):
-            vals = [c.value for c in row]
-            if all(v is None or str(v).strip() == '' for v in vals):
-                continue
-
-            cell_val = vals[col_idx['service_date']] if col_idx['service_date'] < len(vals) else None
-            if cell_val is None:
-                continue
-            if isinstance(cell_val, (_dt.datetime, _dt.date)):
-                cell_date = cell_val.date() if isinstance(cell_val, _dt.datetime) else cell_val
-            else:
-                cell_date = None
-                for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y', '%d/%m/%Y'):
-                    try:
-                        cell_date = _dt.datetime.strptime(str(cell_val).strip(), fmt).date()
-                        break
-                    except ValueError:
-                        continue
-            if cell_date != today:
-                continue
-
+        for row in rows:
             entry = {}
-            for key, idx in col_idx.items():
-                if key == 'service_date' or idx >= len(vals):
-                    continue
-                v = vals[idx]
+            for db_col, out_key in col_map.items():
+                v = row[db_col]
                 if v is not None and str(v).strip():
-                    entry[key] = str(v).strip()
+                    entry[out_key] = str(v).strip()
             if entry:
                 results.append(entry)
-
         return results
     except Exception:
         return []
@@ -279,8 +286,7 @@ def job_morning_briefing(config: dict):
         # Overdue invoices
         ar = _ar_aging()
         if ar:
-            od = [l for l in ar.splitlines()
-                  if any(x in l for x in ["31-60", "61-90", "90+"]) and l.strip()]
+            od = _overdue_ar_lines(ar)   # R-067
             if od:
                 parts.append("<h3>⚠️ Overdue Invoices</h3><ul>")
                 for l in od:
@@ -314,8 +320,7 @@ def job_overdue_invoice_alert(config: dict):
         ar = _ar_aging()
         if not ar:
             return None
-        od = [l for l in ar.splitlines()
-              if any(x in l for x in ["31-60", "61-90", "90+"]) and l.strip()]
+        od = _overdue_ar_lines(ar)   # R-067
         if not od:
             return None
         parts = ["<h2>⚠️ Overdue Invoice Alert</h2>",

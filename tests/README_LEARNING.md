@@ -45,7 +45,7 @@ tests/
 
 ### Why `learning_fixtures.py` lives outside `learning/`
 
-Pytest auto-discovers `conftest.py` files **upward through the directory tree**, not across siblings. Fixtures defined in `tests/learning/conftest.py` are invisible to `tests/mcp/` and `tests/gui/`.
+Pytest auto-discovers `conftest.py` files **upward through the directory tree**, not across siblings. Fixtures defined in `tests/learning/conftest.py` are invisible to `tests/mcp_tests/` and `tests/gui/`.
 
 The standard fix is to put shared fixtures in the parent's `conftest.py`, but that would force a manual merge with the existing top-level fixtures. Instead, the substantive fixture code lives in `tests/learning_fixtures.py` (a regular module), and the three sibling `conftest.py` files import from it:
 
@@ -85,11 +85,11 @@ ID-prefix inventory:
 
 ```cmd
 :: Just the learning tests
-py -m pytest tests\learning tests\mcp\test_learning_mcp_tools.py tests\gui\test_learnings_tab.py
+py -m pytest tests\learning tests\mcp_tests\test_learning_mcp_tools.py tests\gui\test_learnings_tab.py
 
 :: One directory at a time
 py -m pytest tests\learning                       :: engine only — fastest
-py -m pytest tests\mcp\test_learning_mcp_tools.py :: MCP wrappers
+py -m pytest tests\mcp_tests\test_learning_mcp_tools.py :: MCP wrappers
 py -m pytest tests\gui\test_learnings_tab.py      :: GUI layer
 
 :: Filter by prefix
@@ -271,7 +271,7 @@ These are 6.1 candidates. The engine-level tests cover the substantive logic, an
 
 - **Adding a new learning-related test:** drop it into the appropriate file (`test_crud_*`, `test_search_*`, etc.) and name it with the next sequential ID (`L-CRUD-15`, `L-MCP-19`, etc.). The fixtures (`sl_env`, `seeded_learnings`) come automatically once imported in the relevant `conftest.py`.
 
-- **Adding a new fixture:** add it to `tests/learning_fixtures.py`, then import it from the conftests in `tests/learning/`, `tests/mcp/`, and `tests/gui/`. The thin-shim conftests are the documentation for what's shared.
+- **Adding a new fixture:** add it to `tests/learning_fixtures.py`, then import it from the conftests in `tests/learning/`, `tests/mcp_tests/`, and `tests/gui/`. The thin-shim conftests are the documentation for what's shared.
 
 - **If a test breaks after an engine change:** check whether it's exercising real behaviour (genuine regression) or exact output strings (false positive). MCP-layer tests in particular use substring matching on human-readable output — if you change the wording of a message in `ai_prowler_mcp.py`, the corresponding test may need its expected-string list extended. See `L-MCP-15` as an example — it accepts four different phrasings of "not found" because the wrapper uses ℹ️ rather than ❌ for that case, and we want to document that as a deliberate design choice rather than coerce the wrapper to match a test.
 

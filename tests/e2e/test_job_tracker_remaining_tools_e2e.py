@@ -144,10 +144,10 @@ class TestRemainingJobTrackerTools:
             updates={
                 "CustomerID (Customers!A)": self.customer_id,
                 "Customer Name / Company": "ZTEST Remaining Tools",
-                "Street Address ★ AI Route": "412 Pelican Dr",
-                "City ★ AI Route": "Daytona Beach",
+                "Street Address": "412 Pelican Dr",
+                "City": "Daytona Beach",
                 "State": "FL",
-                "ZIP ★ AI Route": "32118",
+                "ZIP": "32118",
                 "Job Status": "Completed",
                 "Quote Amount ($)": 100,
                 "Service Date": "2026-07-01",

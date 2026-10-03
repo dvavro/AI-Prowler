@@ -52,11 +52,14 @@ setlocal
 
 if "%ANTHROPIC_API_KEY%"=="" (
     echo.
-    echo ERROR: ANTHROPIC_API_KEY is not set in this shell.
-    echo Set it first, e.g.:
+    echo NOTE: ANTHROPIC_API_KEY is not set in this shell.
+    echo This suite still runs without it, but skips the "did Claude pick
+    echo the right tool" eval layer and only checks tool CORRECTNESS
+    echo ^(a Claude Pro/Max claude.ai subscription does not provide this
+    echo key -- it's a separate Anthropic API credential^). Set the key
+    echo first if you want the full eval, e.g.:
     echo     set ANTHROPIC_API_KEY=sk-ant-...
     echo.
-    exit /b 1
 )
 
 REM Point the test suite at the real install + real spreadsheet.

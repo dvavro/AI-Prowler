@@ -1,0 +1,110 @@
+"""
+tests/mcp_tests/test_quickbooks_csv_phase8b.py
+============================================
+Job Board Architecture Spec Phase 8b — QuickBooks-labeled CSV export.
+
+Run with:
+    run_tests.bat tests\\mcp\\test_quickbooks_csv_phase8b.py -v
+"""
+from __future__ import annotations
+
+import csv
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
+from db_access import init_db
+from db_backup_ops import db_export_quickbooks_csv
+from db_write_ops import db_create_customer, db_create_invoice, db_create_job
+
+_SRC = Path(__file__).resolve().parent.parent.parent
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+
+@pytest.fixture
+def db_path(tmp_path):
+    path = str(tmp_path / "jobs.db")
+    init_db(path)
+    return path
+
+
+def test_produces_both_files(db_path, tmp_path):
+    out_dir = str(tmp_path / "qb_out")
+    result = db_export_quickbooks_csv(db_path, out_dir)
+    assert result.startswith("✅"), result
+    files = set(os.listdir(out_dir))
+    assert files == {"QuickBooks_Customers.csv", "QuickBooks_Invoices.csv"}
+
+
+def test_customer_headers_match_quickbooks_terminology(db_path, tmp_path):
+    db_create_customer(db_path, {
+        "Company Name": "Blue Wave Cafe", "First Name": "Jane", "Last Name": "Smith",
+        "Email": "jane@example.com", "Phone": "386-555-0101",
+        "Street Address": "42 Beachside Dr",
+        "City": "New Smyrna Beach", "State": "FL", "ZIP": "32168",
+    }, actor="dave")
+
+    out_dir = str(tmp_path / "qb_out")
+    db_export_quickbooks_csv(db_path, out_dir)
+
+    with open(os.path.join(out_dir, "QuickBooks_Customers.csv"), newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+
+    assert rows[0]["Display Name"] == "Blue Wave Cafe"
+    assert rows[0]["Company"] == "Blue Wave Cafe"
+    assert rows[0]["Email"] == "jane@example.com"
+    assert rows[0]["Phone"] == "386-555-0101"
+    assert rows[0]["Billing Address Line 1"] == "42 Beachside Dr"
+    assert rows[0]["Billing Address City"] == "New Smyrna Beach"
+    assert rows[0]["Billing Address State"] == "FL"
+    assert rows[0]["Billing Address ZIP"] == "32168"
+
+
+def test_display_name_falls_back_to_first_last_when_no_company(db_path, tmp_path):
+    db_create_customer(db_path, {"First Name": "Jane", "Last Name": "Smith"}, actor="dave")
+    out_dir = str(tmp_path / "qb_out")
+    db_export_quickbooks_csv(db_path, out_dir)
+    with open(os.path.join(out_dir, "QuickBooks_Customers.csv"), newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["Display Name"] == "Jane Smith"
+    assert rows[0]["Company"] == ""
+
+
+def test_invoice_headers_match_quickbooks_terminology(db_path, tmp_path):
+    cust_result = db_create_customer(db_path, {"Company Name": "Blue Wave Cafe"}, actor="dave")
+    cust_id = cust_result.split("NEW_CUST_ID=")[1].splitlines()[0].strip()
+    job_result = db_create_job(db_path, {"CustomerID (Customers!A)": cust_id, "Customer Name / Company": "Blue Wave Cafe",
+                                          "Quote Amount ($)": 150.0}, actor="dave")
+    job_id = job_result.split("NEW_JOB_ID=")[1].splitlines()[0].strip()
+    db_create_invoice(db_path, job_id, actor="dave")
+
+    out_dir = str(tmp_path / "qb_out")
+    db_export_quickbooks_csv(db_path, out_dir)
+
+    with open(os.path.join(out_dir, "QuickBooks_Invoices.csv"), newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+
+    assert rows[0]["Customer"] == "Blue Wave Cafe"
+    assert rows[0]["Invoice No"].startswith("INV-")
+    assert float(rows[0]["Amount"]) == pytest.approx(160.50)
+
+
+def test_empty_database_produces_headers_only(db_path, tmp_path):
+    out_dir = str(tmp_path / "qb_out")
+    result = db_export_quickbooks_csv(db_path, out_dir)
+    assert result.startswith("✅"), result
+    with open(os.path.join(out_dir, "QuickBooks_Customers.csv"), newline="", encoding="utf-8") as f:
+        rows = list(csv.reader(f))
+    assert len(rows) == 1  # header row only
+
+
+def test_result_message_names_the_qbo_menu_path(db_path, tmp_path):
+    """The honest framing this feature depends on — the message must not
+    imply the QBO mapping screen is skipped, since it can't be."""
+    out_dir = str(tmp_path / "qb_out")
+    result = db_export_quickbooks_csv(db_path, out_dir)
+    assert "Import Data" in result
+    assert "mapping" in result.lower()

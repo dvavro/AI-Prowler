@@ -20,7 +20,7 @@ This directory happens to hold BOTH kinds of tests, which is exactly why
 these suites are invoked ONLY via run_e2e_mcp_tool.bat (see repo root),
 never via run_tests.bat or a bare `-m e2e`.
 
-The rest of AI-Prowler's test suite (tests/mcp/, tests/unit/, etc.)
+The rest of AI-Prowler's test suite (tests/mcp_tests/, tests/unit/, etc.)
 correctly sandboxes ~/.ai-prowler by default (AIPROWLER_TEST_STATE_DIR,
 set by run_tests.bat) so automated tests can never touch real credentials
 or production state. That sandboxing is exactly wrong for these suites,

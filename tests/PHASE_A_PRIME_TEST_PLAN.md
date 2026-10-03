@@ -149,7 +149,7 @@ activation tests described in section 4 once the hoist in section 4.0 is done.
 
 The pure-logic functions are currently defined INSIDE _run_http() in
 ai_prowler_mcp.py, so a test cannot import and call them without launching
-the HTTP server. Before the tests in tests/mcp/test_edition_activation.py
+the HTTP server. Before the tests in tests/mcp_tests/test_edition_activation.py
 can run, hoist these to MODULE level (and re-point _run_http to call the
 module-level versions):
 
@@ -173,7 +173,7 @@ must be unchanged.
 
 ### 4.1 Test file
 
-tests/mcp/test_edition_activation.py (provided) contains, under test IDs
+tests/mcp_tests/test_edition_activation.py (provided) contains, under test IDs
 C-MCP-EDITION-NN and C-MCP-ACTIVATION-NN:
 
 **Edition mapping (_plan_to_edition):**
@@ -206,7 +206,7 @@ C-MCP-EDITION-NN and C-MCP-ACTIVATION-NN:
 
 ```
 cd C:\Users\david\AI-Prowler_V602_to_V700_work\AI-Prowler
-py -m pytest tests/mcp/test_edition_activation.py -v
+py -m pytest tests/mcp_tests/test_edition_activation.py -v
 ```
 Expected (after hoist): all C-MCP-EDITION-* and C-MCP-ACTIVATION-* pass.
 Before hoist: the file skips with a clear reason.

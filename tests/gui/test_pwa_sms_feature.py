@@ -135,20 +135,27 @@ class TestCheckSmsRepliesFunction:
 
 class TestJobModalTextCustomerShortcut:
     def test_button_present_in_job_modal(self, pwa_source):
+        # R-017 (2026-09-26): the button passes only the job id — the customer
+        # name used to be pasted into the button's code, and an apostrophe
+        # (O'Brien's) broke it. _textCustomerForJob looks the name up.
         idx = pwa_source.index("quickClock")  # unique to the job-detail modal template
-        nearby = pwa_source[idx:idx + 900]
-        assert "goMessages('${j.customer}')" in nearby
+        nearby = pwa_source[idx:idx + 1400]
+        assert "_textCustomerForJob('${esc(j.id)}')" in nearby
         assert "Text Customer" in nearby
+        assert "goMessages('${j.customer}')" not in pwa_source
 
     def test_go_messages_prefills_customer_name(self, pwa_source):
         idx = pwa_source.index("function goMessages(")
-        nearby = pwa_source[idx:idx + 400]
+        nearby = pwa_source[idx:idx + 800]
         assert "smsTo').value = customerName" in nearby
 
-    def test_go_messages_switches_to_correct_nav_index(self, pwa_source):
-        """Nav order is Jobs(0), Clock(1), Photos(2), Messages(3),
-        Profile(4) — goPhotos() already correctly uses index 2 for Photos
-        elsewhere; this confirms Messages' index wasn't miscounted."""
+    def test_go_messages_lights_up_the_messages_tab_by_id(self, pwa_source):
+        """R-019 (2026-09-26): the tab was picked by position (.nav-btn[3]),
+        which became the Calendar tab when the bottom bar was reordered.
+        It's now found by its id."""
         idx = pwa_source.index("function goMessages(")
-        nearby = pwa_source[idx:idx + 300]
-        assert "nav-btn')[3]" in nearby
+        end = pwa_source.index("\n}", idx)
+        body = pwa_source[idx:end]
+        assert "[data-testid='nav-messages']" in body
+        code = "\n".join(l.split("//")[0] for l in body.splitlines())
+        assert "nav-btn')[" not in code

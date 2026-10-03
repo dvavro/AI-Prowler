@@ -31,7 +31,7 @@ if "%1"=="unit" (
 )
 
 if "%1"=="mcp" (
-    py -m pytest tests\mcp
+    py -m pytest tests\mcp_tests
     goto :end
 )
 
@@ -56,12 +56,12 @@ if "%1"=="watchdog" (
 )
 
 if "%1"=="status" (
-    py -m pytest tests\mcp\test_status_chunk_count.py -v
+    py -m pytest tests\mcp_tests\test_status_chunk_count.py -v
     goto :end
 )
 
 if "%1"=="stats" (
-    py -m pytest tests\mcp\test_database_stats_collections.py -v
+    py -m pytest tests\mcp_tests\test_database_stats_collections.py -v
     goto :end
 )
 

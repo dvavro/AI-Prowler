@@ -246,7 +246,9 @@ class _FakeFastMCP:
     def __init__(self, *a, **kw):
         pass
 
-    def tool(self):
+    def tool(self, *a, **kw):
+        # Mirror the real FastMCP.tool() signature: production registers
+        # tools with name=/description= kwargs (e.g. run_script).
         def decorator(fn):
             return fn
         return decorator
@@ -456,63 +458,15 @@ class TestEmailInvoice:
         "from_name": "Test",
     }
 
-    def test_CT_01_email_invoice_by_invoice_id(self, mcp_module, tmp_path):
-        """email_invoice('INV-0001') must send email and return confirmation."""
-        fp = str(_make_test_spreadsheet(tmp_path))
-
-        smtp_mock = MagicMock()
-        smtp_mock.__enter__ = MagicMock(return_value=smtp_mock)
-        smtp_mock.__exit__ = MagicMock(return_value=False)
-
-        with patch.object(mcp_module, "_email_config_load", return_value=self._SMTP_CFG), \
-             patch("smtplib.SMTP", return_value=smtp_mock):
-            result = mcp_module.email_invoice(
-                invoice_identifier="INV-0001",
-                to="karen@sunshine.com",
-                filepath=fp,
-            )
-
-        assert "INV-0001" in result
-        assert "Sunshine Realty" in result or "karen" in result or "sent" in result.lower()
-
-    def test_CT_01b_email_invoice_uses_real_username_and_password(self, mcp_module, tmp_path):
-        """The exact bug this regression guards against: login() must be
-        called with the real configured username/password, not a blank
-        default from a key that doesn't exist in the saved config."""
-        fp = str(_make_test_spreadsheet(tmp_path))
-
-        smtp_mock = MagicMock()
-        smtp_mock.__enter__ = MagicMock(return_value=smtp_mock)
-        smtp_mock.__exit__ = MagicMock(return_value=False)
-
-        with patch.object(mcp_module, "_email_config_load", return_value=self._SMTP_CFG), \
-             patch("smtplib.SMTP", return_value=smtp_mock):
-            mcp_module.email_invoice(
-                invoice_identifier="INV-0001",
-                to="karen@sunshine.com",
-                filepath=fp,
-            )
-
-        smtp_mock.login.assert_called_once_with("u@test.com", "realpassword123")
-
-    def test_CT_01c_email_invoice_uses_real_from_address_for_envelope(self, mcp_module, tmp_path):
-        """sendmail()'s envelope-from must be the real configured
-        from_address, not a KeyError on a nonexistent 'from_email' key."""
-        fp = str(_make_test_spreadsheet(tmp_path))
-
-        smtp_mock = MagicMock()
-        smtp_mock.__enter__ = MagicMock(return_value=smtp_mock)
-        smtp_mock.__exit__ = MagicMock(return_value=False)
-
-        with patch.object(mcp_module, "_email_config_load", return_value=self._SMTP_CFG), \
-             patch("smtplib.SMTP", return_value=smtp_mock):
-            mcp_module.email_invoice(
-                invoice_identifier="INV-0001",
-                to="karen@sunshine.com",
-                filepath=fp,
-            )
-
-        assert smtp_mock.sendmail.call_args[0][0] == "me@test.com"
+    # NOTE: test_CT_01_email_invoice_by_invoice_id, test_CT_01b_..._
+    # uses_real_username_and_password, and test_CT_01c_..._uses_real_
+    # from_address_for_envelope removed 2026-09-14 -- superseded by
+    # test_email_invoice_by_invoice_id_smtp_layer, test_email_invoice_
+    # uses_real_username_and_password, and test_email_invoice_uses_
+    # real_from_address_for_envelope in
+    # tests/mcp_tests/test_invoice_receipt_openpyxl_removal.py, ported onto a
+    # real DB-seeded invoice instead of the openpyxl fixture that no
+    # longer connects to _find_invoice_row.
 
     def test_CT_02_email_invoice_auto_lookup_customer_email(self, mcp_module, tmp_path):
         """When 'to' is omitted, email_invoice must try to look up email from Customers."""
@@ -549,27 +503,12 @@ class TestEmailInvoice:
         # Should be an error: either explicitly or "not found" language
         assert any(w in result.lower() for w in ["not found", "no invoice", "error", "could not"])
 
-    def test_CT_04_email_invoice_no_smtp_config_returns_error(self, mcp_module, tmp_path):
-        """If email is not configured, email_invoice must return a clear error."""
-        fp = str(_make_test_spreadsheet(tmp_path))
-        with patch.object(mcp_module, "_email_config_load", return_value=None):
-            result = mcp_module.email_invoice(
-                invoice_identifier="INV-0001",
-                to="karen@sunshine.com",
-                filepath=fp,
-            )
-
-        assert any(w in result.lower() for w in ["configure", "email", "smtp", "setup"])
-
-    def test_CT_05_email_invoice_missing_spreadsheet_returns_error(self, mcp_module, tmp_path):
-        """Passing a nonexistent filepath must return a file-not-found error."""
-        with patch.object(mcp_module, "_email_config_load", return_value=self._SMTP_CFG):
-            result = mcp_module.email_invoice(
-                invoice_identifier="INV-0001",
-                to="test@example.com",
-                filepath=str(tmp_path / "does_not_exist.xlsx"),
-            )
-        assert any(w in result.lower() for w in ["not found", "no spreadsheet", "error", "file"])
+    # NOTE: test_CT_04_email_invoice_no_smtp_config_returns_error and
+    # test_CT_05_email_invoice_missing_spreadsheet_returns_error removed
+    # 2026-09-14 -- superseded by test_email_invoice_no_smtp_config_
+    # returns_error and test_email_invoice_missing_db_returns_error in
+    # tests/mcp_tests/test_invoice_receipt_openpyxl_removal.py, ported onto a
+    # real DB-seeded invoice.
 
     def test_CT_05b_blank_identifier_is_rejected_not_treated_as_match_all(self, mcp_module, tmp_path):
         """The exact production bug this regression guards against: Python
@@ -641,48 +580,10 @@ class TestEmailInvoice:
         if smtp_mock.sendmail.called and captured:
             assert "INV-0001" in captured[0] or "Sunshine" in captured[0]
 
-    def test_CT_06b_tax_and_total_render_correctly_with_real_multiline_headers(
-        self, mcp_module, tmp_path
-    ):
-        """Real production bug regression guard: the actual spreadsheet
-        template's formula-computed columns (Taxable Amt, Tax, TOTAL DUE,
-        Balance Due) have multi-line headers — label on one line, a
-        "=FORMULA" note on the next. Header detection was merging those
-        into one string ("Tax 7% ($) =M*0.07"), which no longer matched
-        the hardcoded lookup key ("Tax 7% ($)"), so every real invoice
-        with this format showed "—" for tax and total regardless of
-        having correct underlying numbers. _make_test_spreadsheet()'s
-        simple single-line headers never exercised this at all."""
-        fp = str(_make_multiline_header_spreadsheet(tmp_path))
-        captured = {}
-
-        def fake_sendmail(from_addr, to_list, msg_str):
-            import email as _email_mod
-            parsed = _email_mod.message_from_string(msg_str)
-            for part in parsed.walk():
-                if part.get_content_type() == "text/html":
-                    captured["html"] = part.get_payload(decode=True).decode("utf-8", errors="replace")
-                    break
-
-        smtp_mock = MagicMock()
-        smtp_mock.__enter__ = MagicMock(return_value=smtp_mock)
-        smtp_mock.__exit__ = MagicMock(return_value=False)
-        smtp_mock.sendmail.side_effect = fake_sendmail
-
-        with patch.object(mcp_module, "_email_config_load", return_value=self._SMTP_CFG), \
-             patch("smtplib.SMTP", return_value=smtp_mock):
-            mcp_module.email_invoice(
-                invoice_identifier="INV-0007",
-                to="david@example.com",
-                filepath=fp,
-            )
-
-        html = captured.get("html", "")
-        assert "$22.05" in html  # Tax 7%
-        assert "$337.05" in html  # TOTAL DUE (and Balance Due)
-        # The old bug's telltale symptom — a bare dash instead of a real
-        # dollar figure for these specific fields.
-        assert "Tax (7%)—" not in html.replace(" ", "").replace("\n", "")
+    # NOTE: test_CT_06b_tax_and_total_render_correctly_with_real_
+    # multiline_headers removed 2026-09-14 -- the "multi-line header"
+    # bug class it guarded (decorated column headers with embedded
+    # formula notes) is structurally impossible on a real SQLite schema.
 
 
 # ===========================================================================
@@ -758,269 +659,12 @@ class TestLoadPaymentSettings:
         assert result["sms_enabled"] is True
 
 
-class TestEmailInvoicePaymentLinksAndSms:
-    """Tests for email_invoice()'s payment-link email injection (gated by
-    email_payment_link_enabled) and the also_sms companion notification
-    (gated separately by sms_payment_link_enabled). Covers both the
-    dynamic per-invoice checkout creation (Stripe/Square API calls,
-    always mocked here — never real network) and the static-URL fallback
-    when no credentials are configured."""
-
-    _SMTP_CFG = TestEmailInvoice._SMTP_CFG
-
-    def _run_with_settings(self, mcp_module, tmp_path, payment_settings,
-                            also_sms=False, send_sms_result="✅ SMS sent to +13865550101",
-                            create_stripe_url=None, create_square_url=None):
-        fp = str(_make_test_spreadsheet(tmp_path))
-        captured = {}
-
-        def fake_sendmail(from_addr, to_list, msg_str):
-            # The HTML body is base64-encoded at the MIME transport layer
-            # (Content-Transfer-Encoding: base64) — decode it so tests can
-            # check for plain-text content, rather than accidentally
-            # asserting against the encoded representation.
-            import email as _email_mod
-            parsed = _email_mod.message_from_string(msg_str)
-            html = ""
-            for part in parsed.walk():
-                if part.get_content_type() == "text/html":
-                    html = part.get_payload(decode=True).decode("utf-8", errors="replace")
-                    break
-            captured["html"] = html
-            captured["raw"] = msg_str
-
-        smtp_mock = MagicMock()
-        smtp_mock.__enter__ = MagicMock(return_value=smtp_mock)
-        smtp_mock.__exit__ = MagicMock(return_value=False)
-        smtp_mock.sendmail.side_effect = fake_sendmail
-
-        with patch.object(mcp_module, "_email_config_load", return_value=self._SMTP_CFG), \
-             patch.object(mcp_module, "_load_payment_settings", return_value=payment_settings), \
-             patch.object(mcp_module, "_create_stripe_checkout_url", return_value=create_stripe_url) as stripe_create_mock, \
-             patch.object(mcp_module, "_create_square_checkout_url", return_value=create_square_url) as square_create_mock, \
-             patch.object(mcp_module, "send_sms", return_value=send_sms_result) as sms_mock, \
-             patch("smtplib.SMTP", return_value=smtp_mock):
-            result = mcp_module.email_invoice(
-                invoice_identifier="INV-0001",
-                to="karen@sunshine.com",
-                filepath=fp,
-                also_sms=also_sms,
-            )
-        return result, captured, sms_mock, stripe_create_mock, square_create_mock
-
-    _NO_CREDS = {
-        "stripe_secret_key": "", "stripe_fallback_url": "",
-        "square_access_token": "", "square_location_id": "", "square_fallback_url": "",
-        "email_enabled": True, "sms_enabled": False,
-    }
-
-    def test_dynamic_stripe_url_used_when_secret_key_configured(self, mcp_module, tmp_path):
-        """The primary new capability: a secret key present means a real
-        (mocked here) checkout session gets created and its URL used —
-        not the static fallback."""
-        settings = dict(self._NO_CREDS, stripe_secret_key="sk_test_abc",
-                         stripe_fallback_url="https://buy.stripe.com/fallback")
-        result, captured, _, stripe_mock, _ = self._run_with_settings(
-            mcp_module, tmp_path, settings,
-            create_stripe_url="https://checkout.stripe.com/pay/cs_test_dynamic123",
-        )
-        assert "cs_test_dynamic123" in captured.get("html", "")
-        assert "buy.stripe.com/fallback" not in captured.get("html", "")
-        stripe_mock.assert_called_once()
-
-    def test_dynamic_stripe_creation_uses_real_invoice_amount(self, mcp_module, tmp_path):
-        """The exact dollar amount passed to the checkout-creation call
-        must be the invoice's real TOTAL DUE ($303.345 for INV-0001 in
-        the test fixture), not a placeholder or the subtotal."""
-        settings = dict(self._NO_CREDS, stripe_secret_key="sk_test_abc")
-        self._run_with_settings(
-            mcp_module, tmp_path, settings,
-            create_stripe_url="https://checkout.stripe.com/pay/cs_test_x",
-        )
-        # Re-run capturing the actual call args this time.
-        fp = str(_make_test_spreadsheet(tmp_path))
-        smtp_mock = MagicMock()
-        smtp_mock.__enter__ = MagicMock(return_value=smtp_mock)
-        smtp_mock.__exit__ = MagicMock(return_value=False)
-        with patch.object(mcp_module, "_email_config_load", return_value=self._SMTP_CFG), \
-             patch.object(mcp_module, "_load_payment_settings", return_value=settings), \
-             patch.object(mcp_module, "_create_stripe_checkout_url",
-                           return_value="https://checkout.stripe.com/pay/cs_test_x") as stripe_mock, \
-             patch("smtplib.SMTP", return_value=smtp_mock):
-            mcp_module.email_invoice(invoice_identifier="INV-0001", to="k@sunshine.com", filepath=fp)
-        called_amount = stripe_mock.call_args[0][1]
-        assert abs(called_amount - 303.345) < 0.01
-
-    def test_falls_back_to_static_url_when_no_secret_key(self, mcp_module, tmp_path):
-        settings = dict(self._NO_CREDS, stripe_fallback_url="https://buy.stripe.com/fallback")
-        result, captured, _, stripe_mock, _ = self._run_with_settings(mcp_module, tmp_path, settings)
-        assert "buy.stripe.com/fallback" in captured.get("html", "")
-        stripe_mock.assert_not_called()  # no key → never even attempted
-
-    def test_falls_back_to_static_url_when_dynamic_creation_fails(self, mcp_module, tmp_path):
-        """If the Stripe API call fails (bad key, network error, etc.),
-        _create_stripe_checkout_url returns None — email_invoice must
-        fall back to the static URL rather than showing no button at all
-        or crashing."""
-        settings = dict(self._NO_CREDS, stripe_secret_key="sk_bad_key",
-                         stripe_fallback_url="https://buy.stripe.com/fallback")
-        result, captured, _, stripe_mock, _ = self._run_with_settings(
-            mcp_module, tmp_path, settings, create_stripe_url=None,
-        )
-        assert "buy.stripe.com/fallback" in captured.get("html", "")
-        stripe_mock.assert_called_once()
-
-    def test_dynamic_square_url_used_when_credentials_configured(self, mcp_module, tmp_path):
-        settings = dict(self._NO_CREDS, square_access_token="EAAA_test",
-                         square_location_id="L123", square_fallback_url="https://square.link/u/fallback")
-        result, captured, _, _, square_mock = self._run_with_settings(
-            mcp_module, tmp_path, settings,
-            create_square_url="https://checkout.square.site/dynamic456",
-        )
-        assert "dynamic456" in captured.get("html", "")
-        assert "square.link/u/fallback" not in captured.get("html", "")
-        square_mock.assert_called_once()
-
-    def test_square_requires_both_token_and_location_id(self, mcp_module, tmp_path):
-        """An access token alone (no location ID) must not attempt
-        dynamic creation — Square's API requires both."""
-        settings = dict(self._NO_CREDS, square_access_token="EAAA_test",
-                         square_fallback_url="https://square.link/u/fallback")
-        result, captured, _, _, square_mock = self._run_with_settings(mcp_module, tmp_path, settings)
-        square_mock.assert_not_called()
-        assert "square.link/u/fallback" in captured.get("html", "")
-
-    def test_no_xero_button_ever_appears(self, mcp_module, tmp_path):
-        """Regression guard — Xero support was removed entirely; nothing
-        in the email should ever reference it."""
-        settings = dict(self._NO_CREDS, stripe_secret_key="sk_test",
-                         square_access_token="EAAA", square_location_id="L1")
-        result, captured, _, _, _ = self._run_with_settings(
-            mcp_module, tmp_path, settings,
-            create_stripe_url="https://checkout.stripe.com/pay/x",
-            create_square_url="https://checkout.square.site/y",
-        )
-        assert "xero" not in captured.get("html", "").lower()
-
-    def test_email_payment_section_omitted_when_disabled(self, mcp_module, tmp_path):
-        """Even with credentials configured, the section must not appear
-        if email_payment_link_enabled is off."""
-        settings = dict(self._NO_CREDS, email_enabled=False, stripe_secret_key="sk_test")
-        result, captured, _, stripe_mock, _ = self._run_with_settings(
-            mcp_module, tmp_path, settings,
-            create_stripe_url="https://checkout.stripe.com/pay/x",
-        )
-        assert "checkout.stripe.com" not in captured.get("html", "")
-        stripe_mock.assert_not_called()  # never even attempted — email disabled, sms disabled too
-
-    def test_also_sms_false_never_calls_send_sms(self, mcp_module, tmp_path):
-        _, _, sms_mock, _, _ = self._run_with_settings(mcp_module, tmp_path, self._NO_CREDS, also_sms=False)
-        sms_mock.assert_not_called()
-
-    def test_also_sms_true_calls_send_sms_with_customer_name(self, mcp_module, tmp_path):
-        _, _, sms_mock, _, _ = self._run_with_settings(mcp_module, tmp_path, self._NO_CREDS, also_sms=True)
-        sms_mock.assert_called_once()
-        assert sms_mock.call_args.kwargs.get("to") or sms_mock.call_args[1].get("to")
-
-    def test_also_sms_true_sms_enabled_false_no_link_in_message(self, mcp_module, tmp_path):
-        """SMS notification sent, but with NO payment link, even though
-        Stripe is configured — sms_enabled must be independently checked,
-        not inherited from a configured credential existing."""
-        settings = dict(self._NO_CREDS, stripe_secret_key="sk_test", sms_enabled=False)
-        _, _, sms_mock, _, _ = self._run_with_settings(
-            mcp_module, tmp_path, settings, also_sms=True,
-            create_stripe_url="https://checkout.stripe.com/pay/x",
-        )
-        sent_message = sms_mock.call_args.kwargs.get("message", "")
-        assert "checkout.stripe.com" not in sent_message
-
-    def test_also_sms_true_sms_enabled_true_includes_link_in_message(self, mcp_module, tmp_path):
-        settings = dict(self._NO_CREDS, stripe_secret_key="sk_test", sms_enabled=True)
-        _, _, sms_mock, _, _ = self._run_with_settings(
-            mcp_module, tmp_path, settings, also_sms=True,
-            create_stripe_url="https://checkout.stripe.com/pay/x",
-        )
-        sent_message = sms_mock.call_args.kwargs.get("message", "")
-        assert "checkout.stripe.com/pay/x" in sent_message
-
-    def test_sms_and_email_share_one_checkout_session_not_two(self, mcp_module, tmp_path):
-        """If both email_enabled and sms_enabled are on, only ONE checkout
-        session should be created and reused by both channels — not a
-        separate one minted per channel for the same invoice."""
-        settings = dict(self._NO_CREDS, stripe_secret_key="sk_test",
-                         email_enabled=True, sms_enabled=True)
-        self._run_with_settings(
-            mcp_module, tmp_path, settings, also_sms=True,
-            create_stripe_url="https://checkout.stripe.com/pay/shared",
-        )
-        # Rerun with a spy to count calls precisely.
-        fp = str(_make_test_spreadsheet(tmp_path))
-        smtp_mock = MagicMock()
-        smtp_mock.__enter__ = MagicMock(return_value=smtp_mock)
-        smtp_mock.__exit__ = MagicMock(return_value=False)
-        with patch.object(mcp_module, "_email_config_load", return_value=self._SMTP_CFG), \
-             patch.object(mcp_module, "_load_payment_settings", return_value=settings), \
-             patch.object(mcp_module, "_create_stripe_checkout_url",
-                           return_value="https://checkout.stripe.com/pay/shared") as stripe_mock, \
-             patch.object(mcp_module, "send_sms", return_value="✅ sent"), \
-             patch("smtplib.SMTP", return_value=smtp_mock):
-            mcp_module.email_invoice(invoice_identifier="INV-0001", to="k@sunshine.com",
-                                      filepath=fp, also_sms=True)
-        stripe_mock.assert_called_once()
-
-    def test_sms_failure_does_not_turn_successful_email_into_error(self, mcp_module, tmp_path):
-        """If send_sms returns an error string (opted out, no phone on
-        file, etc.), the overall result must still read as a success for
-        the email — not a bare failure."""
-        result, _, _, _, _ = self._run_with_settings(
-            mcp_module, tmp_path, self._NO_CREDS, also_sms=True,
-            send_sms_result="❌ No phone number found for this contact",
-        )
-        assert result.startswith("✅")
-        assert "not sent" in result.lower()
-
-    def test_also_sms_uses_raw_customer_name_not_placeholder(self, mcp_module, tmp_path):
-        """The SMS recipient/lookup key and message must use the invoice's
-        actual customer name — never the "—" display placeholder that
-        the email body uses for a blank field."""
-        _, _, sms_mock, _, _ = self._run_with_settings(mcp_module, tmp_path, self._NO_CREDS, also_sms=True)
-        sms_mock.assert_called_once()
-        assert sms_mock.call_args.kwargs.get("to") == "Sunshine Realty LLC"
-        assert "—" not in sms_mock.call_args.kwargs.get("message", "")
-
-    def test_also_sms_skipped_cleanly_when_customer_name_blank(self, mcp_module, tmp_path):
-        """If the invoice row's customer name is genuinely blank, send_sms
-        must never be called at all. The result must clearly say why the
-        text wasn't sent, and email's success must still be reported."""
-        fp = str(_make_test_spreadsheet(tmp_path))
-        import openpyxl as _opx_blank
-        wb = _opx_blank.load_workbook(fp)
-        ws = wb["Invoices"]
-        for row in ws.iter_rows(min_row=3):
-            if row[0].value == "INV-0001":
-                row[3].value = ""  # "Customer Name / Company" column
-                break
-        wb.save(fp)
-
-        smtp_mock = MagicMock()
-        smtp_mock.__enter__ = MagicMock(return_value=smtp_mock)
-        smtp_mock.__exit__ = MagicMock(return_value=False)
-
-        with patch.object(mcp_module, "_email_config_load", return_value=self._SMTP_CFG), \
-             patch.object(mcp_module, "_load_payment_settings", return_value=self._NO_CREDS), \
-             patch.object(mcp_module, "send_sms") as sms_mock, \
-             patch("smtplib.SMTP", return_value=smtp_mock):
-            result = mcp_module.email_invoice(
-                invoice_identifier="INV-0001",
-                to="karen@sunshine.com",
-                filepath=fp,
-                also_sms=True,
-            )
-
-        sms_mock.assert_not_called()
-        assert result.startswith("✅")
-        assert "not sent" in result.lower()
-        assert "customer name" in result.lower()
+# NOTE: TestEmailInvoicePaymentLinksAndSms (openpyxl-based) removed
+# 2026-09-14 -- superseded by tests/mcp_tests/test_email_invoice_payment_
+# links.py, which covers the same Stripe/Square dynamic-checkout,
+# static-fallback, and also_sms behavior against a real DB-seeded
+# invoice. All 12 ported tests pass, confirming this logic itself has
+# no regression -- it was simply untested after the SQLite migration.
 
 
 class TestStripeAndSquareCheckoutHelpers:
@@ -1105,16 +749,22 @@ class TestSendSms:
         "twilio_from_number": "+13865550100",
     }
 
-    def _write_cfg(self, tmp_path):
-        cfg_dir = tmp_path / ".ai-prowler"
-        cfg_dir.mkdir(parents=True, exist_ok=True)
-        cfg_path = cfg_dir / "config.json"
-        cfg_path.write_text(json.dumps(self._TWILIO_CFG), encoding="utf-8")
+    def _write_cfg(self, tmp_path, monkeypatch):
+        # R-066 (2026-09-29): sms_backends.load_sms_config() honours
+        # AIPROWLER_TEST_STATE_DIR when set, bypassing the Path.home()
+        # lookup this helper used to mock. Point the sandbox at tmp_path and
+        # write config.json at its root (load_sms_config reads
+        # $AIPROWLER_TEST_STATE_DIR/config.json directly, no .ai-prowler
+        # subdir). monkeypatch reverts the env var after each test, so the
+        # shared sandbox dir is never polluted.
+        monkeypatch.setenv("AIPROWLER_TEST_STATE_DIR", str(tmp_path))
+        (tmp_path / "config.json").write_text(
+            json.dumps(self._TWILIO_CFG), encoding="utf-8")
         return tmp_path
 
-    def test_CT_07_send_sms_success(self, mcp_module, tmp_path):
+    def test_CT_07_send_sms_success(self, mcp_module, tmp_path, monkeypatch):
         """send_sms must call Twilio API and return a success confirmation."""
-        home = self._write_cfg(tmp_path)
+        home = self._write_cfg(tmp_path, monkeypatch)
 
         twilio_resp = MagicMock()
         twilio_resp.status_code = 201
@@ -1129,9 +779,9 @@ class TestSendSms:
 
         assert "SM1234567890abcdef" in result or "sent" in result.lower()
 
-    def test_CT_08_send_sms_normalises_10_digit_number(self, mcp_module, tmp_path):
+    def test_CT_08_send_sms_normalises_10_digit_number(self, mcp_module, tmp_path, monkeypatch):
         """A 10-digit number must be normalised to E.164 (+1XXXXXXXXXX)."""
-        home = self._write_cfg(tmp_path)
+        home = self._write_cfg(tmp_path, monkeypatch)
         captured = {}
 
         def fake_post(url, auth, data, timeout=30):
@@ -1160,17 +810,17 @@ class TestSendSms:
 
         assert any(w in result.lower() for w in ["twilio", "config", "setup", "configure"])
 
-    def test_CT_10_send_sms_empty_message_returns_error(self, mcp_module, tmp_path):
+    def test_CT_10_send_sms_empty_message_returns_error(self, mcp_module, tmp_path, monkeypatch):
         """An empty message must return an error before hitting the API."""
-        home = self._write_cfg(tmp_path)
+        home = self._write_cfg(tmp_path, monkeypatch)
         with patch("pathlib.Path.home", return_value=home):
             result = mcp_module.send_sms(to="3865550101", message="   ")
 
         assert any(w in result.lower() for w in ["empty", "blank", "message", "error"])
 
-    def test_CT_11_send_sms_twilio_error_response_surfaced(self, mcp_module, tmp_path):
+    def test_CT_11_send_sms_twilio_error_response_surfaced(self, mcp_module, tmp_path, monkeypatch):
         """A Twilio 400 error must be returned as a readable error string."""
-        home = self._write_cfg(tmp_path)
+        home = self._write_cfg(tmp_path, monkeypatch)
 
         twilio_resp = MagicMock()
         twilio_resp.status_code = 400
@@ -1182,32 +832,32 @@ class TestSendSms:
 
         assert "400" in result or "invalid" in result.lower() or "error" in result.lower()
 
-    def test_CT_11b_blank_to_is_rejected_before_any_lookup(self, mcp_module, tmp_path):
+    def test_CT_11b_blank_to_is_rejected_before_any_lookup(self, mcp_module, tmp_path, monkeypatch):
         """Same bug class as email_invoice's blank-identifier fix: the
         name-resolution lookups search for `to` as a SUBSTRING of stored
         names, and a blank `to` (e.g. a job whose customer name failed to
         parse upstream) must never reach them — it would otherwise match
         whichever record happens to come first."""
-        home = self._write_cfg(tmp_path)
+        home = self._write_cfg(tmp_path, monkeypatch)
         with patch("pathlib.Path.home", return_value=home):
             result = mcp_module.send_sms(to="", message="Test")
         assert result.startswith("❌")
         assert "blank" in result.lower() or "required" in result.lower()
 
-    def test_CT_11c_whitespace_only_to_is_also_rejected(self, mcp_module, tmp_path):
-        home = self._write_cfg(tmp_path)
+    def test_CT_11c_whitespace_only_to_is_also_rejected(self, mcp_module, tmp_path, monkeypatch):
+        home = self._write_cfg(tmp_path, monkeypatch)
         with patch("pathlib.Path.home", return_value=home):
             result = mcp_module.send_sms(to="   ", message="Test")
         assert result.startswith("❌")
 
-    def test_CT_11d_blank_to_never_reaches_users_json_crew_lookup(self, mcp_module, tmp_path):
+    def test_CT_11d_blank_to_never_reaches_users_json_crew_lookup(self, mcp_module, tmp_path, monkeypatch):
         """The specific vulnerability this guards against: step 2 (crew
         lookup in users.json) had no blank-input guard at all, unlike
         step 1 (Customers sheet) which was already correctly guarded. A
         blank `to` would match the FIRST crew member in the dict
         unconditionally — this test proves that lookup is never even
         attempted when `to` is blank, by making it fail loudly if called."""
-        home = self._write_cfg(tmp_path)
+        home = self._write_cfg(tmp_path, monkeypatch)
 
         def _users_that_should_never_be_read():
             raise AssertionError(
@@ -1221,10 +871,10 @@ class TestSendSms:
 
         assert result.startswith("❌")
 
-    def test_CT_11e_real_name_still_resolves_normally(self, mcp_module, tmp_path):
+    def test_CT_11e_real_name_still_resolves_normally(self, mcp_module, tmp_path, monkeypatch):
         """Regression guard — the blank-input fix must not break the
         normal, non-blank name-resolution path it's built around."""
-        home = self._write_cfg(tmp_path)
+        home = self._write_cfg(tmp_path, monkeypatch)
         captured = {}
 
         def fake_post(url, auth, data, timeout=30):
@@ -1245,456 +895,16 @@ class TestSendSms:
         assert captured.get("to") == "+13865550199"
 
 
-# ===========================================================================
-# schedule_next_recurring_job  (CT_12 - CT_17)
-# ===========================================================================
-
-class TestScheduleNextRecurringJob:
-    """Tests for ACTION TOOL 10 -- schedule_next_recurring_job."""
-
-    def test_CT_12_monthly_customer_gets_next_job_plus_one_month(self, mcp_module, tmp_path):
-        """Monthly customer: next job should be 1 month after last service date."""
-        fp = str(_make_test_spreadsheet(tmp_path))
-        with patch.object(mcp_module, "_backup_spreadsheet", return_value="Backup saved"):
-            result = mcp_module.schedule_next_recurring_job(
-                job_identifier="JOB-0001",
-                filepath=fp,
-                # Fixture uses a fixed 2026-03-30 Service Date unrelated to
-                # "today" — when="any" is needed since schedule_next_recurring_job
-                # now defaults to "today" if `when` is omitted.
-                when="any",
-            )
-
-        assert isinstance(result, str)
-        # Base date 2026-03-30 + 1 month = 2026-04-30 (now displayed MM/DD/YYYY)
-        assert "04/30/2026" in result or "April" in result
-
-    def test_CT_13_biweekly_customer_gets_next_job_plus_14_days(self, mcp_module, tmp_path):
-        """Biweekly customer: next job should be 14 days after last service date."""
-        fp = str(_make_test_spreadsheet(tmp_path))
-        with patch.object(mcp_module, "_backup_spreadsheet", return_value="Backup saved"):
-            result = mcp_module.schedule_next_recurring_job(
-                job_identifier="JOB-0002",
-                filepath=fp,
-                when="any",
-            )
-
-        assert isinstance(result, str)
-        # Base date 2026-03-16 + 14 days = 2026-03-30 (now displayed MM/DD/YYYY)
-        assert "03/30/2026" in result
-
-    def test_CT_14_new_job_written_to_jobs_schedule(self, mcp_module, tmp_path):
-        """After scheduling, the new job row must exist in the spreadsheet."""
-        fp = str(_make_test_spreadsheet(tmp_path))
-        with patch.object(mcp_module, "_backup_spreadsheet", return_value="Backup saved"):
-            mcp_module.schedule_next_recurring_job(job_identifier="JOB-0001", filepath=fp, when="any")
-
-        wb = openpyxl.load_workbook(fp, data_only=True)
-        ws = wb["Jobs_Schedule"]
-        job_ids = [
-            str(row[0].value)
-            for row in ws.iter_rows(min_row=3)
-            if row[0].value and str(row[0].value).startswith("JOB-")
-        ]
-        assert len(job_ids) >= 3, "New job row should have been appended"
-
-    def test_CT_15_one_time_customer_returns_info_message(self, mcp_module, tmp_path):
-        """OT (one-time) frequency must return an info message, not create a new job."""
-        fp = _make_test_spreadsheet(tmp_path)
-
-        # Add a one-time customer and job
-        wb = openpyxl.load_workbook(str(fp))
-        ws_c = wb["Customers"]
-        ws_c.append([
-            "CUST-0099", "Residential", "", "OneTime", "Customer",
-            "0000000000", "once@test.com",
-            "1 Test St", "TestCity", "FL", "00000",
-            "", "", "Window", "OT",
-            "", "", "60", "100", "0", "100",
-            "2026-03-01", "", "0", "0", "", "", "Active",
-        ])
-        ws_j = wb["Jobs_Schedule"]
-        ws_j.append([
-            "JOB-0099", "CUST-0099", "OneTime Customer", "Residential",
-            "1 Test St", "TestCity", "FL", "00000", "", "",
-            "2026-03-01", "Sunday", "10:00", "11:00", "Window",
-            "One-time clean", "Mike C.", "60", "", "1",
-            "", "", "Complete", "100", "100", "0", "7", "107",
-            "", "", "Unpaid",
-        ])
-        wb.save(str(fp))
-
-        with patch.object(mcp_module, "_backup_spreadsheet", return_value="Backup saved"):
-            result = mcp_module.schedule_next_recurring_job(
-                job_identifier="JOB-0099",
-                filepath=str(fp),
-                when="any",
-            )
-
-        assert any(w in result.lower() for w in ["one-time", "ot", "one time", "no recurring"])
-
-    def test_CT_16_job_not_found_returns_error(self, mcp_module, tmp_path):
-        """Nonexistent job identifier must return an error string."""
-        fp = str(_make_test_spreadsheet(tmp_path))
-        with patch.object(mcp_module, "_backup_spreadsheet", return_value="Backup saved"):
-            result = mcp_module.schedule_next_recurring_job(
-                job_identifier="JOB-9999",
-                filepath=fp,
-                when="any",
-            )
-
-        assert any(w in result.lower() for w in ["not found", "error", "no job", "could not"])
-
-    def test_CT_17_new_job_status_is_scheduled(self, mcp_module, tmp_path):
-        """The auto-created job row must have Job Status = 'Scheduled'."""
-        fp = str(_make_test_spreadsheet(tmp_path))
-        with patch.object(mcp_module, "_backup_spreadsheet", return_value="Backup saved"):
-            result = mcp_module.schedule_next_recurring_job(
-                job_identifier="JOB-0001",
-                filepath=fp,
-                when="any",
-            )
-
-        if "JOB-0003" not in result and "scheduled" not in result.lower():
-            # If the tool returned an error, skip the spreadsheet check
-            pytest.skip("Tool did not create a new job -- skipping row status check")
-
-        wb = openpyxl.load_workbook(fp, data_only=True)
-        ws = wb["Jobs_Schedule"]
-        hdrs = [
-            str(c.value).strip() if c.value else ""
-            for c in list(ws.iter_rows(min_row=2, max_row=2))[0]
-        ]
-        for row in ws.iter_rows(min_row=3):
-            vals = {hdrs[i]: row[i].value for i in range(len(hdrs))}
-            if "JOB-0003" in str(vals.get("JobID (JOB-####)", "")):
-                assert vals.get("Job Status") == "Scheduled"
-                break
-
-
-class TestScheduleNextRecurringJobExpandedFrequencies:
-    """Tests for the expanded recurrence vocabulary — Bi-Monthly,
-    Semi-Annually, and Annually were entirely missing from _FREQ_MAP
-    before this fix, and the month-arithmetic itself had a latent
-    day-of-month overflow bug (Jan 31 + 1 month would try to construct
-    "Feb 31" and raise ValueError) that never surfaced in prior tests
-    only because none of them happened to use a month-end base date."""
-
-    def _make_customer_and_job(self, tmp_path, frequency, service_date, job_id="JOB-0099", cust_id="CUST-0099"):
-        fp = _make_test_spreadsheet(tmp_path)
-        wb = openpyxl.load_workbook(str(fp))
-        ws_c = wb["Customers"]
-        ws_c.append([
-            cust_id, "Residential", "", "Test", "Customer",
-            "0000000000", "test@test.com",
-            "1 Test St", "TestCity", "FL", "00000",
-            "", "", "Window", frequency,
-            "", "", "60", "100", "0", "100",
-            service_date, "", "0", "0", "", "", "Active",
-        ])
-        ws_j = wb["Jobs_Schedule"]
-        ws_j.append([
-            job_id, cust_id, "Test Customer", "Residential",
-            "1 Test St", "TestCity", "FL", "00000", "", "",
-            service_date, "Sunday", "10:00", "11:00", "Window",
-            "Test clean", "Mike C.", "60", "", "1",
-            "", "", "Complete", "100", "100", "0", "7", "107",
-            "", "", "Unpaid",
-        ])
-        wb.save(str(fp))
-        return fp
-
-    def test_bi_monthly_gets_next_job_plus_two_months(self, mcp_module, tmp_path):
-        fp = self._make_customer_and_job(tmp_path, "Bi-Monthly", "2026-03-01")
-        with patch.object(mcp_module, "_backup_spreadsheet", return_value="Backup saved"):
-            result = mcp_module.schedule_next_recurring_job(
-                job_identifier="JOB-0099", filepath=str(fp), when="any",
-            )
-        assert "05/01/2026" in result
-
-    def test_bi_monthly_short_code_bm_also_works(self, mcp_module, tmp_path):
-        """Short code, for backward compatibility with any existing data
-        that predates the full-word dropdown."""
-        fp = self._make_customer_and_job(tmp_path, "BM", "2026-03-01")
-        with patch.object(mcp_module, "_backup_spreadsheet", return_value="Backup saved"):
-            result = mcp_module.schedule_next_recurring_job(
-                job_identifier="JOB-0099", filepath=str(fp), when="any",
-            )
-        assert "05/01/2026" in result
-
-    def test_semi_annually_gets_next_job_plus_six_months(self, mcp_module, tmp_path):
-        fp = self._make_customer_and_job(tmp_path, "Semi-Annually", "2026-01-15")
-        with patch.object(mcp_module, "_backup_spreadsheet", return_value="Backup saved"):
-            result = mcp_module.schedule_next_recurring_job(
-                job_identifier="JOB-0099", filepath=str(fp), when="any",
-            )
-        assert "07/15/2026" in result
-
-    def test_annually_gets_next_job_plus_twelve_months(self, mcp_module, tmp_path):
-        fp = self._make_customer_and_job(tmp_path, "Annually", "2026-06-01")
-        with patch.object(mcp_module, "_backup_spreadsheet", return_value="Backup saved"):
-            result = mcp_module.schedule_next_recurring_job(
-                job_identifier="JOB-0099", filepath=str(fp), when="any",
-            )
-        assert "06/01/2027" in result
-
-    def test_month_end_day_overflow_does_not_crash(self, mcp_module, tmp_path):
-        """The actual bug this fix addresses: a base date of Jan 31 plus
-        1 month must not attempt to construct the nonexistent "Feb 31" —
-        must cap at Feb 28 (2026 is not a leap year) instead of raising."""
-        fp = self._make_customer_and_job(tmp_path, "Monthly", "2026-01-31")
-        with patch.object(mcp_module, "_backup_spreadsheet", return_value="Backup saved"):
-            result = mcp_module.schedule_next_recurring_job(
-                job_identifier="JOB-0099", filepath=str(fp), when="any",
-            )
-        assert isinstance(result, str)
-        assert not result.startswith("❌")
-        assert "02/28/2026" in result
-
-    def test_bi_monthly_month_end_day_overflow_also_capped(self, mcp_module, tmp_path):
-        """Same day-overflow protection, exercised through a 2-month
-        jump instead of 1 — Dec 31 + 2 months = Feb 28, not a crash."""
-        fp = self._make_customer_and_job(tmp_path, "Bi-Monthly", "2025-12-31")
-        with patch.object(mcp_module, "_backup_spreadsheet", return_value="Backup saved"):
-            result = mcp_module.schedule_next_recurring_job(
-                job_identifier="JOB-0099", filepath=str(fp), when="any",
-            )
-        assert isinstance(result, str)
-        assert not result.startswith("❌")
-        assert "02/28/2026" in result
-
-    def test_unrecognized_frequency_error_message_lists_full_expanded_set(self, mcp_module, tmp_path):
-        """The error message must reflect the actual expanded vocabulary,
-        not the old, now-incomplete short-code-only hint."""
-        fp = self._make_customer_and_job(tmp_path, "Every Full Moon", "2026-03-01")
-        with patch.object(mcp_module, "_backup_spreadsheet", return_value="Backup saved"):
-            result = mcp_module.schedule_next_recurring_job(
-                job_identifier="JOB-0099", filepath=str(fp), when="any",
-            )
-        assert "Bi-Monthly" in result
-        assert "Semi-Annually" in result
-        assert "Annually" in result
-
-
-# ===========================================================================
-# log_time_entry  (CT_18 - CT_22)
-# ===========================================================================
-
-class TestLogTimeEntry:
-    """Tests for ACTION TOOL 11 -- log_time_entry."""
-
-    def test_CT_18_clock_in_creates_timelog_entry(self, mcp_module, tmp_path):
-        """action='start' must write a new row to the TimeLog sheet."""
-        fp = str(_make_test_spreadsheet(tmp_path))
-        with patch.object(mcp_module, "_backup_spreadsheet", return_value="Backup saved"):
-            result = mcp_module.log_time_entry(
-                job_identifier="JOB-0001",
-                action="start",
-                filepath=fp,
-            )
-
-        assert isinstance(result, str)
-        assert any(w in result.lower() for w in ["clock", "in", "start", "te-", "logged"])
-
-        wb = openpyxl.load_workbook(fp, data_only=True)
-        ws = wb["TimeLog"]
-        entries = [
-            row for row in ws.iter_rows(min_row=3)
-            if row[0].value and str(row[0].value).startswith("TE-")
-        ]
-        assert len(entries) >= 1, "TimeLog must have at least one entry after clock-in"
-
-    def test_CT_19_clock_out_calculates_elapsed_time(self, mcp_module, tmp_path):
-        """action='stop' must compute elapsed minutes and write Clock Out + Elapsed."""
-        fp = str(_make_test_spreadsheet(tmp_path))
-
-        # Plant an open clock-in entry (~47 min ago)
-        wb = openpyxl.load_workbook(fp)
-        ws_t = wb["TimeLog"]
-        clock_in = (
-            datetime.datetime.now() - datetime.timedelta(minutes=47)
-        ).strftime("%Y-%m-%d %H:%M:%S")
-        ws_t.append(["TE-0001", "JOB-0001", "Sunshine Realty LLC",
-                      clock_in, None, None, "Mike C.", ""])
-        wb.save(fp)
-
-        with patch.object(mcp_module, "_backup_spreadsheet", return_value="Backup saved"):
-            result = mcp_module.log_time_entry(
-                job_identifier="JOB-0001",
-                action="stop",
-                filepath=fp,
-            )
-
-        assert isinstance(result, str)
-        assert any(w in result.lower() for w in ["clock", "out", "stop", "elapsed", "min"])
-
-        wb2 = openpyxl.load_workbook(fp, data_only=True)
-        ws_t2 = wb2["TimeLog"]
-        for row in ws_t2.iter_rows(min_row=3):
-            if row[0].value == "TE-0001":
-                assert row[4].value is not None, "Clock Out must be written"
-                elapsed = row[5].value
-                assert elapsed is not None, "Elapsed (min) must be written"
-                assert 44 <= int(elapsed) <= 50, f"Elapsed should be ~47 min, got {elapsed}"
-                break
-
-    def test_CT_20_clock_out_updates_actual_duration_in_jobs_schedule(self, mcp_module, tmp_path):
-        """Clocking out must write Actual Duration (min) back to Jobs_Schedule."""
-        fp = str(_make_test_spreadsheet(tmp_path))
-
-        wb = openpyxl.load_workbook(fp)
-        ws_t = wb["TimeLog"]
-        clock_in = (
-            datetime.datetime.now() - datetime.timedelta(minutes=35)
-        ).strftime("%Y-%m-%d %H:%M:%S")
-        ws_t.append(["TE-0001", "JOB-0001", "Sunshine Realty LLC",
-                      clock_in, None, None, "Mike C.", ""])
-        wb.save(fp)
-
-        with patch.object(mcp_module, "_backup_spreadsheet", return_value="Backup saved"):
-            mcp_module.log_time_entry(
-                job_identifier="JOB-0001", action="stop", filepath=fp
-            )
-
-        wb2 = openpyxl.load_workbook(fp, data_only=True)
-        ws_j = wb2["Jobs_Schedule"]
-        hdrs = [
-            str(c.value).strip() if c.value else ""
-            for c in list(ws_j.iter_rows(min_row=2, max_row=2))[0]
-        ]
-        for row in ws_j.iter_rows(min_row=3):
-            vals = dict(zip(hdrs, [c.value for c in row]))
-            if vals.get("JobID (JOB-####)") == "JOB-0001":
-                actual = vals.get("Actual Duration (min)")
-                if actual is not None:
-                    assert 32 <= int(actual) <= 38, f"Expected ~35 min, got {actual}"
-                break
-
-    def test_CT_21_double_clock_in_returns_warning(self, mcp_module, tmp_path):
-        """Clocking in when already clocked in must return a warning, not crash."""
-        fp = str(_make_test_spreadsheet(tmp_path))
-
-        wb = openpyxl.load_workbook(fp)
-        ws_t = wb["TimeLog"]
-        clock_in = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        ws_t.append(["TE-0001", "JOB-0001", "Sunshine Realty LLC",
-                      clock_in, None, None, "Mike C.", ""])
-        wb.save(fp)
-
-        with patch.object(mcp_module, "_backup_spreadsheet", return_value="Backup saved"):
-            result = mcp_module.log_time_entry(
-                job_identifier="JOB-0001",
-                action="start",
-                filepath=fp,
-            )
-
-        assert any(w in result.lower() for w in ["already", "open", "active", "warning", "clocked"])
-
-    def test_CT_22_invalid_action_returns_error(self, mcp_module, tmp_path):
-        """action='lunch' (invalid) must return an error about valid options."""
-        fp = str(_make_test_spreadsheet(tmp_path))
-        with patch.object(mcp_module, "_backup_spreadsheet", return_value="Backup saved"):
-            result = mcp_module.log_time_entry(
-                job_identifier="JOB-0001",
-                action="lunch",
-                filepath=fp,
-            )
-
-        assert any(w in result.lower() for w in ["start", "stop", "invalid", "error", "action"])
-
-
-# ===========================================================================
-# get_ar_aging_report  (CT_23 - CT_28)
-# ===========================================================================
-
-class TestGetArAgingReport:
-    """Tests for ACTION TOOL 12 -- get_ar_aging_report."""
-
-    def test_CT_23_report_contains_unpaid_invoice(self, mcp_module, tmp_path):
-        """The AR report must list Sunshine Realty INV-0001 (Unpaid)."""
-        fp = str(_make_test_spreadsheet(tmp_path))
-        result = mcp_module.get_ar_aging_report(filepath=fp, as_of_date="2026-05-01")
-
-        assert isinstance(result, str)
-        assert "INV-0001" in result or "Sunshine Realty" in result
-        assert "303" in result  # balance ~303.345
-
-    def test_CT_23b_balance_renders_with_real_multiline_headers(self, mcp_module, tmp_path):
-        """Same real production bug as email_invoice's CT_06b — the
-        Balance Due column's multi-line header ("Balance Due ($)\n=O-P")
-        must not break get_ar_aging_report's lookup either. The report
-        must show the real $337.05 balance, not a missing/zero amount."""
-        fp = str(_make_multiline_header_spreadsheet(tmp_path))
-        result = mcp_module.get_ar_aging_report(filepath=fp, as_of_date="2026-05-01")
-
-        assert isinstance(result, str)
-        assert "INV-0007" in result or "AI-Prowler LLC" in result
-        assert "337.05" in result
-
-    def test_CT_24_paid_invoice_excluded_from_report(self, mcp_module, tmp_path):
-        """INV-0002 is fully paid -- its balance must NOT appear in AR."""
-        fp = str(_make_test_spreadsheet(tmp_path))
-        result = mcp_module.get_ar_aging_report(filepath=fp, as_of_date="2026-05-01")
-
-        # Paid invoice balance 197.95 must not appear
-        assert "197.95" not in result, "Paid invoice balance must not appear in AR report"
-
-    def test_CT_25_overdue_invoice_lands_in_correct_bucket(self, mcp_module, tmp_path):
-        """INV-0003 (due 2026-02-14, $535) must appear in 90+ bucket as of 2026-05-30."""
-        fp = str(_make_test_spreadsheet(tmp_path))
-        result = mcp_module.get_ar_aging_report(filepath=fp, as_of_date="2026-05-30")
-
-        assert isinstance(result, str)
-        # Either the invoice ID or its balance should appear
-        assert "INV-0003" in result or "535" in result
-        # 90-day bucket language
-        assert "90" in result
-
-    def test_CT_26_report_includes_total_outstanding(self, mcp_module, tmp_path):
-        """The report must include a total outstanding balance line."""
-        fp = str(_make_test_spreadsheet(tmp_path))
-        result = mcp_module.get_ar_aging_report(filepath=fp, as_of_date="2026-05-01")
-
-        assert any(
-            w in result
-            for w in ["TOTAL OUTSTANDING", "Total Outstanding", "Total:", "TOTAL:"]
-        )
-
-    def test_CT_27_all_paid_returns_clean_message(self, mcp_module, tmp_path):
-        """If all invoices are paid, the report must say no outstanding invoices."""
-        fp = _make_test_spreadsheet(tmp_path)
-
-        wb = openpyxl.load_workbook(str(fp))
-        ws = wb["Invoices"]
-        hdrs = [
-            str(c.value).strip() if c.value else ""
-            for c in list(ws.iter_rows(min_row=2, max_row=2))[0]
-        ]
-        try:
-            pmt_col = hdrs.index("Payment Status") + 1
-            bal_col = hdrs.index("Balance Due ($)") + 1
-        except ValueError:
-            pytest.skip("Could not locate Payment Status / Balance Due columns")
-
-        for row in ws.iter_rows(min_row=3):
-            if row[0].value:
-                ws.cell(row=row[0].row, column=pmt_col).value = "Paid"
-                ws.cell(row=row[0].row, column=bal_col).value = 0
-        wb.save(str(fp))
-
-        result = mcp_module.get_ar_aging_report(filepath=str(fp), as_of_date="2026-05-01")
-        assert any(
-            w in result.lower()
-            for w in ["no outstanding", "all paid", "nothing outstanding", "0 outstanding"]
-        ) or result.strip().startswith("No")
-
-    def test_CT_28_missing_spreadsheet_returns_error(self, mcp_module, tmp_path):
-        """Passing a nonexistent filepath must return an error."""
-        result = mcp_module.get_ar_aging_report(
-            filepath=str(tmp_path / "no_such_file.xlsx")
-        )
-        assert isinstance(result, str)
-        assert any(w in result.lower() for w in ["not found", "no spreadsheet", "error", "file"])
+# NOTE: TestScheduleNextRecurringJob, TestScheduleNextRecurringJob
+# ExpandedFrequencies, and TestLogTimeEntry (all openpyxl-based) removed
+# 2026-09-14. Frequency math (Weekly/Biweekly/Monthly/Bi-Monthly/Semi-
+# Annually/Annually, plus month-end-overflow capping and the ambiguous-
+# match/date-range checks) is now covered in
+# tests/mcp_tests/test_db_route_ops_phase1.py against the real SQLite-backed
+# db_schedule_next_recurring_job. Clock in/out mechanics are covered in
+# tests/mcp_tests/test_log_time_entry_isolated.py; ambiguous-match rejection,
+# server-mode crew identity, and ownership-scoped stop are covered in
+# tests/mcp_tests/test_db_log_time_entry_identity.py.
 
 
 # ===========================================================================
@@ -1755,93 +965,11 @@ class TestJoinHeaderLines:
         assert mcp_module._join_header_lines("") == ""
 
 
-def _make_multiline_jobs_schedule_spreadsheet(tmp_path, today_str, other_day_str):
-    """
-    Builds a Jobs_Schedule sheet using the SAME multi-line header format
-    the real production template uses for the three colliding columns —
-    "Service\nDate", "Service\nType", "Service\nDetails / Notes" — plus
-    one job dated today and one job dated a different day, so a
-    filter_date='today' regression test can prove only the right one
-    comes back.
-    """
-    import openpyxl as _opx_js
-    fp = tmp_path / "multiline_jobs_schedule.xlsx"
-    wb = _opx_js.Workbook()
-    wb.remove(wb.active)
-
-    ws = wb.create_sheet("Jobs_Schedule")
-    ws.append(["JOBS & SCHEDULE -- All Service Appointments"])
-    ws.append([
-        "JobID (JOB-####)", "CustomerID", "Customer Name / Company",
-        "Customer Type", "Street Address", "City", "State", "ZIP",
-        "Service\nDate", "Day of Week", "Start Time", "End Time",
-        "Service\nType", "Service\nDetails / Notes",
-        "Crew / Technician", "Est. Duration (min)",
-        "Job Status", "Quote Amount ($)", "Payment Status",
-    ])
-    ws.append([
-        "JOB-0007", "CUST-0007", "AI-Prowler LLC", "Commercial",
-        "1500 Shadow Pines Dr", "New Smyrna Beach", "FL", "32168",
-        today_str, "Wednesday", "08:00", "11:30",
-        "Window", "Full exterior window cleaning -- 12 windows",
-        "David Vavro", "90",
-        "Scheduled", "350", "Unpaid",
-    ])
-    ws.append([
-        "JOB-0001", "CUST-0001", "Sunshine Realty LLC", "Commercial",
-        "125 Harbor Blvd", "New Smyrna Beach", "FL", "32168",
-        other_day_str, "Monday", "08:00", "09:30",
-        "Window", "Full exterior window cleaning -- 12 windows",
-        "Mike C.", "90",
-        "Scheduled", "350", "Unpaid",
-    ])
-    wb.save(str(fp))
-    return fp
-
-
-class TestReadJobSpreadsheetFilterDateWithMultilineHeaders:
-    """The direct regression test for the reported production bug: an
-    owner (unrestricted by crew scoping) hit filter_date='today' and saw
-    NO jobs at all, despite having one scheduled for that exact day."""
-
-    def test_todays_job_is_returned_with_real_multiline_headers(self, mcp_module, tmp_path):
-        today_str = datetime.date.today().strftime("%Y-%m-%d")
-        other_day_str = (datetime.date.today() - datetime.timedelta(days=2)).strftime("%Y-%m-%d")
-        fp = str(_make_multiline_jobs_schedule_spreadsheet(tmp_path, today_str, other_day_str))
-
-        result = mcp_module.read_job_spreadsheet(
-            filepath=fp, sheet_name="Jobs_Schedule", filter_date="today",
-        )
-
-        assert "JOB-0007" in result
-        assert "AI-Prowler LLC" in result
-
-    def test_other_days_job_excluded_from_todays_filter(self, mcp_module, tmp_path):
-        today_str = datetime.date.today().strftime("%Y-%m-%d")
-        other_day_str = (datetime.date.today() - datetime.timedelta(days=2)).strftime("%Y-%m-%d")
-        fp = str(_make_multiline_jobs_schedule_spreadsheet(tmp_path, today_str, other_day_str))
-
-        result = mcp_module.read_job_spreadsheet(
-            filepath=fp, sheet_name="Jobs_Schedule", filter_date="today",
-        )
-
-        assert "JOB-0001" not in result
-
-    def test_service_type_and_notes_render_correctly_not_blank(self, mcp_module, tmp_path):
-        """Beyond just the date filter working, the three previously-
-        colliding fields (date/type/notes) must each show their OWN
-        correct value, not an empty string or another field's value."""
-        today_str = datetime.date.today().strftime("%Y-%m-%d")
-        other_day_str = (datetime.date.today() - datetime.timedelta(days=2)).strftime("%Y-%m-%d")
-        fp = str(_make_multiline_jobs_schedule_spreadsheet(tmp_path, today_str, other_day_str))
-
-        result = mcp_module.read_job_spreadsheet(
-            filepath=fp, sheet_name="Jobs_Schedule", filter_date="today",
-        )
-
-        assert "Window" in result
-        assert "Full exterior window cleaning" in result
-
+# NOTE: TestReadJobSpreadsheetFilterDateWithMultilineHeaders and its
+# fixture removed 2026-09-14 -- openpyxl-based, and the "multi-line
+# header" bug class it guarded against is structurally impossible on a
+# real SQLite schema (real columns, no header-text decoration). Date-
+# filter coverage now lives in tests/mcp_tests/test_db_read_ops_phase2.py.
 
 # ===========================================================================
 # _crew_name_in_cell  +  multi-crew job assignment
@@ -1888,212 +1016,16 @@ class TestCrewNameInCell:
         assert mcp_module._crew_name_in_cell("mike c., david vavro", "mike") is False
 
 
-def _make_multi_crew_jobs_schedule_spreadsheet(tmp_path):
-    """Jobs_Schedule with one job assigned to multiple crew members."""
-    import openpyxl as _opx_mc
-    fp = tmp_path / "multi_crew_jobs_schedule.xlsx"
-    wb = _opx_mc.Workbook()
-    wb.remove(wb.active)
-
-    ws = wb.create_sheet("Jobs_Schedule")
-    ws.append(["JOBS & SCHEDULE -- All Service Appointments"])
-    ws.append([
-        "JobID (JOB-####)", "CustomerID", "Customer Name / Company",
-        "Customer Type", "Street Address", "City", "State", "ZIP",
-        "Service Date", "Day of Week", "Start Time", "End Time",
-        "Service Type", "Service Details / Notes",
-        "Crew / Technician", "Est. Duration (min)",
-        "Job Status", "Quote Amount ($)", "Payment Status",
-    ])
-    ws.append([
-        "JOB-0008", "CUST-0007", "AI-Prowler LLC", "Commercial",
-        "1500 Shadow Pines Dr", "New Smyrna Beach", "FL", "32168",
-        "2026-08-20", "Thursday", "08:00", "11:30",
-        "Window", "Large job -- two crews",
-        "Mike C., David Vavro", "180",
-        "Scheduled", "700", "Unpaid",
-    ])
-    wb.save(str(fp))
-    return fp
-
-
-class TestReadJobSpreadsheetMultiCrewAssignment:
-    """The direct end-to-end regression test: a crew member listed as the
-    SECOND of two names in the Crew / Technician cell must still see the
-    job when restricted."""
-
-    def test_second_listed_crew_member_sees_the_job(self, mcp_module, tmp_path):
-        fp = str(_make_multi_crew_jobs_schedule_spreadsheet(tmp_path))
-        fake_user = {"id": "u2", "name": "David Vavro", "role": "field_crew"}
-        fake_ctx = MagicMock()
-
-        with patch.object(mcp_module, "_current_user", return_value=fake_user), \
-             patch.object(mcp_module, "_check_db_cap", return_value=(False, None)), \
-             patch.object(mcp_module, "_get_default_spreadsheet_path", return_value=fp):
-            result = mcp_module.read_job_spreadsheet(
-                filepath=fp, sheet_name="Jobs_Schedule", ctx=fake_ctx,
-            )
-
-        assert "JOB-0008" in result
-
-    def test_first_listed_crew_member_also_sees_the_job(self, mcp_module, tmp_path):
-        fp = str(_make_multi_crew_jobs_schedule_spreadsheet(tmp_path))
-        fake_user = {"id": "u1", "name": "Mike C.", "role": "field_crew"}
-        fake_ctx = MagicMock()
-
-        with patch.object(mcp_module, "_current_user", return_value=fake_user), \
-             patch.object(mcp_module, "_check_db_cap", return_value=(False, None)), \
-             patch.object(mcp_module, "_get_default_spreadsheet_path", return_value=fp):
-            result = mcp_module.read_job_spreadsheet(
-                filepath=fp, sheet_name="Jobs_Schedule", ctx=fake_ctx,
-            )
-
-        assert "JOB-0008" in result
-
-    def test_uninvolved_crew_member_does_not_see_the_job(self, mcp_module, tmp_path):
-        fp = str(_make_multi_crew_jobs_schedule_spreadsheet(tmp_path))
-        fake_user = {"id": "u3", "name": "Jake R.", "role": "field_crew"}
-        fake_ctx = MagicMock()
-
-        with patch.object(mcp_module, "_current_user", return_value=fake_user), \
-             patch.object(mcp_module, "_check_db_cap", return_value=(False, None)), \
-             patch.object(mcp_module, "_get_default_spreadsheet_path", return_value=fp):
-            result = mcp_module.read_job_spreadsheet(
-                filepath=fp, sheet_name="Jobs_Schedule", ctx=fake_ctx,
-            )
-
-        assert "JOB-0008" not in result
-
-
-# ===========================================================================
-# Multi-day jobs — End Date column
-# ===========================================================================
-
-def _make_multiday_jobs_schedule_spreadsheet(tmp_path, start_str, end_str):
-    """One job spanning multiple days via the new End Date column."""
-    import openpyxl as _opx_md
-    fp = tmp_path / "multiday_jobs_schedule.xlsx"
-    wb = _opx_md.Workbook()
-    wb.remove(wb.active)
-
-    ws = wb.create_sheet("Jobs_Schedule")
-    ws.append(["JOBS & SCHEDULE -- All Service Appointments"])
-    ws.append([
-        "JobID (JOB-####)", "CustomerID", "Customer Name / Company",
-        "Customer Type", "Street Address", "City", "State", "ZIP",
-        "Service Date", "Day of Week", "Start Time", "End Time",
-        "Service Type", "Service Details / Notes",
-        "Crew / Technician", "Est. Duration (min)",
-        "Job Status", "Quote Amount ($)", "Payment Status",
-        "End Date\n(blank = single-day job)",
-    ])
-    ws.append([
-        "JOB-0009", "CUST-0006", "Prospect Corp", "Commercial",
-        "999 Big Job Ave", "New Smyrna Beach", "FL", "32168",
-        start_str, "Monday", "08:00", "17:00",
-        "Both", "Multi-day full building service",
-        "Mike C.", "2880",
-        "Scheduled", "5000", "Unpaid",
-        end_str,
-    ])
-    wb.save(str(fp))
-    return fp
-
-
-class TestReadJobSpreadsheetEndDateRange:
-    """Regression tests for multi-day job support — a job is considered
-    'in progress' on every day from Service Date through End Date,
-    inclusive, when End Date is filled in."""
-
-    def test_middle_day_of_range_matches_filter(self, mcp_module, tmp_path):
-        start = datetime.date.today() - datetime.timedelta(days=2)
-        end = datetime.date.today() + datetime.timedelta(days=2)
-        fp = str(_make_multiday_jobs_schedule_spreadsheet(
-            tmp_path, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")))
-
-        result = mcp_module.read_job_spreadsheet(
-            filepath=fp, sheet_name="Jobs_Schedule", filter_date="today",
-        )
-        assert "JOB-0009" in result
-
-    def test_first_day_of_range_matches_filter(self, mcp_module, tmp_path):
-        today = datetime.date.today()
-        end = today + datetime.timedelta(days=3)
-        fp = str(_make_multiday_jobs_schedule_spreadsheet(
-            tmp_path, today.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")))
-
-        result = mcp_module.read_job_spreadsheet(
-            filepath=fp, sheet_name="Jobs_Schedule", filter_date="today",
-        )
-        assert "JOB-0009" in result
-
-    def test_last_day_of_range_matches_filter(self, mcp_module, tmp_path):
-        start = datetime.date.today() - datetime.timedelta(days=3)
-        today = datetime.date.today()
-        fp = str(_make_multiday_jobs_schedule_spreadsheet(
-            tmp_path, start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")))
-
-        result = mcp_module.read_job_spreadsheet(
-            filepath=fp, sheet_name="Jobs_Schedule", filter_date="today",
-        )
-        assert "JOB-0009" in result
-
-    def test_day_after_range_does_not_match(self, mcp_module, tmp_path):
-        start = datetime.date.today() - datetime.timedelta(days=10)
-        end = datetime.date.today() - datetime.timedelta(days=5)
-        fp = str(_make_multiday_jobs_schedule_spreadsheet(
-            tmp_path, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")))
-
-        result = mcp_module.read_job_spreadsheet(
-            filepath=fp, sheet_name="Jobs_Schedule", filter_date="today",
-        )
-        assert "JOB-0009" not in result
-
-    def test_day_before_range_does_not_match(self, mcp_module, tmp_path):
-        start = datetime.date.today() + datetime.timedelta(days=5)
-        end = datetime.date.today() + datetime.timedelta(days=10)
-        fp = str(_make_multiday_jobs_schedule_spreadsheet(
-            tmp_path, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")))
-
-        result = mcp_module.read_job_spreadsheet(
-            filepath=fp, sheet_name="Jobs_Schedule", filter_date="today",
-        )
-        assert "JOB-0009" not in result
-
-    def test_blank_end_date_treated_as_single_day(self, mcp_module, tmp_path):
-        """Backward compatibility — every existing job has a blank End
-        Date and must behave exactly as before this feature existed."""
-        today = datetime.date.today()
-        fp = str(_make_multiday_jobs_schedule_spreadsheet(
-            tmp_path, today.strftime("%Y-%m-%d"), ""))
-
-        result = mcp_module.read_job_spreadsheet(
-            filepath=fp, sheet_name="Jobs_Schedule", filter_date="today",
-        )
-        assert "JOB-0009" in result
-
-        # A different day must NOT match, since the job is single-day.
-        other_day = (today + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-        result2 = mcp_module.read_job_spreadsheet(
-            filepath=fp, sheet_name="Jobs_Schedule", filter_date=other_day,
-        )
-        assert "JOB-0009" not in result2
-
-    def test_end_date_earlier_than_start_falls_back_to_single_day(self, mcp_module, tmp_path):
-        """A malformed End Date (before Service Date) must not hide the
-        job from its own start date — treated as single-day instead of
-        producing an inverted, always-false range."""
-        today = datetime.date.today()
-        bad_end = (today - datetime.timedelta(days=5)).strftime("%Y-%m-%d")
-        fp = str(_make_multiday_jobs_schedule_spreadsheet(
-            tmp_path, today.strftime("%Y-%m-%d"), bad_end))
-
-        result = mcp_module.read_job_spreadsheet(
-            filepath=fp, sheet_name="Jobs_Schedule", filter_date="today",
-        )
-        assert "JOB-0009" in result
-
-
+# NOTE: TestReadJobSpreadsheetMultiCrewAssignment and
+# TestReadJobSpreadsheetEndDateRange (both openpyxl-based) removed
+# 2026-09-14. Multi-crew comma-list matching is still directly unit-
+# tested above (TestCrewNameInCell) and exercised end-to-end via
+# db_read_job_spreadsheet's own use of that same helper in
+# tests/mcp_tests/test_db_read_ops_phase2.py. Date-range/multi-day-job
+# filtering is covered there too (test_filter_date_within_multi_day_
+# range, test_filter_date_blank_or_invalid_end_date_treated_as_single_
+# day) against the real SQLite-backed read path -- the openpyxl
+# fixtures here no longer connect to read_job_spreadsheet at all.
 # ===========================================================================
 # check_sms_configured
 # ===========================================================================

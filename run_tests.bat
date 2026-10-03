@@ -10,7 +10,7 @@ REM
 REM  DEFAULT RUN (safe — no real Cloudflare tunnels or live Worker):
 REM    run_tests.bat                                        — run all safe tests
 REM    run_tests.bat tests\gui\                             — run GUI tests only
-REM    run_tests.bat tests\mcp\                             — run MCP tests only
+REM    run_tests.bat tests\mcp_tests\                             — run MCP tests only
 REM    run_tests.bat tests\unit\                            — run unit tests only
 REM    run_tests.bat tests\subscription\                    — subscription mocks only
 REM    run_tests.bat tests\analysis\                        — AI analysis tests
@@ -70,10 +70,65 @@ REM was invoked with no arguments, alongside AIPROWLER_TEST_STATE_DIR
 REM sandboxing that makes those specific tests hang instead of failing
 REM cleanly. Single source of truth for the exclusion list is now
 REM pytest.ini alone — update it there, never re-add an -m here.
-if "%~1"=="" (
-    "%PYTHON%" -m pytest tests\ -v
-) else (
-    "%PYTHON%" -m pytest %*
-)
+REM ── Log file (2026-09-24) ────────────────────────────────────────────────
+REM Screen output was the ONLY record of a test run — closed the window or
+REM scrolled past it and it was gone. Every run now ALSO writes a full copy
+REM to test_logs\ next to this script, timestamped so runs don't overwrite
+REM each other. %~dp0 (this script's own directory) is used rather than a
+REM hardcoded path so this works identically whether run from the dev
+REM working copy or a real install — it never needs its own entry in
+REM update_install.bat/MANIFEST_FILES/AI-Prowler-Setup.iss the way an
+REM app source file would, since it's a dev-only tool, not something an
+REM end-user install ships (see run_tests.bat's absence from those three
+REM lists — deliberate, not an oversight of the kind mcp_tool_catalog.py
+REM was).
+REM
+REM Piped through PowerShell's Tee-Object for simultaneous screen+file
+REM output (cmd.exe has no built-in tee). This is NOT a naive
+REM "pytest | powershell" pipe, which would silently lose pytest's real
+REM exit code (a plain pipe's errorlevel reflects the LAST stage, i.e.
+REM Tee-Object's, not pytest's) — that would be a serious regression,
+REM since release_gate.bat's Suite 4 calls this script and reads
+REM %ERRORLEVEL% immediately after to decide pass/fail. Instead, a single
+REM PowerShell invocation runs pytest itself via the native call operator
+REM (&), pipes ITS OWN output to Tee-Object, then explicitly
+REM "exit $LASTEXITCODE". $LASTEXITCODE is only ever set by a native
+REM executable (pytest.exe/python.exe here) — Tee-Object is a cmdlet and
+REM never touches it — so it still holds pytest's real exit code right up
+REM until powershell.exe exits with it, which is exactly the value
+REM run_tests.bat's own caller sees in %ERRORLEVEL% afterward. Verified
+REM against release_gate.bat's own Suite 4 usage before shipping this.
+set "LOGDIR=%~dp0test_logs"
+if not exist "%LOGDIR%" mkdir "%LOGDIR%" >nul 2>&1
+set "STAMP=%date:~-4%%date:~4,2%%date:~7,2%_%time:~0,2%%time:~3,2%%time:~6,2%"
+set "STAMP=%STAMP: =0%"
+set "LOGFILE=%LOGDIR%\test_run_%STAMP%.log"
 
-endlocal
+REM 2026-09-24, second fix: the ForEach-Object + per-line Add-Content
+REM approach above (kept here in this comment for the record) turned out to
+REM have a real problem on a full, verbose, 5000+-test run: Add-Content
+REM opens, seeks-to-end, writes, and closes the file EVERY SINGLE LINE —
+REM for thousands of lines that's thousands of file-handle round trips,
+REM slow enough that the run appeared to never print its final summary at
+REM all (reported directly: "did not print the end result"). Tee-Object
+REM keeps ONE file handle open for the whole pipeline — dramatically
+REM cheaper — so it's back in use for the live tee; its missing -Encoding
+REM parameter (confirmed absent on this machine's PowerShell, see the
+REM earlier comment in git history) is instead solved by a single,
+REM one-time UTF-16LE -> UTF-8 conversion pass AFTER the run finishes,
+REM rather than per-line during it.
+set "LOGFILE_RAW=%LOGFILE%.rawutf16"
+if "%~1"=="" (
+    powershell -NoProfile -Command "& '%PYTHON%' -m pytest tests\ -v 2>&1 | Tee-Object -FilePath '%LOGFILE_RAW%'; exit $LASTEXITCODE"
+) else (
+    powershell -NoProfile -Command "& '%PYTHON%' -m pytest %* 2>&1 | Tee-Object -FilePath '%LOGFILE_RAW%'; exit $LASTEXITCODE"
+)
+set "TEST_RC=%ERRORLEVEL%"
+
+powershell -NoProfile -Command "(Get-Content -Path '%LOGFILE_RAW%' -Encoding Unicode) | Set-Content -Path '%LOGFILE%' -Encoding utf8" >nul 2>&1
+del "%LOGFILE_RAW%" >nul 2>&1
+
+echo.
+echo [run_tests] Full log saved to: %LOGFILE%
+
+endlocal & exit /b %TEST_RC%

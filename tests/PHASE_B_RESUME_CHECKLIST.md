@@ -30,7 +30,7 @@ the turnkey sequence to bank it, prove it, and continue.
 - `_user_has_role`, `_is_admin` (admin gate)
 - `_format_audit_entry`, `_filter_audit_entries` (audit helpers)
 
-**Tests** — all appended to `tests/mcp/test_edition_activation.py`, skip-if-absent:
+**Tests** — all appended to `tests/mcp_tests/test_edition_activation.py`, skip-if-absent:
 - 14 license-grace (C-MCP-LICENSE-01..14)
 - 27 multi-user (C-MCP-MU-01..29)
 - ~12 admin/audit (C-MCP-ADMIN-01..16)
@@ -55,8 +55,8 @@ Run `git status` in each repo, then add the SPECIFIC changed files (avoid
 `git add -A` — the work tree has python-*.exe, __pycache__, Output/, *.bak).
 
 ### Work tree: C:\Users\david\AI-Prowler_V602_to_V700_work\AI-Prowler
-Changed: `ai_prowler_mcp.py`, `rag_gui.py`, `tests/mcp/test_write_tools.py`,
-`tests/mcp/test_edition_activation.py`, `tests/PHASE_A_PRIME_TEST_PLAN.md`
+Changed: `ai_prowler_mcp.py`, `rag_gui.py`, `tests/mcp_tests/test_write_tools.py`,
+`tests/mcp_tests/test_edition_activation.py`, `tests/PHASE_A_PRIME_TEST_PLAN.md`
 (Note: ai_prowler_mcp.py now also has the dev-check tools + Block 2/3 helpers,
 beyond the Phase A' commit message drafted earlier — re-draft the message.)
 Also delete scratch: `tests/_crlf_live_check.py`, `tests/_fix_verify.py` (+ .bak)

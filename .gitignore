@@ -122,6 +122,11 @@ $RECYCLE.BIN/
 # Match both ".bak" and AI-Prowler's monotonic ".bak1", ".bak2", ... format
 *.bak
 *.bak*
+
+# Jobs-app Playwright E2E suite (tests/JOBS_APP_E2E_TEST_SPEC.md §7): per-run
+# logs, traces, screenshots, videos and the saved login state.
+tests/gui_jobs_e2e/artifacts/
+tests/gui_jobs_e2e/.auth/
 *.orig
 *.pid
 

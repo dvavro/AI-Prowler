@@ -448,7 +448,9 @@ else:
 print(f"\n{'8. MCP Server Log (last 40 lines)':}")
 print(SEP2)
 
-log_path = Path.home() / "AppData" / "Local" / "AI-Prowler" / "mcp_server.log"
+# The HTTP server's log (2026-10-02: this pointed at AppData\Local\AI-Prowler,
+# where the log has never been written, so this section always said "not found").
+log_path = Path.home() / ".ai-prowler" / "logs" / "mcp_server.log"
 _kv("Log path", str(log_path))
 
 if log_path.exists():

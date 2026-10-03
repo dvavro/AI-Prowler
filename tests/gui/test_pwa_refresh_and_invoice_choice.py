@@ -32,7 +32,19 @@ def pwa_source():
 class TestJobsRefreshButton:
     def test_refresh_button_present_in_jobs_screen(self, pwa_source):
         idx = pwa_source.index('id="screen-jobs"')
-        nearby = pwa_source[idx:idx + 600]
+        # 2026-09-24: widened from 600 to 1200, then (after that guess proved
+        # 77 characters short and this test failed AGAIN) verified precisely
+        # and widened to 1500. The getting-started wizard trigger button
+        # (id="jobsWizardBtn", added 2026-09-23 at the owner's request) was
+        # inserted immediately after "screen-jobs" and before the Add/Refresh
+        # button row, pushing refreshJobsBtn further from the start of this
+        # window. The button itself is untouched (jobs/index.html:379 as of
+        # this fix) -- only its position moved. Measured directly rather than
+        # guessed this time: the real distance from 'id="screen-jobs"' to the
+        # end of 'id="refreshJobsBtn"' is 1277 characters -- 1500 leaves
+        # genuine headroom for a future small addition in between, rather
+        # than being exactly tight against today's measurement.
+        nearby = pwa_source[idx:idx + 1500]
         assert 'id="refreshJobsBtn"' in nearby
         assert 'onclick="loadJobs()"' in nearby
 

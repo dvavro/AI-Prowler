@@ -3,7 +3,7 @@ Shared fixtures for self-learning tests.
 
 Pytest auto-discovers conftest.py files by walking UP the directory tree,
 not across siblings. So fixtures defined in tests/learning/conftest.py
-are invisible to tests/mcp/ and tests/gui/.
+are invisible to tests/mcp_tests/ and tests/gui/.
 
 The standard solution would be to put the fixtures in the parent's
 tests/conftest.py, but that would force you to manually merge them with

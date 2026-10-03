@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 
-# Path comparison helper — see explanation in tests/mcp/test_mcp_tools.py.
+# Path comparison helper — see explanation in tests/mcp_tests/test_mcp_tools.py.
 # Repeated here to keep gui/ self-contained (no cross-test-package imports).
 def _canon(p: str) -> str:
     return os.path.normcase(os.path.abspath(p))

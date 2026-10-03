@@ -1,0 +1,9 @@
+state: {'now': '2026-10-05T07:00:03', 'today': '2026-10-05', 'sandbox': 'C:\\Users\\david\\AppData\\Local\\Temp\\ap_timemachine_162t3nbq\\.ai-prowler'}
+api ok: True 📋 Settings |    5 row(s) | ──────────────────────────────────────────────────────────── |  |   Setting: Route Origin Mode |   Value: Jobs Only |   Notes: Jobs Only (default) = the route is your scheduled jobs in 
+clock -> {'now': '2026-10-12T07:30:00'}
+morning briefing: 2026-10-12 ☀️ Morning Briefing — Monday, October 12
+create_customer: {"ok": false, "error": "create_customer() got an unexpected keyword argument 'fields'"}
+check_email_configured: ✅ Email configured
+check_sms_configured: ✅ SMS configured
+outbox: []
+sandbox: C:\Users\david\AppData\Local\Temp\ap_timemachine_162t3nbq

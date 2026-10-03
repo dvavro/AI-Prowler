@@ -1,0 +1,9 @@
+{
+  "_note": "Server-mode E2E users (spec §6.11.3). Names and roles only — NEVER put a token here. Each token lives in the Windows user environment variable named by token_env.",
+  "url_env": "AIPROWLER_SRV_URL",
+  "users": [
+    {"key": "U1", "name": "David Vavro", "token_env": "AIPROWLER_SRV_TOKEN_U1"},
+    {"key": "U2", "name": "Vicki Vavro", "token_env": "AIPROWLER_SRV_TOKEN_U2"},
+    {"key": "U3", "name": "Samual Cronin", "token_env": "AIPROWLER_SRV_TOKEN_U3"}
+  ]
+}

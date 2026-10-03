@@ -43,7 +43,19 @@ import file_watchdog
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_wcs01_oskill_exception_diagnosis(capsys):
-    """Diagnostic — prints what os.kill raises on this machine. Always passes."""
+    """Diagnostic — prints what os.kill raises on this machine. Always passes.
+
+    NEVER call os.kill(pid, 0) for real on Windows (2026-10-01): there signal 0
+    is CTRL_C_EVENT, so it sends a Ctrl+C to the whole console. That killed the
+    PowerShell Tee-Object pipe in run_tests.bat — every full run lost its end
+    summary (failures + warnings) right after this test, and the raw log was
+    never converted. file_watchdog.is_running() already skips os.kill on
+    Windows for the same reason, so there is nothing to diagnose there."""
+    import signal
+    if sys.platform == "win32":
+        assert getattr(signal, "CTRL_C_EVENT", 0) == 0   # why we must not send it
+        print("\nWCS-01: skipped on Windows — os.kill(pid, 0) would send Ctrl+C")
+        return
     pid = os.getpid()
     try:
         os.kill(pid, 0)

@@ -1,0 +1,1094 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8"/>
+    <title id="head-title">report.html</title>
+      <style type="text/css">body {
+  font-family: Helvetica, Arial, sans-serif;
+  font-size: 12px;
+  /* do not increase min-width as some may use split screens */
+  min-width: 800px;
+  color: #999;
+}
+
+h1 {
+  font-size: 24px;
+  color: black;
+}
+
+h2 {
+  font-size: 16px;
+  color: black;
+}
+
+p {
+  color: black;
+}
+
+a {
+  color: #999;
+}
+
+table {
+  border-collapse: collapse;
+}
+
+/******************************
+ * SUMMARY INFORMATION
+ ******************************/
+#environment td {
+  padding: 5px;
+  border: 1px solid #e6e6e6;
+  vertical-align: top;
+}
+#environment tr:nth-child(odd) {
+  background-color: #f6f6f6;
+}
+#environment ul {
+  margin: 0;
+  padding: 0 20px;
+}
+
+/******************************
+ * TEST RESULT COLORS
+ ******************************/
+span.passed,
+.passed .col-result {
+  color: green;
+}
+
+span.skipped,
+span.xfailed,
+span.rerun,
+.skipped .col-result,
+.xfailed .col-result,
+.rerun .col-result {
+  color: orange;
+}
+
+span.error,
+span.failed,
+span.xpassed,
+.error .col-result,
+.failed .col-result,
+.xpassed .col-result {
+  color: red;
+}
+
+.col-links__extra {
+  margin-right: 3px;
+}
+
+/******************************
+ * RESULTS TABLE
+ *
+ * 1. Table Layout
+ * 2. Extra
+ * 3. Sorting items
+ *
+ ******************************/
+/*------------------
+ * 1. Table Layout
+ *------------------*/
+#results-table {
+  border: 1px solid #e6e6e6;
+  color: #999;
+  font-size: 12px;
+  width: 100%;
+}
+#results-table th,
+#results-table td {
+  padding: 5px;
+  border: 1px solid #e6e6e6;
+  text-align: left;
+}
+#results-table th {
+  font-weight: bold;
+}
+
+/*------------------
+ * 2. Extra
+ *------------------*/
+.logwrapper {
+  max-height: 230px;
+  overflow-y: scroll;
+  background-color: #e6e6e6;
+}
+.logwrapper.expanded {
+  max-height: none;
+}
+.logwrapper.expanded .logexpander:after {
+  content: "collapse [-]";
+}
+.logwrapper .logexpander {
+  z-index: 1;
+  position: sticky;
+  top: 10px;
+  width: max-content;
+  border: 1px solid;
+  border-radius: 3px;
+  padding: 5px 7px;
+  margin: 10px 0 10px calc(100% - 80px);
+  cursor: pointer;
+  background-color: #e6e6e6;
+}
+.logwrapper .logexpander:after {
+  content: "expand [+]";
+}
+.logwrapper .logexpander:hover {
+  color: #000;
+  border-color: #000;
+}
+.logwrapper .log {
+  min-height: 40px;
+  position: relative;
+  top: -50px;
+  height: calc(100% + 50px);
+  border: 1px solid #e6e6e6;
+  color: black;
+  display: block;
+  font-family: "Courier New", Courier, monospace;
+  padding: 5px;
+  padding-right: 80px;
+  white-space: pre-wrap;
+}
+
+div.media {
+  border: 1px solid #e6e6e6;
+  float: right;
+  height: 240px;
+  margin: 0 5px;
+  overflow: hidden;
+  width: 320px;
+}
+
+.media-container {
+  display: grid;
+  grid-template-columns: 25px auto 25px;
+  align-items: center;
+  flex: 1 1;
+  overflow: hidden;
+  height: 200px;
+}
+
+.media-container--fullscreen {
+  grid-template-columns: 0px auto 0px;
+}
+
+.media-container__nav--right,
+.media-container__nav--left {
+  text-align: center;
+  cursor: pointer;
+}
+
+.media-container__viewport {
+  cursor: pointer;
+  text-align: center;
+  height: inherit;
+}
+.media-container__viewport img,
+.media-container__viewport video {
+  object-fit: cover;
+  width: 100%;
+  max-height: 100%;
+}
+
+.media__name,
+.media__counter {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-around;
+  flex: 0 0 25px;
+  align-items: center;
+}
+
+.collapsible td:not(.col-links) {
+  cursor: pointer;
+}
+.collapsible td:not(.col-links):hover::after {
+  color: #bbb;
+  font-style: italic;
+  cursor: pointer;
+}
+
+.col-result {
+  width: 130px;
+}
+.col-result:hover::after {
+  content: " (hide details)";
+}
+
+.col-result.collapsed:hover::after {
+  content: " (show details)";
+}
+
+#environment-header h2:hover::after {
+  content: " (hide details)";
+  color: #bbb;
+  font-style: italic;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+#environment-header.collapsed h2:hover::after {
+  content: " (show details)";
+  color: #bbb;
+  font-style: italic;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+/*------------------
+ * 3. Sorting items
+ *------------------*/
+.sortable {
+  cursor: pointer;
+}
+.sortable.desc:after {
+  content: " ";
+  position: relative;
+  left: 5px;
+  bottom: -12.5px;
+  border: 10px solid #4caf50;
+  border-bottom: 0;
+  border-left-color: transparent;
+  border-right-color: transparent;
+}
+.sortable.asc:after {
+  content: " ";
+  position: relative;
+  left: 5px;
+  bottom: 12.5px;
+  border: 10px solid #4caf50;
+  border-top: 0;
+  border-left-color: transparent;
+  border-right-color: transparent;
+}
+
+.hidden, .summary__reload__button.hidden {
+  display: none;
+}
+
+.summary__data {
+  flex: 0 0 550px;
+}
+.summary__reload {
+  flex: 1 1;
+  display: flex;
+  justify-content: center;
+}
+.summary__reload__button {
+  flex: 0 0 300px;
+  display: flex;
+  color: white;
+  font-weight: bold;
+  background-color: #4caf50;
+  text-align: center;
+  justify-content: center;
+  align-items: center;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.summary__reload__button:hover {
+  background-color: #46a049;
+}
+.summary__spacer {
+  flex: 0 0 550px;
+}
+
+.controls {
+  display: flex;
+  justify-content: space-between;
+}
+
+.filters,
+.collapse {
+  display: flex;
+  align-items: center;
+}
+.filters button,
+.collapse button {
+  color: #999;
+  border: none;
+  background: none;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.filters button:hover,
+.collapse button:hover {
+  color: #ccc;
+}
+
+.filter__label {
+  margin-right: 10px;
+}
+
+      </style>
+    
+  </head>
+  <body>
+    <h1 id="title">report.html</h1>
+    <p>Report generated on 03-Oct-2026 at 09:39:09 by <a href="https://pypi.python.org/pypi/pytest-html">pytest-html</a>
+        v4.2.0</p>
+    <div id="environment-header">
+      <h2>Environment</h2>
+    </div>
+    <table id="environment"></table>
+    <!-- TEMPLATES -->
+      <template id="template_environment_row">
+      <tr>
+        <td></td>
+        <td></td>
+      </tr>
+    </template>
+    <template id="template_results-table__body--empty">
+      <tbody class="results-table-row">
+        <tr id="not-found-message">
+          <td colspan="4">No results found. Check the filters.</td>
+        </tr>
+      </tbody>
+    </template>
+    <template id="template_results-table__tbody">
+      <tbody class="results-table-row">
+        <tr class="collapsible">
+        </tr>
+        <tr class="extras-row">
+          <td class="extra" colspan="4">
+            <div class="extraHTML"></div>
+            <div class="media">
+              <div class="media-container">
+                  <div class="media-container__nav--left">&lt;</div>
+                  <div class="media-container__viewport">
+                    <img src="" />
+                    <video controls>
+                      <source src="" type="video/mp4">
+                    </video>
+                  </div>
+                  <div class="media-container__nav--right">&gt;</div>
+                </div>
+                <div class="media__name"></div>
+                <div class="media__counter"></div>
+            </div>
+            <div class="logwrapper">
+              <div class="logexpander"></div>
+              <div class="log"></div>
+            </div>
+          </td>
+        </tr>
+      </tbody>
+    </template>
+    <!-- END TEMPLATES -->
+    <div class="summary">
+      <div class="summary__data">
+        <h2>Summary</h2>
+        <div class="additional-summary prefix">
+        </div>
+        <p class="run-count">11 tests took 00:03:22.</p>
+        <p class="filter">(Un)check the boxes to filter the results.</p>
+        <div class="summary__reload">
+          <div class="summary__reload__button hidden" onclick="location.reload()">
+            <div>There are still tests running. <br />Reload this page to get the latest results!</div>
+          </div>
+        </div>
+        <div class="summary__spacer"></div>
+        <div class="controls">
+          <div class="filters">
+            <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="failed" disabled>
+            <span class="failed">0 Failed,</span>
+            <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="passed" >
+            <span class="passed">11 Passed,</span>
+            <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="skipped" disabled>
+            <span class="skipped">0 Skipped,</span>
+            <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="xfailed" disabled>
+            <span class="xfailed">0 Expected failures,</span>
+            <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="xpassed" disabled>
+            <span class="xpassed">0 Unexpected passes,</span>
+            <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="error" disabled>
+            <span class="error">0 Errors,</span>
+            <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="rerun" disabled>
+            <span class="rerun">0 Reruns</span>
+            <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="retried" disabled>
+            <span class="retried">0 Retried,</span>
+          </div>
+          <div class="collapse">
+            <button id="show_all_details">Show all details</button>&nbsp;/&nbsp;<button id="hide_all_details">Hide all details</button>
+          </div>
+        </div>
+      </div>
+      <div class="additional-summary summary">
+      </div>
+      <div class="additional-summary postfix">
+      </div>
+    </div>
+    <table id="results-table">
+      <thead id="results-table-head">
+        <tr>
+          <th class="sortable" data-column-type="result">Result</th>
+          <th class="sortable" data-column-type="testId">Test</th>
+          <th class="sortable" data-column-type="duration">Duration</th>
+          <th>Links</th>
+        </tr>
+      </thead>
+    </table>
+  <footer>
+    <div id="data-container" data-jsonblob="{&#34;environment&#34;: {&#34;Python&#34;: &#34;3.11.8&#34;, &#34;Platform&#34;: &#34;Windows-10-10.0.26200-SP0&#34;, &#34;Packages&#34;: {&#34;pytest&#34;: &#34;9.1.1&#34;, &#34;pluggy&#34;: &#34;1.6.0&#34;}, &#34;Plugins&#34;: {&#34;anyio&#34;: &#34;4.14.2&#34;, &#34;asyncio&#34;: &#34;1.4.0&#34;, &#34;base-url&#34;: &#34;2.1.0&#34;, &#34;html&#34;: &#34;4.2.0&#34;, &#34;metadata&#34;: &#34;3.1.1&#34;, &#34;mock&#34;: &#34;3.15.1&#34;, &#34;playwright&#34;: &#34;0.9.0&#34;, &#34;rerunfailures&#34;: &#34;16.7&#34;, &#34;time-machine&#34;: &#34;3.5.1&#34;}, &#34;Base URL&#34;: &#34;&#34;}, &#34;tests&#34;: {&#34;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_01_setup_day_zero[chromium]&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_01_setup_day_zero[chromium]&#34;, &#34;duration&#34;: &#34;00:00:04&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_01_setup_day_zero[chromium]&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;00:00:04&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;------------------------------ Captured log setup ------------------------------\nINFO     e2e:conftest.py:51 [(session)] TIME MACHINE up (server mode): http://127.0.0.1:65528/jobs/ (control :65529) sandbox C:\\Users\\david\\AI-Prowler-V910_to_V920_work\\AI-Prowler\\tests\\gui_jobs_timemachine\\artifacts\\server\\20261003_093546\\sandbox_home\\.ai-prowler today 2026-10-05\nINFO     e2e:conftest.py:51 [(session)] server users logged in: [owner \u00b7 ZT Owner \u00b7 owner, manager \u00b7 ZT Manager \u00b7 manager, staff \u00b7 ZT Office Sam \u00b7 staff, alex \u00b7 ZT Crew Alex \u00b7 field_crew, bea \u00b7 ZT Crew Bea \u00b7 field_crew]\nINFO     e2e:conftest.py:51 [test_TM_01_setup_day_zero[chromium]] ===== START gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_01_setup_day_zero[chromium]\n\n------------------------------ Captured log call -------------------------------\nINFO     e2e:conftest.py:51 [test_TM_01_setup_day_zero[chromium]] \u23f0 CLOCK -&amp;gt; Mon 2026-10-05 06:30\nINFO     e2e:test_tm_six_weeks.py:387 [TM] day 0 = Mon 2026-10-05; end = Fri 2026-11-13; customers {&amp;#x27;A&amp;#x27;: &amp;#x27;CUST-0001&amp;#x27;, &amp;#x27;B&amp;#x27;: &amp;#x27;CUST-0002&amp;#x27;, &amp;#x27;C&amp;#x27;: &amp;#x27;CUST-0003&amp;#x27;, &amp;#x27;D&amp;#x27;: &amp;#x27;CUST-0004&amp;#x27;, &amp;#x27;E&amp;#x27;: &amp;#x27;CUST-0005&amp;#x27;, &amp;#x27;F&amp;#x27;: &amp;#x27;CUST-0006&amp;#x27;}\n\n---------------------------- Captured log teardown -----------------------------\nINFO     e2e:conftest.py:51 [test_TM_01_setup_day_zero[chromium]] ===== END   gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_01_setup_day_zero[chromium]&#34;}], &#34;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_02_day_one_in_the_app[chromium]&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_02_day_one_in_the_app[chromium]&#34;, &#34;duration&#34;: &#34;00:00:04&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_02_day_one_in_the_app[chromium]&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;00:00:04&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;------------------------------ Captured log setup ------------------------------\nINFO     e2e:conftest.py:51 [test_TM_02_day_one_in_the_app[chromium]] ===== START gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_02_day_one_in_the_app[chromium]\nINFO     e2e:conftest.py:51 [test_TM_02_day_one_in_the_app[chromium]] browser logged in as alex \u00b7 ZT Crew Alex \u00b7 field_crew\nINFO     e2e:conftest.py:51 [test_TM_02_day_one_in_the_app[chromium]] STEP open http://127.0.0.1:65528/jobs/\n\n------------------------------ Captured log call -------------------------------\nINFO     e2e:conftest.py:51 [test_TM_02_day_one_in_the_app[chromium]] \u23f0 CLOCK -&amp;gt; Mon 2026-10-05 07:00\nINFO     e2e:conftest.py:51 [test_TM_02_day_one_in_the_app[chromium]] STEP go to screen &amp;#x27;route&amp;#x27;\nINFO     e2e:conftest.py:51 [test_TM_02_day_one_in_the_app[chromium]] ROUTE pick date 2026-10-05\nINFO     e2e:conftest.py:51 [test_TM_02_day_one_in_the_app[chromium]] TM day 1 (Mon 10/05) \u2014 Route tab shows [&amp;#x27;JOB-0001&amp;#x27;]\nINFO     e2e:conftest.py:51 [test_TM_02_day_one_in_the_app[chromium]] \u23f0 CLOCK -&amp;gt; Mon 2026-10-05 09:00\nINFO     e2e:conftest.py:51 [test_TM_02_day_one_in_the_app[chromium]] \u23f0 CLOCK -&amp;gt; Mon 2026-10-05 09:50\n\n---------------------------- Captured log teardown -----------------------------\nINFO     e2e:conftest.py:51 [test_TM_02_day_one_in_the_app[chromium]] ===== END   gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_02_day_one_in_the_app[chromium]&#34;}], &#34;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_03_walk_to_the_overrun[chromium]&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_03_walk_to_the_overrun[chromium]&#34;, &#34;duration&#34;: &#34;00:00:11&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_03_walk_to_the_overrun[chromium]&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;00:00:11&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;------------------------------ Captured log setup ------------------------------\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] ===== START gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_03_walk_to_the_overrun[chromium]\n\n------------------------------ Captured log call -------------------------------\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Tue 2026-10-06 07:00\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Tue 2026-10-06 09:00\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Tue 2026-10-06 09:50\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Wed 2026-10-07 07:00\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Wed 2026-10-07 09:00\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Wed 2026-10-07 09:50\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Wed 2026-10-07 10:00\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Wed 2026-10-07 10:50\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Thu 2026-10-08 07:00\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Thu 2026-10-08 09:00\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Thu 2026-10-08 09:50\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Thu 2026-10-08 10:00\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Thu 2026-10-08 10:50\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Fri 2026-10-09 07:00\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Fri 2026-10-09 09:00\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Fri 2026-10-09 09:50\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Sat 2026-10-10 07:00\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Mon 2026-10-12 07:00\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Mon 2026-10-12 09:00\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Mon 2026-10-12 09:50\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Mon 2026-10-12 10:00\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Mon 2026-10-12 10:50\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Tue 2026-10-13 07:00\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Wed 2026-10-14 07:00\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Wed 2026-10-14 09:00\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] \u23f0 CLOCK -&amp;gt; Wed 2026-10-14 09:50\n\n---------------------------- Captured log teardown -----------------------------\nINFO     e2e:conftest.py:51 [test_TM_03_walk_to_the_overrun[chromium]] ===== END   gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_03_walk_to_the_overrun[chromium]&#34;}], &#34;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_04_overrun_carries_to_the_next_day[chromium]&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_04_overrun_carries_to_the_next_day[chromium]&#34;, &#34;duration&#34;: &#34;00:00:12&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_04_overrun_carries_to_the_next_day[chromium]&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;00:00:12&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;------------------------------ Captured log setup ------------------------------\nINFO     e2e:conftest.py:51 [test_TM_04_overrun_carries_to_the_next_day[chromium]] ===== START gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_04_overrun_carries_to_the_next_day[chromium]\nINFO     e2e:conftest.py:51 [test_TM_04_overrun_carries_to_the_next_day[chromium]] browser logged in as alex \u00b7 ZT Crew Alex \u00b7 field_crew\nINFO     e2e:conftest.py:51 [test_TM_04_overrun_carries_to_the_next_day[chromium]] STEP open http://127.0.0.1:65528/jobs/\n\n------------------------------ Captured log call -------------------------------\nINFO     e2e:conftest.py:51 [test_TM_04_overrun_carries_to_the_next_day[chromium]] \u23f0 CLOCK -&amp;gt; Thu 2026-10-15 07:00\nINFO     e2e:conftest.py:51 [test_TM_04_overrun_carries_to_the_next_day[chromium]] browser clock -&amp;gt; Thu 2026-10-15 07:00\nINFO     e2e:conftest.py:51 [test_TM_04_overrun_carries_to_the_next_day[chromium]] STEP go to screen &amp;#x27;route&amp;#x27;\nINFO     e2e:conftest.py:51 [test_TM_04_overrun_carries_to_the_next_day[chromium]] ROUTE pick date 2026-10-15\nINFO     e2e:conftest.py:51 [test_TM_04_overrun_carries_to_the_next_day[chromium]] TM Thu 10/15: the unfinished JOB-0008 (C) is on today&amp;#x27;s route\nINFO     e2e:conftest.py:51 [test_TM_04_overrun_carries_to_the_next_day[chromium]] \u23f0 CLOCK -&amp;gt; Thu 2026-10-15 09:00\nINFO     e2e:conftest.py:51 [test_TM_04_overrun_carries_to_the_next_day[chromium]] \u23f0 CLOCK -&amp;gt; Thu 2026-10-15 09:50\n\n---------------------------- Captured log teardown -----------------------------\nINFO     e2e:conftest.py:51 [test_TM_04_overrun_carries_to_the_next_day[chromium]] ===== END   gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_04_overrun_carries_to_the_next_day[chromium]&#34;}], &#34;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_05_walk_to_the_end[chromium]&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_05_walk_to_the_end[chromium]&#34;, &#34;duration&#34;: &#34;00:02:47&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_05_walk_to_the_end[chromium]&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;00:02:47&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;------------------------------ Captured log setup ------------------------------\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] ===== START gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_05_walk_to_the_end[chromium]\n\n------------------------------ Captured log call -------------------------------\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Fri 2026-10-16 07:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Fri 2026-10-16 09:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Fri 2026-10-16 09:50\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Mon 2026-10-19 07:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Mon 2026-10-19 09:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Mon 2026-10-19 09:50\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Tue 2026-10-20 07:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Tue 2026-10-20 09:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Tue 2026-10-20 09:50\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Wed 2026-10-21 07:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Wed 2026-10-21 09:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Wed 2026-10-21 09:50\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Thu 2026-10-22 07:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Fri 2026-10-23 07:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Mon 2026-10-26 07:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Mon 2026-10-26 09:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Mon 2026-10-26 09:50\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Tue 2026-10-27 07:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Wed 2026-10-28 07:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Wed 2026-10-28 09:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Wed 2026-10-28 09:50\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Thu 2026-10-29 07:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Fri 2026-10-30 07:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Mon 2026-11-02 07:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Mon 2026-11-02 09:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Mon 2026-11-02 09:50\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Tue 2026-11-03 07:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Tue 2026-11-03 09:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Tue 2026-11-03 09:50\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Wed 2026-11-04 07:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Wed 2026-11-04 09:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Wed 2026-11-04 09:50\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Thu 2026-11-05 07:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Fri 2026-11-06 07:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Mon 2026-11-09 07:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Mon 2026-11-09 09:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Mon 2026-11-09 09:50\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Mon 2026-11-09 10:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Mon 2026-11-09 10:50\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Tue 2026-11-10 07:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Wed 2026-11-11 07:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Wed 2026-11-11 09:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Wed 2026-11-11 09:50\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Thu 2026-11-12 07:00\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] \u23f0 CLOCK -&amp;gt; Fri 2026-11-13 07:00\n\n---------------------------- Captured log teardown -----------------------------\nINFO     e2e:conftest.py:51 [test_TM_05_walk_to_the_end[chromium]] ===== END   gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_05_walk_to_the_end[chromium]&#34;}], &#34;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_05b_idle_session_expires[chromium]&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_05b_idle_session_expires[chromium]&#34;, &#34;duration&#34;: &#34;52 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_05b_idle_session_expires[chromium]&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;52 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;------------------------------ Captured log setup ------------------------------\nINFO     e2e:conftest.py:51 [test_TM_05b_idle_session_expires[chromium]] ===== START gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_05b_idle_session_expires[chromium]\n\n------------------------------ Captured log call -------------------------------\nINFO     e2e:test_tm_six_weeks.py:470 [TM] Sam&amp;#x27;s day-0 session on Fri 11/13: {&amp;#x27;error&amp;#x27;: &amp;#x27;HTTP 401: {&amp;quot;ok&amp;quot;: false, &amp;quot;error&amp;quot;: &amp;quot;Session expired \\\\u2014 please sign in again.&amp;quot;}&amp;#x27;}\nINFO     e2e:conftest.py:51 [test_TM_05b_idle_session_expires[chromium]] signed in again: staff \u00b7 ZT Office Sam \u00b7 staff\n\n---------------------------- Captured log teardown -----------------------------\nINFO     e2e:conftest.py:51 [test_TM_05b_idle_session_expires[chromium]] ===== END   gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_05b_idle_session_expires[chromium]&#34;}], &#34;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_06_last_day_reminders_screen[chromium]&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_06_last_day_reminders_screen[chromium]&#34;, &#34;duration&#34;: &#34;797 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_06_last_day_reminders_screen[chromium]&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;797 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;------------------------------ Captured log setup ------------------------------\nINFO     e2e:conftest.py:51 [test_TM_06_last_day_reminders_screen[chromium]] ===== START gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_06_last_day_reminders_screen[chromium]\nINFO     e2e:conftest.py:51 [test_TM_06_last_day_reminders_screen[chromium]] browser logged in as owner \u00b7 ZT Owner \u00b7 owner\nINFO     e2e:conftest.py:51 [test_TM_06_last_day_reminders_screen[chromium]] STEP open http://127.0.0.1:65528/jobs/\n\n------------------------------ Captured log call -------------------------------\nINFO     e2e:conftest.py:51 [test_TM_06_last_day_reminders_screen[chromium]] STEP go to screen &amp;#x27;reports&amp;#x27;\nINFO     e2e:conftest.py:51 [test_TM_06_last_day_reminders_screen[chromium]] TM last day (Fri 11/13) Reports as owner: &amp;#x27;Reports\\n\ud83d\udcb0 AR AGING \u2014 UNPAID INVOICES\\n\ud83d\udcb0 AR AGING REPORT\\n   As of: 11/13/2026\\n\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\\n\\n  \u26a0\ufe0f  31 \u2013 60 days overdue\\n  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\\n  Invoice       Customer                          Balance   Days\\n  INV-0001 &amp;#x27;\n\n---------------------------- Captured log teardown -----------------------------\nINFO     e2e:conftest.py:51 [test_TM_06_last_day_reminders_screen[chromium]] ===== END   gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_06_last_day_reminders_screen[chromium]&#34;}], &#34;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_06b_manager_reports[chromium]&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_06b_manager_reports[chromium]&#34;, &#34;duration&#34;: &#34;708 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_06b_manager_reports[chromium]&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;708 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;------------------------------ Captured log setup ------------------------------\nINFO     e2e:conftest.py:51 [test_TM_06b_manager_reports[chromium]] ===== START gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_06b_manager_reports[chromium]\nINFO     e2e:conftest.py:51 [test_TM_06b_manager_reports[chromium]] browser logged in as manager \u00b7 ZT Manager \u00b7 manager\nINFO     e2e:conftest.py:51 [test_TM_06b_manager_reports[chromium]] STEP open http://127.0.0.1:65528/jobs/\n\n------------------------------ Captured log call -------------------------------\nINFO     e2e:conftest.py:51 [test_TM_06b_manager_reports[chromium]] STEP go to screen &amp;#x27;reports&amp;#x27;\nINFO     e2e:conftest.py:51 [test_TM_06b_manager_reports[chromium]] TM last day (Fri 11/13) Reports as manager: &amp;#x27;Reports\\n\ud83d\udcb0 AR AGING \u2014 UNPAID INVOICES\\n\ud83d\udcb0 AR AGING REPORT\\n   As of: 11/13/2026\\n\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\\n\\n  \u26a0\ufe0f  31 \u2013 60 days overdue\\n  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\\n  Invoice       Customer                          Balance   Days\\n  INV-0001 &amp;#x27;\n\n---------------------------- Captured log teardown -----------------------------\nINFO     e2e:conftest.py:51 [test_TM_06b_manager_reports[chromium]] ===== END   gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_06b_manager_reports[chromium]&#34;}], &#34;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_06c_staff_reports[chromium]&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_06c_staff_reports[chromium]&#34;, &#34;duration&#34;: &#34;693 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_06c_staff_reports[chromium]&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;693 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;------------------------------ Captured log setup ------------------------------\nINFO     e2e:conftest.py:51 [test_TM_06c_staff_reports[chromium]] ===== START gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_06c_staff_reports[chromium]\nINFO     e2e:conftest.py:51 [test_TM_06c_staff_reports[chromium]] browser logged in as staff \u00b7 ZT Office Sam \u00b7 staff\nINFO     e2e:conftest.py:51 [test_TM_06c_staff_reports[chromium]] STEP open http://127.0.0.1:65528/jobs/\n\n------------------------------ Captured log call -------------------------------\nINFO     e2e:conftest.py:51 [test_TM_06c_staff_reports[chromium]] STEP go to screen &amp;#x27;reports&amp;#x27;\nINFO     e2e:conftest.py:51 [test_TM_06c_staff_reports[chromium]] TM last day (Fri 11/13) Reports as staff: &amp;quot;Reports\\n\ud83d\udce8 CUSTOMER REMINDERS\\n\\nFind active customers who haven&amp;#x27;t been serviced in a while, then send them a check-in reminder.\\n\\nNot serviced in at least  days\\n\ud83d\udd0d Find Customers\\n\u2705 2 active customer(s) due for a check-in (threshold: 21+ days):\\nZT Canal Street Gallery \u2014 37 days ago\\ncanal.street.gallery@t&amp;quot;\n\n---------------------------- Captured log teardown -----------------------------\nINFO     e2e:conftest.py:51 [test_TM_06c_staff_reports[chromium]] ===== END   gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_06c_staff_reports[chromium]&#34;}], &#34;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_06d_field_crew_has_no_reports_tab[chromium]&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_06d_field_crew_has_no_reports_tab[chromium]&#34;, &#34;duration&#34;: &#34;550 ms&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_06d_field_crew_has_no_reports_tab[chromium]&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;550 ms&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;------------------------------ Captured log setup ------------------------------\nINFO     e2e:conftest.py:51 [test_TM_06d_field_crew_has_no_reports_tab[chromium]] ===== START gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_06d_field_crew_has_no_reports_tab[chromium]\nINFO     e2e:conftest.py:51 [test_TM_06d_field_crew_has_no_reports_tab[chromium]] browser logged in as bea \u00b7 ZT Crew Bea \u00b7 field_crew\nINFO     e2e:conftest.py:51 [test_TM_06d_field_crew_has_no_reports_tab[chromium]] STEP open http://127.0.0.1:65528/jobs/\n---------------------------- Captured log teardown -----------------------------\nINFO     e2e:conftest.py:51 [test_TM_06d_field_crew_has_no_reports_tab[chromium]] ===== END   gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_06d_field_crew_has_no_reports_tab[chromium]&#34;}], &#34;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_07_the_six_weeks_add_up[chromium]&#34;: [{&#34;extras&#34;: [], &#34;result&#34;: &#34;Passed&#34;, &#34;testId&#34;: &#34;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_07_the_six_weeks_add_up[chromium]&#34;, &#34;duration&#34;: &#34;00:00:02&#34;, &#34;resultsTableRow&#34;: [&#34;&lt;td class=\&#34;col-result\&#34;&gt;Passed&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-testId\&#34;&gt;gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_07_the_six_weeks_add_up[chromium]&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-duration\&#34;&gt;00:00:02&lt;/td&gt;&#34;, &#34;&lt;td class=\&#34;col-links\&#34;&gt;&lt;/td&gt;&#34;], &#34;log&#34;: &#34;------------------------------ Captured log setup ------------------------------\nINFO     e2e:conftest.py:51 [test_TM_07_the_six_weeks_add_up[chromium]] ===== START gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_07_the_six_weeks_add_up[chromium]\n\n------------------------------ Captured log call -------------------------------\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Mon 10/05: worked A:JOB-0001\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Tue 10/06: worked B:JOB-0002\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Wed 10/07: sweep created A visit due Mon 10/12 -&amp;gt; scheduled 10/12\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Wed 10/07: worked C:JOB-0003, E:JOB-0005\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Thu 10/08: worked D:JOB-0004, F:JOB-0006\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Fri 10/09: sweep created C visit due Wed 10/14 -&amp;gt; scheduled 10/14\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Fri 10/09: worked F:JOB-0006\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Mon 10/12: worked F:JOB-0006, A:JOB-0007\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Tue 10/13: no work\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Wed 10/14: sweep created A visit due Mon 10/19 -&amp;gt; scheduled 10/19\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Wed 10/14: worked C:JOB-0008\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Thu 10/15: sweep created B visit due Tue 10/20 -&amp;gt; scheduled 10/20\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Thu 10/15: worked C:JOB-0008\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Fri 10/16: sweep created C visit due Wed 10/21 -&amp;gt; scheduled 10/21\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Fri 10/16: worked C:JOB-0008\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Mon 10/19: worked A:JOB-0009\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Tue 10/20: worked B:JOB-0010\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Wed 10/21: sweep created A visit due Mon 10/26 -&amp;gt; scheduled 10/26\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Wed 10/21: worked C:JOB-0011\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Thu 10/22: no work\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Fri 10/23: sweep created C visit due Wed 10/28 -&amp;gt; scheduled 10/28\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Fri 10/23: no work\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Mon 10/26: worked A:JOB-0012\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Tue 10/27: no work\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Wed 10/28: sweep created A visit due Mon 11/02 -&amp;gt; scheduled 11/02\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Wed 10/28: worked C:JOB-0013\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Thu 10/29: sweep created B visit due Tue 11/03 -&amp;gt; scheduled 11/03\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Thu 10/29: no work\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Fri 10/30: sweep created C visit due Wed 11/04 -&amp;gt; scheduled 11/04\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Fri 10/30: no work\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Mon 11/02: worked A:JOB-0014\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Tue 11/03: sweep created D visit due Sun 11/08 -&amp;gt; scheduled 11/09\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Tue 11/03: worked B:JOB-0015\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Wed 11/04: sweep created A visit due Mon 11/09 -&amp;gt; scheduled 11/09\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Wed 11/04: worked C:JOB-0016\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Thu 11/05: no work\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Fri 11/06: sweep created C visit due Wed 11/11 -&amp;gt; scheduled 11/11\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Fri 11/06: no work\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Mon 11/09: worked D:JOB-0017, A:JOB-0018\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Tue 11/10: no work\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Wed 11/11: sweep created A visit due Mon 11/16 -&amp;gt; scheduled 11/16\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Wed 11/11: worked C:JOB-0019\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Thu 11/12: sweep created B visit due Tue 11/17 -&amp;gt; scheduled 11/17\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Thu 11/12: no work\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Fri 11/13: sweep created C visit due Wed 11/18 -&amp;gt; scheduled 11/18\nINFO     e2e:test_tm_six_weeks.py:542 [TM] Fri 11/13: no work\nINFO     e2e:conftest.py:51 [test_TM_07_the_six_weeks_add_up[chromium]] \u23f0 CLOCK -&amp;gt; Tue 2026-11-03 07:00\nINFO     e2e:conftest.py:51 [test_TM_07_the_six_weeks_add_up[chromium]] \u23f0 CLOCK -&amp;gt; Fri 2026-11-13 18:00\nINFO     e2e:test_tm_six_weeks.py:593 [TM] AR aging last day as owner: &amp;#x27;\ud83d\udcb0 AR AGING REPORT\\n   As of: 11/13/2026\\n\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\\n\\n  \u26a0\ufe0f  31 \u2013 60 days overdue\\n  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\\n  Invoice       Customer                          Balance   Days\\n  INV-0001      ZT Riverside Cafe             $ &amp;#x27;\nINFO     e2e:test_tm_six_weeks.py:593 [TM] AR aging last day as manager: &amp;#x27;\ud83d\udcb0 AR AGING REPORT\\n   As of: 11/13/2026\\n\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\\n\\n  \u26a0\ufe0f  31 \u2013 60 days overdue\\n  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\\n  Invoice       Customer                          Balance   Days\\n  INV-0001      ZT Riverside Cafe             $ &amp;#x27;\nINFO     e2e:test_tm_six_weeks.py:636 [TM] outbox: 20 caught; 16 digest(s) naming E; blocked outbound: []\nINFO     e2e:test_tm_six_weeks.py:643 [TM] digest days naming E: [&amp;#x27;2026-10-28&amp;#x27;, &amp;#x27;2026-10-29&amp;#x27;, &amp;#x27;2026-10-30&amp;#x27;, &amp;#x27;2026-11-02&amp;#x27;, &amp;#x27;2026-11-03&amp;#x27;, &amp;#x27;2026-11-04&amp;#x27;, &amp;#x27;2026-11-05&amp;#x27;, &amp;#x27;2026-11-06&amp;#x27;] ...\n\n---------------------------- Captured log teardown -----------------------------\nINFO     e2e:conftest.py:51 [test_TM_07_the_six_weeks_add_up[chromium]] ===== END   gui_jobs_timemachine/test_tm_six_weeks.py::test_TM_07_the_six_weeks_add_up[chromium]&#34;}]}, &#34;renderCollapsed&#34;: [&#34;passed&#34;], &#34;initialSort&#34;: &#34;result&#34;, &#34;title&#34;: &#34;report.html&#34;}"></div>
+    <script>
+      (function(){function r(e,n,t){function o(i,f){if(!n[i]){if(!e[i]){var c="function"==typeof require&&require;if(!f&&c)return c(i,!0);if(u)return u(i,!0);var a=new Error("Cannot find module '"+i+"'");throw a.code="MODULE_NOT_FOUND",a}var p=n[i]={exports:{}};e[i][0].call(p.exports,function(r){var n=e[i][1][r];return o(n||r)},p,p.exports,r,e,n,t)}return n[i].exports}for(var u="function"==typeof require&&require,i=0;i<t.length;i++)o(t[i]);return o}return r})()({1:[function(require,module,exports){
+const { getCollapsedCategory, setCollapsedIds } = require('./storage.js')
+
+class DataManager {
+    setManager(data) {
+        const collapsedCategories = [...getCollapsedCategory(data.renderCollapsed)]
+        const collapsedIds = []
+        const tests = Object.values(data.tests).flat().map((test, index) => {
+            const collapsed = collapsedCategories.includes(test.result.toLowerCase())
+            const id = `test_${index}`
+            if (collapsed) {
+                collapsedIds.push(id)
+            }
+            return {
+                ...test,
+                id,
+                collapsed,
+            }
+        })
+        const dataBlob = { ...data, tests }
+        this.data = { ...dataBlob }
+        this.renderData = { ...dataBlob }
+        setCollapsedIds(collapsedIds)
+    }
+
+    get allData() {
+        return { ...this.data }
+    }
+
+    resetRender() {
+        this.renderData = { ...this.data }
+    }
+
+    setRender(data) {
+        this.renderData.tests = [...data]
+    }
+
+    toggleCollapsedItem(id) {
+        this.renderData.tests = this.renderData.tests.map((test) =>
+            test.id === id ? { ...test, collapsed: !test.collapsed } : test,
+        )
+    }
+
+    set allCollapsed(collapsed) {
+        this.renderData = { ...this.renderData, tests: [...this.renderData.tests.map((test) => (
+            { ...test, collapsed }
+        ))] }
+    }
+
+    get testSubset() {
+        return [...this.renderData.tests]
+    }
+
+    get environment() {
+        return this.renderData.environment
+    }
+
+    get initialSort() {
+        return this.data.initialSort
+    }
+}
+
+module.exports = {
+    manager: new DataManager(),
+}
+
+},{"./storage.js":8}],2:[function(require,module,exports){
+const mediaViewer = require('./mediaviewer.js')
+const templateEnvRow = document.getElementById('template_environment_row')
+const templateResult = document.getElementById('template_results-table__tbody')
+
+function htmlToElements(html) {
+    const temp = document.createElement('template')
+    temp.innerHTML = html
+    return temp.content.childNodes
+}
+
+const find = (selector, elem) => {
+    if (!elem) {
+        elem = document
+    }
+    return elem.querySelector(selector)
+}
+
+const findAll = (selector, elem) => {
+    if (!elem) {
+        elem = document
+    }
+    return [...elem.querySelectorAll(selector)]
+}
+
+const dom = {
+    getStaticRow: (key, value) => {
+        const envRow = templateEnvRow.content.cloneNode(true)
+        const isObj = typeof value === 'object' && value !== null
+        const values = isObj ? Object.keys(value).map((k) => `${k}: ${value[k]}`) : null
+
+        const valuesElement = htmlToElements(
+            values ? `<ul>${values.map((val) => `<li>${val}</li>`).join('')}<ul>` : `<div>${value}</div>`)[0]
+        const td = findAll('td', envRow)
+        td[0].textContent = key
+        td[1].appendChild(valuesElement)
+
+        return envRow
+    },
+    getResultTBody: ({ testId, id, log, extras, resultsTableRow, tableHtml, result, collapsed }) => {
+        const resultBody = templateResult.content.cloneNode(true)
+        resultBody.querySelector('tbody').classList.add(result.toLowerCase())
+        resultBody.querySelector('tbody').id = testId
+        resultBody.querySelector('.collapsible').dataset.id = id
+
+        resultsTableRow.forEach((html) => {
+            const t = document.createElement('template')
+            t.innerHTML = html
+            resultBody.querySelector('.collapsible').appendChild(t.content)
+        })
+
+        if (log) {
+            // Wrap lines starting with "E" with span.error to color those lines red
+            const wrappedLog = log.replace(/^E.*$/gm, (match) => `<span class="error">${match}</span>`)
+            resultBody.querySelector('.log').innerHTML = wrappedLog
+        } else {
+            resultBody.querySelector('.log').remove()
+        }
+
+        if (collapsed) {
+            resultBody.querySelector('.collapsible > .col-result')?.classList.add('collapsed')
+            resultBody.querySelector('.extras-row').classList.add('hidden')
+        } else {
+            resultBody.querySelector('.collapsible > .col-result')?.classList.remove('collapsed')
+        }
+
+        const media = []
+        extras?.forEach(({ name, format_type, content }) => {
+            if (['image', 'video'].includes(format_type)) {
+                media.push({ path: content, name, format_type })
+            }
+
+            if (format_type === 'html') {
+                resultBody.querySelector('.extraHTML').insertAdjacentHTML('beforeend', `<div>${content}</div>`)
+            }
+        })
+        mediaViewer.setup(resultBody, media)
+
+        // Add custom html from the pytest_html_results_table_html hook
+        tableHtml?.forEach((item) => {
+            resultBody.querySelector('td[class="extra"]').insertAdjacentHTML('beforeend', item)
+        })
+
+        return resultBody
+    },
+}
+
+module.exports = {
+    dom,
+    htmlToElements,
+    find,
+    findAll,
+}
+
+},{"./mediaviewer.js":6}],3:[function(require,module,exports){
+const { manager } = require('./datamanager.js')
+const { doSort } = require('./sort.js')
+const storageModule = require('./storage.js')
+
+const getFilteredSubSet = (filter) =>
+    manager.allData.tests.filter(({ result }) => filter.includes(result.toLowerCase()))
+
+const doInitFilter = () => {
+    const currentFilter = storageModule.getVisible()
+    const filteredSubset = getFilteredSubSet(currentFilter)
+    manager.setRender(filteredSubset)
+}
+
+const doFilter = (type, show) => {
+    if (show) {
+        storageModule.showCategory(type)
+    } else {
+        storageModule.hideCategory(type)
+    }
+
+    const currentFilter = storageModule.getVisible()
+    const filteredSubset = getFilteredSubSet(currentFilter)
+    manager.setRender(filteredSubset)
+
+    const sortColumn = storageModule.getSort()
+    doSort(sortColumn, true)
+}
+
+module.exports = {
+    doFilter,
+    doInitFilter,
+}
+
+},{"./datamanager.js":1,"./sort.js":7,"./storage.js":8}],4:[function(require,module,exports){
+const { redraw, bindEvents, renderStatic } = require('./main.js')
+const { doInitFilter } = require('./filter.js')
+const { doInitSort } = require('./sort.js')
+const { manager } = require('./datamanager.js')
+const data = JSON.parse(document.getElementById('data-container').dataset.jsonblob)
+
+function init() {
+    manager.setManager(data)
+    doInitFilter()
+    doInitSort()
+    renderStatic()
+    redraw()
+    bindEvents()
+}
+
+init()
+
+},{"./datamanager.js":1,"./filter.js":3,"./main.js":5,"./sort.js":7}],5:[function(require,module,exports){
+const { dom, find, findAll } = require('./dom.js')
+const { manager } = require('./datamanager.js')
+const { doSort } = require('./sort.js')
+const { doFilter } = require('./filter.js')
+const {
+    getVisible,
+    getCollapsedIds,
+    setCollapsedIds,
+    getSort,
+    getSortDirection,
+    possibleFilters,
+} = require('./storage.js')
+
+const removeChildren = (node) => {
+    while (node.firstChild) {
+        node.removeChild(node.firstChild)
+    }
+}
+
+const renderStatic = () => {
+    const renderEnvironmentTable = () => {
+        const environment = manager.environment
+        const rows = Object.keys(environment).map((key) => dom.getStaticRow(key, environment[key]))
+        const table = document.getElementById('environment')
+        removeChildren(table)
+        rows.forEach((row) => table.appendChild(row))
+    }
+    renderEnvironmentTable()
+}
+
+const addItemToggleListener = (elem) => {
+    elem.addEventListener('click', ({ target }) => {
+        const id = target.parentElement.dataset.id
+        manager.toggleCollapsedItem(id)
+
+        const collapsedIds = getCollapsedIds()
+        if (collapsedIds.includes(id)) {
+            const updated = collapsedIds.filter((item) => item !== id)
+            setCollapsedIds(updated)
+        } else {
+            collapsedIds.push(id)
+            setCollapsedIds(collapsedIds)
+        }
+        redraw()
+    })
+}
+
+const renderContent = (tests) => {
+    const sortAttr = getSort(manager.initialSort)
+    const sortAsc = JSON.parse(getSortDirection())
+    const rows = tests.map(dom.getResultTBody)
+    const table = document.getElementById('results-table')
+    const tableHeader = document.getElementById('results-table-head')
+
+    const newTable = document.createElement('table')
+    newTable.id = 'results-table'
+
+    // remove all sorting classes and set the relevant
+    findAll('.sortable', tableHeader).forEach((elem) => elem.classList.remove('asc', 'desc'))
+    tableHeader.querySelector(`.sortable[data-column-type="${sortAttr}"]`)?.classList.add(sortAsc ? 'desc' : 'asc')
+    newTable.appendChild(tableHeader)
+
+    if (!rows.length) {
+        const emptyTable = document.getElementById('template_results-table__body--empty').content.cloneNode(true)
+        newTable.appendChild(emptyTable)
+    } else {
+        rows.forEach((row) => {
+            if (!!row) {
+                findAll('.collapsible td:not(.col-links', row).forEach(addItemToggleListener)
+                find('.logexpander', row).addEventListener('click',
+                    (evt) => evt.target.parentNode.classList.toggle('expanded'),
+                )
+                newTable.appendChild(row)
+            }
+        })
+    }
+
+    table.replaceWith(newTable)
+}
+
+const renderDerived = () => {
+    const currentFilter = getVisible()
+    possibleFilters.forEach((result) => {
+        const input = document.querySelector(`input[data-test-result="${result}"]`)
+        input.checked = currentFilter.includes(result)
+    })
+}
+
+const bindEvents = () => {
+    const filterColumn = (evt) => {
+        const { target: element } = evt
+        const { testResult } = element.dataset
+
+        doFilter(testResult, element.checked)
+        const collapsedIds = getCollapsedIds()
+        const updated = manager.renderData.tests.map((test) => {
+            return {
+                ...test,
+                collapsed: collapsedIds.includes(test.id),
+            }
+        })
+        manager.setRender(updated)
+        redraw()
+    }
+
+    const header = document.getElementById('environment-header')
+    header.addEventListener('click', () => {
+        const table = document.getElementById('environment')
+        table.classList.toggle('hidden')
+        header.classList.toggle('collapsed')
+    })
+
+    findAll('input[name="filter_checkbox"]').forEach((elem) => {
+        elem.addEventListener('click', filterColumn)
+    })
+
+    findAll('.sortable').forEach((elem) => {
+        elem.addEventListener('click', (evt) => {
+            const { target: element } = evt
+            const { columnType } = element.dataset
+            doSort(columnType)
+            redraw()
+        })
+    })
+
+    document.getElementById('show_all_details').addEventListener('click', () => {
+        manager.allCollapsed = false
+        setCollapsedIds([])
+        redraw()
+    })
+    document.getElementById('hide_all_details').addEventListener('click', () => {
+        manager.allCollapsed = true
+        const allIds = manager.renderData.tests.map((test) => test.id)
+        setCollapsedIds(allIds)
+        redraw()
+    })
+}
+
+const redraw = () => {
+    const { testSubset } = manager
+
+    renderContent(testSubset)
+    renderDerived()
+}
+
+module.exports = {
+    redraw,
+    bindEvents,
+    renderStatic,
+}
+
+},{"./datamanager.js":1,"./dom.js":2,"./filter.js":3,"./sort.js":7,"./storage.js":8}],6:[function(require,module,exports){
+class MediaViewer {
+    constructor(assets) {
+        this.assets = assets
+        this.index = 0
+    }
+
+    nextActive() {
+        this.index = this.index === this.assets.length - 1 ? 0 : this.index + 1
+        return [this.activeFile, this.index]
+    }
+
+    prevActive() {
+        this.index = this.index === 0 ? this.assets.length - 1 : this.index -1
+        return [this.activeFile, this.index]
+    }
+
+    get currentIndex() {
+        return this.index
+    }
+
+    get activeFile() {
+        return this.assets[this.index]
+    }
+}
+
+
+const setup = (resultBody, assets) => {
+    if (!assets.length) {
+        resultBody.querySelector('.media').classList.add('hidden')
+        return
+    }
+
+    const mediaViewer = new MediaViewer(assets)
+    const container = resultBody.querySelector('.media-container')
+    const leftArrow = resultBody.querySelector('.media-container__nav--left')
+    const rightArrow = resultBody.querySelector('.media-container__nav--right')
+    const mediaName = resultBody.querySelector('.media__name')
+    const counter = resultBody.querySelector('.media__counter')
+    const imageEl = resultBody.querySelector('img')
+    const sourceEl = resultBody.querySelector('source')
+    const videoEl = resultBody.querySelector('video')
+
+    const setImg = (media, index) => {
+        if (media?.format_type === 'image') {
+            imageEl.src = media.path
+
+            imageEl.classList.remove('hidden')
+            videoEl.classList.add('hidden')
+        } else if (media?.format_type === 'video') {
+            sourceEl.src = media.path
+
+            videoEl.classList.remove('hidden')
+            imageEl.classList.add('hidden')
+        }
+
+        mediaName.innerText = media?.name
+        counter.innerText = `${index + 1} / ${assets.length}`
+    }
+    setImg(mediaViewer.activeFile, mediaViewer.currentIndex)
+
+    const moveLeft = () => {
+        const [media, index] = mediaViewer.prevActive()
+        setImg(media, index)
+    }
+    const doRight = () => {
+        const [media, index] = mediaViewer.nextActive()
+        setImg(media, index)
+    }
+    const openImg = () => {
+        window.open(mediaViewer.activeFile.path, '_blank')
+    }
+    if (assets.length === 1) {
+        container.classList.add('media-container--fullscreen')
+    } else {
+        leftArrow.addEventListener('click', moveLeft)
+        rightArrow.addEventListener('click', doRight)
+    }
+    imageEl.addEventListener('click', openImg)
+}
+
+module.exports = {
+    setup,
+}
+
+},{}],7:[function(require,module,exports){
+const { manager } = require('./datamanager.js')
+const storageModule = require('./storage.js')
+
+const genericSort = (list, key, ascending, customOrder) => {
+    let sorted
+    if (customOrder) {
+        sorted = list.sort((a, b) => {
+            const aValue = a.result.toLowerCase()
+            const bValue = b.result.toLowerCase()
+
+            const aIndex = customOrder.findIndex((item) => item.toLowerCase() === aValue)
+            const bIndex = customOrder.findIndex((item) => item.toLowerCase() === bValue)
+
+            // Compare the indices to determine the sort order
+            return aIndex - bIndex
+        })
+    } else {
+        sorted = list.sort((a, b) => a[key] === b[key] ? 0 : a[key] > b[key] ? 1 : -1)
+    }
+
+    if (ascending) {
+        sorted.reverse()
+    }
+    return sorted
+}
+
+const durationSort = (list, ascending) => {
+    const parseDuration = (duration) => {
+        if (duration.includes(':')) {
+            // If it's in the format "HH:mm:ss"
+            const [hours, minutes, seconds] = duration.split(':').map(Number)
+            return (hours * 3600 + minutes * 60 + seconds) * 1000
+        } else {
+            // If it's in the format "nnn ms"
+            return parseInt(duration)
+        }
+    }
+    const sorted = list.sort((a, b) => parseDuration(a['duration']) - parseDuration(b['duration']))
+    if (ascending) {
+        sorted.reverse()
+    }
+    return sorted
+}
+
+const doInitSort = () => {
+    const type = storageModule.getSort(manager.initialSort)
+    const ascending = storageModule.getSortDirection()
+    const list = manager.testSubset
+    const initialOrder = ['Error', 'Failed', 'Rerun', 'XFailed', 'XPassed', 'Skipped', 'Passed']
+
+    storageModule.setSort(type)
+    storageModule.setSortDirection(ascending)
+
+    if (type?.toLowerCase() === 'original') {
+        manager.setRender(list)
+    } else {
+        let sortedList
+        switch (type) {
+        case 'duration':
+            sortedList = durationSort(list, ascending)
+            break
+        case 'result':
+            sortedList = genericSort(list, type, ascending, initialOrder)
+            break
+        default:
+            sortedList = genericSort(list, type, ascending)
+            break
+        }
+        manager.setRender(sortedList)
+    }
+}
+
+const doSort = (type, skipDirection) => {
+    const newSortType = storageModule.getSort(manager.initialSort) !== type
+    const currentAsc = storageModule.getSortDirection()
+    let ascending
+    if (skipDirection) {
+        ascending = currentAsc
+    } else {
+        ascending = newSortType ? false : !currentAsc
+    }
+    storageModule.setSort(type)
+    storageModule.setSortDirection(ascending)
+
+    const list = manager.testSubset
+    const sortedList = type === 'duration' ? durationSort(list, ascending) : genericSort(list, type, ascending)
+    manager.setRender(sortedList)
+}
+
+module.exports = {
+    doInitSort,
+    doSort,
+}
+
+},{"./datamanager.js":1,"./storage.js":8}],8:[function(require,module,exports){
+const possibleFilters = [
+    'passed',
+    'skipped',
+    'failed',
+    'error',
+    'xfailed',
+    'xpassed',
+    'rerun',
+]
+
+const getVisible = () => {
+    const url = new URL(window.location.href)
+    const settings = new URLSearchParams(url.search).get('visible')
+    const lower = (item) => {
+        const lowerItem = item.toLowerCase()
+        if (possibleFilters.includes(lowerItem)) {
+            return lowerItem
+        }
+        return null
+    }
+    return settings === null ?
+        possibleFilters :
+        [...new Set(settings?.split(',').map(lower).filter((item) => item))]
+}
+
+const hideCategory = (categoryToHide) => {
+    const url = new URL(window.location.href)
+    const visibleParams = new URLSearchParams(url.search).get('visible')
+    const currentVisible = visibleParams ? visibleParams.split(',') : [...possibleFilters]
+    const settings = [...new Set(currentVisible)].filter((f) => f !== categoryToHide).join(',')
+
+    url.searchParams.set('visible', settings)
+    window.history.pushState({}, null, unescape(url.href))
+}
+
+const showCategory = (categoryToShow) => {
+    if (typeof window === 'undefined') {
+        return
+    }
+    const url = new URL(window.location.href)
+    const currentVisible = new URLSearchParams(url.search).get('visible')?.split(',').filter(Boolean) ||
+        [...possibleFilters]
+    const settings = [...new Set([categoryToShow, ...currentVisible])]
+    const noFilter = possibleFilters.length === settings.length || !settings.length
+
+    noFilter ? url.searchParams.delete('visible') : url.searchParams.set('visible', settings.join(','))
+    window.history.pushState({}, null, unescape(url.href))
+}
+
+const getSort = (initialSort) => {
+    const url = new URL(window.location.href)
+    let sort = new URLSearchParams(url.search).get('sort')
+    if (!sort) {
+        sort = initialSort || 'result'
+    }
+    return sort
+}
+
+const setSort = (type) => {
+    const url = new URL(window.location.href)
+    url.searchParams.set('sort', type)
+    window.history.pushState({}, null, unescape(url.href))
+}
+
+const getCollapsedCategory = (renderCollapsed) => {
+    let categories
+    if (typeof window !== 'undefined') {
+        const url = new URL(window.location.href)
+        const collapsedItems = new URLSearchParams(url.search).get('collapsed')
+        switch (true) {
+        case !renderCollapsed && collapsedItems === null:
+            categories = ['passed']
+            break
+        case collapsedItems?.length === 0 || /^["']{2}$/.test(collapsedItems):
+            categories = []
+            break
+        case /^all$/.test(collapsedItems) || collapsedItems === null && /^all$/.test(renderCollapsed):
+            categories = [...possibleFilters]
+            break
+        default:
+            categories = collapsedItems?.split(',').map((item) => item.toLowerCase()) || renderCollapsed
+            break
+        }
+    } else {
+        categories = []
+    }
+    return categories
+}
+
+const getSortDirection = () => JSON.parse(sessionStorage.getItem('sortAsc')) || false
+const setSortDirection = (ascending) => sessionStorage.setItem('sortAsc', ascending)
+
+const getCollapsedIds = () => JSON.parse(sessionStorage.getItem('collapsedIds')) || []
+const setCollapsedIds = (list) => sessionStorage.setItem('collapsedIds', JSON.stringify(list))
+
+module.exports = {
+    getVisible,
+    hideCategory,
+    showCategory,
+    getCollapsedIds,
+    setCollapsedIds,
+    getSort,
+    setSort,
+    getSortDirection,
+    setSortDirection,
+    getCollapsedCategory,
+    possibleFilters,
+}
+
+},{}]},{},[4]);
+    </script>
+  </footer>
+  </body>
+</html>

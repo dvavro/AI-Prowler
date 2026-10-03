@@ -43,6 +43,33 @@ STATUS_PATH = AI_PROWLER_HOME / "task_automation_last_run.json"
 AUDIT_LOG_PATH = AI_PROWLER_HOME / "autonomous_run_audit.log"
 WRAPPER_SCRIPT_NAME = "run_ai_prowler_queue.bat"
 SCHEDULED_TASK_NAME = "AI-Prowler-QueueRunner"
+# AI Routing on-demand runner (2026-09-18) — a SEPARATE, dedicated Scheduled
+# Task, registered with NO trigger at all, that exists purely to be started
+# on demand via `schtasks /run /tn AI-Prowler-AIRoutingRunner`. Deliberately
+# isolated from SCHEDULED_TASK_NAME: firing SCHEDULED_TASK_NAME on demand
+# would run its QUEUE_RUNNER_PROMPT, which processes EVERY due entry in
+# pending_tasks.json — not just ours — sweeping up other one-shot tasks the
+# user queued for their own next scheduled check and running them early.
+# This dedicated task's wrapper is written fresh with the ONE specific
+# routing prompt each time it's fired and never reads or touches
+# pending_tasks.json at all, so it cannot interfere with anything else
+# queued, by construction rather than by prompt discipline alone.
+AI_ROUTING_TASK_NAME = "AI-Prowler-AIRoutingRunner"
+# Fixed path the task's Action always points at; CONTENT is rewritten fresh
+# before every on-demand trigger (see build_ai_routing_wrapper_content()).
+AI_ROUTING_WRAPPER_PATH = AI_PROWLER_HOME / "ai_routing" / "run_ai_routing_ondemand.bat"
+AI_ROUTING_LAST_RUN_PATH = AI_PROWLER_HOME / "ai_routing" / "last_ai_routing_run.json"
+# Written as the LAST step of every wrapper run, after the claude call
+# returns — _ai_routing_worker (ai_prowler_mcp.py) polls for this file's
+# mtime to advance past its own start time as its completion signal, since
+# this dedicated on-demand task deliberately never touches pending_tasks.json
+# (nothing there to watch for removal, unlike the shared queue runner).
+AI_ROUTING_DONE_MARKER_PATH = AI_PROWLER_HOME / "ai_routing" / "last_run_done.marker"
+# The prompt is written HERE and piped via stdin (`type ... | claude -p`)
+# rather than ever appearing as a quoted argument on the .bat's own command
+# line — see build_ai_routing_wrapper_content()'s docstring for why this
+# replaced the original quoted-argument approach.
+AI_ROUTING_PROMPT_TXT_PATH = AI_PROWLER_HOME / "ai_routing" / "prompt.txt"
 # v8.1.13 fix: NEVER rely on bare `python` resolving via PATH inside the
 # generated wrapper's self-gate check. Confirmed live (2026-07-28, David's
 # machine) that Python's own install directory is present on the
@@ -774,8 +801,8 @@ def dry_run_check() -> dict:
 # Claude Code token being valid. Since the headless wrapper always runs ON
 # THIS SAME MACHINE (a local Windows Scheduled Task, not a remote mobile
 # client), a local stdio config — the exact same shape as the Claude
-# Desktop auto-config the installer already writes, see
-# claude_desktop_config_example.json — needs nothing but AI-Prowler's own
+# Desktop auto-config the installer already writes into
+# %APPDATA%\Claude\claude_desktop_config.json — needs nothing but AI-Prowler's own
 # install path, which is always known. generate_mcp_config() now tries
 # that FIRST (zero setup required), and only falls back to the remote HTTP
 # path for users who've actually configured remote/mobile access.
@@ -1112,6 +1139,85 @@ def _ensure_hook_uses_absolute_python() -> None:
         pass  # self-heal is best-effort — never let this block MCP config generation
 
 
+def _ensure_workspace_trusted() -> None:
+    """R-051 (2026-09-28): mark AI_PROWLER_HOME as a trusted Claude Code
+    workspace for the Windows account these runs use.
+
+    Every headless run cd's into AI_PROWLER_HOME (see the wrappers). Claude
+    Code ignores that folder's .claude/settings.json allow-list until the
+    folder has been trusted once interactively, and prints this warning on
+    every run:
+        "Ignoring 2 permissions.allow entries from .claude/settings.json:
+         this workspace has not been trusted. ..."
+    Nothing was blocked (the wrappers pass --allowedTools and
+    --permission-mode bypassPermissions), but the warning is merged into the
+    run's JSON output file (2>&1) and broke parsing of the AI Route result —
+    confirmed live 2026-09-28, the Jobs app showed the raw output.
+
+    Claude Code keeps trust in ~/.claude.json under
+    projects["C:/Users/<you>/.ai-prowler"].hasTrustDialogAccepted — the exact
+    setting its own warning tells you to set. The home folder is derived from
+    AI_PROWLER_HOME (always ~/.ai-prowler) so tests that point AI_PROWLER_HOME
+    at a temp folder never touch the real file. Only that one key is added;
+    everything else in the file is kept. Writes only when it isn't already
+    set, via a temp file + os.replace. An unreadable or odd-shaped file is
+    left alone. Best-effort — never blocks a run.
+    """
+    try:
+        cfg_path = AI_PROWLER_HOME.parent / ".claude.json"
+        key = str(AI_PROWLER_HOME).replace("\\", "/")
+        if cfg_path.exists():
+            text = cfg_path.read_text(encoding="utf-8").strip()
+            data = json.loads(text) if text else {}
+        else:
+            data = {}
+        if not isinstance(data, dict):
+            return
+        projects = data.setdefault("projects", {})
+        if not isinstance(projects, dict):
+            return
+        entry = projects.setdefault(key, {})
+        if not isinstance(entry, dict):
+            return
+        if entry.get("hasTrustDialogAccepted") is True:
+            return
+        entry["hasTrustDialogAccepted"] = True
+        tmp = cfg_path.with_name(cfg_path.name + ".aip_tmp")
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        os.replace(str(tmp), str(cfg_path))
+    except Exception:
+        pass
+
+
+def parse_claude_json_output(raw: str) -> dict | None:
+    """R-051: the result object from `claude -p --output-format json` output,
+    even when Claude Code printed warning lines before or after it (the
+    wrappers merge stderr into the same file). Returns the LAST JSON object
+    that looks like a Claude result (has "result", "is_error" or "type"), or
+    None if there isn't one — the caller then shows the raw text."""
+    if not raw:
+        return None
+    text = raw.strip()
+    try:
+        obj = json.loads(text)
+        return obj if isinstance(obj, dict) else None
+    except ValueError:
+        pass
+    decoder = json.JSONDecoder()
+    found = None
+    i = text.find("{")
+    while i != -1:
+        try:
+            obj, end = decoder.raw_decode(text, i)
+        except ValueError:
+            i = text.find("{", i + 1)
+            continue
+        if isinstance(obj, dict) and ("result" in obj or "is_error" in obj or "type" in obj):
+            found = obj
+        i = text.find("{", end)
+    return found
+
+
 def generate_mcp_config(prefer_remote: bool = False) -> tuple[bool, str]:
     """Writes/refreshes the --mcp-config file headless Claude Code needs to
     reach AI-Prowler. Tries local stdio first (works out of the box on any
@@ -1135,8 +1241,12 @@ def generate_mcp_config(prefer_remote: bool = False) -> tuple[bool, str]:
     and every actual run — needs a valid MCP config first, so this piggy-
     backs on that same guaranteed-to-run-first spot.
 
+    R-051: also marks AI_PROWLER_HOME as a trusted Claude Code workspace —
+    see _ensure_workspace_trusted().
+
     Returns (success, path_or_error_message)."""
     _ensure_hook_uses_absolute_python()
+    _ensure_workspace_trusted()
     first, second = (_generate_remote_mcp_config, _generate_local_mcp_config) \
         if prefer_remote else (_generate_local_mcp_config, _generate_remote_mcp_config)
     ok, result = first()
@@ -1250,6 +1360,82 @@ def delete_oauth_token() -> None:
         OAUTH_TOKEN_PATH.unlink()
     if OAUTH_TOKEN_PLAIN_PATH.exists():
         OAUTH_TOKEN_PLAIN_PATH.unlink()
+
+
+# ── Per-user Claude token store (server mode AI Routing, 2026-09-19) ─────
+# In personal mode the single owner's setup-token above is the only
+# credential. A multi-user server has no such thing for its users, so each
+# user who should be able to run AI Routing gets their OWN Claude Code token,
+# saved by an admin in the Admin tab. The run is then billed to that user's
+# own Claude subscription instead of the host owner's.
+#
+# Deliberately NOT stored in users.json: that file is read all over the
+# codebase and its records are mirrored into the job database's users table
+# (which is exported to Excel/CSV and backed up), so a credential there
+# would leak into all of those. One plain file per user under
+# AI_ROUTING_USER_TOKEN_DIR instead — the same plaintext-in-~/.ai-prowler
+# model the shared token above already uses, since the headless wrapper .bat
+# has to `set /p` it back out at runtime.
+AI_ROUTING_USER_TOKEN_DIR = AI_PROWLER_HOME / "ai_routing" / "user_tokens"
+
+
+def _user_token_slug(user_id) -> str | None:
+    """Filename-safe form of a user id (the firstname-lastname slug). Anything
+    outside [a-z0-9-] is stripped, so an id can never escape the token dir."""
+    slug = re.sub(r"[^a-z0-9-]", "", str(user_id or "").strip().lower())
+    return slug or None
+
+
+def user_oauth_token_path(user_id) -> "Path | None":
+    slug = _user_token_slug(user_id)
+    return (AI_ROUTING_USER_TOKEN_DIR / f"{slug}.txt") if slug else None
+
+
+def save_user_oauth_token(user_id, token: str) -> Path:
+    """Validates and saves one user's Claude Code token (the `sk-ant-oat…`
+    value `claude setup-token` prints). Raises ValueError for a missing user
+    id or a value that doesn't look like such a token — nothing is written."""
+    path = user_oauth_token_path(user_id)
+    if path is None:
+        raise ValueError("A user id is required to save a Claude token.")
+    clean = (token or "").strip()
+    if not _OAUTH_TOKEN_PATTERN.fullmatch(clean):
+        raise ValueError("That doesn't look like a Claude Code token — it should "
+                         "start with sk-ant-oat (the value `claude setup-token` prints).")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(clean, encoding="utf-8")
+    # Best effort: restrict the file to the current Windows user. Failure here
+    # (non-Windows, no icacls) must never block saving.
+    try:
+        import getpass
+        subprocess.run(["icacls", str(path), "/inheritance:r", "/grant:r",
+                        f"{getpass.getuser()}:F"],
+                       capture_output=True, timeout=10,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception:
+        pass
+    return path
+
+
+def has_user_oauth_token(user_id) -> bool:
+    path = user_oauth_token_path(user_id)
+    try:
+        return bool(path and path.exists()
+                    and _OAUTH_TOKEN_PATTERN.fullmatch(path.read_text(encoding="utf-8").strip()))
+    except Exception:
+        return False
+
+
+def delete_user_oauth_token(user_id) -> bool:
+    """Removes one user's saved token. Returns True if a file was deleted."""
+    path = user_oauth_token_path(user_id)
+    try:
+        if path and path.exists():
+            path.unlink()
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def try_capture_setup_token() -> bool:
@@ -1714,6 +1900,122 @@ type "%~f0" >> "%USERPROFILE%\.ai-prowler\command_debug.log"
   --permission-mode bypassPermissions > "%USERPROFILE%\\.ai-prowler\\last_single_run.json" 2>&1
 
 set RC=%ERRORLEVEL%
+exit /b %RC%
+"""
+
+
+def build_ai_routing_wrapper_content(prompt: str, mcp_config_path: str,
+                                      allowed_tools: str,
+                                      use_api_key: bool = False,
+                                      oauth_token_path: "Path | None" = None) -> str:
+    """Wrapper content for AI_ROUTING_TASK_NAME — the dedicated, trigger-
+    less on-demand task backing the Jobs PWA's "Run AI Routing" button.
+    Modeled on build_wrapper_script_content() (the PROVEN scheduled-queue
+    wrapper), NOT on build_single_prompt_wrapper_content() (the old
+    "▶ NOW" button's wrapper) — same absolute claude.exe path via
+    _get_claude_exe(), same OAuth-token-from-file auth block, same
+    AI_PROWLER_HOME working directory.
+
+    v2 (2026-09-18) — REAL BUG FOUND AND FIXED: the original version, like
+    build_single_prompt_wrapper_content(), embedded the prompt as a quoted
+    argument directly on the .bat's own `claude -p "<prompt>"` command
+    line (via _sanitize_prompt_for_batch()'s doubled-quote cmd.exe
+    escaping). Confirmed live that this silently breaks for a prompt this
+    long and quote-heavy: claude.exe ran successfully (exit 0) but with
+    the `ai-prowler` MCP server never actually attached — only an
+    unrelated globally-registered server ("mobile") was present, meaning
+    --mcp-config itself never got parsed as a real flag, almost certainly
+    because cmd.exe's / claude.exe's own command-line reparsing of a
+    heavily-""-escaped multi-hundred-word argument went wrong somewhere
+    before that flag. Verified directly: the EXACT same prompt/config/
+    tools, passed as genuine separate argv elements via Python's
+    subprocess.run() (no shell involved, no quoting to get wrong) instead
+    of through a cmd.exe command line, connects to `ai-prowler` correctly
+    every time and exposes the full real tool list.
+
+    Fix: the prompt is no longer a command-line argument at all. It's
+    written to AI_ROUTING_PROMPT_TXT_PATH as plain UTF-8 text (real
+    newlines, real quotes, real %, nothing escaped — none of it can touch
+    cmd.exe's parsing once it's file content instead of an argument) and
+    piped to claude's stdin with `type ... | claude -p` — "-p" alone,
+    with no positional prompt argument, is documented as reading the
+    prompt from stdin ("useful for pipes"). This sidesteps the whole
+    class of quoting risk instead of trying to get the escaping more
+    exactly right.
+
+    Args mirror build_wrapper_script_content()'s auth-block parameters;
+    see that function's docstring for why each auth path reads its
+    credential from a file at runtime rather than embedding it.
+    """
+    api_key_block = ""
+    if oauth_token_path is not None:
+        # Server mode (2026-09-19): the run is billed to the SPECIFIC user who
+        # tapped the button, using the Claude token an admin saved for them in
+        # the Admin tab — never the host's shared token, and never the API-key
+        # path (a per-user API key isn't a supported setup). Same read-from-a-
+        # file-at-runtime pattern as the shared token: nothing secret is ever
+        # written into the .bat itself.
+        api_key_block = f"""REM Use THIS user's Claude Code OAuth token — see
+REM build_ai_routing_wrapper_content()'s docstring (server mode).
+if exist "{oauth_token_path}" (
+    set /p CLAUDE_CODE_OAUTH_TOKEN=<"{oauth_token_path}"
+) else (
+    echo [ERROR] No Claude token is saved for this user - set one in the Admin tab.
+    exit /b 1
+)
+
+"""
+    elif use_api_key:
+        api_key_block = f"""REM Use ANTHROPIC_API_KEY — see build_wrapper_script_content()'s
+REM docstring for why this reads from a file at runtime.
+if exist "{API_KEY_PATH}" (
+    set /p ANTHROPIC_API_KEY=<"{API_KEY_PATH}"
+) else (
+    echo [ERROR] use_api_key is enabled but {API_KEY_PATH} was not found.
+    exit /b 1
+)
+
+"""
+    else:
+        api_key_block = f"""REM Use the Claude Code OAuth token — see build_wrapper_script_content()'s
+REM docstring for why this reads from a file at runtime.
+if exist "{OAUTH_TOKEN_PLAIN_PATH}" (
+    set /p CLAUDE_CODE_OAUTH_TOKEN=<"{OAUTH_TOKEN_PLAIN_PATH}"
+) else (
+    echo [ERROR] No Claude Code OAuth token found — click Get / Renew Token in AI-Prowler first.
+    exit /b 1
+)
+
+"""
+
+    # Write the prompt as its own plain file — no batch escaping needed at
+    # all now (see docstring above): real newlines, real quotes, real %.
+    AI_ROUTING_PROMPT_TXT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    AI_ROUTING_PROMPT_TXT_PATH.write_text(prompt, encoding="utf-8")
+
+    AI_ROUTING_WRAPPER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    return rf"""@echo off
+chcp 65001 >nul
+REM Auto-generated by task_queue_automation.py (build_ai_routing_wrapper_content)
+REM — do not edit by hand. Content is rewritten fresh before every trigger of
+REM AI-Prowler-AIRoutingRunner; whatever is here right now is the LAST
+REM on-demand AI Routing request that was made. The actual prompt text
+REM lives in {AI_ROUTING_PROMPT_TXT_PATH.name}, piped in via stdin below —
+REM see this function's docstring for why it's not a command-line argument.
+
+cd /d "{AI_PROWLER_HOME}"
+
+{api_key_block}type "{AI_ROUTING_PROMPT_TXT_PATH}" | "{_get_claude_exe()}" -p ^
+  --mcp-config "{mcp_config_path}" ^
+  --allowedTools "{allowed_tools}" ^
+  --output-format json ^
+  --permission-mode bypassPermissions > "{AI_ROUTING_LAST_RUN_PATH}" 2>&1
+
+set RC=%ERRORLEVEL%
+REM Completion marker written LAST, after the claude call has fully
+REM returned — this, not pending_tasks.json (never touched by this
+REM dedicated task), is what the polling caller watches for.
+echo %RC% %date% %time% > "{AI_ROUTING_DONE_MARKER_PATH}"
 exit /b %RC%
 """
 
@@ -2496,6 +2798,127 @@ try {{
     Set-Content -Path '{result_file}' -Value "FAIL: $msg" -Encoding UTF8
 }}
 """
+
+
+def _build_register_ai_routing_task_ps1(wrapper_script_path: str, username: str,
+                                         result_file: str) -> str:
+    """Registers AI_ROUTING_TASK_NAME with the same proven S4U principal as
+    _build_register_queue_task_ps1() above, but deliberately WITH NO
+    TRIGGER at all — Register-ScheduledTask doesn't require -Trigger, and a
+    triggerless task is still fully runnable on demand via
+    `schtasks /run` / Start-ScheduledTask. This task must never fire on its
+    own; it exists purely to be started explicitly, each time with a fresh
+    wrapper script written for that one specific routing request — see
+    AI_ROUTING_TASK_NAME's module-level comment for why this needs to be a
+    genuinely separate task rather than reusing SCHEDULED_TASK_NAME."""
+    return f"""$ErrorActionPreference = 'Stop'
+try {{
+    $action = New-ScheduledTaskAction -Execute '{wrapper_script_path}'
+    $principal = New-ScheduledTaskPrincipal -UserId '{username}' -LogonType S4U -RunLevel Limited
+    Register-ScheduledTask -TaskName '{AI_ROUTING_TASK_NAME}' -Action $action -Principal $principal -Force | Out-Null
+    Set-Content -Path '{result_file}' -Value 'OK' -Encoding UTF8
+}} catch {{
+    $msg = $_.Exception.Message -replace "[\\r\\n]+", " "
+    Set-Content -Path '{result_file}' -Value "FAIL: $msg" -Encoding UTF8
+}}
+"""
+
+
+def _register_ai_routing_task_elevated(wrapper_script_path: Path, run_as_user: str,
+                                        timeout_sec: int = 30) -> tuple[bool, str]:
+    """Same one-time-UAC-prompt elevation pattern as
+    _register_queue_task_elevated() — Register-ScheduledTask with an S4U
+    principal requires it regardless of whether a trigger is attached."""
+    result_file = AI_PROWLER_HOME / f"_register_ai_routing_task_result_{os.getpid()}.txt"
+    ps1_path = AI_PROWLER_HOME / f"_register_ai_routing_task_{os.getpid()}.ps1"
+    AI_PROWLER_HOME.mkdir(parents=True, exist_ok=True)
+    try:
+        ps1_path.write_text(
+            _build_register_ai_routing_task_ps1(
+                str(wrapper_script_path).replace("'", "''"), run_as_user,
+                str(result_file)),
+            encoding="utf-8")
+    except Exception as e:
+        return False, f"Could not write task registration script: {e}"
+
+    try:
+        subprocess.run(
+            ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command",
+             f'Start-Process -FilePath "powershell.exe" -ArgumentList '
+             f'\'-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{ps1_path}"\' '
+             f'-Verb RunAs -Wait'],
+            capture_output=True, text=True, timeout=timeout_sec,
+            creationflags=subprocess.CREATE_NO_WINDOW)
+
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline:
+            if result_file.exists():
+                break
+            time.sleep(0.5)
+        else:
+            return False, (
+                "Timed out waiting for the elevated task registration to "
+                "complete — if a UAC prompt appeared, it may have been "
+                "declined or is still waiting for a response.")
+
+        content = result_file.read_text(encoding="utf-8-sig", errors="replace").strip()
+        if content.startswith("OK"):
+            return True, "ok"
+        return False, content[len("FAIL: "):] if content.startswith("FAIL:") else content
+    except subprocess.TimeoutExpired:
+        return False, "Timed out."
+    except Exception as e:
+        return False, str(e)
+    finally:
+        for p in (ps1_path, result_file):
+            try:
+                p.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+def ai_routing_task_exists() -> bool:
+    """Same shape as scheduled_task_exists(), for AI_ROUTING_TASK_NAME."""
+    r = subprocess.run(["schtasks", "/query", "/tn", AI_ROUTING_TASK_NAME],
+                        capture_output=True, text=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW)
+    return r.returncode == 0
+
+
+def install_ai_routing_task(run_as_user: str = None) -> tuple[bool, str]:
+    """One-time setup — call from a real user-initiated GUI action (a
+    button click), never silently from a background thread: this triggers
+    a genuine UAC consent prompt, same as install_scheduled_task() does for
+    the main queue runner, and there is no way around that for creating an
+    S4U-principal task. Idempotent (Register-ScheduledTask -Force replaces
+    a prior registration cleanly) — safe to call again if ever needed.
+
+    The wrapper script path registered here is fixed (AI_ROUTING_WRAPPER_PATH,
+    below) — its CONTENT gets rewritten fresh by
+    build_ai_routing_wrapper_content() immediately before every on-demand
+    trigger, but the task's own registration (path, principal, no trigger)
+    only needs to happen once, here.
+
+    Returns (success, detail)."""
+    if run_as_user is None:
+        run_as_user = os.environ.get("USERNAME") or getpass.getuser()
+
+    _grant_ok, _grant_detail = grant_batch_logon_right(run_as_user)
+
+    # Ensure a placeholder wrapper exists at the registered path before
+    # first registration — Register-ScheduledTask just needs *a* file to
+    # point its Action at; content is irrelevant until the first real
+    # on-demand trigger overwrites it.
+    AI_ROUTING_WRAPPER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if not AI_ROUTING_WRAPPER_PATH.exists():
+        AI_ROUTING_WRAPPER_PATH.write_text("@echo off\r\nexit /b 0\r\n", encoding="utf-8")
+
+    reg_ok, reg_detail = _register_ai_routing_task_elevated(AI_ROUTING_WRAPPER_PATH, run_as_user)
+    if not reg_ok:
+        return False, reg_detail
+    if _grant_ok:
+        return True, "ok"
+    return True, f"ok (batch logon right grant had an issue: {_grant_detail})"
 
 
 def _register_queue_task_elevated(wrapper_script_path: Path, schedule_time: str,

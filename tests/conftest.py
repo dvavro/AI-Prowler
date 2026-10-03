@@ -82,6 +82,29 @@ if str(SRC_ROOT) not in sys.path:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Windows console-signal guard (2026-10-01).
+# On Windows, os.kill(pid, 0) and os.kill(pid, 1) do NOT probe a process: 0 is
+# CTRL_C_EVENT and 1 is CTRL_BREAK_EVENT, sent to the whole console. One test
+# doing that (WCS-01) killed run_tests.bat's PowerShell Tee-Object pipe, so full
+# runs never showed pytest's end summary of failures and warnings. Any test that
+# tries it now fails loudly instead of silently cutting off the run. Tests that
+# mock os.kill (patch("os.kill")) are unaffected.
+# ──────────────────────────────────────────────────────────────────────────────
+if sys.platform == "win32":
+    _real_os_kill = os.kill
+
+    def _guarded_os_kill(pid, sig):
+        if sig in (0, 1):
+            raise RuntimeError(
+                f"Test tried os.kill({pid}, {sig}) — on Windows that sends "
+                f"{'Ctrl+C' if sig == 0 else 'Ctrl+Break'} to the console and kills "
+                f"run_tests.bat's output. Mock os.kill instead.")
+        return _real_os_kill(pid, sig)
+
+    os.kill = _guarded_os_kill
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Module import — done lazily inside a fixture so that ANY pytest collection
 # error (e.g. missing chromadb) shows up as a fixture failure for one test
 # rather than a collection failure for the whole suite.
@@ -169,6 +192,25 @@ def isolated_env(tmp_path, rag, monkeypatch):
         except OSError:
             pass
 
+    # Record every database folder THIS test process opens (2026-10-01).
+    # The mtime check alone can't tell who changed the folder: the live
+    # AI-Prowler on the same PC (file watcher, MCP re-index) writes to it too,
+    # and whichever test happened to be running got blamed. rag_preprocessor
+    # opens ChromaDB in exactly one place — chromadb.PersistentClient(path=...)
+    # — so wrapping it shows whether this test really touched the real database.
+    _opened_db_paths: list[str] = []
+    try:
+        import chromadb as _chromadb
+        _real_persistent_client = _chromadb.PersistentClient
+
+        def _recording_persistent_client(*args, **kwargs):
+            _opened_db_paths.append(str(kwargs.get("path", args[0] if args else "")))
+            return _real_persistent_client(*args, **kwargs)
+
+        monkeypatch.setattr(_chromadb, "PersistentClient", _recording_persistent_client)
+    except Exception:
+        pass   # chromadb missing — the rag fixture reports that on its own
+
     class Env:
         pass
     env = Env()
@@ -209,19 +251,38 @@ def isolated_env(tmp_path, rag, monkeypatch):
     if _real_db_mtime_before is not None and _real_db_path.exists():
         try:
             _real_db_mtime_after = _real_db_path.stat().st_mtime
-            assert _real_db_mtime_after == _real_db_mtime_before, (
+        except OSError:
+            _real_db_mtime_after = _real_db_mtime_before   # can't stat — don't crash teardown
+        if _real_db_mtime_after != _real_db_mtime_before:
+            def _is_real(p):
+                try:
+                    return Path(p).resolve() == _real_db_path.resolve()
+                except Exception:
+                    return False
+            _this_test_opened_real = (any(_is_real(p) for p in _opened_db_paths)
+                                      or _is_real(rag.CHROMA_DB_PATH))
+            assert not _this_test_opened_real, (
                 f"\n\n*** PRODUCTION DATABASE CORRUPTED BY THIS TEST ***\n"
                 f"    Path:   {_real_db_path}\n"
                 f"    Before: {_real_db_mtime_before}\n"
                 f"    After:  {_real_db_mtime_after}\n"
-                f"The test bypassed isolated_env isolation and wrote to the real\n"
-                f"~/AI-Prowler/rag_database. Fix: ensure the test uses `isolated_env`\n"
-                f"and that rag_preprocessor.CHROMA_DB_PATH was patched before any\n"
-                f"ChromaDB call, OR ensure AIPROWLER_TEST_STATE_DIR is set in the\n"
-                f"environment (run_tests.bat sets this automatically)."
+                f"This test opened the real ~/AI-Prowler/rag_database and it changed.\n"
+                f"Fix: ensure the test uses `isolated_env` and that\n"
+                f"rag_preprocessor.CHROMA_DB_PATH was patched before any ChromaDB call,\n"
+                f"OR ensure AIPROWLER_TEST_STATE_DIR is set in the environment\n"
+                f"(run_tests.bat sets this automatically)."
             )
-        except OSError:
-            pass  # can't stat after — don't crash teardown over a missing dir
+            # This test never opened the real database, so another program —
+            # normally the AI-Prowler running on this PC (file watcher, an MCP
+            # re-index) — changed it during the test. Report it, don't blame
+            # the test.
+            import warnings
+            warnings.warn(
+                f"{_real_db_path} changed during this test, but the test never opened "
+                f"it — another program (most likely the AI-Prowler running on this PC) "
+                f"wrote to it. Not a test failure.",
+                UserWarning,
+            )
 
 
 # ──────────────────────────────────────────────────────────────────────────────

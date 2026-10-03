@@ -12,8 +12,9 @@ Protocol  : MCP 1.x via the official `mcp` Python SDK (FastMCP)
 Install the MCP package:
     pip install mcp
 
-Then register this server in Claude Desktop's config
-(see claude_desktop_config_example.json for the exact snippet).
+The installer registers this server in Claude Desktop's config
+(%APPDATA%\\Claude\\claude_desktop_config.json) automatically; the desktop
+app's ⚙️ Auto-configure Claude Desktop button re-does it if ever needed.
 
 Author: AI-Prowler project
 """
@@ -89,14 +90,70 @@ if _log_dir_override:
     # just above, except self-inflicted by running tests while the real
     # server is up. config.json/users.json/ChromaDB already redirect under
     # AIPROWLER_TEST_STATE_DIR (see _state_dir() below); logs now do too.
-    _LOG_PATH = Path(_log_dir_override) / "logs" / "mcp_server.log"
+    _LOG_DIR = Path(_log_dir_override) / "logs"
 else:
-    _LOG_PATH = Path.home() / ".ai-prowler" / "logs" / "mcp_server.log"
-_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _LOG_DIR = Path.home() / ".ai-prowler" / "logs"
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-# Rotating log: 5 MB per file, keep 3 backups (15 MB total max).
-# Also rotates on each startup so each server session begins in a fresh file.
-# Startup rotation: .log -> .log.1 -> .log.2 (oldest), then open fresh.
+# ── One log file per server process (2026-10-02, Vicki) ──────────────────────
+# Several AI-Prowler server processes run at once on one PC: the always-on
+# HTTP server (GUI / Jobs app / phone), plus stdio copies Claude Desktop and
+# the background task runs start (two at a time was seen on 2026-09-28). They
+# all wrote the SAME mcp_server.log. Windows can't rename a file another
+# process has open, so rotation of the shared log could never succeed — and
+# the stock rotation shifted .1→.2→.3 BEFORE failing to move the live log,
+# on every single log line, so .1/.2 were destroyed into .3 while the live log
+# grew without limit (117 MB, no rotation since 9/28).
+# Now: the HTTP server keeps mcp_server.log (the one the GUI, the Remote app's
+# log download and support look at); every other process (stdio, or anything
+# that merely imports this module) writes its own mcp_stdio_<pid>.log, and the
+# oldest of those are deleted at startup so they can't pile up.
+def _argv_transport_is_http() -> bool:
+    if __name__ != "__main__":
+        return False
+    a = sys.argv[1:]
+    for i, x in enumerate(a):
+        if x == "--transport" and i + 1 < len(a):
+            return a[i + 1].strip().lower() == "http"
+        if x.startswith("--transport="):
+            return x.split("=", 1)[1].strip().lower() == "http"
+    return False
+
+
+_IS_HTTP_SERVER = _argv_transport_is_http()
+_STDIO_LOGS_KEPT = 10        # newest per-process stdio logs kept
+
+
+def _prune_stdio_logs(log_dir: Path, keep: int) -> None:
+    """Delete all but the newest `keep` mcp_stdio_<pid>.log files (and their
+    .1 backups). A file still in use by a running process can't be deleted on
+    Windows — that error is simply skipped, so a live process never loses its log."""
+    try:
+        logs = sorted(log_dir.glob("mcp_stdio_*.log"),
+                      key=lambda p: p.stat().st_mtime, reverse=True)
+    except Exception:
+        return
+    for old in logs[keep:]:
+        for p in (old, old.with_name(old.name + ".1")):
+            try:
+                p.unlink()
+            except Exception:
+                pass
+
+
+if _IS_HTTP_SERVER:
+    _LOG_PATH = _LOG_DIR / "mcp_server.log"
+else:
+    _prune_stdio_logs(_LOG_DIR, _STDIO_LOGS_KEPT - 1)   # room for this one
+    _LOG_PATH = _LOG_DIR / f"mcp_stdio_{os.getpid()}.log"
+
+# Rotating log: 5 MB per file, keep 3 backups (.1 newest … .3 oldest).
+# The HTTP server's log also rotates once at startup (see just after the
+# handler is created) so each server session begins in a fresh file.
+# (2026-10-02: the old startup step COPIED .log -> .log.1 -> .log.2 and then
+# kept appending to the same .log — RotatingFileHandler forces append mode
+# whenever maxBytes is set, so mode="w" never truncated anything — which is
+# why the live log carried sessions back to 9/28.)
 #
 # v9.1.x HARDENING — root-caused a real production hang (2026-09-10): on
 # Windows, a rename-based rotation step fails with PermissionError if ANY
@@ -114,16 +171,6 @@ _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 # below exists to make that specific failure mode structurally impossible:
 # a rotation failure should make the log file too big, never make the server
 # unresponsive.
-import shutil as _shutil
-for _i in range(2, 0, -1):
-    _old = _LOG_PATH.with_suffix(f".log.{_i}")
-    _prev = _LOG_PATH.with_suffix(f".log.{_i-1}") if _i > 1 else _LOG_PATH
-    if _prev.exists():
-        try:
-            _shutil.copy2(str(_prev), str(_old))
-        except Exception:
-            pass  # e.g. previous log locked by a viewer — skip, non-fatal
-
 from logging.handlers import RotatingFileHandler as _RotatingFileHandler
 
 class _SafeRotatingFileHandler(_RotatingFileHandler):
@@ -133,44 +180,162 @@ class _SafeRotatingFileHandler(_RotatingFileHandler):
     If doRollover() fails (locked file, permissions, anything), this just
     keeps writing to the current file instead of raising. A log file that
     temporarily exceeds maxBytes is a minor annoyance; a hung server isn't.
+
+    v9.1.x hardening had a gap: if the ROTATION rename failed AND the
+    recovery re-open (self._open()) also failed (e.g. the target is locked
+    by both a tailing viewer AND an AV scan), self.stream was left as None.
+    The next emit() then fell through to the stock (unoverridden) emit(),
+    which tries self.stream = self._open() again, fails again, and routes
+    the exception to the stock handleError() — which writes to sys.stderr.
+    This process redirects sys.stderr to a class that logs via this SAME
+    handler, so that write re-entered emit(), failed the same way, called
+    handleError() again, wrote to stderr again... an unbounded recursive
+    re-entry into the one handler that's supposed to be crash-proof —
+    observed as a RecursionError so deep it corrupted the interpreter's own
+    error reporting ("lost sys.stderr"), or as a full server freeze in
+    production if stderr was piped somewhere with a fixed buffer instead.
+
+    Fixed by never delegating to the stock emit()/handleError() path at
+    all: _ensure_stream() guarantees SOME writable stream (real file, else
+    os.devnull, else an in-memory no-op sink) before every write, and emit()
+    swallows everything itself instead of ever reaching handleError().
     """
     def shouldRollover(self, record):
         try:
+            import time as _t
+            # After a failed rotation, don't retry on every line (each retry is
+            # a rename attempt on disk) — wait _RETRY_AFTER_SEC, then try again.
+            if _t.monotonic() < getattr(self, "_rollover_blocked_until", 0.0):
+                return 0
             return super().shouldRollover(record)
         except Exception:
             return 0  # never let even the SIZE CHECK block emit()
 
+    _RETRY_AFTER_SEC = 300
+
     def doRollover(self):
+        """Rotate WITHOUT ever losing a backup (2026-10-02).
+
+        The stock rotation shifts .1→.2→.3 FIRST and renames the live log to
+        .1 LAST. On Windows that last rename fails whenever another process has
+        the live log open — and the stock code then retried on every log line,
+        shifting the backups again each time: .1 and .2 were pushed into .3
+        (overwriting it) while the live log never moved and grew without limit
+        (seen: mcp_server.log 117 MB, only .log.3 left).
+
+        Here the live log is moved aside FIRST. Only if that worked are the
+        backups shifted and the moved file put in place as .1. If it can't be
+        moved, NOTHING is touched, logging carries on in the same file, and
+        the next attempt waits _RETRY_AFTER_SEC. Never raises."""
+        import time as _t
+        base = self.baseFilename
+        aside = base + ".rotating"
         try:
-            super().doRollover()
+            if self.stream is not None:
+                self.stream.close()
         except Exception:
-            # Rotation failed. Make sure we still have a writable stream on
-            # SOME file before returning, so emit() can proceed normally —
-            # but never let opening that stream raise either.
-            try:
-                if self.stream is None or self.stream.closed:
-                    self.stream = self._open()
-            except Exception:
+            pass
+        self.stream = None          # emit()'s _ensure_stream() reopens (append)
+        try:
+            if os.path.exists(aside):            # left over from an interrupted rotation
+                os.replace(aside, base + ".rotating.old")
+        except Exception:
+            pass
+        try:
+            os.replace(base, aside)              # STEP 1: move the live log aside
+        except Exception:
+            self._rollover_blocked_until = _t.monotonic() + self._RETRY_AFTER_SEC
+            return                               # backups untouched
+        self._rollover_blocked_until = 0.0
+        for i in range(self.backupCount - 1, 0, -1):   # STEP 2: .2→.3, .1→.2
+            src, dst = f"{base}.{i}", f"{base}.{i + 1}"
+            if os.path.exists(src):
+                try:
+                    os.replace(src, dst)
+                except Exception:
+                    pass   # e.g. a viewer has dst open — keep going, never raise
+        try:
+            if self.backupCount > 0:
+                os.replace(aside, base + ".1")   # STEP 3: the old live log is .1
+            else:
+                os.remove(aside)
+        except Exception:
+            pass   # stays as .rotating; the next rotation keeps it as .rotating.old
+
+    def _ensure_stream(self):
+        """Guarantee self.stream is a writable, non-None stream, no matter
+        what doRollover() just did or didn't manage. Tries the real log
+        file first; if that's still locked, falls back to a discard sink
+        so writes never raise and never re-enter emit()/handleError()."""
+        if self.stream is not None and not self.stream.closed:
+            return
+        try:
+            self.stream = self._open()
+            return
+        except Exception:
+            pass
+        try:
+            self.stream = open(os.devnull, "w", encoding="utf-8")
+            return
+        except Exception:
+            pass
+        class _NullStream:
+            def write(self, *_a, **_k):
                 pass
+            def flush(self):
+                pass
+            closed = False
+        self.stream = _NullStream()
+
+    def emit(self, record):
+        # Deliberately never calls the stock BaseRotatingHandler.emit() /
+        # handleError() — those are what re-enter sys.stderr (redirected
+        # back into this same logger) on ANY failure here. Every step below
+        # is wrapped so a write failure degrades to "this one line is lost"
+        # rather than "the server hangs".
+        try:
+            if self.shouldRollover(record):
+                self.doRollover()
+            self._ensure_stream()
+            logging.FileHandler.emit(self, record)
+        except Exception:
+            pass
 
 try:
     _log_handler = _SafeRotatingFileHandler(
         str(_LOG_PATH),
-        mode="w",           # fresh file each startup (startup rotation already done above)
+        mode="a",                   # (RotatingFileHandler forces "a" anyway)
         maxBytes=5 * 1024 * 1024,   # 5 MB per file
-        backupCount=3,              # keep .log.1 .log.2 .log.3 (15 MB total max)
+        # HTTP server: .log.1 .log.2 .log.3 (15 MB of history).
+        # stdio / other process: its own file + one backup.
+        backupCount=3 if _IS_HTTP_SERVER else 1,
         encoding="utf-8",
+        # A process that merely imports this module (e.g. the desktop app)
+        # may never log anything — don't leave an empty mcp_stdio_<pid>.log
+        # behind; the file is created on the first log line (2026-10-02).
+        delay=not _IS_HTTP_SERVER,
     )
+    # Start each HTTP server session in a fresh file: the previous session's
+    # log becomes .log.1 (and .1→.2→.3). Same safe rotation as at 5 MB — if
+    # the old log is still held by something, nothing is lost; this session
+    # just continues in it until a later rotation succeeds.
+    if _IS_HTTP_SERVER:
+        try:
+            if _LOG_PATH.exists() and _LOG_PATH.stat().st_size > 0:
+                _log_handler.doRollover()
+                _log_handler._ensure_stream()
+        except Exception:
+            pass
 except Exception:
     # Even the initial open failed (e.g. mcp_server.log itself locked by a
     # viewer at startup) — fall back to a uniquely-named file rather than
     # crashing the whole server over a logging path. Startup must not depend
     # on nobody else having the log open.
     import time as _boot_time
-    _fallback_path = _LOG_PATH.with_name(f"mcp_server_{int(_boot_time.time())}.log")
+    _fallback_path = _LOG_PATH.with_name(f"{_LOG_PATH.stem}_{int(_boot_time.time())}.log")
     _log_handler = _SafeRotatingFileHandler(
-        str(_fallback_path), mode="w",
-        maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8",
+        str(_fallback_path), mode="a",
+        maxBytes=5 * 1024 * 1024, backupCount=1, encoding="utf-8",
     )
 logging.basicConfig(
     level=logging.DEBUG,
@@ -808,6 +973,11 @@ _TIER_A_SUPPRESSED: frozenset = frozenset({
     # Note: send_email, send_alert, and send_learnings_report stay registered;
     # all roles use them via the Tier B _send_email_cap gate.
     "configure_email", "send_file",
+    # list_outlook_accounts (R-049, 2026-09-28): it already refused to run in
+    # server mode (it reads the local Outlook profile of whoever runs the
+    # server), yet was still registered and counted there — the Settings
+    # panel's server Email group showed 4 tools where only 3 work.
+    "list_outlook_accounts",
     "export_learnings_file",
     # Bulk index rebuild — destructive operator action, not for remote users
     "rebuild_learnings_index",
@@ -824,7 +994,19 @@ _TIER_A_SUPPRESSED: frozenset = frozenset({
     # once the real usage model turned out to be "user adds tasks to the
     # queue manually only, no auto-syncing" — so it no longer needs an
     # entry here at all.)
+    # 2026-09-24 fix: queue_single_task and get_all_queued_tasks were
+    # named in this very comment as following the same personal-only
+    # rationale, but were never actually added to the set below — the
+    # comment described the intent, the code never implemented it. Left
+    # unaddressed, this orphaned both tools in server mode: neither has an
+    # internal mode check, so they were reachable there even though every
+    # other tool in this category (create_analysis_task, list_analysis_tasks,
+    # get_pending_analysis_tasks, etc.) is suppressed — leaving a caller
+    # able to queue or list tasks with nothing else in the category
+    # available to define, view, or execute what's queued. Added below to
+    # match the stated rationale.
     "delete_analysis_task", "update_analysis_task",
+    "queue_single_task", "get_all_queued_tasks",
     # Raw/unscoped SMS inbox — personal-install-only. sms_inbox_read() has no
     # per-user filtering (unlike sms_inbox_read_for_user()), so in a
     # multi-user server it would let any employee read every inbound
@@ -872,6 +1054,159 @@ _log.info(
     _IS_SERVER_MODE, len(_PERSONAL_MODE_SUPPRESSED)
 )
 
+# ── Tier C: user-configurable tool suppression (2026-09-24) ─────────────────
+# The Settings tab's MCP Tool Configuration panel. Unlike Tier A / the mirror
+# gate above (both hard-coded, engineering-controlled, and absolute), this
+# layer is entirely user-controlled via ~/.ai-prowler/tool_config.json and
+# can ONLY ever narrow what Tier A/mirror-gate already allow in the current
+# mode — it has no way to re-expose something those layers hide, by
+# construction (see the check order inside _counting_mcp_tool below).
+#
+# A tool marked `locked=True` in mcp_tool_catalog.TOOL_CATALOG can never be
+# suppressed this way — enforced twice: once in the Settings GUI (the
+# checkbox is simply non-interactive) and again right here, so a hand-edited
+# tool_config.json can't bypass it either.
+#
+# 2026-09-24 fix: this import previously had NO exception handling — a
+# real deployment gap (a brand-new file, unlike an edited existing one,
+# didn't make it into the live install directory) meant a missing
+# mcp_tool_catalog.py crashed the ENTIRE server on every single startup,
+# a true crash-loop, since nothing after this line ever ran. Every other
+# piece of this feature (_load_user_tool_config, the Tier C branch below)
+# was already written to fail safely — this bare import was the one gap.
+# Now: if the catalog can't be imported for any reason, the whole Tier C
+# feature quietly disables itself (_tool_catalog stays None, every
+# consumer below checks for that and no-ops) rather than taking the
+# server down. The two Tier A/mirror-gate suppression layers above are
+# completely unaffected either way — they don't depend on this module.
+try:
+    import mcp_tool_catalog as _tool_catalog
+except Exception as _tool_catalog_import_error:
+    _tool_catalog = None
+    _log.warning(
+        "mcp_tool_catalog could not be imported (%s) — the Settings tab's "
+        "MCP Tool Configuration panel will show nothing to configure, but "
+        "the server itself starts normally. Fix: ensure mcp_tool_catalog.py "
+        "is present alongside ai_prowler_mcp.py in the install directory.",
+        _tool_catalog_import_error,
+    )
+
+
+def _tool_config_path() -> Path:
+    """Same AIPROWLER_TEST_STATE_DIR override every other state file in this
+    module respects (see _detect_server_mode()) — lets the automated test
+    suite point this at a scratch directory without touching a real
+    install's actual saved configuration."""
+    _td = os.environ.get("AIPROWLER_TEST_STATE_DIR", "").strip()
+    base = Path(_td) if _td else Path.home() / ".ai-prowler"
+    return base / "tool_config.json"
+
+
+def _load_user_tool_config() -> "dict[str, frozenset]":
+    """Read tool_config.json and return {"personal": frozenset(...),
+    "server": frozenset(...)} — the set of tool names the user has asked to
+    disable, one set per mode, independently persisted in the same file.
+
+    Safe-closed on ANY problem (missing file, malformed JSON, wrong types,
+    an unrecognized schema_version) — returns both sets empty, meaning
+    "change nothing," the same philosophy _detect_server_mode() already
+    uses for its own config.json read. A tool-configuration feature must
+    never be able to prevent AI-Prowler from starting.
+
+    Locked tools are filtered out of whatever the file claims, here, not
+    just in the GUI — a hand-edited config that lists a locked tool as
+    disabled is silently corrected rather than trusted.
+    """
+    empty = {"personal": frozenset(), "server": frozenset()}
+    if _tool_catalog is None:
+        return empty  # import failed at startup — already logged there
+    try:
+        path = _tool_config_path()
+        if not path.exists():
+            return empty
+        raw = json.loads(path.read_text(encoding="utf-8-sig"))
+        if not isinstance(raw, dict):
+            return empty
+        if raw.get("schema_version") != 1:
+            _log.warning(
+                "tool_config.json has an unrecognized schema_version (%r) — "
+                "ignoring saved tool configuration until it's re-saved.",
+                raw.get("schema_version"),
+            )
+            return empty
+
+        result = {}
+        for mode_key in ("personal", "server"):
+            block = raw.get(mode_key) or {}
+            names = block.get("disabled_tools") or []
+            if not isinstance(names, list):
+                names = []
+            # Defense in depth: drop anything not a string, anything not a
+            # real tool name, and anything locked — never trust the file.
+            cleaned = {
+                n for n in names
+                if isinstance(n, str)
+                and n in _tool_catalog.TOOL_CATALOG
+                and not _tool_catalog.is_locked(n)
+            }
+            result[mode_key] = frozenset(cleaned)
+        return result
+    except Exception as _e:
+        _log.warning("Could not read tool_config.json (%s) — starting with "
+                     "no user-disabled tools.", _e)
+        return empty
+
+
+_USER_TOOL_CONFIG = _load_user_tool_config()
+_USER_DISABLED_TOOLS: frozenset = _USER_TOOL_CONFIG[
+    "server" if _IS_SERVER_MODE else "personal"
+]
+
+_log.info(
+    "User tool configuration: mode=%s — %d tool(s) hidden by user "
+    "preference (Settings tab MCP Tool Configuration panel)",
+    "server" if _IS_SERVER_MODE else "personal", len(_USER_DISABLED_TOOLS)
+)
+
+
+# ── R-049 (2026-09-28): the Jobs app honours the tool panel too ──────────────
+# The Jobs app (/pwa-api, both modes) calls tool functions directly, so the
+# Tier C suppression above — which only keeps a tool out of the MCP tool list —
+# never reached it: switching off "Job Tracker & Routing" left the whole Jobs
+# app working, and switching off SMS still let the app text. Both /pwa-api
+# handlers now ask this first, and server mode's /pwa-login refuses sign-in
+# when the Jobs app's core read is off (the whole Job Tracker group, in
+# practice) — that is what makes the Jobs app optional.
+_JOBS_APP_CORE_TOOL = "read_job_spreadsheet"
+
+
+def _pwa_tool_disabled_message(tool_name: str, disabled=None) -> str:
+    """'' if the Jobs app may call tool_name; otherwise a short, user-facing
+    reason (the owner turned it off in Settings → MCP Tool Configuration).
+    Locked tools can never be off. `disabled` overrides the loaded set (tests)."""
+    _off = _USER_DISABLED_TOOLS if disabled is None else disabled
+    if tool_name not in _off:
+        return ""
+    if _tool_catalog is not None and _tool_catalog.is_locked(tool_name):
+        return ""
+    _meta = _tool_catalog.TOOL_CATALOG.get(tool_name) if _tool_catalog is not None else None
+    _label = _meta.label if _meta is not None else tool_name
+    return (f"“{_label}” is turned off on this AI-Prowler "
+            f"(Settings → MCP Tool Configuration). Ask the owner to turn it back on.")
+
+
+def _jobs_app_turned_off(disabled=None) -> bool:
+    """True when the owner has switched the Jobs app off — its core read tool is
+    disabled in the Settings panel (normally by unticking "Job Tracker & Routing")."""
+    _off = _USER_DISABLED_TOOLS if disabled is None else disabled
+    return _JOBS_APP_CORE_TOOL in _off
+
+
+_JOBS_APP_OFF_MESSAGE = (
+    "The Jobs app is turned off on this AI-Prowler — the owner switched off "
+    "“Job Tracker & Routing” in Settings → MCP Tool Configuration."
+)
+
 # ── Internal audit logging (v8.1.17) ────────────────────────────────────────
 # Replaces reliance on Claude Code's PostToolUse hook (.claude/settings.json
 # + .claude/hooks/log_tool_call.py) for populating
@@ -899,6 +1234,15 @@ _log.info(
 # the old hook wrote — View Audit Log in the GUI needs no changes.
 _AUDIT_LOG_PATH = Path.home() / ".ai-prowler" / "autonomous_run_audit.log"
 
+# Tool arguments that are credentials and must NEVER reach the audit log
+# (2026-09-19): the Jobs app's "Connect your Claude account" flow passes a
+# sign-in code / a Claude token as a plain argument. Only the argument's value
+# is blanked — the call itself is still logged.
+_AUDIT_SECRET_ARGS: dict = {
+    "submit_cli_signin_code": {"code"},
+    "save_my_cli_token": {"token"},
+}
+
 
 def _append_audit_log(tool_name: str, kwargs: dict, ok: bool, error: str = "") -> None:
     """Best-effort, never raises, never slows down or blocks the actual tool
@@ -909,7 +1253,9 @@ def _append_audit_log(tool_name: str, kwargs: dict, ok: bool, error: str = "") -
         _AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         # ctx is a FastMCP Context object -- not JSON-serializable and not
         # useful in an audit trail; strip it before logging.
-        safe_kwargs = {k: v for k, v in kwargs.items() if k != "ctx"}
+        _secret = _AUDIT_SECRET_ARGS.get(tool_name, ())
+        safe_kwargs = {k: ("<redacted>" if k in _secret else v)
+                       for k, v in kwargs.items() if k != "ctx"}
         input_summary = json.dumps(safe_kwargs, default=str)[:200]
         ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         line = f"[{ts}] mcp__ai-prowler__{tool_name} ok={ok} input={input_summary}"
@@ -940,12 +1286,24 @@ def _counting_mcp_tool(*tool_args, **tool_kwargs):
     _PERSONAL_MODE_SUPPRESSED is suppressed the same way — tools that
     only make sense with more than one registered user.
 
+    Tier C (2026-09-24): any tool whose name appears in
+    _USER_DISABLED_TOOLS (the current mode's disabled-tools set from the
+    Settings tab's MCP Tool Configuration panel) is suppressed the same
+    way, UNLESS mcp_tool_catalog says it's locked — checked last, so it
+    can only narrow what Tier A / the mirror gate already allow, never
+    widen it.
+
     v8.1.17: also appends to the audit log (_append_audit_log) on every
     call, success or failure — see that function's docstring / the module
     comment above it for why this replaced the old Claude Code hook.
     """
     def _outer(fn):
-        _tool_name = getattr(fn, '__name__', '_unknown')
+        # The REGISTERED name (mcp.tool(name=...)) wins over the Python
+        # function name (2026-09-26): run_script's async wrapper is the
+        # function run_script_tool registered as "run_script", and every gate
+        # below (Tier A suppresses run_script in server mode) must see
+        # "run_script" — the function name alone would have let it through.
+        _tool_name = tool_kwargs.get('name') or getattr(fn, '__name__', '_unknown')
 
         # Tier A: skip registration entirely in server mode.
         if _IS_SERVER_MODE and _tool_name in _TIER_A_SUPPRESSED:
@@ -957,7 +1315,33 @@ def _counting_mcp_tool(*tool_args, **tool_kwargs):
             _log.debug("Personal-mode gate: suppressing '%s' (not registered with MCP)", _tool_name)
             return fn  # plain Python function — invisible to MCP clients
 
+        # Tier C: user-configured suppression, from the Settings tab panel.
+        # Checked last and gated on "not locked" so a config that somehow
+        # slipped a locked tool's name past _load_user_tool_config()'s own
+        # filter (it shouldn't be able to, but never trust one layer alone)
+        # still can't suppress it here either.
+        if _tool_name in _USER_DISABLED_TOOLS and not _tool_catalog.is_locked(_tool_name):
+            _log.debug("User tool configuration: suppressing '%s' (not registered with MCP)", _tool_name)
+            return fn  # plain Python function — invisible to MCP clients
+
         real_decorator = _orig_mcp_tool(*tool_args, **tool_kwargs)
+
+        # Async tools (2026-09-26, run_script) get an async wrapper, so the
+        # MCP SDK still sees a coroutine function, awaits it, and never runs
+        # it on the event loop's thread. A plain sync wrapper here would hand
+        # back an un-awaited coroutine object as the "result".
+        if _inspect.iscoroutinefunction(fn):
+            @_functools.wraps(fn)
+            async def _inner_async(*args, **kwargs):
+                try:
+                    result = await fn(*args, **kwargs)
+                except Exception as e:
+                    _append_audit_log(_tool_name, kwargs, ok=False, error=str(e))
+                    raise
+                _telemetry_increment_tool_count(_tool_name)
+                _append_audit_log(_tool_name, kwargs, ok=True)
+                return result
+            return real_decorator(_inner_async)
 
         @_functools.wraps(fn)
         def _inner(*args, **kwargs):
@@ -1107,14 +1491,15 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "AI-Prowler — Agentic RAG Knowledge Base\n"
         + "=" * 50 + "\n\n"
 
-        "TOOL CATEGORIES (103 tools total — 102 visible in personal mode,\n"
-        "68 visible in server mode; call check_tools_status() for a precise\n"
-        "per-tool breakdown on this connection)\n"
+        "TOOL CATEGORIES (tool counts vary by release — call\n"
+        "check_tools_status() for a precise per-tool breakdown on this\n"
+        "connection; personal mode sees the full catalog, server mode sees\n"
+        "a smaller Tier-A-suppressed subset)\n"
         + "-" * 30 + "\n"
-        "AI-Prowler exposes ten tool families. Most question-answering\n"
+        "AI-Prowler exposes eleven tool families. Most question-answering\n"
         "tasks use the first two; the others cover indexing, code editing,\n"
         "dev tooling, communications, contractor/field-service workflows,\n"
-        "and agentic analysis.\n\n"
+        "job-tracker data portability, and agentic analysis.\n\n"
 
         "  • Knowledge retrieval (RAG over indexed documents):\n"
         "      get_knowledge_base_overview, list_indexed_documents,\n"
@@ -1134,9 +1519,28 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "      geocode_address, get_weather, optimize_route,\n"
         "      build_maps_url, build_daily_route, read_job_spreadsheet,\n"
         "      update_job_spreadsheet, create_job, create_customer,\n"
-        "      create_quote, get_sheet_columns, check_tools_status\n"
+        "      create_quote, get_sheet_columns, check_tools_status,\n"
+        "      get_board_updates\n"
         "      get_home_address (personal mode only — Settings tab's Home\n"
         "      address is a single-owner concept with no server-mode caller)\n"
+        "    NOTE — the job tracker's canonical store is now a SQLite\n"
+        "    database (ai_prowler_jobs.db), not a live .xlsx file — Job\n"
+        "    Board Architecture Spec Phases 0-7. Every tool above keeps its\n"
+        "    same name, arguments, and return shape; only the internals\n"
+        "    changed (row-level transactions instead of whole-file save),\n"
+        "    which is what makes it safe for someone to have the Job Board\n"
+        "    open and editing all day while crew write concurrently.\n"
+        "    Excel is now an EXPORTABLE VIEW ONLY — see export_to_excel in\n"
+        "    the Data Portability section below — never a live write target.\n"
+        "    NOTE — get_board_updates(since, sheet_name) is the live-update\n"
+        "    polling query behind the admin Job Board (1-minute polling —\n"
+        "    spec §6.1): pass the newest _last_edited_at you've seen and it\n"
+        "    returns only rows changed since then, as JSON for a UI to\n"
+        "    render — not meant for a human to read directly like\n"
+        "    read_job_spreadsheet's formatted output. A stale-row write\n"
+        "    (someone else edited the same row since you loaded it) is\n"
+        "    rejected outright with a clear message — reload and redo, no\n"
+        "    silent auto-merge (spec §6.2).\n"
         "    NOTE — create_customer/create_quote ALWAYS append a new row;\n"
         "    to edit an existing customer or quote (e.g. mark inactive,\n"
         "    approve a quote) use update_job_spreadsheet with\n"
@@ -1155,7 +1559,7 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "    both the spreadsheet cell (blue/underlined, tap-to-navigate) and\n"
         "    the Jobs PWA — not just a plain-text URL string. It's ALSO\n"
         "    persisted onto each matched job's own Jobs_Schedule row (that\n"
-        "    sheet's existing 'Route Map URL ★ AI Prowler' column) — unlike\n"
+        "    sheet's existing 'Route Map URL' column) — unlike\n"
         "    Route_Planner (single-day view, overwritten by the next build),\n"
         "    this per-job copy survives building routes for OTHER dates, so\n"
         "    routes can be built for several future/past dates in advance and\n"
@@ -1166,6 +1570,31 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "      schedule_next_recurring_job, log_time_entry,\n"
         "      get_ar_aging_report, save_contact, get_sms_thread,\n"
         "      list_sms_contacts_with_replies\n\n"
+
+        "  • Data portability — export, backup & restore for the job\n"
+        "    tracker (Job Board Architecture Spec Phase 8, spec §12):\n"
+        "      export_to_excel, export_to_csv, export_to_quickbooks_csv,\n"
+        "      backup_job_database, restore_job_database\n"
+        "    Two different needs, two different tools — don't conflate them:\n"
+        "      - export_to_excel / export_to_csv / export_to_quickbooks_csv\n"
+        "        are ONE-WAY, LOSSY-BY-DESIGN VIEWS generated on demand from\n"
+        "        the live database — for a human, an accountant, or a\n"
+        "        QuickBooks Online import. Editing and saving one of these\n"
+        "        files has ZERO effect on the live data; nothing reads\n"
+        "        changes back out of them, ever. export_to_quickbooks_csv\n"
+        "        labels Customers/Invoices columns with QBO's own field\n"
+        "        names so QBO's mandatory field-mapping step is fast rather\n"
+        "        than a guessing exercise; use export_to_csv instead for an\n"
+        "        accountant who doesn't need QBO's specific terminology.\n"
+        "      - backup_job_database / restore_job_database are LOSSLESS,\n"
+        "        ROUND-TRIPPABLE copies of the actual .db file — the right\n"
+        "        tools for safekeeping or moving to a new computer, not for\n"
+        "        handing to a human to read. Both use SQLite's own online\n"
+        "        Backup API (safe even mid-write), never a raw file copy.\n"
+        "        restore_job_database is the one genuinely destructive-to-\n"
+        "        current-state tool in AI-Prowler — it wholesale-replaces\n"
+        "        the live database, so it requires confirm=True and always\n"
+        "        takes a safety backup of whatever was live first.\n\n"
 
         "  • Communications (email + SMS + WhatsApp — every role in both\n"
         "    personal and server mode):\n"
@@ -1720,6 +2149,62 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         if caps.get("is_admin"):
             footer_lines.append("")
             footer_lines.append("Admin tab: ✅ you have admin rights (user management, recovery, etc.)")
+
+    # ── TOOL CONFIGURATION (2026-09-24) ─────────────────────────────────────
+    # Genuinely dynamic, not cosmetic: this section is computed from
+    # mcp_tool_catalog + the actual _USER_DISABLED_TOOLS set loaded at this
+    # process's own startup, and names EXACTLY which tools described
+    # elsewhere in this guide are not actually available right now because
+    # the owner disabled them in Settings → MCP Tool Configuration. The
+    # surrounding category prose above is intentionally left static (it
+    # would lose real explanatory detail if regenerated purely from catalog
+    # data) — this section is what keeps the guide's OUTPUT honest about
+    # configuration without needing to rewrite that prose.
+    footer_lines.append("")
+    footer_lines.append("Tool Configuration (Settings tab → MCP Tool Configuration):")
+    if _tool_catalog is None:
+        # mcp_tool_catalog failed to import at startup (already logged there,
+        # and the server itself started fine regardless — see the try/except
+        # around that import). Nothing to report here; every tool this guide
+        # describes above is available exactly as written, since Tier C
+        # suppression can't be active without the catalog it depends on.
+        footer_lines.append(
+            "  Unavailable on this install (mcp_tool_catalog failed to load "
+            "at startup — check the server log). No tools are disabled by "
+            "user configuration as a result; every tool described above is "
+            "available exactly as written."
+        )
+    else:
+        _htu_mode_key = "server" if _IS_SERVER_MODE else "personal"
+        _htu_available = set(_tool_catalog.tools_available_in_mode(_htu_mode_key))
+        _htu_total = len(_htu_available)
+        _htu_disabled = sorted(_USER_DISABLED_TOOLS & _htu_available)
+        _htu_enabled_count = _htu_total - len(_htu_disabled)
+        footer_lines.append(
+            f"  {_htu_enabled_count} of {_htu_total} tools available in {_htu_mode_key} "
+            f"mode are currently enabled."
+        )
+        if _htu_disabled:
+            footer_lines.append(
+                "  The following are DISABLED by this install's own configuration — "
+            )
+            footer_lines.append(
+                "  do not call them; treat any instruction above that names one as "
+                "unavailable:"
+            )
+            _htu_by_cat: "dict[str, list]" = {}
+            for _htu_name in _htu_disabled:
+                _htu_cat = _tool_catalog.category_of(_htu_name) or "other"
+                _htu_by_cat.setdefault(_htu_cat, []).append(_htu_name)
+            for _htu_cat_key, _htu_names in _htu_by_cat.items():
+                footer_lines.append(
+                    f"    {_tool_catalog.category_label(_htu_cat_key)}: "
+                    + ", ".join(_htu_names)
+                )
+        else:
+            footer_lines.append(
+                "  Nothing is disabled — every tool described above is actually available."
+            )
 
     # ── ANALYSIS BRIEFING — due tasks only ──────────────────────────────────
     # v9.0.0 fix: only show tasks that are actually due right now.
@@ -3667,16 +4152,27 @@ def geocode_address(address: str) -> str:
         Latitude, longitude, and display name for the matched location.
     """
     import requests as _req
+    import time as _t
 
-    try:
-        data = _req.get(
-            "https://nominatim.openstreetmap.org/search",
-            params={"q": address, "format": "json", "limit": 1},
-            headers={"User-Agent": "AI-Prowler/5.0 (field-service-tool)"},
-            timeout=10,
-        ).json()
-    except Exception as exc:
-        return f"❌ Geocoding request failed: {exc}"
+    # R-023: retry a dropped connection (Nominatim resets ~half of close-together
+    # requests); a real "not found" answer is not retried.
+    data, last_exc = None, None
+    for attempt in range(3):
+        try:
+            data = _req.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={"q": address, "format": "json", "limit": 1},
+                headers={"User-Agent": "AI-Prowler/5.0 (field-service-tool)"},
+                timeout=10,
+            ).json()
+            last_exc = None
+            break
+        except Exception as exc:
+            last_exc = exc
+            if attempt < 2:
+                _t.sleep(1.2)
+    if last_exc is not None:
+        return f"❌ Geocoding request failed: {last_exc}"
 
     if not data:
         return (
@@ -3963,11 +4459,17 @@ def build_maps_url(
     # only included in the URL if one was actually given ────────────────────
     def _google_url(orig: str, dest: str, waypoints: list[str]) -> str:
         base   = "https://www.google.com/maps/dir/?api=1"
-        params = f"&destination={_enc(dest)}&travelmode=driving"
+        # dir_action=navigate: Google's documented parameter for opening the
+        # route/navigation view directly, instead of landing on the multi-stop
+        # list editor (what a multi-waypoint link shows on a phone otherwise).
+        params = f"&destination={_enc(dest)}&travelmode=driving&dir_action=navigate"
         if orig:
             params = f"&origin={_enc(orig)}" + params
         if waypoints:
-            params += "&waypoints=" + "|".join(_enc(w) for w in waypoints)
+            # %7C, not a raw "|": Google's Maps URLs spec requires the
+            # waypoint separator URL-encoded, and a raw pipe is exactly the
+            # kind of character iOS in-app browsers / link handlers mangle.
+            params += "&waypoints=" + "%7C".join(_enc(w) for w in waypoints)
         return base + params
 
     if len(stops) <= GOOGLE_MAX:
@@ -4020,6 +4522,338 @@ def build_maps_url(
 # ACTION TOOL 5 — update_job_spreadsheet
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Phone tap-to-navigate link — shared by BOTH route engines (2026-09-21)
+#   Engine #1: suggest_route_schedule  (free — the Route Today button)
+#   Engine #2: apply_route_order        (AI Routing, uses credits — its commit step)
+# Each calls _with_route_link() on success, so every route that is built
+# refreshes the link saved on its jobs. (Before this, only build_daily_route
+# saved a link, and the Route Today button stopped calling it on 9/20 — which
+# left phones opening a stale, home-to-home loop link.)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _route_same_place(a: str, b: str) -> bool:
+    """Same street address written two ways ("1500 Shadow Pines Dr, New Smyrna
+    Beach, Florida 32168" vs "1500 Shadow Pines Dr New Smyrna Beach FL 32168")?
+    Compares house number + street name (the first 3 words) only."""
+    import re as _re
+    ta = _re.findall(r"[a-z0-9]+", (a or "").lower())[:3]
+    tb = _re.findall(r"[a-z0-9]+", (b or "").lower())[:3]
+    return bool(ta) and ta == tb
+
+
+def _route_same_stop(a: str, b: str) -> bool:
+    """Stricter than _route_same_place (2026-09-25), for de-duplicating
+    back-to-back stops in the phone link: the WHOLE street part must match
+    (so '1755 State Road 44' != '1755 State Road 46'), with abbreviations
+    normalized the same way the route prescreen does ('SR 44' == 'State Road
+    44', 'St' == 'Street'), and the 5-digit ZIP must match when both have one.
+    Lat/lon-only stops ('29.03,-80.95') compare exactly."""
+    import re as _re
+    from db_route_ops import _ps_street_key
+    a, b = (a or "").strip(), (b or "").strip()
+    if not a or not b:
+        return False
+    if a.lower() == b.lower():
+        return True
+    _coord = r"^\s*-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?\s*$"
+    if _re.match(_coord, a) or _re.match(_coord, b):
+        return False                       # coordinate stops: exact match only (above)
+    ka, kb = _ps_street_key(a.split(",")[0]), _ps_street_key(b.split(",")[0])
+    if not ka or ka != kb:
+        return False
+    za = _re.findall(r"\b(\d{5})(?:-\d{4})?\s*$", a)
+    zb = _re.findall(r"\b(\d{5})(?:-\d{4})?\s*$", b)
+    return (za == zb) if (za and zb) else True
+
+
+def _path_is_inside(child, root) -> bool:
+    """True if `child` is `root` itself or inside it (2026-09-25). Replaces
+    `abspath(child).startswith(abspath(root))` prefix checks, which also let
+    through siblings that merely START with the folder's name (…\\jobs_old\\…
+    for …\\jobs, …\\project2 for …\\proj). Case-insensitive on Windows; a
+    different drive (ValueError from commonpath) is never inside."""
+    import os as _os_pi
+    try:
+        c = _os_pi.path.normcase(_os_pi.path.abspath(str(child)))
+        r = _os_pi.path.normcase(_os_pi.path.abspath(str(root)))
+        return _os_pi.path.commonpath([c, r]) == r
+    except (ValueError, TypeError):
+        return False
+
+
+# ── Job photo/file uploads: where they may be saved (R-028 / R-029, 2026-09-26) ──
+# Found by the Jobs-app E2E suite (PH-08, PH-09). /photos/upload built its save
+# folder straight from the job number the browser sent:
+#     <home>/Documents/AI-Prowler/JobPhotos/<job_id>/
+# so a job number like "..\\Desktop" or "JOB-1/../../x" wrote files OUTSIDE
+# JobPhotos, anywhere under the user's profile (security). And any made-up job
+# number was accepted, leaving folders for jobs that don't exist. Both upload
+# handlers (personal and server mode) now go through these two helpers.
+_JOB_PHOTO_ID_RE = __import__("re").compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+
+def _job_photo_dir(job_id: str, db_path: str):
+    """(folder Path, None) for an existing job's upload folder, or
+    (None, error message). Never creates anything outside JobPhotos."""
+    from pathlib import Path as _P_jp
+    jid = str(job_id or "").strip()
+    if not _JOB_PHOTO_ID_RE.match(jid):
+        return None, f"Invalid job number: {jid!r}"
+    if db_path:
+        try:
+            import sqlite3 as _sq_jp
+            _c = _sq_jp.connect(db_path)
+            try:
+                found = _c.execute("SELECT 1 FROM jobs WHERE job_id = ? COLLATE NOCASE",
+                                   (jid,)).fetchone()
+            finally:
+                _c.close()
+        except Exception as e:
+            return None, f"Could not check the job number: {e}"
+        if not found:
+            return None, f"No job {jid} — photos and files can only be added to an existing job."
+    root = _P_jp.home() / "Documents" / "AI-Prowler" / "JobPhotos"
+    folder = root / jid
+    if not _path_is_inside(folder, root):          # belt and braces — the regex already forbids it
+        return None, f"Invalid job number: {jid!r}"
+    return folder, None
+
+
+def _safe_upload_ext(orig_name: str, ext_map: dict) -> str:
+    """The saved file's extension: known photo types normalized (.jpeg→.jpg),
+    anything else kept but reduced to letters/digits (no ':' NTFS streams,
+    no path characters), '.bin' if nothing usable is left."""
+    import os as _os_ue, re as _re_ue
+    ext = _os_ue.path.splitext(str(orig_name or ""))[1].lower()
+    if ext in ext_map:
+        return ext_map[ext]
+    clean = _re_ue.sub(r"[^a-z0-9]", "", ext)[:10]
+    return "." + clean if clean else (".jpg" if not ext else ".bin")
+
+
+def _publish_route_links(db_path: str, route_date: str, crew: str, ctx, actor: str) -> str:
+    """Builds the phone tap-to-navigate link from the route just stored in
+    route_stops and saves it on each job (Route Map URL) and on its stops.
+
+    The link has NO origin: Google Maps then starts from the phone's live GPS
+    location, which is not a stop — the first stop in the link is the first
+    job (or, in Company Location mode, the Start/End Address). Stops, in
+    order: every real job; in Company Location mode the Start/End Address at
+    both ends (those are stored as real stops); the day's "Home" bookend rows
+    are mileage markers, not stops, and are skipped. The trip then ends at
+    the crew member's own home address (server mode: that crew member's home
+    from the Admin tab; personal mode: the owner's Settings home) — unless
+    the last stop is already that same place. With no home address known the
+    link simply ends at the last stop.
+
+    Never raises — the route itself is already saved; returns a short note
+    for the tool's response ('' when there is nothing to publish)."""
+    try:
+        from db_access import get_connection, transaction
+        from db_route_ops import db_update_job_route_url
+        conn = get_connection(db_path)
+        try:
+            rows = conn.execute(
+                "SELECT crew_id, stop_number, job_id, address, latitude, longitude "
+                "FROM route_stops WHERE route_date = ? ORDER BY crew_id, stop_number",
+                (route_date,),
+            ).fetchall()
+        finally:
+            conn.close()
+        if not rows:
+            return ""
+        groups: dict = {}
+        for r in rows:
+            groups.setdefault(r["crew_id"] or "", []).append(r)
+        crew_filter = (crew or "").strip().casefold()
+        notes = []
+        for crew_id, grp in groups.items():
+            if _IS_SERVER_MODE and crew_filter and crew_id.strip().casefold() != crew_filter:
+                continue
+            stops: list = []
+            job_ids: list = []
+            for r in grp:
+                addr = (r["address"] or "").strip()
+                if r["job_id"] is None and addr.lower() == "home":
+                    continue  # home bookend: a mileage marker, not a stop
+                if not addr and r["latitude"] is not None and r["longitude"] is not None:
+                    addr = f"{r['latitude']},{r['longitude']}"
+                if not addr:
+                    continue
+                if r["job_id"]:
+                    job_ids.append(r["job_id"])
+                # 2026-09-25: never put the same place in the link twice in a
+                # row (two jobs at one address routed back-to-back). Google
+                # Maps opens such a link as a stop list instead of a route —
+                # found live 2026-09-24. The job still gets the saved link;
+                # its address just isn't repeated.
+                if stops and _route_same_stop(stops[-1], addr):
+                    continue
+                stops.append(addr)
+            if not job_ids:
+                continue
+            home_crew = "" if crew_id in ("", "(unassigned)") else crew_id
+            home_addr, _home_label = _resolve_route_home(ctx, home_crew)
+            ends_at_home = False
+            if home_addr:
+                ends_at_home = True
+                if not _route_same_place(stops[-1], home_addr):
+                    stops.append(home_addr)
+            text = build_maps_url(stops=stops, origin="")   # origin="" -> phone GPS start
+            links = [ln for ln in text.splitlines() if ln.startswith("http")]
+            if not links:
+                continue
+            for jid in job_ids:
+                db_update_job_route_url(db_path, jid, links[0], actor)
+            with transaction(db_path) as c:
+                c.execute(
+                    "UPDATE route_stops SET map_url = ? WHERE route_date = ? AND crew_id = ?",
+                    (links[0], route_date, crew_id),
+                )
+            import time as _time_mod
+            _ROUTE_LINK_PUBLISHED_AT[route_date] = _time_mod.time()
+            who = f" ({crew_id})" if crew_id.strip() and crew_id != "(unassigned)" else ""
+            notes.append(
+                f"📍 Phone route link saved on {len(job_ids)} job(s){who}: starts from your "
+                f"live location, {len(stops)} stop(s), "
+                + ("ends at home." if ends_at_home else "ends at the last stop (no home address on file).")
+                + (f" Long day — split into {len(links)} legs; the saved link is leg 1." if len(links) > 1 else "")
+                + f"\n   {links[0]}"
+            )
+        return "\n".join(notes)
+    except Exception as _e:
+        try:
+            _log.warning("Could not publish the route link for %s: %s", route_date, _e)
+        except Exception:
+            pass
+        return ""
+
+
+# When each route date's phone link was last saved (epoch seconds). Lets the
+# AI run's worker tell "this run saved a route" apart from an older route still
+# sitting in the database, before it emails anything.
+_ROUTE_LINK_PUBLISHED_AT: dict = {}
+
+
+def _clock12_from_hhmm(hhmm) -> str:
+    """'14:03' / '7:15:00' -> '2:03 PM' / '7:15 AM' for the emails ('' if unparseable)."""
+    import re as _r
+    m = _r.match(r"^\s*(\d{1,2}):(\d{2})", str(hhmm or ""))
+    if not m:
+        return ""
+    h = int(m.group(1))
+    if h > 23:
+        return ""
+    return f"{(h % 12) or 12}:{m.group(2)} {'PM' if h >= 12 else 'AM'}"
+
+
+def _email_route_results(db_path: str, route_date: str, crew: str, caller_email: str,
+                         results_text: str, include_stops: bool = False,
+                         force: bool = False) -> str:
+    """Emails the day's route — the results text plus the saved tap-to-navigate
+    link — when Settings -> "Email Route On Build" is Enabled (the same setting
+    build_daily_route already used; now it covers Route Today and Run AI Route
+    too). Returns a one-line note to append to the tool's response ('' when the
+    setting is off or there is nothing saved to send). Never raises: a missing
+    email setup or a failed send is reported in the note, and the route itself
+    is already saved either way.
+
+    force=True (2026-09-21, the "Email Approved Route Now" button) skips the
+    Enabled/Disabled check — the setting only governs the AUTOMATIC send after a
+    route is built; a manual on-demand send is the person's own explicit choice
+    and isn't gated by it. The button itself only appears (and is only
+    clickable) when the setting is Disabled, so this can't double-send.
+
+    Recipient, in order: the calling user's own address (server mode) -> the SMTP
+    config's default_to -> its username.
+    include_stops adds the stop list with arrival times (the AI run's text is a
+    short summary; the free engine's result text already lists every stop)."""
+    try:
+        from db_write_ops import db_read_email_route_on_build
+        if not force and not db_read_email_route_on_build(db_path):
+            return ""
+        from db_access import get_connection
+        conn = get_connection(db_path)
+        try:
+
+            rows = conn.execute(
+                "SELECT r.crew_id, r.stop_number, r.job_id, r.address, r.eta, r.map_url, "
+                "j.customer_name FROM route_stops r LEFT JOIN jobs j ON j.job_id = r.job_id "
+                "WHERE r.route_date = ? ORDER BY r.crew_id, r.stop_number",
+                (route_date,),
+            ).fetchall()
+        finally:
+            conn.close()
+        crew_filter = (crew or "").strip().casefold()
+        if _IS_SERVER_MODE and crew_filter:
+            rows = [r for r in rows if (r["crew_id"] or "").strip().casefold() == crew_filter]
+        links: list = []
+        for r in rows:
+            u = (r["map_url"] or "").strip()
+            if u and u not in links:
+                links.append(u)
+        if not links:
+            return ""     # no route link was saved — nothing worth emailing
+
+        cfg = _email_config_load()
+        if not cfg:
+            return ("ℹ️  Route email not sent — email isn't configured. Set it up in "
+                    "Settings → Email Configuration, or turn off \"Email Route On Build\".")
+        to = (caller_email or cfg.get("default_to") or cfg.get("username") or "").strip()
+        if not to:
+            return ("ℹ️  Route email not sent — no recipient could be determined. Set a "
+                    "default_to/username in Settings → Email Configuration.")
+
+        job_rows = [r for r in rows if r["job_id"]]
+        who = f" ({crew.strip()})" if crew.strip() else ""
+        subject = (f"Route for {route_date}{who} — {len(job_rows)} stop"
+                   f"{'s' if len(job_rows) != 1 else ''}")
+        parts = [f"Route for {route_date}" + (f" — crew: {crew.strip()}" if crew.strip() else ""), ""]
+        if (results_text or "").strip():
+            parts += [results_text.strip(), ""]
+        if include_stops and job_rows:
+            parts.append("Stops:")
+            for n, r in enumerate(job_rows, 1):
+                arrive = _clock12_from_hhmm(r["eta"])
+                parts.append(f"{n}. " + (f"{arrive} — " if arrive else "")
+                             + f"{r['customer_name'] or r['job_id']} — {r['address'] or ''}")
+            parts.append("")
+        parts.append("Tap to navigate (starts from your current location):")
+        parts += links
+        ok, msg = _send_smtp(to, subject, "\n".join(parts))
+        if ok:
+            return f"📧 Route link and results emailed to {to}"
+        return f"⚠️  Route built, but the email failed to send: {msg}"
+    except Exception as _e:
+        try:
+            _log.warning("Route email failed for %s: %s", route_date, _e)
+        except Exception:
+            pass
+        return ""
+
+
+def _with_route_link(result, db_path: str, route_date: str, crew: str, ctx, actor: str,
+                     email: bool = False):
+    """Appends the phone-link note to a successful route result (starts with ✅);
+    anything else (❌ etc.) passes through untouched. email=True (the free engine)
+    also sends the results + link by email when the setting allows — the AI engine
+    leaves that to its worker so one run sends one email."""
+    if isinstance(result, str) and result.lstrip().startswith("✅"):
+        note = _publish_route_links(db_path, route_date, crew, ctx, actor)
+        if note:
+            out = result + "\n\n" + note
+            if email:
+                _caller = _current_user(ctx)
+                _caller_email = (_caller.get("email") or "").strip() if _caller else ""
+                email_note = _email_route_results(db_path, route_date, crew, _caller_email,
+                                                  result, include_stops=False)
+                if email_note:
+                    out += "\n\n" + email_note
+            return out
+    return result
+
+
 def _get_default_spreadsheet_path() -> str:
     """Read the default spreadsheet path from ~/.ai-prowler/config.json."""
     try:
@@ -4045,62 +4879,258 @@ import threading as _sheet_threading
 _spreadsheet_write_lock = _sheet_threading.RLock()
 
 
-def _resolve_job_spreadsheet_path(ctx, filepath_arg: str = "") -> str:
+# ══════════════════════════════════════════════════════════════════════════════
+# Job Board Architecture Spec — Phase 1 wiring (spec §5, §11).
+#
+# `_resolve_job_db_path` resolves the ONE SQLite job database
+# (`ai_prowler_jobs.db`) every job tool uses, and guarantees the schema exists
+# (init_db is idempotent — spec §11 Phase 0 testing requirement) before
+# handing the path back to a caller.
+#
+# 2026-09-16: the live database's folder is always `_state_dir()/jobs_database`
+# (normally `Path.home() / '.ai-prowler'`), for both personal and server mode.
+# See `_resolve_job_db_path`'s own docstring for why (OneDrive/cloud-sync risk
+# on at least one real install).
+#
+# R-046 (2026-09-28): `_resolve_job_spreadsheet_path` (the spreadsheet-era
+# resolver, incl. per-user "<user_id>.xlsx" files) had no callers left and was
+# removed, together with the per-user "<user_id>.db" lookup and the matching
+# "own file = no crew filter" rule in `_job_crew_scope`. One shared database
+# for everyone; field crew are filtered by the Crew / Technician column.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _test_db_folder_override() -> str:
+    """Test-only seam for _resolve_job_db_path. Returns "" in production
+    (production always resolves through _state_dir() instead) — a test
+    monkeypatches this directly to point the live-database folder at its
+    own isolated tmp_path, independent of AIPROWLER_TEST_STATE_DIR (one
+    folder shared for the whole test RUN, not per-test — see
+    _resolve_job_db_path's docstring for the confirmed cross-test
+    pollution that caused this function to exist) and independent of
+    default_spreadsheet_path (which no longer affects the live db folder
+    at all)."""
+    return ""
+
+
+def _resolve_job_db_path(ctx, filepath_arg: str = "") -> str:
     """
-    Resolve which .xlsx file a job-spreadsheet tool should use.
+    Resolve (and ensure the existence of) the SQLite job database a
+    DB-backed write/read tool should use.
 
-    Personal mode (ctx has no user): unchanged from all prior versions —
-    an explicit filepath_arg is honored exactly as given; otherwise falls
-    back to the configured default_spreadsheet_path. Full flexibility,
-    exactly like every version before this function existed.
+    2026-09-16 change: the database folder is now always the same place
+    AI-Prowler's own state already lives — `_state_dir()` (normally
+    `Path.home() / '.ai-prowler'`, or the sandboxed AIPROWLER_TEST_STATE_DIR
+    directory when a test RUN has set it) — the SAME dynamic,
+    per-OS-account resolution AI-Prowler already uses everywhere else for
+    its own state (config.json, logs, scheduler state, etc.), NOT a
+    literal path tied to any one person. On David's PC that's
+    `C:\\Users\\david\\.ai-prowler`; on the dedicated AI-Prowler Server
+    machine's service account it resolves to that account's own home
+    folder the same way — nothing here is hardcoded to a specific
+    username.
 
-    Server mode: filepath_arg is IGNORED — every role's tool call resolves
-    through the shared default_spreadsheet_path (Settings -> Business ->
-    Default Spreadsheet Path) instead. This closes a real gap: previously
-    any server-mode role could point these tools at an arbitrary .xlsx file
-    anywhere on the host with zero access control.
+    `_test_db_folder_override()` is checked FIRST, ahead of _state_dir():
+    a dedicated, obviously-test-only seam a test can monkeypatch for its
+    OWN isolated tmp_path, independent of both AIPROWLER_TEST_STATE_DIR
+    (which is one folder shared for the WHOLE test run, not per-test —
+    routing straight to _state_dir() here caused real, confirmed
+    cross-test pollution: 19 failures the first time this was tried,
+    tests picking up rows other tests had created into the same shared
+    sandbox) and independent of default_spreadsheet_path (which no
+    longer affects the live db folder at all — see below). Returns ""
+    in production; every existing per-test tmp_path fixture across the
+    suite needs exactly one added line —
+    `monkeypatch.setattr(mcp_mod, "_test_db_folder_override", lambda: str(tmp_path))`
+    — to keep its own isolation now that default_spreadsheet_path no
+    longer doubles as that seam. DEFAULT_DB_SUBDIR is deliberately NOT
+    appended on this path — a test's own tmp_path is already a flat,
+    fully isolated folder, and every existing test that constructs its
+    own expected db path directly (`tmp_path / "ai_prowler_jobs.db"`,
+    the common pattern across the suite) already assumes no subfolder;
+    only the real production folder (_state_dir()) gets the nested
+    jobs_database/ organization, since nothing in the test suite needs
+    to know that internal detail exists.
 
-    Within that, two models, both driven by the SAME single config value:
-      - default_spreadsheet_path points at an .xlsx file that exists ->
-        that IS the master file (today's behaviour, unchanged). Every
-        role reads/writes that one shared spreadsheet.
-      - The calling user has their OWN per-user file sitting in the same
-        folder as default_spreadsheet_path, named exactly "<user_id>.xlsx"
-        -> that takes priority over the master file for THIS user only.
-        If no such file exists, falls back to the master file above.
+    This replaces the previous behavior, where the folder was derived
+    from the user-configurable `default_spreadsheet_path` setting (the
+    Excel export/legacy .xlsx location) — found live to sit inside a
+    OneDrive-synced folder on at least one real install, a known general
+    risk pattern for a live, actively-written SQLite file (cloud-sync
+    clients can interfere with a database's file-locking mid-write). A
+    stress test (154 writes, two timing patterns, both locations) could
+    not reproduce a failure either way, so this wasn't proven as the
+    cause of a specific incident — but moving the live database to a
+    location nothing else has a reason to sync remains a sound precaution
+    regardless, and it's also just a cleaner separation of concerns: the
+    Excel export a person might keep in Documents/OneDrive to share or
+    open by hand is fundamentally different from the live multi-writer
+    database everything else depends on, and the two no longer need to
+    share a folder just because the old openpyxl-era code happened to
+    put them there together.
 
-    A manager sets up per-user tracking simply by dropping "jake-r.xlsx",
-    "vicki-vavro.xlsx" etc. into the same folder as the master spreadsheet
-    (whatever filename was chosen via the Business tab's Browse button —
-    defaults to AI-Prowler_Job_Tracker.xlsx on a fresh install). No
-    separate config field is needed; the folder is simply
-    dirname(default_spreadsheet_path).
+    default_spreadsheet_path itself is UNCHANGED and still governs where
+    export_to_excel()/the legacy .xlsx template default to — only the
+    live database's own folder stopped depending on it.
     """
+    from db_access import init_db, DEFAULT_DB_FILENAME, DEFAULT_DB_SUBDIR
+
     user = _current_user(ctx)
-    default_path = _get_default_spreadsheet_path()
+    _test_folder = _test_db_folder_override()
+    folder = _test_folder if _test_folder else os.path.join(str(_state_dir()), DEFAULT_DB_SUBDIR)
+
+    db_path = os.path.join(folder, DEFAULT_DB_FILENAME)
 
     if user is None:
-        # Personal mode: unrestricted, exactly as before this feature existed.
+        # Personal mode: an explicit .db filepath_arg is honored as-is.
+        #
+        # 2026-09-14 fix: a non-.db filepath_arg — most commonly an isolated
+        # test fixture's .xlsx path, since many callers (and a large swath
+        # of the test suite) still pass through the spreadsheet-era
+        # `filepath` argument unchanged — is not the SQLite file itself,
+        # but its FOLDER is still the intended isolation boundary. This
+        # function's own docstring says it "mirrors
+        # _resolve_job_spreadsheet_path's folder/per-user resolution
+        # exactly", but the previous code dropped filepath_arg entirely
+        # whenever its extension wasn't .db, falling through to the
+        # configured default folder instead — which silently pointed every
+        # such caller at the REAL PRODUCTION database rather than the
+        # isolated location the caller clearly intended. Confirmed via a
+        # full test-suite run: tests passing a tmp_path .xlsx fixture were
+        # reading (and, for write-tool tests, writing) live production job
+        # data. Reusing the given path's folder for the .db file restores
+        # the intended isolation without changing real (no-filepath) calls
+        # at all.
         if filepath_arg:
-            return filepath_arg
-        return default_path
+            if filepath_arg.lower().endswith(".db"):
+                db_path = filepath_arg
+            else:
+                _arg_folder = os.path.dirname(filepath_arg)
+                if _arg_folder:
+                    db_path = os.path.join(_arg_folder, DEFAULT_DB_FILENAME)
+    # Server mode: filepath_arg is ignored and EVERY user gets the one shared
+    # database. R-046 (2026-09-28): the old per-user "<user_id>.db" lookup is
+    # gone — per-user job files belonged to the spreadsheet era, and a stray
+    # file with a user's id as its name would otherwise have silently given
+    # that user a separate, empty set of jobs.
 
-    # Server mode: filepath_arg is ignored from here on.
-    if not default_path:
-        return ""
+    try:
+        os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+        init_db(db_path)
+    except Exception as _e:
+        _log.warning("Could not initialize job database at %s: %s", db_path, _e)
 
-    user_id = (user.get("id") or "").strip()
-    if user_id:
-        try:
-            folder = os.path.dirname(default_path)
-            if folder:
-                candidate = os.path.join(folder, f"{user_id}.xlsx")
-                if os.path.exists(candidate):
-                    return candidate
-        except Exception:
-            pass
+    return db_path
 
-    return default_path
+
+def _backup_job_db(db_path: str, keep_days: int = 2, keep_last: int = 50,
+                    min_interval_seconds: int = 120) -> str:
+    """
+    Lightweight sibling of _backup_spreadsheet for the SQLite job database.
+    Copies db_path into a _backups subfolder next to it, timestamped.
+
+    Non-fatal by design: unlike the old openpyxl flow (where a failed
+    backup meant "abort, don't risk the only copy"), SQLite's WAL journal
+    already makes the live file crash-safe, so a backup failure here is a
+    warning, never a reason to refuse the write. Returns a short status
+    string, or "" if backup was skipped for a benign reason (the db
+    doesn't exist yet on a brand-new install's first write, OR — see
+    below — a recent-enough backup already exists).
+
+    2026-09-14 fix: found live, 77 near-identical backups (~13.5 MB)
+    accumulated in under 2 days with the previous keep_days=30 default —
+    that window made sense for occasional manual backups, but this
+    function fires on EVERY write, so at any real usage volume every
+    backup made so far is still "recent" by a 30-day cutoff and none of
+    them ever prune. Two changes address this directly:
+
+      1. Throttle: if the most recent backup in _backups/ is less than
+         min_interval_seconds old, skip making a new one entirely. A
+         burst of edits in the same couple of minutes (exactly what
+         happens during normal use — several field updates, a quote then
+         an invoice, etc.) now produces ONE backup, not one per write,
+         with no loss of real protection (a 2-minute-old snapshot is as
+         good as a fresh one for "undo my last mistake" purposes).
+      2. Retention: keep_days dropped from 30 to 2, AND a count-based
+         floor (keep_last) added — pruning now removes anything older
+         than keep_days UNLESS doing so would drop below keep_last total
+         backups, so a quiet period (no writes for days) never leaves
+         zero backups just because they all aged out at once.
+
+    This does NOT replace backup_job_database()/restore_job_database() (spec
+    §12) — those remain the user-facing "give me a real backup I choose
+    the destination for" tools. This function is purely the automatic,
+    keep-a-few-recent-copies safety net behind every write tool.
+    """
+    try:
+        if not db_path or not os.path.exists(db_path):
+            return ""
+        import shutil as _shutil
+        import datetime as _bkdt
+        folder = os.path.dirname(db_path)
+        # 2026-09-16: consolidated with db_backup_database's own default
+        # folder (db_backup_ops.py) — both used to live in separate
+        # sibling folders (_backups vs Backups) next to the db file for
+        # no real reason; now everything lands in one "backup" folder.
+        backups_dir = os.path.join(folder, "backup")
+        os.makedirs(backups_dir, exist_ok=True)
+        base = os.path.splitext(os.path.basename(db_path))[0]
+
+        # Throttle: skip if the most recent backup for THIS db is fresh
+        # enough already. Only considers files matching this db's own
+        # base name, so a busy Jobs_Schedule-style multi-db setup doesn't
+        # cross-throttle unrelated databases against each other.
+        existing = [
+            os.path.join(backups_dir, name) for name in os.listdir(backups_dir)
+            if name.startswith(base + "_") and name.endswith(".db")
+        ]
+        if existing:
+            newest = max(existing, key=os.path.getmtime)
+            age_seconds = _bkdt.datetime.now().timestamp() - os.path.getmtime(newest)
+            if age_seconds < min_interval_seconds:
+                return ""
+
+        stamp = _bkdt.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        dest = os.path.join(backups_dir, f"{base}_{stamp}.db")
+        n = 1
+        while os.path.exists(dest):
+            dest = os.path.join(backups_dir, f"{base}_{stamp}_{n}.db")
+            n += 1
+        _shutil.copy2(db_path, dest)
+
+        # Retention: prune anything older than keep_days, but never below
+        # keep_last total (newest-first) — a quiet stretch with no writes
+        # should never leave zero backups just because they all crossed
+        # keep_days at once.
+        #
+        # 2026-09-16 fix: found live — after consolidating this folder
+        # with db_backup_database's own default folder (manual "Backup
+        # Now"/scheduled/pre-delete-safety backups all land here too now,
+        # named "AI-Prowler-Backup-<timestamp>.db"), this loop was still
+        # listing EVERY file in the folder with no name filter, unlike the
+        # throttle check just above which already scopes itself to this
+        # function's own "{base}_<timestamp>.db" files. That meant a run
+        # of this pruning pass — dormant under the current backup=False
+        # default, but still reachable via an explicit backup=True call —
+        # could delete a manual/scheduled/safety backup it never created.
+        # Scoped to the identical name filter the throttle check uses, so
+        # this can only ever touch its own files.
+        cutoff = _bkdt.datetime.now() - _bkdt.timedelta(days=keep_days)
+        all_backups = sorted(
+            (os.path.join(backups_dir, name) for name in os.listdir(backups_dir)
+             if name.startswith(base + "_") and name.endswith(".db")
+             and os.path.isfile(os.path.join(backups_dir, name))),
+            key=os.path.getmtime, reverse=True,
+        )
+        for fp in all_backups[keep_last:]:
+            try:
+                if _bkdt.datetime.fromtimestamp(os.path.getmtime(fp)) < cutoff:
+                    os.remove(fp)
+            except Exception:
+                pass
+        return f"Backup saved: {dest}"
+    except Exception as _e:
+        _log.warning("Job DB backup failed (non-fatal): %s", _e)
+        return f"⚠️ Backup skipped ({_e})"
 
 
 def _join_header_lines(raw_value) -> str:
@@ -4152,31 +5182,23 @@ def _job_crew_scope(ctx, fp: str) -> tuple[bool, str]:
     separate implementations.
 
     Returns (restrict, crew_name):
-      - restrict=False: no crew filtering should be applied — either
-        personal mode, an owner/manager role, or a user already isolated
-        to their own per-user spreadsheet file (Model B — every row in
-        that file already belongs to them by construction).
-      - restrict=True: caller is a server-mode staff/field_crew user on
-        the SHARED master spreadsheet (Model A). crew_name is their
-        stripped, lowercased display name — the caller is responsible for
-        comparing it against a row's "Crew / Technician" cell using the
-        same normalization, and treating a blank cell as non-matching.
+      - restrict=False: no crew filtering should be applied — personal
+        mode, or an owner/manager/staff role.
+      - restrict=True: caller is a server-mode field_crew user. crew_name
+        is their stripped, lowercased display name — the caller is
+        responsible for comparing it against a row's "Crew / Technician"
+        cell using the same normalization, and treating a blank cell as
+        non-matching.
+
+    R-046 (2026-09-28): there is ONE shared job database for every user
+    (see _resolve_job_db_path). The old "Model B" exemption — no filtering
+    for a user working in their own per-user <uid>.xlsx / <uid>.db file — is
+    gone with the per-user files themselves. `fp` is kept for the ~20 call
+    sites' signature but no longer affects the decision.
     """
     user = _current_user(ctx)
     if user is None:
         return False, ""
-
-    try:
-        uid = (user.get("id") or "").strip()
-        if uid:
-            default_path = _get_default_spreadsheet_path()
-            folder = os.path.dirname(default_path) if default_path else ""
-            if folder:
-                own_candidate = os.path.join(folder, f"{uid}.xlsx")
-                if os.path.abspath(fp) == os.path.abspath(own_candidate):
-                    return False, ""  # Model B — own file, no filtering
-    except Exception:
-        pass
 
     # v9.1.x — "staff" is the crew-lead tier for a multi-crew company:
     # unrestricted job-crew scope (sees/edits every crew's jobs, customers,
@@ -4189,6 +5211,157 @@ def _job_crew_scope(ctx, fp: str) -> tuple[bool, str]:
         return False, ""
 
     return True, (user.get("name") or "").strip().lower()
+
+
+# R-039 (2026-09-27, was gap G-02): sheets whose READS are crew-filtered for a
+# restricted (field_crew, shared-database) user. Before R-039 only
+# Jobs_Schedule was filtered, so field crew could read every other crew's
+# clock-ins (TimeLog) and routes (Route_Planner) through read_job_spreadsheet
+# and get_board_updates. The row match itself lives in db_read_ops
+# (_READ_DISPATCH crew column + _crew_name_in_cell):
+#   Jobs_Schedule -> jobs.crew             (Crew / Technician)
+#   TimeLog       -> time_entries.crew     (the person who clocked in, not the
+#                                           job's crew — a crew member sees only
+#                                           their own clock-ins)
+#   Route_Planner -> route_stops.crew_id   (the route's crew name)
+# Both read tools use this one set so they can never disagree.
+_CREW_SCOPED_READ_SHEETS = frozenset({"Jobs_Schedule", "TimeLog", "Route_Planner"})
+
+
+def _route_crew_for_caller(ctx, db_path: str, crew: str) -> tuple[str, str]:
+    """R-039 (2026-09-27, was gap G-01): the crew a route tool may act on.
+
+    build_daily_route, suggest_route_schedule, approve_route_schedule,
+    unapprove_route_schedule and prescreen_route_jobs all take a `crew`
+    argument where BLANK means "every crew". Before R-039 none of them
+    checked it, so a field_crew user could build, re-time, approve or
+    un-approve another crew's route (or every crew's at once).
+    R-047 (2026-09-28, G-14) added get_route_drive_matrix and
+    apply_route_order — the two tools a Claude chat or AI Routing run uses.
+
+    Returns (crew_to_use, error):
+      - personal mode: the crew argument unchanged (one route, no crews).
+      - server mode, ANY role (R-055, 2026-09-28 — David): blank -> the
+        caller's OWN name. People route themselves ("the admin won't be doing
+        the routing for the users, they self-serve"), so Route Today / Email
+        Route / AI Route / the Route tab's default give the caller the jobs
+        assigned to them — including jobs shared with others (R-056).
+        Owner / manager / staff may still name another person explicitly to
+        plan or fix that person's day. Before R-055 a blank meant EVERY crew
+        for anyone but field crew, so Vicki's Route Today merged Samual's jobs
+        into her route.
+      - restricted field_crew: blank -> their own name; their own name (any
+        case / surrounding spaces) -> their own name; anything else -> error
+        (a ready-to-return ❌ message) and nothing is done.
+    """
+    restrict, own_lc = _job_crew_scope(ctx, db_path)
+    if not restrict:
+        own_default = _route_default_crew(ctx)
+        if own_default and not (crew or "").strip():
+            return own_default, ""
+        return crew, ""
+    user = _current_user(ctx) or {}
+    own = (user.get("name") or "").strip()
+    if not own:
+        return "", "❌ Your user has no name set, so your route can't be found. Ask the owner to fix it in the Admin tab."
+    asked = (crew or "").strip()
+    if not asked or asked.lower() == own_lc:
+        return own, ""
+    return "", (f"❌ Field crew can only work on their own route. "
+                f"You asked for '{asked}'; your route is '{own}'.")
+
+
+def _route_default_crew(ctx) -> str:
+    """R-055: the crew a BLANK route request means for this caller: in server
+    mode, their own name, whatever their role (owner included — everyone
+    routes themselves). Personal mode (no signed-in user) -> "" (one route)."""
+    user = _current_user(ctx)
+    if user is None:
+        return ""
+    return (user.get("name") or "").strip()
+
+
+# Sheets field_crew has NO access to at all, in server mode (2026-09-23, at
+# the owner's request) — Settings and Services_Pricing (business
+# configuration and internal pricing) plus Quotes and Invoices (financial
+# documents). This is a blanket denial, stricter than and layered BEFORE the
+# existing per-field/per-customer-ownership scoping update_job_spreadsheet
+# already applies to Customers/Invoices/Quotes for field_crew (see that
+# tool's own docstring) — a field_crew user gets no access whatsoever to
+# these four sheets, not even their own customers' Quotes/Invoices rows.
+# Customers itself stays OUT of this set on purpose: field crew still need
+# Gate Code / Access Notes and the on-site contact while working a job — the
+# owner explicitly confirmed Customers access stays for server-mode field
+# crew. Personal mode is never affected (there is no crew, only the owner).
+_FIELD_CREW_BLOCKED_SHEETS = frozenset({"Settings", "Services_Pricing", "Quotes", "Invoices"})
+
+
+def _field_crew_sheet_denied(ctx, sheet_name: str) -> str:
+    """Returns a ❌ denial message if the caller is a server-mode field_crew
+    user AND sheet_name is one of _FIELD_CREW_BLOCKED_SHEETS — otherwise "".
+    Callers should return the message as-is when non-empty, and proceed
+    normally when empty. Personal mode (_current_user returns None) is
+    always "" — this check only ever applies in server mode."""
+    target = (sheet_name or "").strip()
+    if target not in _FIELD_CREW_BLOCKED_SHEETS:
+        return ""
+    user = _current_user(ctx)
+    if user is None:
+        return ""
+    role = (user.get("role") or "").strip().lower()
+    if role != "field_crew":
+        return ""
+    return (
+        f"❌ Field crew do not have access to the {target} sheet. "
+        "This is a company-wide setting — ask an owner, manager, or staff member for this information."
+    )
+
+
+def _field_crew_data_admin_denied(ctx, action: str) -> str:
+    """R-050 (2026-09-28, David): whole-company data tools — Export to Excel /
+    CSV / QuickBooks, Backup and Restore — are for the owner, managers and
+    staff only. In server mode a field_crew caller gets a ❌ and nothing is
+    read or written; every other role, and personal mode, gets "". Before
+    R-050 none of these tools checked the role at all: field crew could export
+    every customer and invoice, or restore a file over the live database."""
+    user = _current_user(ctx)
+    if user is None:
+        return ""
+    role = (user.get("role") or "").strip().lower()
+    if role != "field_crew":
+        return ""
+    return (f"❌ {action} is for the owner, managers and staff only — field crew "
+            "can't use it. Nothing was done.")
+
+
+def _owner_only_denied(ctx) -> str:
+    """Returns a ❌ denial message if the caller is server mode and NOT the
+    owner role — otherwise "". For tools tied to the Reports screen (2026-
+    09-23, at the owner's request: "only the owner should have access" to
+    financial reports and customer reminders) — stricter than
+    _field_crew_sheet_denied, which still allows manager/staff. Personal
+    mode is always "" — there is no crew there, only the owner."""
+    user = _current_user(ctx)
+    if user is None:
+        return ""
+    role = (user.get("role") or "").strip().lower()
+    if role == "owner":
+        return ""
+    return "❌ Only the owner has access to this. Ask an owner to run this for you."
+
+
+def _owner_or_manager_denied(ctx) -> str:
+    """R-068 (David 2026-09-29: "In the server mode, we need AR report aging
+    report to be visible by the owner And manager"). "" for the owner and
+    managers (and always in personal mode); a ❌ denial for staff, field crew
+    and anyone else — the AR aging report is every customer's balance."""
+    user = _current_user(ctx)
+    if user is None:
+        return ""
+    role = (user.get("role") or "").strip().lower()
+    if role in ("owner", "manager"):
+        return ""
+    return "❌ The AR aging report is for the owner and managers only. Nothing was shown."
 
 
 def _crew_name_in_cell(row_crew_lower: str, crew_name: str) -> bool:
@@ -4371,8 +5544,9 @@ def update_job_spreadsheet(
     filepath:       str = "",
     id_column:      str = "Customer",
     sheet_name:     str = "",
-    backup:         bool = True,
+    backup:         bool = False,
     row_index:      int = -1,
+    expected_version: int = -1,
     ctx: "Context | None" = None,
 ) -> str:
     """
@@ -4388,36 +5562,42 @@ def update_job_spreadsheet(
     across every stop on the same day. For these, pass row_index instead
     of relying on id_column/job_identifier — see that arg's docs below.
 
-    Uses openpyxl — already installed, no new package needed.
-    Works only on .xlsx files. For .xls, convert to .xlsx first.
+    SQLite-backed — updates the live job database directly, no file format
+    restrictions (this is not an openpyxl/.xlsx operation).
 
-    If filepath is omitted, the default spreadsheet path configured in
-    AI-Prowler Settings → Small Business → Default Spreadsheet Path is used
+    If filepath is omitted, the default database path configured in
+    the database's fixed, automatically-resolved location is used
     automatically — no need to specify the path every time.
 
     Available to every role in every mode — personal and ALL server-mode
     roles (owner, manager, staff, field_crew). No DB-management or
     communications gate applies here.
 
-    Server mode, field_crew only (v9.1.x): on the Jobs_Schedule sheet, a
-    row must be assigned to you (Crew / Technician). On Customers,
-    Invoices, and Quotes, a row's CustomerID must belong to a customer
-    you've actually worked a job for (linked via Jobs_Schedule's own
-    CustomerID column) — you can't touch a coworker's customer record.
-    On Customers specifically, pricing/frequency/status master fields
-    (Frequency, Standard Quote, Discount, Net Price, Status
-    Active/Inactive, Total Jobs Completed, Lifetime Revenue) additionally
-    require staff/manager/owner, even for a customer in your own scope —
-    everything else (contact info, address, service prefs, gate code,
-    on-site contact, last/next service date) stays editable. staff,
-    manager, and owner are unrestricted everywhere this tool touches.
-    None of this applies in personal mode.
+    Server mode, field_crew only (v9.1.x, tightened 2026-09-23): on the
+    Jobs_Schedule sheet, a row must be assigned to you (Crew / Technician).
+    field_crew has NO ACCESS AT ALL — not even to their own customers' rows —
+    to Settings, Services_Pricing, Quotes, or Invoices. On Customers
+    specifically, field_crew may still read/edit rows for a customer they've
+    actually worked a job for (linked via Jobs_Schedule's own CustomerID
+    column); pricing/frequency/status master fields (Frequency, Standard
+    Quote, Discount, Net Price, Status Active/Inactive, Total Jobs Completed,
+    Lifetime Revenue) additionally require staff/manager/owner, even for a
+    customer in their own scope — everything else on Customers (contact
+    info, address, service prefs, gate code, on-site contact, last/next
+    service date) stays editable by field_crew. staff, manager, and owner
+    are unrestricted everywhere this tool touches. None of this applies in
+    personal mode.
 
-    By design, this tool — and every tool in AI-Prowler — never deletes a
-    row. There is no delete_customer, delete_job, delete_invoice, etc. To
-    retire a customer, set Status Active/Inactive to "Inactive" rather
-    than removing the row; the history stays intact and nothing a crew
-    member (or anyone else) does through the Jobs PWA can destroy data.
+    By design, this tool — and nearly every tool in AI-Prowler — never
+    deletes a row. There is no delete_job, delete_invoice, delete_quote,
+    etc. To retire a customer, set Status Active/Inactive to "Inactive"
+    rather than removing the row; the history stays intact and nothing a
+    crew member (or anyone else) does through the Jobs PWA can destroy
+    data. The one narrow exception is delete_customer (added 2026-09-15),
+    which permanently removes a customer and its linked records — but
+    only once that customer is ALREADY Inactive and only with
+    confirm=True, specifically so test/mistaken customer records can be
+    cleaned up without reopening the door to casual data loss.
 
     Args:
         job_identifier: Value to search for in id_column. Ignored (may be
@@ -4429,20 +5609,21 @@ def update_job_spreadsheet(
                                   "Last Service\\nDate": "2026-03-31",
                                   "Actual\\nDuration (min)": 45,
                                   "Actual\\nAmount ($)": 150.00}
-        filepath:       Full path to the Excel spreadsheet (.xlsx).
-                        If omitted, uses the path saved in AI-Prowler Settings.
-                        Example: "C:/Users/Dave/Documents/jobs.xlsx"
+        filepath:       Path to the SQLite job database. If omitted, uses
+                        the default configured in AI-Prowler Settings.
+                        Example: "C:/Users/Dave/Documents/AI-Prowler/ai_prowler_jobs.db"
         id_column:      Column header to search in (default "Customer").
                         Ignored when row_index is given.
-        sheet_name:     Sheet to use. Defaults to "Jobs_Schedule" if that sheet
-                        exists in the workbook (the common case for this tool);
-                        otherwise falls back to Excel's active sheet. Pass this
-                        explicitly to target a different sheet (e.g. "Invoices",
-                        "Customers", "Route_Planner").
-        backup:         If True (default), a timestamped backup copy of the
-                        spreadsheet is saved in a _backups subfolder next to
-                        the file before any changes are written.
-                        Backups older than 30 days are pruned automatically.
+        sheet_name:     Table to use. Defaults to "Jobs_Schedule" if not
+                        given. Pass this explicitly to target a different
+                        table (e.g. "Invoices", "Customers", "Route_Planner").
+        backup:         If True (2026-09-16: now defaults to False — scheduled/manual backups cover this; still available per-call), a timestamped backup copy of the
+                        database is saved in a _backups subfolder next to
+                        the file before any changes are written (throttled
+                        to at most once every 2 minutes, and pruned after a
+                        couple of days while always keeping the most recent
+                        50 — see backup_job_database() for a real, user-chosen
+                        backup instead of this automatic safety net).
                         Set to False to skip the backup (faster, no disk use).
         row_index:      0-based position among this sheet's DATA rows (i.e.
                         the row order read_job_spreadsheet() returns them
@@ -4452,284 +5633,113 @@ def update_job_spreadsheet(
                         Takes priority over the id_column search whenever
                         it's >= 0. Use this for sheets like Route_Planner
                         that have no column guaranteed unique on its own.
+        expected_version: Optional optimistic-concurrency check (Job Board
+                        Architecture Spec Phase 4, spec §6.2). Pass the
+                        row's own `_version` value from a prior
+                        read_job_spreadsheet()/get_board_updates() call to
+                        have this write refuse — with nothing written —
+                        if someone else edited the row in the meantime,
+                        instead of silently overwriting their change. The
+                        rejection names who and when, so the caller can
+                        show a clear "reload and try again" message. Leave
+                        at the default -1 to skip this check entirely
+                        (unconditional overwrite, the pre-Phase-4 behavior).
 
     Returns:
         Confirmation listing exactly which cells were updated, backup status,
         or an error if the file, row, or column was not found.
+
+    Job Board Architecture Spec Phase 1 (spec §5, §11), extended
+    2026-09-12 (Database-tab expansion): internals use the SQLite-backed
+    db_write_ops.db_update_job/db_update_customer/db_update_invoice/
+    db_update_quote/db_update_time_entry/db_update_route_stop/
+    db_update_settings/db_update_service_pricing instead of an openpyxl
+    load/mutate/save cycle — all eight sheets Database-tab can show are
+    now wired. row_index-based updates are still not supported (every
+    table now has a real unique key of its own — route_stops via its
+    integer `id`, Settings via its `key`, Services_Pricing via its
+    `service_code` — so the "no column is unique on its own" problem
+    row_index existed to work around no longer applies anywhere).
+    Crew-scoping: TimeLog/Route_Planner restrict a field_crew caller to
+    entries/stops recorded under their own name (same rule as
+    Jobs_Schedule); Settings/Services_Pricing lock field_crew out of
+    writing entirely (company-wide configuration, not per-job data) —
+    same allow/deny outcomes as everywhere else, expressed as a check_fn
+    run inside the DB transaction instead of a pre-write openpyxl scan.
     """
-    try:
-        import openpyxl as _opx
-    except ImportError:
-        return "❌ openpyxl not installed. Run: pip install openpyxl"
-
-    # Resolve filepath — use default from config if not supplied
-    filepath = _resolve_job_spreadsheet_path(ctx, filepath)
-    if not filepath:
-        return (
-            "❌ No spreadsheet path provided and no default path configured.\n"
-            "Set one in AI-Prowler → Settings → Small Business → Default Spreadsheet Path,\n"
-            "or pass the full filepath argument explicitly."
-        )
-
-    fp = filepath.replace("\\", "/")
-    if not os.path.exists(fp):
-        return f"❌ Spreadsheet not found: {fp}"
-    if not fp.lower().endswith(".xlsx"):
-        return (
-            "❌ Only .xlsx files are supported for updates.\n"
-            "Save the spreadsheet as .xlsx in Excel first."
-        )
-
-    # ── Backup before modifying ───────────────────────────────────────────────
-    backup_msg = ""
-    if backup:
-        backup_msg = _backup_spreadsheet(fp)
-        if backup_msg.startswith("⚠️") or backup_msg.startswith("❌"):
-            # Backup failed — abort to protect the file
-            return (
-                f"{backup_msg}\n"
-                "Spreadsheet was NOT modified. Fix the backup issue or pass backup=False to skip."
-            )
-
-    # Serialise the whole load -> modify -> save cycle so two concurrent
-    # server-mode writers can never interleave and silently drop each
-    # other's changes (openpyxl has no file locking of its own).
-    with _spreadsheet_write_lock:
-        try:
-            wb = _opx.load_workbook(fp)
-        except Exception as exc:
-            return f"❌ Could not open spreadsheet: {exc}"
-
-        # Sheet resolution order:
-        #   1. Explicit sheet_name, if given and it exists.
-        #   2. "Jobs_Schedule", if it exists — this tool is used overwhelmingly
-        #      for job updates (crew, status, notes, pricing), and a voice-driven
-        #      caller ("set the crew to Carlos") has no natural way to know or
-        #      say which sheet is Excel's current "active" tab. Relying on
-        #      wb.active here silently wrote to whatever sheet happened to be
-        #      selected when the file was last saved (e.g. a Quotes sheet),
-        #      which could look like a successful update while actually
-        #      updating the wrong sheet or erroring on a job that only exists
-        #      in Jobs_Schedule.
-        #   3. wb.active — unchanged fallback for spreadsheets with no
-        #      Jobs_Schedule sheet at all (e.g. Route_Planner-only workbooks).
-        if sheet_name and sheet_name in wb.sheetnames:
-            ws = wb[sheet_name]
-        elif "Jobs_Schedule" in wb.sheetnames:
-            ws = wb["Jobs_Schedule"]
-        else:
-            ws = wb.active
-
-        # ── Detect header row (skip title/banner rows, same logic as read tool) ───
-        # Scans the first 5 rows and uses the first row that has ≥ 3 non-empty
-        # cells as the real header row.  This handles decorative title rows like
-        # "📅 JOBS & SCHEDULE — All Service Appointments" in row 1.
-        header_row_num: int | None = None
-        headers: dict[str, int] = {}
-        for r in ws.iter_rows(min_row=1, max_row=5):
-            non_empty = [c for c in r if c.value is not None]
-            if len(non_empty) >= 3:
-                header_row_num = r[0].row
-                for col_idx, cell in enumerate(r, 1):
-                    if cell.value is not None:
-                        raw = str(cell.value).strip()
-                        headers[raw] = col_idx
-                        # Register a newline-normalised alias so callers can pass
-                        # either "Job\nStatus" or "Job Status" and both resolve.
-                        normalised = raw.replace('\n', ' ')
-                        if normalised != raw:
-                            headers.setdefault(normalised, col_idx)
-                break
-
-        if header_row_num is None or not headers:
-            return (
-                "❌ Could not detect a header row in the spreadsheet.\n"
-                "Expected a row with at least 3 non-empty cells in the first 5 rows."
-            )
-
-        # ── Find the row to update ──────────────────────────────────────────────
-        # row_index (when given) targets a row by position — the Nth data
-        # row below the header, matching read_job_spreadsheet()'s row
-        # order exactly — bypassing the id_column search entirely. This is
-        # the only reliable way to target a specific row on a sheet like
-        # Route_Planner, where no single column is unique on its own.
-        found_row = None
-        if row_index >= 0:
-            target_row_num = header_row_num + 1 + row_index
-            if target_row_num > ws.max_row:
-                return (
-                    f"❌ row_index {row_index} is out of range — this sheet only has "
-                    f"{max(ws.max_row - header_row_num, 0)} data row(s)."
-                )
-            found_row = next(iter(ws.iter_rows(min_row=target_row_num, max_row=target_row_num)))
-        else:
-            if id_column not in headers:
-                avail = [k for k in headers.keys() if '\n' not in k][:15]
-                return (
-                    f"❌ Column '{id_column}' not found in headers (detected on row {header_row_num}).\n"
-                    f"Available columns: {', '.join(avail)}"
-                )
-
-            id_col_idx = headers[id_column]
-            for row in ws.iter_rows(min_row=header_row_num + 1):
-                cell_val = row[id_col_idx - 1].value
-                if cell_val and job_identifier.lower() in str(cell_val).lower():
-                    found_row = row
-                    break
-
-            if found_row is None:
-                return (
-                    f"❌ No row found where {id_column} contains '{job_identifier}'.\n"
-                    "Check the spelling — partial matches are accepted."
-                )
-
-        # ── Server-mode crew scoping (Phase 4) ──────────────────────────────
-        # Same rule as read_job_spreadsheet, via the shared _job_crew_scope()
-        # helper. Only enforced when the resolved sheet is Jobs_Schedule —
-        # updates to any other sheet (e.g. Customers) are unaffected. A
-        # restricted user attempting to update a row that isn't theirs is
-        # rejected before any cell is written, not silently allowed.
-        if ws.title == "Jobs_Schedule":
-            _ujs_restrict, _ujs_crew_name = _job_crew_scope(ctx, fp)
-            if _ujs_restrict:
-                _ujs_crew_col = headers.get("Crew / Technician")
-                _ujs_row_crew = (str(found_row[_ujs_crew_col - 1].value or "").strip().lower()
-                                  if _ujs_crew_col else "")
-                if not _crew_name_in_cell(_ujs_row_crew, _ujs_crew_name):
-                    return (
-                        f"❌ You can only update jobs assigned to you "
-                        f"(Crew / Technician column). This row is not assigned to you."
-                    )
-
-        # ── Server-mode crew scoping for Customers/Invoices/Quotes (v9.1.x) ──
-        # Extends the same idea to the three sheets linked to Jobs_Schedule
-        # by CustomerID: a restricted (field_crew) user may only touch a
-        # record for a customer they've actually worked a job for. staff/
-        # owner/manager get restrict=False from _job_crew_scope and skip
-        # this entirely, same as they already do for Jobs_Schedule above.
-        elif ws.title in ("Customers", "Invoices", "Quotes"):
-            _cs_restrict, _cs_crew_name = _job_crew_scope(ctx, fp)
-            if _cs_restrict:
-                if ws.title == "Customers":
-                    # Customers' own identifying column is CustomerID itself
-                    # (column A) — there's no separate FK column to look up.
-                    _cs_cust_id = str(found_row[0].value or "").strip().lower()
-                else:
-                    _cs_cid_col = headers.get("CustomerID")
-                    _cs_cust_id = (str(found_row[_cs_cid_col - 1].value or "").strip().lower()
-                                    if _cs_cid_col else "")
-
-                if not _server_customer_in_crew_scope(wb, _cs_crew_name, _cs_cust_id):
-                    return (
-                        f"❌ You can only update {ws.title} records for a customer "
-                        f"you've actually worked a job for. This CustomerID isn't "
-                        f"linked to any job assigned to you."
-                    )
-
-                if ws.title == "Customers":
-                    _cs_locked = set(updates.keys()) & _FIELD_CREW_LOCKED_CUSTOMER_FIELDS
-                    if _cs_locked:
-                        return (
-                            f"❌ These Customers fields require staff/manager/owner "
-                            f"access: {', '.join(sorted(_cs_locked))}. Contact info, "
-                            f"address, service preferences, and access notes are "
-                            f"still fine to update."
-                        )
-
-        # ── Apply updates ─────────────────────────────────────────────────────────
-        updated:    list[str] = []
-        not_found:  list[str] = []
-
-        import datetime as _dt   # needed by _coerce_date and the isinstance check below
-
-        # Column names that hold dates — used to coerce string values to
-        # real Excel date serials so the cell stores a native date rather
-        # than a text string. This keeps Excel display (MM/DD/YYYY via the
-        # cell's number_format) consistent with what the PWA writes and what
-        # read_job_spreadsheet returns (also MM/DD/YYYY). Standardized
-        # 2026-08-25 as part of the full MM/DD/YYYY format alignment.
-        _DATE_COL_KEYWORDS = (
-            'service date', 'end date', 'invoice date', 'due date',
-            'invoice sent date', 'payment date', 'last service date',
-            'next sched', 'start date',
-        )
-        _DATE_FMTS = ('%m/%d/%Y', '%Y-%m-%d', '%m-%d-%Y', '%d/%m/%Y')
-
-        def _coerce_date(col: str, val):
-            """Convert a string date value to datetime.date if the column
-            is a date column. Returns the original value unchanged if the
-            column is not a date column or the value can't be parsed."""
-            import datetime as _dt
-            if val is None or val == '':
-                return val
-            col_lower = col.lower().replace('\n', ' ')
-            if not any(kw in col_lower for kw in _DATE_COL_KEYWORDS):
-                return val
-            if isinstance(val, (_dt.datetime, _dt.date)):
-                return val.date() if isinstance(val, _dt.datetime) else val
-            for fmt in _DATE_FMTS:
-                try:
-                    return _dt.datetime.strptime(str(val).strip(), fmt).date()
-                except ValueError:
-                    continue
-            return val  # unparseable — write as-is, don't corrupt the value
-
-        for col_name, new_val in updates.items():
-            if col_name in headers:
-                cell = found_row[headers[col_name] - 1]
-                coerced = _coerce_date(col_name, new_val)
-                cell.value = coerced
-                # Apply MM/DD/YYYY number_format whenever we successfully
-                # coerced to a real date — this is what makes Excel display
-                # the date as 08/25/2026 rather than a raw serial number.
-                if isinstance(coerced, (_dt.date, _dt.datetime)):
-                    cell.number_format = 'MM/DD/YYYY'
-                updated.append(f"{col_name} → {new_val}")
-            else:
-                not_found.append(col_name)
-
-        # ── Audit trail stamp (BOTH modes, v9.1.x) ──────────────────────────────
-        # If this sheet has "Last Edited By" and/or "Last Edited At" columns,
-        # stamp them with who made this change and when. Purely additive and
-        # silent if the columns don't exist yet — add them to a sheet's header
-        # row (any position) to start getting audit history on it; nothing
-        # else in this tool changes based on their presence. _actor_display_name
-        # resolves the right identity in either mode: the authenticated user in
-        # server mode, or the configured owner name (falling back to
-        # "operator") in personal mode.
-        _aud_by_col = headers.get("Last Edited By")
-        if _aud_by_col:
-            found_row[_aud_by_col - 1].value = _actor_display_name(ctx)
-        _aud_at_col = headers.get("Last Edited At")
-        if _aud_at_col:
-            import datetime as _aud_dt
-            found_row[_aud_at_col - 1].value = _aud_dt.datetime.now()
-            found_row[_aud_at_col - 1].number_format = 'MM/DD/YYYY HH:MM'
-
-        # ── Save ──────────────────────────────────────────────────────────────────
-        try:
-            wb.save(fp)
-        except Exception as exc:
-            return f"❌ Could not save spreadsheet: {exc}"
-
-        row_num = found_row[0].row
-    row_label = f"row_index {row_index}" if row_index >= 0 else f"{id_column}: {job_identifier}"
-    lines   = [
-        f"✅ Spreadsheet updated: {os.path.basename(fp)}",
-        f"   Row:     {row_num}  ({row_label})",
-        f"   Updated: {', '.join(updated)}",
-    ]
-    if backup_msg:
-        lines.append(f"   {backup_msg}")
-    if not_found:
-        lines.append(
-            f"   ⚠️  Columns not found (check spelling): {', '.join(not_found)}"
-        )
-    lines.append(
-        "\n📑 Re-index the spreadsheet to keep AI-Prowler search results current:\n"
-        "   Call update_tracked_directories() after updating the file."
+    from db_write_ops import (
+        db_update_job, db_update_customer, db_update_invoice, db_update_quote,
+        db_update_time_entry, db_update_route_stop, db_update_settings,
+        db_update_service_pricing,
     )
-    return "\n".join(lines)
+
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return (
+            "❌ No database path provided and no default path configured.\n"
+            "Pass the full filepath argument explicitly, or check that AI-Prowler has write access to its own state folder."
+        )
+
+    _resolved_sheet = sheet_name or "Jobs_Schedule"
+    # Blanket field_crew denial (2026-09-23, at the owner's request) — checked
+    # BEFORE the dispatch table and BEFORE the per-field/per-customer-
+    # ownership scoping db_update_customer/db_update_invoice/db_update_quote
+    # apply on their own (see this tool's own docstring on that scoping):
+    # this is stricter than and overrides that finer-grained "may edit within
+    # their own scope" behavior for these four sheets specifically — no
+    # access at all, not even to a field_crew user's own customers' rows.
+    denial = _field_crew_sheet_denied(ctx, _resolved_sheet)
+    if denial:
+        return denial
+    if _resolved_sheet == "Settings":
+        # R-052: a default setting (e.g. Route Origin Mode, or the Start/End
+        # Address rows its popup saves) may not have a row yet on a fresh
+        # database — add missing defaults first so the update finds it.
+        try:
+            from db_write_ops import db_seed_default_settings
+            db_seed_default_settings(db_path)
+        except Exception:
+            pass
+    _ujs_dispatch = {
+        "Jobs_Schedule":     (db_update_job, "JobID (JOB-####)"),
+        "Customers":         (db_update_customer, "CustomerID (CUST-####)"),
+        "Invoices":          (db_update_invoice, "InvoiceID (INV-####)"),
+        "Quotes":            (db_update_quote, "QuoteID (QTE-####)"),
+        "TimeLog":           (db_update_time_entry, "EntryID"),
+        "Route_Planner":     (db_update_route_stop, "ID"),
+        "Settings":          (db_update_settings, "Setting"),
+        "Services_Pricing":  (db_update_service_pricing, "Service Code"),
+    }
+    if row_index >= 0 or _resolved_sheet not in _ujs_dispatch:
+        return (
+            f"❌ '{_resolved_sheet}'"
+            + (" row_index-based updates are" if row_index >= 0 else " is")
+            + " not yet wired to the DB-backed job store.\n"
+            f"Available sheets: {', '.join(_ujs_dispatch.keys())}."
+        )
+
+    db_fn, default_id_col = _ujs_dispatch[_resolved_sheet]
+    # id_column's tool-level default ("Customer") predates per-sheet ID
+    # columns and doesn't match any real column on most sheets. When the
+    # caller left it at that default, use this sheet's own natural ID
+    # column instead of forcing every caller to know to override it.
+    effective_id_column = id_column if id_column and id_column != "Customer" else default_id_col
+
+    restrict, crew_name = _job_crew_scope(ctx, db_path)
+
+    backup_msg = _backup_job_db(db_path) if backup else ""
+
+    actor = _actor_display_name(ctx)
+    result = db_fn(
+        db_path, job_identifier, updates or {}, actor,
+        restrict=restrict, crew_name=crew_name, id_column=effective_id_column,
+        expected_version=(expected_version if expected_version >= 0 else None),
+    )
+    if backup_msg and result.startswith("✅"):
+        lines = result.split("\n")
+        lines.insert(1, f"   {backup_msg}")
+        result = "\n".join(lines)
+    return result
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -4740,7 +5750,7 @@ def update_job_spreadsheet(
 def create_job(
     updates:    dict,
     filepath:   str = "",
-    backup:     bool = True,
+    backup:     bool = False,
     ctx: "Context | None" = None,
 ) -> str:
     """
@@ -4755,28 +5765,38 @@ def create_job(
     crew member's own existing jobs, since a brand-new row has no prior
     owner to check against.
 
-    Uses openpyxl — already installed, no new package needed.
-    Works only on .xlsx files.
+    SQLite-backed — appends the new row directly to the live job database.
 
-    If filepath is omitted, the default spreadsheet path configured in
-    AI-Prowler Settings → Small Business → Default Spreadsheet Path is used
+    If filepath is omitted, the default database path configured in
+    the database's fixed, automatically-resolved location is used
     automatically.
+
+    Job Board Architecture Spec §5.1 (customer-before-job requirement,
+    added 2026-09-22): `updates` MUST include a valid, existing CustomerID
+    — a job can no longer be created for a customer that doesn't exist yet,
+    and create_job does not implicitly create one. If the caller only has
+    a customer name/address on hand, call create_customer first and pass
+    the CustomerID it returns here. Missing or nonexistent CustomerID
+    returns a clear ❌ error and creates no row.
 
     Args:
         updates:  Dict of {column_header: new_value} pairs for the new job.
-                  Example: {"Customer Name / Company": "Jane Smith",
-                            "Street Address ★ AI Route": "42 Beachside Dr",
+                  Must include "CustomerID" (or "CustomerID (Customers!A)")
+                  for an EXISTING customer — see §5.1 note above.
+                  Example: {"CustomerID": "CUST-0002",
+                            "Customer Name / Company": "Jane Smith",
+                            "Street Address": "42 Beachside Dr",
                             "Service Date": "2026-04-05",
                             "Service Type": "Window",
                             "Job Status": "Scheduled"}
                   A "JobID (JOB-####)" key, if passed, is ignored — the next
                   JobID is always auto-generated from the highest existing
                   JOB-#### number in the sheet.
-        filepath: Full path to the Excel spreadsheet (.xlsx). If omitted,
-                  uses the path saved in AI-Prowler Settings. In server mode
-                  this argument is ignored — see _resolve_job_spreadsheet_path().
-        backup:   If True (default), a timestamped backup copy of the
-                  spreadsheet is saved before any changes are written.
+        filepath: Path to the SQLite job database. If omitted, uses the
+                  default configured in AI-Prowler Settings. In server mode
+                  this argument is ignored — see _resolve_job_db_path().
+        backup:   If True (2026-09-16: now defaults to False — scheduled/manual backups cover this; still available per-call), a timestamped backup copy of the
+                  database is saved before any changes are written.
 
     Returns:
         Confirmation with the new JobID, or an error if the file or the
@@ -4796,188 +5816,45 @@ def create_job(
 
 def _create_job_impl(updates: dict, filepath: str, backup: bool, ctx) -> str:
     """Implementation body, called under _spreadsheet_write_lock. See
-    create_job() for the public docstring."""
+    create_job() for the public docstring.
+
+    Job Board Architecture Spec Phase 1 (spec §5, §11): internals now use
+    the SQLite-backed db_write_ops.db_create_job instead of an openpyxl
+    load/mutate/save cycle — "load workbook -> find row -> mutate cell ->
+    save workbook" becomes "open a transaction -> INSERT -> commit." The
+    lock above is retained even though row-level SQLite writes no longer
+    need it for correctness, since it costs nothing and keeps this
+    function's calling convention identical to every other write tool
+    during the transition.
+
+    Tool name, arguments, and return-value shape are unchanged: same
+    ✅/❌ prefix, same "Set: ..." / "Columns not found" wording, same
+    NEW_JOB_ID=... machine-parseable marker line — so existing callers
+    (Jobs PWA, E2E tests) see no difference. The old "re-index the
+    spreadsheet" hint is dropped: there is no .xlsx file for this write
+    to land in anymore (spec §7 — Excel is now an on-demand export, not
+    the live store), so nothing needs re-indexing as a result of it.
+    """
     _telemetry_increment_tool_count("create_job")
 
-    try:
-        import openpyxl as _opx
-    except ImportError:
-        return "❌ openpyxl not installed. Run: pip install openpyxl"
+    from db_write_ops import db_create_job
 
-    filepath = _resolve_job_spreadsheet_path(ctx, filepath)
-    if not filepath:
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
         return (
-            "❌ No spreadsheet path provided and no default path configured.\n"
-            "Set one in AI-Prowler → Settings → Small Business → Default Spreadsheet Path,\n"
-            "or pass the full filepath argument explicitly."
+            "❌ No database path provided and no default path configured.\n"
+            "Pass the full filepath argument explicitly, or check that AI-Prowler has write access to its own state folder."
         )
 
-    fp = filepath.replace("\\", "/")
-    if not os.path.exists(fp):
-        return f"❌ Spreadsheet not found: {fp}"
-    if not fp.lower().endswith(".xlsx"):
-        return (
-            "❌ Only .xlsx files are supported for updates.\n"
-            "Save the spreadsheet as .xlsx in Excel first."
-        )
+    backup_msg = _backup_job_db(db_path) if backup else ""
 
-    backup_msg = ""
-    if backup:
-        backup_msg = _backup_spreadsheet(fp)
-        if backup_msg.startswith("⚠️") or backup_msg.startswith("❌"):
-            return (
-                f"{backup_msg}\n"
-                "Spreadsheet was NOT modified. Fix the backup issue or pass backup=False to skip."
-            )
-
-    try:
-        wb = _opx.load_workbook(fp)
-    except Exception as exc:
-        return f"❌ Could not open spreadsheet: {exc}"
-
-    if "Jobs_Schedule" not in wb.sheetnames:
-        return "❌ 'Jobs_Schedule' sheet not found in spreadsheet."
-    ws = wb["Jobs_Schedule"]
-
-    # ── Detect header row — same logic as update_job_spreadsheet ──────────────
-    header_row_num: int | None = None
-    headers: dict[str, int] = {}
-    for r in ws.iter_rows(min_row=1, max_row=5):
-        non_empty = [c for c in r if c.value is not None]
-        if len(non_empty) >= 3:
-            header_row_num = r[0].row
-            for col_idx, cell in enumerate(r, 1):
-                if cell.value is not None:
-                    raw = str(cell.value).strip()
-                    headers[raw] = col_idx
-                    normalised = raw.replace('\n', ' ')
-                    if normalised != raw:
-                        headers.setdefault(normalised, col_idx)
-            break
-
-    if header_row_num is None or not headers:
-        return (
-            "❌ Could not detect a header row in Jobs_Schedule.\n"
-            "Expected a row with at least 3 non-empty cells in the first 5 rows."
-        )
-
-    id_col_name = next((c for c in ("JobID (JOB-####)", "JobID") if c in headers), None)
-    if id_col_name is None:
-        avail = [k for k in headers.keys() if '\n' not in k][:15]
-        return (
-            "❌ Could not find the JobID column in Jobs_Schedule.\n"
-            f"Available columns: {', '.join(avail)}"
-        )
-    id_col_idx = headers[id_col_name]
-
-    # ── Generate next JobID — same JOB-#### scheme as
-    #    schedule_next_recurring_job's auto-created rows ────────────────────
-    existing_ids = []
-    for row in ws.iter_rows(min_row=header_row_num + 1):
-        jid_cell = row[id_col_idx - 1].value
-        if jid_cell and str(jid_cell).startswith("JOB-"):
-            try:
-                existing_ids.append(int(str(jid_cell).split("-")[1]))
-            except ValueError:
-                pass
-    next_num = (max(existing_ids) + 1) if existing_ids else 1
-    new_job_id = f"JOB-{next_num:04d}"
-
-    # ── Find the next empty row ─────────────────────────────────────────────
-    # Anchor on the last row that actually has a JobID, not "the last row
-    # with any non-empty cell anywhere" — a stray formatting artifact
-    # (leftover fill/border, an empty-string remnant from a deleted row,
-    # a merged-cell ghost) far below the real data can make a cell look
-    # non-empty to openpyxl even though nothing was ever entered there,
-    # which previously caused new jobs to land dozens or hundreds of rows
-    # below the last real job instead of immediately after it.
-    last_row = header_row_num
-    for row in ws.iter_rows(min_row=header_row_num + 1):
-        if row[id_col_idx - 1].value:
-            last_row = row[0].row
-    new_row_num = last_row + 1
-
-    # ── Write provided fields, then force the auto-generated JobID ─────────
-    # (A caller-supplied JobID is silently ignored — this tool always
-    # assigns the next sequential one, matching the "Auto-assigned"
-    # placeholder shown in the Jobs PWA's add-job form.)
-    written:   list[str] = []
-    not_found: list[str] = []
-
-    import datetime as _dt
-
-    # Same date coercion as update_job_spreadsheet — string dates become
-    # real Excel date serials with MM/DD/YYYY number_format so Excel
-    # displays them consistently whether the row was added via the PWA
-    # or typed directly into the sheet.
-    _CJ_DATE_KEYWORDS = (
-        'service date', 'end date', 'invoice date', 'due date',
-        'invoice sent date', 'payment date', 'last service date',
-        'next sched', 'start date',
-    )
-    _CJ_DATE_FMTS = ('%m/%d/%Y', '%Y-%m-%d', '%m-%d-%Y', '%d/%m/%Y')
-
-    def _cj_coerce_date(col: str, val):
-        import datetime as _dt
-        if val is None or val == '':
-            return val
-        col_lower = col.lower().replace('\n', ' ')
-        if not any(kw in col_lower for kw in _CJ_DATE_KEYWORDS):
-            return val
-        if isinstance(val, (_dt.datetime, _dt.date)):
-            return val.date() if isinstance(val, _dt.datetime) else val
-        for fmt in _CJ_DATE_FMTS:
-            try:
-                return _dt.datetime.strptime(str(val).strip(), fmt).date()
-            except ValueError:
-                continue
-        return val
-
-    for col_name, new_val in (updates or {}).items():
-        if col_name == id_col_name:
-            continue
-        if col_name in headers:
-            cell = ws.cell(row=new_row_num, column=headers[col_name])
-            coerced = _cj_coerce_date(col_name, new_val)
-            cell.value = coerced
-            if isinstance(coerced, (_dt.date, _dt.datetime)):
-                cell.number_format = 'MM/DD/YYYY'
-            written.append(f"{col_name} → {new_val}")
-        else:
-            not_found.append(col_name)
-    ws.cell(row=new_row_num, column=id_col_idx).value = new_job_id
-
-    # ── Created By stamp (BOTH modes, v9.1.x) ──────────────────────────────
-    # Silent no-op if Jobs_Schedule has no "Created By" column yet.
-    _cj_created_by_col = headers.get("Created By")
-    if _cj_created_by_col:
-        ws.cell(row=new_row_num, column=_cj_created_by_col).value = _actor_display_name(ctx)
-
-    try:
-        wb.save(fp)
-    except Exception as exc:
-        return f"❌ Could not save spreadsheet: {exc}"
-
-    lines = [
-        f"✅ Job created: {new_job_id}",
-        f"   Row:  {new_row_num}",
-        f"   Set:  {', '.join(written) if written else '(no fields provided)'}",
-    ]
-    if backup_msg:
-        lines.append(f"   {backup_msg}")
-    if not_found:
-        lines.append(
-            f"   ⚠️  Columns not found (check spelling): {', '.join(not_found)}"
-        )
-    # Machine-parseable line so callers (e.g. the Jobs PWA) can reliably pull
-    # the new JobID out of this tool's text response without regex-scraping
-    # the human-readable summary above.
-    lines.append(f"NEW_JOB_ID={new_job_id}")
-    lines.append(
-        "\n📑 Re-index the spreadsheet to keep AI-Prowler search results current:\n"
-        "   Call update_tracked_directories() after updating the file."
-    )
-    return "\n".join(lines)
+    actor = _actor_display_name(ctx)
+    result = db_create_job(db_path, updates or {}, actor)
+    if backup_msg and result.startswith("✅"):
+        lines = result.split("\n")
+        lines.insert(1, f"   {backup_msg}")
+        result = "\n".join(lines)
+    return result
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -5017,7 +5894,7 @@ def _append_sheet_row_impl(
         id_prefix:     ID prefix, e.g. "CUST", "QTE".
         id_digits:     Zero-padded digit width, e.g. 4 for CUST-0001.
         updates:       Dict of {column_header: new_value} pairs.
-        filepath:      Path to the .xlsx tracker, or "" for the default.
+        filepath:      Path to the SQLite job database, or "" for the default.
         backup:        Whether to back up before writing.
         ctx:           MCP context.
         date_keywords: Substrings (lowercase) that mark a column as a date
@@ -5026,167 +5903,52 @@ def _append_sheet_row_impl(
     Returns:
         Formatted confirmation string including NEW_<PREFIX>_ID=... on its
         own line for machine parsing, matching create_job()'s convention.
+
+    Job Board Architecture Spec Phase 1 (spec §5, §11): internals now use
+    the SQLite-backed db_write_ops.db_create_row (via the sheet-specific
+    db_create_customer/db_create_quote wrappers) instead of an openpyxl
+    load/mutate/save cycle. Only "Customers" and "Quotes" are wired here —
+    the two sheets this helper is actually called for today (create_job
+    has its own dedicated impl above, and no other caller currently uses
+    this helper) — so an unrecognized sheet_name fails clearly rather than
+    silently falling through to an unported path. Return format is
+    unchanged: same ✅/❌ prefix, same NEW_<PREFIX>_ID=... marker line.
     """
-    try:
-        import openpyxl as _opx
-    except ImportError:
-        return "❌ openpyxl not installed. Run: pip install openpyxl"
+    from db_write_ops import db_create_customer, db_create_quote
 
-    filepath = _resolve_job_spreadsheet_path(ctx, filepath)
-    if not filepath:
+    _dispatch = {"Customers": db_create_customer, "Quotes": db_create_quote}
+    db_fn = _dispatch.get(sheet_name)
+    if db_fn is None:
         return (
-            "❌ No spreadsheet path provided and no default path configured.\n"
-            "Set one in AI-Prowler → Settings → Small Business → Default Spreadsheet Path,\n"
-            "or pass the full filepath argument explicitly."
+            f"❌ '{sheet_name}' is not yet wired to the DB-backed job store.\n"
+            "Only Customers and Quotes are supported by this helper."
         )
 
-    fp = filepath.replace("\\", "/")
-    if not os.path.exists(fp):
-        return f"❌ Spreadsheet not found: {fp}"
-    if not fp.lower().endswith(".xlsx"):
+    # Blanket field_crew denial (2026-09-23, at the owner's request) — covers
+    # create_quote via this shared helper; create_customer (the same
+    # helper's other caller) is unaffected since Customers is not in the
+    # blocked set. Checked before db_path resolution has any bearing on the
+    # outcome, same as read_job_spreadsheet/update_job_spreadsheet.
+    denial = _field_crew_sheet_denied(ctx, sheet_name)
+    if denial:
+        return denial
+
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
         return (
-            "❌ Only .xlsx files are supported for updates.\n"
-            "Save the spreadsheet as .xlsx in Excel first."
+            "❌ No database path provided and no default path configured.\n"
+            "Pass the full filepath argument explicitly, or check that AI-Prowler has write access to its own state folder."
         )
 
-    backup_msg = ""
-    if backup:
-        backup_msg = _backup_spreadsheet(fp)
-        if backup_msg.startswith("⚠️") or backup_msg.startswith("❌"):
-            return (
-                f"{backup_msg}\n"
-                "Spreadsheet was NOT modified. Fix the backup issue or pass backup=False to skip."
-            )
+    backup_msg = _backup_job_db(db_path) if backup else ""
 
-    try:
-        wb = _opx.load_workbook(fp)
-    except Exception as exc:
-        return f"❌ Could not open spreadsheet: {exc}"
-
-    if sheet_name not in wb.sheetnames:
-        return (f"❌ '{sheet_name}' sheet not found in spreadsheet.\n"
-                f"Available sheets: {', '.join(wb.sheetnames)}")
-    ws = wb[sheet_name]
-
-    # ── Detect header row (same logic as create_job / update_job_spreadsheet) ──
-    header_row_num: "int | None" = None
-    headers: dict = {}
-    for r in ws.iter_rows(min_row=1, max_row=5):
-        non_empty = [c for c in r if c.value is not None]
-        if len(non_empty) >= 3:
-            header_row_num = r[0].row
-            for col_idx, cell in enumerate(r, 1):
-                if cell.value is not None:
-                    raw = str(cell.value).strip()
-                    headers[raw] = col_idx
-                    normalised = raw.replace('\n', ' ')
-                    if normalised != raw:
-                        headers.setdefault(normalised, col_idx)
-            break
-
-    if header_row_num is None or not headers:
-        return (
-            f"❌ Could not detect a header row in {sheet_name}.\n"
-            "Expected a row with at least 3 non-empty cells in the first 5 rows."
-        )
-
-    id_col_name = next((c for c in id_col_names if c in headers), None)
-    if id_col_name is None:
-        avail = [k for k in headers.keys() if '\n' not in k][:15]
-        return (
-            f"❌ Could not find the ID column in {sheet_name} "
-            f"(looked for: {', '.join(id_col_names)}).\n"
-            f"Available columns: {', '.join(avail)}"
-        )
-    id_col_idx = headers[id_col_name]
-
-    # ── Generate next ID ─────────────────────────────────────────────────────
-    existing_ids = []
-    for row in ws.iter_rows(min_row=header_row_num + 1):
-        id_cell = row[id_col_idx - 1].value
-        if id_cell and str(id_cell).startswith(f"{id_prefix}-"):
-            try:
-                existing_ids.append(int(str(id_cell).split("-")[1]))
-            except ValueError:
-                pass
-    next_num = (max(existing_ids) + 1) if existing_ids else 1
-    new_id = f"{id_prefix}-{next_num:0{id_digits}d}"
-
-    # ── Find the next empty row — anchor on the last row with a real ID ────
-    # value in the id column, NOT "any cell anywhere has any value" (the
-    # create_job row-501 bug: a stray formatting artifact far below the
-    # real data can otherwise push the new row hundreds of rows down).
-    last_row = header_row_num
-    for row in ws.iter_rows(min_row=header_row_num + 1):
-        if row[id_col_idx - 1].value:
-            last_row = row[0].row
-    new_row_num = last_row + 1
-
-    # ── Write provided fields, then force the auto-generated ID ────────────
-    written:   list = []
-    not_found: list = []
-
-    import datetime as _dt
-    _date_fmts = ('%m/%d/%Y', '%Y-%m-%d', '%m-%d-%Y', '%d/%m/%Y')
-
-    def _coerce_date(col: str, val):
-        if val is None or val == '':
-            return val
-        col_lower = col.lower().replace('\n', ' ')
-        if not any(kw in col_lower for kw in date_keywords):
-            return val
-        if isinstance(val, (_dt.datetime, _dt.date)):
-            return val.date() if isinstance(val, _dt.datetime) else val
-        for fmt in _date_fmts:
-            try:
-                return _dt.datetime.strptime(str(val).strip(), fmt).date()
-            except ValueError:
-                continue
-        return val
-
-    for col_name, new_val in (updates or {}).items():
-        if col_name == id_col_name:
-            continue
-        if col_name in headers:
-            cell = ws.cell(row=new_row_num, column=headers[col_name])
-            coerced = _coerce_date(col_name, new_val)
-            cell.value = coerced
-            if isinstance(coerced, (_dt.date, _dt.datetime)):
-                cell.number_format = 'MM/DD/YYYY'
-            written.append(f"{col_name} → {new_val}")
-        else:
-            not_found.append(col_name)
-    ws.cell(row=new_row_num, column=id_col_idx).value = new_id
-
-    # ── Created By stamp (BOTH modes, v9.1.x) ──────────────────────────────
-    # Silent no-op if the sheet has no "Created By" column yet — same
-    # additive posture as update_job_spreadsheet's Last Edited By/At stamp.
-    _asr_created_by_col = headers.get("Created By")
-    if _asr_created_by_col:
-        ws.cell(row=new_row_num, column=_asr_created_by_col).value = _actor_display_name(ctx)
-
-    try:
-        wb.save(fp)
-    except Exception as exc:
-        return f"❌ Could not save spreadsheet: {exc}"
-
-    lines = [
-        f"✅ {sheet_name[:-1] if sheet_name.endswith('s') else sheet_name} created: {new_id}",
-        f"   Row:  {new_row_num}",
-        f"   Set:  {', '.join(written) if written else '(no fields provided)'}",
-    ]
-    if backup_msg:
-        lines.append(f"   {backup_msg}")
-    if not_found:
-        lines.append(
-            f"   ⚠️  Columns not found (check spelling): {', '.join(not_found)}"
-        )
-    lines.append(f"NEW_{id_prefix}_ID={new_id}")
-    lines.append(
-        "\n📑 Re-index the spreadsheet to keep AI-Prowler search results current:\n"
-        "   Call update_tracked_directories() after updating the file."
-    )
-    return "\n".join(lines)
+    actor = _actor_display_name(ctx)
+    result = db_fn(db_path, updates or {}, actor)
+    if backup_msg and result.startswith("✅"):
+        lines = result.split("\n")
+        lines.insert(1, f"   {backup_msg}")
+        result = "\n".join(lines)
+    return result
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -5197,7 +5959,7 @@ def _append_sheet_row_impl(
 def create_customer(
     updates:    dict,
     filepath:   str = "",
-    backup:     bool = True,
+    backup:     bool = False,
     ctx: "Context | None" = None,
 ) -> str:
     """
@@ -5212,11 +5974,10 @@ def create_customer(
     inactive), use update_job_spreadsheet with sheet_name="Customers"
     instead — this tool always creates a new row.
 
-    Uses openpyxl — already installed, no new package needed.
-    Works only on .xlsx files.
+    SQLite-backed — appends the new row directly to the live job database.
 
-    If filepath is omitted, the default spreadsheet path configured in
-    AI-Prowler Settings → Small Business → Default Spreadsheet Path is used
+    If filepath is omitted, the default database path configured in
+    the database's fixed, automatically-resolved location is used
     automatically.
 
     Available to every role in every mode — personal and ALL server-mode
@@ -5228,19 +5989,19 @@ def create_customer(
                   customer. Example: {"Company Name": "Blue Wave Cafe",
                   "First Name": "Jane", "Last Name": "Smith",
                   "Phone": "386-555-0101", "Email": "jane@example.com",
-                  "Street Address ★ AI Route": "42 Beachside Dr",
-                  "City ★ AI Route": "New Smyrna Beach", "State": "FL",
-                  "ZIP ★ AI Route": "32168",
+                  "Street Address": "42 Beachside Dr",
+                  "City": "New Smyrna Beach", "State": "FL",
+                  "ZIP": "32168",
                   "Service Type(s) Win/Press/Both": "Window",
                   "Frequency": "Monthly",
                   "Status Active/Inactive": "Active"}
                   A "CustomerID (CUST-####)" key, if passed, is ignored —
                   the next CustomerID is always auto-generated from the
                   highest existing CUST-#### number in the sheet.
-        filepath: Full path to the Excel spreadsheet (.xlsx). If omitted,
+        filepath: Path to the SQLite job database. If omitted,
                   uses the path saved in AI-Prowler Settings.
-        backup:   If True (default), a timestamped backup copy of the
-                  spreadsheet is saved before any changes are written.
+        backup:   If True (2026-09-16: now defaults to False — scheduled/manual backups cover this; still available per-call), a timestamped backup copy of the
+                  database is saved before any changes are written.
 
     Returns:
         Confirmation with the new CustomerID, or an error if the file or
@@ -5273,7 +6034,7 @@ def create_customer(
 def create_quote(
     updates:    dict,
     filepath:   str = "",
-    backup:     bool = True,
+    backup:     bool = False,
     ctx: "Context | None" = None,
 ) -> str:
     """
@@ -5287,11 +6048,10 @@ def create_quote(
     update_job_spreadsheet with sheet_name="Quotes" instead — this tool
     always creates a new row.
 
-    Uses openpyxl — already installed, no new package needed.
-    Works only on .xlsx files.
+    SQLite-backed — appends the new row directly to the live job database.
 
-    If filepath is omitted, the default spreadsheet path configured in
-    AI-Prowler Settings → Small Business → Default Spreadsheet Path is used
+    If filepath is omitted, the default database path configured in
+    the database's fixed, automatically-resolved location is used
     automatically.
 
     Available to every role in every mode — personal and ALL server-mode
@@ -5312,10 +6072,10 @@ def create_quote(
                   compute totals/tax/discount math for you — pass the
                   amounts you want written directly (mirroring the manual
                   quoting workflow this replaces).
-        filepath: Full path to the Excel spreadsheet (.xlsx). If omitted,
+        filepath: Path to the SQLite job database. If omitted,
                   uses the path saved in AI-Prowler Settings.
-        backup:   If True (default), a timestamped backup copy of the
-                  spreadsheet is saved before any changes are written.
+        backup:   If True (2026-09-16: now defaults to False — scheduled/manual backups cover this; still available per-call), a timestamped backup copy of the
+                  database is saved before any changes are written.
 
     Returns:
         Confirmation with the new QuoteID, or an error if the file or the
@@ -5341,6 +6101,126 @@ def create_quote(
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 5b-6 — create_setting
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def create_setting(
+    updates:  dict,
+    filepath: str = "",
+    backup:   bool = False,
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Create a new Settings entry — a plain key/value row in the Settings
+    table (business config like a default tax rate, a feature flag, a
+    saved preference). Unlike the auto-numbered sheets (Jobs, Customers,
+    Quotes, Invoices), Settings has no generated ID — the "Setting" field
+    you supply IS the row's own key, so it must be unique. To change an
+    EXISTING setting's value, use update_job_spreadsheet with
+    sheet_name="Settings" instead — this tool only creates new keys and
+    fails if the key already exists.
+
+    Staff/manager/owner only in server mode — Settings is company-wide
+    configuration, not per-job data a field crew member would ever need
+    to create. Unrestricted in personal mode.
+
+    Args:
+        updates:  Dict with "Setting" (required, the key name),
+                  "Value", and optionally "Notes".
+                  Example: {"Setting": "default_tax_rate", "Value": "0.07",
+                  "Notes": "Applied to all new invoices unless overridden"}
+        filepath: Path to the SQLite job database. Uses default if omitted.
+                  In server mode this argument is ignored.
+        backup:   If True (2026-09-16: now defaults to False — scheduled/manual backups cover this; still available per-call), a timestamped backup is saved first.
+
+    Returns:
+        Confirmation with the new key, or a clear error (missing key,
+        key already exists, or insufficient permissions).
+
+    Voice examples:
+        "Add a setting called default_tax_rate set to 0.07"
+        "Create a new setting for the invoice reminder days"
+    """
+    from db_write_ops import db_create_setting
+
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return "❌ No spreadsheet path configured."
+
+    restrict, _ = _job_crew_scope(ctx, db_path)
+    backup_msg = _backup_job_db(db_path) if backup else ""
+    actor = _actor_display_name(ctx)
+    result = db_create_setting(db_path, updates or {}, actor, restrict=restrict)
+    if backup_msg and result.startswith("✅"):
+        lines = result.split("\n")
+        lines.insert(1, f"   {backup_msg}")
+        result = "\n".join(lines)
+    return result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 5b-7 — create_service_pricing
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def create_service_pricing(
+    updates:  dict,
+    filepath: str = "",
+    backup:   bool = False,
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Create a new Services_Pricing entry — a priced service line (e.g.
+    "Window Cleaning — $150 flat, 7% commission"). Unlike the auto-
+    numbered sheets, Services_Pricing has no generated ID — the "Service
+    Code" you supply IS the row's own key, so it must be unique. To
+    change an EXISTING service's pricing, use update_job_spreadsheet with
+    sheet_name="Services_Pricing" instead — this tool only creates new
+    codes and fails if the code already exists.
+
+    Staff/manager/owner only in server mode — pricing is company-wide
+    configuration a field crew member shouldn't be able to set.
+    Unrestricted in personal mode.
+
+    Args:
+        updates:  Dict with "Service Code" (required, e.g. "WIN",
+                  "PRESS-DRIVE") plus any of "Category", "Name",
+                  "Base Price ($)", "Unit Basis", "Min Charge ($)",
+                  "Commission Multiplier", "Tax Category", "Notes".
+                  Example: {"Service Code": "WIN", "Category": "Cleaning",
+                  "Name": "Window Cleaning", "Base Price ($)": 150,
+                  "Unit Basis": "flat", "Commission Multiplier": 0.1}
+        filepath: Path to the SQLite job database. Uses default if omitted.
+                  In server mode this argument is ignored.
+        backup:   If True (2026-09-16: now defaults to False — scheduled/manual backups cover this; still available per-call), a timestamped backup is saved first.
+
+    Returns:
+        Confirmation with the new Service Code, or a clear error (missing
+        code, code already exists, or insufficient permissions).
+
+    Voice examples:
+        "Add a pricing entry for gutter cleaning at $200 flat"
+        "Create a new service code for pressure washing driveways"
+    """
+    from db_write_ops import db_create_service_pricing
+
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return "❌ No spreadsheet path configured."
+
+    restrict, _ = _job_crew_scope(ctx, db_path)
+    backup_msg = _backup_job_db(db_path) if backup else ""
+    actor = _actor_display_name(ctx)
+    result = db_create_service_pricing(db_path, updates or {}, actor, restrict=restrict)
+    if backup_msg and result.startswith("✅"):
+        lines = result.split("\n")
+        lines.insert(1, f"   {backup_msg}")
+        result = "\n".join(lines)
+    return result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ACTION TOOL 5b-5 — build_daily_route
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -5351,9 +6231,9 @@ def build_daily_route(
     origin:      str = "",
     departure_hour: int = 7,
     filepath:    str = "",
-    backup:      bool = True,
+    backup:      bool = False,
     accept_reorder: bool = False,
-    email_link:  bool = True,
+    email_link:  "bool | None" = None,
     email_to:    str = "",
     ctx: "Context | None" = None,
 ) -> str:
@@ -5381,6 +6261,28 @@ def build_daily_route(
          estimates stay meaningful. Either way, this is an OPEN path — it
          never assumes a return trip to anywhere. Route home yourself after
          the last job.
+
+         EXCEPTION — Settings → "Route Origin Mode" = "Company Location"
+         (2026-09-15; re-pointed 2026-09-16 onto its own dedicated Street/
+         City/State/ZIP fields): when no explicit origin= is passed for
+         this call AND that setting is on, the route auto-starts from
+         Settings → "Start/End Address" — its own dedicated set of four
+         Settings keys (Street/City/State/ZIP), separate from "Business
+         Address" (which stays reserved for what prints on invoices/
+         receipts) — AND becomes a genuine round trip — a real
+         return-to-origin leg (with its own OSRM-computed drive time) is
+         appended after the last job, included on the tap-to-navigate map
+         link, and stored as its own route_stops row. Start/End Address
+         can be set to the same address as Business Address, or to a
+         different one entirely — the two are fully independent. Default
+         setting value is "Jobs Only", so this is fully opt-in — nothing
+         changes for an install that's never touched it. An explicit
+         origin= argument on a specific call always overrides the setting
+         and is treated as a normal one-off open-path start point, never
+         forced into a round trip just because the setting happens to be
+         on.
+
+
       4. PRE-FLIGHT SAVINGS CHECK (only runs when origin is given — with no
          origin there's only one candidate order, nothing to compare it
          against): also computes total drive time for the "as-scheduled"
@@ -5409,11 +6311,12 @@ def build_daily_route(
          default to the phone's live GPS location the moment it's opened,
          which is usually more accurate than any stored address anyway.
 
-    Uses openpyxl and the same free Nominatim/OSRM services optimize_route()
-    uses — no API keys needed. Works only on .xlsx files.
+    SQLite-backed job/route storage; geocoding and route optimization use
+    the same free Nominatim/OSRM services optimize_route() uses — no API
+    keys needed for either.
 
-    If filepath is omitted, the default spreadsheet path configured in
-    AI-Prowler Settings → Small Business → Default Spreadsheet Path is used.
+    If filepath is omitted, the default database path configured in
+    the database's fixed, automatically-resolved location is used.
 
     Args:
         route_date:      Date to build the route for, e.g. "2026-09-22".
@@ -5436,27 +6339,33 @@ def build_daily_route(
                           navigates back wherever they're going manually
                           after the last job.
         departure_hour:  Hour to start the day in 24h format (default 7 = 7am).
-        filepath:        Full path to the Excel spreadsheet (.xlsx). If
-                          omitted, uses the path saved in AI-Prowler Settings.
-        backup:          If True (default), a timestamped backup copy of the
-                          spreadsheet is saved before any changes are written.
+        filepath:        Path to the SQLite job database. If omitted,
+                          uses the default configured in AI-Prowler Settings.
+        backup:          If True (2026-09-16: now defaults to False — scheduled/manual backups cover this; still available per-call), a timestamped backup copy of the
+                          database is saved before any changes are written.
         accept_reorder:  Set True to proceed with the optimal-order route
                           after already having seen (and accepted) a savings
                           alert from a previous call. Ignored — has no
                           effect — when no savings alert would fire anyway.
-        email_link:      If True (default), email the day's Waypoint Map
-                          URL(s) after a successful build. Skipped with a
-                          clear note (not an error) if email isn't
-                          configured — the route is still built and the
-                          link is still available as a clickable cell in
-                          the Route_Planner tab either way. Also skipped
+        email_link:      Leave unset (the default, None) to follow the
+                          persisted "Email Route On Build" Settings toggle —
+                          Enabled (the out-of-the-box default) emails the
+                          day's Waypoint Map URL(s) after a successful
+                          build; Disabled never sends automatically. Pass
+                          True or False explicitly on a specific call to
+                          override that setting just for this one build.
+                          Skipped with a clear note (not an error) if email
+                          isn't configured — the route is still built and
+                          the link is still available as a clickable cell
+                          in the Route_Planner tab either way. Also skipped
                           if the pre-flight savings alert fires instead of
                           a real build — nothing to email yet in that case.
-                          Set False to build without ever sending email.
         email_to:        Recipient for the route-link email. If omitted,
-                          uses the account's own configured default_to or
-                          username from Settings → Email Configuration.
-                          Ignored when email_link is False.
+                          server mode uses the calling user's own email
+                          (Admin → Users); personal mode uses the account's
+                          own configured default_to or username from
+                          Settings → Email Configuration. Ignored when
+                          email_link resolves to False.
 
     Returns:
         Either a pre-flight SAVINGS ALERT (Route_Planner untouched — call
@@ -5482,37 +6391,55 @@ def build_daily_route(
 
 def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_hour: int,
                              filepath: str, backup: bool, accept_reorder: bool,
-                             email_link: bool, email_to: str, ctx) -> str:
-    try:
-        import openpyxl as _opx
-    except ImportError:
-        return "❌ openpyxl not installed. Run: pip install openpyxl"
+                             email_link: "bool | None", email_to: str, ctx) -> str:
+    """Job Board Architecture Spec Phase 1 (spec §4.2, §5, §6.4, §11):
+    internals now read/write via db_route_ops instead of an openpyxl
+    Jobs_Schedule/Route_Planner scan. The routing logic itself —
+    geocoding, OSRM TSP optimization, the pre-flight savings check,
+    LATE ARRIVAL/SCHEDULE OVERLAP detection, and email composition — is
+    completely unchanged below; only the three storage touchpoints
+    (reading the day's jobs, writing back geocoded coordinates, and
+    writing the final route) were swapped. Route storage is now
+    per-crew-partitioned (route_stops keyed by route_date+crew_id+
+    stop_number) — this is the real structural fix spec §6.4 describes:
+    building one crew's route can no longer clobber another crew's
+    already-built route for the same date, unlike the old single shared
+    Route_Planner sheet.
+    """
     import requests as _req
     import datetime as _bdt
     import time as _btime
+    from db_route_ops import (
+        db_get_jobs_for_route, db_update_job_geocode, db_update_job_route_url,
+        db_write_route_stops,
+    )
 
-    fp = _resolve_job_spreadsheet_path(ctx, filepath)
-    if not fp:
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
         return (
-            "❌ No spreadsheet path provided and no default path configured.\n"
-            "Set one in AI-Prowler → Settings → Small Business → Default Spreadsheet Path,\n"
-            "or pass the full filepath argument explicitly."
+            "❌ No database path provided and no default path configured.\n"
+            "Pass the full filepath argument explicitly, or check that AI-Prowler has write access to its own state folder."
         )
-    fp = fp.replace("\\", "/")
-    if not os.path.exists(fp):
-        return f"❌ Spreadsheet not found: {fp}"
-    if not fp.lower().endswith(".xlsx"):
-        return "❌ Only .xlsx files are supported. Save the spreadsheet as .xlsx in Excel first."
+
+    # R-039 (G-01): field crew build only their own route.
+    crew, _crew_err = _route_crew_for_caller(ctx, db_path, crew)
+    if _crew_err:
+        return _crew_err
+
+    # An explicit email_link=True/False on THIS call always wins. Left
+    # unspecified (None, the default), it follows the persisted
+    # "Email Route On Build" Settings toggle instead of a hardcoded
+    # constant — see db_read_email_route_on_build() for the recipient-
+    # resolution notes (server mode: calling user's own email from Admin
+    # -> Users; personal mode: the SMTP config's default_to/username).
+    if email_link is None:
+        from db_write_ops import db_read_email_route_on_build
+        email_link = db_read_email_route_on_build(db_path)
 
     try:
         target_date = _bdt.datetime.strptime(route_date.strip(), "%Y-%m-%d").date()
     except ValueError:
         return f"❌ route_date must be YYYY-MM-DD format, got: {route_date!r}"
-
-    try:
-        wb = _opx.load_workbook(fp)
-    except Exception as exc:
-        return f"❌ Could not open spreadsheet: {exc}"
 
     # v9.1.x — a starting address is now OPTIONAL, never assumed. Previously
     # this required a home/depot address (personal-mode Settings tab, or a
@@ -5524,106 +6451,78 @@ def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_h
     # and the tap-to-navigate link omits an origin entirely so Google/Apple
     # Maps default to the phone's live location the moment it's opened —
     # arguably more correct anyway, since crew rarely start exactly from
-    # "home." See _build_daily_route_impl's routable_jobs section below for
-    # where this branches.
+    # "home." See the routable_jobs section below for where this branches.
     effective_origin = origin.strip()
+    actor = _actor_display_name(ctx)
 
-    if "Jobs_Schedule" not in wb.sheetnames:
-        return "❌ 'Jobs_Schedule' sheet not found in spreadsheet."
-    if "Route_Planner" not in wb.sheetnames:
-        return "❌ 'Route_Planner' sheet not found in spreadsheet."
-    ws_jobs = wb["Jobs_Schedule"]
-    ws_route = wb["Route_Planner"]
+    # ── Company Location round-trip mode (2026-09-15 feature; 2026-09-16:
+    # moved off Business Address onto its own dedicated Street/City/State/
+    # ZIP Settings fields) ───────────────────────────────────────────────
+    # Settings → "Route Origin Mode" = "Company Location" auto-fills the
+    # starting address from Settings → "Start/End Address" — its own set
+    # of four Settings rows (Street/City/State/ZIP, joined by
+    # db_read_route_address()), DIFFERENT from "Business Address" (which
+    # stays reserved for what prints on invoices/receipts) and from
+    # get_home_address()'s separate config.json-backed Home address field.
+    # A user can set Start/End Address to the same value as Business
+    # Address if they want routing to start/end at the business, or to a
+    # different depot/garage address entirely — the two are fully
+    # independent once Start/End Address is set. Company Location mode
+    # also marks this route as a round trip: a
 
-    def _detect_header(ws):
-        for r in ws.iter_rows(min_row=1, max_row=5):
-            non_empty = [c for c in r if c.value is not None]
-            if len(non_empty) >= 3:
-                hdr_row = r[0].row
-                hdrs = {}
-                for col_idx, cell in enumerate(r, 1):
-                    if cell.value is not None:
-                        raw = str(cell.value).strip()
-                        hdrs[raw] = col_idx
-                        norm = raw.replace('\n', ' ')
-                        if norm != raw:
-                            hdrs.setdefault(norm, col_idx)
-                return hdr_row, hdrs
-        return None, {}
-
-    jobs_hdr_row, jobs_hdrs = _detect_header(ws_jobs)
-    if jobs_hdr_row is None:
-        return "❌ Could not detect header row in Jobs_Schedule."
-
-    def _jcol(name):
-        return jobs_hdrs.get(name)
+    # return-to-origin leg gets appended after the last job further down.
+    # Only kicks in when the CALLER didn't already pass an explicit origin=
+    # for this one-off call — an explicit origin always wins and is treated
+    # as a normal one-off open-path start point, same as always, never
+    # forced into a round trip just because the setting happens to be on.
+    # Default setting value is "Jobs Only", so an install that's never
+    # touched this is completely unaffected — same open-path-from-Start-
+    # Time behavior as before this feature existed.
+    round_trip = False
+    round_trip_reason = ""
+    company_mode_no_address = False
+    if not effective_origin:
+        from db_write_ops import db_read_route_origin_mode, db_read_route_address
+        if db_read_route_origin_mode(db_path).strip().lower() == "company location":
+            route_addr = db_read_route_address(db_path)
+            if route_addr:
+                effective_origin = route_addr
+                round_trip = True
+                round_trip_reason = "Company Location"
+            else:
+                company_mode_no_address = True
+        else:
+            # Mileage-tracking follow-up (2026-09-19): "Jobs Only" mode
+            # (the default) now also falls back to the caller's own home
+            # address — the SAME _resolve_route_home resolver the "Run AI
+            # Routing" start/end picker already uses (per-user in server
+            # mode via the Admin tab's Home address field, Settings-based
+            # in personal mode) — when nothing else was given. Models the
+            # real home-office mileage rule: driving from home to the
+            # first job and back from the last job IS deductible business
+            # mileage, distinct from ordinary commuting to a fixed office.
+            # "Route Today" (the Jobs-page button that calls this tool
+            # with no explicit origin) is the main beneficiary — before
+            # this, it never assumed ANY address at all, by the
+            # deliberate product decision described above, which left a
+            # home-based business's "Total miles" always missing the very
+            # first leg of the day. An explicit origin= argument on a
+            # specific call still always overrides this, exactly as it
+            # already overrides Company Location above.
+            home_addr, home_label = _resolve_route_home(ctx, crew, db_path=db_path)
+            if home_addr:
+                effective_origin = home_addr
+                round_trip = True
+                round_trip_reason = home_label
 
     # ── Find all jobs on route_date (optionally filtered by crew) ───────────
-    matching_jobs = []
-    sd_idx = _jcol("Service Date")
-    for row in ws_jobs.iter_rows(min_row=jobs_hdr_row + 1):
-        if not sd_idx:
-            break
-        sd_val = row[sd_idx - 1].value
-        if sd_val is None:
-            continue
-        if isinstance(sd_val, _bdt.datetime):
-            sd_date = sd_val.date()
-        elif isinstance(sd_val, _bdt.date):
-            sd_date = sd_val
-        else:
-            sd_date = None
-            for fmt in ("%Y-%m-%d", "%m/%d/%Y"):
-                try:
-                    sd_date = _bdt.datetime.strptime(str(sd_val).strip(), fmt).date()
-                    break
-                except ValueError:
-                    continue
-            if sd_date is None:
-                continue
-        if sd_date != target_date:
-            continue
-
-        def _cell(name, _row=row):
-            idx = _jcol(name)
-            return _row[idx - 1].value if idx else None
-
-        job_crew = str(_cell("Crew / Technician") or "").strip()
-        if crew.strip() and job_crew.lower() != crew.strip().lower():
-            continue
-
-        street = str(_cell("Street Address ★ AI Route") or "").strip()
-        city   = str(_cell("City ★ AI Route") or "").strip()
-        state  = str(_cell("State") or "").strip()
-        zipc   = str(_cell("ZIP ★ AI Route") or "").strip()
-        full_address = ", ".join(p for p in [street, city, f"{state} {zipc}".strip()] if p)
-        if not full_address:
-            continue
-
-        lat = _cell("Latitude (AI Geocode)")
-        lon = _cell("Longitude (AI Geocode)")
-
-        matching_jobs.append({
-            "row_num":   row[0].row,
-            "job_id":    _cell("JobID (JOB-####)"),
-            "cust_id":   _cell("CustomerID (Customers!A)"),
-            "cust_name": _cell("Customer Name / Company"),
-            "street": street, "city": city, "state": state, "zip": zipc,
-            "address": full_address,
-            "lat": float(lat) if isinstance(lat, (int, float)) else None,
-            "lon": float(lon) if isinstance(lon, (int, float)) else None,
-            "service_type": _cell("Service Type"),
-            "start_time": _cell("Start Time"),
-            "duration":   _cell("Est. Duration"),
-            "duration_unit": str(_cell("Est. Duration Unit") or "min").strip().lower(),
-            "crew": job_crew,
-        })
+    matching_jobs = db_get_jobs_for_route(db_path, target_date.isoformat(), crew)
 
     if not matching_jobs:
         crew_note = f" for crew {crew!r}" if crew.strip() else ""
         return (
             f"ℹ️  No jobs scheduled on {target_date.isoformat()}{crew_note}.\n"
-            "Nothing to route — Route_Planner was not modified."
+            "Nothing to route — no route was modified."
         )
 
     def _duration_minutes(job):
@@ -5695,12 +6594,7 @@ def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_h
             continue
         j["lat"] = float(geo[0]["lat"])
         j["lon"] = float(geo[0]["lon"])
-        lat_col = _jcol("Latitude (AI Geocode)")
-        lon_col = _jcol("Longitude (AI Geocode)")
-        if lat_col:
-            ws_jobs.cell(row=j["row_num"], column=lat_col).value = j["lat"]
-        if lon_col:
-            ws_jobs.cell(row=j["row_num"], column=lon_col).value = j["lon"]
+        db_update_job_geocode(db_path, j["job_id"], j["lat"], j["lon"], actor)
 
     routable_jobs = [j for j in matching_jobs if j["lat"] is not None and j["lon"] is not None]
     if not routable_jobs:
@@ -5722,19 +6616,17 @@ def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_h
     leg_drive_minutes = None       # minutes of drive INTO each stop, same length/order
 
     if effective_origin:
-        _btime.sleep(0.35)
-        try:
-            origin_geo = _req.get(
-                "https://nominatim.openstreetmap.org/search",
-                params={"q": effective_origin, "format": "json", "limit": 1},
-                headers={"User-Agent": "AI-Prowler/5.0 (field-service-tool)"},
-                timeout=10,
-            ).json()
-        except Exception as exc:
-            return f"❌ Could not geocode starting address: {exc}"
-        if not origin_geo:
-            return f"❌ Could not geocode starting address: {effective_origin}"
-        origin_lat, origin_lon = float(origin_geo[0]["lat"]), float(origin_geo[0]["lon"])
+        # R-062 (2026-09-29): same retrying + cached lookup as job addresses
+        # (db_write_ops._geocode, R-023). The old one-shot call here failed
+        # the whole build whenever Nominatim dropped the connection, which
+        # it does when day builds come back-to-back.
+        from db_write_ops import _geocode as _geocode_retry
+        _origin_pt = _geocode_retry(effective_origin)
+        if not _origin_pt:
+            return (f"❌ Could not geocode starting address: {effective_origin} "
+                    "(address not found, or the map lookup service did not answer "
+                    "after 3 tries)")
+        origin_lat, origin_lon = _origin_pt
 
         # OSRM /trip — optimal OPEN-PATH order from the given origin, ending
         # at whichever job is the most efficient last stop. roundtrip=false:
@@ -5848,11 +6740,12 @@ def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_h
 
         ordered_jobs = [routable_jobs[idx - 1] for idx in ordered_point_idxs if idx != 0]
         leg_drive_minutes = []
+        leg_drive_miles = []
         for seq_i in range(1, len(ordered_point_idxs)):
             leg_idx = seq_i - 1
-            leg_drive_minutes.append(
-                legs[leg_idx].get("duration", 0) / 60.0 if 0 <= leg_idx < len(legs) else 0.0
-            )
+            leg = legs[leg_idx] if 0 <= leg_idx < len(legs) else {}
+            leg_drive_minutes.append(leg.get("duration", 0) / 60.0)
+            leg_drive_miles.append(leg.get("distance", 0) / 1609.344)
 
     else:
         # No starting address given for this call (the default) — order by
@@ -5865,6 +6758,7 @@ def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_h
         # get TSP-optimized ordering from a specific starting point instead.
         ordered_jobs = as_scheduled_jobs
         leg_drive_minutes = [0.0]  # nothing to drive from before the first stop
+        leg_drive_miles = [0.0]
         if len(ordered_jobs) > 1:
             route_points = [(j["lat"], j["lon"]) for j in ordered_jobs]
             coord_str = ";".join(f"{lon},{lat}" for lat, lon in route_points)
@@ -5877,10 +6771,13 @@ def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_h
                 if route_resp.get("code") == "Ok":
                     for leg in route_resp["routes"][0]["legs"]:
                         leg_drive_minutes.append(leg.get("duration", 0) / 60.0)
+                        leg_drive_miles.append(leg.get("distance", 0) / 1609.344)
                 else:
                     leg_drive_minutes.extend([0.0] * (len(ordered_jobs) - 1))
+                    leg_drive_miles.extend([0.0] * (len(ordered_jobs) - 1))
             except Exception:
                 leg_drive_minutes.extend([0.0] * (len(ordered_jobs) - 1))
+                leg_drive_miles.extend([0.0] * (len(ordered_jobs) - 1))
 
     # ── Compute arrival/departure schedule + LATE ARRIVAL warnings ──────────
     cur_time = _bdt.datetime.combine(target_date, _bdt.time(departure_hour, 0))
@@ -5888,6 +6785,7 @@ def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_h
     stops_out = []
     for i, job in enumerate(ordered_jobs):
         drive_min = leg_drive_minutes[i] if i < len(leg_drive_minutes) else 0.0
+        drive_miles = leg_drive_miles[i] if i < len(leg_drive_miles) else 0.0
         cur_time += _bdt.timedelta(minutes=drive_min)
         arrival = cur_time
         dur_min = _duration_minutes(job)
@@ -5909,102 +6807,200 @@ def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_h
             "stop_num": len(stops_out) + 1,
             "job": job,
             "drive_from_prev": round(drive_min),
+            "drive_miles_from_prev": round(drive_miles, 2),
             "arrival": arrival,
             "departure": departure,
+        })
+
+    # ── Company Location round-trip: also prepend a start-from-origin
+    # "clock in here" stop — same job=None treatment as the return leg
+    # below, mirrored to the FRONT of the day instead of the back. Before
+    # this, the origin only ever biased the TSP ordering and the first
+    # real job's drive time — informationally correct, but never actually
+    # visible as a stop the crew could see or clock in against, unlike
+    # suggest_route_schedule's Advisor (spec §6.3/§14 follow-up,
+    # 2026-09-17), which already does write it as a real numbered stop.
+    # This brings build_daily_route in line with that, for anyone calling
+    # it via conversation instead of the Route tab's own button. The real
+    # jobs' own arrival times need no adjustment here — leg_drive_minutes[0]
+    # (drive time FROM the origin TO the first real job) was already
+    # correctly baked into their schedule above; this is purely an
+    # additional, informational-turned-real checkpoint marking exactly
+    # when and where the day begins.
+    # Real bug found live (2026-09-19 mileage-tracking follow-up, corrected
+    # 2026-09-20): a START bookend row is ONLY appropriate for Company
+    # Location mode, where the business address is a genuine "clock in
+    # here" stop the crew visits. For the Jobs-Only home-address fallback,
+    # home was NEVER meant to be a visible, numbered stop — only scheduled
+    # jobs are stops in that mode (the existing _getRouteOriginInfo()
+    # informational banner already covers "where does the day start" for
+    # Jobs Only, deliberately as text, not a real stop). Writing an actual
+    # "Home" route_stops row here duplicated/contradicted that design.
+    # The real first job's OWN leg_drive_minutes[0] (computed above,
+    # unconditionally, from the origin) already carries the home->job1
+    # mileage correctly with no separate row needed — this bookend would
+    # have been purely redundant for that leg. Skipping it for Jobs Only
+    # is exactly correct, not a loss of data.
+    is_company_location_round_trip = (round_trip_reason == "Company Location")
+    if round_trip and effective_origin and ordered_jobs and is_company_location_round_trip:
+        day_start_dt = _bdt.datetime.combine(target_date, _bdt.time(departure_hour, 0))
+        stops_out.insert(0, {
+            "stop_num": 0,  # renumbered below
+            "job": None,
+            "return_leg": True,
+            "return_address": effective_origin,
+            "return_crew": ordered_jobs[0]["crew"],
+            "drive_from_prev": 0,
+            "drive_miles_from_prev": 0.0,
+            "arrival": day_start_dt,
+            "departure": day_start_dt,
+        })
+        for _i, _s in enumerate(stops_out, start=1):
+            _s["stop_num"] = _i
+
+    # ── Company Location round-trip: append a return-to-origin leg ──────────
+    # Additive on purpose — doesn't touch the TSP/waypoint-reconstruction
+    # logic above at all (that stays exactly the open-path behavior it's
+    # always been), just appends one more leg after the real stops loop
+    # finishes. Uses a plain single-leg OSRM /route call (last job -> origin)
+    # for real drive time, same service the rest of this function already
+    # uses. This entry has "job": None — every place below that iterates
+    # stops_out has to check for that (map link, route_stops write, job
+    # writeback, human-readable summary) since it isn't a real job stop.
+    if round_trip and effective_origin and stops_out:
+        last_stop = stops_out[-1]
+        _btime.sleep(0.35)
+        return_drive_min = 0.0
+        return_drive_miles = 0.0
+        try:
+            return_coord_str = (f"{last_stop['job']['lon']},{last_stop['job']['lat']};"
+                                 f"{origin_lon},{origin_lat}")
+            return_resp = _req.get(
+                f"http://router.project-osrm.org/route/v1/driving/{return_coord_str}",
+                params={"overview": "false", "annotations": "false"},
+                timeout=30,
+            ).json()
+            if return_resp.get("code") == "Ok":
+                return_drive_min = return_resp["routes"][0]["duration"] / 60.0
+                return_drive_miles = return_resp["routes"][0].get("distance", 0) / 1609.344
+        except Exception:
+            pass  # return leg just shows 0 min drive time if OSRM is unreachable
+        return_arrival = cur_time + _bdt.timedelta(minutes=return_drive_min)
+        stops_out.append({
+            "stop_num": len(stops_out) + 1,
+            "job": None,
+            "return_leg": True,
+            "return_address": effective_origin,
+            "return_crew": last_stop["job"]["crew"],
+            "drive_from_prev": round(return_drive_min),
+            "drive_miles_from_prev": round(return_drive_miles, 2),
+            "arrival": return_arrival,
+            "departure": return_arrival,
         })
 
     # ── Backup now — right before the actual write, not earlier — so a
     # pre-flight-savings-alert call (which returns above and writes nothing)
     # never creates a wasted backup. Also covers the Latitude/Longitude
-    # geocoding write-back that already happened above in ws_jobs, in the
-    # same wb object about to be saved.
-    backup_msg = ""
-    if backup:
-        backup_msg = _backup_spreadsheet(fp)
-        if backup_msg.startswith("⚠️") or backup_msg.startswith("❌"):
-            return f"{backup_msg}\nSpreadsheet was NOT modified."
+    # geocoding write-back that already happened above.
+    backup_msg = _backup_job_db(db_path) if backup else ""
 
-    # ── Clear existing Route_Planner data rows — this sheet shows ONE day
-    # only, never a history ───────────────────────────────────────────────
-    route_hdr_row, route_hdrs = _detect_header(ws_route)
-    if route_hdr_row is None:
-        return "❌ Could not detect header row in Route_Planner."
-    existing_data_rows = max(ws_route.max_row - route_hdr_row, 0)
-    if existing_data_rows > 0:
-        ws_route.delete_rows(route_hdr_row + 1, existing_data_rows)
+    # ── Write the day's stops into route_stops — per-crew-partitioned, so
+    # only the (route_date, crew) pairs present in THIS build are cleared
+    # (spec §6.4: building one crew's route never touches another crew's
+    # already-built route for the same date). ──────────────────────────────
+    ordered_addresses = [s["job"]["address"] for s in stops_out if s.get("job") is not None]
 
-    def _rcol(name):
-        return route_hdrs.get(name)
+    # ── Tap-to-navigate LINK stops (2026-09-21) ─────────────────────────────
+    # The route MATH/stored stops are unchanged (home or Start/End Address at
+    # both ends, for mileage and the Route tab). The LINK is built for a phone:
+    #   • no origin in the URL → Maps starts from the phone's live GPS
+    #     location (an origin equal to the destination is a closed loop, which
+    #     Google Maps on a phone answers with a stop list / a map that never
+    #     finishes loading);
+    #   • Jobs Only home round trip → jobs in order, ending at the user's/
+    #     owner's home address (effective_origin IS that home address);
+    #   • Company Location (Start/End Address) mode → the Start/End Address is
+    #     included as real stops at BOTH ends (matching the numbered start and
+    #     return stops stored for the Route tab), and the trip then continues
+    #     on to the user's/owner's home address as the final destination —
+    #     unless that home address is the same place as the Start/End Address,
+    #     in which case the return stop already IS the destination;
+    #   • an explicit origin= from the caller keeps that origin, as always.
+    def _same_place(a: str, b: str) -> bool:
+        # Same street address written two ways ("1500 Shadow Pines Dr, New
+        # Smyrna Beach, Florida" vs "1500 Shadow Pines Dr New Smyrna Beach FL"):
+        # compare house number + street name (first 3 words) only.
+        import re as _re
+        ta = _re.findall(r"[a-z0-9]+", (a or "").lower())[:3]
+        tb = _re.findall(r"[a-z0-9]+", (b or "").lower())[:3]
+        return bool(ta) and ta == tb
 
-    ordered_addresses = [s["job"]["address"] for s in stops_out]
-    maps_url_full = build_maps_url(stops=ordered_addresses, origin=effective_origin)
+    link_origin = effective_origin
+    link_stops = list(ordered_addresses)
+    if round_trip:
+        link_origin = ""   # phone GPS start
+        if round_trip_reason == "Company Location":
+            link_stops = [effective_origin] + link_stops + [effective_origin]
+            _home_addr, _home_label = _resolve_route_home(ctx, crew)
+            if _home_addr and not _same_place(_home_addr, effective_origin):
+                link_stops.append(_home_addr)
+        else:
+            link_stops.append(effective_origin)   # Jobs Only: end at home
+    maps_url_full = build_maps_url(stops=link_stops, origin=link_origin)
     url_line = next((ln for ln in maps_url_full.splitlines() if ln.startswith("http")), "")
     all_url_lines = [ln for ln in maps_url_full.splitlines() if ln.startswith("http")]
 
-    for i, s in enumerate(stops_out):
-        r = route_hdr_row + 1 + i
-        j = s["job"]
+    route_rows = []
+    for s in stops_out:
+        if s.get("job") is not None:
+            j = s["job"]
+            route_rows.append({
+                "crew": j["crew"],
+                "job_id": j["job_id"],
+                "cust_id": j["cust_id"],
+                "address": j["address"],
+                "lat": j["lat"],
+                "lon": j["lon"],
+                "arrival": s["arrival"].strftime("%H:%M"),
+                "leg_drive_min": s.get("drive_from_prev"),
+                "leg_drive_miles": s.get("drive_miles_from_prev"),
+                "map_url": url_line or None,
+            })
+        else:
+            # Synthetic return-to-origin leg (Company Location round-trip
+            # mode) — no job_id/cust_id, it's not a real job stop.
+            route_rows.append({
+                "crew": s.get("return_crew", ""),
+                "job_id": None,
+                "cust_id": None,
+                "address": s.get("return_address", effective_origin),
+                "lat": origin_lat if round_trip else None,
+                "lon": origin_lon if round_trip else None,
+                "arrival": s["arrival"].strftime("%H:%M"),
+                "leg_drive_min": s.get("drive_from_prev"),
+                "leg_drive_miles": s.get("drive_miles_from_prev"),
+                "map_url": url_line or None,
+            })
+    # spec §6.3: a personal install is a one-crew show even if different
+    # employee names get typed into individual jobs' Crew / Technician
+    # field — write this route under one shared crew_id rather than
+    # letting db_write_route_stops fragment it by each stop's own crew
+    # text (the real per-crew isolation server mode's multiple actual
+    # crews needs, and needs to keep).
+    existing_data_rows = db_write_route_stops(db_path, target_date.isoformat(), route_rows, actor,
+                                               single_crew=(not _IS_SERVER_MODE))
 
-        def _set(name, value, _r=r):
-            idx = _rcol(name)
-            if idx:
-                ws_route.cell(row=_r, column=idx).value = value
-
-        _set("Route Date", target_date)
-        _set("Crew / Technician", j["crew"])
-        _set("Stop #", s["stop_num"])
-        _set("JobID", j["job_id"])
-        _set("CustomerID", j["cust_id"])
-        _set("Customer Name / Company", j["cust_name"])
-        _set("Street Address ★ AI Geocode", j["address"])
-        _set("City", j["city"])
-        _set("State", j["state"])
-        _set("ZIP", j["zip"])
-        _set("Latitude (AI Fill)", j["lat"])
-        _set("Longitude (AI Fill)", j["lon"])
-        _set("Sched. Arrival", s["arrival"].strftime("%H:%M"))
-        _set("Sched. Depart", s["departure"].strftime("%H:%M"))
-        _set("Drive Time from Prev. (min)", s["drive_from_prev"])
-        _set("Service Type", j["service_type"])
-        _set("Duration (min)", _duration_minutes(j))
-
-        # Real clickable Excel hyperlink. cell.value stays the RAW URL
-        # string (not a friendly label) deliberately — the Jobs PWA's own
-        # link rendering (jobs/index.html) detects clickable columns by
-        # checking whether the cell VALUE itself starts with http(s)://,
-        # since it reads values only, not openpyxl hyperlink targets. A
-        # friendly label here would render correctly in Excel but silently
-        # stop being clickable in the PWA. Excel still shows this as a
-        # normal blue/underlined hyperlink either way.
-        _url_col_idx = _rcol("Waypoint Map URL ★ AI Prowler")
-        if _url_col_idx and url_line:
-            _url_cell = ws_route.cell(row=r, column=_url_col_idx)
-            _url_cell.value = url_line
-            _url_cell.hyperlink = url_line
-            _url_cell.font = _opx.styles.Font(color="0563C1", underline="single")
-
-        # ALSO persist this same URL onto the job's own Jobs_Schedule row
-        # (the sheet's existing "Route Map URL ★ AI Prowler" column, unused
-        # by this tool until now) — Route_Planner only ever shows the LAST
-        # date a route was built for (it's a single-day working view, by
-        # design), so without this a route built for a future/past date
-        # would have its link disappear the moment a different day's route
-        # gets built. Storing it per-job here means each job carries its
-        # own persistent link regardless of what Route_Planner currently
-        # shows — this is what lets "today's jobs" / calendar-style PWA
-        # views surface a job's route link even for a day that isn't the
-        # single day currently in Route_Planner.
-        _jobs_url_col = _jcol("Route Map URL ★ AI Prowler")
-        if _jobs_url_col and url_line:
-            _jobs_url_cell = ws_jobs.cell(row=j["row_num"], column=_jobs_url_col)
-            _jobs_url_cell.value = url_line
-            _jobs_url_cell.hyperlink = url_line
-            _jobs_url_cell.font = _opx.styles.Font(color="0563C1", underline="single")
-
-    try:
-        wb.save(fp)
-    except Exception as exc:
-        return f"❌ Could not save spreadsheet: {exc}"
+    # Also persist this same URL onto each job's own row (the "Route Map
+    # URL" column) — route_stops only ever reflects the LAST date a route
+    # was built for any given crew, so without this a route built for a
+    # future/past date would have its link disappear the moment a
+    # different day's route gets built for that crew. Storing it per-job
+    # here means each job carries its own persistent link regardless of
+    # what's currently in route_stops.
+    if url_line:
+        for s in stops_out:
+            if s.get("job") is not None:
+                db_update_job_route_url(db_path, s["job"]["job_id"], url_line, actor)
 
     lines = [
         f"🗺️  Route built for {target_date.isoformat()}"
@@ -6014,24 +7010,46 @@ def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_h
     ]
     if effective_origin:
         lines.append(f"  Starting from: {effective_origin}")
+        if round_trip:
+            lines.append(
+                f"  Round trip ({round_trip_reason}) — the route returns to "
+                f"{effective_origin} after the last job."
+            )
     else:
         lines.append(
             "  No starting address given — stops ordered by their own "
             "Start Time; the tap-to-navigate link will use your current "
             "location as the starting point when opened."
         )
+    if company_mode_no_address:
+        lines.append(
+            "  ℹ️  Settings → Route Origin Mode is set to \"Company "
+            "Location\", but Start/End Address (Street/City/State/ZIP) "
+            "isn't configured yet — falling back to Jobs Only behavior "
+            "for this route. Set it in Settings (via the Route Origin "
+            "Mode popup) to enable the round trip."
+        )
     if existing_data_rows > 0:
-        lines.append(f"  Cleared {existing_data_rows} previous row(s) from Route_Planner")
+        lines.append(f"  Cleared {existing_data_rows} previous stop(s) for this date/crew")
     lines.append("")
     for s in stops_out:
-        j = s["job"]
-        lines.append(
-            f"  {s['stop_num']}. {j['cust_name']} ({j['job_id']}) — {j['address']}\n"
-            f"     Drive from prev: {s['drive_from_prev']} min   "
-            f"Arrive: {s['arrival'].strftime('%I:%M %p')}   "
-            f"Depart: {s['departure'].strftime('%I:%M %p')}"
-        )
+        if s.get("job") is not None:
+            j = s["job"]
+            lines.append(
+                f"  {s['stop_num']}. {j['cust_name']} ({j['job_id']}) — {j['address']}\n"
+                f"     Drive from prev: {s['drive_from_prev']} min   "
+                f"Arrive: {s['arrival'].strftime('%I:%M %p')}   "
+                f"Depart: {s['departure'].strftime('%I:%M %p')}"
+            )
+        else:
+            lines.append(
+                f"  {s['stop_num']}. Return to {s.get('return_address', effective_origin)} "
+                f"(Company Location)\n"
+                f"     Drive from prev: {s['drive_from_prev']} min   "
+                f"Arrive: {s['arrival'].strftime('%I:%M %p')}"
+            )
     lines.append("")
+
 
     if geocode_failures:
         lines.append("⚠️  GEOCODING FAILED (excluded from route):")
@@ -6096,12 +7114,23 @@ def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_h
                     + (f" — crew: {crew}" if crew.strip() else "") + "\n",
                 ]
                 for s in stops_out:
-                    j = s["job"]
-                    body_parts.append(
-                        f"{s['stop_num']}. {j['cust_name']} — {j['address']}\n"
-                        f"   Arrive {s['arrival'].strftime('%I:%M %p')}, "
-                        f"depart {s['departure'].strftime('%I:%M %p')}"
-                    )
+                    j = s.get("job")
+                    if j is not None:
+                        body_parts.append(
+                            f"{s['stop_num']}. {j['cust_name']} — {j['address']}\n"
+                            f"   Arrive {s['arrival'].strftime('%I:%M %p')}, "
+                            f"depart {s['departure'].strftime('%I:%M %p')}"
+                        )
+                    else:
+                        # Company Location's synthetic return-to-origin stop
+                        # carries no job (see the plain-text report above,
+                        # which already guards this the same way) — describe
+                        # it instead of crashing on None['cust_name'].
+                        body_parts.append(
+                            f"{s['stop_num']}. Return to "
+                            f"{s.get('return_address', effective_origin)} (Company Location)\n"
+                            f"   Arrive {s['arrival'].strftime('%I:%M %p')}"
+                        )
                 body_parts.append("")
                 if len(all_url_lines) > 1:
                     body_parts.append(
@@ -6155,7 +7184,7 @@ def get_sheet_columns(
 
     Args:
         sheet_name: Sheet to inspect (e.g. "Customers", "Invoices").
-        filepath:   Path to the .xlsx tracker. Uses default if omitted.
+        filepath:   Path to the SQLite job database. Uses default if omitted.
 
     Returns:
         Text in the form:
@@ -6168,95 +7197,29 @@ def get_sheet_columns(
         inline "A,B,C" list) aren't resolved here and are skipped rather
         than shown as a raw formula. Or an error message if the sheet or
         file couldn't be read.
+
+    Job Board Architecture Spec — Database-tab expansion (2026-09-12):
+    internals now use the SQLite-backed db_read_ops.db_get_sheet_columns
+    instead of an openpyxl worksheet + data-validation scan. This tool
+    had been silently broken for every sheet since Phase 1 began — it
+    still called the OLD .xlsx path resolver and tried to open a file
+    that generally no longer exists once an install has moved to the
+    SQLite-backed job store — found and fixed while wiring the Database
+    tab's own generic add/edit form, which depends on this tool to build
+    its field list. Column list/order come from the same canonical
+    display-pairs read_job_spreadsheet()/get_board_updates() already use
+    — one source of truth. There's no native "Excel data-validation
+    dropdown" concept in SQLite anymore, so DROPDOWN lines now come from
+    a small hand-maintained map of genuinely dropdown-backed columns
+    (see db_read_ops._KNOWN_DROPDOWNS) rather than a live worksheet scan.
     """
-    try:
-        import openpyxl as _opx
-    except ImportError:
-        return "❌ openpyxl not installed. Run: pip install openpyxl"
+    from db_read_ops import db_get_sheet_columns
 
-    filepath = _resolve_job_spreadsheet_path(ctx, filepath)
-    if not filepath:
-        return (
-            "❌ No spreadsheet path provided and no default path configured.\n"
-            "Set one in AI-Prowler → Settings → Small Business → Default Spreadsheet Path,\n"
-            "or pass the full filepath argument explicitly."
-        )
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return "❌ No spreadsheet path configured."
 
-    fp = filepath.replace("\\", "/")
-    if not os.path.exists(fp):
-        return f"❌ Spreadsheet not found: {fp}"
-
-    try:
-        wb = _opx.load_workbook(fp)
-    except Exception as exc:
-        return f"❌ Could not open spreadsheet: {exc}"
-
-    if sheet_name not in wb.sheetnames:
-        return f"❌ Sheet '{sheet_name}' not found. Available: {', '.join(wb.sheetnames)}"
-    ws = wb[sheet_name]
-
-    # ── Detect header row — same logic as update_job_spreadsheet/create_job,
-    #    but using the shared _join_header_lines() helper (not a plain
-    #    str().strip()) so a header cell that legitimately spans multiple
-    #    lines in Excel — e.g. "CustomerID\n(CUST-####)" — comes back as
-    #    the single clean string "CustomerID (CUST-####)", matching
-    #    EXACTLY what read_job_spreadsheet/_renderGenericTable's row data
-    #    already uses for that same column (both go through
-    #    _join_header_lines too). Without this, two problems compound:
-    #    the column name reported here wouldn't line up with rowData's
-    #    key at all (silently breaking the "does this row already have a
-    #    value for this column" and dropdown lookups), AND the embedded
-    #    "\n" would corrupt this tool's own line-based COLUMNS/DROPDOWN
-    #    text protocol on the way back to the PWA — a naive .split('\n')
-    #    on the client would see the header cell's own internal line
-    #    break as if it were the end of the COLUMNS line itself, silently
-    #    truncating the column list after whichever column happened to
-    #    wrap first.
-    header_row_num: int | None = None
-    headers_by_col: dict[int, str] = {}
-    ordered_cols: list[str] = []
-    for r in ws.iter_rows(min_row=1, max_row=5):
-        non_empty = [c for c in r if c.value is not None]
-        if len(non_empty) >= 3:
-            header_row_num = r[0].row
-            for idx, cell in enumerate(r, 1):
-                if cell.value is not None:
-                    name = _join_header_lines(cell.value)
-                    if name:
-                        headers_by_col[idx] = name
-                        ordered_cols.append(name)
-            break
-
-    if header_row_num is None:
-        return (
-            "❌ Could not detect a header row in this sheet.\n"
-            "Expected a row with at least 3 non-empty cells in the first 5 rows."
-        )
-
-    lines = ["COLUMNS: " + " | ".join(ordered_cols)]
-
-    for dv in ws.data_validations.dataValidation:
-        if dv.type != "list" or not dv.formula1:
-            continue
-        raw = dv.formula1.strip()
-        # Only inline lists — a quoted comma string like "A,B,C" — are
-        # resolved. A range reference (=Sheet2!$A$1:$A$5) is skipped
-        # rather than surfaced as a literal dropdown option string.
-        if not (raw.startswith('"') and raw.endswith('"')):
-            continue
-        options = [o.strip() for o in raw[1:-1].split(",") if o.strip()]
-        if not options:
-            continue
-        cols_hit: set[int] = set()
-        for rng in dv.sqref.ranges:
-            for col in range(rng.min_col, rng.max_col + 1):
-                cols_hit.add(col)
-        for col in sorted(cols_hit):
-            name = headers_by_col.get(col)
-            if name:
-                lines.append(f"DROPDOWN: {name} = {','.join(options)}")
-
-    return "\n".join(lines)
+    return db_get_sheet_columns(db_path, sheet_name)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -6281,26 +7244,32 @@ def read_job_spreadsheet(
       - "Show me everything scheduled this week."
       - "What customers haven't been serviced yet?"
 
-    If filepath is omitted, the default spreadsheet path configured in
-    AI-Prowler Settings -> Small Business -> Default Spreadsheet Path is used
+    If filepath is omitted, the default database path configured in
+    the database's fixed, automatically-resolved location is used
     automatically.
 
     Available to every role in every mode — personal and ALL server-mode
     roles (owner, manager, staff, field_crew) — no DB-management or
-    communications gate applies here. The Customers sheet specifically is
-    also the FIRST place send_email() and send_sms() look up a recipient
-    by name/company/ID, so this is the same data those tools draw on.
+    communications gate applies here, EXCEPT the blanket denial below. The
+    Customers sheet specifically is also the FIRST place send_email() and
+    send_sms() look up a recipient by name/company/ID, so this is the same
+    data those tools draw on.
 
-    Server mode, Jobs_Schedule sheet only: staff/field_crew see only rows
-    where Crew / Technician matches their own name (same matching logic
-    schedule_next_recurring_job uses) — owner/manager see every row. This
-    restriction does not apply to the Customers sheet or any other sheet,
-    and is skipped entirely for a user already isolated to their own
-    per-user spreadsheet file (see _resolve_job_spreadsheet_path()), since
-    that file's rows already belong to them by construction.
+    Server mode, field_crew: NO access at all (2026-09-23, at the owner's
+    request) to Settings, Services_Pricing, Quotes, or Invoices — a request
+    for any of those four sheets is denied outright, before any row-level
+    filtering. Customers stays fully accessible to field_crew (unfiltered,
+    same as owner/manager/staff) — they still need Gate Code / Access Notes
+    and the on-site contact while working a job. On Jobs_Schedule, TimeLog
+    and Route_Planner (R-039), field_crew see only their own rows: jobs
+    whose Crew / Technician matches their name, clock-ins THEY logged, and
+    their own route's stops (same matching logic schedule_next_recurring_job
+    uses) — owner/manager/staff see every row. Everyone shares the one job
+    database (R-046). None of this applies in personal mode — there
+    is no crew, only the owner, who sees everything.
 
     Args:
-        filepath:    Full path to the .xlsx spreadsheet.
+        filepath:    Full path to the SQLite job database.
                      If omitted, uses the path saved in AI-Prowler Settings.
         sheet_name:  Sheet to read (default: "Jobs_Schedule").
                      Use "Customers" to read the customer master list.
@@ -6313,183 +7282,143 @@ def read_job_spreadsheet(
     Returns:
         A formatted table of rows with all column values, or a message
         if no matching rows are found.
-    """
-    try:
-        import openpyxl as _opx
-    except ImportError:
-        return "❌ openpyxl not installed. Run: pip install openpyxl"
 
-    filepath = _resolve_job_spreadsheet_path(ctx, filepath)
-    if not filepath:
+    Job Board Architecture Spec Phase 2 (spec §5, §11): internals now use
+    the SQLite-backed db_read_ops.db_read_job_spreadsheet instead of an
+    openpyxl worksheet scan. Jobs_Schedule, Customers, Invoices, and
+    Quotes are wired; Route_Planner, TimeLog, and Settings have no table
+    yet and return a clear error rather than an empty/wrong result.
+    Crew-scoping and the multi-day-job End Date handling are unchanged in
+    substance — same allow/deny outcomes and date-range logic, now
+    running against real columns instead of a cell scan.
+    """
+    from db_read_ops import db_read_job_spreadsheet
+
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
         return (
-            "❌ No spreadsheet path provided and no default path configured.\n"
-            "Set one in AI-Prowler -> Settings -> Small Business -> Default Spreadsheet Path,\n"
-            "or pass the full filepath argument explicitly."
+            "❌ No database path provided and no default path configured.\n"
+            "Pass the full filepath argument explicitly, or check that AI-Prowler has write access to its own state folder."
         )
 
-    fp = filepath.replace("\\", "/")
-    if not os.path.exists(fp):
-        return f"❌ Spreadsheet not found: {fp}"
-    if not fp.lower().endswith(".xlsx"):
-        return "❌ Only .xlsx files are supported. Save as .xlsx first."
+    target_sheet = sheet_name.strip() if sheet_name.strip() else "Jobs_Schedule"
+    denial = _field_crew_sheet_denied(ctx, target_sheet)
+    if denial:
+        return denial
+    if target_sheet.lower() == "settings":
+        # R-052: make sure every editable setting has a row (defaults only —
+        # never changes an existing one) so the Jobs app / GUI can show it.
+        try:
+            from db_write_ops import db_seed_default_settings
+            db_seed_default_settings(db_path)
+        except Exception:
+            pass
+    restrict, crew_name = (False, "")
 
-    try:
-        wb = _opx.load_workbook(fp, data_only=True)
-    except Exception as exc:
-        return f"❌ Could not open spreadsheet: {exc}"
+    if target_sheet in _CREW_SCOPED_READ_SHEETS:  # R-039: was Jobs_Schedule only
+        restrict, crew_name = _job_crew_scope(ctx, db_path)
+
+    return db_read_job_spreadsheet(
+        db_path, sheet_name=sheet_name, filter_date=filter_date, max_rows=max_rows,
+        restrict=restrict, crew_name=crew_name,
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 5b — get_board_updates
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def get_board_updates(
+    since:       str,
+    sheet_name:  str = "",
+    filepath:    str = "",
+    with_ids:    bool = False,
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Return every row changed since a given timestamp — the live-update
+    polling query behind the admin Job Board (Job Board Architecture Spec
+    Phase 3, §6.1/§11): `WHERE last_edited_at > ?`. Intended to be called
+    on a ~60-second interval by the Job Board UI so it can reflect crew
+    activity (clock-ins, photo uploads, completions, any edit) without a
+    manual refresh, and without ever needing to re-fetch rows that
+    haven't changed.
+
+    Unlike read_job_spreadsheet, this returns raw JSON (a list of row
+    objects keyed by the sheet's normal column headers, plus an internal
+    "_last_edited_at" field for the caller's own bookkeeping) rather than
+    a formatted text digest — built for a UI to render into cards, not
+    for a human to read directly. Every populated field on a changed row
+    is included (not trimmed to columns other rows happen to use), so a
+    partial update (e.g. only Job Status changed) still returns the full
+    row and the client can refresh a card in place without guessing which
+    fields it's missing.
+
+    Args:
+        since:      ISO 8601 timestamp (e.g. "2026-09-22T14:30:00"). Only
+                    rows edited strictly after this instant are returned.
+                    Pass the newest "_last_edited_at" value from your
+                    previous poll's response as the next poll's `since`.
+        sheet_name: "Jobs_Schedule" (default), "Customers", "Invoices",
+                    or "Quotes". Route_Planner/TimeLog/Settings have no
+                    table yet and are not supported.
+        filepath:   Path to the SQLite job database. Uses default if omitted.
+                    In server mode this argument is ignored — see
+                    _resolve_job_db_path().
+        with_ids:   Jobs_Schedule only (R-045, 2026-09-27). When True the
+                    reply is {"rows": [...], "ids": [...]} — the changed rows
+                    as usual plus EVERY JobID the caller may see right now
+                    (same crew rule), so the Job Board can drop a card whose
+                    job was re-assigned away or deleted. Without it a poll
+                    could only add or update cards, never remove one.
+
+    Returns:
+        A JSON array of row objects (possibly empty — "nothing changed"
+        is the normal, common response for a 60-second poll), or a JSON
+        error object. With with_ids=True on Jobs_Schedule: an object
+        {"rows": [...], "ids": [...]}.
+
+    Server mode: field_crew only receive their own Jobs_Schedule, TimeLog
+    and Route_Planner rows (R-039; same _job_crew_scope() rule and sheet
+    list read_job_spreadsheet uses) — a restricted crew member's Job Board never shows a coworker's
+    job changing out from under them. Customers is never crew-filtered,
+    matching read_job_spreadsheet. field_crew gets no access at all (not
+    filtered — denied outright) to Settings, Services_Pricing, Quotes, or
+    Invoices — same blanket rule read_job_spreadsheet enforces (2026-09-23,
+    at the owner's request), applied here too since this is a SEPARATE read
+    path that could otherwise be used to reach those sheets' data.
+
+    Voice examples:
+        "What's changed on the board since 2:30pm?"
+        "Any updates since my last check?"
+    """
+    import json as _gbu_json
+
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return _gbu_json.dumps({"error": "No spreadsheet path configured."})
 
     target_sheet = sheet_name.strip() if sheet_name.strip() else "Jobs_Schedule"
-    if target_sheet not in wb.sheetnames:
-        if sheet_name.strip():
-            avail = ", ".join(wb.sheetnames)
-            return f"❌ Sheet '{target_sheet}' not found.\nAvailable sheets: {avail}"
-        target_sheet = wb.sheetnames[0]
+    denial = _field_crew_sheet_denied(ctx, target_sheet)
+    if denial:
+        return _gbu_json.dumps({"error": denial})
+    restrict, crew_name = (False, "")
+    if target_sheet in _CREW_SCOPED_READ_SHEETS:  # R-039: was Jobs_Schedule only
+        restrict, crew_name = _job_crew_scope(ctx, db_path)
 
-    ws = wb[target_sheet]
-
-    # Detect header row (skip title banner rows)
-    header_row_idx = None
-    headers: list = []
-    for r in ws.iter_rows(min_row=1, max_row=5):
-        non_empty = [c for c in r if c.value is not None]
-        if len(non_empty) >= 3:
-            header_row_idx = r[0].row
-            headers = [_join_header_lines(c.value) for c in r]
-            break
-
-    if header_row_idx is None or not headers:
-        return f"❌ Could not detect a header row in sheet '{target_sheet}'."
-
-    # ── Server-mode crew scoping (Phase 3) ──────────────────────────────────
-    # Uses the shared _job_crew_scope() helper (same rule, same rows, used
-    # identically by update_job_spreadsheet/log_time_entry/email_invoice) so
-    # all job-spreadsheet tools stay in agreement. Only applies to the
-    # Jobs_Schedule sheet — Customers must stay fully readable by every role
-    # for send_email/send_sms name lookups.
-    _rjs_restrict = False
-    _rjs_crew_name = ""
-    _rjs_crew_col_idx = None
-    if target_sheet == "Jobs_Schedule":
-        _rjs_restrict, _rjs_crew_name = _job_crew_scope(ctx, fp)
-        if _rjs_restrict:
-            _rjs_crew_col_idx = next(
-                (i for i, h in enumerate(headers) if h == "Crew / Technician"), None)
-
-    import datetime as _dt
-    date_filter = None
-    if filter_date:
-        fd = filter_date.strip().lower()
-        if fd == 'today':
-            date_filter = _dt.date.today()
-        else:
-            for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y', '%d/%m/%Y'):
-                try:
-                    date_filter = _dt.datetime.strptime(fd, fmt).date()
-                    break
-                except ValueError:
-                    continue
-            if date_filter is None:
-                return f"❌ Could not parse filter_date '{filter_date}'. Use MM/DD/YYYY."
-
-    svc_date_col = None
-    end_date_col = None
-    if date_filter:
-        for idx, h in enumerate(headers):
-            hl = h.lower()
-            if 'service' in hl and 'date' in hl:
-                svc_date_col = idx
-            # Distinct from "End Time" — that header doesn't contain "date".
-            elif 'end' in hl and 'date' in hl:
-                end_date_col = idx
-
-    def _parse_cell_date(cell_val):
-        """Returns a date object for cell_val, or None if blank/unparseable.
-        Shared by both the Service Date and End Date columns below."""
-        if cell_val is None:
-            return None
-        if isinstance(cell_val, (_dt.datetime, _dt.date)):
-            return cell_val.date() if isinstance(cell_val, _dt.datetime) else cell_val
-        for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y', '%d/%m/%Y'):
-            try:
-                return _dt.datetime.strptime(str(cell_val).strip(), fmt).date()
-            except ValueError:
-                continue
-        return None
-
-    max_rows = min(max_rows, 500)
-    rows_out: list = []
-
-    for row in ws.iter_rows(min_row=header_row_idx + 1):
-        vals = [c.value for c in row]
-        if all(v is None or str(v).strip() == '' for v in vals):
-            continue
-        if date_filter is not None and svc_date_col is not None:
-            start_date = _parse_cell_date(vals[svc_date_col])
-            if start_date is None:
-                continue
-            # Multi-day jobs: End Date column, blank by default (every
-            # existing job is a single day unless explicitly given a
-            # later End Date). A blank, unparseable, or earlier-than-start
-            # End Date is treated as a single-day job rather than an
-            # error — a bad date in that column shouldn't hide the job
-            # from its own Service Date.
-            end_date = start_date
-            if end_date_col is not None:
-                parsed_end = _parse_cell_date(vals[end_date_col])
-                if parsed_end is not None and parsed_end >= start_date:
-                    end_date = parsed_end
-            if not (start_date <= date_filter <= end_date):
-                continue
-
-        if _rjs_restrict:
-            _rjs_row_crew = (str(vals[_rjs_crew_col_idx] or "").strip().lower()
-                              if _rjs_crew_col_idx is not None else "")
-            if not _crew_name_in_cell(_rjs_row_crew, _rjs_crew_name):
-                continue
-        rows_out.append(vals)
-        if len(rows_out) >= max_rows:
-            break
-
-    if not rows_out:
-        msg = f"📋 No rows found in sheet '{target_sheet}'"
-        if date_filter:
-            msg += f" for date {date_filter.strftime('%m/%d/%Y')}"
-        if _rjs_restrict:
-            msg += " assigned to you"
-        return msg + "."
-
-    # Trim to last used column
-    max_col_used = 0
-    for row in rows_out:
-        for i in range(len(row) - 1, -1, -1):
-            if row[i] is not None and str(row[i]).strip():
-                if i > max_col_used:
-                    max_col_used = i
-                break
-    headers_trimmed = headers[:max_col_used + 1]
-
-    lines = [
-        f"📋 {target_sheet}  —  {os.path.basename(fp)}",
-        f"   {len(rows_out)} row(s)" + (f" for {date_filter.strftime('%m/%d/%Y')}" if date_filter else ""),
-        "─" * 60,
-    ]
-    for row_vals in rows_out:
-        lines.append("")
-        for col_idx, col_name in enumerate(headers_trimmed):
-            if not col_name:
-                continue
-            val = row_vals[col_idx] if col_idx < len(row_vals) else None
-            if val is None or str(val).strip() == '':
-                continue
-            if isinstance(val, _dt.datetime):
-                val = val.strftime('%m/%d/%Y')
-            elif isinstance(val, _dt.date):
-                val = val.strftime('%m/%d/%Y')
-            lines.append(f"  {col_name}: {val}")
-    lines.append("")
-    lines.append("─" * 60)
-    lines.append("✅ Read complete. Use update_job_spreadsheet() to write changes back.")
-    return "\n".join(lines)
+    from db_read_ops import db_get_jobs_changed_since
+    try:
+        rows = db_get_jobs_changed_since(
+            db_path, since, sheet_name=target_sheet, restrict=restrict, crew_name=crew_name,
+        )
+    except ValueError as exc:
+        return _gbu_json.dumps({"error": str(exc)})
+    if with_ids and target_sheet == "Jobs_Schedule":     # R-045
+        from db_read_ops import db_visible_job_ids
+        ids = db_visible_job_ids(db_path, restrict=restrict, crew_name=crew_name)
+        return _gbu_json.dumps({"rows": rows, "ids": ids}, default=str)
+    return _gbu_json.dumps(rows, default=str)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -6895,6 +7824,18 @@ def check_tools_status(ctx: "Context | None" = None) -> str:
         lines.append("  ❌ requests package missing — run: pip install requests")
         lines.append("")
 
+    # 2026-09-13 fix: read_job_spreadsheet/update_job_spreadsheet/
+    # email_invoice/schedule_next_recurring_job/log_time_entry/
+    # get_ar_aging_report are all fully SQLite-backed now (Job Board
+    # Architecture Spec) — they no longer need openpyxl at all, and don't
+    # even need the default path to already point at a real .xlsx file
+    # (the underlying database is auto-created). Gating their status on
+    # opx_ok/os.path.exists(default_xl) was a real, user-visible bug:
+    # this report could show ❌ "not available" for tools that actually
+    # worked fine, or ✅ based on an .xlsx file that had nothing to do
+    # with whether the (SQLite) tool would succeed. openpyxl is still
+    # checked below since export_to_excel() (a genuinely different,
+    # intentionally one-way .xlsx *output* tool) does need it.
     try:
         import openpyxl  # noqa: F401
         opx_ok = True
@@ -6902,16 +7843,18 @@ def check_tools_status(ctx: "Context | None" = None) -> str:
         opx_ok = False
 
     default_xl = _get_default_spreadsheet_path()
-    xl_status  = f"✅ Default path: {default_xl}" if default_xl else "⚠️  No default path set"
+    db_status  = (f"✅ Job data folder: {os.path.dirname(default_xl) or default_xl}"
+                  if default_xl else "⚠️  No default path set (falls back to ~/.ai-prowler/)")
 
     lines += [
-        f"  {'✅' if opx_ok else '❌'} read_job_spreadsheet(filepath?, sheet?, date?, max_rows?)",
-        f"     openpyxl — reads Jobs_Schedule or any sheet; supports date filtering",
-        f"     {xl_status}",
+        f"  ✅ read_job_spreadsheet(filepath?, sheet?, date?, max_rows?)",
+        f"     SQLite-backed — reads Jobs_Schedule or any of the 8 wired sheets;",
+        f"     supports date filtering",
+        f"     {db_status}",
         "",
-        f"  {'✅' if opx_ok else '❌'} update_job_spreadsheet(job_id, updates, filepath?)",
-        f"     openpyxl — updates .xlsx job tracking files in place",
-        f"     {xl_status}",
+        f"  ✅ update_job_spreadsheet(job_id, updates, filepath?, sheet_name?)",
+        f"     SQLite-backed — updates the live job database directly",
+        f"     {db_status}",
         "",
         "     💡 Available to every role, in both personal and server mode —",
         "        no DB-management or communications gate applies to these two",
@@ -6971,17 +7914,17 @@ def check_tools_status(ctx: "Context | None" = None) -> str:
         "",
         "CONTRACTOR WORKFLOW TOOLS:",
         "",
-        f"  {'✅' if opx_ok else '❌'} email_invoice(invoice_id, to?, filepath?)",
-        f"     Reads Invoices sheet, sends branded HTML invoice via SMTP",
-        f"     {xl_status}",
+        f"  ✅ email_invoice(invoice_id, to?, filepath?)",
+        f"     Reads Invoices table (SQLite), sends branded HTML invoice via SMTP",
+        f"     {db_status}",
         "",
-        f"  {'✅' if opx_ok else '❌'} schedule_next_recurring_job(job_id, filepath?, when?)",
+        f"  ✅ schedule_next_recurring_job(job_id, filepath?, when?)",
         f"     Auto-creates next job based on customer frequency (W/BW/M/Q)",
         "",
-        f"  {'✅' if opx_ok else '❌'} log_time_entry(job_id, action, filepath?)",
+        f"  ✅ log_time_entry(job_id, action, filepath?)",
         f"     Clock in / out — records TimeLog, writes Actual Duration to Jobs_Schedule",
         "",
-        f"  {'✅' if opx_ok else '❌'} get_ar_aging_report(filepath?, as_of_date?)",
+        f"  ✅ get_ar_aging_report(filepath?, as_of_date?)",
         f"     AR aging buckets: Current / 1-30 / 31-60 / 61-90 / 90+ days",
         "",
     ]
@@ -7138,81 +8081,109 @@ def check_tools_status(ctx: "Context | None" = None) -> str:
 # where a dollar amount belongs.
 
 
-def _read_settings_tax_rate(filepath: str, fallback: float = 0.07) -> float:
-    """Read the Tax Rate from the Settings sheet in the Job Tracker spreadsheet.
+def _read_settings_tax_rate(db_path: str, fallback: float = 0.07) -> float:
+    """Read the "Tax Rate" setting from the DB-backed settings table.
 
-    Looks for a row where column A = "Tax Rate" and reads the value from
-    column B.  The value is stored as a decimal fraction (0.07 = 7%) when
-    openpyxl reads a percentage-formatted cell, or as a string "7%" / "0.07"
-    when entered as text — all three forms are handled.
+    2026-09-12 fix: this used to open the old .xlsx Job Tracker directly
+    via openpyxl and scan its Settings sheet for a "Tax Rate" row — a
+    path that stopped being live the moment create_invoice() (and every
+    other write tool) moved to SQLite-only. Since then, EVERY invoice
+    had silently been using the 0.07 fallback regardless of what anyone
+    set — a real setting with zero effect. Found live while checking the
+    newly-wired Database tab's Settings screen.
 
-    Returns `fallback` (default 0.07) if the Settings sheet doesn't exist,
-    the Tax Rate row is missing, or the value can't be parsed.
+    Looks up key="Tax Rate" in the settings table. Value is stored as a
+    decimal fraction (0.07) or as text like "7%" / "7" / "0.07" — all
+    three forms are handled, matching the old parsing behavior exactly
+    so an existing value entered either way keeps working.
+
+    Returns `fallback` (default 0.07) if the setting doesn't exist yet
+    or its value can't be parsed — a fresh install with no Settings
+    filled in yet should never crash invoice creation over this.
     """
     try:
-        import openpyxl as _opx
-        _wb = _opx.load_workbook(filepath, data_only=True, read_only=True)
-        if "Settings" not in _wb.sheetnames:
+        import sqlite3 as _sqlite3_tr
+        _conn = _sqlite3_tr.connect(db_path)
+        _row = _conn.execute("SELECT value FROM settings WHERE key = 'Tax Rate'").fetchone()
+        _conn.close()
+        if not _row or _row[0] is None:
             return fallback
-        _ws = _wb["Settings"]
-        for _row in _ws.iter_rows(min_row=3, values_only=True):
-            if _row and str(_row[0] or "").strip() == "Tax Rate":
-                _raw = _row[1]
-                if _raw is None:
-                    return fallback
-                # openpyxl returns percentage cells as decimals (0.07 for 7%)
-                if isinstance(_raw, (int, float)):
-                    # if someone entered 7 instead of 7% or 0.07, normalise
-                    return float(_raw) if float(_raw) <= 1.0 else float(_raw) / 100.0
-                # string form: "7%", "7", or "0.07"
-                _s = str(_raw).strip().rstrip("%")
-                _v = float(_s)
-                return _v if _v <= 1.0 else _v / 100.0
+        _raw = _row[0]
+        if isinstance(_raw, (int, float)):
+            return float(_raw) if float(_raw) <= 1.0 else float(_raw) / 100.0
+        _s = str(_raw).strip().rstrip("%")
+        if not _s:
+            return fallback
+        _v = float(_s)
+        return _v if _v <= 1.0 else _v / 100.0
     except Exception:
-        pass
-    return fallback
+        return fallback
 
 
-def _read_business_info(filepath: str) -> dict:
-    """Read the COMPANY INFORMATION block from the Settings sheet.
+def _read_business_info(db_path: str) -> dict:
+    """Read the business-identity settings (Business Name/Phone/Email/
+    Address/Website/License) from the DB-backed settings table.
+
+    2026-09-12: same class of fix as _read_settings_tax_rate above — this
+    was openpyxl-based against the now-defunct .xlsx file. 2026-09-13
+    update: email_invoice()/email_receipt() (and _find_invoice_row(),
+    the shared invoice lookup they both use) have since been fully ported
+    off openpyxl too, so this function's DB-backed data now actually
+    reaches emailed invoices/receipts — it isn't just sitting unused
+    anymore.
 
     Returns a dict with keys: name, phone, email, address, website, license.
-    Any key whose row is missing, blank, or the sheet itself doesn't exist
-    returns "" for that key — callers should treat an empty string as
-    "omit this from the invoice/receipt header" rather than erroring, since
-    Website and License are explicitly marked optional in the sheet's own
-    Notes column, and a fresh install may not have filled in the rest yet.
-
-    Used by email_invoice() and email_receipt() to print who the customer
-    is actually paying — the Business Name row's own Notes column says
-    "Appears on invoices and email headers", but until this helper existed
-    nothing actually read it; invoices showed no sender identity at all.
     """
     _keys = {
-        "Business Name":         "name",
-        "Business Phone":        "phone",
-        "Business Email":        "email",
-        "Business Address":      "address",
-        "Website":               "website",
-        "License / LLC Number":  "license",
+        "Business Name":        "name",
+        "Business Phone":       "phone",
+        "Business Email":       "email",
+        "Business Address":     "address",
+        "Website":              "website",
+        "License / LLC Number": "license",
     }
     info = {v: "" for v in _keys.values()}
     try:
-        import openpyxl as _opx
-        _wb = _opx.load_workbook(filepath, data_only=True, read_only=True)
-        if "Settings" not in _wb.sheetnames:
-            return info
-        _ws = _wb["Settings"]
-        for _row in _ws.iter_rows(min_row=3, values_only=True):
-            if not _row:
-                continue
-            _label = str(_row[0] or "").strip()
-            if _label in _keys:
-                _val = _row[1]
-                info[_keys[_label]] = str(_val).strip() if _val is not None else ""
+        import sqlite3 as _sqlite3_bi
+        _conn = _sqlite3_bi.connect(db_path)
+        for _label, _field in _keys.items():
+            _row = _conn.execute("SELECT value FROM settings WHERE key = ?", (_label,)).fetchone()
+            if _row and _row[0] is not None:
+                info[_field] = str(_row[0]).strip()
+        _conn.close()
     except Exception:
         pass
     return info
+
+
+def _note_app_seen(app: str, scope) -> None:
+    """Setup Center (2026-09-30): note that a phone app ('remote_app' /
+    'jobs_app') is in use, and whether from a phone, in
+    ~/.ai-prowler/<app>_seen.json — so its Setup Center step can turn ✅ on
+    the first phone sign-in. Only the time + phone yes/no, never a token.
+    Written at most once a minute; never raises (can't affect the request)."""
+    try:
+        import json as _j, time as _t, pathlib as _p
+        _ua = ""
+        for _k, _v in scope.get("headers", []):
+            if _k.lower() == b"user-agent":
+                _ua = _v.decode("utf-8", "ignore")
+                break
+        _mob = any(k in _ua for k in ("iPhone", "iPad", "Android", "Mobile"))
+        _f = _p.Path.home() / ".ai-prowler" / f"{app}_seen.json"
+        _old = {}
+        if _f.exists():
+            _old = _j.loads(_f.read_text(encoding="utf-8") or "{}")
+        _now = _t.time()
+        if _now - float(_old.get("last_at", 0)) > 60 or (_mob and not _old.get("phone_seen")):
+            _new = dict(_old, last_at=_now, last_was_phone=_mob)
+            if _mob:
+                _new["phone_seen"] = True
+                _new.setdefault("first_phone_at", _now)
+            _f.parent.mkdir(parents=True, exist_ok=True)
+            _f.write_text(_j.dumps(_new), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _create_invoice_impl(
@@ -7228,324 +8199,50 @@ def _create_invoice_impl(
     ctx,
 ) -> str:
     """Implementation body, called under _spreadsheet_write_lock. See
-    create_invoice() for the public docstring."""
-    try:
-        import openpyxl as _ci_opx
-    except ImportError:
-        return "❌ openpyxl not installed. Run: pip install openpyxl"
+    create_invoice() for the public docstring.
 
-    import datetime as _ci_dt
+    Job Board Architecture Spec Phase 1 (spec §5, §6a, §11): internals now
+    use the SQLite-backed db_write_ops.db_create_invoice, which carries
+    over the exact same financial calculation (subtotal/discount/taxable/
+    tax/total, all round()'d the same way) as this function's previous
+    openpyxl-based version — this is the "computed once, stored as plain
+    data" invoice math described in spec §6a, unchanged in substance, only
+    the storage swapped out. Same unambiguous-match contract, same
+    one-invoice-per-job refusal, same crew-scoping rule, same job-row
+    writeback of any overridden price/description fields, same
+    NEW_INVOICE_ID=... marker line.
+    """
+    from db_write_ops import db_create_invoice
 
-    filepath = _resolve_job_spreadsheet_path(ctx, filepath)
-    if not filepath:
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
         return (
-            "❌ No spreadsheet path provided and no default path configured.\n"
-            "Set one in AI-Prowler → Settings → Small Business → Default Spreadsheet Path,\n"
-            "or pass the full filepath argument explicitly."
+            "❌ No database path provided and no default path configured.\n"
+            "Pass the full filepath argument explicitly, or check that AI-Prowler has write access to its own state folder."
         )
-
-    # ── Resolve tax rate from Settings sheet ──────────────────────────────────
-    # tax_rate == -1.0 means "read from Settings sheet" (the default).
-    # Any explicit value passed overrides the sheet (e.g. the PWA form sends
-    # the user-edited value directly).
-    # Falls back to 7% if the Settings sheet can't be read or the value
-    # can't be parsed.
-    if tax_rate < 0:
-        tax_rate = _read_settings_tax_rate(filepath)
 
     _telemetry_increment_tool_count("create_invoice")
 
-    fp = filepath.replace("\\", "/")
-    if not os.path.exists(fp):
-        return f"❌ Spreadsheet not found: {fp}"
-
     if not job_identifier or not job_identifier.strip():
-        # Same class of bug as the blank-identifier fix in send_sms/
-        # email_invoice — an empty string is a substring of every row's
-        # text, which would otherwise silently match whichever job comes
-        # first in the sheet.
         return "❌ job_identifier is required and cannot be blank."
 
-    backup_msg = ""
-    if backup:
-        backup_msg = _backup_spreadsheet(fp)
-        if backup_msg.startswith("⚠️") or backup_msg.startswith("❌"):
-            return (
-                f"{backup_msg}\n"
-                "Spreadsheet was NOT modified. Fix the backup issue or pass backup=False to skip."
-            )
-
-    try:
-        wb = _ci_opx.load_workbook(fp)
-    except Exception as exc:
-        return f"❌ Could not open spreadsheet: {exc}"
-
-    if "Jobs_Schedule" not in wb.sheetnames:
-        return "❌ 'Jobs_Schedule' sheet not found in spreadsheet."
-    ws_jobs = wb["Jobs_Schedule"]
-
-    # ── Find the job — must match exactly ONE row (same unambiguous-match
-    #    contract as log_time_entry) ─────────────────────────────────────────
-    job_hdr_row, job_hdrs = None, []
-    for r in ws_jobs.iter_rows(min_row=1, max_row=5):
-        ne = [c for c in r if c.value is not None]
-        if len(ne) >= 3:
-            job_hdr_row = r[0].row
-            job_hdrs = [_join_header_lines(c.value) for c in r]
-            break
-    if not job_hdrs:
-        return "❌ Could not detect header row in Jobs_Schedule."
-
-    _matches = []
-    for row in ws_jobs.iter_rows(min_row=job_hdr_row + 1):
-        vals = [c.value for c in row]
-        row_text = " ".join(str(v) for v in vals if v)
-        if job_identifier.lower() in row_text.lower():
-            _matches.append(row[0].row)
-    if not _matches:
-        return f"❌ No job found matching '{job_identifier}' in Jobs_Schedule."
-    if len(_matches) > 1:
-        _cand = "\n".join(
-            f"   • {ws_jobs.cell(row=r, column=1).value or '(no JobID)'} — "
-            f"{ws_jobs.cell(row=r, column=job_hdrs.index('Customer Name / Company') + 1).value or ''}"
-            for r in _matches[:10]
-        )
-        return (
-            f"❌ '{job_identifier}' matches {len(_matches)} jobs — please specify "
-            f"which one:\n{_cand}\n\nTry again with the exact JobID."
-        )
-    job_row_num = _matches[0]
-
-    def _jcol(name):
-        return job_hdrs.index(name) + 1 if name in job_hdrs else None
-
-    def _jval(name, default=None):
-        c = _jcol(name)
-        if c is None:
-            return default
-        v = ws_jobs.cell(row=job_row_num, column=c).value
-        return v if v not in (None, "") else default
-
-    job_id     = str(_jval("JobID (JOB-####)", "") or "").strip()
-    cust_id    = str(_jval("CustomerID (Customers!A)", "") or "").strip()
-    cust_name  = str(_jval("Customer Name / Company", "") or "").strip()
-    cust_type  = str(_jval("Customer Type", "") or "").strip()
-    svc_date   = _jval("Service Date", "")
-
     # ── Server-mode crew scoping — same rule as update_job_spreadsheet ─────
-    # A technician creating an invoice on the spot is exactly the "own job"
-    # write case that rule exists for; owner/manager remain unrestricted.
-    _ci_restrict, _ci_crew_name = _job_crew_scope(ctx, fp)
-    if _ci_restrict:
-        _ci_crew_col = _jcol("Crew / Technician")
-        _ci_row_crew = (str(ws_jobs.cell(row=job_row_num, column=_ci_crew_col).value or "")
-                         .strip().lower() if _ci_crew_col else "")
-        if not _crew_name_in_cell(_ci_row_crew, _ci_crew_name):
-            return (
-                "❌ You can only create invoices for jobs assigned to you "
-                f"(Crew / Technician column). {job_id or job_identifier} is not assigned to you."
-            )
+    _ci_restrict, _ci_crew_name = _job_crew_scope(ctx, db_path)
 
-    # ── Refuse to silently double-invoice ───────────────────────────────────
-    # Jobs_Schedule has exactly one InvoiceID slot per job — a second
-    # create_invoice call would either overwrite that reference (orphaning
-    # the first Invoices row, which nothing could find again by JobID) or
-    # leave it pointing at the wrong invoice. Block it outright rather than
-    # silently doing either.
-    _existing_inv_id = str(_jval("InvoiceID (INV-####)", "") or "").strip()
-    if _existing_inv_id:
-        return (
-            f"❌ {job_id or job_identifier} already has an invoice: {_existing_inv_id}.\n"
-            "To adjust an existing invoice's amount, use update_job_spreadsheet "
-            "on the Invoices sheet instead of creating a second one."
-        )
+    backup_msg = _backup_job_db(db_path) if backup else ""
 
-    # ── Resolve price: explicit override wins, else fall back to whatever's
-    #    already on the job row ─────────────────────────────────────────────
-    if quote_amount is None:
-        _raw_q = _jval("Quote Amount ($)")
-        try:
-            quote_amount = float(_raw_q) if _raw_q is not None else None
-        except (TypeError, ValueError):
-            quote_amount = None
-    if quote_amount is None:
-        return (
-            "❌ No price to invoice. Pass quote_amount explicitly, or set "
-            "'Quote Amount ($)' on the job first."
-        )
-    if quote_amount < 0:
-        return "❌ quote_amount cannot be negative."
-
-    if discount is None:
-        _raw_d = _jval("Discount Applied ($)")
-        try:
-            discount = float(_raw_d) if _raw_d is not None else 0.0
-        except (TypeError, ValueError):
-            discount = 0.0
-    if discount < 0:
-        return "❌ discount cannot be negative."
-    if discount > quote_amount:
-        return "❌ discount cannot exceed quote_amount."
-
-    description  = (description or str(_jval("Service Details / Notes", "") or "")).strip()
-    service_type = (service_type or str(_jval("Service Type", "") or "")).strip()
-
-    # ── Independently computed — never trusted from a stale/blank formula
-    #    cell (see module note above) ───────────────────────────────────────
-    subtotal    = round(float(quote_amount), 2)
-    discount_amt = round(float(discount), 2)
-    taxable     = round(subtotal - discount_amt, 2)
-    tax_amt     = round(taxable * float(tax_rate), 2)
-    total_due   = round(taxable + tax_amt, 2)
-
-    # ── If the technician adjusted price/service, write it back onto the
-    #    job row too, so the Jobs_Schedule listing (and the PWA) reflects
-    #    it — but only the raw inputs, never Jobs_Schedule's own formula
-    #    cells (Actual Amount/Tax/Invoice Total), which are out of scope
-    #    for this tool and recalculate on their own the next time the file
-    #    is opened in Excel. ──────────────────────────────────────────────
-    _job_writes = []
-    for _col_name, _val in (
-        ("Quote Amount ($)", subtotal),
-        ("Discount Applied ($)", discount_amt),
-        ("Service Details / Notes", description),
-        ("Service Type", service_type),
-    ):
-        _c = _jcol(_col_name)
-        if _c is not None and _val:
-            ws_jobs.cell(row=job_row_num, column=_c).value = _val
-            _job_writes.append(_col_name)
-    _payment_status_col = _jcol("Payment Status")
-    if _payment_status_col is not None and not _jval("Payment Status"):
-        ws_jobs.cell(row=job_row_num, column=_payment_status_col).value = "Unpaid"
-
-    # ── Ensure the Invoices sheet exists ────────────────────────────────────
-    _INVOICE_HEADERS = [
-        "InvoiceID (INV-####)", "JobID (JOB-####)", "CustomerID",
-        "Customer Name / Company", "Customer Type", "Invoice Date",
-        "Due Date (Net 30)", "Service Date", "Service Type", "Description",
-        "Subtotal ($)", "Discount ($)", "Taxable Amt ($)", "Tax 7% ($)",
-        "TOTAL DUE ($)", "Amount Paid ($)", "Balance Due ($)",
-        "Payment Status", "Payment Date", "Payment Method",
-        "Days Overdue (AI-AR)",
-    ]
-    if "Invoices" not in wb.sheetnames:
-        ws_inv = wb.create_sheet("Invoices")
-        ws_inv.append(["🧾  INVOICES"])
-        ws_inv.append(_INVOICE_HEADERS)
-    else:
-        ws_inv = wb["Invoices"]
-
-    inv_hdr_row, inv_hdrs = None, []
-    for r in ws_inv.iter_rows(min_row=1, max_row=5):
-        ne = [c for c in r if c.value is not None]
-        if len(ne) >= 3:
-            inv_hdr_row = r[0].row
-            inv_hdrs = [_join_header_lines(c.value) for c in r]
-            break
-    if not inv_hdrs:
-        return "❌ Could not detect header row in Invoices sheet."
-
-    def _icol(name):
-        return inv_hdrs.index(name) + 1 if name in inv_hdrs else None
-
-    id_col = _icol("InvoiceID (INV-####)")
-    if id_col is None:
-        return "❌ Could not find the InvoiceID column in Invoices sheet."
-
-    # ── Generate next InvoiceID — same INV-#### scheme create_job uses for
-    #    JOB-#### ─────────────────────────────────────────────────────────
-    existing_ids = []
-    for row in ws_inv.iter_rows(min_row=inv_hdr_row + 1):
-        v = row[id_col - 1].value
-        if v and str(v).startswith("INV-"):
-            try:
-                existing_ids.append(int(str(v).split("-")[1]))
-            except ValueError:
-                pass
-    next_num = (max(existing_ids) + 1) if existing_ids else 1
-    new_inv_id = f"INV-{next_num:04d}"
-
-    # v9.1.x fix: check the ID column specifically (row[0]), not "any cell
-    # in the row". The Invoices sheet can have formula columns (e.g. "Days
-    # Overdue (AI-AR)") pre-filled far down in advance — those always
-    # evaluate to a non-None value even on an otherwise-blank row, which
-    # made the old "any(c.value for c in row)" check treat hundreds of
-    # formula-only rows as occupied and push new invoices way past the
-    # real data. InvoiceID is only ever set by an actual invoice.
-    last_row = inv_hdr_row
-    for row in ws_inv.iter_rows(min_row=inv_hdr_row + 1):
-        if row[0].value not in (None, ""):
-            last_row = row[0].row
-    new_row_num = last_row + 1
-
-    today     = _ci_dt.date.today()
-    due_date  = today + _ci_dt.timedelta(days=max(int(due_days), 0))
-
-    _new_row_values = {
-        "InvoiceID (INV-####)":    new_inv_id,
-        "JobID (JOB-####)":        job_id or job_identifier,
-        "CustomerID":              cust_id,
-        "Customer Name / Company": cust_name,
-        "Customer Type":           cust_type,
-        "Invoice Date":            today.isoformat(),
-        "Due Date (Net 30)":       due_date.isoformat(),
-        "Service Date":            svc_date,
-        "Service Type":            service_type,
-        "Description":             description,
-        "Subtotal ($)":            subtotal,
-        "Discount ($)":            discount_amt,
-        "Taxable Amt ($)":         taxable,
-        "Tax 7% ($)":              tax_amt,
-        "TOTAL DUE ($)":           total_due,
-        "Amount Paid ($)":         0,
-        "Balance Due ($)":         total_due,
-        "Payment Status":          "Unpaid",
-        "Days Overdue (AI-AR)":    0,
-    }
-    for _name, _val in _new_row_values.items():
-        _c = _icol(_name)
-        if _c is not None:
-            ws_inv.cell(row=new_row_num, column=_c).value = _val
-
-    # ── Created By stamp (BOTH modes, v9.1.x) ──────────────────────────────
-    # Silent no-op if the Invoices sheet has no "Created By" column yet.
-    _ci_created_by_col = _icol("Created By")
-    if _ci_created_by_col is not None:
-        ws_inv.cell(row=new_row_num, column=_ci_created_by_col).value = _actor_display_name(ctx)
-
-    # ── Write the new InvoiceID back onto the job row — this is what lets
-    #    _find_invoice_row's crew-scope cross-reference, and a human
-    #    scanning Jobs_Schedule, find the invoice from the job side too. ──
-    _job_inv_col = _jcol("InvoiceID (INV-####)")
-    if _job_inv_col is not None:
-        ws_jobs.cell(row=job_row_num, column=_job_inv_col).value = new_inv_id
-
-    try:
-        wb.save(fp)
-    except Exception as exc:
-        return f"❌ Could not save spreadsheet: {exc}"
-
-    lines = [
-        f"✅ Invoice created: {new_inv_id}  (Job {job_id or job_identifier})",
-        f"   Customer:    {cust_name or '(none on file)'}",
-        f"   Subtotal:    ${subtotal:,.2f}",
-        f"   Discount:    ${discount_amt:,.2f}",
-        f"   Tax ({tax_rate*100:g}%):    ${tax_amt:,.2f}",
-        f"   TOTAL DUE:   ${total_due:,.2f}",
-        f"   Due:         {due_date.isoformat()} (Net {due_days})",
-    ]
-    if _job_writes:
-        lines.append(f"   Job row updated: {', '.join(_job_writes)}")
-    if backup_msg:
-        lines.append(f"   {backup_msg}")
-    lines.append(f"NEW_INVOICE_ID={new_inv_id}")
-    lines.append(
-        "\n📑 Re-index the spreadsheet to keep AI-Prowler search results current:\n"
-        "   Call update_tracked_directories() after updating the file.\n"
-        "💡 Ready to send: email_invoice() or text_invoice() with this InvoiceID."
+    actor = _actor_display_name(ctx)
+    result = db_create_invoice(
+        db_path, job_identifier, actor,
+        quote_amount=quote_amount, discount=discount, description=description,
+        service_type=service_type, tax_rate=tax_rate, due_days=due_days,
+        restrict=_ci_restrict, crew_name=_ci_crew_name,
     )
-    return "\n".join(lines)
+    if backup_msg and result.startswith("✅"):
+        lines = result.split("\n")
+        lines.insert(1, f"   {backup_msg}")
+        result = "\n".join(lines)
+    return result
 
 
 @mcp.tool()
@@ -7558,7 +8255,7 @@ def create_invoice(
     tax_rate:       float = -1.0,   # -1 = read from Settings sheet; pass explicit value to override
     due_days:       int = 30,
     filepath:       str = "",
-    backup:         bool = True,
+    backup:         bool = False,
     ctx: "Context | None" = None,
 ) -> str:
     """
@@ -7581,9 +8278,13 @@ def create_invoice(
     per job) — use update_job_spreadsheet on the Invoices sheet to adjust an
     existing invoice's amount instead of creating a duplicate.
 
-    Server mode: same crew-scoping as update_job_spreadsheet — a restricted
-    role (staff/field_crew) may only invoice jobs assigned to them
-    (Crew / Technician column); owner/manager unrestricted.
+    Server mode: same crew-scoping as update_job_spreadsheet — field_crew
+    may only invoice jobs assigned to them (Crew / Technician column);
+    owner/manager/staff unrestricted. (Corrected 2026-09-24: this docstring
+    previously said "staff/field_crew," which never matched the actual
+    implementation — create_invoice has always used the shared
+    _job_crew_scope() helper, which treats staff as unrestricted. Only the
+    wording here was wrong; no behavior changed.)
 
     Args:
         job_identifier: JobID (e.g. "JOB-0001") or customer name (partial
@@ -7602,9 +8303,9 @@ def create_invoice(
                           tools at once. Pass an explicit value to override.
         due_days:        Payment terms in days from today. Default 30
                           (Net 30, matching the sheet's own column header).
-        filepath:        Path to the .xlsx job tracker. Uses the default
+        filepath:        Path to the SQLite job database. Uses the default
                           path from Settings if omitted.
-        backup:          If True (default), back up the spreadsheet before
+        backup:          If True (2026-09-16: now defaults to False — scheduled/manual backups cover this; still available per-call), back up the spreadsheet before
                           writing.
         ctx:             MCP context (injected automatically).
 
@@ -7754,100 +8455,136 @@ def _create_square_checkout_url(access_token: str, location_id: str,
 
 def _find_invoice_row(invoice_identifier: str, filepath: str, ctx) -> dict:
     """
-    Shared invoice-lookup + crew-scope-check logic used by both
-    email_invoice() and text_invoice() — locates the matching row in the
-    Invoices sheet, and (in server mode, for restricted roles) confirms
-    the invoice's job is actually assigned to the calling crew member
-    before returning it. Centralizing this in one place means both
-    channels stay in agreement on matching rules and access control,
-    rather than two independent copies that could quietly drift apart.
+    Shared invoice-lookup + crew-scope-check logic used by email_invoice(),
+    text_invoice(), email_receipt(), and text_receipt().
+
+    2026-09-13: fully ported off openpyxl. This used to open the .xlsx Job
+    Tracker directly and scan the Invoices/Jobs_Schedule/Customers sheets
+    cell by cell — a path that stopped being live the moment create_invoice()
+    (and every other write tool) moved to SQLite-only. Since then, these
+    four tools could not reliably find ANY invoice created after the
+    migration — a real, previously-undiscovered break in the whole
+    invoice/receipt-sending pipeline, found while checking the newly-wired
+    Database tab's Settings screen and tracing where Business Settings
+    actually gets used.
 
     Returns a dict with either:
-        {"error": "<message starting with ❌>"}                on failure
-        {"wb": <Workbook>, "inv_row": <dict>, "fp": <str>}     on success
-    """
-    try:
-        import openpyxl as _opx
-    except ImportError:
-        return {"error": "❌ openpyxl not installed. Run: pip install openpyxl"}
+        {"error": "<message starting with ❌>"}          on failure
+        {"inv_row": <dict>, "db_path": <str>}             on success
 
-    filepath = _resolve_job_spreadsheet_path(ctx, filepath)
-    if not filepath:
+    inv_row's keys deliberately match the exact strings email_invoice()/
+    text_invoice()/email_receipt()/text_receipt() already query via
+    inv_row.get(...) — no changes needed in those four functions' own
+    field-access code, only in how the row itself gets built and (for
+    email_invoice/email_receipt) how the customer's email gets resolved.
+    """
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
         return {"error": "❌ No spreadsheet path configured. Set one in Settings → Small Business."}
 
-    fp = filepath.replace("\\", "/")
-    if not os.path.exists(fp):
-        return {"error": f"❌ Spreadsheet not found: {fp}"}
-
-    try:
-        wb = _opx.load_workbook(fp, data_only=True)
-    except Exception as exc:
-        return {"error": f"❌ Could not open spreadsheet: {exc}"}
-
-    inv_sheet = wb["Invoices"] if "Invoices" in wb.sheetnames else wb.active
-    header_row_idx, headers = None, []
-    for r in inv_sheet.iter_rows(min_row=1, max_row=5):
-        non_empty = [c for c in r if c.value is not None]
-        if len(non_empty) >= 3:
-            header_row_idx = r[0].row
-            headers = [_join_header_lines(c.value) for c in r]
-            break
-
-    if not headers:
-        return {"error": "❌ Could not detect header row in Invoices sheet."}
-
-    # Critical: Python's `"" in row_text` is always True — a blank
-    # invoice_identifier would otherwise silently match the FIRST row in
-    # the entire Invoices sheet, sending someone else's invoice to the
-    # wrong customer with no error at all. See email_invoice()'s history
-    # for the real incident this guards against.
+    # Critical: an empty invoice_identifier must never silently match the
+    # first row in the table — see this function's own history (the
+    # openpyxl version's identical guard) for the real incident this
+    # protects against: someone else's invoice going to the wrong customer.
     if not invoice_identifier or not invoice_identifier.strip():
         return {"error": "❌ invoice_identifier is required and cannot be blank."}
 
-    inv_row = None
-    for row in inv_sheet.iter_rows(min_row=header_row_idx + 1):
-        vals = [c.value for c in row]
-        row_text = " ".join(str(v) for v in vals if v)
-        if invoice_identifier.lower() in row_text.lower():
-            inv_row = dict(zip(headers, vals))
-            break
+    import sqlite3 as _sqlite3_fir
+    conn = _sqlite3_fir.connect(db_path)
+    conn.row_factory = _sqlite3_fir.Row
+    like = f"%{invoice_identifier.strip().lower()}%"
+    row = conn.execute(
+        "SELECT * FROM invoices WHERE LOWER(invoice_id) LIKE ? "
+        "OR LOWER(customer_name) LIKE ? OR LOWER(job_id) LIKE ? "
+        "ORDER BY rowid LIMIT 1",
+        (like, like, like),
+    ).fetchone()
 
-    if not inv_row:
-        return {"error": f"❌ No invoice found matching '{invoice_identifier}' in Invoices sheet."}
+    if row is None:
+        conn.close()
+        return {"error": f"❌ No invoice found matching '{invoice_identifier}'."}
 
     # ── Server-mode crew scoping (Phase 4) ──────────────────────────────────
-    # The Invoices sheet itself has no Crew/Technician column of its own —
-    # cross-reference the invoice's JobID against Jobs_Schedule's crew
-    # assignment instead (the source of truth), same pattern log_time_entry
-    # uses. A restricted user accessing an invoice for a job that isn't
-    # theirs is rejected before anything is sent, not silently allowed.
-    restrict, crew_name = _job_crew_scope(ctx, fp)
+    # The invoices table itself has no crew column of its own — cross-
+    # reference the invoice's job_id against jobs.crew instead (the source
+    # of truth), same pattern log_time_entry/update_job_spreadsheet use.
+    # A restricted user accessing an invoice for a job that isn't theirs
+    # is rejected before anything is sent, not silently allowed.
+    restrict, crew_name = _job_crew_scope(ctx, db_path)
     if restrict:
-        job_id = str(inv_row.get("JobID (JOB-####)", "") or "")
+        job_id = str(row["job_id"] or "")
         row_crew = ""
-        if job_id and "Jobs_Schedule" in wb.sheetnames:
-            jobs_sheet = wb["Jobs_Schedule"]
-            job_hdr_row, job_hdrs = None, []
-            for r in jobs_sheet.iter_rows(min_row=1, max_row=5):
-                ne = [c for c in r if c.value is not None]
-                if len(ne) >= 3:
-                    job_hdr_row = r[0].row
-                    job_hdrs = [_join_header_lines(c.value) for c in r]
-                    break
-            if job_hdrs:
-                for row in jobs_sheet.iter_rows(min_row=job_hdr_row + 1):
-                    jvals = [c.value for c in row]
-                    jrow = dict(zip(job_hdrs, jvals))
-                    if str(jrow.get("JobID (JOB-####)", "") or "") == job_id:
-                        row_crew = str(jrow.get("Crew / Technician", "") or "").strip().lower()
-                        break
+        if job_id:
+            jrow = conn.execute("SELECT crew FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+            if jrow:
+                row_crew = str(jrow["crew"] or "").strip().lower()
         if not _crew_name_in_cell(row_crew, crew_name):
+            conn.close()
             return {"error": (
                 "❌ You can only access invoices for jobs assigned to you "
                 "(Crew / Technician column). This invoice's job is not assigned to you."
             )}
 
-    return {"wb": wb, "inv_row": inv_row, "fp": fp}
+    inv_row = {
+        "InvoiceID (INV-####)":     row["invoice_id"],
+        "JobID (JOB-####)":         row["job_id"],
+        "CustomerID":               row["customer_id"],
+        "Customer Name / Company":  row["customer_name"],
+        "Invoice Date":             row["invoice_date"],
+        "Due Date (Net 30)":        row["due_date"],
+        "Service Date":             row["service_date"],
+        "Service Type":             row["service_type"],
+        "Description":              row["description"],
+        "Subtotal ($)":             row["subtotal"],
+        "Discount ($)":             row["discount"],
+        "Tax 7% ($)":               row["tax"],
+        "TOTAL DUE ($)":            row["total_due"],
+        "Balance Due ($)":          row["balance_due"],
+        "Payment Status":           row["payment_status"],
+    }
+    conn.close()
+    return {"inv_row": inv_row, "db_path": db_path}
+
+
+def _lookup_invoice_customer_email(db_path: str, cust_id: str, cust_name: str) -> str:
+    """DB-backed customer-email lookup for email_invoice()/email_receipt()
+    when no `to` address is given. Replaces a hand-rolled scan of the
+    Customers worksheet with the same two-tier matching the old code used:
+    exact CustomerID match first, falling back to a company/first-name
+    substring match. Returns "" (never raises) if nothing matches, so
+    callers can fall through to their own "no recipient" error message.
+
+    Deliberately NOT named _lookup_customer_email — that name is already
+    taken by an older, single-argument helper used by send_email()/
+    send_alert() (name_or_id: str). That older helper is STILL fully
+    openpyxl-based itself (same class of bug this whole fix addresses,
+    found while porting this one) — a separate, real gap in a different
+    pair of tools than the four (email_invoice/text_invoice/email_
+    receipt/text_receipt) this pass was scoped to. Flagged, not fixed
+    here, to avoid scope creep into tools that weren't part of this ask.
+    """
+    import sqlite3 as _sqlite3_cel
+    conn = _sqlite3_cel.connect(db_path)
+    conn.row_factory = _sqlite3_cel.Row
+    try:
+        if cust_id:
+            row = conn.execute(
+                "SELECT email FROM customers WHERE customer_id = ?", (cust_id,)
+            ).fetchone()
+            if row and row["email"]:
+                return str(row["email"])
+        if cust_name:
+            like = f"%{cust_name.strip().lower()}%"
+            row = conn.execute(
+                "SELECT email FROM customers WHERE LOWER(company_name) LIKE ? "
+                "OR LOWER(first_name) LIKE ? LIMIT 1",
+                (like, like),
+            ).fetchone()
+            if row and row["email"]:
+                return str(row["email"])
+    finally:
+        conn.close()
+    return ""
 
 
 @mcp.tool()
@@ -7869,7 +8606,7 @@ def email_invoice(
                             (partial match accepted, e.g. "Torres").
         to:                 Recipient email address. If omitted, looks up the
                             customer email in the Customers sheet automatically.
-        filepath:           Path to the .xlsx job tracker. Uses the default
+        filepath:           Path to the SQLite job database. Uses the default
                             path from Settings if omitted.
         also_sms:           If True, also send an SMS notification to the
                             customer after the email succeeds. The SMS reuses
@@ -7893,33 +8630,14 @@ def email_invoice(
     _ei_lookup = _find_invoice_row(invoice_identifier, filepath, ctx)
     if "error" in _ei_lookup:
         return _ei_lookup["error"]
-    wb = _ei_lookup["wb"]
     inv_row = _ei_lookup["inv_row"]
-    fp = _ei_lookup["fp"]
+    db_path = _ei_lookup["db_path"]
 
     # ── Look up customer email if not provided ────────────────────────────────
     if not to:
         cust_id = str(inv_row.get("CustomerID", "") or "")
         cust_name = str(inv_row.get("Customer Name / Company", "") or "")
-        if "Customers" in wb.sheetnames:
-            cust_sheet = wb["Customers"]
-            cust_hdrs = []
-            cust_hdr_row = None
-            for r in cust_sheet.iter_rows(min_row=1, max_row=5):
-                ne = [c for c in r if c.value is not None]
-                if len(ne) >= 3:
-                    cust_hdr_row = r[0].row
-                    cust_hdrs = [str(c.value).strip().replace('\n',' ') if c.value else '' for c in r]
-                    break
-            if cust_hdrs:
-                for row in cust_sheet.iter_rows(min_row=cust_hdr_row + 1):
-                    cvals = [c.value for c in row]
-                    crow = dict(zip(cust_hdrs, cvals))
-                    cid = str(crow.get("CustomerID (CUST-####)", "") or "")
-                    cname = str(crow.get("Company Name", "") or crow.get("First Name","") or "")
-                    if (cust_id and cust_id == cid) or (cust_name and cust_name.lower() in str(cvals).lower()):
-                        to = str(crow.get("Email", "") or "")
-                        break
+        to = _lookup_invoice_customer_email(db_path, cust_id, cust_name)
         if not to:
             return (f"❌ No recipient email provided and could not auto-find customer email.\n"
                     f"Pass a 'to' address: email_invoice('{invoice_identifier}', to='email@example.com')")
@@ -7964,7 +8682,7 @@ def email_invoice(
     # but nothing previously read them, so every invoice looked like it
     # came from "AI-Prowler" with no indication of which business the
     # customer is actually paying.
-    _biz = _read_business_info(fp)
+    _biz = _read_business_info(db_path)
     _biz_name    = _biz["name"] or "Your Business"
     _biz_lines   = []
     if _biz["address"]:
@@ -8202,7 +8920,7 @@ def text_invoice(
     Args:
         invoice_identifier: InvoiceID (e.g. "INV-0001") or customer name
                             (partial match accepted, e.g. "Torres").
-        filepath:           Path to the .xlsx job tracker. Uses the default
+        filepath:           Path to the SQLite job database. Uses the default
                             path from Settings if omitted.
         ctx:                MCP context (injected automatically).
 
@@ -8319,7 +9037,7 @@ def email_receipt(
                             Shown in the receipt body. Defaults to "Cash".
         to:                 Recipient email. Auto-resolved from Customers
                             sheet if omitted.
-        filepath:           Path to the .xlsx job tracker. Uses default if
+        filepath:           Path to the SQLite job database. Uses default if
                             omitted.
         ctx:                MCP context (injected automatically).
 
@@ -8331,32 +9049,14 @@ def email_receipt(
     _er_lookup = _find_invoice_row(invoice_identifier, filepath, ctx)
     if "error" in _er_lookup:
         return _er_lookup["error"]
-    wb      = _er_lookup["wb"]
     inv_row = _er_lookup["inv_row"]
-    fp      = _er_lookup["fp"]
+    db_path = _er_lookup["db_path"]
 
     # ── Resolve recipient email ────────────────────────────────────────────────
     if not to:
         cust_id   = str(inv_row.get("CustomerID", "") or "")
         cust_name = str(inv_row.get("Customer Name / Company", "") or "")
-        if "Customers" in wb.sheetnames:
-            cust_sheet   = wb["Customers"]
-            cust_hdrs    = []
-            cust_hdr_row = None
-            for r in cust_sheet.iter_rows(min_row=1, max_row=5):
-                ne = [c for c in r if c.value is not None]
-                if len(ne) >= 3:
-                    cust_hdr_row = r[0].row
-                    cust_hdrs = [str(c.value).strip().replace('\n', ' ') if c.value else '' for c in r]
-                    break
-            if cust_hdrs:
-                for row in cust_sheet.iter_rows(min_row=cust_hdr_row + 1):
-                    cvals = [c.value for c in row]
-                    crow  = dict(zip(cust_hdrs, cvals))
-                    cid   = str(crow.get("CustomerID (CUST-####)", "") or "")
-                    if (cust_id and cust_id == cid) or (cust_name and cust_name.lower() in str(cvals).lower()):
-                        to = str(crow.get("Email", "") or "")
-                        break
+        to = _lookup_invoice_customer_email(db_path, cust_id, cust_name)
         if not to:
             return (f"❌ No recipient email and could not auto-find customer email.\n"
                     f"Pass a 'to' address: email_receipt('{invoice_identifier}', to='email@example.com')")
@@ -8393,7 +9093,7 @@ def email_receipt(
     pm        = (payment_method or "Cash").strip()
 
     # Business identity — same rationale as email_invoice()'s identical fix.
-    _biz = _read_business_info(fp)
+    _biz = _read_business_info(db_path)
     _biz_name = _biz["name"] or "Your Business"
     _biz_lines = [v for v in (_biz["address"], _biz["phone"], _biz["email"])
                   if v]
@@ -8522,7 +9222,7 @@ def text_receipt(
         invoice_identifier: InvoiceID (e.g. "INV-0001") or customer name.
         payment_method:     How they paid — "Cash", "Check", "Zelle", etc.
                             Defaults to "Cash".
-        filepath:           Path to the .xlsx job tracker. Uses default if omitted.
+        filepath:           Path to the SQLite job database. Uses default if omitted.
         ctx:                MCP context (injected automatically).
 
     Returns:
@@ -8763,31 +9463,34 @@ def send_sms(
     if len(_to_digits_check) < 10:
         _resolved_phone = None
 
-        # 1. Customers sheet — match by name/company in any column
+        # 1. Customers table — match by name/company (2026-09-13 fix: this
+        #    was still fully openpyxl-based, opening the old .xlsx Job
+        #    Tracker directly — the third instance of the exact same bug
+        #    class just fixed in _lookup_customer_email()/
+        #    _lookup_invoice_customer_email(), found during the same
+        #    system-wide audit. Was silently unable to find any customer
+        #    added after the SQLite migration.
         try:
-            import openpyxl as _opxn
-            _xln = _get_default_spreadsheet_path()
-            if _xln and os.path.exists(_xln):
-                _wbn = _opxn.load_workbook(_xln, data_only=True)
-                if 'Customers' in _wbn.sheetnames:
-                    _wsn = _wbn['Customers']
-                    _hn, _hrn = [], None
-                    for _rn in _wsn.iter_rows(min_row=1, max_row=5):
-                        if len([c for c in _rn if c.value]) >= 3:
-                            _hrn = _rn[0].row
-                            _hn = [_join_header_lines(c.value) for c in _rn]
-                            break
-                    if _hrn:
-                        _pcn = next((i for i, h in enumerate(_hn)
-                                    if 'phone' in h.lower()), None)
-                        if _pcn is not None:
-                            _needle = to.strip().lower()
-                            for _rown in _wsn.iter_rows(min_row=_hrn + 1):
-                                _valsn = [str(c.value or '').strip() for c in _rown]
-                                if _needle and _needle in ' '.join(_valsn).lower():
-                                    if _valsn[_pcn]:
-                                        _resolved_phone = _valsn[_pcn]
-                                        break
+            _db_path_sms = _resolve_job_db_path(ctx, "")
+            if _db_path_sms:
+                import sqlite3 as _sqlite3_sms
+                _conn_sms = _sqlite3_sms.connect(_db_path_sms)
+                _conn_sms.row_factory = _sqlite3_sms.Row
+                try:
+                    _needle = to.strip().lower()
+                    if _needle:
+                        _like_sms = f"%{_needle}%"
+                        _row_sms = _conn_sms.execute(
+                            "SELECT phone FROM customers WHERE "
+                            "(LOWER(company_name) LIKE ? OR LOWER(first_name) LIKE ? "
+                            "OR LOWER(last_name) LIKE ?) "
+                            "AND phone IS NOT NULL AND phone != '' LIMIT 1",
+                            (_like_sms, _like_sms, _like_sms),
+                        ).fetchone()
+                        if _row_sms and _row_sms["phone"]:
+                            _resolved_phone = _row_sms["phone"]
+                finally:
+                    _conn_sms.close()
         except Exception:
             pass
 
@@ -9479,19 +10182,19 @@ def schedule_next_recurring_job(
 
     Args:
         job_identifier: JobID (e.g. "JOB-0001") or customer name/company.
-        filepath:       Path to the .xlsx tracker. Uses default if omitted.
+        filepath:       Path to the SQLite job database. Uses default if omitted.
                          In server mode this argument is ignored — see
-                         _resolve_job_spreadsheet_path().
+                         _resolve_job_db_path().
         when:           Which jobs to search among — works in BOTH personal
                          and server mode: "today" (default if omitted),
                          "tomorrow", "yesterday", "this_week", "next_week",
                          "any" (no date restriction), or an explicit
                          "YYYY-MM-DD" date.
 
-    Server mode: staff/field_crew only search jobs assigned to THEM
-    (Crew / Technician matches their own name) — owner/manager search
-    every crew's jobs. This crew restriction applies regardless of `when`
-    and does not apply at all in personal mode (single user).
+    Server mode: field_crew only search jobs assigned to THEM (Crew /
+    Technician matches their own name) — owner/manager/staff search every
+    crew's jobs. This crew restriction applies regardless of `when` and does
+    not apply at all in personal mode (single user).
 
     Returns:
         New JobID and scheduled date, or explanation if no recurring job applies.
@@ -9550,58 +10253,32 @@ def _srj_resolve_date_range(when: str, today):
 
 def _schedule_next_recurring_job_impl(job_identifier: str, filepath: str, when: str, ctx) -> str:
     """Implementation body, called under _spreadsheet_write_lock. See
-    schedule_next_recurring_job() for the public docstring."""
+    schedule_next_recurring_job() for the public docstring.
+
+    Job Board Architecture Spec Phase 1 (spec §5, §11): internals now use
+    the SQLite-backed db_write_ops.db_schedule_next_recurring_job instead
+    of an openpyxl double-sheet (Jobs_Schedule + Customers) scan. Date-
+    range resolution (_srj_resolve_date_range) and the crew-scoping
+    decision below are pure/ctx-derived logic with no storage dependency
+    and are unchanged; only the job lookup, frequency lookup, and new-
+    job creation moved to db_write_ops.
+    """
     _telemetry_increment_tool_count("schedule_next_recurring_job")
 
-    try:
-        import openpyxl as _opx
-    except ImportError:
-        return "❌ openpyxl not installed. Run: pip install openpyxl"
-
     import datetime as _dt
-    import calendar as _cal
+    from db_write_ops import db_schedule_next_recurring_job
 
-    filepath = _resolve_job_spreadsheet_path(ctx, filepath)
-    if not filepath:
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
         return "❌ No spreadsheet path configured."
 
-    fp = filepath.replace("\\", "/")
-    if not os.path.exists(fp):
-        return f"❌ Spreadsheet not found: {fp}"
-
-    backup_msg = _backup_spreadsheet(fp)
-    if backup_msg.startswith("⚠️") or backup_msg.startswith("❌"):
-        return f"{backup_msg}\nSpreadsheet was NOT modified."
-
-    try:
-        wb = _opx.load_workbook(fp)
-    except Exception as exc:
-        return f"❌ Could not open spreadsheet: {exc}"
-
-    # ── Read Jobs_Schedule ────────────────────────────────────────────────────
-    if "Jobs_Schedule" not in wb.sheetnames:
-        return "❌ 'Jobs_Schedule' sheet not found in spreadsheet."
-    ws_jobs = wb["Jobs_Schedule"]
-
-    job_hdr_row, job_hdrs = None, []
-    for r in ws_jobs.iter_rows(min_row=1, max_row=5):
-        ne = [c for c in r if c.value is not None]
-        if len(ne) >= 3:
-            job_hdr_row = r[0].row
-            job_hdrs = [str(c.value).strip().replace('\n',' ') if c.value else '' for c in r]
-            break
-
-    if not job_hdrs:
-        return "❌ Could not detect header row in Jobs_Schedule."
-
     # ── Scoping ─────────────────────────────────────────────────────────────
-    # Staff/field_crew (server mode only): only search jobs assigned to THEM
+    # field_crew (server mode only): only search jobs assigned to THEM
     # (Crew / Technician matches their own name) — prevents accidentally
     # rescheduling a coworker's job by a job-name/JobID match alone.
-    # Owner/manager see every crew's jobs — their real entitlement, same
-    # _check_db_cap('full') gate used by list_writable_directories /
-    # list_tracked_directories. This crew restriction never applies in
-    # personal mode (single user).
+    # Owner/manager/staff see every crew's jobs (see the 2026-09-24 fix note
+    # just below — staff was previously mis-restricted here by mistake).
+    # This crew restriction never applies in personal mode (single user).
     #
     # Date range (`when`): a common feature in BOTH modes now. If the caller
     # doesn't specify one: server mode defaults to "today" (this tool is
@@ -9609,276 +10286,256 @@ def _schedule_next_recurring_job_impl(job_identifier: str, filepath: str, when: 
     # to "any" (unrestricted) so every version before this parameter existed
     # keeps working unchanged. An explicitly-passed `when` behaves
     # identically in both modes.
-    _srj_user = _current_user(ctx)
-    _srj_full_access = True
-    _srj_crew_name = None
-    if _srj_user is not None:
-        _srj_full_access, _ = _check_db_cap(_srj_user, "full")
-        _srj_crew_name = (_srj_user.get('name') or '').strip().lower()
-
+    # ── Scoping (fixed 2026-09-24) ──────────────────────────────────────────
+    # Previously used _check_db_cap(user, "full") — a DB-MANAGEMENT capability
+    # check (index/untrack/reindex/update), not a job-crew-ownership check —
+    # to decide job-scheduling restriction. _check_db_cap only grants "full"
+    # to owner/manager, so staff (which gets "limited") was being restricted
+    # to their own jobs here, inconsistent with every other job-tracker tool
+    # in this file (create_invoice, read_job_spreadsheet, update_job_spreadsheet,
+    # the whole delete_* family, the route-management family), all of which use
+    # the shared _job_crew_scope() helper — which correctly treats staff as
+    # unrestricted (same tier as owner/manager for job/crew data) and only
+    # restricts field_crew. Switched to that same helper so this tool matches
+    # the rest of the codebase instead of its own one-off rule.
     _srj_effective_when = when.strip() if when and when.strip() else "today"
     _srj_range_start, _srj_range_end = _srj_resolve_date_range(
         _srj_effective_when, _dt.date.today())
 
-    def _srj_parse_date(value):
-        if isinstance(value, _dt.datetime):
-            return value.date()
-        if isinstance(value, _dt.date):
-            return value
-        if value:
-            for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y'):
-                try:
-                    return _dt.datetime.strptime(str(value).strip(), fmt).date()
-                except ValueError:
-                    continue
-        return None
+    restrict, _srj_crew_name = _job_crew_scope(ctx, db_path)
 
-    _crew_col_idx = next((i for i, h in enumerate(job_hdrs) if h == "Crew / Technician"), None)
-    _date_col_idx = next((i for i, h in enumerate(job_hdrs) if h == "Service Date"), None)
-
-    _srj_matches = []
-    for row in ws_jobs.iter_rows(min_row=job_hdr_row + 1):
-        vals = [c.value for c in row]
-        row_text = " ".join(str(v) for v in vals if v)
-        if job_identifier.lower() not in row_text.lower():
-            continue
-        if _srj_range_start is not None:  # None,None means "any" - unrestricted
-            row_date = _srj_parse_date(vals[_date_col_idx]) if _date_col_idx is not None else None
-            if row_date is None or not (_srj_range_start <= row_date <= _srj_range_end):
-                continue
-        if _srj_user is not None and not _srj_full_access:
-            row_crew = str(vals[_crew_col_idx] or '').strip().lower() if _crew_col_idx is not None else ''
-            if not _crew_name_in_cell(row_crew, _srj_crew_name):
-                continue
-        _srj_matches.append(dict(zip(job_hdrs, vals)))
-
-    if not _srj_matches:
-        _scope_note = " assigned to you" if (_srj_user is not None and not _srj_full_access) else ""
-        _when_note = (
-            "" if _srj_range_start is None
-            else f" scheduled {_srj_range_start}" if _srj_range_start == _srj_range_end
-            else f" scheduled {_srj_range_start} to {_srj_range_end}"
-        )
-        return (
-            f"❌ No job found matching '{job_identifier}'{_when_note}{_scope_note} "
-            f"in Jobs_Schedule." + ("" if _srj_range_start is None else " Try when='any' to search all dates.")
-        )
-
-    if len(_srj_matches) > 1:
-        _srj_candidates = "\n".join(
-            f"   • {m.get('JobID (JOB-####)','?')} — {m.get('Customer Name / Company','?')}"
-            for m in _srj_matches[:10]
-        )
-        return (
-            f"❌ '{job_identifier}' matches {len(_srj_matches)} jobs — please "
-            f"specify which one:\n{_srj_candidates}\n\nTry again with the exact JobID."
-        )
-
-    found_job = _srj_matches[0]
-
-    cust_id   = str(found_job.get("CustomerID (Customers!A)", "") or "")
-    cust_name = str(found_job.get("Customer Name / Company",  "") or "")
-    svc_date  = found_job.get("Service Date")
-    crew      = str(found_job.get("Crew / Technician", "") or "")
-    svc_type  = str(found_job.get("Service Type", "") or "")
-    est_dur   = found_job.get("Est. Duration (min)", "")
-    svc_notes = str(found_job.get("Service Details / Notes", "") or "")
-
-    # Parse service date
-    if isinstance(svc_date, _dt.datetime):
-        base_date = svc_date.date()
-    elif isinstance(svc_date, _dt.date):
-        base_date = svc_date
-    elif svc_date:
-        for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y'):
-            try:
-                base_date = _dt.datetime.strptime(str(svc_date).strip(), fmt).date()
-                break
-            except ValueError:
-                continue
-        else:
-            return f"❌ Could not parse service date: {svc_date}"
-    else:
-        return "❌ Completed job has no Service Date — cannot compute next date."
-
-    # ── Look up customer frequency ────────────────────────────────────────────
-    frequency = ""
-    cust_addr = str(found_job.get("Street Address ★ AI Route", "") or "")
-    cust_city = str(found_job.get("City ★ AI Route", "") or "")
-    cust_zip  = str(found_job.get("ZIP ★ AI Route", "") or "")
-
-    if "Customers" in wb.sheetnames:
-        ws_cust = wb["Customers"]
-        cust_hdr_row, cust_hdrs = None, []
-        for r in ws_cust.iter_rows(min_row=1, max_row=5):
-            ne = [c for c in r if c.value is not None]
-            if len(ne) >= 3:
-                cust_hdr_row = r[0].row
-                cust_hdrs = [str(c.value).strip().replace('\n',' ') if c.value else '' for c in r]
-                break
-        if cust_hdrs:
-            for row in ws_cust.iter_rows(min_row=cust_hdr_row + 1):
-                cvals = [c.value for c in row]
-                crow  = dict(zip(cust_hdrs, cvals))
-                cid   = str(crow.get("CustomerID (CUST-####)", "") or "")
-                cn    = str(crow.get("Company Name", "") or crow.get("First Name", "") or "")
-                if (cust_id and cid == cust_id) or (cust_name and cust_name.lower() in str(cvals).lower()):
-                    # Column is "Frequency" in the current Customers sheet
-                    # schema (confirmed via get_sheet_columns). The old
-                    # "Frequency W/BW/M/Q/OT" header name this used to look
-                    # for doesn't exist in ANY current spreadsheet — that
-                    # made frequency always resolve to "" for every
-                    # customer, real or test, silently turning every
-                    # customer into a false "one-time customer" regardless
-                    # of what was actually set in their Frequency column.
-                    # Check "Frequency" first (current schema), fall back
-                    # to the legacy name for any older exported sheet that
-                    # still uses it.
-                    frequency = str(crow.get("Frequency", "")
-                                    or crow.get("Frequency W/BW/M/Q/OT", "") or "")
-                    pref_day  = str(crow.get("Preferred Day(s)", "") or "")
-                    pref_time = str(crow.get("Pref. Time Window", "") or "")
-                    break
-
-    freq_norm = frequency.strip().upper()
-
-    def _add_months(d, months):
-        """
-        Adds `months` calendar months to date `d`, correctly handling
-        year rollover AND day-of-month overflow. The prior hand-written
-        Monthly/Quarterly logic (d.replace(month=...)) had a latent bug:
-        a base date of e.g. Jan 31 plus 1 month would try to construct
-        "Feb 31", which doesn't exist and raises ValueError — this
-        never surfaced in testing only because no test happened to use
-        a month-end base date. Caps the day at the target month's actual
-        last day instead (Jan 31 + 1 month -> Feb 28 or 29).
-        """
-        import calendar as _cal
-        total = d.month - 1 + months
-        new_year = d.year + total // 12
-        new_month = total % 12 + 1
-        max_day = _cal.monthrange(new_year, new_month)[1]
-        return d.replace(year=new_year, month=new_month, day=min(d.day, max_day))
-
-    # Frequency → delta mapping. Both short codes (matching the
-    # spreadsheet's historical "(W/BW/M/Q/OT)" header hint, kept for
-    # backward compatibility with any existing data) and full words
-    # (matching the new Excel dropdown's controlled vocabulary) map to
-    # the same delta function, so either form works regardless of which
-    # one a given row happens to contain.
-    _FREQ_MAP = {
-        "W":             lambda d: d + _dt.timedelta(weeks=1),
-        "WEEKLY":        lambda d: d + _dt.timedelta(weeks=1),
-        "BW":            lambda d: d + _dt.timedelta(weeks=2),
-        "BIWEEKLY":      lambda d: d + _dt.timedelta(weeks=2),
-        "M":             lambda d: _add_months(d, 1),
-        "MONTHLY":       lambda d: _add_months(d, 1),
-        "BM":            lambda d: _add_months(d, 2),
-        "BI-MONTHLY":    lambda d: _add_months(d, 2),
-        "BIMONTHLY":     lambda d: _add_months(d, 2),
-        "Q":             lambda d: _add_months(d, 3),
-        "QUARTERLY":     lambda d: _add_months(d, 3),
-        "SA":            lambda d: _add_months(d, 6),
-        "SEMI-ANNUALLY": lambda d: _add_months(d, 6),
-        "SEMIANNUALLY":  lambda d: _add_months(d, 6),
-        "A":             lambda d: _add_months(d, 12),
-        "ANNUALLY":      lambda d: _add_months(d, 12),
-        "YEARLY":        lambda d: _add_months(d, 12),
-    }
-
-    if freq_norm in ("OT", "ONE-TIME", "ONE TIME", "ONETIME", ""):
-        return (
-            f"ℹ️  No recurring job scheduled — {cust_name} is a one-time customer\n"
-            f"   (Frequency: '{frequency or 'not set'}')\n"
-            "   To add a recurring schedule, update the Customers sheet first."
-        )
-
-    delta_fn = _FREQ_MAP.get(freq_norm)
-    if delta_fn is None:
-        return (
-            f"❌ Unrecognised frequency '{frequency}' for {cust_name}.\n"
-            "   Expected: Weekly / Biweekly / Monthly / Bi-Monthly / "
-            "Quarterly / Semi-Annually / Annually / One-time"
-        )
-
-    next_date = delta_fn(base_date)
-
-    # ── Generate next JobID ───────────────────────────────────────────────────
-    existing_ids = []
-    for row in ws_jobs.iter_rows(min_row=job_hdr_row + 1):
-        jid_cell = row[0].value
-        if jid_cell and str(jid_cell).startswith("JOB-"):
-            try:
-                existing_ids.append(int(str(jid_cell).split("-")[1]))
-            except ValueError:
-                pass
-    next_num = (max(existing_ids) + 1) if existing_ids else 1
-    new_job_id = f"JOB-{next_num:04d}"
-
-    # ── Build new row matching Jobs_Schedule columns ──────────────────────────
-    # Find the next empty row — anchor on the last row with a real JobID in
-    # column A, not "any non-empty cell anywhere" (see create_job's identical
-    # fix for why: a stray formatting artifact far below the real data can
-    # otherwise push the new row dozens/hundreds of rows down).
-    last_row = job_hdr_row
-    for row in ws_jobs.iter_rows(min_row=job_hdr_row + 1):
-        if row[0].value:
-            last_row = row[0].row
-
-    new_row_data = {
-        "JobID (JOB-####)":          new_job_id,
-        "CustomerID (Customers!A)":  cust_id,
-        "Customer Name / Company":   cust_name,
-        "Customer Type":             str(found_job.get("Customer Type", "") or ""),
-        "Street Address ★ AI Route": cust_addr,
-        "City ★ AI Route":           cust_city,
-        "State":                     str(found_job.get("State", "") or ""),
-        "ZIP ★ AI Route":            cust_zip,
-        "Service Date":              next_date,
-        "Day of Week":               next_date.strftime('%A'),
-        "Service Type":              svc_type,
-        "Service Details / Notes":   svc_notes,
-        "Crew / Technician":         crew,
-        "Est. Duration (min)":       est_dur,
-        "Job Status":                "Scheduled",
-    }
-
-    new_row_num = last_row + 1
-    for col_idx, col_name in enumerate(job_hdrs, 1):
-        if col_name in new_row_data:
-            _val = new_row_data[col_name]
-            _cell = ws_jobs.cell(row=new_row_num, column=col_idx)
-            _cell.value = _val
-            # Match create_job's date handling: a real date/datetime value
-            # gets an explicit Excel number format so it displays and reads
-            # back as a proper date, not the serial number Excel would
-            # otherwise show for an unformatted date cell. Previously this
-            # wrote next_date.strftime('%m/%d/%Y') — a STRING that looked
-            # fine when read for display, but meant the Service Date column
-            # silently mixed real dates (from create_job) with plain text
-            # dates (from this tool) in the same column — breaking any
-            # code that filters/sorts/compares Service Date as a real date
-            # (e.g. read_job_spreadsheet's filter_date, or this tool's own
-            # date-range matching on a job created by ITS OWN prior run).
-            if isinstance(_val, (_dt.date, _dt.datetime)):
-                _cell.number_format = 'MM/DD/YYYY'
-
-    try:
-        wb.save(fp)
-    except Exception as exc:
-        return f"❌ Could not save spreadsheet: {exc}"
-
-    return (
-        f"✅ Next recurring job scheduled\n"
-        f"   New Job ID:   {new_job_id}\n"
-        f"   Customer:     {cust_name}\n"
-        f"   Frequency:    {frequency}  ({freq_norm})\n"
-        f"   Last Service: {base_date.strftime('%m/%d/%Y')}\n"
-        f"   Next Service: {next_date.strftime('%m/%d/%Y')} ({next_date.strftime('%A')})\n"
-        f"   Crew:         {crew or '(unassigned)'}\n"
-        f"   Service:      {svc_type}\n"
-        f"   {backup_msg}"
+    actor = _actor_display_name(ctx)
+    return db_schedule_next_recurring_job(
+        db_path, job_identifier, actor,
+        restrict=restrict, crew_name=_srj_crew_name,
+        range_start=_srj_range_start.isoformat() if _srj_range_start else None,
+        range_end=_srj_range_end.isoformat() if _srj_range_end else None,
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 10b — find_stale_customers / send_customer_reminders
+# ══════════════════════════════════════════════════════════════════════════════
+# The Reports screen's "Customer Reminders" section (2026-09-23, at the
+# owner's request). Owner-only (see _owner_only_denied) — same access level
+# as the rest of Reports. find_stale_customers is the search; send_customer_
+# reminders is the explicit, reviewed send — the daily digest hook
+# (_maybe_send_stale_customer_digest, wired into read_job_spreadsheet /
+# get_board_updates) only ever tells the owner who's due, it never contacts a
+# customer on its own.
+
+@mcp.tool()
+def find_stale_customers(days_threshold: int = -1, filepath: str = "", ctx: "Context | None" = None) -> str:
+    """
+    Lists Active customers who haven't had a Completed job in days_threshold+
+    days — or have never had one at all — most-overdue first. This is the
+    search behind the Jobs app's Reports -> Customer Reminders section; use
+    send_customer_reminders() afterward to actually message the ones worth
+    reaching out to.
+
+    "Last serviced" comes from the job history itself (the most recent
+    Completed job's Service Date), not the Customers sheet's own hand-
+    maintained "Last Service Date" field, which can drift out of date.
+
+    Server mode: owner, managers and staff (R-069, David 2026-09-29: "Customer
+    reminders should be visible for owner, managers, and staff as it's only
+    informational"); field crew get a clear denial. SENDING a reminder
+    (send_customer_reminders) is still owner-only. Unrestricted in personal mode.
+
+    Args:
+        days_threshold: How many days since last service counts as "due".
+                        -1 (default) reads the "Stale Customer Reminder
+                        Days" Settings value (60 if that's never been set).
+                        Pass an explicit number to check a different window
+                        without changing the saved setting.
+        filepath:       Path to the SQLite job database. Uses the default
+                        from Settings if omitted. In server mode this
+                        argument is ignored.
+        ctx:            MCP context (injected automatically).
+
+    Returns:
+        A ✅ list (customer, last serviced / never serviced, days overdue),
+        or a ✅ "nobody's due" message when none qualify, or a ❌ for field crew.
+
+    Voice examples:
+        "Which active customers haven't been serviced in 90 days?"
+        "Find customers due for a check-in"
+    """
+    denial = _field_crew_data_admin_denied(ctx, "Customer Reminders")   # R-069
+    if denial:
+        return denial
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return "❌ No spreadsheet path configured."
+
+    from db_write_ops import db_find_stale_customers, db_read_settings_stale_customer_days
+    threshold = days_threshold if days_threshold is not None and days_threshold >= 0 else None
+    effective = threshold if threshold is not None else db_read_settings_stale_customer_days(db_path)
+    stale = db_find_stale_customers(db_path, days_threshold=threshold)
+    if not stale:
+        return f"✅ No active customers are due for a check-in (threshold: {effective}+ days)."
+
+    lines = [f"✅ {len(stale)} active customer(s) due for a check-in (threshold: {effective}+ days):"]
+    for c in stale:
+        when = f"{c['days_since']} days ago" if c["days_since"] is not None else "never serviced"
+        contact = c["email"] or c["phone"] or "no contact on file"
+        # Names the actual contact person too, when it differs from the
+        # business name — so the owner can see who the reminder will
+        # actually greet before sending it. CustomerID comes right after the
+        # bullet, always a single space-free token — this is what the Jobs
+        # PWA's own line parser (findStaleCustomers() in jobs/index.html)
+        # anchors on; keep the two in lock-step if this format ever changes.
+        greet = c.get("contact_name") or c["name"]
+        who = f"{c['name']} (contact: {greet})" if greet != c["name"] else c["name"]
+        lines.append(f"  • {c['customer_id']} — {who} — last serviced {when} — {contact}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def send_customer_reminders(
+    customer_ids: str,
+    channel:      str = "email",
+    message:      str = "",
+    filepath:     str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Sends a check-in reminder — asking whether service is needed — to one or
+    more customers found by find_stale_customers(). This is the explicit,
+    reviewed send step; nothing texts or emails a customer automatically on
+    its own (the daily digest only ever notifies the OWNER of who's due).
+
+    Uses each customer's own Email (channel="email") or Phone (channel=
+    "sms") on file, via send_email()/send_sms() — the same tools everything
+    else in AI-Prowler uses to reach a customer. A customer missing the
+    contact field for the chosen channel is skipped and named in the result,
+    not silently dropped.
+
+    The greeting uses the actual PERSON to reach, not the account name — a
+    residential customer's First Name, or for a commercial account with no
+    named individual on file, the On-Site Contact; only falls back to the
+    company/account name when neither is on file. "Hi Jane," reads like
+    someone wrote it; "Hi Riverside Grill," reads like a form letter.
+
+    Owner only, in server mode — same access level as the rest of Reports.
+    Unrestricted in personal mode.
+
+    Args:
+        customer_ids: Comma-separated CustomerIDs (e.g. "CUST-0001,CUST-0002")
+                      — from find_stale_customers()'s own output.
+        channel:      "email" (default) or "sms". Each channel has its own
+                      Settings toggle ("Customer Reminder Email Enabled" /
+                      "Customer Reminder SMS Enabled", both default Enabled)
+                      — a disabled channel returns a clear ❌ naming which
+                      setting to flip, rather than silently sending nothing.
+        message:      Custom message. Leave blank for the default: "Hi
+                      {name}, it's been a while since your last
+                      service{ - on {date}, if known}. Would you like to
+                      schedule your next visit? Just reply to let us know."
+                      A custom message may use {name} and {date} as
+                      placeholders (the contact's name / their last service
+                      date, or "your last visit" when there's no date on
+                      file) — each recipient still gets their own name/date
+                      substituted in, even with a custom message. Plain text
+                      with no placeholders is sent verbatim to everyone.
+        filepath:     Path to the SQLite job database. Uses the default from
+                      Settings if omitted. In server mode this argument is
+                      ignored.
+        ctx:          MCP context (injected automatically).
+
+    Returns:
+        A ✅ summary of who was messaged, plus anyone skipped and why
+        (missing contact info, send failure) — or a ❌ if the caller isn't
+        the owner.
+
+    Voice examples:
+        "Email a service reminder to CUST-0004 and CUST-0011"
+        "Text CUST-0007 asking if they need service"
+    """
+    denial = _owner_only_denied(ctx)
+    if denial:
+        return denial
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return "❌ No spreadsheet path configured."
+
+    ids = [c.strip() for c in (customer_ids or "").split(",") if c.strip()]
+    if not ids:
+        return "❌ customer_ids is required — pass one or more CustomerIDs, comma-separated."
+    channel_norm = (channel or "email").strip().lower()
+    if channel_norm not in ("email", "sms"):
+        return "❌ channel must be 'email' or 'sms'."
+
+    from db_write_ops import (
+        db_find_stale_customers,
+        db_read_settings_customer_reminder_email_enabled,
+        db_read_settings_customer_reminder_sms_enabled,
+    )
+    # Per-channel gate (2026-09-23, at the owner's request — "enable email
+    # send and enable SMS send as part of the Customer Reminder
+    # configuration"). Checked here, not in find_stale_customers — searching
+    # is never blocked, only the explicit send. Independent settings: either,
+    # both, or neither channel can be on.
+    channel_enabled = (
+        db_read_settings_customer_reminder_email_enabled(db_path) if channel_norm == "email"
+        else db_read_settings_customer_reminder_sms_enabled(db_path)
+    )
+    if not channel_enabled:
+        setting_name = "Customer Reminder Email Enabled" if channel_norm == "email" else "Customer Reminder SMS Enabled"
+        return f"❌ {channel_norm.upper()} reminders are turned off. Enable \"{setting_name}\" in Settings to use this channel."
+    # Looked up fresh rather than trusting whatever the caller's customer_ids
+    # claim — this is also how each customer's contact_name/contact info/
+    # last-serviced date get resolved for the message itself.
+    by_id = {c["customer_id"]: c for c in db_find_stale_customers(db_path, days_threshold=0)}
+
+    sent, skipped = [], []
+    custom_template = message.strip() if message and message.strip() else None
+    for cid in ids:
+        c = by_id.get(cid)
+        if not c:
+            skipped.append(f"{cid} (not found or not currently an active customer)")
+            continue
+        contact = c["email"] if channel_norm == "email" else c["phone"]
+        if not contact:
+            skipped.append(f"{c['name']} ({cid}) — no {'email' if channel_norm == 'email' else 'phone number'} on file")
+            continue
+        greet_name = c.get("contact_name") or c["name"]
+        date_text = c["last_service_date"] or "your last visit"
+        if custom_template:
+            # {name}/{date} are optional — plain text with neither is sent
+            # verbatim, same as before this feature existed.
+            body = custom_template.replace("{name}", greet_name).replace("{date}", date_text)
+        else:
+            when_clause = f" — your last service was on {c['last_service_date']}" if c["last_service_date"] else ""
+            body = (
+                f"Hi {greet_name}, it's been a while since your last service{when_clause}. "
+                "Would you like to schedule your next visit? Just reply to let us know."
+            )
+        try:
+            if channel_norm == "email":
+                result = send_email(contact, "Time for your next service?", body, ctx=ctx)
+            else:
+                result = send_sms(contact, body, ctx=ctx)
+            if _isinstance_failure(result):
+                skipped.append(f"{c['name']} ({cid}) — send failed: {result.splitlines()[0]}")
+            else:
+                sent.append(f"{c['name']} ({cid})")
+        except Exception as exc:
+            skipped.append(f"{c['name']} ({cid}) — send failed: {exc}")
+
+    lines = [f"✅ Reminder {'emailed' if channel_norm == 'email' else 'texted'} to {len(sent)} customer(s)."]
+    if sent:
+        lines.extend(f"  • {s}" for s in sent)
+    if skipped:
+        lines.append(f"⚠️ Skipped {len(skipped)}:")
+        lines.extend(f"  • {s}" for s in skipped)
+    return "\n".join(lines)
+
+
+def _isinstance_failure(result) -> bool:
+    """send_email/send_sms both return a plain string, ❌-prefixed on
+    failure — same convention _isFailureResult() checks client-side."""
+    return isinstance(result, str) and result.strip().startswith("❌")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -9903,9 +10560,9 @@ def log_time_entry(
     Args:
         job_identifier: JobID (e.g. "JOB-0001") or customer name.
         action:         "start" to clock in, "stop" to clock out.
-        filepath:       Path to the .xlsx tracker. Uses default if omitted.
+        filepath:       Path to the SQLite job database. Uses default if omitted.
                          In server mode this argument is ignored — see
-                         _resolve_job_spreadsheet_path().
+                         _resolve_job_db_path().
         gps_coords:     Optional GPS coordinates string "lat,lng" to log
                          with the clock-in or clock-out entry. Passed
                          automatically by the Jobs App PWA.
@@ -9950,378 +10607,222 @@ def _gps_maps_hyperlink(cell, coords: str) -> None:
 
 def _log_time_entry_impl(job_identifier: str, action: str, filepath: str, ctx, gps_coords: str = "") -> str:
     """Implementation body, called under _spreadsheet_write_lock. See
-    log_time_entry() for the public docstring."""
+    log_time_entry() for the public docstring.
+
+    Job Board Architecture Spec Phase 1 (spec §5, §11): internals now use
+    the SQLite-backed db_write_ops.db_log_time_entry instead of an
+    openpyxl load/mutate/save cycle on the TimeLog sheet. This also picks
+    up the Phase 1 regression-test requirement called out in spec §11:
+    "own open entry" ownership is now a real crew_user_id foreign-key
+    match rather than name-matching against a free-text "Crew /
+    Technician" cell (the old "Logged By (User ID)" column was optional
+    and frequently absent, so that equality could never hold in either
+    direction — see the v9.1.x fix note this function used to carry).
+    Elapsed-minutes math, Actual Duration writeback to jobs, and the
+    ⏱️ Clocked IN/OUT return format are unchanged.
+    """
     _telemetry_increment_tool_count("log_time_entry")
 
-    try:
-        import openpyxl as _opx
-    except ImportError:
-        return "❌ openpyxl not installed. Run: pip install openpyxl"
+    from db_write_ops import db_log_time_entry
 
-    import datetime as _dt
-
-    action = action.strip().lower()
+    action = (action or "").strip().lower()
     if action not in ("start", "stop"):
         return "❌ action must be 'start' or 'stop'."
 
-    filepath = _resolve_job_spreadsheet_path(ctx, filepath)
-    if not filepath:
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
         return "❌ No spreadsheet path configured."
 
-    fp = filepath.replace("\\", "/")
-    if not os.path.exists(fp):
-        return f"❌ Spreadsheet not found: {fp}"
-
-    backup_msg = _backup_spreadsheet(fp)
-    if backup_msg.startswith("⚠️") or backup_msg.startswith("❌"):
-        return f"{backup_msg}\nSpreadsheet was NOT modified."
-
-    try:
-        wb = _opx.load_workbook(fp)
-    except Exception as exc:
-        return f"❌ Could not open spreadsheet: {exc}"
-
-    # ── Ensure TimeLog sheet exists ───────────────────────────────────────────
-    _TIMELOG_HEADERS = [
-        "EntryID", "JobID", "Customer Name / Company",
-        "Clock In", "Clock Out", "Elapsed (min)", "Crew / Technician", "Notes",
-        "Logged By (User ID)", "Clock In GPS", "Clock Out GPS",
-    ]
-    if "TimeLog" not in wb.sheetnames:
-        ws_log = wb.create_sheet("TimeLog")
-        ws_log.append(["⏱️  TIME LOG — Job Clock In / Clock Out"])
-        ws_log.append(_TIMELOG_HEADERS)
-    else:
-        ws_log = wb["TimeLog"]
-
-    # Detect header row in TimeLog
-    log_hdr_row, log_hdrs = None, []
-    for r in ws_log.iter_rows(min_row=1, max_row=5):
-        ne = [c for c in r if c.value is not None]
-        if len(ne) >= 3:
-            log_hdr_row = r[0].row
-            log_hdrs = [str(c.value).strip().replace('\n',' ') if c.value else '' for c in r]
-            break
-
-    if not log_hdrs:
-        return "❌ Could not detect header row in TimeLog sheet."
-
-    # Some job trackers decorate these header cells with extra formatting —
-    # e.g. "Clock In\n(HH:MM:SS)" or "Elapsed\n(min)\n=(Out-In)*1440" instead
-    # of a bare "Clock In" / "Elapsed (min)". Canonicalize by prefix so every
-    # lookup/write below still resolves correctly regardless of the exact
-    # suffix a given spreadsheet uses. "GPS" columns are explicitly excluded
-    # so "Clock In GPS" is never folded into the base "Clock In" column.
-    _TIMELOG_CANONICAL = ("Clock In", "Clock Out", "Elapsed (min)")
-    for _i, _h in enumerate(log_hdrs):
-        if "GPS" in _h:
-            continue
-        for _canon in _TIMELOG_CANONICAL:
-            if _h == _canon:
-                break
-            if _h.startswith(_canon):
-                log_hdrs[_i] = _canon
-                break
-
-    # ── Find the job in Jobs_Schedule — must match exactly ONE row ────────────
-    # Requiring an unambiguous match (not silently taking the first hit, and
-    # not silently falling back to the raw identifier string when nothing
-    # matches) is what makes "clock in" / "clock out" actually specify a
-    # real job rather than guessing.
-    cust_name, job_id_found, crew = None, None, ""
-    if "Jobs_Schedule" in wb.sheetnames:
-        ws_jobs = wb["Jobs_Schedule"]
-        job_hdr_row, job_hdrs = None, []
-        for r in ws_jobs.iter_rows(min_row=1, max_row=5):
-            ne = [c for c in r if c.value is not None]
-            if len(ne) >= 3:
-                job_hdr_row = r[0].row
-                job_hdrs = [str(c.value).strip().replace('\n',' ') if c.value else '' for c in r]
-                break
-        if job_hdrs:
-            _matches = []
-            for row in ws_jobs.iter_rows(min_row=job_hdr_row + 1):
-                vals = [c.value for c in row]
-                row_text = " ".join(str(v) for v in vals if v)
-                if job_identifier.lower() in row_text.lower():
-                    jrow = dict(zip(job_hdrs, vals))
-                    _matches.append((
-                        str(jrow.get("JobID (JOB-####)", "") or ""),
-                        str(jrow.get("Customer Name / Company", "") or ""),
-                        str(jrow.get("Crew / Technician", "") or ""),
-                    ))
-            if not _matches:
-                return (
-                    f"❌ No job found matching '{job_identifier}' in Jobs_Schedule.\n"
-                    "Check the JobID or customer name and try again — clocking in/out "
-                    "requires an exact job, not a guess."
-                )
-            if len(_matches) > 1:
-                _candidates = "\n".join(
-                    f"   • {jid or '(no JobID)'} — {cust}" for jid, cust, _ in _matches[:10]
-                )
-                return (
-                    f"❌ '{job_identifier}' matches {len(_matches)} jobs — please specify "
-                    f"which one:\n{_candidates}\n\nTry again with the exact JobID."
-                )
-            job_id_found, cust_name, crew = _matches[0]
-            job_id_found = job_id_found or job_identifier
-            cust_name = cust_name or job_identifier
-    if job_id_found is None:
-        return (
-            "❌ No Jobs_Schedule sheet found — cannot verify job identity. "
-            "Clocking in/out requires a real job in the tracker."
-        )
-
-    # ── Server-mode crew scoping (Phase 4) ──────────────────────────────────
-    # Reuses `crew` already extracted above from the matched Jobs_Schedule
-    # row — no need to re-scan the sheet. Same shared _job_crew_scope() rule
-    # as read_job_spreadsheet/update_job_spreadsheet: a restricted user
-    # clocking in/out on a job that isn't assigned to them is rejected
-    # before any TimeLog entry is written, not silently allowed.
-    _lte_restrict, _lte_crew_name = _job_crew_scope(ctx, fp)
-    if _lte_restrict:
-        # Crew / Technician column is scheduling reference only — not access control.
-        # The TimeLog records the actual caller's identity regardless of assignment.
-        # No crew-column enforcement: any authenticated user may clock in/out.
-        if False:  # reserved for future fine-grained enforcement
-            return (
-                f"❌ You can only clock in/out on jobs assigned to you "
-                f"(Crew / Technician column). {job_id_found} is not assigned to you."
-            )
+    # ── Server-mode crew scoping — kept for parity with the previous
+    #    implementation (currently advisory only: Crew / Technician is
+    #    scheduling reference, not access control, same as before). ─────
+    _job_crew_scope(ctx, db_path)
 
     _lte_user = _current_user(ctx)
-
-    now_ts = _dt.datetime.now()
-    now_str = now_ts.strftime('%Y-%m-%d %H:%M:%S')
-
     _lte_uid = _lte_user.get('id', '') if _lte_user else ''
     _lte_display = _lte_user.get('name', _lte_uid) if _lte_user else ''
 
-    # v9.1.x fix: "Logged By (User ID)" is an OPTIONAL column — this
-    # template's TimeLog sheet doesn't have it at all. Previously, the
-    # ownership check compared rdict.get("Logged By (User ID)", "") (always
-    # "" when the column is absent) against _lte_uid (never blank in server
-    # mode) — an equality that can NEVER hold. That silently broke BOTH
-    # directions: on start(), your own already-open entry was never
-    # recognized (skipped as "someone else's"), letting you open a second
-    # duplicate; on stop(), your own open entry was ALWAYS treated as
-    # someone else's, blocking every clock-out. Falls back to matching by
-    # Crew / Technician name (which does exist, and is exactly what
-    # Jobs_Schedule crew-scoping already keys off of) when the ID column
-    # isn't present.
-    _lte_has_uid_col = "Logged By (User ID)" in log_hdrs
+    backup_msg = _backup_job_db(db_path)
 
-    def _lte_entry_is_mine(rdict: dict) -> bool:
-        if _lte_user is None:
-            return True  # personal mode — single user, any open entry is "yours"
-        if _lte_has_uid_col:
-            return rdict.get("Logged By (User ID)", "") == _lte_uid
-        return _crew_name_in_cell(
-            str(rdict.get("Crew / Technician", "") or "").strip().lower(),
-            _lte_display.strip().lower(),
-        )
+    result = db_log_time_entry(
+        db_path, job_identifier, action,
+        user_id=_lte_uid, user_display_name=_lte_display, gps_coords=gps_coords or "",
+    )
+    if backup_msg and result.startswith("⏱️"):
+        result = f"{result}\n   {backup_msg}"
+    return result
 
-    if action == "start":
-        # Check for an already-open entry. Server mode: scoped to THIS
-        # user's own open entries — Jake starting a shift doesn't block
-        # Karen from also starting her own shift on the same job. Personal
-        # mode: unchanged, any open entry for the job blocks re-starting
-        # (there's only one user, so a second concurrent entry can only
-        # mean a forgotten clock-out).
-        for row in ws_log.iter_rows(min_row=log_hdr_row + 1):
-            rvals = [c.value for c in row]
-            rdict = dict(zip(log_hdrs, rvals))
-            if not (job_id_found.lower() in str(rdict.get("JobID", "")).lower()
-                    and not rdict.get("Clock Out")):
-                continue
-            if not _lte_entry_is_mine(rdict):
-                continue  # someone else's open entry — doesn't block you
-            return (
-                f"⚠️  A clock-in for {job_id_found} is already open.\n"
-                f"   Clocked in at: {rdict.get('Clock In')}\n"
-                "   Call log_time_entry with action='stop' to clock out first."
-            )
 
-        # Generate entry ID
-        existing_ids = []
-        for row in ws_log.iter_rows(min_row=log_hdr_row + 1):
-            eid = row[0].value
-            if eid and str(eid).startswith("TE-"):
-                try:
-                    existing_ids.append(int(str(eid).split("-")[1]))
-                except ValueError:
-                    pass
-        next_num  = (max(existing_ids) + 1) if existing_ids else 1
-        entry_id  = f"TE-{next_num:04d}"
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 11.5 — get_daily_mileage
+# ══════════════════════════════════════════════════════════════════════════════
 
-        # Find next empty row. v9.1.x fix: check EntryID specifically
-        # (row[0]), not "any cell in the row". The TimeLog sheet's
-        # "Elapsed (min)" column has a live formula (=(Out-In)*1440)
-        # pre-filled hundreds of rows ahead of any real data — it always
-        # evaluates to a non-None value (0) even on an otherwise-blank
-        # row, so the old "any(c.value for c in row)" check treated every
-        # one of those formula-only rows as occupied and pushed new clock-
-        # ins far below the real data (e.g. row 501 instead of row 3).
-        # EntryID is only ever set by an actual clock-in.
-        last_log_row = log_hdr_row
-        for row in ws_log.iter_rows(min_row=log_hdr_row + 1):
-            if row[0].value not in (None, ""):
-                last_log_row = row[0].row
+@mcp.tool()
+def get_daily_mileage(
+    entry_date: str,
+    crew:       str = "",
+    filepath:   str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Estimate actual miles driven on a given day, computed from real GPS
+    points already captured at clock-in/clock-out (log_time_entry's
+    gps_coords, passed automatically by the Jobs PWA) — NOT continuous
+    background tracking. A browser-based PWA (not a native app) generally
+    can't track GPS continuously in the background; iOS Safari in
+    particular suspends location the moment the tab isn't the active
+    foreground app, so a true always-on odometer isn't realistic here.
 
-        # Server mode: the actual calling user's identity is authoritative
-        # for who's clocking in — not whatever's pre-filled in the job's
-        # Crew / Technician assignment. Personal mode: unchanged, uses the
-        # job's assigned crew field since there's only one user anyway.
-        crew_display = _lte_display if _lte_user is not None else crew
+    What this actually computes: for each crew member, orders that day's
+    TimeLog entries chronologically, then for every consecutive pair where
+    the earlier entry's Clock Out GPS and the later entry's Clock In GPS
+    are BOTH present, calls OSRM (the same free routing service
+    build_daily_route()/optimize_route() already use) for the real driving
+    distance between those two points and adds it to that crew member's
+    running total. This captures the drive BETWEEN jobs (clock-out at job
+    A -> clock-in at job B) — not any driving before the first clock-in or
+    after the last clock-out of the day, since there's no GPS point
+    marking those.
 
-        new_row = {
-            "EntryID":                  entry_id,
-            "JobID":                    job_id_found,
-            "Customer Name / Company":  cust_name,
-            "Clock In":                 now_str,
-            "Crew / Technician":        crew_display,
-            "Logged By (User ID)":      _lte_uid if _lte_user is not None else "",
-            "Clock In GPS":             gps_coords.strip(),
-        }
-        new_row_num = last_log_row + 1
-        for col_idx, col_name in enumerate(log_hdrs, 1):
-            if col_name in new_row:
-                ws_log.cell(row=new_row_num, column=col_idx).value = new_row[col_name]
+    Entries missing either GPS point are skipped (not estimated, not
+    guessed) and listed separately so gaps in the day's mileage are
+    visible rather than silently invented.
 
-        # Make the GPS value clickable — links straight to Google Maps at
-        # that location without changing the displayed "lat,lng" text.
-        if "Clock In GPS" in log_hdrs:
-            _gps_col = log_hdrs.index("Clock In GPS") + 1
-            _gps_maps_hyperlink(ws_log.cell(row=new_row_num, column=_gps_col), gps_coords)
+    If filepath is omitted, the default database path configured in
+    the database's fixed, automatically-resolved location is used.
 
+    Args:
+        entry_date: Date to compute mileage for, e.g. "2026-09-22".
+        crew:       Optional — limit to one crew member's entries. If
+                    omitted, every crew member who clocked in/out that day
+                    gets their own mileage total.
+        filepath:   Path to the SQLite job database. Uses the default if
+                    omitted.
+
+    Returns:
+        A per-crew mileage breakdown (each counted leg with its distance),
+        totals, and a note listing any legs skipped for missing GPS data —
+        or a clear message if no time entries exist for that date.
+
+    Voice examples:
+        "How many miles did Carlos drive today?"
+        "What's our total mileage for September 22nd?"
+    """
+    _telemetry_increment_tool_count("get_daily_mileage")
+    return _get_daily_mileage_impl(entry_date=entry_date, crew=crew, filepath=filepath, ctx=ctx)
+
+
+def _get_daily_mileage_impl(entry_date: str, crew: str, filepath: str, ctx) -> str:
+    import requests as _req
+    import datetime as _mdt
+    from db_access import get_connection
+
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return "❌ No database path provided and no default path configured."
+
+    try:
+        target_date = _mdt.datetime.strptime(entry_date.strip(), "%Y-%m-%d").date()
+    except ValueError:
+        return f"❌ entry_date must be YYYY-MM-DD format, got: {entry_date!r}"
+
+    conn = get_connection(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT entry_id, crew, clock_in, clock_out, clock_in_gps, clock_out_gps "
+            "FROM time_entries WHERE entry_date = ? ORDER BY crew, clock_in",
+            (target_date.isoformat(),),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if crew.strip():
+        crew_filter = crew.strip().lower()
+        rows = [r for r in rows if (r["crew"] or "").strip().lower() == crew_filter]
+
+    if not rows:
+        crew_note = f" for {crew!r}" if crew.strip() else ""
+        return f"ℹ️  No TimeLog entries found for {target_date.isoformat()}{crew_note}."
+
+    def _parse_gps(raw):
+        if not raw or "," not in str(raw):
+            return None
         try:
-            wb.save(fp)
-        except Exception as exc:
-            return f"❌ Could not save spreadsheet: {exc}"
+            lat_s, lon_s = str(raw).split(",", 1)
+            return float(lat_s.strip()), float(lon_s.strip())
+        except ValueError:
+            return None
 
-        return (
-            f"⏱️  Clocked IN\n"
-            f"   Entry ID:  {entry_id}\n"
-            f"   Job:       {job_id_found}\n"
-            f"   Customer:  {cust_name}\n"
-            f"   Clock In:  {now_str}\n"
-            f"   Crew:      {crew_display or '(unspecified)'}\n"
-            "   Call log_time_entry(action='stop') when finished."
-        )
+    # Group by crew — the SQL query above already sorts by (crew,
+    # clock_in), so appending in query order keeps each crew's entries
+    # chronological within its own group.
+    by_crew = {}
+    for r in rows:
+        by_crew.setdefault((r["crew"] or "").strip() or "(unassigned)", []).append(r)
 
-    else:  # action == "stop"
-        # Find YOUR open entry for this job. Server mode: only entries this
-        # caller personally opened (Logged By (User ID) match) — you cannot
-        # clock out a coworker's still-open shift, even for the same job.
-        # Personal mode: unchanged, single-user, so any open entry qualifies.
-        open_row_num = None
-        open_entry   = None
-        _stop_someone_elses_entry_exists = False
-        for row in ws_log.iter_rows(min_row=log_hdr_row + 1):
-            rvals = [c.value for c in row]
-            rdict = dict(zip(log_hdrs, rvals))
-            if not (job_id_found.lower() in str(rdict.get("JobID", "")).lower()
-                    and not rdict.get("Clock Out")):
-                continue
-            if not _lte_entry_is_mine(rdict):
-                _stop_someone_elses_entry_exists = True
-                continue
-            open_row_num = row[0].row
-            open_entry   = (rdict, row)
-            break
+    lines = [f"🚗 Mileage for {target_date.isoformat()}", "─" * 50]
+    grand_total_miles = 0.0
+    any_legs_counted = False
 
-        if open_entry is None:
-            if _stop_someone_elses_entry_exists:
-                return (
-                    f"❌ No open clock-in found for '{job_identifier}' under your "
-                    f"name. Someone else on the crew has an open entry for this "
-                    f"job, but you can only clock out your own."
+    for crew_name, entries in by_crew.items():
+        lines.append(f"\n{crew_name}:")
+        crew_total_miles = 0.0
+        skipped = []
+        legs_counted = 0
+        for i in range(len(entries) - 1):
+            prev, nxt = entries[i], entries[i + 1]
+            out_pt = _parse_gps(prev["clock_out_gps"])
+            in_pt = _parse_gps(nxt["clock_in_gps"])
+            if out_pt is None or in_pt is None:
+                missing = "Clock Out GPS" if out_pt is None else "Clock In GPS"
+                skipped.append(
+                    f"  (skipped: {prev['entry_id']} -> {nxt['entry_id']} — missing {missing})"
                 )
-            return (
-                f"❌ No open clock-in found for '{job_identifier}'.\n"
-                "   Call log_time_entry(action='start') first."
-            )
-
-        rdict, row_cells = open_entry
-        clock_in_val = rdict.get("Clock In")
-        if isinstance(clock_in_val, _dt.datetime):
-            clock_in_dt = clock_in_val
-        else:
+                continue
             try:
-                clock_in_dt = _dt.datetime.strptime(str(clock_in_val).strip(), '%Y-%m-%d %H:%M:%S')
-            except Exception:
-                return f"❌ Could not parse Clock In time: {clock_in_val}"
+                coord_str = f"{out_pt[1]},{out_pt[0]};{in_pt[1]},{in_pt[0]}"
+                resp = _req.get(
+                    f"http://router.project-osrm.org/route/v1/driving/{coord_str}",
+                    params={"overview": "false", "annotations": "false"},
+                    timeout=30,
+                ).json()
+                if resp.get("code") != "Ok":
+                    skipped.append(
+                        f"  (skipped: {prev['entry_id']} -> {nxt['entry_id']} — routing error)"
+                    )
+                    continue
+                leg_miles = resp["routes"][0]["distance"] * 0.000621371
+            except Exception as exc:
+                skipped.append(f"  (skipped: {prev['entry_id']} -> {nxt['entry_id']} — {exc})")
+                continue
+            crew_total_miles += leg_miles
+            legs_counted += 1
+            any_legs_counted = True
+            lines.append(
+                f"  {prev['entry_id']} -> {nxt['entry_id']}: {leg_miles:.1f} mi "
+                f"(clock-out {prev['clock_out']} -> clock-in {nxt['clock_in']})"
+            )
+        lines.extend(skipped)
+        lines.append(f"  Subtotal: {crew_total_miles:.1f} mi ({legs_counted} leg(s) counted)")
+        grand_total_miles += crew_total_miles
 
-        elapsed_td   = now_ts - clock_in_dt
-        elapsed_mins = round(elapsed_td.total_seconds() / 60)
-
-        # Write Clock Out and Elapsed
-        for col_idx, col_name in enumerate(log_hdrs, 1):
-            if col_name == "Clock Out":
-                ws_log.cell(row=open_row_num, column=col_idx).value = now_str
-            elif col_name == "Elapsed (min)":
-                ws_log.cell(row=open_row_num, column=col_idx).value = elapsed_mins
-            elif col_name == "Clock Out GPS":
-                _co_cell = ws_log.cell(row=open_row_num, column=col_idx)
-                _co_cell.value = gps_coords.strip()
-                _gps_maps_hyperlink(_co_cell, gps_coords)
-
-        # Also update Actual Duration in Jobs_Schedule
-        if "Jobs_Schedule" in wb.sheetnames:
-            ws_jobs = wb["Jobs_Schedule"]
-            job_hdr_row2, job_hdrs2 = None, []
-            for r in ws_jobs.iter_rows(min_row=1, max_row=5):
-                ne = [c for c in r if c.value is not None]
-                if len(ne) >= 3:
-                    job_hdr_row2 = r[0].row
-                    job_hdrs2 = [str(c.value).strip().replace('\n',' ') if c.value else '' for c in r]
-                    break
-            if job_hdrs2:
-                for row in ws_jobs.iter_rows(min_row=job_hdr_row2 + 1):
-                    vals = [c.value for c in row]
-                    row_text = " ".join(str(v) for v in vals if v)
-                    if job_id_found.lower() in row_text.lower():
-                        for col_idx, col_name in enumerate(job_hdrs2, 1):
-                            # Match "Actual Duration" exactly — NOT "Actual
-                            # Duration Unit", which also contains both
-                            # substrings and would otherwise get overwritten
-                            # with the numeric elapsed_mins value, clobbering
-                            # its correct unit string (e.g. "min").
-                            if ("Actual" in col_name and "Duration" in col_name
-                                    and "Unit" not in col_name):
-                                ws_jobs.cell(row=row[0].row, column=col_idx).value = elapsed_mins
-                            # elapsed_mins is always computed in minutes above
-                            # (elapsed_td.total_seconds() / 60), so whenever we
-                            # write a numeric Actual Duration we also stamp its
-                            # Unit as "min" — but only if that cell is currently
-                            # blank, so a job someone deliberately set to a
-                            # different unit (e.g. "hour") beforehand keeps its
-                            # own label instead of being silently overridden.
-                            elif "Actual" in col_name and "Duration" in col_name and "Unit" in col_name:
-                                _unit_cell = ws_jobs.cell(row=row[0].row, column=col_idx)
-                                if not _unit_cell.value:
-                                    _unit_cell.value = "min"
-                        break
-
-        try:
-            wb.save(fp)
-        except Exception as exc:
-            return f"❌ Could not save spreadsheet: {exc}"
-
-        hours, mins = divmod(elapsed_mins, 60)
-        elapsed_str = (f"{hours}h {mins}m" if hours else f"{mins}m")
-
-        return (
-            f"⏱️  Clocked OUT\n"
-            f"   Job:          {job_id_found}\n"
-            f"   Customer:     {cust_name}\n"
-            f"   Clock In:     {clock_in_dt.strftime('%I:%M %p')}\n"
-            f"   Clock Out:    {now_ts.strftime('%I:%M %p')}\n"
-            f"   Elapsed:      {elapsed_str}  ({elapsed_mins} min)\n"
-            f"   Actual Duration written to Jobs_Schedule ✅\n"
-            f"   {backup_msg}"
+    lines.append("")
+    lines.append(f"TOTAL: {grand_total_miles:.1f} mi across {len(by_crew)} crew member(s)")
+    if not any_legs_counted:
+        lines.append(
+            "\nℹ️  No legs could be computed — every consecutive clock-out/"
+            "clock-in pair that day was missing a GPS point on at least "
+            "one side. Mileage tracking needs GPS to be captured at both "
+            "clock-in and clock-out (the Jobs PWA does this automatically "
+            "when location permission is granted)."
         )
+    lines.append(
+        "\nℹ️  This is driving BETWEEN jobs only (clock-out at one job to "
+        "clock-in at the next) — it doesn't include any driving before "
+        "the day's first clock-in or after the last clock-out, since "
+        "there's no recorded GPS point marking those."
+    )
+    return "\n".join(lines)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -10344,7 +10845,7 @@ def get_ar_aging_report(
     "What invoices are overdue?" and get a clean summary in seconds.
 
     Args:
-        filepath:   Path to the .xlsx tracker. Uses default if omitted.
+        filepath:   Path to the SQLite job database. Uses default if omitted.
         as_of_date: Date to calculate aging from. Default "today".
                     Accepts: "today", "2026-04-15", "04/15/2026".
 
@@ -10356,175 +10857,2519 @@ def get_ar_aging_report(
         "What's my AR aging report?"
         "Which customers owe me money?"
         "How much is outstanding past 30 days?"
+
+    Job Board Architecture Spec Phase 2 (spec §5, §11): internals now use
+    the SQLite-backed db_read_ops.db_get_ar_aging_report instead of an
+    openpyxl Invoices-sheet scan. Same bucket definitions, same PAID/
+    zero-balance skip rule, same report layout — not crew-scoped, exactly
+    as before (an AR aging report is an admin-level financial view).
     """
     _telemetry_increment_tool_count("get_ar_aging_report")
 
-    try:
-        import openpyxl as _opx
-    except ImportError:
-        return "❌ openpyxl not installed. Run: pip install openpyxl"
+    # R-068: owner and managers only (it had no role check at all before —
+    # any signed-in server user, field crew included, could read every
+    # customer's balance through Claude).
+    _denied = _owner_or_manager_denied(ctx)
+    if _denied:
+        return _denied
 
-    import datetime as _dt
+    from db_read_ops import db_get_ar_aging_report
 
-    filepath = _resolve_job_spreadsheet_path(ctx, filepath)
-    if not filepath:
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
         return "❌ No spreadsheet path configured."
 
-    fp = filepath.replace("\\", "/")
-    if not os.path.exists(fp):
-        return f"❌ Spreadsheet not found: {fp}"
+    return db_get_ar_aging_report(db_path, as_of_date=as_of_date)
 
-    try:
-        wb = _opx.load_workbook(fp, data_only=True)
-    except Exception as exc:
-        return f"❌ Could not open spreadsheet: {exc}"
 
-    if "Invoices" not in wb.sheetnames:
-        return "❌ 'Invoices' sheet not found in spreadsheet."
+# ══════════════════════════════════════════════════════════════════════════════
+# ACTION TOOL 5d — export_to_excel
+# ══════════════════════════════════════════════════════════════════════════════
 
-    ws = wb["Invoices"]
+@mcp.tool()
+def export_to_excel(
+    filepath:    str = "",
+    output_path: str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Export the current DB-backed job tracker into a fresh .xlsx file —
+    Job Board Architecture Spec Phase 6 (spec §7, §11).
 
-    # Detect header row
-    hdr_row, headers = None, []
-    for r in ws.iter_rows(min_row=1, max_row=5):
-        ne = [c for c in r if c.value is not None]
-        if len(ne) >= 3:
-            hdr_row = r[0].row
-            headers = [_join_header_lines(c.value) for c in r]
-            break
+    One-way, generated on demand: builds a brand-new spreadsheet with one
+    sheet per table (Jobs_Schedule, Customers, Invoices, Quotes, TimeLog,
+    Route_Planner, Settings, Services_Pricing) from the live database.
+    NEVER a write target — nothing reads changes back out of this file,
+    ever. If you edit and save the export, those edits are simply gone
+    the moment a fresh export is generated; this is a snapshot for
+    viewing, printing, or QuickBooks-style import, not a live file.
 
-    if not headers:
-        return "❌ Could not detect header row in Invoices sheet."
+    Args:
+        filepath:    Path to the SQLite job database. Uses default if
+                     omitted. In server mode this argument is ignored —
+                     see _resolve_job_db_path().
+        output_path: Where to save the exported .xlsx. Defaults to
+                     "AI-Prowler_Job_Tracker_Export_<timestamp>.xlsx"
+                     next to the database if omitted.
 
-    # Parse as_of_date
-    aod_str = as_of_date.strip().lower()
-    if aod_str == 'today' or not aod_str:
-        as_of = _dt.date.today()
-    else:
-        for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y'):
-            try:
-                as_of = _dt.datetime.strptime(aod_str, fmt).date()
-                break
-            except ValueError:
-                continue
-        else:
-            return f"❌ Could not parse as_of_date '{as_of_date}'."
+    Returns:
+        Confirmation with per-sheet row counts, or a clear error.
 
-    # ── Bucket definitions ────────────────────────────────────────────────────
-    buckets = {
-        "current":  {"label": "Current (not yet due)", "rows": [], "total": 0.0},
-        "1_30":     {"label": "1 – 30 days overdue",   "rows": [], "total": 0.0},
-        "31_60":    {"label": "31 – 60 days overdue",  "rows": [], "total": 0.0},
-        "61_90":    {"label": "61 – 90 days overdue",  "rows": [], "total": 0.0},
-        "over_90":  {"label": "90+ days overdue",      "rows": [], "total": 0.0},
+    Voice examples:
+        "Export the job tracker to Excel"
+        "Give me a fresh export for QuickBooks"
+        "Generate this week's spreadsheet snapshot"
+    """
+    _denied = _field_crew_data_admin_denied(ctx, "Export to Excel")   # R-050
+    if _denied:
+        return _denied
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return "❌ No spreadsheet path configured."
+
+    if not output_path.strip():
+        import datetime as _exp_dt
+        stamp = _exp_dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        folder = os.path.dirname(db_path) or "."
+        output_path = os.path.join(folder, f"AI-Prowler_Job_Tracker_Export_{stamp}.xlsx")
+
+    from db_export_ops import db_export_to_excel
+    return db_export_to_excel(db_path, output_path)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOL — export_to_csv
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def export_to_csv(
+    filepath:   str = "",
+    output_dir: str = "",
+    tables:     "list | None" = None,
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Export the current DB-backed job tracker to one CSV file per table —
+    Job Board Architecture Spec Phase 8 (spec §12.5).
+
+    General-purpose, one-way, generated on demand — like export_to_excel(),
+    NEVER a write target. Use this when a plain CSV is what's actually
+    needed: handing data to an accountant/tax preparer, or as a starting
+    point for a QuickBooks import. CSV is the lowest-common-denominator
+    format nearly every accounting tool and spreadsheet program accepts
+    directly, more reliably than a multi-sheet .xlsx for that purpose.
+
+    NOT a QuickBooks-native template match — QuickBooks Online's own
+    importer expects specific column names per record type that don't
+    match AI-Prowler's own header text 1:1. This produces AI-Prowler's
+    own labeled columns; a dedicated QBO-template export is a planned
+    later phase (spec §12.5, Phase 8b), not this tool.
+
+    Args:
+        filepath:   Path to the SQLite job database. Uses default if
+                    omitted. In server mode this argument is ignored.
+        output_dir: Folder to write the CSV files into. Defaults to
+                    "AI-Prowler_CSV_Export_<timestamp>/" next to the
+                    database if omitted.
+        tables:     Optional list to scope the export to just what's
+                    needed — e.g. ["Invoices", "Customers"] for a
+                    QuickBooks pass — rather than always writing all 8
+                    files. Accepts either the display sheet names
+                    (Jobs_Schedule, Customers, Invoices, Quotes, TimeLog,
+                    Route_Planner, Settings, Services_Pricing) or the
+                    underlying table names (jobs, customers, ...).
+                    Omit for "export everything."
+
+    Returns:
+        Confirmation listing each file written and its row count, or a
+        clear error (bad table name, can't create output_dir, etc.).
+
+    Voice examples:
+        "Export my invoices and customers to CSV for QuickBooks"
+        "Export everything to CSV for my accountant"
+        "Give me a CSV of my customer list"
+    """
+    _denied = _field_crew_data_admin_denied(ctx, "Export to CSV")   # R-050
+    if _denied:
+        return _denied
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return "❌ No spreadsheet path configured."
+
+    if not output_dir.strip():
+        import datetime as _csv_dt
+        stamp = _csv_dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        folder = os.path.dirname(db_path) or "."
+        output_dir = os.path.join(folder, f"AI-Prowler_CSV_Export_{stamp}")
+
+    # Accept either display sheet names or raw table names — a caller
+    # thinking in terms of "Invoices" (what they see in the app) shouldn't
+    # need to know the underlying table is called "invoices".
+    _sheet_to_table = {
+        "Jobs_Schedule": "jobs", "Customers": "customers", "Invoices": "invoices",
+        "Quotes": "quotes", "TimeLog": "time_entries", "Route_Planner": "route_stops",
+        "Settings": "settings", "Services_Pricing": "service_pricing",
     }
+    resolved_tables = None
+    if tables:
+        resolved_tables = [_sheet_to_table.get(t, t) for t in tables]
 
-    def _parse_date(v):
-        if isinstance(v, _dt.datetime):
-            return v.date()
-        if isinstance(v, _dt.date):
-            return v
-        if v:
-            for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y'):
-                try:
-                    return _dt.datetime.strptime(str(v).strip(), fmt).date()
-                except ValueError:
-                    continue
-        return None
+    from db_backup_ops import db_export_to_csv as _db_export_to_csv
+    return _db_export_to_csv(db_path, output_dir, resolved_tables)
 
-    total_outstanding = 0.0
-    rows_processed    = 0
 
-    for row in ws.iter_rows(min_row=hdr_row + 1):
-        vals   = [c.value for c in row]
-        if all(v is None or str(v).strip() == '' for v in vals):
-            continue
-        rdict  = dict(zip(headers, vals))
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOL — export_to_quickbooks_csv
+# ══════════════════════════════════════════════════════════════════════════════
 
-        pmt_status = str(rdict.get("Payment Status", "") or "").strip().upper()
-        if pmt_status in ("PAID",):
-            continue  # fully paid — skip
+@mcp.tool()
+def export_to_quickbooks_csv(
+    filepath:   str = "",
+    output_dir: str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Export Customers and Invoices as CSV files labeled with QuickBooks
+    Online's own field names (Job Board Architecture Spec Phase 8b).
 
-        balance_raw = rdict.get("Balance Due ($)")
-        try:
-            balance = float(balance_raw) if balance_raw is not None else 0.0
-        except (TypeError, ValueError):
-            balance = 0.0
+    IMPORTANT — verified against QuickBooks Online's current import
+    documentation: QBO's own Settings -> Import Data tool ALWAYS shows an
+    interactive "map your fields" screen after upload, no matter what the
+    CSV's column headers say. No export format can skip that screen
+    entirely — it's built into QBO's own import wizard, not a limitation
+    of this tool. What this DOES do: every column here already reads as
+    QuickBooks' own terminology (Display Name, Billing Address Line 1,
+    Invoice No, etc.) instead of AI-Prowler's own header text, so the
+    one-time mapping step in QBO is fast and unambiguous rather than a
+    guessing exercise. Use export_to_csv() instead if you want AI-
+    Prowler's own column names (e.g. for an accountant, who doesn't need
+    QBO's specific terminology at all).
 
-        if balance <= 0:
-            continue  # zero balance — skip
+    Args:
+        filepath:   Path to the SQLite job database. Uses default if
+                    omitted. In server mode this argument is ignored.
+        output_dir: Folder to write the CSV files into. Defaults to
+                    "AI-Prowler_QuickBooks_Export_<timestamp>/" next to
+                    the database if omitted.
 
-        due_date = _parse_date(rdict.get("Due Date (Net 30)"))
-        inv_id   = str(rdict.get("InvoiceID (INV-####)", "") or "—")
-        customer = str(rdict.get("Customer Name / Company", "") or "—")
-        inv_date = _parse_date(rdict.get("Invoice Date"))
+    Returns:
+        Confirmation listing each file written, its row count, and the
+        exact QBO menu path to import it, or a clear error.
 
-        if due_date is None:
-            bucket_key = "current"
-        else:
-            days_over = (as_of - due_date).days
-            if days_over <= 0:
-                bucket_key = "current"
-            elif days_over <= 30:
-                bucket_key = "1_30"
-            elif days_over <= 60:
-                bucket_key = "31_60"
-            elif days_over <= 90:
-                bucket_key = "61_90"
-            else:
-                bucket_key = "over_90"
+    Voice examples:
+        "Export my customers and invoices for QuickBooks"
+        "Get my data ready to import into QuickBooks Online"
+    """
+    _denied = _field_crew_data_admin_denied(ctx, "Export for QuickBooks")   # R-050
+    if _denied:
+        return _denied
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return "❌ No spreadsheet path configured."
 
-        due_str  = due_date.strftime('%m/%d/%Y') if due_date else "—"
-        days_str = (f"{(as_of - due_date).days}d overdue" if due_date and (as_of - due_date).days > 0
-                    else ("due " + due_date.strftime('%m/%d') if due_date else "no due date"))
-        row_line = f"  {inv_id:<12}  {customer:<28}  ${balance:>9,.2f}   {days_str}"
+    if not output_dir.strip():
+        import datetime as _qb_dt
+        stamp = _qb_dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        folder = os.path.dirname(db_path) or "."
+        output_dir = os.path.join(folder, f"AI-Prowler_QuickBooks_Export_{stamp}")
 
-        buckets[bucket_key]["rows"].append(row_line)
-        buckets[bucket_key]["total"] += balance
-        total_outstanding += balance
-        rows_processed += 1
+    from db_backup_ops import db_export_quickbooks_csv
+    return db_export_quickbooks_csv(db_path, output_dir)
 
-    if rows_processed == 0:
-        return (
-            f"✅ No outstanding invoices as of {as_of.strftime('%m/%d/%Y')}.\n"
-            "   All invoices are paid or have zero balance."
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOL — backup_job_database
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def backup_job_database(
+    filepath:         str = "",
+    destination_path: str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Make a full, lossless backup of the live JOB TRACKER database
+    (ai_prowler_jobs.db) — Job Board Architecture Spec Phase 8 (spec §12.3).
+    Renamed from backup_database() so the name can't be mistaken for backing
+    up the ChromaDB knowledge-base index, which this tool has nothing to do
+    with and which has no backup/restore tool of its own.
+
+    Uses SQLite's own online Backup API, not a raw file copy — safe to
+    run even while the database is being actively written to elsewhere.
+    Unlike export_to_excel()/export_to_csv() (human-readable, lossy-by-
+    design, one-way views), this produces a byte-faithful copy of the
+    actual database — the right artifact for safekeeping or moving to a
+    new computer. See restore_job_database() for the other half of that
+    workflow.
+
+    Args:
+        filepath:         Path to the SQLite job database. Uses default
+                          if omitted. In server mode this argument is
+                          ignored.
+        destination_path: Full file path for the backup. Defaults to
+                          "<database folder>/backup/AI-Prowler-Backup-
+                          <timestamp>.db" if omitted.
+
+    Returns:
+        Confirmation with the destination path, file size, and a per-
+        table row-count summary, or a clear error.
+
+    Voice examples:
+        "Back up my job database"
+        "Make a backup of the job tracker before I update my PC"
+        "Save a backup of my jobs data to my external drive"
+    """
+    _denied = _field_crew_data_admin_denied(ctx, "Backing up the job database")   # R-050
+    if _denied:
+        return _denied
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return "❌ No spreadsheet path configured."
+
+    from db_backup_ops import db_backup_database as _db_backup_database
+    return _db_backup_database(db_path, destination_path)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOL — restore_job_database
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def restore_job_database(
+    backup_path: str,
+    filepath:    str = "",
+    confirm:     bool = False,
+    replace_existing: bool = False,
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Replace the live JOB TRACKER database (ai_prowler_jobs.db) with a
+    previously-made backup — Job Board Architecture Spec Phase 8 (spec
+    §12.4). This is how you move AI-Prowler's job/customer/invoice data to
+    a new computer: back up on the old machine (backup_job_database()),
+    copy that one file over, then restore here. Renamed from
+    restore_database() so the name can't be mistaken for restoring the
+    ChromaDB knowledge-base index — this tool has nothing to do with that.
+
+    THE one genuinely destructive-to-current-state tool in AI-Prowler —
+    every other write tool edits or appends a row; this wholesale-
+    replaces the live database. That's why it requires confirm=True and
+    won't act on a first, unconfirmed call.
+
+    Safety sequence:
+      1. Refuses outright unless confirm=True — nothing changes.
+      2. Validates backup_path actually looks like an AI-Prowler
+         database before touching anything live.
+      3. Takes a safety backup of whatever is CURRENTLY live, before
+         overwriting it — so a bad restore is itself always recoverable.
+      4. Only then performs the actual restore, again via SQLite's
+         online Backup API rather than a raw file copy.
+
+    Args:
+        backup_path: Path to the backup .db file to restore from.
+        filepath:    Path to the SQLite job database to REPLACE. Uses
+                    default if omitted. In server mode this argument is
+                    ignored.
+        confirm:     Must be True to actually proceed. Defaults to False
+                    so an accidental call never destroys anything —
+                    call once to see the warning, then again with
+                    confirm=True once the person has confirmed they
+                    want to proceed.
+        replace_existing: R-050, server mode only. Restore is meant for
+                    moving to a new PC. If the live database already has
+                    jobs/customers/invoices/etc., a restore is refused
+                    unless this is ALSO True. Only set it after the person
+                    has been shown the live-vs-backup counts and has said
+                    in plain words that they want the current data wiped.
+
+    Who can use it (R-050, server mode): owner, managers and staff. Field
+    crew are refused.
+
+    Returns:
+        Confirmation with the safety-backup path and the newly-restored
+        database's per-table row counts, or a clear error at whichever
+        step failed (nothing after a failed step runs).
+
+    Voice examples:
+        "Restore my job database from this backup file"
+        "I just moved to a new PC, restore my jobs data from C:/backup.db"
+    """
+    _denied = _field_crew_data_admin_denied(ctx, "Restoring the job database")   # R-050
+    if _denied:
+        return _denied
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        # A brand-new install with nothing configured yet still needs a
+        # target path to restore INTO — fall back to the default
+        # personal-mode location rather than failing outright, since
+        # "restore my data onto this fresh install" is exactly the
+        # migration scenario this tool exists for.
+        db_path = os.path.join(
+            os.path.dirname(_get_default_spreadsheet_path() or "") or
+            os.path.expanduser("~/Documents/AI-Prowler"),
+            "ai_prowler_jobs.db",
         )
 
-    # ── Build report ──────────────────────────────────────────────────────────
-    lines = [
-        f"💰 AR AGING REPORT",
-        f"   As of: {as_of.strftime('%m/%d/%Y')}",
-        f"   File:  {os.path.basename(fp)}",
-        "═" * 60,
-        "",
-    ]
+    from db_backup_ops import db_restore_database as _db_restore_database
+    # R-050: in server mode a non-empty live database needs replace_existing=True.
+    return _db_restore_database(db_path, backup_path, confirm=confirm,
+                                require_replace=bool(_IS_SERVER_MODE),
+                                replace_existing=bool(replace_existing))
 
-    _BUCKET_ORDER = ["over_90", "61_90", "31_60", "1_30", "current"]
-    for bkey in _BUCKET_ORDER:
-        b = buckets[bkey]
-        if not b["rows"]:
-            continue
-        lines.append(f"  {'⚠️' if bkey != 'current' else '📋'}  {b['label']}")
-        lines.append(f"  {'─' * 56}")
-        lines.append(f"  {'Invoice':<12}  {'Customer':<28}  {'Balance':>11}   Days")
-        for r in b["rows"]:
-            lines.append(r)
-        lines.append(f"  {'─' * 56}")
-        lines.append(f"  {'Subtotal':<42}  ${b['total']:>9,.2f}")
-        lines.append("")
 
-    lines += [
-        "═" * 60,
-        f"  TOTAL OUTSTANDING:              ${total_outstanding:>12,.2f}",
-        "═" * 60,
-    ]
+# ══════════════════════════════════════════════════════════════════════════════
+# TOOL — delete_customer
+# ══════════════════════════════════════════════════════════════════════════════
 
-    if buckets["over_90"]["total"] > 0 or buckets["61_90"]["total"] > 0:
-        lines.append("")
-        lines.append("  🚨 Action recommended: send payment reminders for 60+ day items.")
-        lines.append("     Ask: \"Send payment reminders for all overdue invoices\"")
+@mcp.tool()
+def delete_customer(
+    customer_identifier: str,
+    filepath: str = "",
+    confirm: bool = False,
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Permanently delete a customer and every row that references them
+    (Jobs, Invoices, Quotes, TimeLog entries, route stops) — the one
+    exception to AI-Prowler's own "never delete, only retire" rule (see
+    update_job_spreadsheet's docstring: "there is no delete_customer,
+    delete_job, delete_invoice, etc."). Added at the owner's explicit
+    request (2026-09-15) so test and mistaken customer records — which
+    accumulate real linked Jobs and Invoices during normal use and
+    testing — can actually be cleaned up, instead of piling up forever
+    with no way out.
 
+    Two safety gates, both required:
+      1. The customer must ALREADY be Status = Inactive. There is no way
+         to delete an Active customer with this tool — mark them
+         Inactive first (update_job_spreadsheet, sheet_name="Customers"),
+         then delete. This forces a deliberate two-step action rather
+         than a single call that could vaporize a live customer
+         relationship by mistake.
+      2. confirm must be True. A first call without it returns a preview
+         of exactly what would be removed (row counts per table) and
+         changes nothing — same pattern as restore_job_database.
+
+    A safety backup of the whole database is taken automatically before
+    anything is deleted (the same backup_job_database() mechanism
+    restore_job_database uses), so this is always recoverable from that
+    file, even though the live data itself is gone for good once this
+    runs.
+
+    Server mode: staff/manager/owner only — field_crew cannot delete
+    customer records (same posture as Settings/Services_Pricing: this is
+    company-wide-impacting, not per-job data). Unrestricted in personal
+    mode.
+
+    Args:
+        customer_identifier: CustomerID (e.g. "CUST-0001") or customer
+                              name (partial match accepted). Must match
+                              exactly one customer — an ambiguous or
+                              empty match is rejected with nothing
+                              deleted.
+        filepath: Path to the SQLite job database. Uses the default from
+                  Settings if omitted. In server mode this argument is
+                  ignored.
+        confirm:  Must be True to actually delete. Defaults to False so
+                  an accidental call only shows a preview.
+        ctx:      MCP context (injected automatically).
+
+    Returns:
+        A preview of what would be deleted (confirm=False), a
+        confirmation of what was deleted plus the safety-backup path
+        (confirm=True and it succeeded), or a clear error: customer not
+        found, ambiguous match, customer still Active, or insufficient
+        role.
+
+    Voice examples:
+        "Delete the ZTEST Customer Alpha record — they're inactive test data"
+        "Permanently remove CUST-0042, it was a test entry"
+    """
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return (
+            "❌ No database path provided and no default path configured.\n"
+            "Pass the full filepath argument explicitly, or check that AI-Prowler has write access to its own state folder."
+        )
+
+    restrict, _crew_name = _job_crew_scope(ctx, db_path)
+    if restrict:
+        return "❌ Deleting a customer requires staff/manager/owner access. Field crew cannot delete customer records."
+
+    from db_write_ops import db_delete_customer as _db_delete_customer
+    return _db_delete_customer(db_path, customer_identifier, confirm=confirm)
+
+
+@mcp.tool()
+def delete_service_pricing(
+    service_code: str,
+    filepath: str = "",
+    confirm: bool = False,
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Permanently delete a Services_Pricing entry. Unlike delete_customer,
+    this needs no Inactive-first gate and no cascade — nothing in
+    AI-Prowler's schema references a pricing entry by foreign key; Jobs
+    and Invoices always store their own copied Service Type and amount at
+    creation time, never a live link back to the price list. Deleting a
+    stale price here has zero effect on any job or invoice that already
+    used it. Added 2026-09-15 alongside delete_customer, for the same
+    reason: a genuine way to remove a pricing mistake instead of it
+    accumulating forever with no way out.
+
+    Still requires confirm=True — a first call without it returns a
+    preview and changes nothing, same pattern as delete_customer /
+    restore_job_database.
+
+    Server mode: staff/manager/owner only — field_crew cannot delete
+    pricing entries (same posture as Settings/Services_Pricing writes in
+    general).
+
+    Args:
+        service_code: The Service Code to delete (e.g. "WIN", "PRESS-DRIVE").
+        filepath: Path to the SQLite job database. Uses the default from
+                  Settings if omitted. In server mode this argument is
+                  ignored.
+        confirm:  Must be True to actually delete. Defaults to False so an
+                  accidental call only shows a preview.
+        ctx:      MCP context (injected automatically).
+
+    Returns:
+        A preview of what would be deleted (confirm=False), a confirmation
+        plus the safety-backup path (confirm=True and it succeeded), or a
+        clear error: not found or insufficient role.
+
+    Voice examples:
+        "Delete the WIN-EXTRA pricing entry, I don't offer that anymore"
+        "Remove the pressure-wash-driveway price, it was a typo"
+    """
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return (
+            "❌ No database path provided and no default path configured.\n"
+            "Pass the full filepath argument explicitly, or check that AI-Prowler has write access to its own state folder."
+        )
+
+    restrict, _crew_name = _job_crew_scope(ctx, db_path)
+    if restrict:
+        return "❌ Deleting a pricing entry requires staff/manager/owner access. Field crew cannot delete pricing entries."
+
+    from db_write_ops import db_delete_service_pricing as _db_delete_service_pricing
+    return _db_delete_service_pricing(db_path, service_code, confirm=confirm)
+
+
+@mcp.tool()
+def delete_quote(
+    quote_identifier: str,
+    filepath: str = "",
+    confirm: bool = False,
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Permanently delete a Quote — any status, not just Declined (spec change
+    2026-09-23, at the owner's request, replacing the original Declined-
+    first gate). No cascade needed: nothing in AI-Prowler's schema
+    references a quote by foreign key, so this is a plain single-row
+    delete once confirmed, same pattern as delete_service_pricing. A
+    genuine way to keep the Quotes sheet cleaned up regardless of a
+    quote's status, instead of it accumulating forever with no way out.
+
+    Still requires confirm=True — a first call without it returns a
+    preview and changes nothing, same pattern as delete_customer /
+    delete_service_pricing / restore_job_database.
+
+    Server mode: staff/manager/owner only — field_crew cannot delete
+    quotes (same posture as delete_customer/delete_service_pricing: this
+    is a permanent removal, not ordinary per-job data entry).
+
+    Args:
+        quote_identifier: QuoteID (e.g. "QTE-0001") or customer name
+                           (partial match accepted). Must match exactly
+                           one quote — an ambiguous or empty match is
+                           rejected with nothing deleted.
+        filepath: Path to the SQLite job database. Uses the default from
+                  Settings if omitted. In server mode this argument is
+                  ignored.
+        confirm:  Must be True to actually delete. Defaults to False so
+                  an accidental call only shows a preview.
+        ctx:      MCP context (injected automatically).
+
+    Returns:
+        A preview of what would be deleted (confirm=False), a
+        confirmation plus the safety-backup path (confirm=True and it
+        succeeded), or a clear error: not found, ambiguous match, or
+        insufficient role.
+
+    Voice examples:
+        "Delete the quote for Blue Wave Cafe"
+        "Remove QTE-0042, I don't need it anymore"
+    """
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return (
+            "❌ No database path provided and no default path configured.\n"
+            "Pass the full filepath argument explicitly, or check that AI-Prowler has write access to its own state folder."
+        )
+
+    restrict, _crew_name = _job_crew_scope(ctx, db_path)
+    if restrict:
+        return "❌ Deleting a quote requires staff/manager/owner access. Field crew cannot delete quotes."
+
+    from db_write_ops import db_delete_quote as _db_delete_quote
+    return _db_delete_quote(db_path, quote_identifier, confirm=confirm)
+
+
+@mcp.tool()
+def delete_job(
+    job_identifier: str,
+    filepath: str = "",
+    confirm: bool = False,
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Permanently delete a Job. Requires Job Status == 'Cancelled' — same
+    deliberate two-step gate as delete_customer/delete_quote, so a
+    Scheduled or In Progress job can never be deleted in one call. A
+    'Completed' job can NEVER be deleted through this tool at all, under
+    any confirm value — it's linked to income and accounting (its
+    invoice, payment history, TimeLog hours) and must stay in the
+    database permanently. To get a completed job out of the way without
+    losing its history, use the Sheet tab's "Hide completed jobs" toggle
+    instead — that's a display filter, not a deletion.
+
+    Cascade: a cancelled job may still have TimeLog entries (clocked in
+    before cancellation) and a route_stops row (it may have been on a
+    built route) — both are deleted along with any linked invoice, same
+    pattern as delete_customer one level down.
+
+    Still requires confirm=True — a first call without it returns a
+    preview and changes nothing, same pattern as every other delete_*
+    tool in this codebase.
+
+    Server mode: staff/manager/owner only — field_crew cannot delete
+    jobs (same posture as delete_customer/delete_quote: this is a
+    permanent removal, not ordinary per-job data entry).
+
+    Args:
+        job_identifier: JobID (e.g. "JOB-0018") or customer name (partial
+                         match accepted). Must match exactly one job — an
+                         ambiguous or empty match is rejected with
+                         nothing deleted.
+        filepath: Path to the SQLite job database. Uses the default from
+                  Settings if omitted. In server mode this argument is
+                  ignored.
+        confirm:  Must be True to actually delete. Defaults to False so
+                  an accidental call only shows a preview.
+        ctx:      MCP context (injected automatically).
+
+    Returns:
+        A preview of what would be deleted (confirm=False), a
+        confirmation plus the safety-backup path (confirm=True and it
+        succeeded), or a clear error: not found, ambiguous match, still
+        Scheduled/In Progress, Completed (permanently refused), or
+        insufficient role.
+
+    Voice examples:
+        "Delete JOB-0018, it's cancelled"
+        "Remove the cancelled job for Blue Wave Cafe"
+    """
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return (
+            "❌ No database path provided and no default path configured.\n"
+            "Pass the full filepath argument explicitly, or check that AI-Prowler has write access to its own state folder."
+        )
+
+    restrict, _crew_name = _job_crew_scope(ctx, db_path)
+    if restrict:
+        return "❌ Deleting a job requires staff/manager/owner access. Field crew cannot delete jobs."
+
+    from db_write_ops import db_delete_job as _db_delete_job
+    return _db_delete_job(db_path, job_identifier, confirm=confirm)
+
+
+@mcp.tool()
+def delete_route(
+    route_date: str,
+    crew: str = "",
+    filepath: str = "",
+    confirm: bool = False,
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Permanently delete an ENTIRE day's route — every stop for route_date,
+    not just one — in a single action. Added 2026-09-23 at the owner's
+    request: deleting a route one stop at a time never made sense, since
+    the stops are one coherent plan, not independent rows — this is the
+    whole-route sibling of delete_route_stop, which still exists for the
+    rare case of removing a single stray stop without touching the rest
+    of the day.
+
+    Same no-cascade posture as delete_route_stop (nothing in the schema
+    references route_stops by foreign key, so deleting a route has zero
+    effect on the jobs/customers it pointed at). Still requires
+    confirm=True — a first call without it returns a preview (every
+    crew involved and the total stop count) and changes nothing, and an
+    automatic safety backup is taken before anything is removed.
+
+    Server mode: crew-scoped like delete_route_stop — a field_crew
+    member may delete a day's route only if every stop on it is their
+    own; passing `crew` scopes the delete to just that crew's stops,
+    leaving any other crew's stops on that same date untouched.
+    owner/manager/staff unrestricted.
+
+    Args:
+        route_date: YYYY-MM-DD — the day whose entire route to delete.
+        crew:       Optional — delete only this crew's stops for the day,
+                    leaving other crews' stops on the same date alone.
+                    Left blank, every stop for the date is deleted
+                    (every crew, in personal mode there is only one).
+        filepath:   Path to the SQLite job database. Uses the default
+                    from Settings if omitted. In server mode this
+                    argument is ignored.
+        confirm:    Must be True to actually delete. Defaults to False
+                    so an accidental call only shows a preview.
+        ctx:        MCP context (injected automatically).
+
+    Returns:
+        A preview of what would be deleted (confirm=False), a
+        confirmation with the stop count and safety-backup path
+        (confirm=True and it succeeded), or a clear error: no route
+        found for that date, or insufficient scope.
+
+    Voice examples:
+        "Delete the whole route for tomorrow"
+        "Remove Jake's entire route for September 22nd"
+    """
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return (
+            "❌ No database path provided and no default path configured.\n"
+            "Pass the full filepath argument explicitly, or check that "
+            "AI-Prowler has write access to its own state folder."
+        )
+
+    restrict, crew_name = _job_crew_scope(ctx, db_path)
+
+    from db_write_ops import db_delete_route as _db_delete_route
+    return _db_delete_route(db_path, route_date, crew=crew, confirm=confirm,
+                             restrict=restrict, crew_name=crew_name)
+
+
+@mcp.tool()
+def delete_route_stop(
+    stop_id: str,
+    filepath: str = "",
+    confirm: bool = False,
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Permanently delete a Route_Planner stop. Unlike delete_customer/
+    delete_quote/delete_service_pricing, no status pre-condition gate —
+    a route stop has no "retire first" concept, and once a job is done
+    the stop genuinely has no further use. No cascade needed either:
+    nothing in AI-Prowler's schema references a route stop by foreign
+    key. Added 2026-09-16 at the owner's request, for exactly that
+    day-to-day cleanup — old stops piling up in the Route_Planner sheet
+    with nothing to do with them.
+
+    Still requires confirm=True — a first call without it returns a
+    preview and changes nothing, same pattern as every other delete_*
+    tool.
+
+    Server mode: crew-scoped, NOT staff+-only like the other delete_*
+    tools — a field_crew member may delete a stop only on their own
+    route (same crew_id ownership rule update_job_spreadsheet already
+    uses for editing Route_Planner rows). Restricting delete to staff+
+    here would be a tighter gate than editing the same row already has,
+    which route stops don't warrant the way customer/quote/pricing data
+    does. owner/manager/staff unrestricted.
+
+    Args:
+        stop_id:  The route stop's own integer ID (the "ID" column —
+                  e.g. from read_job_spreadsheet(sheet_name="Route_Planner")
+                  or the Database tab's Route sheet).
+        filepath: Path to the SQLite job database. Uses the default from
+                  Settings if omitted. In server mode this argument is
+                  ignored.
+        confirm:  Must be True to actually delete. Defaults to False so
+                  an accidental call only shows a preview.
+        ctx:      MCP context (injected automatically).
+
+    Returns:
+        A preview of what would be deleted (confirm=False), a
+        confirmation plus the safety-backup path (confirm=True and it
+        succeeded), or a clear error: not found or insufficient scope.
+
+    Voice examples:
+        "Delete route stop 14, that job's done"
+        "Clean up today's route stops for Jake, they're finished"
+    """
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return (
+            "❌ No database path provided and no default path configured.\n"
+            "Pass the full filepath argument explicitly, or check that "
+            "AI-Prowler has write access to its own state folder."
+        )
+
+    restrict, crew_name = _job_crew_scope(ctx, db_path)
+
+    # Note this stop's day/crew BEFORE deleting it (2026-09-25): removing a stop
+    # changes the day, so re-plan what's left and refresh the phone link — the
+    # same thing ▲▼ / drag already do. Before this, the times after the removed
+    # stop and the saved link (which still included it) went stale.
+    _rd, _rc, _rc_raw = "", "", ""
+    if confirm:
+        try:
+            from db_access import get_connection as _get_conn
+            _c = _get_conn(db_path)
+            try:
+                _row = _c.execute("SELECT route_date, crew_id FROM route_stops WHERE id = ?",
+                                  (str(stop_id or "").strip(),)).fetchone()
+            finally:
+                _c.close()
+            if _row:
+                _rd = _row["route_date"] or ""
+                _rc_raw = _row["crew_id"] or ""            # exactly as stored, for the count below
+                _rc = "" if _rc_raw == "(unassigned)" else _rc_raw
+        except Exception:
+            pass
+
+    from db_write_ops import db_delete_route_stop as _db_delete_route_stop
+    result = _db_delete_route_stop(db_path, stop_id, confirm=confirm, restrict=restrict, crew_name=crew_name)
+    if confirm and _rd and isinstance(result, str) and result.lstrip().startswith("✅"):
+        # Was that the last job on this route? Then there's nothing to re-plan
+        # (and its Start/End rows were already removed with it) — say so plainly
+        # instead of "re-planned; phone link updated" (R-014, 2026-09-25).
+        _left = 1
+        try:
+            from db_access import get_connection as _get_conn2
+            _c2 = _get_conn2(db_path)
+            try:
+                _left = _c2.execute(
+                    "SELECT COUNT(*) AS n FROM route_stops WHERE route_date = ? "
+                    "AND COALESCE(crew_id, '') = COALESCE(?, '') AND COALESCE(job_id, '') <> ''",
+                    (_rd, _rc_raw),
+                ).fetchone()["n"]
+            finally:
+                _c2.close()
+        except Exception:
+            _left = 1
+        if not _left:
+            return result + f"\nℹ️ That was the last job on this route — the route for {_rd} is now empty."
+        try:
+            rp = replan_route_day(_rd, crew=_rc, filepath=filepath, ctx=ctx)
+            if isinstance(rp, str) and rp.lstrip().startswith("✅"):
+                extra = [l for l in rp.splitlines() if l.strip().startswith(("⚠️", "ℹ️"))]
+                result += "\n🔄 Route re-planned without it; phone link updated."
+                if extra:
+                    result += "\n" + "\n".join(extra)
+        except Exception:
+            pass     # the delete itself succeeded; never fail it over the re-plan
+    return result
+
+
+@mcp.tool()
+def reorder_route_stop(
+    stop_id: str,
+    new_position: int,
+    filepath: str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Move ONE stop to a new position within its own day's route — Job
+    Board Architecture Spec §14.7 (Route & Schedule Advisor, Phase 10).
+    The Route tab's drag-and-drop and ▲▼ buttons call this. Updated 2026-09-21:
+    after moving the stop it RE-PLANS THE WHOLE DAY in the new order with the
+    same planner Route Today and Run AI Route use (real drive times PLUS how long
+    each job takes, waiting for a hard job's committed start, lunch), so:
+    - Every stop's arrival time is recomputed, not just the moved ones — the old
+      "only re-time the moved stops, drive time alone" nudge ignored how long
+      each job takes, which produced wrong 'off schedule' flags that dragging
+      the stops back did NOT clear.
+    - The result depends only on the ORDER: moving a stop and moving it back
+      always returns exactly the same times (and clears the same warnings).
+    - A schedule_type='hard' job that arrives more than 'Hard Time Tolerance
+      (min)' from its committed Start Time, and a soft job outside its window,
+      come back as explicit warnings — advisory only; the write still goes through.
+    - The phone tap-to-navigate link saved on the jobs is refreshed to follow the
+      new order (no email is sent for a drag).
+    Falls back to the older narrow nudge only for a stop that is not a job (a
+    Start/End Address row) or when the day can't be re-planned.
+
+    Server mode: crew-scoped like delete_route_stop, NOT staff+-only — a
+    field_crew member may reorder a stop only on their own route.
+    owner/manager/staff unrestricted.
+
+    Args:
+        stop_id:      The route stop's own integer ID (the "ID" column —
+                      e.g. from read_job_spreadsheet(sheet_name=
+                      "Route_Planner") or the Database tab's Route
+                      sheet). Its own route date/crew are read from its
+                      existing row — not separate arguments.
+        new_position: Target 1-based Stop # position within that same
+                      route. A value past the end of the route is
+                      clamped to "make it last" rather than erroring.
+        filepath:     Path to the SQLite job database. Uses the default
+                      from Settings if omitted. In server mode this
+                      argument is ignored.
+        ctx:          MCP context (injected automatically).
+
+    Returns:
+        A confirmation listing the new order/ETAs for the affected span,
+        with any HARD TIME VIOLATION / DRIVE TIME UNKNOWN warnings called
+        out explicitly, or a clear ❌ error (stop not found, out of
+        scope, already at that position, bad new_position).
+
+    Voice examples:
+        "Move route stop 14 to position 2"
+        "Put the Torres job first on today's route"
+    """
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return (
+            "❌ No database path provided and no default path configured.\n"
+            "Pass the full filepath argument explicitly, or check that "
+            "AI-Prowler has write access to its own state folder."
+        )
+
+    restrict, crew_name = _job_crew_scope(ctx, db_path)
+    actor = _actor_display_name(ctx)
+
+    from db_route_ops import db_reorder_and_replan as _db_reorder_and_replan
+
+    # Note this stop's own day/crew first — the saved phone link must follow the new order.
+    _rd, _rc = "", ""
+    try:
+        from db_access import get_connection as _get_conn
+        _c = _get_conn(db_path)
+        try:
+            _row = _c.execute("SELECT route_date, crew_id FROM route_stops WHERE id = ?",
+                              (str(stop_id or "").strip(),)).fetchone()
+        finally:
+            _c.close()
+        if _row:
+            _rd = _row["route_date"] or ""
+            _rc = "" if (_row["crew_id"] or "") == "(unassigned)" else (_row["crew_id"] or "")
+    except Exception:
+        pass
+
+    result = _db_reorder_and_replan(db_path, stop_id, new_position, actor,
+                                    restrict=restrict, crew_name=crew_name,
+                                    is_server_mode=_IS_SERVER_MODE)
+    # A real move (not the "already there" no-op) changed the order: refresh the
+    # phone link saved on the jobs. No email here — that would fire on every drag.
+    if _rd and result.lstrip().startswith("✅") and "nothing to change" not in result:
+        result = _with_route_link(result, db_path, _rd, _rc, ctx, actor)
+    return result
+
+
+@mcp.tool()
+def replan_route_day(
+    route_date: str,
+    crew: str = "",
+    filepath: str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Re-plan a day's stored route IN ITS CURRENT ORDER (2026-09-21). The visit order
+    stays exactly as it is; every stop's arrival time, the lunch pause and every
+    HARD TIME / SOFT WINDOW warning are recomputed with the same planner Route
+    Today and Run AI Route use. The Route tab calls this after a job's schedule
+    is edited from that page — a changed Start Time, Est. Duration or Hard/Soft
+    type shifts every later stop, so the times saved before the edit are stale.
+
+    Jobs on the stored route that are no longer eligible for that day/crew (the
+    edit moved them to another date or crew, or they lost their location) are
+    dropped from the route and named in the reply — the jobs themselves are
+    never changed or deleted. The saved phone tap-to-navigate link is refreshed
+    to match. No email is sent.
+
+    Personal mode is one route. Server mode re-plans each crew's route on its own
+    (just `crew`'s when given); a field_crew caller may only re-plan their own
+    crew's route, the same crew scoping as reorder_route_stop.
+
+    Args:
+        route_date: YYYY-MM-DD — the day whose stored route to re-plan.
+        crew:       Server mode: limit to this crew's route; blank = every crew's.
+                    Ignored in personal mode (there is only one route).
+        filepath:   Path to the SQLite job database. Uses the default from
+                    Settings if omitted. In server mode this argument is ignored.
+        ctx:        MCP context (injected automatically).
+
+    Returns:
+        A ✅ summary (stop order + real arrival times) with any HARD TIME / SOFT
+        WINDOW / DRIVE TIME warnings, or a clear ❌/⚠️ explaining why nothing
+        could be re-planned.
+
+    Voice examples:
+        "Re-plan today's route with the new times"
+        "Recalculate the route after that schedule change"
+    """
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return (
+            "❌ No database path provided and no default path configured.\n"
+            "Pass the full filepath argument explicitly, or check that "
+            "AI-Prowler has write access to its own state folder."
+        )
+    restrict, crew_name = _job_crew_scope(ctx, db_path)
+    actor = _actor_display_name(ctx)
+
+    from db_route_ops import db_replan_current_order as _db_replan_current_order
+    result = _db_replan_current_order(db_path, route_date, crew, actor,
+                                      is_server_mode=_IS_SERVER_MODE,
+                                      restrict=restrict, crew_name=crew_name)
+    if result.lstrip().startswith("✅"):
+        result = _with_route_link(result, db_path, route_date, crew, ctx, actor)   # link follows the new plan
+    return result
+
+
+@mcp.tool()
+def email_route_now(
+    route_date: str,
+    crew: str = "",
+    filepath: str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    The Jobs page's and Route tab's "📧 Email Approved Route Now" button
+    (2026-09-21). Emails the CURRENTLY SAVED route for route_date/crew — the
+    results (stop order + arrival times) and the tap-to-navigate link already
+    stored on the jobs, whatever last saved them (Route Today, Run AI Route, a
+    manual reorder/edit) — right now, on request.
+
+    This is the manual counterpart to Settings -> "Email Route On Build":
+    that setting controls whether a route is emailed AUTOMATICALLY the moment
+    it's built (default, as of 2026-09-21: Disabled). This tool always sends
+    when there's a saved route to send, REGARDLESS of that setting's value —
+    in EITHER direction. It works exactly the same when auto-email is
+    Disabled, Enabled, or was never Enabled but the person who needs the
+    route wasn't the one it went to. That's deliberate: the two are different
+    things (automatic vs. on-demand) rather than one superseding the other,
+    and the button in the app that calls this is always shown and active for
+    the same reason — most usefully in server mode, where a crew member who
+    didn't receive an admin-approved route (wrong recipient, auto-email off,
+    it changed after the fact) can self-serve their own copy instead of
+    asking the admin to resend it.
+
+    Server mode: crew-scoped like reorder_route_stop/replan_route_day — a
+    field_crew caller can only email their own route (crew is forced to their
+    name, any other value they pass is ignored); owner/manager/staff may email
+    any crew's route, or every crew's (leave crew blank).
+
+    Args:
+        route_date: YYYY-MM-DD — the day whose already-saved route to email.
+        crew:       Server mode: limit to this crew's route; blank = every
+                    crew's. Ignored in personal mode (there is only one route).
+        filepath:   Path to the SQLite job database. Uses the default from
+                    Settings if omitted. In server mode this argument is ignored.
+        ctx:        MCP context (injected automatically).
+
+    Returns:
+        A 📧 confirmation naming who it was sent to, or a clear ⚠️/❌ — no
+        route saved for that date/crew yet, email isn't configured, or the
+        send itself failed (in which case the route/link is unaffected either
+        way — this tool only ever sends an email, never changes the route).
+
+    Voice examples:
+        "Email today's approved route to me now"
+        "Send the route for tomorrow"
+    """
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return (
+            "❌ No database path provided and no default path configured.\n"
+            "Pass the full filepath argument explicitly, or check that "
+            "AI-Prowler has write access to its own state folder."
+        )
+    restrict, crew_name = _job_crew_scope(ctx, db_path)
+    if restrict:
+        crew = crew_name   # same "own route only" forcing start_ai_routing/reorder_route_stop use
+    elif not (crew or "").strip():
+        crew = _route_default_crew(ctx) or crew   # R-055: manager/staff blank = their own route
+
+    caller = _current_user(ctx)
+    caller_email = (caller.get("email") or "").strip() if caller else ""
+    note = _email_route_results(db_path, route_date, crew, caller_email, "",
+                                include_stops=True, force=True)
+    if not note:
+        return (
+            f"⚠️ Nothing to email — no route is saved for {route_date}"
+            + (f" ({crew.strip()})" if crew.strip() else "")
+            + ". Build or re-plan the route first (Route Today / Run AI Route / a manual reorder)."
+        )
+    return note
+
+
+@mcp.tool()
+def approve_route_schedule(
+    route_date: str,
+    crew: str = "",
+    filepath: str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    The Route tab's "Approve" button — pushes each routed non-hard job's
+    own computed arrival time (Route_Planner's ETA) into its Start Time,
+    with an End Time derived from its own Est. Duration. Hard jobs are
+    skipped entirely: their Start Time is already a real commitment a
+    route respects, never something approving a route changes.
+
+    Mileage/routing follow-up (2026-09-20): this deliberately NEVER
+    touches a job's Original Start Time/Original End Time — those change
+    only through a genuine manual edit (via update_job_spreadsheet, same
+    as any other field) or an explicit instruction to update them, never
+    as a side effect of approving a route. That's what makes it safe to
+    try a route, approve it, decide it's wrong, and call
+    unapprove_route_schedule to get back to the customer's actually-
+    agreed schedule — any number of times, in either order — without
+    ever losing track of what that schedule was.
+
+    Args:
+        route_date: YYYY-MM-DD. Every routed job on this date (for the
+                    given crew, or every crew if left blank) is approved.
+        crew:       Crew/Technician name to scope to. Left blank, every
+                    crew's routed jobs on this date are approved.
+        filepath:   Path to the SQLite job database. Uses the default
+                    from Settings if omitted. In server mode this
+                    argument is ignored.
+        ctx:        MCP context (injected automatically).
+
+    Returns:
+        A ✅ summary of the jobs approved (JobID, customer, new Start–End
+        Time), a note on how many hard jobs were left untouched, and a
+        reminder that unapprove_route_schedule can revert this — or a ✅
+        "nothing to approve" message if route_date has no routed jobs.
+
+    Voice examples:
+        "Approve today's route"
+        "Approve the schedule for tomorrow"
+    """
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return (
+            "❌ No database path provided and no default path configured.\n"
+            "Pass the full filepath argument explicitly, or check that "
+            "AI-Prowler has write access to its own state folder."
+        )
+    actor = _actor_display_name(ctx)
+    # R-039 (G-01): field crew approve only their own route.
+    crew, _crew_err = _route_crew_for_caller(ctx, db_path, crew)
+    if _crew_err:
+        return _crew_err
+    from db_route_ops import db_approve_route_schedule as _db_approve_route_schedule
+    return _db_approve_route_schedule(db_path, route_date, crew, actor)
+
+
+@mcp.tool()
+def unapprove_route_schedule(
+    route_date: str,
+    crew: str = "",
+    filepath: str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    The Route tab's "Un-approve" button and the direct inverse of
+    approve_route_schedule above: copies each non-hard job's Original
+    Start Time/Original End Time back into Start Time/End Time — the
+    customer's actually-agreed schedule, restored exactly as it was
+    before any amount of trial-and-error route approving touched it.
+
+    Operates on every job scheduled on route_date (not just ones
+    currently in Route_Planner), so this still works even if the route
+    itself was rebuilt or deleted since — as long as the job's own
+    Original Start Time was ever recorded. Hard jobs are skipped (their
+    Start Time was never changed by approving in the first place, so
+    there's nothing to revert). A job with no recorded Original Start
+    Time is left untouched and called out by name, never silently
+    blanked.
+
+    Args:
+        route_date: YYYY-MM-DD. Every non-hard job scheduled on this date
+                    (for the given crew, or every crew if left blank) is
+                    reverted.
+        crew:       Crew/Technician name to scope to. Left blank, every
+                    crew's jobs on this date are reverted.
+        filepath:   Path to the SQLite job database. Uses the default
+                    from Settings if omitted. In server mode this
+                    argument is ignored.
+        ctx:        MCP context (injected automatically).
+
+    Returns:
+        A ✅/↩️ summary of the jobs reverted (JobID, customer, restored
+        Start–End Time), a note on how many hard jobs were left
+        untouched, and a warning naming any job with no recorded
+        Original Start Time — or a ✅ "nothing to un-approve" message if
+        route_date has no jobs at all.
+
+    Voice examples:
+        "Un-approve today's route"
+        "Revert tomorrow's schedule back to the original"
+    """
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return (
+            "❌ No database path provided and no default path configured.\n"
+            "Pass the full filepath argument explicitly, or check that "
+            "AI-Prowler has write access to its own state folder."
+        )
+    actor = _actor_display_name(ctx)
+    # R-039 (G-01): field crew un-approve only their own route.
+    crew, _crew_err = _route_crew_for_caller(ctx, db_path, crew)
+    if _crew_err:
+        return _crew_err
+    from db_route_ops import db_unapprove_route_schedule as _db_unapprove_route_schedule
+    return _db_unapprove_route_schedule(db_path, route_date, crew, actor)
+
+
+@mcp.tool()
+def prescreen_route_jobs(
+    route_date: str,
+    crew: str = "",
+    filepath: str = "",
+    output: str = "text",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Pre-routing check of a day's jobs (2026-09-25). The Jobs PWA runs this
+    automatically when Route Today Jobs or Run AI Route Jobs is pressed, and
+    shows anything it finds under the map; it is also safe to call on its
+    own ("check tomorrow's jobs before I route them"). Read-only — changes
+    nothing.
+
+    Flags, per crew route (the whole day as one route in personal mode):
+      ERRORS (the route or its phone map link will come out wrong):
+        • DUPLICATE_ADDRESS — 2+ jobs at the same address. The router puts
+          them back-to-back and Google Maps can't take the same address as
+          two stops in a row: the link opens as a stop list, not a route.
+        • NO_ADDRESS — left off the route entirely.
+        • NOT_GEOCODED — no map location, so the job is NOT PLACED.
+      WARNINGS (the route builds, but something looks off):
+        • INCOMPLETE_ADDRESS, BAD_TIME, HARD_NO_TIME, HARD_OVERLAP.
+      Cancelled jobs are skipped — the route engines never route them.
+
+    Args:
+        route_date: YYYY-MM-DD.
+        crew:       Crew/Technician to scope to; blank = every crew.
+        filepath:   SQLite job database; default from Settings if omitted.
+        output:     "text" (default, for people/voice) or "json" (for the PWA:
+                    {"ok": true, "route_date", "errors", "warnings", "issues": [...]}).
+
+    Voice examples:
+        "Check tomorrow's jobs before I route them"
+        "Any problems with today's route jobs?"
+    """
+    import json as _json_ps
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        msg = "No database path provided and no default path configured."
+        return (_json_ps.dumps({"ok": False, "error": msg}) if output == "json"
+                else f"❌ {msg}")
+    # R-039 (G-01): field crew prescreen only their own route's jobs.
+    crew, _crew_err = _route_crew_for_caller(ctx, db_path, crew)
+    if _crew_err:
+        return (_json_ps.dumps({"ok": False, "error": _crew_err.lstrip("❌ ")}) if output == "json"
+                else _crew_err)
+    from db_route_ops import db_prescreen_route_jobs as _db_prescreen
+    try:
+        issues = _db_prescreen(db_path, route_date, crew, single_crew=(not _IS_SERVER_MODE))
+    except Exception as _e:
+        return (_json_ps.dumps({"ok": False, "error": str(_e)}) if output == "json"
+                else f"❌ Prescreen failed: {_e}")
+    n_err = sum(1 for i in issues if i["severity"] == "error")
+    n_warn = len(issues) - n_err
+    if output == "json":
+        return _json_ps.dumps({"ok": True, "route_date": route_date, "errors": n_err,
+                               "warnings": n_warn, "issues": issues})
+    if not issues:
+        return f"✅ Prescreen {route_date}: no problems found — ready to route."
+    lines = [f"🔎 Prescreen {route_date}: {n_err} error(s), {n_warn} warning(s)"]
+    for i in issues:
+        mark = "❌" if i["severity"] == "error" else "⚠️"
+        lines.append(f"{mark} {i['title']}\n   {i['detail']}")
     return "\n".join(lines)
+
+
+@mcp.tool()
+def suggest_route_schedule(
+    route_date: str,
+    crew: str = "",
+    filepath: str = "",
+    origin_lat: str = "",
+    origin_lon: str = "",
+    email_route: "bool | None" = None,
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    "Get AI Suggestion" — Job Board Architecture Spec §14.4 (Route &
+    Schedule Advisor, Mode A / Phase 12). A deterministic scheduling
+    heuristic (not a live LLM call — same free, no-external-API-cost
+    posture as build_daily_route/optimize_route), NOT a rebuild-from-
+    scratch like build_daily_route: reads route_date's jobs, splits hard
+    (schedule_type='hard' — a committed appointment window) from soft
+    (placeable anywhere in its own window), builds a geographically
+    sensible visit order, then repairs it so hard jobs never violate
+    their own committed order relative to each other, chains real OSRM
+    drive times through the day, and applies the daily lunch pause as a
+    one-time duration extension wherever it lands on the timeline — never
+    a stop of its own, and never something a job is blocked from
+    spanning; whichever job is in progress when lunch arrives just runs
+    that much longer.
+
+    The result is written straight into Route_Planner via the same
+    storage path Mode B's manual route-building already uses — this is
+    not staged anywhere separate. Open the Route tab afterward to see it
+    on the normal draggable map/list, adjust anything by hand exactly
+    like any other route, and hit Approve when ready. Approving does NOT
+    change a soft job's schedule_type to 'hard' — a suggested time stays
+    a suggestion until the owner explicitly locks it.
+
+    A job with no geocoded address is left off the plan and listed as
+    NOT PLACED, never silently dropped or guessed at. A hard job the
+    plan can't land within its tolerance (Settings → Hard Time Tolerance
+    (min)), and a day whose jobs don't fit before Workday End Time, both
+    come back as explicit warnings — the write still happens either way,
+    same "advisory, never silently resolved" posture as every other
+    warning in this system (LATE ARRIVAL, HARD TIME VIOLATION, etc.).
+
+    Args:
+        route_date: YYYY-MM-DD. Every job scheduled on this date (for the
+                    given crew, or every crew if left blank) is included.
+        crew:       Crew/Technician name to scope to. Left blank, every
+                    crew present on this date is scheduled independently
+                    — jobs are never reassigned to a different crew to
+                    balance the day (crew assignment is fixed input).
+        filepath:   Path to the SQLite job database. Uses the default
+                    from Settings if omitted. In server mode this
+                    argument is ignored.
+        origin_lat: Optional device GPS latitude — where the day's stop
+                    order should start from (spec §6.3/§14). Left blank,
+                    falls back to Settings → Start/End Address when
+                    Settings → Route Origin Mode is "Company Location",
+                    or no origin awareness at all otherwise (the
+                    pre-existing behavior). Both origin_lat and
+                    origin_lon must be given together.
+        origin_lon: Optional device GPS longitude — see origin_lat.
+        email_route: Leave unset (None, the default) to follow Settings →
+                    "Email Route On Build" (Enabled = the results + link are
+                    emailed after the route is built). Pass False to build
+                    WITHOUT the automatic email this one time ("route today
+                    but don't email me"); the setting itself is unchanged.
+        ctx:        MCP context (injected automatically).
+
+    Returns:
+        A ✅ per-crew summary (stop order + times), any HARD TIME
+        VIOLATION / SOFT WINDOW VIOLATION / DRIVE TIME UNKNOWN / DAY DOES
+        NOT FIT warnings, and a NOT PLACED list, or a ✅ "nothing to
+        suggest" message if there
+        are no jobs at all for that date/crew — or a ❌ if none of the
+        day's jobs have a geocoded address yet.
+
+    Voice examples:
+        "Suggest a route for tomorrow"
+        "Get an AI suggestion for today's route for Jake"
+    """
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return (
+            "❌ No database path provided and no default path configured.\n"
+            "Pass the full filepath argument explicitly, or check that "
+            "AI-Prowler has write access to its own state folder."
+        )
+
+    actor = _actor_display_name(ctx)
+
+    # R-039 (G-01): field crew get suggestions for (and re-time) only their own route.
+    crew, _crew_err = _route_crew_for_caller(ctx, db_path, crew)
+    if _crew_err:
+        return _crew_err
+
+    # Both must parse cleanly to actually count as "GPS given" — a
+    # partial/malformed pair silently falls through to None rather than
+    # blocking the whole suggestion on a bad coordinate string.
+    parsed_lat = parsed_lon = None
+    try:
+        if origin_lat.strip() and origin_lon.strip():
+            parsed_lat, parsed_lon = float(origin_lat), float(origin_lon)
+    except (ValueError, AttributeError):
+        parsed_lat = parsed_lon = None
+
+    from db_route_ops import db_suggest_route_schedule as _db_suggest_route_schedule
+    # spec §6.3: a personal install is a one-crew show even if different
+    # employee names get typed into individual jobs' Crew / Technician
+    # field — collapse to a single unified day rather than the real
+    # multi-crew independent-scheduling behavior server mode needs.
+    _res = _db_suggest_route_schedule(db_path, route_date, crew, actor,
+                                       single_crew=(not _IS_SERVER_MODE),
+                                       origin_lat=parsed_lat, origin_lon=parsed_lon)
+    # Route engine #1 (free / Route Today) — also publishes the phone link, and
+    # emails the results + link when Settings -> "Email Route On Build" is Enabled
+    # (unless this call passed email_route=False — R-059, 2026-09-29).
+    _no_email = email_route is False or str(email_route).strip().lower() in ("false", "0", "no")
+    return _with_route_link(_res, db_path, route_date, crew, ctx, actor, email=not _no_email)
+
+
+@mcp.tool()
+def get_route_drive_matrix(
+    route_date: str,
+    crew: str = "",
+    filepath: str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Real drive-time/drive-distance matrix between every geocoded job
+    scheduled on route_date — one OSRM /table call (same free, no-API-key
+    service build_daily_route/suggest_route_schedule already use) instead
+    of guessing at travel times or making a separate call per pair.
+
+    Built for exactly this: something doing its OWN reasoning about visit
+    order — a person, or a full Claude Code session working through a
+    day's jobs step by step — needs real numbers to reason WITH before it
+    can propose a sequence. Get this matrix, reason about which order best
+    respects hard commitments and fills idle time productively, then call
+    apply_route_order() with the resulting sequence — the rest (real ETAs,
+    lunch placement, violation checks, persistence) is handled the same
+    way build_daily_route/suggest_route_schedule already handle it.
+
+    Args:
+        route_date: YYYY-MM-DD. Every geocoded job scheduled on this date
+                    (for the given crew, or every crew if left blank) is
+                    included in the matrix.
+        crew:       Crew/Technician name to scope to. Left blank, every
+                    crew's jobs on this date are included together in one
+                    matrix.
+        filepath:   Path to the SQLite job database. Uses the default from
+                    Settings if omitted. In server mode this argument is
+                    ignored.
+        ctx:        MCP context (injected automatically).
+
+    Returns:
+        Two labeled tables (minutes, then miles) keyed by JobID + address,
+        plus a NOT IN MATRIX list for any ungeocoded job, or a ✅/❌ message
+        if there's nothing to matrix (no jobs, or fewer than 2 geocoded).
+
+    Voice examples:
+        "Get the drive matrix for tomorrow's jobs"
+        "What are the real drive times between today's jobs for Jake"
+    """
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return (
+            "❌ No database path provided and no default path configured.\n"
+            "Pass the full filepath argument explicitly, or check that "
+            "AI-Prowler has write access to its own state folder."
+        )
+    # R-047 (2026-09-28, was gap G-14): same crew rule as the other route tools
+    # (R-039) — a field_crew caller gets only their own route's matrix. Before,
+    # a blank or other crew returned every crew's job addresses.
+    crew, _crew_err = _route_crew_for_caller(ctx, db_path, crew)
+    if _crew_err:
+        return _crew_err
+    from db_route_ops import db_route_drive_matrix as _db_route_drive_matrix
+    # R-064: single_crew as apply_route_order uses it, so the START/END row is
+    # the same point apply_route_order will route from.
+    return _db_route_drive_matrix(db_path, route_date, crew, single_crew=(not _IS_SERVER_MODE))
+
+
+@mcp.tool()
+def apply_route_order(
+    route_date: str,
+    stop_order: str,
+    crew: str = "",
+    filepath: str = "",
+    origin_lat: str = "",
+    origin_lon: str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Writes a REASONED, caller-supplied visit order into Route_Planner —
+    the "let something that can actually think about the day decide the
+    order" alternative to suggest_route_schedule's free nearest-neighbor
+    heuristic ("Get AI Suggestion"). Get the day's real numbers first via
+    get_route_drive_matrix() (and read_job_spreadsheet for each job's own
+    hard/soft commitment), reason through the best order by hand, then
+    call this with that order — it runs the EXACT SAME timeline engine
+    suggest_route_schedule uses (real OSRM drive times chained through the
+    day, the lunch pause, hard/soft violation checking) and writes to the
+    same Route_Planner table, so the result looks and behaves identically
+    in the Route tab either way (map, editable list, Approve button) —
+    the only difference is who chose the order.
+
+    A hard job's committed Start Time is a floor, not a target: if the
+    order arrives ahead of it, the plan waits rather than starting the
+    appointment early, so a well-reasoned order that fills idle time with
+    a nearby soft job before a hard commitment won't trip a false
+    violation just for arriving a few minutes ahead.
+
+    Mileage-tracking follow-up (2026-09-19): when Settings → Route Origin
+    Mode is "Company Location", the configured Start/End Address bookends
+    the day as real stops (unchanged). When it's "Jobs Only", passing
+    origin_lat/origin_lon (live device GPS, captured client-side at the
+    moment this was triggered) creates the same kind of bookend but
+    anchored on that GPS point instead — modeling the real home-office
+    mileage rule that driving from home to the first job and back from
+    the last job is deductible business mileage, distinct from ordinary
+    commuting to a fixed office. With neither GPS given nor Company
+    Location configured, this falls back to the owner's configured Home
+    Address (Settings → Home address); with none of the three available,
+    behavior is unchanged from before this note existed.
+
+    Args:
+        route_date: YYYY-MM-DD. Must match the date get_route_drive_matrix
+                    was called for.
+        stop_order: Comma-separated JobIDs in the exact order to visit
+                    them, e.g. "JOB-0021,JOB-0018,JOB-0019,JOB-0023,
+                    JOB-0020,JOB-0022". Every ID must be a real geocoded
+                    job scheduled on route_date (optionally scoped to
+                    crew) — an unknown or duplicate ID is rejected with a
+                    clear error and nothing is written. A geocoded job for
+                    this date that's simply left out is reported as NOT
+                    PLACED, not an error — deliberately deferring a job is
+                    a legitimate call, but it's never silent.
+        crew:       Crew/Technician name to scope to. Left blank, every
+                    job on this date across every crew must appear
+                    somewhere in stop_order.
+        filepath:   Path to the SQLite job database. Uses the default
+                    from Settings if omitted. In server mode this
+                    argument is ignored.
+        origin_lat: Optional live device GPS latitude — see the mileage-
+                    tracking note above. Leave blank to use Settings-based
+                    resolution only (Company Location address, else Home
+                    Address).
+        origin_lon: Optional live device GPS longitude — see origin_lat.
+        ctx:        MCP context (injected automatically).
+
+    Returns:
+        A ✅ summary (stop order + real ETAs) with any HARD TIME VIOLATION
+        / SOFT WINDOW VIOLATION / DRIVE TIME UNKNOWN / DAY DOES NOT FIT
+        warnings and a NOT PLACED list, or a ❌ explaining exactly what's
+        wrong with stop_order if it couldn't be applied.
+
+    Voice examples:
+        "Apply this route order for tomorrow: JOB-0021, JOB-0018, ..."
+    """
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return (
+            "❌ No database path provided and no default path configured.\n"
+            "Pass the full filepath argument explicitly, or check that "
+            "AI-Prowler has write access to its own state folder."
+        )
+    actor = _actor_display_name(ctx)
+    # R-047 (2026-09-28, was gap G-14): a field_crew caller may only write
+    # their OWN route — blank means theirs, another crew is refused and
+    # nothing is written. Before, they could reorder any crew's day (or, with
+    # crew blank, every crew's).
+    crew, _crew_err = _route_crew_for_caller(ctx, db_path, crew)
+    if _crew_err:
+        return _crew_err
+    # Strings in, floats out (or None) — mirrors suggest_route_schedule's
+    # own origin_lat/origin_lon handling exactly, since MCP tool args
+    # arrive as strings over the wire regardless of the Python type hint.
+    _olat = float(origin_lat) if str(origin_lat).strip() else None
+    _olon = float(origin_lon) if str(origin_lon).strip() else None
+    from db_route_ops import db_apply_route_order as _db_apply_route_order
+    # spec §6.3: same personal-mode collapse suggest_route_schedule uses —
+    # a one-crew install writes everything under a single shared crew_id
+    # regardless of what's typed into individual jobs' Crew / Technician
+    # field.
+    _res = _db_apply_route_order(db_path, route_date, stop_order, crew, actor,
+                                  single_crew=(not _IS_SERVER_MODE),
+                                  origin_lat=_olat, origin_lon=_olon)
+    # Route engine #2 (AI Routing) commits here — also publishes the phone link.
+    # No email from here on purpose: the AI may call this twice in one run (a
+    # revised order), so _ai_routing_worker emails ONCE when the whole run ends.
+    return _with_route_link(_res, db_path, route_date, crew, ctx, actor)
+
+
+# ── run_ai_routing — the Jobs PWA's "Run AI Routing (uses Credits)" button
+# (Job Board Architecture Spec §14.12 follow-up, 2026-09-18) ─────────────────
+_RUN_AI_ROUTING_PROMPT_TEMPLATE = (
+    # Deliberately the SAME reasoning steps as the "AI Route Optimizer (full
+    # reasoning)" custom task the Small Business tab's own button creates
+    # (rag_gui.py) — kept as a separate, hardcoded copy here rather than
+    # reading that saved task definition back off disk, per the explicit
+    # design call: the PWA path must work even if the user never pressed
+    # that button, never keeps the task's wording in sync with edits made
+    # on the other side, and isn't affected if the saved task is later
+    # deleted or renamed. The one difference from that task's version:
+    # ROUTE_DATE is a real substituted value here (this runs for one
+    # specific date the PWA passed in), not a runtime-resolved placeholder.
+    "Plan the best possible field-service route for {route_date}{crew_clause}. "
+    "Do NOT use suggest_route_schedule (\"Get AI Suggestion\") -- that is a "
+    "cheap nearest-neighbor heuristic with no real time-window reasoning. "
+    "Instead, do the actual reasoning yourself, then commit it with "
+    "apply_route_order. Steps:\n\n"
+    "1. read_job_spreadsheet(sheet_name=\"Jobs_Schedule\", "
+    "filter_date=\"{route_date}\") to get every job that day: JobID, "
+    "address, lat/lon, Schedule Type (Hard/Soft), Start Time, End Time, "
+    "Est. Duration.\n"
+    "2. read_job_spreadsheet(sheet_name=\"Settings\") for Workday Start "
+    "Time, Workday End Time, Lunch Break Start, Lunch Break Duration (min), "
+    "Hard Time Tolerance (min).\n"
+    "3. get_route_drive_matrix(route_date=\"{route_date}\"{crew_arg}) for "
+    "real drive time/distance between every geocoded job. If any job isn't "
+    "geocoded, note it as NOT PLACED and leave it out -- do not guess its "
+    "location. When the matrix has a START/END row (row/column 1), that is "
+    "where the day begins and ends: every order starts with a drive FROM it "
+    "and ends with a drive back TO it, so compare orders by the whole day "
+    "(start -> jobs -> back), never by the job-to-job legs alone. It is not "
+    "a stop -- do not put it in stop_order.\n"
+    "4. Reason through the day BEFORE writing anything:\n"
+    "   - Hard jobs (Schedule Type = hard) have a committed Start Time that "
+    "must be respected. Arriving early is fine (the crew waits) -- arriving "
+    "so late it exceeds Hard Time Tolerance is a real problem to avoid if "
+    "any better order exists.\n"
+    "   - Soft jobs (Schedule Type = soft) have only a duration and, "
+    "sometimes, their own Start Time/End Time as a preferred window -- they "
+    "are flexible filler, not fixed appointments.\n"
+    "   - Look for idle gaps: time between Workday Start and the first hard "
+    "job's committed start, and time between consecutive hard jobs. For "
+    "each gap, check whether a soft job's duration + the real drive times "
+    "to/from it actually fit inside that gap without pushing a later hard "
+    "job's arrival past its own tolerance. Prefer filling a gap with a soft "
+    "job that is geographically close to the jobs on either side of it "
+    "(per the drive matrix) over one that is far away.\n"
+    "   - A soft job whose duration and location don't fit cleanly into any "
+    "gap should be deferred to open time after the last hard commitment of "
+    "the day, rather than forced into a tight morning slot that risks a "
+    "hard violation.\n"
+    "   - The lunch break is handled automatically by apply_route_order's "
+    "own timeline engine -- you do not need to reason about it yourself.\n"
+    "   - The goal is: zero avoidable HARD TIME VIOLATION / SOFT WINDOW "
+    "VIOLATION warnings, every job placed (or a clear, justified reason why "
+    "one is deferred), and the day finishing at or before Workday End "
+    "Time.\n"
+    "5. Once you have a final visit order, call "
+    "apply_route_order(route_date=\"{route_date}\", "
+    "stop_order=\"JOB-####,JOB-####,...\"{crew_arg}{origin_arg}) with every geocoded "
+    "job for that date included exactly once, in your reasoned order.\n"
+    "6. Read back the tool's own response -- it repeats any HARD TIME "
+    "VIOLATION / SOFT WINDOW VIOLATION / DRIVE TIME UNKNOWN / DAY DOES NOT "
+    "FIT warnings using the same real timeline engine \"Get AI Suggestion\" "
+    "uses. If a warning fired that a different order would have avoided, "
+    "try once more with a revised order before finishing.\n\n"
+    "Do not modify Jobs_Schedule directly and do not click/simulate "
+    "\"Approve\" -- leave the Route tab's own Approve button for the owner "
+    "to press after reviewing. Do not send any email, text/SMS, or record "
+    "any learning -- this run's ONLY job is to plan and apply the route; "
+    "nothing else should be touched or sent as a side effect. Keep your "
+    "final text response short — a one-paragraph plain-language summary "
+    "of the order and any warnings is all that will be shown back to the "
+    "person who tapped the button."
+)
+
+# Deliberately NOT cfg.get("allowed_tools") — that shared queue-config
+# setting is a broad wildcard (mcp__ai-prowler__*) meant for the general
+# scheduled queue, which legitimately might need to email/text a report.
+# This on-demand routing run has exactly one job — plan and apply a
+# route — so it gets exactly the tools that job needs, nothing else. This
+# is a real mechanism-level restriction, not just a prompt instruction:
+# even if something in a future prompt edit asked it to email or record a
+# learning, the tool simply would not be there to call.
+_AI_ROUTING_ALLOWED_TOOLS = (
+    "mcp__ai-prowler__read_job_spreadsheet,"
+    "mcp__ai-prowler__get_route_drive_matrix,"
+    "mcp__ai-prowler__apply_route_order"
+)
+
+# In-memory job registry backing start_ai_routing()/poll_ai_routing() — see
+# start_ai_routing's docstring for why this is split into start/poll rather
+# than one long blocking call. Deliberately in-memory only, not persisted
+# to disk: a job that was running when AI-Prowler itself restarts is a rare
+# edge case (the person would have to restart the app mid-run), and
+# poll_ai_routing already reports "Unknown job_id" cleanly for that case —
+# not worth the complexity of a durable queue for what is fundamentally a
+# single interactive person tapping one button and watching it finish.
+_AI_ROUTING_JOBS_LOCK = threading.Lock()
+_AI_ROUTING_JOBS: dict = {}
+_AI_ROUTING_JOBS_MAX = 20
+
+
+# ── AI Routing start/end picker (2026-09-19) ────────────────────────────────
+# The Route tab's "Run AI Routing" button now ALWAYS asks where the day
+# should start and end — Current GPS location, or a home address — instead
+# of silently picking one. Nothing about the choice is remembered between
+# taps (deliberately: the person may be at home one day and on a job site
+# the next). These two helpers resolve the "home address" option:
+#   * Personal mode -> the owner's address from Settings (config.json).
+#   * Server mode   -> the per-user home_address stored in users.json via the
+#                      Admin tab's Add/Edit User dialog. An owner/manager/
+#                      staff caller building a route for a specific crew
+#                      member gets THAT crew member's address; blank crew
+#                      (or a field_crew caller) gets the caller's own.
+# The host machine's owner address is never used as a stand-in for a crew
+# member in server mode — it would be some other person's home.
+
+def _compose_route_address(street: str, city: str, state: str, zip_: str) -> str:
+    """Street / City / State / ZIP -> one geocodable string, or "" if blank."""
+    street, city, state, zip_ = (str(x or "").strip() for x in (street, city, state, zip_))
+    if not any((street, city, state, zip_)):
+        return ""
+    city_state_zip = " ".join(p for p in (city, state) if p)
+    if zip_:
+        city_state_zip = f"{city_state_zip} {zip_}".strip()
+    return ", ".join(p for p in (street, city_state_zip) if p)
+
+
+def _resolve_route_home(ctx, crew: str = "", db_path: str = "") -> tuple:
+    """Whose home address the AI Route start/end picker should offer.
+
+    Returns (address, label): address is a single geocodable string ("" when
+    none is configured); label says whose it is, for the picker and for
+    error messages. Never raises.
+
+    Real gap found live (2026-09-23): an install with Route Origin Mode left
+    on "Jobs Only" but only a Start/End Address configured (no separate
+    personal/per-user Home address) got no home fallback at all — silently
+    missing the home-to-first-job and last-job-to-home mileage, even though
+    the Route tab's own map preview shows that same Start/End Address as a
+    home marker regardless of mode, implying it's already "the" configured
+    start point. When db_path is given and the dedicated home address comes
+    back blank, fall back to Start/End Address (db_read_route_address)
+    before giving up — same mileage rule, just a different Settings field.
+    Existing callers that don't pass db_path (e.g. the Route tab's own
+    start/end picker) are unaffected — this fallback is opt-in per caller.
+    """
+    def _start_end_fallback():
+        if not db_path:
+            return ("", "")
+        try:
+            from db_write_ops import db_read_route_address
+            addr = db_read_route_address(db_path)
+        except Exception:
+            addr = ""
+        return (addr, "Start/End Address (Settings)") if addr else ("", "")
+
+    user = _current_user(ctx)
+    if user is None:
+        a = _get_personal_owner_address()
+        addr = _compose_route_address(a.get("street"), a.get("city"),
+                                      a.get("state"), a.get("zip"))
+        if addr:
+            return (addr, "Your home address (Settings)")
+        fallback_addr, fallback_label = _start_end_fallback()
+        return (fallback_addr, fallback_label) if fallback_addr else (addr, "Your home address (Settings)")
+
+    crew = (crew or "").strip()
+    role = (user.get("role") or "").strip().lower()
+    target = user
+    # Only owner/manager/staff may look up someone else's home address; a
+    # field_crew caller always gets their own, whatever `crew` says.
+    if crew and role != "field_crew":
+        wanted = crew.casefold()
+        found = None
+        try:
+            for rec in ((_load_users() or {}).get("users") or {}).values():
+                if (isinstance(rec, dict)
+                        and rec.get("status", "active") == "active"
+                        and str(rec.get("name") or "").strip().casefold() == wanted):
+                    found = rec
+                    break
+        except Exception:
+            found = None
+        if found is None:
+            return ("", f"{crew}'s home address (no matching user)")
+        target = found
+    name = str(target.get("name") or "").strip() or "This user"
+    home_addr = str(target.get("home_address") or "").strip()
+    if home_addr:
+        return (home_addr, f"{name}'s home address")
+    fallback_addr, fallback_label = _start_end_fallback()
+    return (fallback_addr, fallback_label) if fallback_addr else (home_addr, f"{name}'s home address")
+
+
+@mcp.tool()
+def get_working_days(
+    filepath: str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    The days the crews work — Settings → "Working Days" (default
+    Mon,Tue,Wed,Thu,Fri). Multi-day jobs are routed and shown on the Calendar
+    only on these days, and a job still open past its end carries over to the
+    next of them (R-058). Read-only.
+
+    Open to EVERY role (field crew included): field crew can't read the
+    Settings sheet, but their Calendar must show the same working days as the
+    office's. Added 2026-10-02 (Vicki) so a contractor running late can add
+    Saturday/Sunday in Settings and everyone's Calendar follows.
+
+    Args:
+        filepath: Path to the SQLite job database. Uses the default from
+                  Settings if omitted. In server mode this argument is ignored.
+        ctx:      MCP context (injected automatically).
+
+    Returns:
+        One line: "WORKING_DAYS: Mon,Tue,Wed,Thu,Fri" (always the tidy form;
+        Mon–Fri when the setting is missing or unreadable).
+
+    Voice examples:
+        "What days do we work?"
+        "Are Saturdays working days?"
+    """
+    try:
+        from db_write_ops import working_days, format_working_days
+        db_path = _resolve_job_db_path(ctx, filepath)
+        return "WORKING_DAYS: " + format_working_days(working_days(db_path))
+    except Exception:
+        return "WORKING_DAYS: Mon,Tue,Wed,Thu,Fri"
+
+
+@mcp.tool()
+def get_route_start_options(
+    crew: str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Backs the Jobs PWA Route tab's AI Routing start/end picker: reports the
+    home address that picker should offer next to "Current location (GPS)".
+    Read-only — never geocodes, writes, or spends anything.
+
+    Personal mode: the owner's address from the Settings tab. Server mode:
+    the home_address saved for the relevant user in the Admin tab — the
+    crew member named by `crew` when an owner/manager/staff caller is
+    building that person's route, otherwise the caller's own. A field_crew
+    caller can only ever see their own.
+
+    Args:
+        crew: Optional crew/technician name whose home address to offer
+              (server mode, owner/manager/staff callers only).
+        ctx:  MCP context (injected automatically).
+
+    Returns:
+        Two lines: "HOME_ADDRESS: <address, blank if not set>" and
+        "HOME_LABEL: <whose address that is>".
+
+    Voice examples: (not applicable — PWA-button-only tool)
+    """
+    address, label = _resolve_route_home(ctx, crew)
+    return f"HOME_ADDRESS: {address}\nHOME_LABEL: {label}"
+
+
+def _team_members() -> list:
+    """R-056: the active users' names and roles from users.json, sorted by
+    name, one entry per distinct name. Nothing else leaves this function —
+    never a token, email, phone or home address. [] if users.json is
+    missing / unreadable (personal mode has none)."""
+    data = _load_users() or {}
+    seen = {}
+    for rec in (data.get("users") or {}).values():
+        if not isinstance(rec, dict):
+            continue
+        if str(rec.get("status", "active") or "active").strip().lower() != "active":
+            continue
+        name = str(rec.get("name") or "").strip()
+        if not name or "," in name:      # a comma would break the Crew list format
+            continue
+        role = str(rec.get("role") or "field_crew").strip()
+        if role not in _USER_ROLES:
+            role = "field_crew"
+        seen.setdefault(name.casefold(), {"name": name, "role": role})
+    return sorted(seen.values(), key=lambda m: m["name"].casefold())
+
+
+@mcp.tool()
+def list_team_members(ctx: "Context | None" = None) -> str:
+    """
+    Backs the Jobs app's Crew / Technician picker (R-056, server mode): the
+    names (and roles) of the team's active users, so a job is assigned by
+    picking people from a list instead of typing names — no spelling
+    mistakes, so each person's route always finds their jobs. A job may be
+    assigned to several people; it is then on each one's route.
+
+    Read-only. Returns names and roles only — never tokens, emails, phone
+    numbers or addresses. Any signed-in role may call it. Personal mode (one
+    person, no users) returns an empty list.
+
+    Args:
+        ctx: MCP context (injected automatically).
+
+    Returns:
+        JSON: {"members": [{"name": "...", "role": "..."}, ...]}
+
+    Voice examples: "who's on the team?", "list the crew members"
+    """
+    if not _IS_SERVER_MODE or _current_user(ctx) is None:
+        return json.dumps({"members": []})
+    return json.dumps({"members": _team_members()})
+
+
+# ── "Connect your Claude account" (server mode, 2026-09-19) ─────────────────
+# The Jobs app's first-use screen for a user with no (or an expired) Claude
+# Code token: either paste a token they already have from AI-Prowler Personal
+# (save_my_cli_token), or sign in from their phone (start_cli_signin ->
+# submit_cli_signin_code, engine in cli_signin_relay.py). Every tool here
+# acts on the CALLER only — there is no user argument to point at someone else.
+# Personal mode has its own Get / Renew Token button and never uses these.
+
+_CLI_SIGNIN_SERVER_ONLY = (
+    "❌ Connecting a Claude account from the Jobs app is only for multi-user "
+    "servers. In AI-Prowler Personal, use Get / Renew Token on the Links & "
+    "Analysis page."
+)
+
+
+def _cli_signin_caller(ctx) -> tuple:
+    """(user, user_id) for a server-mode caller; (None, None) in personal mode."""
+    user = _current_user(ctx)
+    if user is None:
+        return None, None
+    return user, (user.get("id") or _make_user_id(user.get("name", "")))
+
+
+def _email_user_cli_token(user: dict, token: str) -> str:
+    """Emails the user their own Claude token (they asked for a copy). Returns
+    a short phrase describing the outcome; never raises. The token is
+    a long-lived credential in plain text — the body says so."""
+    to = (user.get("email") or "").strip()
+    if not to:
+        return "no email address is set for you, so a copy wasn't emailed"
+    body = (
+        f"Hi {user.get('name') or ''},\n\n"
+        "You connected your Claude account to AI-Prowler AI Routing. Here is your "
+        "Claude connection key, in case you need it again:\n\n"
+        f"    {token}\n\n"
+        "Keep it private — anyone with it can use your Claude subscription. It is "
+        "good for about a year.\n\n"
+        "If you also use AI-Prowler Personal on your own computer: creating a new "
+        "key can sign that install out. If that happens, open Links & Analysis in "
+        "AI-Prowler Personal and paste this key in as its token."
+    )
+    try:
+        ok, msg = _send_smtp(to, "Your AI-Prowler Claude connection key", body)
+    except Exception as exc:  # noqa: BLE001
+        return f"the copy couldn't be emailed ({exc})"
+    return "a copy was emailed to you" if ok else f"the copy couldn't be emailed ({msg})"
+
+
+@mcp.tool()
+def start_cli_signin(ctx: "Context | None" = None) -> str:
+    """
+    Step 1 of the Jobs app's "Connect your Claude account" phone sign-in
+    (server mode). Starts a Claude sign-in for the CALLER on the server and
+    returns the link to open on their phone.
+
+    Returns:
+        "SIGNIN_URL: <link>" or a ❌ explaining what went wrong.
+
+    Voice examples: (not applicable — PWA-button-only tool)
+    """
+    user, uid = _cli_signin_caller(ctx)
+    if user is None:
+        return _CLI_SIGNIN_SERVER_ONLY
+    import cli_signin_relay as _relay
+    ok, value = _relay.start_login(uid)
+    return f"SIGNIN_URL: {value}" if ok else f"❌ {value}"
+
+
+@mcp.tool()
+def submit_cli_signin_code(code: str, ctx: "Context | None" = None) -> str:
+    """
+    Step 2: the code Claude showed the user after they signed in on their
+    phone. On success the server saves the token for the caller, emails them a
+    copy, and the Jobs app can carry on with AI Routing. The code is redacted
+    from the audit log.
+
+    Returns:
+        "CONNECTED — <email note>", "INVALID_CODE: <what to do>", or a ❌.
+
+    Voice examples: (not applicable — PWA-button-only tool)
+    """
+    user, uid = _cli_signin_caller(ctx)
+    if user is None:
+        return _CLI_SIGNIN_SERVER_ONLY
+    import cli_signin_relay as _relay
+    res = _relay.submit_code(uid, code)
+    if res["status"] == "connected":
+        note = _email_user_cli_token(user, res.get("token", ""))
+        return f"CONNECTED — {note}."
+    if res["status"] == "invalid_code":
+        return f"INVALID_CODE: {res['message']}"
+    return f"❌ {res['message']}"
+
+
+@mcp.tool()
+def cancel_cli_signin(ctx: "Context | None" = None) -> str:
+    """
+    Abandons the caller's pending phone sign-in (frees the server-side
+    process). Safe to call when nothing is pending.
+
+    Voice examples: (not applicable — PWA-button-only tool)
+    """
+    user, uid = _cli_signin_caller(ctx)
+    if user is None:
+        return _CLI_SIGNIN_SERVER_ONLY
+    import cli_signin_relay as _relay
+    _relay.cancel_login(uid)
+    return "✅ Cancelled."
+
+
+@mcp.tool()
+def save_my_cli_token(token: str, ctx: "Context | None" = None) -> str:
+    """
+    The "I already have a token" path: saves a Claude Code token the user
+    already made (typically copied from AI-Prowler Personal's Links & Analysis
+    page) as the CALLER's AI Routing credential. Nothing new is minted, so a
+    Personal install's token is not invalidated. The token is redacted from
+    the audit log.
+
+    Returns:
+        "CONNECTED" or a ❌ saying why the value was rejected.
+
+    Voice examples: (not applicable — PWA-button-only tool)
+    """
+    user, uid = _cli_signin_caller(ctx)
+    if user is None:
+        return _CLI_SIGNIN_SERVER_ONLY
+    try:
+        import task_queue_automation as _tqa
+        _tqa.save_user_oauth_token(uid, token)
+    except ValueError as ve:
+        return f"❌ {ve}"
+    except Exception as exc:  # noqa: BLE001
+        return f"❌ Couldn't save the token: {exc}"
+    return "CONNECTED"
+
+
+def _ai_routing_worker(job_id: str, prompt: str, route_date: str,
+                       oauth_token_path=None, crew: str = "",
+                       caller_email: str = "") -> None:
+    """Runs on a background daemon thread started by start_ai_routing() —
+    does the actual waiting off the ASGI event loop entirely, so the HTTP
+    request that triggered it already returned long before this finishes.
+
+    v3 (2026-09-18) — uses a DEDICATED, trigger-less Scheduled Task
+    (task_queue_automation.AI_ROUTING_TASK_NAME), never the shared
+    AI-Prowler-QueueRunner: firing that shared one would process EVERY
+    entry in pending_tasks.json that's due right now, not just ours,
+    sweeping up other tasks the user queued for their own next scheduled
+    check and running them early — see AI_ROUTING_TASK_NAME's module-level
+    comment in task_queue_automation.py. This dedicated task never touches
+    pending_tasks.json at all, so it cannot interfere with anything else
+    queued, by construction.
+
+    Also deliberately NOT the old "▶ NOW button" localhost-HTTP-MCP path
+    (run_single_prompt_now / generate_mcp_config_for_now_button) — that was
+    already defeatured before this feature existed, never reliably worked,
+    and testing it live reproduced exactly that (zero working MCP tools,
+    and a raw MCP `initialize` POST to localhost:8000/mcp hung outright).
+
+    What this does:
+      1. Requires the dedicated task to already be registered
+         (task_queue_automation.ai_routing_task_exists()) — that
+         registration needs a one-time UAC prompt only a real GUI button
+         click can satisfy, never something this background thread can do
+         silently.
+      2. Writes a FRESH wrapper script for this one specific request
+         (build_ai_routing_wrapper_content) — same proven stdio MCP config
+         + absolute claude.exe path + OAuth-token-from-file pattern as the
+         actual scheduled queue runner.
+      3. Fires the dedicated task right now via `schtasks /run`.
+      4. Polls for its completion marker file (this task never touches
+         pending_tasks.json, so there's no queue entry to watch disappear)
+         and reads the real captured output once it appears.
+    Writes the outcome into _AI_ROUTING_JOBS[job_id] for poll_ai_routing()
+    to report; never raises back into the thread runner."""
+    import time as _time
+    import subprocess as _sp
+
+    def _finish(status: str, output: str) -> None:
+        with _AI_ROUTING_JOBS_LOCK:
+            job = _AI_ROUTING_JOBS.get(job_id)
+            if job is not None:
+                job["status"] = status
+                job["output"] = output
+                job["finished_at"] = _time.time()
+
+    try:
+        import task_queue_automation as _tqa
+
+        if not _tqa.ai_routing_task_exists():
+            # 2026-09-28: a server's setup is on the Admin tab (the Small Business
+            # tab's AI Route Optimizer section is personal-install only).
+            _finish("error",
+                    ("AI Routing isn't set up on this server yet — ask an admin to open "
+                     "the Admin tab and click “Set Up AI Route Runner” (one-time, "
+                     "needs one Windows confirmation prompt at the server).")
+                    if _IS_SERVER_MODE else
+                    ("The on-demand AI Routing runner isn't set up yet — click "
+                     "“Set Up On-Demand AI Routing” in the Small Business tab "
+                     "(one-time, needs one Windows confirmation prompt), then try again."))
+            return
+
+        cfg = _tqa.load_config()
+        # Never trust a stored mcp_config_path from config.json as-is — it
+        # can be stale (confirmed live: it was still pointing at the old,
+        # broken claude_mcp_config_now.json from the defeatured "NOW
+        # button" the first time this ran for real, leaving the headless
+        # session with zero ai-prowler tools). The proven Apply flow for
+        # the main scheduled queue (rag_gui.py) never trusts it either —
+        # it always calls generate_mcp_config() fresh and overwrites
+        # cfg["mcp_config_path"] with whatever that returns, every single
+        # time, specifically so a stale value can never linger. Do the
+        # same thing here rather than reading the possibly-stale field
+        # directly.
+        mcp_ok, mcp_path = _tqa.generate_mcp_config()
+        if not mcp_ok or not mcp_path:
+            _finish("error", f"Could not generate the MCP config for this run: {mcp_path}")
+            return
+
+        wrapper_content = _tqa.build_ai_routing_wrapper_content(
+            prompt,
+            mcp_path,
+            _AI_ROUTING_ALLOWED_TOOLS,
+            use_api_key=cfg.get("use_api_key", False),
+            oauth_token_path=oauth_token_path,
+        )
+        _tqa.AI_ROUTING_WRAPPER_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _tqa.AI_ROUTING_WRAPPER_PATH.write_text(wrapper_content, encoding="utf-8")
+
+        start_time = _time.time()
+
+        run_result = _sp.run(
+            ["schtasks", "/run", "/tn", _tqa.AI_ROUTING_TASK_NAME],
+            capture_output=True, text=True, timeout=30,
+            creationflags=_sp.CREATE_NO_WINDOW if hasattr(_sp, "CREATE_NO_WINDOW") else 0,
+        )
+        if run_result.returncode != 0:
+            _finish("error",
+                    f"Couldn't trigger the on-demand runner "
+                    f"(schtasks said: {(run_result.stderr or run_result.stdout).strip()}).")
+            return
+
+        # This dedicated task never touches pending_tasks.json, so its
+        # completion marker file (written as the LAST step of the wrapper,
+        # after the claude call returns) is the only completion signal.
+        deadline = _time.time() + 480
+        marker = _tqa.AI_ROUTING_DONE_MARKER_PATH
+        finished = False
+        while _time.time() < deadline:
+            _time.sleep(3)
+            try:
+                if marker.exists() and marker.stat().st_mtime >= start_time:
+                    finished = True
+                    break
+            except Exception:
+                pass
+
+        if not finished:
+            _finish("error",
+                    "Still running after 8 minutes — this is unusual. It may still "
+                    "finish on its own; check the Route tab in a few minutes.")
+            return
+
+        # The wrapper runs claude with --output-format json, so this file is
+        # a JSON object, not plain text — confirmed live (2026-09-18): the
+        # earlier version here just dumped the raw file content verbatim,
+        # which put the ENTIRE JSON payload (usage stats, token counts,
+        # session id, everything) into the Route tab's warnings box instead
+        # of the actual human-readable summary. Parse it and surface just
+        # the "result" field, which is what the headless session actually
+        # said; fall back to the raw text only if parsing fails, so a
+        # malformed/unexpected file still shows SOMETHING rather than going
+        # silent.
+        output_text = ""
+        _run_is_error = False
+        try:
+            raw = _tqa.AI_ROUTING_LAST_RUN_PATH.read_text(encoding="utf-8", errors="replace").strip()
+            # R-051: Claude Code can print warning lines (e.g. "Ignoring 2
+            # permissions.allow entries ... workspace has not been trusted")
+            # into the same file ahead of the JSON — find the JSON anyway.
+            parsed = _tqa.parse_claude_json_output(raw)
+            if parsed is not None:
+                output_text = str(parsed.get("result") or "").strip()
+                _run_is_error = bool(parsed.get("is_error"))
+                if not output_text and parsed.get("is_error"):
+                    # A real API/CLI-level error still comes back as valid
+                    # JSON but with no "result" text — surface *something*
+                    # useful instead of silently falling through to the
+                    # generic "no captured output" message below.
+                    output_text = f"Run reported an error: {parsed.get('subtype') or parsed}"
+            else:
+                # Not valid JSON (a crash before claude even produced
+                # output, a truncated file, etc.) — show the raw text as a
+                # last resort rather than nothing at all.
+                output_text = raw[-3000:]
+        except Exception:
+            pass
+        if not output_text:
+            output_text = f"AI Routing finished for {route_date}, but produced no captured output. Check the Route tab for the result."
+        # Server mode: the run used THIS user's saved Claude token. If Claude
+        # rejected it (expired, revoked, or invalidated by a newer token made
+        # for the same account), discard it so the very next AI Route tap
+        # sends the user back through "Connect your Claude account" instead of
+        # failing the same way forever.
+        import re as _re_auth
+        if oauth_token_path is not None and _re_auth.search(
+                r"API Error: 401|authentication_error|OAuth (access )?token "
+                r"(has expired|is invalid)|Invalid authentication credentials|"
+                r"Please run /login|No Claude token is saved",
+                output_text, _re_auth.IGNORECASE):
+            try:
+                Path(oauth_token_path).unlink()
+            except Exception:
+                pass
+            _finish("error",
+                    "AUTH_EXPIRED — Claude no longer accepts your saved connection "
+                    "(it may have expired, or a newer key was made for your Claude "
+                    "account). Tap AI Route again to reconnect.")
+            return
+        # Email the finished route ONCE, here at the very end (not inside
+        # apply_route_order, which the AI may legitimately call twice in one run
+        # when it revises its order — that would send two emails). Only when
+        # THIS run actually saved a new route link (start_time is when it began),
+        # so a run that failed never re-sends whatever route was already stored.
+        # R-065 (2026-09-29, found by E2E MILES-04): when Claude refused to run
+        # at all ("You've hit your session limit · resets 8:50am") the worker
+        # still reported "✅ DONE" — the Route tab showed success over an
+        # unchanged (or empty) route. A usage-limit / error reply with no route
+        # saved by THIS run is now an error, with Claude's own words.
+        _route_saved = _ROUTE_LINK_PUBLISHED_AT.get(route_date, 0) >= start_time
+        if not _route_saved and (_run_is_error or _re_auth.search(
+                r"hit your (session|usage|weekly) limit|usage limit|rate limit|"
+                r"credit balance is too low|overloaded_error|resets \d{1,2}(:\d{2})?\s*[ap]m",
+                output_text, _re_auth.IGNORECASE)):
+            _finish("error",
+                    "AI Routing did not run — Claude replied: "
+                    f"\"{output_text[-500:].strip()}\". No route was changed; "
+                    "try again later or use Route Today.")
+            return
+        final_text = output_text[-3000:]
+        try:
+            if _route_saved:
+                _email_note = _email_route_results(
+                    _resolve_job_db_path(None, ""), route_date, crew, caller_email,
+                    output_text[-3000:], include_stops=True)
+                if _email_note:
+                    final_text = final_text + "\n\n" + _email_note
+        except Exception:
+            pass
+        _finish("done", final_text)
+    except Exception as exc:
+        _finish("error", f"Unexpected error triggering the background run: {exc}")
+
+
+@mcp.tool()
+def start_ai_routing(
+    route_date: str,
+    crew: str = "",
+    origin_lat: str = "",
+    origin_lon: str = "",
+    origin_choice: str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    The Jobs PWA Route tab's "🧠 Run AI Routing (uses Credits)" button —
+    KICKS OFF a real headless Claude Code session in the background and
+    returns immediately with a job_id; poll_ai_routing(job_id) reports
+    progress and, eventually, the result. Split into start/poll (2026-09-18)
+    instead of one long blocking call specifically because a full agentic
+    run can take several minutes, and a single blocking HTTP request that
+    long risks being cut off by an idle-connection timeout somewhere in the
+    path (a reverse proxy/tunnel, for remote/mobile access) even though the
+    run itself would have kept going and finished fine server-side — the
+    PWA would see nothing but a dead connection. Starting instantly and
+    polling in short bursts has no such ceiling.
+
+    The session reasons through route_date's jobs the way apply_route_order's
+    docstring describes (hard commitments respected with wait-not-early-
+    start, idle gaps filled with well-matched soft jobs, poor fits deferred
+    to open afternoon time) and writes the result via apply_route_order —
+    as opposed to suggest_route_schedule ("Get AI Suggestion"), which is a
+    free, instant, but much cruder nearest-neighbor heuristic with no real
+    time-window reasoning.
+
+    Genuinely spends real Claude usage from whichever auth the Autonomous
+    AI Task Queue's Links & Analysis panel has configured (OAuth
+    subscription allowance by default, or a metered API key if the owner
+    switched to that) — the "(uses Credits)" label on the PWA button exists
+    specifically so tapping it is an informed choice, not a surprise.
+
+    Calling this again for the SAME route_date + crew while a run is still
+    in flight does NOT start a second one — it hands back the existing
+    job_id instead, so a double-tap or a page reload re-triggering the
+    button can't accidentally spend usage twice on the same day.
+
+    The prompt used is a hardcoded duplicate of the reasoning steps in the
+    "AI Route Optimizer (full reasoning)" custom task the Small Business
+    tab's own button creates — deliberately NOT read from that saved task
+    definition, so this keeps working even if that task was never created,
+    was edited, or was deleted.
+
+    Start/end location (2026-09-21): the Jobs app no longer asks. Leaving
+    origin_choice blank does exactly what Route Today does — the run's
+    apply_route_order call gets no coordinates and resolves the day's start/end
+    from Settings by route mode (Jobs Only: the crew member's/owner's home
+    address; Company Location: the Start/End Address), so both routing methods
+    always use the same data. A direct caller (voice/Claude) can still pass an
+    explicit choice: "gps" uses the device coordinates in origin_lat/origin_lon;
+    "home" resolves a home address (Personal mode: the owner's address from
+    Settings; Server mode: the home_address saved in the Admin tab for the crew
+    member being routed, else the caller's own — see _resolve_route_home) and
+    geocodes it here. Any other value is rejected before anything starts.
+
+    Server mode: the run is billed to the CALLER, using the Claude token an
+    admin saved for them in the Admin tab (🔑 Set AI Route Token); a user
+    with none saved is told to ask an admin. A field_crew caller can only
+    route their own day (crew is forced to their name); owner/manager/staff
+    may route any crew. Only one run happens at a time, since every run
+    shares one wrapper/prompt/marker file set.
+
+    Company Location mode: the chosen start/end point is added as a plain
+    bookend AROUND the company Start/End Address stop (see
+    db_route_ops._wrap_with_home_bookends) — Home is not a stop.
+
+    Args:
+        route_date: YYYY-MM-DD to plan the route for.
+        crew:       Optional crew/technician name to scope to. Left blank,
+                    every crew's jobs on this date are included. In server
+                    mode this also picks whose home address "home" means.
+        origin_lat: Live device GPS latitude, captured client-side the
+                    moment the picker's Continue was tapped — required
+                    when origin_choice is "gps", ignored for "home" (the
+                    geocoded home address replaces it). Only meaningful
+                    when Settings -> Route Origin Mode is "Jobs Only";
+                    Company Location mode always anchors on its own
+                    configured address regardless.
+        origin_lon: Live device GPS longitude — see origin_lat.
+        origin_choice: Optional. Leave blank (what the Jobs app does) to use the
+                      route mode's own start/end from Settings; or "gps" /
+                      "home" (case-insensitive) to force one.
+        ctx:        MCP context (injected automatically).
+
+    Returns:
+        "⏳ RUNNING (job_id=...)" once the background run has started (or
+        already was running for this exact date+crew), or a ❌ explaining
+        exactly what is missing (no start/end choice, GPS unavailable, no
+        home address configured, address not found on the map, Claude Code
+        CLI not installed, caller not allowed) — never a silent no-op.
+
+    Voice examples: (not applicable — PWA-button-only tool)
+    """
+    try:
+        import task_queue_automation as _tqa
+    except Exception as exc:
+        return f"❌ task_queue_automation module not available: {exc}"
+
+    # Where the one-time setup lives depends on the mode: Personal uses the
+    # Small Business tab's AI Route Optimizer section (and the Links & Analysis
+    # task queue). A server still shows the Small Business tab, but not that
+    # section (no task queue in server mode) — its setup is the "AI Route
+    # runner" panel on the Admin tab, and only an admin at the server can do it.
+    _server_setup = _current_user(ctx) is not None
+    if not _tqa.claude_code_cli_installed():
+        if _server_setup:
+            return (
+                "❌ AI Routing isn't set up on this server yet — Claude Code isn't "
+                "installed. Ask an admin to open the Admin tab and click \u201c"
+                "Install Claude Code CLI\u201d in the AI Route runner panel."
+            )
+        return (
+            "❌ Claude Code CLI is not installed or not on PATH. Set it up "
+            "from the Links & Analysis tab's Autonomous AI Task Queue panel "
+            "first (⬇ Install Claude Code CLI), then try again."
+        )
+    if not _tqa.ai_routing_task_exists():
+        if _server_setup:
+            return (
+                "❌ AI Routing isn't set up on this server yet — the on-demand "
+                "runner hasn't been registered. Ask an admin to open the Admin tab "
+                "and click \u201cSet Up AI Route Runner\u201d (one-time, needs one "
+                "Windows confirmation prompt at the server)."
+            )
+        return (
+            "❌ The on-demand AI Routing runner isn't set up yet — click "
+            "\u201cSet Up On-Demand AI Routing\u201d in the Small Business tab "
+            "(one-time, needs one Windows confirmation prompt), then try again. This is "
+            "a separate, dedicated runner from the main scheduled queue, specifically so "
+            "an on-demand routing request never sweeps up and runs your other queued "
+            "tasks early."
+        )
+
+    crew = (crew or "").strip()
+
+    # Server mode: the run is billed to the CALLER, using the Claude token an
+    # admin saved for them in the Admin tab — so a user with no token saved
+    # can't run it, and nobody spends anyone else's usage. (No user on ctx ==
+    # personal mode: the owner's own shared token, unchanged.)
+    _caller = _current_user(ctx)
+    _user_token_path = None
+    if _caller is not None:
+        _role = (_caller.get("role") or "").strip().lower()
+        _uid = _caller.get("id") or _make_user_id(_caller.get("name", ""))
+        if not _tqa.has_user_oauth_token(_uid):
+            return (
+                "🔑 NO_CLI_TOKEN — your Claude account isn't connected to AI "
+                "Routing yet. Connect it (or ask an admin to add your token in "
+                "the Admin tab), then try again. Nothing was started."
+            )
+        _user_token_path = _tqa.user_oauth_token_path(_uid)
+        # A crew account can only ever route its OWN day — whatever `crew` the
+        # client sent. (Owner/manager/staff may route any crew.)
+        if _role == "field_crew":
+            crew = (_caller.get("name") or "").strip()
+        elif not crew:
+            # R-055: a manager/staff member's AI Route with no crew picked is
+            # THEIR day (the jobs assigned to them), not every crew's.
+            crew = _route_default_crew(ctx)
+
+    # Start/end location (2026-09-21): the PWA no longer asks — a BLANK
+    # origin_choice means "do what Route Today does": pass no coordinates, and
+    # apply_route_order resolves the day's start/end from Settings by mode (Jobs
+    # Only -> the crew member's/owner's home address; Company Location -> the
+    # Start/End Address), so both routing methods always use the same data.
+    # An explicit "gps" or "home" is still honored for a direct caller who
+    # really wants one; anything ELSE is rejected before anything starts, so a
+    # typo costs nothing. Validated (and, for "home", geocoded) BEFORE anything
+    # is started.
+    _choice = (origin_choice or "").strip().lower()
+    if _choice not in ("", "gps", "home"):
+        return (
+            "❌ Unknown start/end choice — use \"gps\", \"home\", or leave it "
+            "blank to use the route mode's own start/end from Settings. "
+            "Nothing was started."
+        )
+    if _choice == "":
+        origin_lat, origin_lon = "", ""
+    elif _choice == "gps":
+        try:
+            _glat = float(str(origin_lat).strip())
+            _glon = float(str(origin_lon).strip())
+        except (TypeError, ValueError):
+            _glat = _glon = float("nan")
+        # NaN fails both range checks, so a garbage pair is rejected here too.
+        if not (-90.0 <= _glat <= 90.0 and -180.0 <= _glon <= 180.0):
+            return (
+                "❌ Current location isn't available from this device (location "
+                "permission denied, or no fix yet). Choose your home address "
+                "instead, or allow location access and try again. Nothing was started."
+            )
+        origin_lat, origin_lon = repr(_glat), repr(_glon)
+    else:
+        _home_addr, _home_label = _resolve_route_home(ctx, crew)
+        _where = ("in the Settings tab (owner address)" if _caller is None
+                  else "in the Admin tab (Edit User → Home address)")
+        if not _home_addr:
+            return (
+                f"❌ {_home_label} isn't set yet — add it {_where}, or choose "
+                f"Current location instead. Nothing was started."
+            )
+        from db_route_ops import _geocode as _route_geocode
+        _coords = _route_geocode(_home_addr)
+        if not _coords:
+            return (
+                f"❌ Couldn't find {_home_label} (\u201c{_home_addr}\u201d) on the map — "
+                f"fix the address {_where}, or choose Current location instead. "
+                f"Nothing was started."
+            )
+        origin_lat, origin_lon = repr(float(_coords[0])), repr(float(_coords[1]))
+
+    with _AI_ROUTING_JOBS_LOCK:
+        for _jid, _j in _AI_ROUTING_JOBS.items():
+            if _j["status"] == "running" and _j["route_date"] == route_date and _j["crew"] == crew:
+                return f"⏳ RUNNING (job_id={_jid}) — already in flight for this date, not starting a second run."
+        # Every run rewrites the SAME wrapper, prompt, last-run and marker files
+        # (the dedicated Scheduled Task's Action is one fixed path), so two runs
+        # at once — different dates, different crews, or different USERS in
+        # server mode — would overwrite each other's inputs and outputs. One at
+        # a time, whoever asks second is told to retry.
+        for _jid, _j in _AI_ROUTING_JOBS.items():
+            if _j["status"] == "running":
+                _busy_for = f"{_j['route_date']}" + (f" ({_j['crew']})" if _j["crew"] else "")
+                return (
+                    f"❌ Another AI Routing run is already in progress ({_busy_for}) — "
+                    f"the on-demand runner handles one at a time. Try again in a few "
+                    f"minutes. Nothing was started."
+                )
+
+    prompt = _RUN_AI_ROUTING_PROMPT_TEMPLATE.format(
+        route_date=route_date,
+        crew_clause=f" for crew '{crew}'" if crew else "",
+        crew_arg=f", crew=\"{crew}\"" if crew else "",
+        origin_arg=(f", origin_lat=\"{origin_lat}\", origin_lon=\"{origin_lon}\""
+                    if str(origin_lat).strip() and str(origin_lon).strip() else ""),
+    )
+
+    import uuid, time
+    job_id = uuid.uuid4().hex[:12]
+
+    with _AI_ROUTING_JOBS_LOCK:
+        _AI_ROUTING_JOBS[job_id] = {
+            "status": "running", "route_date": route_date, "crew": crew,
+            "started_at": time.time(), "finished_at": None, "output": "",
+        }
+        # Trim finished (not running) jobs beyond the cap so this dict
+        # never grows unbounded across a long-running AI-Prowler session —
+        # a running job is never trimmed regardless of age.
+        if len(_AI_ROUTING_JOBS) > _AI_ROUTING_JOBS_MAX:
+            _finished = sorted(
+                ((jid, j) for jid, j in _AI_ROUTING_JOBS.items() if j["status"] != "running"),
+                key=lambda kv: kv[1]["started_at"],
+            )
+            for _jid, _ in _finished[: len(_AI_ROUTING_JOBS) - _AI_ROUTING_JOBS_MAX]:
+                _AI_ROUTING_JOBS.pop(_jid, None)
+
+    # The worker emails the finished route (link + the AI's own summary) once, at
+    # the very end, when Settings -> "Email Route On Build" is Enabled. Server
+    # mode sends it to the person who tapped the button; personal mode falls
+    # back to the SMTP config's default recipient.
+    _caller_email = (_caller.get("email") or "").strip() if _caller else ""
+    threading.Thread(
+        target=_ai_routing_worker,
+        args=(job_id, prompt, route_date, _user_token_path, crew, _caller_email),
+        daemon=True,
+    ).start()
+
+    return f"⏳ RUNNING (job_id={job_id})"
+
+
+@mcp.tool()
+def poll_ai_routing(
+    job_id: str,
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Checks progress on a background AI Routing run started by
+    start_ai_routing(job_id=...) — the Jobs PWA Route tab polls this every
+    few seconds while its "🧠 Thinking…" banner is showing.
+
+    Args:
+        job_id: The id returned by start_ai_routing's "⏳ RUNNING (job_id=…)"
+                response.
+        ctx:    MCP context (injected automatically).
+
+    Returns:
+        "⏳ RUNNING (job_id=…, elapsed=Ns)" while still going, "✅ DONE
+        (job_id=…)" followed by the session's own final summary once it
+        finishes successfully, "❌ ERROR (job_id=…)" followed by what went
+        wrong if it failed or timed out, or "❌ Unknown job_id: …" if the
+        id doesn't exist — including because AI-Prowler restarted since the
+        job started (job state is in-memory only, not persisted across a
+        restart); the PWA treats this the same as any other failure and
+        lets the person start a fresh run.
+
+    Voice examples: (not applicable — PWA-button-only tool)
+    """
+    with _AI_ROUTING_JOBS_LOCK:
+        job = _AI_ROUTING_JOBS.get(job_id)
+        job = dict(job) if job is not None else None
+
+    if job is None:
+        return f"❌ Unknown job_id: {job_id}"
+
+    if job["status"] == "running":
+        import time
+        elapsed = int(time.time() - job["started_at"])
+        return f"⏳ RUNNING (job_id={job_id}, elapsed={elapsed}s)"
+
+    if job["status"] == "done":
+        return f"✅ DONE (job_id={job_id})\n\n{job['output']}"
+
+    return f"❌ ERROR (job_id={job_id})\n\n{job['output']}"
 
 
 # ── Import the self-learning engine ──────────────────────────────────────────
@@ -10682,6 +13527,20 @@ def record_learning(
         _recorded_by    = (_user.get("name") or "").strip()
         if not _recorded_by:
             _recorded_by = _user.get("role", "").strip()
+
+    # ── R-042 (was gap G-03, 2026-09-27): supersedes_id ownership gate ──────
+    # Superseding marks the OLD learning deprecated — a modification of it —
+    # so it gets the same rules as update_learning / delete_learning
+    # (_can_modify_learning): crew only their own, managers any employee's
+    # but never the owner's, owner any. Previously anyone could retire anyone's
+    # learning this way. Checked BEFORE anything is written, so a refused call
+    # records nothing. Personal mode (_user is None) is unchanged.
+    if _user is not None and supersedes_id.strip():
+        _old = _sl.get_learning_by_id(supersedes_id.strip())
+        _ok, _reason = _can_modify_learning(_user, _old, _owner_user_id())
+        if not _ok:
+            return (f"⛔ record_learning: can't supersede learning "
+                    f"{supersedes_id.strip()} — {_reason}. Nothing was recorded.")
 
     # Resolve the source label:
     #   - Claude auto-detected it          → model name e.g. "claude-sonnet-4-6"
@@ -12106,12 +14965,21 @@ def _is_blocked_path(resolved_path: str) -> tuple[bool, str]:
     if ".aws" in parts_lower or "\\.aws\\" in p or p.endswith("\\.aws"):
         return (True, ".aws contains credentials — never written by AI-Prowler")
 
-    # The job tracker spreadsheet — schema-aware tool only
+    # The old job tracker workbook — a legacy artifact, not the live store.
+    # 2026-09-14 fix: this used to say "must be modified via the dedicated
+    # update_job_spreadsheet tool (schema-aware)" — wrong since the Job
+    # Board migration, since that tool (and every other job-data tool) is
+    # SQLite-backed now and doesn't touch this file at all either. Still
+    # worth a soft protection (this file may hold a user's own historical
+    # data they wouldn't want a careless generic write to clobber), but
+    # the reasoning given must be accurate about why.
     job_tracker_marker = "ai-prowler_job_tracker.xlsx"
     if p.endswith(job_tracker_marker):
-        return (True, "AI-Prowler_Job_Tracker.xlsx must be modified via the "
-                       "dedicated update_job_spreadsheet tool (schema-aware), "
-                       "not via generic write tools")
+        return (True, "AI-Prowler_Job_Tracker.xlsx is a legacy file — live job "
+                       "data has moved to a SQLite database (see backup_job_database()/ "
+                       "restore_job_database()/export_to_excel() instead). This old "
+                       "file may still hold meaningful historical data, so "
+                       "generic write tools won't overwrite it automatically")
 
     return (False, "")
 
@@ -14629,7 +17497,15 @@ def lint_check(filepath: str, timeout_sec: int = _DEV_CHECK_TIMEOUT_SEC) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 # TOOL — run_script
 # ══════════════════════════════════════════════════════════════════════════════
-@mcp.tool()
+# 2026-09-26 (found during the Jobs-app E2E work): this used to be registered
+# as a plain (sync) MCP tool, and the MCP SDK runs sync tools directly on the
+# server's single event loop — so while a script ran, the WHOLE server stopped
+# answering (/health, the Jobs app, every other tool call). Measured: a 15 s
+# script = 14.8 s with no answer at all; the desktop app's LED went red
+# ("Stopped") and came back green when the script finished. The tool is now
+# an async wrapper (run_script_tool, registered under the same name
+# "run_script") that runs this function on a worker thread. run_script itself
+# stays a plain function so direct Python callers/tests are unchanged.
 def run_script(script_path: str, args: str = "",
                timeout_sec: int = 120, max_output_lines: int = 200) -> str:
     """
@@ -14952,6 +17828,16 @@ def _resolve_run_argv(script_path: str, extra_args: list) -> tuple:
                 f".go .c .cpp .cc .cxx .java")
 
 
+# The MCP-facing run_script: same name, same arguments, same description, same
+# result — but the script is waited on in a worker thread, so the server keeps
+# answering everything else meanwhile (see the note above run_script).
+@mcp.tool(name="run_script", description=run_script.__doc__)
+async def run_script_tool(script_path: str, args: str = "",
+                          timeout_sec: int = 120, max_output_lines: int = 200) -> str:
+    import asyncio as _aio_rs
+    return await _aio_rs.to_thread(run_script, script_path, args, timeout_sec, max_output_lines)
+
+
 @mcp.tool()
 def run_script_start(script_path: str, args: str = "",
                      timeout_sec: int = 1800) -> str:
@@ -15220,6 +18106,75 @@ def run_script_status(job_id: str, tail_lines: int = 50) -> str:
     return "\n".join(lines_out)
 
 
+def _pid_alive(pid: int) -> bool:
+    """True if a process with this PID exists (no psutil needed)."""
+    import subprocess as _sp
+    if sys.platform == "win32":
+        try:
+            out = _sp.run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+                          capture_output=True, text=True, timeout=10,
+                          creationflags=0x08000000).stdout
+            return f'"{pid}"' in out
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 0)          # POSIX probe only — never on Windows (see below)
+        return True
+    except OSError:
+        return False
+
+
+def _kill_process_tree(pid: int):
+    """Stop a process AND everything it started. Returns (ok, detail).
+
+    2026-10-02 (Vicki): run_script_kill used to need psutil for this, and
+    psutil isn't installed, so it fell back to stopping only the one PID — the
+    E2E test runner, pytest and its browser under a killed job kept running and
+    clashed with the next run. Verified with tests/dev/kill_tree_probe.py: the
+    child and grandchild survived. Windows' own `taskkill /F /T` walks the whole
+    tree with no extra packages. NOTE: os.kill(pid, 0) is a Ctrl+C on Windows,
+    never a probe — _pid_alive uses tasklist there.
+    """
+    import subprocess as _sp
+    if not _pid_alive(pid):
+        return True, " (already gone)"
+    if sys.platform == "win32":
+        try:
+            r = _sp.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                        capture_output=True, text=True, timeout=30,
+                        creationflags=0x08000000)
+            stopped = (r.stdout or "").count("SUCCESS")
+        except Exception as exc:
+            return False, f": taskkill failed ({exc})"
+    else:
+        stopped = 0
+        try:
+            import psutil as _ps
+            proc = _ps.Process(pid)
+            kids = proc.children(recursive=True)
+            for k in kids:
+                try:
+                    k.kill()
+                except Exception:
+                    pass
+            proc.kill()
+            stopped = 1 + len(kids)
+        except ImportError:
+            import signal as _sig
+            try:
+                os.killpg(os.getpgid(pid), _sig.SIGKILL)   # whole process group
+            except Exception:
+                os.kill(pid, _sig.SIGKILL)
+            stopped = 1
+        except Exception as exc:
+            return False, f": {exc}"
+    if _pid_alive(pid):
+        return False, " is STILL RUNNING after the stop attempt"
+    extra = stopped - 1
+    return True, (f" (+ {extra} child process{'es' if extra != 1 else ''})"
+                  if extra > 0 else "")
+
+
 @mcp.tool()
 def run_script_kill(job_id: str) -> str:
     """
@@ -15258,29 +18213,12 @@ def run_script_kill(job_id: str) -> str:
     def _kill_pid(p, label):
         if not p:
             return
-        try:
-            import signal
-            # Try psutil first for child-tree kill
-            try:
-                import psutil as _ps
-                proc_obj = _ps.Process(int(p))
-                children = proc_obj.children(recursive=True)
-                for child in children:
-                    try:
-                        child.kill()
-                    except Exception:
-                        pass
-                proc_obj.kill()
-                killed.append(f"{label} PID {p} (+ {len(children)} children)")
-            except ImportError:
-                # psutil not available — kill just the pid
-                os.kill(int(p), signal.SIGTERM)
-                killed.append(f"{label} PID {p}")
-        except ProcessLookupError:
-            killed.append(f"{label} PID {p} (already gone)")
-        except Exception as exc:
-            errors.append(f"{label} PID {p}: {exc}")
+        ok, detail = _kill_process_tree(int(p))
+        (killed if ok else errors).append(f"{label} PID {p}{detail}")
 
+    # Script tree first, while its parent→child links are still intact (once a
+    # parent is gone, Windows can no longer find that parent's children by
+    # walking the tree). Then the wrapper.
     _kill_pid(pid, "script")
     _kill_pid(wrapper_pid, "wrapper")
 
@@ -15503,43 +18441,56 @@ def _email_config_load() -> "dict | None":
     return None
 
 
-def _lookup_customer_email(name_or_id: str) -> "str | None":
-    """Look up a customer's email address from the Customers sheet by name or ID.
+def _lookup_customer_email(name_or_id: str, ctx=None) -> "str | None":
+    """Look up a customer's email address from the customers table by name or ID.
 
-    Matches CustomerID (CUST-####), Company Name, First+Last Name, or any
-    partial name match (case-insensitive). Returns the email string or None.
-    Used by send_email / send_alert so any role can address customers by
-    name without knowing their email — works the same in personal mode and
-    for every server-mode role (owner, manager, staff, field_crew).
+    Matches CustomerID (CUST-####) exactly first, then falls back to a
+    substring match against Company Name, First Name, Last Name, or Phone
+    (case-insensitive). Returns the email string or None. Used by
+    send_email()/send_alert() so any role can address customers by name
+    without knowing their email.
+
+    2026-09-13 fix: this was still fully openpyxl-based, opening the old
+    .xlsx Job Tracker directly — the same class of bug just fixed in
+    email_invoice()/text_invoice()/email_receipt()/text_receipt()'s
+    shared _find_invoice_row(), found while porting those four. It had
+    been silently unable to find any customer added after the SQLite
+    migration. Also accepts `ctx` (optional, defaults to None so any
+    external caller not passing it still works) and resolves the job
+    database via _resolve_job_db_path(ctx, ...) like every other job tool —
+    the one shared database for every user (R-046).
 
     v8.0.0 — enables customer email from the job spreadsheet.
+    v9.2.0 — ported to the DB-backed customers table.
     """
     try:
-        import openpyxl as _opx
-        _xl_path = _get_default_spreadsheet_path()
-        if not (_xl_path and os.path.exists(_xl_path)):
+        db_path = _resolve_job_db_path(ctx, "")
+        if not db_path:
             return None
-        _wb = _opx.load_workbook(_xl_path, data_only=True)
-        if 'Customers' not in _wb.sheetnames:
-            return None
-        _ws = _wb['Customers']
-        _hdrs, _hdr_row = [], None
-        for _r in _ws.iter_rows(min_row=1, max_row=5):
-            if len([c for c in _r if c.value]) >= 3:
-                _hdr_row = _r[0].row
-                _hdrs = [_join_header_lines(c.value) for c in _r]
-                break
-        if not _hdr_row:
-            return None
-        _email_col = next((i for i, h in enumerate(_hdrs) if h.lower() == 'email'), None)
-        if _email_col is None:
-            return None
-        _needle = name_or_id.strip().lower()
-        for _row in _ws.iter_rows(min_row=_hdr_row + 1):
-            _vals = [str(c.value or '').strip() for c in _row]
-            _row_str = ' '.join(_vals).lower()
-            if _needle in _row_str and _vals[_email_col]:
-                return _vals[_email_col]
+        import sqlite3 as _sqlite3_lce
+        conn = _sqlite3_lce.connect(db_path)
+        conn.row_factory = _sqlite3_lce.Row
+        try:
+            needle = name_or_id.strip()
+            if not needle:
+                return None
+            row = conn.execute(
+                "SELECT email FROM customers WHERE customer_id = ?", (needle,)
+            ).fetchone()
+            if row and row["email"]:
+                return str(row["email"])
+            like = f"%{needle.lower()}%"
+            row = conn.execute(
+                "SELECT email FROM customers WHERE "
+                "(LOWER(company_name) LIKE ? OR LOWER(first_name) LIKE ? "
+                "OR LOWER(last_name) LIKE ? OR LOWER(phone) LIKE ?) "
+                "AND email IS NOT NULL AND email != '' LIMIT 1",
+                (like, like, like, like),
+            ).fetchone()
+            if row and row["email"]:
+                return str(row["email"])
+        finally:
+            conn.close()
     except Exception:
         pass
     return None
@@ -16286,7 +19237,7 @@ def send_email(to: str, subject: str, body: str,
     # from the Customers sheet (by name/company/ID), users.json (by name),
     # or the personal contacts_cache.json (by name) — in that order.
     if '@' not in to:
-        _resolved = _lookup_customer_email(to)
+        _resolved = _lookup_customer_email(to, ctx=ctx)
         if _resolved:
             to = _resolved
         else:
@@ -16354,10 +19305,15 @@ def send_email(to: str, subject: str, body: str,
             return f"❌ Attachment: {err}"
         attach = resolved_attach
 
+    # R-053: server mode ignores from_account — every user sends from the
+    # company account chosen in Settings → Email Configuration. With an
+    # Outlook backend the server's Outlook profile may hold other mailboxes
+    # (the owner's own, say) that a signed-in employee must not send from.
+    _from_override = (from_account.strip() or None) if user is None else None
     ok, msg = _send_smtp(to, subject, body, attachment_path=attach,
                          body_html=(body_html.strip() or None),
                          reply_to=reply_to, sender_display=sender_display,
-                         from_account_override=(from_account.strip() or None))
+                         from_account_override=_from_override)
     return msg
 
 
@@ -16401,7 +19357,7 @@ def send_alert(message: str, to: str = "",
 
     # v8.0.0: name → email resolution (Customers sheet first, then users.json)
     if '@' not in to:
-        _resolved = _lookup_customer_email(to)
+        _resolved = _lookup_customer_email(to, ctx=ctx)
         if _resolved:
             to = _resolved
         else:
@@ -18164,20 +21120,42 @@ def list_writable_directories(ctx: Context = None) -> str:
                 "owner/admin to enable write access in the Admin tab."
             )
 
-    # Personal mode, or server-mode owner/manager: full list, unchanged.
+    # Personal mode, or server-mode owner/manager: full list.
+    # RM-R-007 (2026-09-29, Remote PWA E2E RP-02/04): a tracked folder INSIDE a
+    # writable folder IS writable (grant_write_access / the write check both go by
+    # "inside a writable folder"), but this list used to show it as [R] — so the
+    # Remote app's Permissions + Files screens called it read-only (no Upload),
+    # granting "succeeded" without changing anything, and it could never be made
+    # read-only on its own. It is now listed under Writable, in the SAME
+    # "  ✅ [W]  <path>" line format the Remote app parses (exact path, nothing
+    # appended), followed by a separate note line saying which folder covers it.
     writable = _writable_allowlist_load()
     read_dirs = load_auto_update_list() or []
+    _wn = [(_normalize_path_for_match(w), w) for w in writable]
+
+    def _covered_by(p):
+        pn = _normalize_path_for_match(p)
+        for wn, w in _wn:
+            if pn != wn and pn.startswith(wn + "/"):
+                return w
+        return None
+
+    inherited = [(r, _covered_by(r)) for r in read_dirs if r not in writable and _covered_by(r)]
+    inherited_paths = {r for r, _ in inherited}
 
     lines = ["📁 AI-Prowler Write Zone Status\n"]
-    lines.append(f"Writable directories ({len(writable)}):")
-    if writable:
+    lines.append(f"Writable directories ({len(writable) + len(inherited)}):")
+    if writable or inherited:
         for w in sorted(writable):
             lines.append(f"  ✅ [W]  {w}")
+        for r, parent in sorted(inherited):
+            lines.append(f"  ✅ [W]  {r}")
+            lines.append(f"         ↳ writable because it is inside {parent}")
     else:
         lines.append("  (none configured — Claude can read but not write files)")
 
     lines.append("")
-    read_only = [r for r in read_dirs if r not in writable]
+    read_only = [r for r in read_dirs if r not in writable and r not in inherited_paths]
     lines.append(f"Read-only directories ({len(read_only)}):")
     if read_only:
         for r in sorted(read_only):
@@ -18316,6 +21294,14 @@ def revoke_write_access(directory: str, ctx: Context = None) -> str:
                  or _normalize_path_for_match(w).startswith(dir_norm + "/")]
 
     if not to_remove:
+        # RM-R-007: a folder INSIDE a writable folder is writable through that
+        # parent — it can't be made read-only on its own. Say so plainly (as a
+        # refusal the Remote app shows) instead of "nothing to revoke".
+        _parent = next((w for w in writable
+                        if dir_norm.startswith(_normalize_path_for_match(w) + "/")), None)
+        if _parent:
+            return (f"❌ '{resolved}' is writable because it is inside the writable folder "
+                    f"'{_parent}' — it can't be made read-only on its own. Revoke '{_parent}' instead.")
         return f"ℹ️  '{resolved}' is not in the write zone — nothing to revoke."
 
     new_list = [w for w in writable if w not in to_remove]
@@ -18618,7 +21604,7 @@ def reindex_all(purge_first: bool = True, ctx: Context = None) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 # These four functions are PURE (no I/O beyond reading config.json in
 # _load_runtime_config) and were hoisted out of _run_http() to module level so
-# the test suite (tests/mcp/test_edition_activation.py) can import and call them
+# the test suite (tests/mcp_tests/test_edition_activation.py) can import and call them
 # directly without launching the HTTP server. _run_http() calls them by bare
 # name, which now resolves here. See PHASE_A_PRIME_TEST_PLAN.md §4.0.
 #
@@ -19950,6 +22936,40 @@ def _can_purge_chunks(actor: "dict | None", existing_metadatas: "list | None",
     return (True, "actor may purge all present owners")
 
 
+# ── R-043 (was gap G-10, 2026-09-27 — David: 30 days) ─────────────────────────
+# Jobs app sessions (the access tokens /pwa-login hands out) used to live until
+# Sign Out or a server restart — a copied session (lost/shared phone, old
+# browser profile) worked forever. Now a session that hasn't been used for
+# PWA_SESSION_IDLE_SECS is ended on its next use and answered with 401, which
+# sends the app back to its sign-in screen. Every successful use restarts the
+# clock, so someone using the app at least once a month never notices.
+# Only /pwa-login sessions are tracked; OAuth connector tokens and raw
+# users.json tokens are untouched.
+PWA_SESSION_IDLE_SECS = 30 * 24 * 3600
+
+
+def _pwa_session_touch(tok: str, last_used: dict, now: float,
+                       idle_secs: float = PWA_SESSION_IDLE_SECS) -> str:
+    """Check-and-refresh one presented bearer against the idle timeout. PURE
+    apart from updating/removing `last_used[tok]`.
+
+    Returns:
+      "not_session" — tok isn't a tracked /pwa-login session (OAuth token,
+                      raw users.json token, or unknown): no timeout applies.
+      "ok"          — live session; its last-used time is now `now`.
+      "expired"     — idle longer than idle_secs; removed from last_used.
+                      The caller must also drop it from its token map and
+                      answer 401.
+    """
+    if not tok or tok not in last_used:
+        return "not_session"
+    if now - last_used[tok] > idle_secs:
+        last_used.pop(tok, None)
+        return "expired"
+    last_used[tok] = now
+    return "ok"
+
+
 def _run_server_mode(port: int, token: str,
                      public_base: str = "https://mobile.dvavro-ai-prowler.com") -> None:
     """Multi-user server transport. STEP 1: authentication layer.
@@ -20011,6 +23031,21 @@ def _run_server_mode(port: int, token: str,
     # from the user's display name — the token never becomes the id.
     for _ut in (users_data.get("users") or {}).keys():
         _srv_access_tokens[_ut] = _ut
+
+    # R-043: /pwa-login session -> last time it was used (time.time()).
+    _srv_pwa_last_used: dict = {}
+    import time as _srv_time
+
+    def _srv_raw_token_for(tok: str):
+        """Map a presented bearer to its users.json token, applying the Jobs
+        app idle timeout (R-043). Returns None for an expired /pwa-login
+        session — which is also ended here — so the caller answers 401."""
+        if _pwa_session_touch(tok, _srv_pwa_last_used, _srv_time.time()) == "expired":
+            _srv_access_tokens.pop(tok, None)
+            _log.info("Jobs PWA session expired after %d idle days — sign-in required",
+                      PWA_SESSION_IDLE_SECS // 86400)
+            return None
+        return _srv_access_tokens.get(tok, tok)
 
     _local_host = f"127.0.0.1:{port}".encode()
     _srv_public_base = public_base.rstrip("/")
@@ -20500,8 +23535,7 @@ def _run_server_mode(port: int, token: str,
                     _srv_os.path.dirname(_srv_os.path.abspath(__file__)), "jobs")
                 _srv_rel = path[5:].lstrip("/") or "index.html"
                 _srv_file_path = _srv_os.path.join(_srv_pwa_root, _srv_rel)
-                if not _srv_os.path.abspath(_srv_file_path).startswith(
-                        _srv_os.path.abspath(_srv_pwa_root)):
+                if not _path_is_inside(_srv_file_path, _srv_pwa_root):   # 2026-09-25: was a prefix check
                     await _send_text(send, 403, "Forbidden")
                     return
                 if not _srv_os.path.isfile(_srv_file_path):
@@ -20576,6 +23610,13 @@ def _run_server_mode(port: int, token: str,
                 _srv_pl_name    = str(_srv_pl_req.get("name", "")).strip()
                 _srv_pl_entered = str(_srv_pl_req.get("token", "")).strip()
                 _srv_pl_generic_error = "Name or password not recognized."
+                # R-049: the owner switched the Jobs app off (Job Tracker &
+                # Routing unticked in Settings) — say so plainly at sign-in
+                # rather than letting every screen fail afterwards. Checked
+                # before the credentials, and reveals nothing about them.
+                if _jobs_app_turned_off():
+                    await _send_json(send, 403, {"ok": False, "error": _JOBS_APP_OFF_MESSAGE})
+                    return
 
                 if not _srv_pl_name or not _srv_pl_entered:
                     await _send_json(send, 401, {"ok": False, "error": _srv_pl_generic_error})
@@ -20593,6 +23634,7 @@ def _run_server_mode(port: int, token: str,
 
                 _srv_pl_access = _srv_secrets.token_urlsafe(48)
                 _srv_access_tokens[_srv_pl_access] = _srv_pl_entered
+                _srv_pwa_last_used[_srv_pl_access] = _srv_time.time()   # R-043
                 _log.info("Jobs PWA login: user=%s role=%s",
                           _srv_pl_user.get("id"), _srv_pl_user.get("role"))
                 await _send_json(send, 200, {
@@ -20601,6 +23643,26 @@ def _run_server_mode(port: int, token: str,
                     "name":         _srv_pl_user.get("name", ""),
                     "role":         _srv_pl_user.get("role", ""),
                 })
+                return
+
+            # ── Jobs PWA sign-out (R-038, 2026-09-26 — found by E2E SRV-AUTH-06b) ──
+            # Sign Out used to only forget the session in the browser: the
+            # access_token issued by /pwa-login stayed valid on the server until
+            # the next restart, so a copy of it (shared or lost phone, browser
+            # profile, saved request) kept full access after the user "signed
+            # out". This ends THAT session: it removes exactly the presented
+            # access_token — and only a /pwa-login-issued one (its mapped value
+            # differs from itself). A raw users.json token (mapped to itself for
+            # legacy clients) is never removed here; revoking a user's real token
+            # stays an Admin-tab action. Always 200, so the reply reveals nothing
+            # about whether the token was valid.
+            if path == "/pwa-logout" and method == "POST":
+                _srv_lo_tok = _bearer_from_scope(scope)
+                if _srv_lo_tok and _srv_access_tokens.get(_srv_lo_tok, _srv_lo_tok) != _srv_lo_tok:
+                    _srv_access_tokens.pop(_srv_lo_tok, None)
+                    _srv_pwa_last_used.pop(_srv_lo_tok, None)   # R-043
+                    _log.info("Jobs PWA sign-out: session ended")
+                await _send_json(send, 200, {"ok": True})
                 return
 
             # ── Jobs PWA tool-call bridge (server mode, Phase 2) ────────────────
@@ -20623,7 +23685,11 @@ def _run_server_mode(port: int, token: str,
                     await _send_json(send, 401, {"ok": False, "error": "Missing bearer token"})
                     return
                 _srv_pa_live_users = _hot_reload_users(users_data)
-                _srv_pa_raw_tok = _srv_access_tokens.get(_srv_pa_tok, _srv_pa_tok)
+                _srv_pa_raw_tok = _srv_raw_token_for(_srv_pa_tok)          # R-043 idle timeout
+                if _srv_pa_raw_tok is None:
+                    await _send_json(send, 401, {"ok": False,
+                                                 "error": "Session expired — please sign in again."})
+                    return
                 _srv_pa_user = _resolve_user(_srv_pa_live_users, _srv_pa_raw_tok)
                 if _srv_pa_user is None:
                     await _send_json(send, 401, {"ok": False, "error": "Invalid or revoked token"})
@@ -20638,6 +23704,7 @@ def _run_server_mode(port: int, token: str,
 
                     _srv_pa_allowed = {
                         "read_job_spreadsheet",
+                        "get_board_updates",
                         "log_time_entry",
                         "update_job_spreadsheet",
                         "record_learning",
@@ -20659,12 +23726,157 @@ def _run_server_mode(port: int, token: str,
                         "check_sms_replies",
                         "create_job",
                         "get_sheet_columns",
+                        # Database-tab expansion (2026-09-12): these two
+                        # tools existed and worked when called directly —
+                        # this allow-list is a SEPARATE gate from "does the
+                        # tool exist," and adding create_setting/
+                        # create_service_pricing as real @mcp.tool()s did
+                        # not automatically add them here. Found live: the
+                        # Database tab's new "+ Add" button on Settings/
+                        # Services_Pricing returned "Unknown tool" even
+                        # though the tools themselves were already correct.
+                        "create_setting",
+                        "create_service_pricing",
+                        # Jobs PWA "route today" button (2026-09-15) — same
+                        # gate-is-separate-from-tool-existing gap as
+                        # create_setting/create_service_pricing above: the
+                        # button calls build_daily_route via mcpCall(), which
+                        # hits this same allow-list, so it had to be added
+                        # here too, not just exist as a real @mcp.tool().
+                        "build_daily_route",
+                        # Database-tab "+ Add"/"Delete" expansion to
+                        # Customers/Quotes/Services_Pricing (2026-09-15) —
+                        # same gap again, found live the same way: the tools
+                        # worked fine called directly but the PWA's own "+
+                        # Add"/"Delete" buttons got "Unknown tool" until
+                        # added here explicitly.
+                        "create_customer",
+                        "create_quote",
+                        "delete_service_pricing",
+                        # delete_customer itself had the SAME gap — built in
+                        # a different session, never added to either
+                        # allowlist. Caught before the Customers sheet's own
+                        # Delete button (which calls it) was ever tested
+                        # live, not after.
+                        "delete_customer",
+                        # delete_quote (2026-09-15) — added alongside its
+                        # row-level Delete button on the Quotes sheet, this
+                        # time added here from the start rather than found
+                        # missing after the fact.
+                        "delete_quote",
+                        # delete_route_stop (2026-09-16) — same pattern,
+                        # added here from the start alongside its row-level
+                        # Delete button on the Route sheet.
+                        "delete_route_stop",
+                        # delete_route (2026-09-23) — whole-day-route delete
+                        # sibling of delete_route_stop above, same
+                        # gate-is-separate-from-tool-existing rule.
+                        "delete_route",
+                        # delete_job (2026-09-18) — same gate-is-separate-
+                        # from-tool-existing gap as every entry above: the
+                        # Jobs sheet's row-level Delete button (Cancelled
+                        # rows only) calls this via mcpCall().
+                        "delete_job",
+                        # reorder_route_stop (2026-09-16, spec §14.7/Phase
+                        # 10) — same gate-is-separate-from-tool-existing gap
+                        # as every entry above: the planned Route-tab map
+                        # widget's drag-to-reorder (spec §14.5) calls this
+                        # via mcpCall(), so it has to be in this allow-list
+                        # from the start, not just exist as a real
+                        # @mcp.tool(), or its drag handler would get
+                        # "Unknown tool" the first time anyone tried it.
+                        "reorder_route_stop",
+                        # replan_route_day (2026-09-21) — the Route tab re-plans the
+                        # day (same order, fresh times) after a job's schedule is
+                        # edited from that page. Same gate-is-separate-from-tool-
+                        # existing rule as every entry above.
+                        "replan_route_day",
+                        # email_route_now (2026-09-21) — "Email Approved Route
+                        # Now" button, active when Email Route On Build is
+                        # Disabled. Same gate-is-separate-from-tool-existing
+                        # rule as every entry above.
+                        "email_route_now",
+                        # find_stale_customers / send_customer_reminders
+                        # (2026-09-23) — the Reports screen's Customer
+                        # Reminders section. Each tool has its own
+                        # _owner_only_denied() check, same as Reports itself
+                        # (manager/staff/field_crew all denied) — the allow-
+                        # list only says the tool EXISTS for this phone
+                        # surface, same gate-is-separate-from-tool-existing
+                        # rule as every entry above.
+                         "find_stale_customers", "send_customer_reminders",
+                         # get_ar_aging_report (R-068, David 2026-09-29) — the
+                         # Reports screen's AR Aging section; the tool itself
+                         # allows only the owner and managers.
+                         "get_ar_aging_report",
+
+                        # approve_route_schedule / unapprove_route_schedule
+                        # (2026-09-20, mileage/routing follow-up) — same
+                        # gate-is-separate-from-tool-existing gap as every
+                        # entry above. The Route tab's two dedicated
+                        # Approve/Un-approve buttons call these via
+                        # mcpCall(), replacing the old client-side
+                        # update_job_spreadsheet loop.
+                        "approve_route_schedule", "unapprove_route_schedule",
+                        # suggest_route_schedule (2026-09-16, spec §14.4/
+                        # Phase 12) — same gate-is-separate-from-tool-
+                        # existing gap as every entry above: the Route
+                        # tab's "Get AI Suggestion" button calls this via
+                        # mcpCall(), so it has to be in this allow-list
+                        # from the start.
+                        "suggest_route_schedule",
+                        # prescreen_route_jobs (2026-09-25) — read-only job
+                        # check run before Route Today / Run AI Route.
+                        "prescreen_route_jobs",
+                        # geocode_address (spec §6.3/§14 follow-up,
+                        # 2026-09-17) — same gate-is-separate-from-tool-
+                        # existing gap as every entry above. The Route tab's
+                        # Start/End bookend (_getRouteOriginInfo) calls this
+                        # via mcpCall() to place the home marker on the
+                        # map, and every one of those calls silently failed
+                        # (400, "Unknown tool") until this was added —
+                        # visible in manual QA as the End marker/red-leg
+                        # never appearing despite everything server-side
+                        # (address, geocoding via a direct MCP call) being
+                        # correct.
+                        "geocode_address",
+                        # AI Routing (2026-09-19) — the Route tab's "🧠 Run AI
+                        # Routing" button and its start/end picker, now
+                        # available in server mode too. Same gate-is-separate-
+                        # from-tool-existing gap as every entry above. NOT a
+                        # blanket grant: start_ai_routing itself requires the
+                        # caller to have their own Claude token saved in the
+                        # Admin tab (the run is billed to them) and forces a
+                        # field_crew caller's crew to their own name;
+                        # get_route_start_options only ever returns another
+                        # user's home address to owner/manager/staff callers.
+                        "start_ai_routing", "poll_ai_routing",
+                        "get_route_start_options",
+                        # Working Days setting (2026-10-02): read-only, every
+                        # role — field crew can't read Settings, but their
+                        # Calendar must use the same working days.
+                        "get_working_days",
+                        # R-056: Crew / Technician picker (names + roles only).
+                        "list_team_members",
+                        # "Connect your Claude account" screen (2026-09-19) —
+                        # each acts on the CALLER only (no user argument), and
+                        # all four refuse in personal mode.
+                        "start_cli_signin", "submit_cli_signin_code",
+                        "cancel_cli_signin", "save_my_cli_token",
                     }
 
                     _srv_pa_g = globals()
                     if _srv_pa_tool not in _srv_pa_allowed or _srv_pa_tool not in _srv_pa_g:
                         await _send_json(send, 400,
                                           {"ok": False, "error": f"Unknown tool: {_srv_pa_tool}"})
+                        return
+                    # R-049: a tool the owner turned off in the Settings panel is
+                    # off for the Jobs app too (and the whole app when Job Tracker
+                    # is off) — not just hidden from Claude's tool list.
+                    _srv_pa_off = (_JOBS_APP_OFF_MESSAGE if _jobs_app_turned_off()
+                                   else _pwa_tool_disabled_message(_srv_pa_tool))
+                    if _srv_pa_off:
+                        await _send_json(send, 403, {"ok": False, "error": _srv_pa_off})
                         return
 
                     # Minimal duck-typed stand-in for a FastMCP Context, only
@@ -20684,10 +23896,26 @@ def _run_server_mode(port: int, token: str,
                     _srv_pa_fn = _srv_pa_g[_srv_pa_tool]
                     import inspect as _srv_pa_inspect
                     _srv_pa_ctx = _SrvPwaCtx(_srv_pa_user)
+                    # R-041 (2026-09-27, was gap G-06): only pass ctx to a tool
+                    # that takes it. search_learnings and geocode_address have no
+                    # ctx parameter, so forcing ctx=… made every call fail with
+                    # HTTP 400 "unexpected keyword argument 'ctx'" for every
+                    # role — the Route tab's home marker (geocode_address) never
+                    # appeared in server mode. Checked per call so a tool added
+                    # to the allow-list later can't hit the same wall.
+                    try:
+                        _srv_pa_params = _srv_pa_inspect.signature(_srv_pa_fn).parameters
+                        _srv_pa_takes_ctx = ("ctx" in _srv_pa_params or any(
+                            p.kind == p.VAR_KEYWORD for p in _srv_pa_params.values()))
+                    except (TypeError, ValueError):
+                        _srv_pa_takes_ctx = True
+                    _srv_pa_kw = dict(_srv_pa_args)
+                    if _srv_pa_takes_ctx:
+                        _srv_pa_kw["ctx"] = _srv_pa_ctx
                     if _srv_pa_inspect.iscoroutinefunction(_srv_pa_fn):
-                        _srv_pa_result = await _srv_pa_fn(**_srv_pa_args, ctx=_srv_pa_ctx)
+                        _srv_pa_result = await _srv_pa_fn(**_srv_pa_kw)
                     else:
-                        _srv_pa_result = _srv_pa_fn(**_srv_pa_args, ctx=_srv_pa_ctx)
+                        _srv_pa_result = _srv_pa_fn(**_srv_pa_kw)
                     await _send_json(send, 200, {"ok": True, "result": str(_srv_pa_result)})
                     return
                 except Exception as _srv_pa_exc:
@@ -20712,7 +23940,11 @@ def _run_server_mode(port: int, token: str,
                     await _send_json(send, 401, {"ok": False, "error": "Missing bearer token"})
                     return
                 _srv_p_live_users = _hot_reload_users(users_data)
-                _srv_p_raw_tok = _srv_access_tokens.get(_srv_p_tok, _srv_p_tok)
+                _srv_p_raw_tok = _srv_raw_token_for(_srv_p_tok)            # R-043 idle timeout
+                if _srv_p_raw_tok is None:
+                    await _send_json(send, 401, {"ok": False,
+                                                 "error": "Session expired — please sign in again."})
+                    return
                 _srv_p_user = _resolve_user(_srv_p_live_users, _srv_p_raw_tok)
                 if _srv_p_user is None:
                     await _send_json(send, 401, {"ok": False, "error": "Invalid or revoked token"})
@@ -20840,29 +24072,36 @@ def _run_server_mode(port: int, token: str,
                         def __init__(self, user): self.request_context = _SrvPhotoRequestContext(user)
 
                     _srv_p_ctx = _SrvPhotoCtx(_srv_p_user)
-                    _srv_p_fp = _resolve_job_spreadsheet_path(_srv_p_ctx, "")
-                    _srv_p_restrict, _srv_p_crew_name = _job_crew_scope(_srv_p_ctx, _srv_p_fp)
-                    if _srv_p_restrict and _srv_p_fp and os.path.exists(_srv_p_fp):
-                        import openpyxl as _srv_p_opx
+                    # 2026-09-13 fix: this crew-scoping check was still fully
+                    # openpyxl-based, opening the old .xlsx Job Tracker
+                    # directly via _resolve_job_spreadsheet_path — a real,
+                    # ACTIVE bug found during a system-wide openpyxl audit,
+                    # not just a stale comment. Since that file generally no
+                    # longer exists (or isn't maintained) once an install has
+                    # moved to the SQLite-backed job store, the try/except
+                    # below silently swallowed the failure and defaulted
+                    # _srv_p_row_crew to "" — which then failed the
+                    # crew-name-match unconditionally, BLOCKING EVERY
+                    # field_crew photo upload in server mode with a false
+                    # "not assigned to you" error. Now queries jobs.crew
+                    # directly, same as every other ported crew-scoping
+                    # check this session.
+                    _srv_p_db_path = _resolve_job_db_path(_srv_p_ctx, "")
+                    _srv_p_restrict, _srv_p_crew_name = _job_crew_scope(_srv_p_ctx, _srv_p_db_path)
+                    if _srv_p_restrict and _srv_p_db_path:
                         _srv_p_row_crew = ""
                         try:
-                            _srv_p_wb = _srv_p_opx.load_workbook(_srv_p_fp, data_only=True)
-                            if "Jobs_Schedule" in _srv_p_wb.sheetnames:
-                                _srv_p_ws = _srv_p_wb["Jobs_Schedule"]
-                                _srv_p_hdr_row, _srv_p_hdrs = None, []
-                                for r in _srv_p_ws.iter_rows(min_row=1, max_row=5):
-                                    ne = [c for c in r if c.value is not None]
-                                    if len(ne) >= 3:
-                                        _srv_p_hdr_row = r[0].row
-                                        _srv_p_hdrs = [_join_header_lines(c.value) for c in r]
-                                        break
-                                if _srv_p_hdrs:
-                                    for row in _srv_p_ws.iter_rows(min_row=_srv_p_hdr_row + 1):
-                                        jvals = [c.value for c in row]
-                                        jrow = dict(zip(_srv_p_hdrs, jvals))
-                                        if str(jrow.get("JobID (JOB-####)", "") or "") == _job_id4:
-                                            _srv_p_row_crew = str(jrow.get("Crew / Technician", "") or "").strip().lower()
-                                            break
+                            import sqlite3 as _sqlite3_photo
+                            _srv_p_conn = _sqlite3_photo.connect(_srv_p_db_path)
+                            _srv_p_conn.row_factory = _sqlite3_photo.Row
+                            try:
+                                _srv_p_jrow = _srv_p_conn.execute(
+                                    "SELECT crew FROM jobs WHERE job_id = ?", (_job_id4,)
+                                ).fetchone()
+                                if _srv_p_jrow:
+                                    _srv_p_row_crew = str(_srv_p_jrow["crew"] or "").strip().lower()
+                            finally:
+                                _srv_p_conn.close()
                         except Exception:
                             _srv_p_row_crew = ""
                         if not _crew_name_in_cell(_srv_p_row_crew, _srv_p_crew_name):
@@ -20871,13 +24110,12 @@ def _run_server_mode(port: int, token: str,
                                 f"(Crew / Technician column). {_job_id4} is not assigned to you."
                             )
 
-                    _photo_dir4 = (
-                        _srv_p_Path.home()
-                        / "Documents"
-                        / "AI-Prowler"
-                        / "JobPhotos"
-                        / _job_id4
-                    )
+                    # Save folder: an EXISTING job's own folder under JobPhotos,
+                    # never anywhere else (R-028 / R-029 — see _job_photo_dir).
+                    # Not yet tested live in server mode (spec §6.11).
+                    _photo_dir4, _pd_err4 = _job_photo_dir(_job_id4, _srv_p_db_path)
+                    if _pd_err4:
+                        raise ValueError(_pd_err4)
                     _photo_dir4.mkdir(parents=True, exist_ok=True)
 
                     _ts4      = _srv_p_dt.now().strftime("%Y%m%d_%H%M%S")
@@ -20896,7 +24134,8 @@ def _run_server_mode(port: int, token: str,
                         # forced to .jpg while still containing non-JPEG
                         # bytes. Only a genuinely missing extension (some
                         # mobile camera captures omit one) falls back to .jpg.
-                        _ext4 = _ext_map4.get(_orig_ext4, _orig_ext4 or ".jpg")
+                        # (Reduced to letters/digits, 2026-09-26 — _safe_upload_ext.)
+                        _ext4 = _safe_upload_ext(_orig_name4, _ext_map4)
 
                         # Keep the original filename (sanitized) rather than
                         # discarding it entirely — a crew member uploading
@@ -20961,8 +24200,8 @@ def _run_server_mode(port: int, token: str,
             for _new_tok in (_live_users.get("users") or {}).keys():
                 if _new_tok not in _srv_access_tokens:
                     _srv_access_tokens[_new_tok] = _new_tok
-            raw_user_token = _srv_access_tokens.get(tok, tok)
-            user = _resolve_user(_live_users, raw_user_token)
+            raw_user_token = _srv_raw_token_for(tok)      # R-043: None = expired Jobs app session
+            user = None if raw_user_token is None else _resolve_user(_live_users, raw_user_token)
             if user is None:
                 _log.info("Auth rejected for token …%s on %s",
                           tok[-4:] if tok else "", path)
@@ -22137,6 +25376,40 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                     "/.well-known/oauth-protected-resource",
                     "/sms-webhook", "/whatsapp-webhook", "/consent-signup"}
 
+    # ── Personal-mode PWA auth (SECURITY FIX 2026-09-25) ──────────────────────
+    # Until now /pwa-token handed the owner's Bearer Token to ANY caller, the
+    # Jobs and Remote PWAs "logged in" by comparing the typed token to that
+    # downloaded copy in the browser, and /pwa-api + /photos/upload required no
+    # token at all. On a public tunnel URL that meant anyone who knew the
+    # address could read/change/delete jobs & customers, send texts/emails, and
+    # upload files — without logging in. Now: /pwa-token never returns the
+    # token, login is checked here (/pwa-verify), and these endpoints require
+    # the same Bearer token /remote-api and /mcp already require
+    # (_access_tokens: the Settings Bearer Token + OAuth-issued tokens).
+    def _pwa_bearer(scope) -> str:
+        for _k, _v in scope.get("headers", []):
+            if _k.lower() == b"authorization":
+                _a = _v.decode("utf-8", errors="ignore")
+                return _a[7:].strip() if _a.lower().startswith("bearer ") else ""
+        return ""
+
+    async def _pwa_personal_auth(scope, send) -> bool:
+        """True if the request carries a valid Bearer token; otherwise sends a
+        401 JSON reply (the PWAs return to their login screen on 401) and
+        returns False."""
+        _tok = _pwa_bearer(scope)
+        if _tok and _tok in _access_tokens:
+            return True
+        _log.warning("PWA AUTH FAIL: %s %s (token: %s)", scope.get("method", "?"),
+                     scope.get("path", ""), "present" if _tok else "missing")
+        _b = b'{"ok":false,"error":"Not logged in \\u2014 please log in again."}'
+        await send({"type": "http.response.start", "status": 401,
+                    "headers": [[b"content-type", b"application/json"],
+                                [b"content-length", str(len(_b)).encode()],
+                                [b"cache-control", b"no-store"]]})
+        await send({"type": "http.response.body", "body": _b, "more_body": False})
+        return False
+
     class _RouterASGI:
         async def __call__(self, scope, receive, send):
             stype = scope.get("type", "")
@@ -22161,21 +25434,22 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                 await oauth_only_app(scope, receive, send)
                 return
 
-            # ── PWA token endpoint — no auth required ─────────────────────
-            # Serves the bearer token, owner name, and mode to the PWA so it
-            # can authenticate MCP calls and display the correct identity.
-            # Reads from ~/.ai-prowler/config.json (same source as Settings tab).
+            # ── PWA info endpoint — no auth required ──────────────────────
+            # Tells the PWAs the mode and owner name. SECURITY FIX 2026-09-25:
+            # it NEVER returns the Bearer Token any more (it used to — see
+            # _pwa_personal_auth above). "token" stays in the reply, always
+            # blank, so an older cached PWA fails closed (its login compares
+            # against "" and refuses) instead of throwing.
             if path == "/pwa-token":
                 import json as _json2, os.path as _osp2
                 _cfg_p = _osp2.join(str(Path.home()), ".ai-prowler", "config.json")
                 try:
                     with open(_cfg_p, "r", encoding="utf-8") as _f2:
                         _cfg2 = __import__("json").load(_f2)
-                    _tok2       = _cfg2.get("remote_token", "")
                     _owner2     = _cfg2.get("owner_name", "")
                     _mode2      = _cfg2.get("mode", "personal")
                     _body2 = __import__("json").dumps({
-                        "token":      _tok2,
+                        "token":      "",
                         "owner_name": _owner2,
                         "mode":       _mode2,
                     }).encode()
@@ -22192,7 +25466,70 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                 return
             # ── end PWA token endpoint ─────────────────────────────────────
 
-            # ── PWA API endpoint — no auth required ────────────────────────
+            # ── /connect — "Connect your AI" phone page (Setup Center, 2026-09-30) ──
+            # Opened by the QR code on the desktop's Setup Center. No sign-in:
+            # it shows ONLY the public connector URL (https://<your link>/mcp)
+            # with Copy / Email and "open Claude / Grok / Muse" buttons — never
+            # the Bearer Token. The URL comes from the owner's own configured
+            # tunnel_domain, not from the request's Host header. Personal mode
+            # only (this is the personal router).
+            if path in ("/connect", "/connect/") and method in ("GET", "HEAD"):
+                try:
+                    import setup_wizard as _sw_c
+                    _dom_c = _sw_c.tunnel_domain()
+                    if not _dom_c:
+                        raise ValueError("phone access (tunnel domain) isn't set up yet")
+                    _html_c = _sw_c.connect_page_html(_sw_c.mcp_url(_dom_c)).encode("utf-8")
+                    _st_c, _ct_c = 200, b"text/html; charset=utf-8"
+                except Exception as _e_c:
+                    _log.warning("/connect unavailable: %s", _e_c)
+                    _html_c = (b"This AI-Prowler isn't ready to share a connector link yet. "
+                               b"Set up phone access on the AI-Prowler desktop first.")
+                    _st_c, _ct_c = 503, b"text/plain; charset=utf-8"
+                await send({"type": "http.response.start", "status": _st_c,
+                            "headers": [
+                                [b"content-type",  _ct_c],
+                                [b"content-length", str(len(_html_c)).encode()],
+                                [b"cache-control",  b"no-store"],
+                                [b"x-robots-tag",   b"noindex"],
+                                [b"referrer-policy", b"no-referrer"],
+                            ]})
+                await send({"type": "http.response.body",
+                            "body": b"" if method == "HEAD" else _html_c, "more_body": False})
+                return
+            # ── end /connect ───────────────────────────────────────────────
+
+            # ── PWA login check (SECURITY FIX 2026-09-25) ──────────────────
+            # POST {"token": "..."} -> 200 {"ok": true} if it's a valid Bearer
+            # token, else 401 {"ok": false} after a short pause (slows
+            # guessing). Replaces the old in-browser compare against a token
+            # /pwa-token used to hand out. Used by the Jobs and Remote PWAs.
+            if path == "/pwa-verify" and method == "POST":
+                import json as _jv, asyncio as _av
+                _vchunks = []
+                while True:
+                    _vm = await receive()
+                    _vchunks.append(_vm.get("body", b""))
+                    if not _vm.get("more_body", False):
+                        break
+                try:
+                    _vtok = str((_jv.loads(b"".join(_vchunks) or b"{}") or {}).get("token", "")).strip()
+                except Exception:
+                    _vtok = ""
+                _vok = bool(_vtok) and _vtok in _access_tokens
+                if not _vok:
+                    _log.warning("PWA LOGIN FAIL (token %s)", "present" if _vtok else "missing")
+                    await _av.sleep(1.0)
+                _vb = b'{"ok":true}' if _vok else b'{"ok":false,"error":"Incorrect token."}'
+                await send({"type": "http.response.start", "status": 200 if _vok else 401,
+                            "headers": [[b"content-type", b"application/json"],
+                                        [b"content-length", str(len(_vb)).encode()],
+                                        [b"cache-control", b"no-store"]]})
+                await send({"type": "http.response.body", "body": _vb, "more_body": False})
+                return
+
+            # ── PWA API endpoint — Bearer token required (SECURITY FIX 2026-09-25;
+            # was "no auth required") ───────────────────────────────────────
             # Simple tool-call bridge for the PWA. The PWA cannot use /mcp
             # directly because FastMCP requires the full Streamable HTTP MCP
             # protocol handshake. This endpoint accepts plain JSON:
@@ -22200,6 +25537,9 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
             #   Response:      {"ok": true, "result": "..."} 
             #                  {"ok": false, "error": "..."}
             if path == "/pwa-api":
+                if not await _pwa_personal_auth(scope, send):
+                    return
+                _note_app_seen("jobs_app", scope)     # Setup Center: Jobs app used (phone yes/no)
                 import json as _json3
                 # Read request body
                 _body_chunks = []
@@ -22216,6 +25556,7 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                     # Use globals() to get live module-level tool functions
                     _allowed_tools = {
                         "read_job_spreadsheet",
+                        "get_board_updates",
                         "log_time_entry",
                         "update_job_spreadsheet",
                         "record_learning",
@@ -22236,12 +25577,110 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                         "check_sms_inbox",
                         "create_job",
                         "get_sheet_columns",
+                        # Database-tab expansion (2026-09-12) — see the
+                        # matching comment on _srv_pa_allowed above.
+                        "create_setting",
+                        "create_service_pricing",
+                        # Jobs PWA "route today" button (2026-09-15) — see
+                        # the matching comment on _srv_pa_allowed above.
+                        "build_daily_route",
+                        # Database-tab "+ Add"/"Delete" expansion to
+                        # Customers/Quotes/Services_Pricing (2026-09-15) —
+                        # see the matching comment on _srv_pa_allowed above.
+                        "create_customer",
+                        "create_quote",
+                        "delete_service_pricing",
+                        # delete_customer itself had the SAME gap — see the
+                        # matching comment on _srv_pa_allowed above.
+                        "delete_customer",
+                        # delete_quote (2026-09-15) — added alongside its
+                        # row-level Delete button on the Quotes sheet, this
+                        # time added here from the start rather than found
+                        # missing after the fact.
+                        "delete_quote",
+                        # delete_route_stop (2026-09-16) — same pattern,
+                        # added here from the start alongside its row-level
+                        # Delete button on the Route sheet.
+                        "delete_route_stop",
+                        # delete_route (2026-09-23) — whole-day-route delete
+                        # sibling of delete_route_stop above, same
+                        # gate-is-separate-from-tool-existing rule.
+                        "delete_route",
+                        # delete_job (2026-09-18) — see the matching comment
+                        # on _srv_pa_allowed above.
+                        "delete_job",
+                        # reorder_route_stop (2026-09-16) — see the
+                        # matching comment on _srv_pa_allowed above.
+                        "reorder_route_stop",
+                        # replan_route_day (2026-09-21) — the Route tab re-plans the
+                        # day (same order, fresh times) after a job's schedule is
+                        # edited from that page. Same gate-is-separate-from-tool-
+                        # existing rule as every entry above.
+                        "replan_route_day",
+                        # email_route_now (2026-09-21) — "Email Approved Route
+                        # Now" button, active when Email Route On Build is
+                        # Disabled. Same gate-is-separate-from-tool-existing
+                        # rule as every entry above.
+                        "email_route_now",
+                        # find_stale_customers / send_customer_reminders
+                        # (2026-09-23) — the Reports screen's Customer
+                        # Reminders section. Each tool has its own
+                        # _owner_only_denied() check, same as Reports itself
+                        # (manager/staff/field_crew all denied) — the allow-
+                        # list only says the tool EXISTS for this phone
+                        # surface, same gate-is-separate-from-tool-existing
+                        # rule as every entry above.
+                         "find_stale_customers", "send_customer_reminders",
+                         # get_ar_aging_report (R-068) — owner + managers only,
+                         # enforced by the tool itself.
+                         "get_ar_aging_report",
+
+                        # approve_route_schedule / unapprove_route_schedule
+                        # (2026-09-20) — see the matching comment on
+                        # _srv_pa_allowed above.
+                        "approve_route_schedule", "unapprove_route_schedule",
+
+                        # suggest_route_schedule (2026-09-16) — see the
+                        # matching comment on _srv_pa_allowed above.
+                        "suggest_route_schedule",
+                        # prescreen_route_jobs (2026-09-25) — see the
+                        # matching comment on _srv_pa_allowed above.
+                        "prescreen_route_jobs",
+                        # geocode_address (2026-09-17) — see the matching
+                        # comment on _srv_pa_allowed above.
+                        "geocode_address",
+                        # start_ai_routing / poll_ai_routing (2026-09-18) —
+                        # back the Route tab's "🧠 Run AI Routing (uses
+                        # Credits)" button (renamed from "✨ Get AI
+                        # Suggestion"), split into a kick-off call and a
+                        # short poll call rather than one long blocking
+                        # run_ai_routing call, since a full agentic session
+                        # can take minutes and a single that-long blocking
+                        # request risks a reverse-proxy/tunnel idle timeout
+                        # even though the run itself would finish fine.
+                        # Personal-mode only by design, same as every other
+                        # agentic-task-queue tool (create_analysis_task
+                        # etc.) — this IS the personal-mode allowlist, so
+                        # it's simply added here directly.
+                        "start_ai_routing", "poll_ai_routing",
+                        # get_route_start_options (2026-09-19) — feeds the AI
+                        # Route start/end picker's "home address" option.
+                        "get_route_start_options",
+                        # Working Days setting (2026-10-02) — the Calendar's
+                        # working days (multi-day jobs, overrun carry-over).
+                        "get_working_days",
                     }
 
                     _g = globals()
+                    # R-049: same Settings-panel rule as server mode's /pwa-api.
+                    _pa_off = (_JOBS_APP_OFF_MESSAGE if _jobs_app_turned_off()
+                               else _pwa_tool_disabled_message(_tool))
                     if _tool not in _allowed_tools or _tool not in _g:
                         _resp = _json3.dumps({"ok": False, "error": f"Unknown tool: {_tool}"}).encode()
                         _status = 400
+                    elif _pa_off:
+                        _resp = _json3.dumps({"ok": False, "error": _pa_off}).encode()
+                        _status = 403
                     else:
                         _fn = _g[_tool]
                         import asyncio as _asyncio3
@@ -22270,7 +25709,8 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                 return
             # ── end PWA API endpoint ────────────────────────────────────────
 
-            # ── PWA photo upload endpoint — no auth required ───────────────
+            # ── PWA photo upload endpoint — Bearer token required (SECURITY
+            # FIX 2026-09-25; was "no auth required") ─────────────────────
             # Accepts multipart/form-data POST from the PWA photo screen.
             # Saves images to:
             #   <user home>/Documents/AI-Prowler/JobPhotos/<JobID>/<timestamp>_N.jpg
@@ -22281,6 +25721,8 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
             #   notes   — optional text notes
             #   files   — one or more image files (field name: photo)
             if path == "/photos/upload":
+                if not await _pwa_personal_auth(scope, send):
+                    return
                 import os as _os4, json as _json4, re as _re4
                 from pathlib import Path as _Path4
                 from datetime import datetime as _dt4
@@ -22360,15 +25802,11 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                     if not _job_id4:
                         raise ValueError("job_id field is required")
 
-                    # ── Build save directory using Path.home() ─────────────
-                    # Never hardcoded — resolves to the current Windows user
-                    _photo_dir4 = (
-                        _Path4.home()
-                        / "Documents"
-                        / "AI-Prowler"
-                        / "JobPhotos"
-                        / _job_id4
-                    )
+                    # ── Save folder: an EXISTING job's own folder under JobPhotos,
+                    # never anywhere else (R-028 / R-029 — see _job_photo_dir).
+                    _photo_dir4, _pd_err4 = _job_photo_dir(_job_id4, _resolve_job_db_path(None, ""))
+                    if _pd_err4:
+                        raise ValueError(_pd_err4)
                     _photo_dir4.mkdir(parents=True, exist_ok=True)
 
                     # ── Save each photo ─────────────────────────────────────
@@ -22383,8 +25821,9 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                         _orig_ext4 = _os4.path.splitext(_orig_name4)[1].lower()
                         # See the matching comment in the server-mode handler
                         # above — unknown extensions keep their own extension
-                        # instead of being silently forced to .jpg.
-                        _ext4 = _ext_map4.get(_orig_ext4, _orig_ext4 or ".jpg")
+                        # instead of being silently forced to .jpg (reduced to
+                        # letters/digits, 2026-09-26 — see _safe_upload_ext).
+                        _ext4 = _safe_upload_ext(_orig_name4, _ext_map4)
 
                         # Keep the original filename (sanitized) — see the
                         # matching comment in the server-mode handler above.
@@ -22433,8 +25872,9 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                     _os2.path.dirname(_os2.path.abspath(__file__)), "jobs")
                 rel = path[5:].lstrip("/") or "index.html"
                 file_path = _os2.path.join(_pwa_root, rel)
-                if not _os2.path.abspath(file_path).startswith(
-                        _os2.path.abspath(_pwa_root)):
+                # Inside the folder itself, not merely a path that STARTS with
+                # its name (…\jobs_old\… used to pass) — 2026-09-25.
+                if not _path_is_inside(file_path, _pwa_root):
                     await send({"type": "http.response.start", "status": 403,
                                 "headers": [[b"content-type", b"text/plain"]]})
                     await send({"type": "http.response.body",
@@ -22489,14 +25929,28 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                         return
 
                     # ── /remote/download — file download endpoint ─────────────────
-                    # GET /remote/download?path=<encoded>&token=<bearer>
-                    # Token in query param because browser <a download> can't set headers.
+                    # GET /remote/download?path=<encoded>   + header Authorization: Bearer <token>
+                    # RM-R-001 (2026-09-29, found by Remote PWA E2E RX-04): the Remote
+                    # PWA used to put the FULL Bearer token in the URL (?token=…), and
+                    # this handler logged the raw query string — so the token landed in
+                    # AI-Prowler's own log, proxy/tunnel access logs and browser history.
+                    # The app now fetches with an Authorization header; ?token= stays
+                    # accepted ONLY for ready-made links from get_file_download_url
+                    # (a plain <a href> can't send headers). The token is never logged.
                     if path == "/remote/download":
-                        _log.info("REMOTE: >> /remote/download qs=%s", scope.get("query_string", b"")[:120])
                         import urllib.parse as _up5, mimetypes as _mt5, os as _os5
                         _qs5 = dict(_up5.parse_qsl(scope.get("query_string", b"").decode()))
-                        _dl_tok   = _qs5.get("token", "").strip()
+                        _dl_hdr = ""
+                        for _hk5, _hv5 in scope.get("headers", []):
+                            if _hk5.lower() == b"authorization":
+                                _hv5s = _hv5.decode("latin-1").strip()
+                                if _hv5s.lower().startswith("bearer "):
+                                    _dl_hdr = _hv5s[7:].strip()
+                                break
+                        _dl_tok   = (_dl_hdr or _qs5.get("token", "")).strip()
                         _dl_path  = _qs5.get("path",  "").strip()
+                        _log.info("REMOTE: >> /remote/download path=%s (token via %s)", _dl_path[:80],
+                                  "header" if _dl_hdr else "query" if _qs5.get("token") else "none")
 
                         # Validate token
                         _log.info("REMOTE: /remote/download token_len=%d path=%s", len(_dl_tok), _dl_path[:80])
@@ -22655,6 +26109,9 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                             _log.info("REMOTE: return (no response sent) at line %d", 20466)
                             return
 
+                        # Setup Center: note the Remote app is in use (phone yes/no) — shared helper.
+                        _note_app_seen("remote_app", scope)
+
                         try:
                             _req5  = _json5.loads(_raw5)
                             _tool5 = _req5.get("tool", "")
@@ -22811,8 +26268,7 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                             # Check writable
                             _up_dir_abs = _os7.path.abspath(_up_dir)
                             _wr5 = _writable_allowlist_load()
-                            _in_w = any(_up_dir_abs.lower().startswith(
-                                _os7.path.abspath(str(w)).lower()) for w in _wr5)
+                            _in_w = any(_path_is_inside(_up_dir_abs, w) for w in _wr5)   # 2026-09-25: was a prefix check (…\proj allowed …\project2)
                             if not _in_w:
                                 _ub = b'{"ok":false,"error":"directory not writable"}'
                                 await send({"type":"http.response.start","status":403,
@@ -22857,9 +26313,8 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                     _rel6 = path[7:].lstrip("/") or "index.html"
                     _file6 = _os6.path.join(_remote_root, _rel6)
 
-                    # Path traversal guard
-                    if not _os6.path.abspath(_file6).startswith(
-                            _os6.path.abspath(_remote_root)):
+                    # Path traversal guard (2026-09-25: was a prefix check)
+                    if not _path_is_inside(_file6, _remote_root):
                         await send({"type": "http.response.start", "status": 403,
                                     "headers": [[b"content-type", b"text/plain"]]})
                         await send({"type": "http.response.body",
