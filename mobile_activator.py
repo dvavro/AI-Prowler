@@ -78,10 +78,19 @@ CLOUDFLARED_SERVICE = "cloudflared"
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+def _debug_logging_enabled() -> bool:
+    """Return True only when debug_logging=true in config.json."""
+    try:
+        import json as _j
+        return bool(_j.loads(CONFIG_PATH.read_text(encoding='utf-8')).get('debug_logging'))
+    except Exception:
+        return False
+
 def _log(msg):
     """Write a timestamped line to the activation debug log.
-    Always appends — never truncates — so history is preserved across attempts.
-    Called by _cb_and_log() which wraps the progress callback."""
+    Only written when debug_logging=true in config.json — silent in releases."""
+    if not _debug_logging_enabled():
+        return
     import datetime
     try:
         AI_PROWLER_DIR.mkdir(parents=True, exist_ok=True)

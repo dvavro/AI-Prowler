@@ -543,13 +543,29 @@ MANIFEST_FILES = [
     "rag_preprocessor.py",
     "ai_prowler_mcp.py",
     "mcp_diagnostics.py",
+    # Added 2026-09-24: single source of truth for the Settings tab's MCP
+    # Tool Configuration panel (categories, descriptions, locked/PWA-
+    # dependency flags for every @mcp.tool()). ai_prowler_mcp.py imports
+    # this unconditionally at module load — omitting it here is exactly
+    # the failure mode this comment block warns about: an auto-updated
+    # client would receive the ai_prowler_mcp.py that imports it but never
+    # receive the module itself, crash-looping the MCP server on every
+    # restart (confirmed directly — see the crash log this fix came from).
+    "mcp_tool_catalog.py",
+    # 2026-10-03: safe-save module for Settings -> MCP Tool Configuration ->
+    # Save (rag_gui.py imports it and refuses to save without it). Was only
+    # deployed by update_install*.bat, so in-app updates never received it.
+    "tool_config_store.py",
     "self_learning.py",
     "RAG_RUN.bat",
     "create_shortcut.py",
     "requirements.txt",
-    "claude_desktop_config_example.json",
+    # (2026-10-02: claude_desktop_config_example.json removed — no longer
+    # shipped; the installer writes the real Claude Desktop config itself.)
     "subscription_instructions.txt",
-    "README.md",
+    # (2026-10-02: README.md removed — it's the GitHub project page and stays in
+    # the repository, but nothing in an install reads it, so updates no longer
+    # copy it into the program folder.)
     "COMPLETE_USER_GUIDE.md",
     "VERSION",
     # Added 2026-07-09: these were already in AI-Prowler-Setup.iss's [Files]
@@ -567,24 +583,13 @@ MANIFEST_FILES = [
     "cloudflared_service_helper.py",
     "sms_backends.py",
     "sms_inbox.py",
-    # Added 2026-08-25: spreadsheet schema migration engine.
-    # Runs at startup to migrate existing user spreadsheets to the current
-    # schema version without overwriting user data. Must be in MANIFEST_FILES
-    # so auto-updated clients receive it alongside rag_gui.py which imports it.
-    "migrate_spreadsheet.py",
-    # Added 2026-08-26: the Program Files reference copy of the template
-    # spreadsheet (NOT the user's live Documents copy — that one is never
-    # auto-updated, by design). migrate_spreadsheet.py's _get_template_path()
-    # reads this exact file as the schema "source of truth" a user's
-    # spreadsheet gets diffed against. Without it here, an auto-updated
-    # client's Program Files copy of this file goes stale the moment the
-    # schema bumps again — migrate_spreadsheet.py would ship in the same
-    # update, but it would compare against last release's template, silently
-    # producing an incomplete migration (missing whatever changed in between)
-    # instead of the "Template not found" failure a first-time missing file
-    # would cause. Found alongside the [Files] entry gap for the same file in
-    # AI-Prowler-Setup.iss (see that file's comment at the equivalent line).
-    "AI-Prowler_Job_Tracker.xlsx",
+    # (2026-10-02: migrate_spreadsheet.py and AI-Prowler_Job_Tracker.xlsx
+    # removed. The job tracker is the SQLite database ai_prowler_jobs.db, and
+    # the installer stopped shipping both files — but they were still listed
+    # here, so every in-app update kept copying the old spreadsheet and its
+    # migration script into the program folder. rag_gui.py only imports
+    # migrate_spreadsheet inside try/except, so its absence is harmless.
+    # The installer's [InstallDelete] removes old copies on upgrade.)
     "custom_tasks_manager.py",
     "scheduler_jobs.py",
     "scheduler_engine.py",
@@ -601,6 +606,37 @@ MANIFEST_FILES = [
     # Was in AI-Prowler-Setup.iss [Files] from v9.1.0 but missing here, meaning
     # auto-updated clients from older versions would never receive it.
     "sms_consent.py",
+    # Added 2026-09-19: the SQLite-backed Job Board data-access layer
+    # (db_access.py connect/transaction primitives, db_schema.py table
+    # definitions + migrations, db_read_ops.py/db_write_ops.py/
+    # db_route_ops.py/db_backup_ops.py/db_export_ops.py — every db_*.py
+    # module ai_prowler_mcp.py imports for the job/customer/invoice/
+    # quote/route tools). Same exact bug class as every dated comment
+    # above: these modules were already load-bearing (ai_prowler_mcp.py
+    # cannot serve a single job/route/invoice tool call without them) but
+    # had never been added to either this list OR AI-Prowler-Setup.iss's
+    # [Files] section — meaning EVERY fresh install AND every auto-update
+    # was missing the entire Job Board architecture. Caught while
+    # reviewing the installer/manifest for completeness after this
+    # session's route-mileage and job-delete work, not from a release
+    # actually shipping broken — but the gap predates this session by as
+    # long as these files have existed in the repo.
+    "db_access.py",
+    "db_schema.py",
+    "db_read_ops.py",
+    "db_write_ops.py",
+    "db_route_ops.py",
+    "db_backup_ops.py",
+    "db_export_ops.py",
+    # Added with AI Routing's per-user Claude connection (Business Server mode):
+    # cli_signin_relay.py is imported by ai_prowler_mcp.py the first time a user
+    # taps AI Route without a saved Claude token; console_inject.py is the helper
+    # it launches BY PATH as a separate process to type the pasted sign-in code
+    # into a hidden console. Both must ship together — an auto-updated client
+    # that got ai_prowler_mcp.py but not these would fail the moment the Connect
+    # screen calls start_cli_signin. Also listed in AI-Prowler-Setup.iss [Files].
+    "cli_signin_relay.py",
+    "console_inject.py",
     # Added v9.1.0: Jobs PWA — field crew job management interface served at
     # /jobs/ by the HTTP MCP server. All six files are needed for the PWA to
     # work as a home-screen installable app on iPhone and Android.

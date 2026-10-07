@@ -91,7 +91,7 @@ from typing import Optional
 # running it once. _ensure_sheet() and _ensure_columns() already guarantee
 # this — they check before acting.
 #
-CURRENT_SCHEMA_VERSION = 1   # bump this each release that changes sheet structure
+CURRENT_SCHEMA_VERSION = 2   # bump this each release that changes sheet structure
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 _CONFIG_PATH    = Path.home() / ".ai-prowler" / "config.json"
@@ -495,6 +495,54 @@ def _migrate_0_to_1(wb, template_wb) -> list[str]:
     return changes
 
 
+def _migrate_1_to_2(wb, template_wb) -> list[str]:
+    """
+    v9.1.x migration (audit trail columns):
+    - Adds "Created By", "Last Edited By", "Last Edited At" to Jobs_Schedule,
+      Customers, Invoices, and Quotes wherever missing. These are populated
+      automatically going forward by update_job_spreadsheet() and the four
+      create_* tools once the columns exist -- see the "v9.1.x" comments
+      near those write paths in ai_prowler_mcp.py. Before this migration,
+      a spreadsheet already on schema v1 had no way to pick these up; only
+      a brand-new install (built fresh from the current template) had them.
+    - Same additive, idempotent pattern as _migrate_0_to_1's per-sheet
+      column sync: only appends columns present in the template but missing
+      from the user's sheet, via the same _ensure_columns() helper. Never
+      touches existing data, never removes or locks anything, and the
+      renamed-column guard inside _ensure_columns still applies (skips the
+      append with a warning if the user already has a similarly-named
+      column, rather than risking a confusing duplicate).
+    - Deliberately narrower in scope than _migrate_0_to_1: this step only
+      needs to sync these three specific columns on four specific sheets,
+      not re-run freeze-pane fixes or protection changes that were already
+      correct as of v1 and are unrelated to this update.
+    """
+    changes = []
+
+    sheet_map = {
+        "Jobs_Schedule": 2,
+        "Customers":     2,
+        "Invoices":      2,
+        "Quotes":        2,
+    }
+
+    for sheet_name, hdr_row in sheet_map.items():
+        if sheet_name not in wb.sheetnames or sheet_name not in template_wb.sheetnames:
+            continue
+
+        ws  = wb[sheet_name]
+        tws = template_wb[sheet_name]
+
+        added_cols, warned_cols = _ensure_columns(ws, tws, hdr_row=hdr_row)
+        if added_cols:
+            changes.append(f"{sheet_name}: added column(s): {', '.join(added_cols)}")
+        if warned_cols:
+            for w in warned_cols:
+                changes.append(f"⚠ {sheet_name}: {w}")
+
+    return changes
+
+
 def _verify_migration(original_wb, migrated_wb) -> list[str]:
     """
     Compare the migrated workbook against the original to detect data corruption.
@@ -634,9 +682,9 @@ def _verify_migration(original_wb, migrated_wb) -> list[str]:
 
 _MIGRATIONS = [
     (0, 1, _migrate_0_to_1),
+    (1, 2, _migrate_1_to_2),   # v9.1.x: Created By / Last Edited By / Last Edited At
     # ── Add future migrations below this line ─────────────────────────────────
     # Pattern:
-    #   (1, 2, _migrate_1_to_2),   # v9.2.0: QB_Export sheet, Actual Cost col
     #   (2, 3, _migrate_2_to_3),   # v9.3.0: ...
     # Always append — never remove or reorder existing entries.
 ]

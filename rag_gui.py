@@ -16,6 +16,39 @@ import queue
 import os
 from datetime import datetime
 
+
+def most_recent_scheduled_backup_date(frequency, day_of_week, month_position, today):
+    """The most recent date on/before `today` that a scheduled backup
+    (Job Board Architecture Spec §12.8) would have been due, given the
+    configured cadence. Module-level and pure (no I/O, no GUI) so it can
+    be unit-tested directly — the GUI's periodic check just compares this
+    against the last recorded run date.
+
+    Args:
+        frequency:     'weekly' or 'monthly'.
+        day_of_week:   0 (Monday) .. 6 (Sunday) — used only for 'weekly'.
+        month_position: 'start' or 'end' — used only for 'monthly'.
+        today:         a datetime.date to compute relative to.
+
+    Returns:
+        A datetime.date — the most recent scheduled occurrence.
+    """
+    import datetime as _sdt
+    if frequency == 'weekly':
+        days_since = (today.weekday() - day_of_week) % 7
+        return today - _sdt.timedelta(days=days_since)
+    # monthly
+    import calendar as _cal
+    last_day_this_month = _cal.monthrange(today.year, today.month)[1]
+    this_month_end = today.replace(day=last_day_this_month)
+    if month_position == 'start':
+        return today.replace(day=1)
+    # 'end': the most recent completed month-end is THIS month's end if
+    # we've reached it, otherwise last month's end.
+    if today >= this_month_end:
+        return this_month_end
+    return today.replace(day=1) - _sdt.timedelta(days=1)
+
 # ── Bulletproof stdout/stderr UTF-8 fix ──────────────────────────────────────
 # Tkinter apps on Windows can have stdout/stderr in any of three broken states:
 #   1. None        — when launched via pythonw.exe (no console)
@@ -1612,95 +1645,159 @@ class RAGGui:
         """Show quick start guide"""
         self.show_help_window("Quick Start", self.get_quick_start_content())
     
+    def get_about_content(self):
+        """About text as (kind, text) blocks: 'title', 'sub', 'head', 'body'.
+
+        No tool counts here on purpose (2026-09-24): MCP tools are now
+        user-configurable in Settings → MCP Tool Configuration, so any number
+        quoted here would be wrong for some installs and go stale whenever a
+        tool is added. The About box points at that panel's live counter.
+        """
+        return [
+            ("title", "AI-Prowler — Agentic RAG Knowledge Base"),
+            ("sub",   f"Version {APP_VERSION}"),
+            ("body",  "Your AI-powered knowledge assistant. Index your documents "
+                      "once, then ask Claude questions from your desktop or phone."),
+
+            ("head",  "KNOWLEDGE BASE (RAG)"),
+            ("body",  "• MCP tools for search, indexing, learnings, jobs, messaging "
+                      "and more — turn feature groups on or off in Settings → "
+                      "🧩 MCP Tool Configuration, which also shows how many tools "
+                      "are enabled on this install\n"
+                      "• 65+ file types: PDF, Word, Excel, PowerPoint, HTML and more\n"
+                      "• Automatic OCR for scanned PDFs and images\n"
+                      "• Incremental indexing — only changed files reprocessed\n"
+                      "• Auto-purge deleted files from ChromaDB on every update"),
+
+            ("head",  "REMOTE ACCESS"),
+            ("body",  "• One-click subscription — Personal ($10/mo) or Business ($20/mo)\n"
+                      "• One-click Configure Mobile Access — tunnel auto-provisioned\n"
+                      "• Auto Connect Claude.ai button — opens connector form with URL copied\n"
+                      "• Bearer-token authentication\n"
+                      "• Auto-start after reboot via Windows service\n"
+                      "• Server uptime displayed in Settings → Remote Access"),
+
+            ("head",  "CODE TOOLS"),
+            ("body",  "• Create, edit, and manage files in tracked directories\n"
+                      "• str_replace, line_replace, diff, backup/restore\n"
+                      "• Lint, syntax check, compile check, and script runner"),
+
+            ("head",  "SELF-LEARNING (🧠 tab)"),
+            ("body",  "• Claude remembers facts across sessions\n"
+                      "• Record, retrieve, update, delete, and export learnings\n"
+                      "• Conflict detection and supersession chains"),
+
+            ("head",  "SMALL BUSINESS (🏢 tab)"),
+            ("body",  "• Job tracker database — customers, quotes, jobs, invoices — "
+                      "from Claude or the Jobs app on your phone\n"
+                      "• Route optimization, weather, geocoding (free, no API key)\n"
+                      "• Invoicing, recurring jobs, time tracking, AR aging\n"
+                      "• Export to Excel/CSV, backup and restore\n"
+                      "• QuickBooks-aware analysis — detects QB MCP automatically\n"
+                      "• Square payment integration via Claude MCP connector"),
+
+            ("head",  "COMMON BUSINESS AI ANALYSIS"),
+            ("body",  "• One-click analysis buttons (Quick Links tab)\n"
+                      "• Schedule recurring analyses — weekly, monthly, quarterly\n"
+                      "• QuickBooks-aware: uses QB if connected, Job Tracker if not\n"
+                      "• ▶ Queue to schedule; runs on the next Task Queue pass"),
+
+            ("head",  "PROACTIVE ALERTS SCHEDULER"),
+            ("body",  "• Background email alerts — no Claude session needed\n"
+                      "• Zero API cost — calls AI-Prowler tools directly\n"
+                      "• Configurable jobs: briefing, invoices, weather & more\n"
+                      "• Personal mode only — hidden in server mode"),
+
+            ("head",  "JOB IMAGE STORAGE"),
+            ("body",  "• Save job photos from Claude chat to local storage\n"
+                      "• JPEG, HEIC, PNG, WebP, DNG, RAW & more\n"
+                      "• iPhone (HEIC) and Android (WebP/DNG) fully supported\n"
+                      "• Metadata index per job — searchable without pixel data"),
+
+            ("head",  "EMAIL, SMS & WHATSAPP"),
+            ("body",  "• Email tools: send email and alerts, email files, invoices, "
+                      "receipts and learnings reports, list Outlook accounts, "
+                      "configure email\n"
+                      "• Outlook backend: Classic Outlook (OUTLOOK.EXE) — no password "
+                      "needed; pick the default account in Settings, or override per "
+                      "send in Claude: \"Send this from my Yahoo account\"\n"
+                      "• SMTP backend: Gmail, iCloud, Outlook.com, Microsoft 365, "
+                      "Yahoo, or any custom SMTP server with an app password\n"
+                      "• Both backends can be active: Outlook primary, SMTP auto-fallback\n"
+                      "• Text or WhatsApp anyone via Twilio, SignalWire, or Vonage\n"
+                      "• Reply checking with per-user attribution in server mode"),
+
+            ("body",  "⚠  .doc and legacy .xls not supported — convert to .docx / .xlsx"),
+            ("sub",   "100% Local  •  100% Private  •  100% Yours"),
+            ("sub",   "Built with Python, ChromaDB, FastMCP, and Claude"),
+        ]
+
     def show_about(self):
-        """Show about dialog"""
-        about_text = f"""AI-Prowler — Agentic RAG Knowledge Base
-Version {APP_VERSION}
+        """About dialog — a resizable, scrollable window (was a fixed-size
+        messagebox that ran off small screens). Text is word-wrapped by the
+        Text widget itself, so it reflows whenever the window is resized."""
+        # Reuse an open About window rather than stacking duplicates.
+        _existing = getattr(self, "_about_win", None)
+        if _existing is not None and _existing.winfo_exists():
+            _existing.deiconify()
+            _existing.lift()
+            _existing.focus_set()
+            return
 
-Your AI-powered knowledge assistant. Index your documents once,
-then ask Claude questions from your desktop or phone.
+        win = tk.Toplevel(self.root)
+        self._about_win = win
+        win.title("About AI Prowler")
+        win.transient(self.root)
+        win.minsize(380, 260)
+        win.geometry("640x620")
 
-─────────────────────────────────────────────────
- KNOWLEDGE BASE (RAG)
-─────────────────────────────────────────────────
-• 81 MCP tools across 12 categories
-• 65+ file types: PDF, Word, Excel, PowerPoint, HTML,
-• Automatic OCR for scanned PDFs and images
-• Incremental indexing — only changed files reprocessed
-• Auto-purge deleted files from ChromaDB on every update
+        # Footer packed FIRST (side=bottom) so shrinking the window squeezes
+        # the text area, never the Close button.
+        foot = ttk.Frame(win, padding=(12, 8, 12, 12))
+        foot.pack(side='bottom', fill='x')
 
-─────────────────────────────────────────────────
- REMOTE ACCESS
-─────────────────────────────────────────────────
-• One-click subscription — Personal ($10/mo) or Business ($20/mo)
-• One-click Configure Mobile Access — tunnel auto-provisioned
-• Auto Connect Claude.ai button — opens connector form with URL copied
-• Bearer-token authentication
-• Auto-start after reboot via Windows service
-• Server uptime displayed in Settings → Remote Access
+        body = ttk.Frame(win, padding=(12, 12, 12, 0))
+        body.pack(fill='both', expand=True)
+        txt = scrolledtext.ScrolledText(
+            body, wrap=tk.WORD, font=('Arial', 10), relief='flat',
+            padx=10, pady=8, borderwidth=0, cursor='arrow')
+        txt.pack(fill='both', expand=True)
 
-─────────────────────────────────────────────────
- CODE TOOLS
-─────────────────────────────────────────────────
-• Create, edit, and manage files in tracked directories
-• str_replace, fuzzy_replace, line_replace, backup/restore
-• Lint, syntax check, compile check, and script runner
+        # Wheel scrolls this window only; "break" stops a Settings-tab
+        # bind_all wheel handler from also scrolling the page underneath.
+        def _wheel(e):
+            txt.yview_scroll(int(-1 * (e.delta / 120)), 'units')
+            return "break"
+        win.bind('<MouseWheel>', _wheel)
+        txt.bind('<MouseWheel>', _wheel)
 
-─────────────────────────────────────────────────
- SELF-LEARNING (🧠 tab)
-─────────────────────────────────────────────────
-• Claude remembers facts across sessions
-• Record, retrieve, update, delete, and export learnings
-• Conflict detection and supersession chains
+        txt.tag_configure('title', font=('Arial', 14, 'bold'), spacing3=2)
+        txt.tag_configure('sub', font=('Arial', 10, 'italic'),
+                          foreground='gray30', spacing3=6)
+        txt.tag_configure('head', font=('Arial', 10, 'bold'),
+                          foreground='#1f4e79', spacing1=12, spacing3=4)
+        # Hanging indent so wrapped bullet lines line up under the text.
+        txt.tag_configure('body', lmargin1=4, lmargin2=18, spacing3=2)
 
-─────────────────────────────────────────────────
- SMALL BUSINESS (🏢 tab)
-─────────────────────────────────────────────────
-• Route optimization, weather, geocoding (free, no API key)
-• Job tracker spreadsheet — read and update from Claude
-• Invoicing, recurring jobs, time tracking, AR aging
-• QuickBooks-aware analysis — detects QB MCP automatically
-• Square payment integration via Claude MCP connector
+        for kind, text in self.get_about_content():
+            txt.insert('end', text + "\n", kind)
 
-─────────────────────────────────────────────────
- COMMON BUSINESS AI ANALYSIS
-─────────────────────────────────────────────────
-• 4 one-click analysis buttons (Quick Links tab)
-• Schedule recurring analyses — weekly, monthly, quarterly
-• QuickBooks-aware: uses QB if connected, Job Tracker if not
-• ▶ Queue to schedule; runs on the next Task Queue pass
+        txt.configure(state='disabled')   # read-only, but text stays selectable
 
-─────────────────────────────────────────────────
- PROACTIVE ALERTS SCHEDULER
-─────────────────────────────────────────────────
-• Background email alerts — no Claude session needed
-• Zero API cost — calls AI-Prowler tools directly
-• 6 configurable jobs: briefing, invoices, weather & more
-• Personal mode only — hidden in server mode
+        def _close(_e=None):
+            self._about_win = None
+            win.destroy()
 
-─────────────────────────────────────────────────
- JOB IMAGE STORAGE
-─────────────────────────────────────────────────
-• Save job photos from Claude chat to local storage
-• 15 formats: JPEG, HEIC, PNG, WebP, DNG, RAW & more
-• iPhone (HEIC) and Android (WebP/DNG) fully supported
-• Metadata index per job — searchable without pixel data
+        ttk.Button(foot, text="Close", command=_close).pack(side='right')
+        win.protocol("WM_DELETE_WINDOW", _close)
+        win.bind('<Escape>', _close)
 
-─────────────────────────────────────────────────
- EMAIL, SMS & WHATSAPP
-─────────────────────────────────────────────────
-• Send emails, alerts, file attachments, learnings reports
-• Gmail, iCloud, Outlook, or any SMTP provider
-• Text or WhatsApp anyone via Twilio, SignalWire, or Vonage
-• Reply checking with per-user attribution in server mode
-
-⚠  .doc and legacy .xls not supported — convert to .docx / .xlsx
-
-100% Local  •  100% Private  •  100% Yours
-
-Built with Python, ChromaDB, FastMCP, and Claude"""
-
-        messagebox.showinfo("About AI Prowler", about_text)
+        win.update_idletasks()
+        _x = self.root.winfo_rootx() + max(
+            0, (self.root.winfo_width() - win.winfo_width()) // 2)
+        _y = self.root.winfo_rooty() + 40
+        win.geometry(f"+{_x}+{_y}")
+        win.focus_set()
 
     def show_notifications_status(self):
         """Display a diagnostic popup with cached notifications, dismissed
@@ -2849,33 +2946,42 @@ Built with Python, ChromaDB, FastMCP, and Claude"""
                    width=8).pack(side='right')
 
     def show_job_tracker_guide(self):
-        """Show the Job Tracker spreadsheet explainer — what it does for a
-        multi-employee or high-volume service business, how the crew/mobile
-        workflow works in Server mode, and how QuickBooks + Claude can pull
-        customer data straight into it. Opened from the Small Business tab.
-        v8.1.3."""
-        self.show_help_window("Job Tracker Spreadsheet Guide",
+        """Show the job-data explainer — what AI-Prowler's database does for
+        a multi-employee or high-volume service business, how the crew/
+        mobile workflow works in Server mode, and how to get data into and
+        out of QuickBooks or an accountant's hands. Opened from the Small
+        Business tab. v8.1.3, content rewritten 2026-09-13 (Job Board
+        Architecture Spec Phase 8a) — the original text described a live
+        .xlsx workbook as the data store; every fact here now matches the
+        SQLite-backed reality that's been true since Phase 1."""
+        self.show_help_window("Job Data & QuickBooks Guide",
                               self.get_job_tracker_guide_content())
 
     def get_job_tracker_guide_content(self):
-        """Markdown content for the Job Tracker guide popup. All facts here
-        (sheet names, column names, server-mode behavior) are pulled from
-        COMPLETE_USER_GUIDE.md section 'Job Tracker Spreadsheet' — keep the
-        two in sync if that section changes."""
-        return """# The Job Tracker Spreadsheet — What It's Actually For
+        """Markdown content for the Job Data & QuickBooks guide popup.
+        Rewritten 2026-09-13 (Job Board Architecture Spec Phase 8a) — the
+        original version described AI-Prowler_Job_Tracker.xlsx as the live
+        data store (sheet names, an internal write-lock, per-user .xlsx
+        files) — all stale since the Phase 1 SQLite migration. Every fact
+        below was checked against the actual current implementation, not
+        carried forward from the old text. COMPLETE_USER_GUIDE.md's 'Job
+        Tracker Spreadsheet' section has the same staleness and should be
+        updated to match next time it's touched — flagged, not fixed here,
+        since this popup is what users actually see from this tab."""
+        return """# Your Job Data — What AI-Prowler Actually Does With It
 
-One `.xlsx` file is your customer list, daily schedule, quotes, invoices,
+A local database is your customer list, daily schedule, quotes, invoices,
 time clock, and pricing catalog — all cross-linked, all readable and
-writable by Claude in plain English. No app to log into, no separate CRM
-subscription, no double-entry between "the schedule" and "the invoice."
+writable by Claude in plain English, and all usable from the Jobs App on
+your phone without ever needing to talk to Claude at all. No app to log
+into beyond AI-Prowler itself, no separate CRM subscription, no
+double-entry between "the schedule" and "the invoice."
 
-You (or your crew) never open the spreadsheet directly for day-to-day work
-— you just talk to Claude. The spreadsheet is the shared source of truth
-underneath.
+## The 8 Tables, At a Glance
 
-## The 9 Sheets, At a Glance
+Same tables you'll see on the Jobs App's own Database tab:
 
-| Sheet | What lives here |
+| Table | What lives here |
 |---|---|
 | `Customers` | Your customer list — address, service type, frequency, phone, email, gate codes, access notes |
 | `Jobs_Schedule` | Every appointment — date, time, address, assigned crew member, weather, route, billing |
@@ -2883,53 +2989,51 @@ underneath.
 | `Quotes` | Estimates sent before a job is booked |
 | `Invoices` | Billing and payment tracking, feeds the AR aging report |
 | `TimeLog` | Clock-in / clock-out per job, per employee |
-| `QB_Daily_Export` | Daily rows formatted for QuickBooks or other accounting software import |
 | `Services_Pricing` | Your service catalog — base prices, multipliers, tax rates |
-| `AI-Prowler_Commands` | A cheat sheet of Claude prompts, right in the workbook |
+| `Settings` | Business info (name, address, tax rate) and other config |
 
 Nothing here is manual bookkeeping. Ask Claude "mark the Miller job
 complete and record invoice #1048" and Claude finds the row, updates
 `Job Status`, `Invoice Total`, `Invoice Sent Date` — whatever you asked
-for — in one step.
+for — in one step. Or tap the same job open in the Jobs App and edit it
+directly — both paths write to the exact same database.
 
 ## Built for Multiple Employees, Not Just One Owner
 
-This is where it stops being "a spreadsheet" and starts being a real
-scheduling system for a crew:
+This is a real scheduling system for a crew, not a single-user tool:
 
-- **Every job has a `Crew / Technician` column.** Assign "Mike C." to one
-  job and "Sarah T." to another in the same `Jobs_Schedule` sheet — Claude
-  reads and writes this like any other field. Ask "what's on Mike's
-  schedule tomorrow?" and Claude filters to just his jobs.
+- **Every job has a `Crew / Technician` field.** Assign "Mike C." to one
+  job and "Sarah T." to another — Claude reads and writes this like any
+  other field. Ask "what's on Mike's schedule tomorrow?" and Claude
+  filters to just his jobs.
 
 - **In Server mode, each employee automatically only sees their own jobs.**
   When a staff or field-crew member asks Claude to clock in, look up
   today's schedule, or schedule the next recurring visit, AI-Prowler
   scopes the search to jobs where `Crew / Technician` matches *their own
   name* — automatically, with no filter to remember. Owners and managers
-  still see the whole crew's schedule.
+  still see the whole crew's schedule. The Jobs App applies the exact
+  same scoping.
 
-- **Clock-ins are per-person, not per-job.** The `TimeLog` sheet tracks
-  who logged in and out with a `Logged By` field — one teammate's open
-  shift on a job never blocks another's, and you can only clock yourself
-  out of a shift you personally opened.
+- **Clock-ins are per-person, not per-job.** `TimeLog` tracks who logged
+  in and out — one teammate's open shift on a job never blocks another's,
+  and you can only clock yourself out of a shift you personally opened.
 
-- **Two ways to organize a crew's data**, depending on how tightly you
-  want everyone's schedule linked:
-    - **Shared master (the default)** — everyone reads and writes the
-      same file. The whole crew stays in sync automatically; this is
-      right for most small teams.
-    - **Per-user tracking files** — drop a file named after each
-      employee's user ID (e.g. `jake-r.xlsx`) next to the master file,
-      and that person gets their own private tracker instead of the
-      shared one. Anyone without a personal file still uses the master.
-      No extra setup — it's entirely based on which files exist in the
-      folder.
+- **One shared master database.** Every employee reads and writes the
+  same database — the whole crew stays in sync automatically, with no
+  separate per-employee database files to keep track of or fall out of
+  sync.
 
-- **No lost updates when two people save at once.** Writes are queued
-  behind an internal lock, and every write takes an automatic backup
-  first. Two crew members updating the schedule in the same minute never
-  silently overwrite each other.
+- **Real concurrent writes, not a queue.** Two crew members updating
+  different jobs at the same moment both succeed immediately — there's
+  no shared lock serializing every write behind a single line, the way
+  a spreadsheet-based system would need. If two people *do* edit the
+  exact same job field at once, the second save is rejected with a clear
+  "this was just updated by [name] — reload and try again" rather than
+  silently overwriting the first person's change. Writes are also backed
+  up automatically before they happen, by default (an explicit setting
+  can turn this off on a specific call, but it's on unless told
+  otherwise).
 
 ## Mobile Access — Your Crew Doesn't Need a Laptop
 
@@ -2937,40 +3041,55 @@ Each employee gets their own seat and their own mobile login to the
 company server (set up once in the Admin tab) — from that point on, they
 can talk to Claude from their phone the same way you do from your desktop,
 and every "clock me in," "what's my next job," or "text the customer I'm
-on my way" reads and writes the exact same shared spreadsheet in real
-time. There's no separate mobile app to install or sync — it's the same
+on my way" reads and writes the exact same shared database in real time.
+There's no separate mobile app to install for this part — it's the same
 Claude conversation, on any device with a browser.
 
-## The Jobs App — A Dedicated Screen for the Truck, Not a Chat Window
+## The Jobs App — A Dedicated Screen for the Truck, Not Just a Chat Window
 
 Alongside talking to Claude directly, each employee also gets their own
 lightweight app screen purpose-built for the field: tap Jobs on their
 phone's home screen (added once from the browser, no app store) and they
 land straight on today's schedule — filtered to just their own jobs
-automatically, same as everywhere else in Server mode.
+automatically, same as everywhere else in Server mode. This is the primary
+day-to-day interface for most crew members — Claude is there for anything
+that's easier said as a sentence than tapped through a screen.
 
-- **Clock in / clock out** with one tap — writes straight to the `TimeLog`
-  sheet and back to `Jobs_Schedule`, same as asking Claude to do it.
+- **Jobs, Board, Calendar, Clock, Photos, Messages, and Database tabs** —
+  a full working view of the day, the week, and the whole crew's data, not
+  just a job list.
+- **Clock in / clock out** with one tap — writes straight to `TimeLog` and
+  back to `Jobs_Schedule`, same as asking Claude to do it.
+- **Drag-and-drop scheduling** on the Board tab — reschedule or reassign a
+  job by dragging its card, no typing required.
 - **Snap and attach job photos** directly from the camera — before/after
   shots, damage documentation — saved and linked to the job automatically.
-- **Email an invoice** for a job right from the app, no need to open a
-  conversation with Claude to ask for it.
+- **Today's route, one tap away** — a route built for today shows a
+  tap-to-navigate banner right at the top of the Jobs tab, and a small
+  route indicator on the Calendar's weekly and monthly views too.
+- **Email or text an invoice** for a job right from the app, no need to
+  open a conversation with Claude to ask for it.
 - **Log in once, stay logged in.** An employee enters their personal
   token the first time they open the app; after that, it's just a tap to
-  open, exactly like any other app on their phone — no re-entering
-  anything on every visit. Signing out (e.g. handing the phone to a
-  different crew member) is a single button in the app's profile screen.
-- **Same scoping as everywhere else.** Whichever spreadsheet model you've
-  set up above — shared master or per-employee file — the Jobs app
-  respects it automatically. An employee can only clock in, upload
-  photos, or send invoices for jobs actually assigned to them.
+  open, exactly like any other app on their phone. Closing or restarting
+  the app never signs anyone out — to switch users or sign out, use
+  **Sign Out / Change Device** on the profile screen.
+- **Same scoping as everywhere else.** The Jobs App reads and writes the
+  same shared master database as Claude does — an employee can only clock
+  in, upload photos, or send invoices for jobs actually assigned to them.
 
-This is a second way in, not a replacement — an employee can use the Jobs
-app for quick field actions and still talk to Claude directly (in the same
-browser or in Claude.ai) for anything more open-ended, like rescheduling a
-week's worth of jobs or asking which customers are overdue on payment.
+This is a second way in, not a replacement for talking to Claude — the
+Jobs App is faster for the things you do every day (clocking in, checking
+today's list, snapping a photo); Claude is better for anything more
+open-ended, like rescheduling a week's worth of jobs, asking which
+customers are overdue on payment, or making bulk changes across many jobs
+at once.
 
-## QuickBooks + Claude — Filling the Spreadsheet Without Retyping
+## Getting Your Data Into QuickBooks or to Your Accountant
+
+Two different paths, depending on what you actually need:
+
+### Option 1 — Live QuickBooks connector (real-time, requires QuickBooks)
 
 If you connect the QuickBooks Online MCP connector in Claude.ai (Settings
 → Connectors), Claude automatically detects it and can pull real
@@ -2978,23 +3097,43 @@ financial data — invoices, payments, customer records, P&L — directly
 into your workflow. This already powers the Quick Links business-analysis
 prompts (Analyze My Business, Weekly Business Advisor, Find Problems,
 Growth Opportunities), which use QuickBooks as the primary source when
-it's connected and fall back to the Job Tracker when it's not.
+it's connected and fall back to your AI-Prowler data when it's not.
 
-Because Claude has both the QuickBooks connector *and* the spreadsheet
+Because Claude has both the QuickBooks connector *and* your job data
 tools available in the same conversation, you can also ask it to bridge
 the two directly — for example, pulling a customer list from QuickBooks
-and writing new rows into the `Customers` sheet, instead of retyping
-names, addresses, and phone numbers by hand. Try:
+and adding any that are missing from your Customers table, instead of
+retyping names, addresses, and phone numbers by hand. Try:
 
 > *"Pull my active customers from QuickBooks and add any that aren't
-> already in my Job Tracker's Customers sheet."*
+> already in my AI-Prowler customer list."*
 
-> *"Cross-check today's invoices in QuickBooks against the Invoices sheet
+> *"Cross-check today's invoices in QuickBooks against my Invoices data
 > and flag anything that's out of sync."*
 
 This isn't a separate one-click sync button — it's Claude reasoning
 across both tools in one request, which means you can phrase it however
 fits what you actually need done.
+
+### Option 2 — Export and import manually (no QuickBooks connector needed)
+
+For handing data to an accountant, or a one-time bring-into-QuickBooks
+pass without setting up a live connector, use the **Export to Excel** or
+**Export to CSV** buttons in the "Your Business Jobs Data" panel above.
+
+- **For an accountant or tax preparer:** hand over the Excel export (or
+  the whole CSV folder) as-is. `Invoices` and `Customers` are the two
+  that matter most for bookkeeping; `Jobs_Schedule` and `TimeLog` are
+  useful supporting detail if they ask for it.
+
+- **For QuickBooks Online:** use **"Export my customers and invoices for
+  QuickBooks"** — this labels every column with QuickBooks' own
+  terminology (Display Name, Billing Address Line 1, Invoice No, etc.)
+  instead of AI-Prowler's own header text. QBO's own **Settings → Import
+  Data** wizard always shows a one-time field-mapping screen after you
+  upload a file — that step is built into QuickBooks itself and can't be
+  skipped by any export format — but with these labels, the mapping
+  should be quick and obvious rather than a guessing exercise.
 
 ## Example Prompts
 
@@ -3006,21 +3145,23 @@ fits what you actually need done.
 | Complete a job + invoice | *"Mark the Miller Windows job complete, invoice #1048, amount $312."* |
 | Route + navigate | *"Optimize my route for today's jobs and send me the Google Maps link."* |
 | Get paid faster | *"Show me every invoice more than 30 days overdue."* |
-| Pull in QuickBooks data | *"Sync any new QuickBooks customers into my Job Tracker."* |
+| Pull in QuickBooks data | *"Sync any new QuickBooks customers into my customer list."* |
+| Hand off to my accountant | *"Export my invoices and customers to CSV so I can send them to my accountant."* |
 
 ## Why This Beats a Generic Scheduling App
 
 - **One system, not three** — no separate CRM, invoicing tool, and time
   clock that all need to agree with each other.
-- **No typing into forms** — every update is a sentence to Claude.
+- **No typing into forms** — every update is a sentence to Claude, or a
+  tap in the Jobs App.
 - **Scales with your crew** — one owner or ten employees, the same
-  spreadsheet and the same conversational workflow, with automatic
-  per-employee scoping built in.
+  database and the same conversational or app-based workflow, with
+  automatic per-employee scoping built in.
 - **Works from the truck** — mobile access means the schedule is never
   stuck on an office PC.
 - **Real accounting data when you want it** — QuickBooks integration adds
-  true financials on top of the operational data already in the sheet,
-  without forcing every business to set up QuickBooks first.
+  true financials on top of the operational data already here, without
+  forcing every business to set up QuickBooks first.
 """
 
     def show_service_tools_guide(self):
@@ -3044,17 +3185,17 @@ fits what you actually need done.
 Claude acts as your field-service assistant through these MCP tools — ask
 in a normal conversation, no forms to fill out, no menus to navigate.
 Free tools (weather, routing, maps) work immediately with no setup.
-Spreadsheet tools use the default path from Settings if you don't specify
-a file. Contractor tools (invoicing, SMS, time logging, AR aging) need
+Job data tools use the default database if you don't specify a file.
+Contractor tools (invoicing, SMS, time logging, AR aging) need
 Twilio and/or SMTP configured — see Settings, or ask Claude to run
 `check_tools_status()` for a full readiness report.
 
 ## End-to-End Workflow — A Typical Day
 
 This is the whole loop, start to finish — everything happens by talking to
-Claude. Nothing here requires opening this app, a browser, or the
-spreadsheet itself; the Jobs App PWA link at the top of this tab covers the
-mobile side of the same workflow.
+Claude. The same actions are available with a tap in the Jobs App instead
+(clock in/out, photos, invoicing) — this walks through the Claude-
+conversation version.
 
 **1. Check the morning schedule**
 > *"What's on my schedule today?"*
@@ -3063,7 +3204,7 @@ Claude reads `Jobs_Schedule` and lists today's jobs.
 **2. Add or update a job or customer, if needed**
 > *"Add a new customer: Sunshine Realty LLC, 125 Harbor Blvd, New Smyrna Beach FL 32168, monthly window cleaning, contact Karen at karen@sunshine.com."*
 > *"Schedule a window cleaning for the Walsh account next Monday at 8am."*
-Claude writes the new row(s) straight into the Job Tracker spreadsheet.
+Claude writes the new row(s) straight into your job database.
 
 **3. Check the weather before heading out**
 > *"What's the weather forecast for New Smyrna Beach today?"*
@@ -3104,7 +3245,7 @@ phone, can run the whole workflow without a laptop:
 |---|---|
 | `get_sheet_columns(sheet_name)` | Powers the Jobs App's row-edit form — returns every column the sheet has (even ones blank on this row) plus real Excel dropdown options, so the phone shows a proper editable field and select list instead of guessing. |
 | `create_invoice(job_identifier, …)` | On-the-spot invoicing — a tech can adjust price and service notes right at the job and create the invoice immediately, instead of it waiting for office entry. |
-| `log_time_entry(job_identifier, action, gps_coords)` | Clock in/out from the job site; the Jobs App PWA passes GPS coordinates automatically with each punch for accurate job costing. |
+| `log_time_entry(job_identifier, action, gps_coords)` | Clock in/out from the job site; the Jobs App PWA passes GPS coordinates automatically with each punch for accurate job costing, and a Google Maps link to that exact location is saved alongside it — tap-through from the Database tab to verify where a punch actually happened. |
 | `check_email_configured()` / `check_sms_configured()` | Fast yes/no checks the Jobs App calls *before* a button is tapped, so "Email Invoice" or "Text Invoice" are dimmed out up front instead of failing after the tap. |
 | `schedule_next_recurring_job(job_identifier)` | Auto-creates the next visit (weekly/biweekly/monthly/quarterly) right after a recurring job is marked complete — no manual re-booking. |
 | `create_job(updates)` | Add a brand-new job row from a plain-English description — usable by any crew role, not just the owner. |
@@ -3118,7 +3259,7 @@ phone, can run the whole workflow without a laptop:
 | `optimize_route(stops, origin, …)` | Reorders your stops into the fastest driving sequence with estimated arrival times. |
 | `build_maps_url(stops, origin, app)` | Tap-to-navigate Google/Apple Maps link, auto-split into legs for routes over 9 stops. |
 
-## Spreadsheet & Job Tools
+## Job Data Tools
 
 | Tool | What it does |
 |---|---|
@@ -3139,6 +3280,15 @@ phone, can run the whole workflow without a laptop:
 | `text_invoice(invoice_identifier)` | SMS-only invoice notification with amount due (and payment link, if enabled). |
 | `email_receipt(invoice_identifier, payment_method)` | Payment-received confirmation by email — for cash/check/offline payments. |
 | `text_receipt(invoice_identifier, payment_method)` | Same as above, by text. |
+
+## Data Portability — Backup, Restore, Export
+
+| Tool | What it does |
+|---|---|
+| `backup_job_database(destination_path)` | Full, lossless copy of your live job tracker database to wherever you choose — the safety net behind Backup Now. |
+| `restore_job_database(backup_path, confirm)` | Replaces the live job tracker database with a backup — how you move to a new computer, or undo a mistake. Requires `confirm=True`; a safety copy of the current data is made automatically first. |
+| `export_to_csv(output_dir, tables)` | One CSV file per table (or just the ones you name), labeled with AI-Prowler's own column names — good for an accountant or a general spreadsheet tool. |
+| `export_to_quickbooks_csv(output_dir)` | Same idea, but Customers.csv and Invoices.csv are labeled with QuickBooks Online's own field names (Display Name, Billing Address Line 1, Invoice No, etc.) so the one-time mapping screen in QBO's own importer is fast rather than a guessing exercise. |
 
 ## Messaging
 
@@ -3165,7 +3315,7 @@ phone, can run the whole workflow without a laptop:
 |---|---|
 | 🌤 Weather | "What's the weather forecast for New Smyrna Beach for the next 3 days?" |
 | 🗺 Route | "Optimize my route for these 6 jobs today and give me a Google Maps link." |
-| 📊 Spreadsheet | "Mark the Miller Windows job complete in my jobs.xlsx and record invoice #1048." |
+| 📊 Job update | "Mark the Miller Windows job complete and record invoice #1048." |
 | 🧾 Invoice | "Create an invoice for the Torres job for $220 and email it to them." |
 | ⏱ Time log | "Clock me in on job J-205." |
 | 📱 SMS | "Text the Johnson job that I am on my way." |
@@ -3188,20 +3338,22 @@ powerful MCP tools to search, cross-reference, and synthesize
 answers from your own documents. You ask a question;
 Claude researches your knowledge base and answers it.
 
-Two ways to talk to Claude:
+AI-Prowler has two operating modes. Choose the one that
+fits your situation:
 
-  📱  Claude.ai (web or mobile app)  — PREFERRED
-      Works on phone, tablet, and desktop browsers.
-      Requires an active AI-Prowler Mobile Access subscription.
-      Subscribe and configure in one click from Settings.
+  🖥️  Path 1 — Claude Desktop only (no subscription needed)
+      Use Claude on your Windows PC only. Full RAG capability,
+      no HTTP server or tunnel required, works with any
+      Claude account including free.
 
-  💻  Claude Desktop  — desktop-only alternative
-      Connects locally via stdio. No tunnel needed.
-      Free to install alongside Claude.ai.
+  📱  Path 2 — Desktop + Mobile/Web (subscription required)
+      Use Claude.ai on your phone, tablet, or any browser.
+      Requires an AI-Prowler Personal subscription ($10/month).
+      Also unlocks the Remote Control PWA and Jobs PWA.
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  STEP 1: INDEX YOUR DOCUMENTS
+  STEP 1: INDEX YOUR DOCUMENTS  (both paths)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 1. Click the "📚 Index Documents" tab
@@ -3220,68 +3372,100 @@ re-processed on subsequent runs. No need to start over.
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  STEP 2 — OPTION A: CLAUDE.AI (PREFERRED)
+  PATH 1 — CLAUDE DESKTOP (DESKTOP ONLY)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Access your knowledge base from your phone, tablet, or
-any browser — with full agentic RAG capability.
+Use this when you only need Claude on this Windows PC.
+No subscription, no HTTP server, no tunnel required.
+
+  ✅ Full agentic RAG — all 99 personal-mode MCP tools
+  ✅ Self-learning system, file editing, code execution
+  ✅ Email via Classic Outlook (no password) or SMTP app password;
+     multi-account support — choose account in Settings or per-send
+  ✅ SMS and WhatsApp to field crew/customers
+
+  ✅ Job data — schedule jobs, track customers, invoice, and log time
+  ✅ Scheduling and autonomous analysis task queue
+  ✅ Works with a free Claude account
+  ✅ Completely local MCP connection — no network needed
+  ❌ No phone/tablet/browser access
+  ❌ No Remote Control PWA or Jobs PWA
+  ❌ Inbound SMS replies not received (needs HTTP server)
+
+Setup:
+  1. The installer already registered AI-Prowler with
+     Claude Desktop automatically — no config needed.
+  2. Open the 🔗 Quick Links tab → click 🚀 Launch Claude Desktop
+     (First time? Click ⬇ Install Claude Desktop first)
+  3. Start a new conversation and ask a research question:
+
+     "Summarize the key risks in my Q3 contracts"
+     "What does my insurance policy say about flooding?"
+     "Find everything related to Project Alpha"
+
+  Claude calls multiple search tools, follows leads, and
+  synthesizes a comprehensive answer automatically.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PATH 2 — CLAUDE.AI (MOBILE + WEB ACCESS)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Use this when you want Claude on your phone, tablet,
+or any web browser — in addition to Claude Desktop.
+
+What you get beyond Path 1:
+  ✅ Claude.ai on any phone, tablet, or browser
+  ✅ Remote Control PWA (/remote/) — search, upload,
+     and download files from your phone
+  ✅ Jobs PWA (/jobs/) — field crew mobile app for jobs,
+     clock-in/out, photos, and creating invoices
+  ✅ Inbound SMS/WhatsApp replies (HTTP server running)
+  ✅ File transfer — download tracked PC files to phone,
+     upload phone photos into your knowledge base
+  ✅ Permanent public HTTPS URL (Cloudflare Tunnel,
+     provisioned automatically — no Cloudflare account needed)
 
 Requirements:
-  • Claude Pro plan on Claude.ai
-  • Active AI-Prowler Mobile Access subscription
+  • AI-Prowler Personal subscription ($10/month)
+  • A Claude.ai account — the FREE TIER IS SUFFICIENT
+    for AI-Prowler Personal (free tier allows 1 custom
+    MCP connector, which is all Personal mode needs).
+    Claude Pro is only required if you also use other
+    MCP connectors at the same time (e.g. a Business
+    server alongside your personal instance).
 
-Setup (one time — everything is automated):
+Setup (one time — fully automated):
   1. Go to Settings → 📡 Remote Access
   2. Enter a Bearer token and click Save Token
   3. Click ▶ Start HTTP Server
-  4. Click Subscribe — Personal (or Business)
+  4. Click 🛒 Subscribe — Personal
      → complete Stripe checkout
-     → check email for activation code
+     → check email for activation code (APRO-XXXX-XXXX-XXXX)
   5. Paste activation code → click ⚡ Configure Mobile Access
-     → tunnel is provisioned and started automatically
+     → Cloudflare tunnel is provisioned automatically
   6. Click the red 📖 Connect Claude.ai (auto) button
-     → reads instructions → click OK
-     → Claude.ai opens with connector form
-     → paste URL → name it AI-Prowler → click Add
+     → popup copies your MCP URL → click OK
+     → Claude.ai opens with the Add Custom Connector form
+     → paste URL → name it "AI-Prowler Local" → click Add
      → enter Bearer token when prompted
      → set Always Allow for all tools
+  7. Open Claude.ai on your phone — you should see
+     AI-Prowler tools in the tools panel
 
-Daily use — the server and tunnel auto-start on login.
+Daily use: the HTTP server and tunnel auto-start on login.
+
+Note: Once mobile is activated, use Claude.ai for all
+AI-Prowler sessions. Running Claude Desktop and Claude.ai
+simultaneously on the same AI-Prowler install can cause
+conflicts (two MCP sessions writing to the same database).
 
 Subscription info:  Help → User Guide → Section 8
 Support:            david.vavro1@gmail.com
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  STEP 2 — OPTION B: CLAUDE DESKTOP (DESKTOP ONLY)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Good alternative when you only need access from this PC.
-No Cloudflare Tunnel needed, no subscription beyond
-a free Claude account.
-
-  1. Open the 🔗 Quick Links tab
-  2. Click "🚀 Launch Claude Desktop"
-     • First time? Click "⬇ Install Claude Desktop" first
-  3. Start a NEW conversation and ask a research question:
-
-     "Summarize the key risks in my Q3 contracts"
-     "What does my insurance policy say about flooding?"
-     "Find everything related to Project Alpha"
-
-Claude calls multiple search tools, follows leads, and
-synthesizes a comprehensive answer automatically.
-
-  ✅ No HTTP server needed for Claude Desktop
-  ✅ Works with a free Claude account
-  ✅ Completely local — no internet required for the RAG connection
-
-Note: The installer registers AI-Prowler with Claude
-Desktop automatically. No config files to edit.
-
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  🧠  SELF-LEARNING
+  🧠  SELF-LEARNING  (both paths)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 AI-Prowler remembers what you tell it across sessions.
@@ -3291,28 +3475,51 @@ AI-Prowler remembers what you tell it across sessions.
   "What do we know about Client Alpha?"  → finds it instantly
 
 Manage saved learnings from the 🧠 Learnings tab — browse,
-filter, archive, or delete. See Help → User Guide → Section 20.
+filter, archive, or delete. See Help → User Guide → Section 22.
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  📧  EMAIL, SMS & WHATSAPP
+  📧  EMAIL, SMS & WHATSAPP  (both paths)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Configure once in Settings → Email Configuration (Gmail,
-iCloud, or any SMTP provider) and Settings → SMS / Text
-Messaging (Twilio, SignalWire, or Vonage), then ask Claude
-to text, WhatsApp, or email anyone — by name if they're in
-your job spreadsheet or saved as a contact.
+Email backend options (configure once in Settings → Email Configuration):
 
-  "Text Karen that we're 20 minutes away"
-  "Send me an alert — the Johnson job is running late"
-  "Email the job tracker spreadsheet to myself"
-  "WhatsApp Torres a reminder about tomorrow's appointment"
-  "Did anyone reply to my texts today?"
+  🖥️  Classic Outlook (OUTLOOK.EXE) — no app password needed
+      Works with any account Outlook has configured: Gmail, Yahoo,
+      Microsoft 365, Exchange, Outlook.com, and more.
+      Select the default account in Settings; override per-send:
+        "Send this from my Yahoo account"
+        "Email Torres from my Gmail"
+      Note: requires Classic Outlook — the New Outlook (olk.exe)
+      from the Microsoft Store does NOT support this. See Settings
+      → Email Configuration → "How to switch to Classic Outlook".
+
+  📧  SMTP with app password — fully automated background sending
+      Gmail · Outlook.com · Microsoft 365 · Yahoo · iCloud · custom
+      App passwords created at your provider's security settings page.
+      The Get App Password button in Settings links there directly.
+
+  ✅  Both backends can be active simultaneously — Outlook sends
+      first, SMTP is the automatic fallback if Outlook fails.
+
+Once configured, ask Claude:
+    "Text Karen that we're 20 minutes away"
+    "Send me an alert — the Johnson job is running late"
+    "Export the job tracker to Excel and email it to myself"
+    "WhatsApp Torres a reminder about tomorrow's appointment"
+    "What Outlook accounts do I have?" → lists all configured accounts
+    "Send this invoice from my Yahoo account"
+
+Note: Outbound email and SMS work in both Claude Desktop
+and Claude.ai (Path 1 and Path 2). Checking inbound SMS
+replies requires the HTTP server to be running so Twilio
+can POST webhook notifications to AI-Prowler — this is
+automatic in Path 2; in Path 1, start the HTTP server
+manually in Settings → Remote Access if you need it.
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  🔄  KEEPING YOUR INDEX CURRENT
+  🔄  KEEPING YOUR INDEX CURRENT  (both paths)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 • Click "🔄 Update Index" tab → "Update All" after
@@ -3759,6 +3966,18 @@ or from the Help menu."""
                       font=('Arial', 56)).pack(anchor='center')
 
         ttk.Separator(container, orient='horizontal').pack(fill='x', pady=(12, 12))
+
+        # ── 🧭 Setup Center (SETUP_CENTER_SPEC.md, Phase 1 2026-09-30) ─────────
+        # Lives permanently on the Home page: guides new users and is reused
+        # whenever they add a service (phone access, Jobs app, crew routes…).
+        # Personal mode only — this whole tab is the personal Home page.
+        # build_setup_center never raises; on any error the panel is left out.
+        try:
+            from setup_wizard import build_setup_center
+            self._setup_center = build_setup_center(container, self)
+        except Exception as _sc_err:
+            self._setup_center = None
+            print(f"Setup Center not loaded: {_sc_err}")
 
         # ── Notification banner area (populated by _refresh_notifications) ────
         self._notif_frame = ttk.Frame(container)
@@ -4703,41 +4922,210 @@ or from the Help menu."""
         if not answer:
             return
 
-        def _do_download():
-            # ── Update debug log ──────────────────────────────────────────────
-            # Written to ~/.ai-prowler/update_debug.log so every attempt,
-            # retry, wait, hash result and failure is captured on disk even
-            # though the GUI shows no console. Each run APPENDS so multiple
-            # click attempts are all in one file for comparison.
-            import datetime as _dt, socket as _socket
-            _log_path = Path.home() / '.ai-prowler' / 'update_debug.log'
-            _log_path.parent.mkdir(parents=True, exist_ok=True)
+        # ── Download progress dialog ──────────────────────────────────
+        # The download runs in a background thread. Tkinter is not
+        # thread-safe, so the worker never touches widgets — it pushes
+        # progress tuples into _prog_queue and this dialog drains the
+        # queue via after() in the main thread.
+        #
+        # The dialog is modal (grab_set): while it is open the user
+        # cannot File → Exit the main window mid-download, which is the
+        # exact failure this dialog exists to prevent.
+        _prog_queue = queue.Queue()
+        _cancel_event = threading.Event()
 
-            def _ulog(msg: str) -> None:
-                ts  = _dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-                line = f"[{ts}] {msg}\n"
+        def _fmt_bytes(n):
+            _n = float(n)
+            for _u in ("B", "KB", "MB", "GB"):
+                if _n < 1024.0 or _u == "GB":
+                    return f"{_n:,.0f} {_u}" if _u == "B" else f"{_n:,.1f} {_u}"
+                _n /= 1024.0
+            return f"{_n:,.1f} GB"
+
+        _prog_closed = {"done": False}
+
+        def _close_progress_dialog():
+            # Every exit path funnels through here — the dialog is
+            # destroyed exactly once.
+            if _prog_closed["done"]:
+                return
+            _prog_closed["done"] = True
+            try:
+                _prog.grab_release()
+            except Exception:
+                pass
+            try:
+                _prog.destroy()
+            except Exception:
+                pass
+
+        def _cancel_update():
+            # The Cancel button and the dialog X button behave
+            # identically: signal the worker, which aborts cleanly and
+            # reports back through the queue. The dialog itself is closed
+            # by the queue poller, never here.
+            if _cancel_event.is_set():
+                return
+            _cancel_event.set()
+            try:
+                _cancel_btn.config(state="disabled")
+            except Exception:
+                pass
+            _prog_file_var.set("Cancelling…")
+
+        def _show_final_dialog(kind, title, message, status_text):
+            # Runs in the main thread (called from the queue poller).
+            _close_progress_dialog()
+            if kind == "error":
+                messagebox.showerror(title, message)
+            elif kind == "warning":
+                messagebox.showwarning(title, message)
+            else:
+                messagebox.showinfo(title, message)
+            self.status_var.set(status_text)
+
+        _poll_state = {"total": None, "count": 0}
+
+        def _poll_progress():
+            # Runs in the main thread — the ONLY place widgets are touched.
+            _finished = None
+            try:
+                while True:
+                    _item = _prog_queue.get_nowait()
+                    _tag = _item[0]
+                    if _tag == "phase":
+                        _prog_file_var.set(_item[1])
+                        _prog_bytes_var.set("")
+                    elif _tag == "totals":
+                        _poll_state["total"] = _item[1]
+                        _poll_state["count"] = _item[2]
+                        _prog_bar["maximum"] = _item[1] if _item[1] else _item[2]
+                        _prog_bar["value"] = 0
+                    elif _tag == "progress":
+                        _, _fname, _cum = _item
+                        _total = _poll_state["total"]
+                        _prog_file_var.set(_fname)
+                        if _total:
+                            _pct = min(99, int(_cum * 100 / _total))
+                            _prog_bytes_var.set(
+                                f"{_fmt_bytes(_cum)} / {_fmt_bytes(_total)} ({_pct}%)")
+                            _prog_bar["value"] = _cum
+                    elif _tag == "file_done":
+                        _, _fname, _n = _item
+                        _prog_file_var.set(_fname)
+                        _prog_bytes_var.set(f"file {_n} of {_poll_state['count']}")
+                        _prog_bar["value"] = _n
+                    elif _tag == "done":
+                        _finished = _item[1:]
+            except queue.Empty:
+                pass
+            if _finished is not None:
+                _show_final_dialog(*_finished)
+                return
+            if not _dl_thread.is_alive() and _prog_queue.empty():
+                # Safety net: worker died without sending "done" — never
+                # leave the dialog hanging.
+                _show_final_dialog(
+                    "error", "Update Error",
+                    "The download stopped unexpectedly.\n\n"
+                    "Your current installation is unchanged.",
+                    "Ready")
+                return
+            try:
+                _prog.after(100, _poll_progress)
+            except tk.TclError:
+                pass
+
+        _prog = tk.Toplevel(self.root)
+        _prog.title(f"Downloading AI-Prowler v{version} update")
+        _prog.transient(self.root)
+        _prog.resizable(False, False)
+        _prog.geometry("460x170")
+        _prog.protocol("WM_DELETE_WINDOW", _cancel_update)
+
+        ttk.Label(_prog,
+                  text=f"Downloading AI-Prowler™ v{version}…",
+                  font=("Arial", 10, "bold")).pack(pady=(14, 6))
+        _prog_bar = ttk.Progressbar(_prog, orient="horizontal",
+                                    mode="determinate", length=400)
+        _prog_bar.pack(pady=(0, 6))
+        _prog_file_var = tk.StringVar(value="Preparing…")
+        ttk.Label(_prog, textvariable=_prog_file_var,
+                  font=("Arial", 9)).pack()
+        _prog_bytes_var = tk.StringVar(value="")
+        ttk.Label(_prog, textvariable=_prog_bytes_var,
+                  font=("Arial", 9)).pack(pady=(0, 10))
+        _cancel_btn = ttk.Button(_prog, text="Cancel", command=_cancel_update)
+        _cancel_btn.pack(pady=(0, 12))
+        _prog.grab_set()
+
+        def _do_download():
+            try:
+                # ── Update debug log ──────────────────────────────────────────────
+                # Written to ~/.ai-prowler/update_debug.log so every attempt,
+                # retry, wait, hash result and failure is captured on disk even
+                # though the GUI shows no console. Each run APPENDS so multiple
+                # click attempts are all in one file for comparison.
+                import datetime as _dt, socket as _socket
+                _log_path = Path.home() / '.ai-prowler' / 'update_debug.log'
+                _log_path.parent.mkdir(parents=True, exist_ok=True)
+
+                _config_path = Path.home() / '.ai-prowler' / 'config.json'
                 try:
-                    with open(_log_path, 'a', encoding='utf-8') as _lf:
-                        _lf.write(line)
+                    _update_debug_enabled = bool(
+                        json.loads(_config_path.read_text(encoding='utf-8')).get('debug_logging', False)
+                    ) if _config_path.exists() else False
+                except Exception as _cfg_exc:
+                    # Unreadable/corrupt config: debug logging stays off, but the
+                    # failure is surfaced (not swallowed) so the user sees it.
+                    _update_debug_enabled = False
+                    print(f"[UPDATE] Could not read config.json: {_cfg_exc}")
+                    _prog_queue.put(("done", "error",
+                        "Update Error",
+                        f"The update download failed unexpectedly:\n\n"
+                        f"Could not read config.json ({_cfg_exc}).\n\n"
+                        f"Your current installation is unchanged.",
+                        "Ready"))
+                    return
+
+                def _ulog(msg: str) -> None:
+                    print(f"[UPDATE] {msg}", flush=True)  # always keep console output
+                    if not _update_debug_enabled:
+                        return
+                    ts  = _dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                    line = f"[{ts}] {msg}\n"
+                    try:
+                        with open(_log_path, 'a', encoding='utf-8') as _lf:
+                            _lf.write(line)
+                    except Exception:
+                        pass
+
+                def _abort_cancelled():
+                    # User hit Cancel (or the dialog X): stage nothing, leave
+                    # the install untouched. The "done" tuple makes the queue
+                    # poller close the progress dialog and show the notice.
+                    _ulog("Update cancelled by user — staging nothing")
+                    _prog_queue.put(("done", "info",
+                        "Update Cancelled",
+                        "The update download was cancelled.\n\n"
+                        "Your current installation is unchanged — "
+                        "nothing was downloaded or modified.",
+                        "Ready"))
+
+                _ulog("=" * 60)
+                _ulog(f"Update session start — target v{version}")
+                _ulog(f"APP_VERSION={APP_VERSION}  python={__import__('sys').version.split()[0]}")
+                try:
+                    _ulog(f"hostname={_socket.gethostname()}")
                 except Exception:
                     pass
-                print(f"[UPDATE] {msg}", flush=True)  # keep console output too
+                try:
+                    import ssl as _ssl
+                    _ulog(f"ssl={_ssl.OPENSSL_VERSION}")
+                except Exception:
+                    pass
 
-            _ulog("=" * 60)
-            _ulog(f"Update session start — target v{version}")
-            _ulog(f"APP_VERSION={APP_VERSION}  python={__import__('sys').version.split()[0]}")
-            try:
-                _ulog(f"hostname={_socket.gethostname()}")
-            except Exception:
-                pass
-            try:
-                import ssl as _ssl
-                _ulog(f"ssl={_ssl.OPENSSL_VERSION}")
-            except Exception:
-                pass
-
-            try:
-                self.status_var.set(f"Downloading AI-Prowler v{version}...")
+                _prog_queue.put(("phase", f"Fetching update manifest for v{version}…"))
 
                 # Tag-based fetching — pin to the released git tag so that
                 # ongoing development on `main` never bleeds into an
@@ -4779,6 +5167,15 @@ or from the Help menu."""
                     'ai_prowler_mcp.py',
                     'RAG_RUN.bat',
                     'mcp_diagnostics.py',
+                    # Added 2026-09-24: ai_prowler_mcp.py imports this
+                    # unconditionally at module load (Settings tab's MCP Tool
+                    # Configuration panel). Omitting it here is the exact
+                    # failure pattern this whole comment block already warns
+                    # about — confirmed directly this time, not hypothetical:
+                    # a client stuck on this fallback would get the updated
+                    # ai_prowler_mcp.py but never this module, crash-looping
+                    # the MCP server on every restart.
+                    'mcp_tool_catalog.py',
                     # v8.0.0 task scheduling — omitting these from the
                     # fallback was the root cause of crashes after an
                     # in-place update (manifest fetch failed → these files
@@ -4797,6 +5194,11 @@ or from the Help menu."""
                     'subscription_client.py',
                     'mobile_activator.py',
                     'cloudflared_service_helper.py',
+                    # AI Routing per-user Claude connection (server mode):
+                    # console_inject.py is run BY PATH by cli_signin_relay.py,
+                    # so both files must be current together.
+                    'cli_signin_relay.py',
+                    'console_inject.py',
                 ]
 
                 _files = _fallback_files
@@ -4835,6 +5237,7 @@ or from the Help menu."""
                 # is what lets a release ship the user guide, icons, and any
                 # new modules without editing this code each time.
                 _file_hashes = {}   # path -> expected sha256, or None if unknown
+                _file_sizes = {}    # path -> expected byte size, or None if unknown
                 try:
                     _manifest_url = f"{_base}update_manifest.json"
                     _man_req = urllib.request.Request(
@@ -4850,17 +5253,21 @@ or from the Help menu."""
                         # verify integrity per file.
                         _resolved = []
                         _resolved_hashes = {}
+                        _resolved_sizes = {}
                         for _entry in _man_files:
                             if isinstance(_entry, str):
                                 _resolved.append(_entry)
                                 _resolved_hashes[_entry] = None
+                                _resolved_sizes[_entry] = None
                             elif isinstance(_entry, dict) and _entry.get("path"):
                                 _p = _entry["path"]
                                 _resolved.append(_p)
                                 _resolved_hashes[_p] = _entry.get("sha256")
+                                _resolved_sizes[_p] = _entry.get("bytes")
                         if _resolved:
                             _files = _resolved
                             _file_hashes = _resolved_hashes
+                            _file_sizes = _resolved_sizes
                             _n_hashed = sum(1 for v in _file_hashes.values() if v)
                             _ulog(f"Manifest loaded — {len(_files)} file(s) "
                                   f"({_n_hashed} with integrity hashes)")
@@ -4876,20 +5283,36 @@ or from the Help menu."""
                     # IS the authoritative file list — if we can't fetch
                     # it, abort and leave the current install untouched.
                     print(f"[UPDATE] Manifest fetch failed: {_man_exc} — aborting.")
-                    self.root.after(0, lambda _e=_man_exc: messagebox.showerror(
+                    _prog_queue.put(("done", "error",
                         "Update Aborted — Manifest Unavailable",
                         f"AI-Prowler could not fetch the update manifest for "
                         f"v{version}.\n\n"
-                        f"Reason: {_e}\n\n"
+                        f"Reason: {_man_exc}\n\n"
                         f"Your current installation is completely unchanged "
                         f"and safe to keep using.\n\n"
                         f"This is usually a temporary network or GitHub issue. "
-                        f"Click '📥 Download Update' again in a few minutes to retry."
-                    ))
-                    self.root.after(0, lambda: self.status_var.set(
+                        f"Click '📥 Download Update' again in a few minutes to retry.",
                         f"❌ Update v{version} aborted — manifest unavailable, "
                         f"your install is unchanged"))
                     return
+
+                if _cancel_event.is_set():
+                    _abort_cancelled()
+                    return
+
+                # Byte-driven progress when the manifest gave per-file
+                # sizes (scripts/release.py always writes them); otherwise
+                # fall back to per-file progress.
+                _byte_mode = bool(_file_sizes) and all(
+                    isinstance(_s, int) and _s >= 0
+                    for _s in _file_sizes.values())
+                if _byte_mode:
+                    _total_bytes = sum(_file_sizes.values())
+                    _ulog(f"Progress: byte mode, {_total_bytes:,} total bytes")
+                else:
+                    _total_bytes = None
+                    _ulog(f"Progress: file-count mode, {len(_files)} file(s)")
+                _prog_queue.put(("totals", _total_bytes, len(_files)))
 
                 # ── Download + verify everything into memory first ────────
                 # Nothing is written to the staging directory until EVERY
@@ -4903,6 +5326,8 @@ or from the Help menu."""
                 import hashlib as _hashlib_upd
                 _downloaded_content = {}   # path -> bytes
                 _failures = []             # list of (path, reason)
+                _cumulative_bytes = 0      # fully-downloaded bytes (byte mode)
+                _done_count = 0            # fully-downloaded files (count mode)
 
                 import time as _time_upd
 
@@ -4914,6 +5339,9 @@ or from the Help menu."""
                              ".jpeg", ".gif", ".webp", ".zip"}
 
                 for fname in _files:
+                    if _cancel_event.is_set():
+                        _abort_cancelled()
+                        return
                     _url = f"{_base}{fname}"
                     _expected = _file_hashes.get(fname)
 
@@ -4936,13 +5364,32 @@ or from the Help menu."""
 
                     _ulog(f"--- {fname} (expected_hash={str(_expected)[:16] if _expected else 'none'})")
                     for _attempt in range(1, _MAX_ATTEMPTS + 1):
+                        if _cancel_event.is_set():
+                            break
                         _t0 = _time_upd.time()
                         try:
                             _req = urllib.request.Request(
                                 _url,
                                 headers={"User-Agent": f"AI-Prowler/{APP_VERSION}"})
                             with urllib.request.urlopen(_req, timeout=30) as _resp:
-                                _content = _resp.read()
+                                # Chunked read: keeps the progress dialog live
+                                # on multi-MB files, and lets Cancel interrupt
+                                # mid-file instead of waiting for the whole
+                                # response to arrive.
+                                _chunks = []
+                                _got = 0
+                                while True:
+                                    if _cancel_event.is_set():
+                                        break
+                                    _piece = _resp.read(65536)
+                                    if not _piece:
+                                        break
+                                    _chunks.append(_piece)
+                                    _got += len(_piece)
+                                    if _byte_mode:
+                                        _prog_queue.put(("progress", fname,
+                                                         _cumulative_bytes + _got))
+                                _content = b"".join(_chunks)
                             _elapsed = _time_upd.time() - _t0
                             _ulog(f"  attempt {_attempt}/{_MAX_ATTEMPTS} OK "
                                   f"({len(_content):,} bytes in {_elapsed:.2f}s)")
@@ -4957,10 +5404,15 @@ or from the Help menu."""
                             if _attempt < _MAX_ATTEMPTS:
                                 _wait = 2 ** (_attempt - 1)  # 1, 2, 4 s
                                 _ulog(f"  waiting {_wait}s before retry…")
-                                _time_upd.sleep(_wait)
+                                if _cancel_event.wait(_wait):
+                                    _ulog("  cancelled during retry wait")
+                                    break
                             else:
                                 _ulog(f"  ALL {_MAX_ATTEMPTS} attempts exhausted — giving up on {fname}")
 
+                    if _cancel_event.is_set():
+                        _abort_cancelled()
+                        return
                     if _last_exc is not None:
                         _failures.append((fname, str(_last_exc)))
                         continue
@@ -4984,6 +5436,11 @@ or from the Help menu."""
                             continue
 
                     _downloaded_content[fname] = _content
+                    if _byte_mode:
+                        _cumulative_bytes += len(_content)
+                    else:
+                        _done_count += 1
+                        _prog_queue.put(("file_done", fname, _done_count))
                     _ulog(f"  -> staged ({'verified' if _expected else 'unverified'})")
 
                 _ulog(f"Download loop complete — "
@@ -5000,7 +5457,7 @@ or from the Help menu."""
                         for fn, reason in _failures[:8])
                     _more = (f"\n  …and {len(_failures) - 8} more file(s)"
                              if len(_failures) > 8 else "")
-                    self.root.after(0, lambda: messagebox.showerror(
+                    _prog_queue.put(("done", "error",
                         "Update Not Applied",
                         f"The update for v{version} could not be verified "
                         f"and was NOT installed.\n\n"
@@ -5009,9 +5466,7 @@ or from the Help menu."""
                         f"Your current AI-Prowler installation is "
                         f"unchanged and safe to keep using.\n\n"
                         f"This is usually a temporary network issue — "
-                        f"click '📥 Download Update' again to retry."
-                    ))
-                    self.root.after(0, lambda: self.status_var.set(
+                        f"click '📥 Download Update' again to retry.",
                         f"❌ Update v{version} failed integrity check — "
                         f"click Download Update to retry"))
                     return
@@ -5045,30 +5500,33 @@ or from the Help menu."""
                         f"Date: {datetime.now().isoformat()}\n",
                         encoding='utf-8'
                     )
-                    self.root.after(0, lambda: messagebox.showinfo(
+                    _prog_queue.put(("done", "info",
                         "Update Downloaded",
                         f"AI-Prowler™ v{version} downloaded and verified "
                         f"successfully.\n\n"
                         f"{downloaded} file(s) staged for install.\n\n"
                         f"The update will be applied automatically\n"
                         f"the next time you start AI-Prowler.\n\n"
-                        f"Go to File → Exit to restart now."
-                    ))
-                    self.root.after(0, lambda: self.status_var.set(
+                        f"Go to File → Exit to restart now.",
                         f"✅ Update v{version} ready — restart to apply"))
                 else:
-                    self.root.after(0, lambda: messagebox.showwarning(
+                    _prog_queue.put(("done", "warning",
                         "Download Failed",
                         "No files could be downloaded.\n"
-                        "Check your internet connection and try again."
-                    ))
-                    self.root.after(0, lambda: self.status_var.set("Ready"))
+                        "Check your internet connection and try again.",
+                        "Ready"))
 
             except Exception as exc:
                 print(f"[UPDATE] Download error: {exc}")
-                self.root.after(0, lambda: self.status_var.set("Ready"))
+                _prog_queue.put(("done", "error",
+                    "Update Error",
+                    f"The update download failed unexpectedly:\n\n{exc}\n\n"
+                    f"Your current installation is unchanged.",
+                    "Ready"))
 
-        threading.Thread(target=_do_download, daemon=True).start()
+        _dl_thread = threading.Thread(target=_do_download, daemon=True)
+        _dl_thread.start()
+        _prog.after(100, _poll_progress)
 
     def _display_notifications(self, data):
         """Display active notification banners on the Welcome tab."""
@@ -9574,6 +10032,70 @@ or from the Help menu."""
                         "Complete the browser sign-in it prompts for, then come "
                         "back here and click Test Setup (Dry Run) to confirm.")
 
+            def _tqa_copy_token():
+                """Copies the saved Claude token to the clipboard so it can be
+                pasted into the Jobs app's "CLI Pass Key" box (server-mode users
+                who also run AI-Prowler Personal reuse THIS token rather than
+                minting a second one, which would invalidate this one)."""
+                tok = _tqa.load_oauth_token()
+                if not tok:
+                    messagebox.showinfo(
+                        "No Token Yet",
+                        "There's no Claude token saved yet.\n\n"
+                        "Click 🔑 Get / Renew Token first.")
+                    return
+                self.root.clipboard_clear()
+                self.root.clipboard_append(tok)
+                self.root.update()
+                messagebox.showinfo(
+                    "Token Copied",
+                    "Your Claude token is on the clipboard.\n\n"
+                    "Paste it into the Jobs app's CLI Pass Key box. It's a "
+                    "long-lived credential — don't share it.")
+
+            def _tqa_email_token():
+                """Emails the saved Claude token to this install's own address
+                (Email Configuration's default recipient) — for getting it onto
+                a phone. Asks first: email isn't encrypted."""
+                tok = _tqa.load_oauth_token()
+                if not tok:
+                    messagebox.showinfo(
+                        "No Token Yet",
+                        "There's no Claude token saved yet.\n\n"
+                        "Click 🔑 Get / Renew Token first.")
+                    return
+                try:
+                    import ai_prowler_mcp as _mcp_tok
+                    _ecfg = _mcp_tok._email_config_load() or {}
+                    _to = (_ecfg.get("default_to") or _ecfg.get("username") or "").strip()
+                except Exception:
+                    _mcp_tok, _to = None, ""
+                if _mcp_tok is None or "@" not in _to:
+                    messagebox.showinfo(
+                        "Email Not Set Up",
+                        "Set up Email Configuration first, so AI-Prowler knows "
+                        "which address to send it to.")
+                    return
+                if not messagebox.askyesno(
+                        "Email Token To Yourself",
+                        f"Send your Claude token to {_to}?\n\n"
+                        "It's a long-lived credential and email isn't encrypted — "
+                        "only do this if that inbox is yours and private."):
+                    return
+                body = ("Your AI-Prowler Claude token (paste it into the Jobs "
+                        "app's CLI Pass Key box):\n\n"
+                        f"    {tok}\n\n"
+                        "Keep it private — anyone with it can use your Claude "
+                        "subscription.")
+                try:
+                    ok, msg = _mcp_tok._send_smtp(_to, "Your AI-Prowler Claude token", body)
+                except Exception as _e:
+                    ok, msg = False, str(_e)
+                if ok:
+                    messagebox.showinfo("Token Emailed", f"Sent to {_to}.")
+                else:
+                    messagebox.showerror("Could Not Email", str(msg))
+
             # v8.1.5 reorder, per direct product decision: the Subscription/
             # OAuth path (Get / Renew Token) is the recommended default —
             # it should be the FIRST, most prominent button, not buried
@@ -9607,6 +10129,10 @@ or from the Help menu."""
             _tqa_btn_row.pack(fill='x', pady=(4, 0))
             _tqa_btn_get_token = ttk.Button(_tqa_btn_row, text="🔑 Get / Renew Token",
                                              command=_tqa_get_token)
+            _tqa_btn_copy_token = ttk.Button(_tqa_btn_row, text="📋 Copy Token",
+                                              command=_tqa_copy_token)
+            _tqa_btn_email_token = ttk.Button(_tqa_btn_row, text="✉ Email Token to Me",
+                                               command=_tqa_email_token)
             _tqa_btn_test = ttk.Button(_tqa_btn_row, text="🧪 Test Setup (Dry Run)",
                                         command=_tqa_test_setup)
             _tqa_btn_get_api_key = ttk.Button(_tqa_btn_row, text="🌐 Get an API Key (backup)",
@@ -9620,11 +10146,16 @@ or from the Help menu."""
                 positions a widget relative to whatever else is CURRENTLY
                 packed at the moment .pack() is called, not by any original
                 fixed index."""
-                for _b in (_tqa_btn_get_token, _tqa_btn_test, _tqa_btn_get_api_key):
+                for _b in (_tqa_btn_get_token, _tqa_btn_copy_token, _tqa_btn_email_token,
+                           _tqa_btn_test, _tqa_btn_get_api_key):
                     _b.pack_forget()
                 is_api_key = (_tqa_auth_var.get() == "api_key")
                 if not is_api_key:
                     _tqa_btn_get_token.pack(side='left', padx=(0, 6))
+                    # Copy / Email the OAuth token — only meaningful on the
+                    # subscription (OAuth) path; the API-key path has no token.
+                    _tqa_btn_copy_token.pack(side='left', padx=(0, 6))
+                    _tqa_btn_email_token.pack(side='left', padx=(0, 6))
                 _tqa_btn_test.pack(side='left', padx=(0, 6))
                 if is_api_key:
                     _tqa_btn_get_api_key.pack(side='left')
@@ -11347,6 +11878,17 @@ or from the Help menu."""
                 value=_rag_engine.OWNER_NAME if RAG_AVAILABLE else "")
             _owner_entry = ttk.Entry(_owner_row, textvariable=_owner_name_var, width=30)
             _owner_entry.pack(side='left')
+            # This is the first focusable widget on the Settings tab, so when
+            # the notebook switches to Settings, ttk hands it focus via
+            # <<TraverseIn>> — and the TEntry class binding for that event
+            # selects ALL text, leaving the owner's name highlighted every
+            # time the tab opens. Take focus with the cursor at the end
+            # instead, no selection. ("break" skips the class binding.)
+            def _owner_entry_traverse_in(e):
+                e.widget.selection_clear()
+                e.widget.icursor('end')
+                return "break"
+            _owner_entry.bind('<<TraverseIn>>', _owner_entry_traverse_in)
 
             def _save_owner_name():
                 name = _owner_name_var.get().strip()
@@ -11436,6 +11978,458 @@ or from the Help menu."""
             _addr_btn_row.pack(fill='x', pady=(4, 0))
             ttk.Button(_addr_btn_row, text="💾 Save Address",
                        command=_save_owner_address).pack(side='left')
+
+        # ── MCP Tool Configuration (2026-09-24, redesigned 2026-09-24) ────────
+        # Lets the owner disable individual MCP tools, or whole feature
+        # groups, that this install doesn't use — applies to whichever mode
+        # THIS install is actually running (Personal vs Server), independently
+        # of the other mode's saved configuration. Enforced at MCP
+        # registration time by ai_prowler_mcp.py's _USER_DISABLED_TOOLS /
+        # _load_user_tool_config() — see mcp_tool_catalog.py for the single
+        # source of truth on categories, descriptions, locked tools, and
+        # which tools a live app feature depends on. Unlike everything above
+        # in this Owner Name section, this panel is NOT personal-mode-only —
+        # it's placed right after Owner Name (matching where it was asked
+        # for) but applies in both modes, since it has its own mode check
+        # rather than being wrapped in `if not _settings_is_server_mode`.
+        #
+        # Redesign: every tool used to get its own row (and later its own
+        # "ⓘ" button), making the Settings page very long. Now each category
+        # collapses to a single row — group checkbox (or 🔒 when
+        # mcp_tool_catalog.category_is_locked()), "N of M enabled", and a
+        # Configure…/Details… button that opens a popup with the category
+        # description and each tool's description + enable/disable checkbox.
+        #
+        # Takes effect on the next restart, not live — tool registration is
+        # baked in at process startup with no existing hot-reload mechanism
+        # in this codebase, same as the two engineering-controlled
+        # suppression tiers (_TIER_A_SUPPRESSED, _PERSONAL_MODE_SUPPRESSED)
+        # this feature sits beside. No "Restart Now" button yet — wiring one
+        # up to the correct relaunch mechanism (RUN.bat vs. the installed
+        # shortcut) needs a decision before that's safe to add; for now the
+        # save confirmation tells the owner to restart manually.
+        try:
+            import mcp_tool_catalog as _tc
+        except Exception:
+            _tc = None
+
+        if _tc is not None:
+            # Collapsible (2026-10-01, Vicki) — same look as the Home page's
+            # 🧭 Set up AI-Prowler panel: an always-visible header row with a
+            # ▸/▾ fold button and the live "N of M tools enabled" count; the
+            # body (description, group rows, Save/Reset) shows only when open.
+            # Folded by default; the choice is remembered between sessions in
+            # ~/.ai-prowler/gui_sections.json. Everything below still packs
+            # into `_tool_cfg_frame`, which is now the foldable body frame.
+            _tool_cfg_outer = ttk.LabelFrame(scrollable_frame, text="", padding=(14, 8))
+            _tool_cfg_outer.pack(fill='x', padx=20, pady=(0, 10))
+
+            def _gui_sections_path():
+                import pathlib as _pl
+                _td = os.environ.get("AIPROWLER_TEST_STATE_DIR", "").strip()
+                base = _pl.Path(_td) if _td else _pl.Path.home() / ".ai-prowler"
+                return base / "gui_sections.json"
+
+            def _gui_section_collapsed(key, default=True):
+                try:
+                    _d = json.loads(_gui_sections_path().read_text(encoding="utf-8-sig"))
+                    _v = _d.get(key) if isinstance(_d, dict) else None
+                    return _v if isinstance(_v, bool) else default
+                except Exception:
+                    return default
+
+            def _gui_section_set_collapsed(key, value):
+                try:
+                    _p = _gui_sections_path()
+                    try:
+                        _d = json.loads(_p.read_text(encoding="utf-8-sig"))
+                        if not isinstance(_d, dict):
+                            _d = {}
+                    except Exception:
+                        _d = {}
+                    _d[key] = bool(value)
+                    _p.parent.mkdir(parents=True, exist_ok=True)
+                    _p.write_text(json.dumps(_d, indent=2), encoding="utf-8")
+                except Exception:
+                    pass   # remembering the fold is a convenience, never an error
+
+            _tool_cfg_head = ttk.Frame(_tool_cfg_outer)
+            _tool_cfg_head.pack(fill='x')
+            _tool_cfg_frame = ttk.Frame(_tool_cfg_outer)   # the foldable body
+            _tool_cfg_open = [not _gui_section_collapsed("mcp_tool_config", True)]
+
+            def _tool_cfg_apply_fold():
+                _o = _tool_cfg_open[0]
+                _tool_cfg_toggle_btn.configure(
+                    text=("▾" if _o else "▸") + " 🧩 MCP Tool Configuration")
+                if _o:
+                    _tool_cfg_frame.pack(fill='x', pady=(8, 0))
+                else:
+                    _tool_cfg_frame.pack_forget()
+                try:   # let the Settings page's scroll region follow the new height
+                    scrollable_frame.event_generate('<Configure>')
+                except Exception:
+                    pass
+
+            def _tool_cfg_toggle():
+                _tool_cfg_open[0] = not _tool_cfg_open[0]
+                _gui_section_set_collapsed("mcp_tool_config", not _tool_cfg_open[0])
+                _tool_cfg_apply_fold()
+
+            _tool_cfg_toggle_btn = ttk.Button(_tool_cfg_head, command=_tool_cfg_toggle)
+            _tool_cfg_toggle_btn.pack(side='left')
+
+            _tool_cfg_mode_key = "server" if _settings_is_server_mode else "personal"
+
+            ttk.Label(
+                _tool_cfg_frame,
+                text=(f"Disable individual MCP tools or whole feature groups you "
+                      f"don't use — applies to this install's {_tool_cfg_mode_key} "
+                      f"mode. Changes take effect after restarting AI-Prowler, "
+                      f"not live."),
+                font=('Arial', 9), foreground='gray', wraplength=600,
+                justify='left').pack(anchor='w', pady=(0, 8))
+
+            def _tool_config_path_gui():
+                import pathlib as _pl
+                _td = os.environ.get("AIPROWLER_TEST_STATE_DIR", "").strip()
+                base = _pl.Path(_td) if _td else _pl.Path.home() / ".ai-prowler"
+                return base / "tool_config.json"
+
+            def _blank_tool_config():
+                return {"schema_version": 1,
+                        "personal": {"disabled_tools": []},
+                        "server": {"disabled_tools": []}}
+
+            def _load_tool_config_gui():
+                path = _tool_config_path_gui()
+                try:
+                    if not path.exists():
+                        return _blank_tool_config()
+                    raw = json.loads(path.read_text(encoding="utf-8-sig"))
+                    if not isinstance(raw, dict) or raw.get("schema_version") != 1:
+                        return _blank_tool_config()
+                    raw.setdefault("personal", {}).setdefault("disabled_tools", [])
+                    raw.setdefault("server", {}).setdefault("disabled_tools", [])
+                    return raw
+                except Exception:
+                    return _blank_tool_config()
+
+            _tool_cfg_data = _load_tool_config_gui()
+            _tool_cfg_disabled_now = set(
+                n for n in _tool_cfg_data.get(_tool_cfg_mode_key, {}).get("disabled_tools", [])
+                if n in _tc.TOOL_CATALOG and not _tc.is_locked(n)
+            )
+
+            _tool_cfg_vars = {}  # tool_name -> tk.BooleanVar (True = ENABLED)
+            _tool_cfg_counter_var = tk.StringVar()
+
+            # ── Compact layout (2026-09-24, group popups) ─────────────────────
+            # The Settings page shows ONE row per category:
+            #     [☑ Group name]   5 of 7 enabled   [Configure…]
+            # (locked groups show "🔒 Group name ... always on  [Details…]").
+            # Everything per-tool — description, locked reason, live-feature
+            # note, the individual enable/disable checkboxes — lives in a
+            # popup window opened from that row. The group checkbox is
+            # tri-state (dash = some tools off) and toggles the whole group.
+            #
+            # A tool is toggleable only if neither it nor its category is
+            # locked. Vars exist for toggleable tools only, created up front
+            # (not inside the popup) so Save/Reset work without ever opening
+            # a popup, and a popup reopened later shows the pending state.
+            def _tool_cfg_fixed(name):
+                return (_tc.is_locked(name)
+                        or _tc.category_is_locked(_tc.category_of(name) or ""))
+
+            _tool_cfg_cats = []   # (CategoryMeta, [tools in this mode], cat_locked)
+            for _cat in _tc.CATEGORY_ORDER:
+                _cat_tools = [
+                    n for n in _tc.tools_in_category(_cat.key)
+                    if _tool_cfg_mode_key in _tc.modes_of(n)
+                ]
+                if not _cat_tools:
+                    continue  # nothing in this category applies to this mode
+                for n in _cat_tools:
+                    if not _tool_cfg_fixed(n):
+                        _tool_cfg_vars[n] = tk.BooleanVar(
+                            value=n not in _tool_cfg_disabled_now)
+                _tool_cfg_cats.append(
+                    (_cat, _cat_tools, _tc.category_is_locked(_cat.key)))
+
+            _tool_cfg_row_refreshers = []
+
+            def _tool_cfg_refresh_counter():
+                _total = sum(len(t) for _c, t, _l in _tool_cfg_cats)
+                _off = sum(1 for v in _tool_cfg_vars.values() if not v.get())
+                _tool_cfg_counter_var.set(
+                    f"{_total - _off} of {_total} tools "
+                    f"enabled in {_tool_cfg_mode_key} mode"
+                )
+
+            def _tool_cfg_changed():
+                _tool_cfg_refresh_counter()
+                for _fn in _tool_cfg_row_refreshers:
+                    _fn()
+
+            # In the header (always visible, folded or not) — like the Setup
+            # Center's "N of M done" next to its fold button.
+            ttk.Label(_tool_cfg_head, textvariable=_tool_cfg_counter_var,
+                      font=('Arial', 10, 'bold')).pack(side='left', padx=(10, 0))
+            _tool_cfg_apply_fold()
+
+            def _tool_cfg_confirm_pwa(names, parent):
+                """Ask before turning OFF tools a live app feature uses.
+                `names` = tools about to go from enabled to disabled."""
+                _deps = [n for n in names if _tc.TOOL_CATALOG[n].pwa_dependency]
+                if not _deps:
+                    return True
+                _lines = "\n".join(
+                    f"• {_tc.TOOL_CATALOG[n].label} — "
+                    f"{_tc.TOOL_CATALOG[n].pwa_dependency_note or 'a live app feature'}"
+                    for n in _deps)
+                return messagebox.askyesno(
+                    "Disable a tool used by a live feature?",
+                    "These tools are used by live app features, which may stop "
+                    f"working after restart:\n\n{_lines}\n\nContinue?",
+                    parent=parent)
+
+            def _tool_cfg_set_many(names, enable, parent):
+                _names = [n for n in names if n in _tool_cfg_vars]
+                if not enable:
+                    _turning_off = [n for n in _names if _tool_cfg_vars[n].get()]
+                    if not _tool_cfg_confirm_pwa(_turning_off, parent):
+                        _tool_cfg_changed()   # repaint any clicked checkbox
+                        return
+                for n in _names:
+                    _tool_cfg_vars[n].set(enable)
+                _tool_cfg_changed()
+
+            def _open_tool_cfg_popup(cat, tools, cat_locked):
+                _toggle = [n for n in tools if n in _tool_cfg_vars]
+                _win = tk.Toplevel(self.root)
+                _win.title(f"MCP Tools — {cat.label}")
+                _win.transient(self.root)
+                _win.minsize(480, 220)
+
+                _hdr = ttk.Frame(_win, padding=(14, 12, 14, 6))
+                _hdr.pack(fill='x')
+                ttk.Label(_hdr, text=cat.label,
+                          font=('Arial', 11, 'bold')).pack(anchor='w')
+                _hdr_desc = ttk.Label(_hdr, text=cat.description, font=('Arial', 9),
+                                      foreground='gray', wraplength=500,
+                                      justify='left')
+                _hdr_desc.pack(anchor='w', fill='x', pady=(2, 0))
+                if not _toggle:
+                    ttk.Label(_hdr, font=('Arial', 9, 'italic'),
+                              text="🔒 These tools are always on and can't be "
+                                   "disabled.").pack(anchor='w', pady=(6, 0))
+
+                ttk.Separator(_win).pack(fill='x', padx=14)
+
+                # Scrollable tool list
+                _list_h = min(440, 58 * len(tools) + 10)
+                _outer = ttk.Frame(_win)
+                _outer.pack(fill='both', expand=True, padx=(14, 4), pady=(4, 0))
+                try:
+                    _bg = ttk.Style().lookup('TFrame', 'background') or None
+                except Exception:
+                    _bg = None
+                _cv = tk.Canvas(_outer, highlightthickness=0, width=520,
+                                height=_list_h, background=_bg)
+                _sb = ttk.Scrollbar(_outer, orient='vertical', command=_cv.yview)
+                _inner = ttk.Frame(_cv)
+                _inner.bind('<Configure>',
+                            lambda e: _cv.configure(scrollregion=_cv.bbox('all')))
+                _inner_id = _cv.create_window((0, 0), window=_inner, anchor='nw')
+                _cv.configure(yscrollcommand=_sb.set)
+                _cv.pack(side='left', fill='both', expand=True)
+                _sb.pack(side='right', fill='y')
+
+                # Text reflows when the popup is resized: the inner frame is
+                # stretched to the canvas width, and every wrapping label's
+                # wraplength follows it (tool notes are indented 22px + 8px
+                # right margin; header description tracks the header width).
+                _wrap_labels = []   # tool-note labels inside the list
+
+                def _reflow_list(e):
+                    _cv.itemconfigure(_inner_id, width=e.width)
+                    _wl = max(200, e.width - 30)
+                    for _lbl in _wrap_labels:
+                        _lbl.configure(wraplength=_wl)
+                _cv.bind('<Configure>', _reflow_list)
+                _hdr.bind('<Configure>', lambda e: _hdr_desc.configure(
+                    wraplength=max(200, e.width - 28)))
+
+                # Wheel bound on the popup itself; "break" keeps the Settings
+                # page's bind_all wheel handler from scrolling underneath.
+                def _wheel(e):
+                    _cv.yview_scroll(int(-1 * (e.delta / 120)), 'units')
+                    return "break"
+                _win.bind('<MouseWheel>', _wheel)
+
+                def _make_popup_toggle(name, var):
+                    def _t():
+                        if not var.get():   # just unchecked
+                            if not _tool_cfg_confirm_pwa([name], _win):
+                                var.set(True)
+                        _tool_cfg_changed()
+                    return _t
+
+                for n in tools:
+                    _m = _tc.TOOL_CATALOG[n]
+                    _r = ttk.Frame(_inner)
+                    _r.pack(fill='x', anchor='w', pady=(6, 0))
+                    _v = _tool_cfg_vars.get(n)
+                    if _v is None:
+                        ttk.Label(_r, text=f"🔒 {_m.label}",
+                                  font=('Arial', 9, 'bold')).pack(anchor='w')
+                    else:
+                        ttk.Checkbutton(_r, text=_m.label, variable=_v,
+                                        command=_make_popup_toggle(n, _v)
+                                        ).pack(anchor='w')
+                    _note = _m.description
+                    if _v is None and _m.locked_reason:
+                        _note += f"\nAlways on: {_m.locked_reason}"
+                    if _m.pwa_dependency:
+                        _note += (f"\nUsed by: "
+                                  f"{_m.pwa_dependency_note or 'a live app feature'}")
+                    _note_lbl = ttk.Label(_r, text=_note, font=('Arial', 9),
+                                          foreground='gray', wraplength=470,
+                                          justify='left')
+                    _note_lbl.pack(anchor='w', fill='x', padx=(22, 0))
+                    _wrap_labels.append(_note_lbl)
+
+                _foot = ttk.Frame(_win, padding=(14, 10))
+                _foot.pack(fill='x')
+                if _toggle:
+                    ttk.Button(_foot, text="Enable all",
+                               command=lambda: _tool_cfg_set_many(_toggle, True, _win)
+                               ).pack(side='left')
+                    ttk.Button(_foot, text="Disable all",
+                               command=lambda: _tool_cfg_set_many(_toggle, False, _win)
+                               ).pack(side='left', padx=(6, 0))
+
+                def _close(_e=None):
+                    try:
+                        _win.grab_release()
+                    except Exception:
+                        pass
+                    _win.destroy()
+
+                ttk.Button(_foot, text="Close", command=_close).pack(side='right')
+                if _toggle:
+                    ttk.Label(_win, font=('Arial', 8), foreground='gray',
+                              text="Changes are kept when you close this window — "
+                                   "click Save on the Settings page to apply."
+                              ).pack(anchor='w', padx=14, pady=(0, 8))
+                _win.protocol("WM_DELETE_WINDOW", _close)
+                _win.bind('<Escape>', _close)
+
+                _win.update_idletasks()
+                _x = self.root.winfo_rootx() + max(
+                    0, (self.root.winfo_width() - _win.winfo_width()) // 2)
+                _y = self.root.winfo_rooty() + 60
+                _win.geometry(f"+{_x}+{_y}")
+                try:
+                    _win.grab_set()
+                except Exception:
+                    pass
+                _win.focus_set()
+
+            _tool_cfg_body = ttk.Frame(_tool_cfg_frame)
+            _tool_cfg_body.pack(fill='x', anchor='w')
+            _tool_cfg_body.columnconfigure(0, minsize=300)
+
+            for _ri, (_cat, _cat_tools, _cat_locked) in enumerate(_tool_cfg_cats):
+                _toggle = [n for n in _cat_tools if n in _tool_cfg_vars]
+                if _toggle:
+                    _grp_var = tk.IntVar()
+                    _grp_cb = ttk.Checkbutton(_tool_cfg_body, text=_cat.label,
+                                              variable=_grp_var)
+                    _grp_cb.configure(command=lambda t=_toggle: _tool_cfg_set_many(
+                        t, any(not _tool_cfg_vars[n].get() for n in t), self.root))
+                    _grp_cb.grid(row=_ri, column=0, sticky='w', pady=2)
+                else:
+                    _grp_var = _grp_cb = None
+                    ttk.Label(_tool_cfg_body, text=f"🔒 {_cat.label}"
+                              ).grid(row=_ri, column=0, sticky='w', pady=2)
+
+                _count_lbl = ttk.Label(_tool_cfg_body, font=('Arial', 9),
+                                       foreground='gray')
+                _count_lbl.grid(row=_ri, column=1, sticky='w', padx=(8, 16))
+                ttk.Button(_tool_cfg_body,
+                           text="Configure…" if _toggle else "Details…",
+                           command=lambda c=_cat, t=_cat_tools, l=_cat_locked:
+                               _open_tool_cfg_popup(c, t, l)
+                           ).grid(row=_ri, column=2, sticky='w', pady=2)
+
+                def _make_row_refresh(tools=_cat_tools, toggle=_toggle,
+                                      var=_grp_var, cb=_grp_cb, lbl=_count_lbl):
+                    def _refresh():
+                        if not toggle:
+                            lbl.configure(text=f"{len(tools)} tools · always on")
+                            return
+                        _off = sum(1 for n in toggle if not _tool_cfg_vars[n].get())
+                        lbl.configure(text=f"{len(tools) - _off} of {len(tools)} enabled")
+                        cb.state(['!alternate'])
+                        if _off == 0:
+                            var.set(1)
+                        else:
+                            var.set(0)
+                            if _off < len(toggle):
+                                cb.state(['alternate'])   # dash = partly on
+                    return _refresh
+
+                _tool_cfg_row_refreshers.append(_make_row_refresh())
+
+            _tool_cfg_changed()
+
+            _tool_cfg_status_var = tk.StringVar(value="")
+            ttk.Label(_tool_cfg_frame, textvariable=_tool_cfg_status_var,
+                      font=('Arial', 9, 'bold'),
+                      foreground='#b8860b').pack(anchor='w', pady=(8, 4))
+
+            def _save_tool_config():
+                # 2026-10-01 (Vicki): Save goes ONLY through tool_config_store —
+                # it writes tool_config.json and nothing else (atomic write, a
+                # backup of the previous tool_config.json, refuses every other
+                # file), then checks config.json and the other settings files
+                # and puts back any that came out missing or damaged. If that
+                # module can't load, refuse to save rather than fall back to a
+                # less careful write.
+                _disabled_now = [n for n, v in _tool_cfg_vars.items() if not v.get()]
+                try:
+                    import tool_config_store as _tcs
+                except Exception as _e:
+                    _tool_cfg_status_var.set(
+                        f"❌ Not saved — the safe-save module is missing ({_e}). "
+                        f"Your settings were not touched.")
+                    return
+                try:
+                    _tcs.save_disabled_tools(_disabled_now, _tool_cfg_mode_key)
+                    _tool_cfg_status_var.set(
+                        "✅ Saved MCP tool choices only — your other settings were not "
+                        "changed. Restart AI-Prowler to apply.")
+                except Exception as _e:
+                    _tool_cfg_status_var.set(
+                        f"❌ Could not save: {_e}. Your other settings were not changed.")
+
+            def _reset_tool_config_defaults():
+                # Only re-ticks the boxes in this panel. Nothing is written to
+                # disk until Save, and Save only ever writes tool_config.json.
+                for v in _tool_cfg_vars.values():
+                    v.set(True)
+                _tool_cfg_changed()
+                _tool_cfg_status_var.set(
+                    "Reset in this panel only — click Save to keep it (MCP tools "
+                    "only; other settings are not affected), then restart.")
+
+            _tool_cfg_btn_row = ttk.Frame(_tool_cfg_frame)
+            _tool_cfg_btn_row.pack(fill='x', pady=(4, 0))
+            ttk.Button(_tool_cfg_btn_row, text="💾 Save (restart required)",
+                       command=_save_tool_config).pack(side='left')
+            ttk.Button(_tool_cfg_btn_row, text="↺ Reset to Defaults",
+                       command=_reset_tool_config_defaults).pack(side='left', padx=(8, 0))
 
         # ── Visibility-controlled parent frames ──────────────────────────────
         # Sections that are hidden when their feature flag is off get parented
@@ -11694,7 +12688,7 @@ or from the Help menu."""
         #   So the customer's Reply goes directly to the field tech's phone.
         _email_section_title = (
             '\U0001f4e7 Email Configuration  '
-            '(company SMTP — field crew identity set in Admin tab)'
+            '(company account, Outlook or SMTP — each user\'s name/Reply-To set in Admin tab)'
             if _settings_is_server_mode else
             '\U0001f4e7 Email Configuration  '
             '(your personal SMTP — used by send_email / send_alert tools)'
@@ -11705,42 +12699,425 @@ or from the Help menu."""
             padding=10)
         email_cfg_frame.pack(fill='x', padx=20, pady=(0, 10))
 
-        # Context hint — different message for each mode
-        if _settings_is_server_mode:
-            ttk.Label(email_cfg_frame, justify='left',
-                      font=('Segoe UI', 8), foreground='gray',
-                      text=(
-                          "Server mode: configure the company SMTP account here.\n"
-                          "Field crew send_email / send_alert use this account to send,\n"
-                          "but each message is personalised with the employee's name and\n"
-                          "Reply-To from their user record in the Admin tab."
-                      )).grid(row=0, column=0, columnspan=3, sticky='w', padx=6, pady=(0, 6))
-            _email_row_start = 1
-        else:
-            ttk.Label(email_cfg_frame, justify='left',
-                      font=('Segoe UI', 8), foreground='gray',
-                      text=(
-                          "Personal mode: configure your own email account here.\n"
-                          "Claude can also set this by telling it your email and app password\n"
-                          "in a conversation (configure_email() MCP tool)."
-                      )).grid(row=0, column=0, columnspan=3, sticky='w', padx=6, pady=(0, 6))
-            _email_row_start = 1
+        # ── Detect Outlook — calls the authoritative MCP module function ──────
+        def _run_outlook_check() -> tuple:
+            """Returns (classic_available: bool, new_outlook: bool)."""
+            try:
+                import ai_prowler_mcp as _mcp
+                classic = _mcp._outlook_is_available()
+                new_ol  = (not classic) and (
+                    _mcp._new_outlook_is_running() or
+                    _mcp._new_outlook_is_installed())
+                return classic, new_ol
+            except Exception:
+                return False, False
+
+        _outlook_available, _new_outlook = _run_outlook_check()
 
         _ep = {'padx': 6, 'pady': 3}
-        ttk.Label(email_cfg_frame, text='Your Email Address:').grid(
+
+        # ── Row 0: dynamic status label ───────────────────────────────────────
+        # R-053 (2026-09-28): Outlook detection, the Send-via checkboxes, the
+        # Check/Refresh Outlook button and the account picker used to be
+        # personal-mode only, and saving in server mode forced SMTP. But the
+        # send path (_send_smtp in ai_prowler_mcp.py) already honours an
+        # Outlook backend in both modes, and the HTTP MCP server runs as a
+        # child of this window in the same desktop session, so Outlook COM
+        # works on a server PC too. Server mode now gets the same controls;
+        # only the intro text differs.
+        _show_outlook_ui = True
+        _ol_mode_intro = (
+            "Server mode: this is the company's sending account — every user's "
+            "email goes out from it,\n"
+            "personalised with the employee's name and Reply-To from the Admin tab.\n"
+            if _settings_is_server_mode else
+            "Personal mode: configure your email account below.\n")
+        if _show_outlook_ui:
+            _ol_status_var = tk.StringVar()
+
+            def _update_ol_status(classic: bool, new_ol: bool) -> None:
+                if classic:
+                    _ol_status_var.set(
+                        _ol_mode_intro +
+                        "✅ Classic Outlook detected — can send silently via COM."
+                        + ("\n    (Outlook sends under the account's own name; the "
+                           "employee's Reply-To still applies.)"
+                           if _settings_is_server_mode else "")
+                    )
+                elif new_ol:
+                    _ol_status_var.set(
+                        _ol_mode_intro +
+                        "ℹ️  New Outlook (olk.exe) detected — no COM interface.\n"
+                        "    Use SMTP below to send automatically, or use the\n"
+                        "    Gmail connector in Claude for a no-password option."
+                    )
+                else:
+                    _ol_status_var.set(
+                        _ol_mode_intro +
+                        "⚠️  No Outlook detected — use SMTP with an app password."
+                    )
+
+            _update_ol_status(_outlook_available, _new_outlook)
+
+            ttk.Label(email_cfg_frame, textvariable=_ol_status_var,
+                      justify='left', font=('Segoe UI', 8),
+                      foreground='gray').grid(
+                row=0, column=0, columnspan=3, sticky='w',
+                padx=6, pady=(0, 4))
+
+            # ── 'How to switch to Classic Outlook' help button ────────
+            # Shown only when New Outlook (olk.exe) is detected.
+            # Hidden when Classic Outlook found or no Outlook at all.
+            # _check_outlook_now() also shows/hides it on re-detection.
+            def _show_classic_outlook_help():
+                import tkinter.messagebox as _mb
+                _mb.showinfo(
+                    title='How to Switch to Classic Outlook',
+                    message=(
+                        'AI-Prowler requires Classic Outlook (OUTLOOK.EXE)\n'
+                        'for the Outlook email backend.\n\n'
+                        'You have the New Outlook for Windows (olk.exe),\n'
+                        'which has no COM interface and cannot send email\n'
+                        'silently in the background.\n\n'
+                        '── How to switch back ─────────────────\n\n'
+                        '1.  Open the Outlook app on your PC.\n\n'
+                        '2.  Look in the TOP-RIGHT corner of the main\n'
+                        '    inbox window for a toggle labelled\n'
+                        '    "New Outlook".\n\n'
+                        '3.  Flip the toggle OFF.\n\n'
+                        '4.  Windows downloads Classic Outlook in the\n'
+                        '    background (2-5 minutes). Your email\n'
+                        '    accounts stay configured.\n\n'
+                        '5.  Outlook restarts automatically when done.\n\n'
+                        '6.  Return here and click\n'
+                        '    "Check for Outlook" to confirm.\n\n'
+                        '── If the toggle is missing ────────\n\n'
+                        'Some Microsoft 365 installs remove the toggle.\n\n'
+                        '  Use SMTP with an app password (always works).\n\n'
+                        '  OR repair Office via:\n'
+                        '  Control Panel > Programs >\n'
+                        '  Microsoft 365 > Change > Quick Repair.\n\n'
+                        '── Conflict error? ─────────────────\n\n'
+                        'If you see "Only one version of Outlook\n'
+                        'can run at a time":\n\n'
+                        '  1.  Open Task Manager (Ctrl+Shift+Esc).\n'
+                        '  2.  Find olk.exe > End Task.\n'
+                        '  3.  Open Classic Outlook normally.\n'
+                    )
+                )
+
+            _new_ol_help_frame = ttk.Frame(email_cfg_frame)
+            ttk.Button(
+                _new_ol_help_frame,
+                text='i  How to switch to Classic Outlook  →',
+                command=_show_classic_outlook_help
+            ).pack(side='left')
+            _new_ol_help_frame.grid(
+                row=1, column=0, columnspan=4,
+                sticky='w', padx=6, pady=(0, 4))
+            if not _new_outlook:
+                _new_ol_help_frame.grid_remove()
+
+            _email_row_start = 2
+
+        # ── Backend selector — personal mode: checkboxes (both can be on) ───
+        # outlook_cb_var  = use Outlook as primary sender
+        # smtp_cb_var     = use SMTP (as sole sender, or as fallback for Outlook)
+        # This replaces the exclusive radio buttons with independent checkboxes
+        # so the user can have Outlook + SMTP-fallback active at the same time.
+        _outlook_cb_var = tk.BooleanVar(value=_outlook_available)
+        # SMTP always defaults to checked — it's always available and is the
+        # required backend when classic Outlook is absent (new Outlook or no Outlook).
+        _smtp_cb_var    = tk.BooleanVar(value=True)
+
+        if _show_outlook_ui:   # R-053: both modes (was personal-only)
+            # ── "Send via:" row with checkboxes + Check Now button ──────────
+            ttk.Label(email_cfg_frame, text='Send via:').grid(
+                row=_email_row_start+0, column=0, sticky='e', **_ep)
+
+            _backend_frame = ttk.Frame(email_cfg_frame)
+            _backend_frame.grid(row=_email_row_start+0, column=1,
+                                columnspan=3, sticky='w', **_ep)
+
+            _ol_cb = ttk.Checkbutton(
+                _backend_frame,
+                text='Microsoft Outlook  (no password needed)',
+                variable=_outlook_cb_var,
+                state='normal' if _outlook_available else 'disabled')
+            _ol_cb.pack(side='left', padx=(0, 10))
+
+            _smtp_cb = ttk.Checkbutton(
+                _backend_frame,
+                text='SMTP / App Password  (Gmail, Yahoo, iCloud, custom)',
+                variable=_smtp_cb_var)
+            _smtp_cb.pack(side='left', padx=(0, 16))
+
+            # ── "Check for Outlook" button ──────────────────────────────────
+            def _check_outlook_now():
+                """Re-run Outlook detection on demand."""
+                classic, new_ol = _run_outlook_check()
+                nonlocal _outlook_available, _new_outlook
+                _outlook_available = classic
+                _new_outlook       = new_ol
+                _update_ol_status(classic, new_ol)
+                # Show/hide the help button based on detection result
+                if new_ol and not classic:
+                    _new_ol_help_frame.grid()
+                else:
+                    _new_ol_help_frame.grid_remove()
+                if classic:
+                    _ol_cb.configure(state='normal')
+                    _outlook_cb_var.set(True)
+                    _ol_acct_frame.grid()
+                    _accts = _refresh_ol_accounts()
+                    _on_backend_change()
+                    # Update button label to reflect ongoing refresh role
+                    _chk_ol_btn.configure(
+                        text='🔄 Refresh Outlook Accounts')
+                    _n = len(_accts)
+                    _acct_list = ', '.join(_accts) if _accts else 'none'
+                    _email_cfg_status.set(
+                        f'✅ Outlook refreshed — {_n} account(s): {_acct_list}')
+                elif new_ol:
+                    _ol_cb.configure(state='disabled')
+                    _outlook_cb_var.set(False)
+                    _ol_acct_frame.grid_remove()
+                    _on_backend_change()
+                    _email_cfg_status.set(
+                        'ℹ️  New Outlook (olk.exe) detected — no COM interface. '
+                        'Use SMTP to send automatically.')
+                else:
+                    _ol_cb.configure(state='disabled')
+                    _outlook_cb_var.set(False)
+                    _ol_acct_frame.grid_remove()
+                    _on_backend_change()
+                    _email_cfg_status.set(
+                        '⚠️  No Outlook found. Use SMTP with an app password.')
+
+            _chk_ol_btn = ttk.Button(
+                _backend_frame, text='🔍 Check for Outlook',
+                command=_check_outlook_now)
+            _chk_ol_btn.pack(side='left')
+            # Rename button immediately if Outlook is already detected
+            if _outlook_available:
+                _chk_ol_btn.configure(text='🔄 Refresh Outlook Accounts')
+
+            # ── Backend hint label (updates when checkboxes change) ─────────
+            _backend_hint_var = tk.StringVar()
+
+            def _on_backend_change(*_a):
+                using_ol   = _outlook_cb_var.get()
+                using_smtp = _smtp_cb_var.get()
+                # Enable/disable SMTP detail fields
+                _smtp_state = 'normal' if using_smtp else 'disabled'
+                for _w in (_smtp_host_entry, _smtp_port_entry,
+                            _smtp_pass_entry, _smtp_show_cb):
+                    try:
+                        _w.configure(state=_smtp_state)
+                    except Exception:
+                        pass
+                # Update hint text
+                if using_ol and using_smtp:
+                    _backend_hint_var.set(
+                        "Outlook sends first — SMTP is the automatic backup "
+                        "if Outlook fails.\n"
+                        "No password needed for Outlook; app password used "
+                        "only for the SMTP fallback."
+                    )
+                elif using_ol:
+                    _backend_hint_var.set(
+                        "Outlook only — no SMTP fallback.\n"
+                        "Works with MS365, Exchange, Outlook.com, and personal "
+                        "accounts. No password needed."
+                    )
+                elif using_smtp:
+                    _backend_hint_var.set(
+                        "SMTP only — enter your app password below.\n"
+                        "SMTP host and port are filled automatically from your "
+                        "email address."
+                    )
+                else:
+                    _backend_hint_var.set(
+                        "⚠️  No backend selected — check at least one option above."
+                    )
+
+            _ol_cb.configure(command=_on_backend_change)
+            _smtp_cb.configure(command=_on_backend_change)
+
+            ttk.Label(email_cfg_frame, textvariable=_backend_hint_var,
+                      font=('Segoe UI', 8), foreground='#0066aa',
+                      justify='left').grid(
+                row=_email_row_start+1, column=0, columnspan=4,
+                sticky='w', padx=6, pady=(0, 4))
+
+            _email_row_start += 2
+
+        # ── Outlook account picker — always created, shown/hidden dynamically ─
+        # This frame is created unconditionally so _check_outlook_now() can
+        # call _ol_acct_frame.grid() / .grid_remove() at any time.
+        _ol_accounts   = []
+        _ol_acct_var   = tk.StringVar()
+        _ol_acct_combo = None
+
+        _ol_acct_frame = ttk.Frame(email_cfg_frame)
+
+        ttk.Label(_ol_acct_frame, text='Default account:').grid(
+            row=0, column=0, sticky='e', **_ep)
+        _ol_acct_combo = ttk.Combobox(
+            _ol_acct_frame, textvariable=_ol_acct_var,
+            values=[], width=32, state='readonly')
+        _ol_acct_combo.grid(row=0, column=1, **_ep)
+        ttk.Label(_ol_acct_frame,
+                  text='Default sending account (you can override per-send in Claude)',
+                  font=('Segoe UI', 8), foreground='#0066aa').grid(
+            row=0, column=2, sticky='w')
+
+        def _refresh_ol_accounts(allow_launch: bool = True):
+            """Populate (or refresh) the Outlook account dropdown.
+
+            R-054: allow_launch=False (used when the Settings page is built)
+            only reads accounts from an Outlook that is ALREADY running and
+            never starts it — see the worker below. The Check/Refresh button
+            passes the default True.
+
+            Tries GetActiveObject first (Outlook already running — instant,
+            zero side effects). Falls back to Dispatch (Outlook installed but
+            closed — starts it silently in the background).
+
+            NOTE on the "Choose Profile" popup: Dispatch() only triggers that
+            dialog when Outlook has PickLogonProfile=1 set, or multiple mail
+            profiles exist with no default chosen. On a normal single-profile
+            setup (the common case) Dispatch() starts Outlook silently with
+            no prompt at all.
+
+            HANG DETECTION: if Outlook IS configured to prompt, Dispatch()
+            blocks silently waiting for someone to click the hidden dialog —
+            no exception is raised, so a plain try/except can't detect it.
+            To catch this, the COM call runs on a dedicated worker thread
+            (with its own STA apartment via pythoncom.CoInitialize) and this
+            function waits up to _OL_REFRESH_TIMEOUT_SEC for it to finish.
+            If it times out, a hidden "Choose Profile" dialog is the most
+            likely cause — the status bar tells the user to open Outlook
+            manually (which surfaces and lets them dismiss the dialog),
+            then click Refresh again, which will find it already running
+            via the fast GetActiveObject path with no prompt.
+
+            Preserves the previously-selected account if it still exists
+            after refresh — so adding a new iCloud or Gmail account to
+            Outlook does not silently reset a saved preference.
+
+            Returns the list of account addresses found.
+            """
+            import threading as _th
+
+            _OL_REFRESH_TIMEOUT_SEC = 8
+            _result_box = {"accts": None, "error": None}
+
+            def _worker():
+                try:
+                    import pythoncom as _pycom
+                    _pycom.CoInitialize()
+                except Exception:
+                    _pycom = None
+                try:
+                    import win32com.client as _wc2
+                    try:
+                        _app2 = _wc2.GetActiveObject("Outlook.Application")
+                    except Exception:
+                        if not allow_launch:
+                            # R-054: page-load refresh — never START Outlook.
+                            # Starting it on a PC where Classic Outlook is
+                            # installed but has no mail profile pops the
+                            # "Welcome to Outlook" setup wizard (found live on
+                            # the server 2026-09-28). Only an explicit
+                            # Check/Refresh click may launch it.
+                            _result_box["accts"] = []
+                            return
+                        _app2 = _wc2.Dispatch("Outlook.Application")
+                    _ns2  = _app2.GetNamespace("MAPI")
+                    _result_box["accts"] = [
+                        _a.SmtpAddress for _a in _ns2.Accounts if _a.SmtpAddress]
+                except Exception as _e:
+                    _result_box["error"] = str(_e)
+                finally:
+                    if _pycom is not None:
+                        try:
+                            _pycom.CoUninitialize()
+                        except Exception:
+                            pass
+
+            _t = _th.Thread(target=_worker, daemon=True)
+            _t.start()
+            _t.join(timeout=_OL_REFRESH_TIMEOUT_SEC)
+
+            if _t.is_alive():
+                # Still running after the timeout — a hidden dialog (most
+                # likely "Choose Profile") is almost certainly blocking it.
+                # We deliberately do NOT wait longer or kill the thread —
+                # Python threads can't be forcibly killed safely, and the
+                # underlying Outlook process is still legitimately trying
+                # to start. Leave it running in the background; it will
+                # finish on its own once the user dismisses the dialog.
+                _ol_acct_combo['values'] = []
+                _email_cfg_status.set(
+                    '⚠️  Outlook did not respond within '
+                    f'{_OL_REFRESH_TIMEOUT_SEC}s — a hidden dialog '
+                    '(likely "Choose Profile") may be waiting for input. '
+                    'Open Outlook manually, dismiss any dialog, then click '
+                    'Refresh again.')
+                return []
+
+            accts = _result_box["accts"] or []
+            _ol_acct_combo['values'] = accts
+            if accts:
+                current = _ol_acct_var.get()
+                if current and current in accts:
+                    _ol_acct_var.set(current)
+                else:
+                    _ol_acct_var.set(accts[0])
+            return accts
+
+        # Initial population + show/hide based on whether Outlook was found
+        # (R-053: both modes). R-054: never launch Outlook just because the
+        # Settings page was built — only read it if it's already running.
+        _refresh_ol_accounts(allow_launch=False)
+        _ol_acct_frame.grid(
+            row=_email_row_start, column=0,
+            columnspan=4, sticky='w', padx=0, pady=0)
+        if not _outlook_available:
+            _ol_acct_frame.grid_remove()   # hide until Check Now finds it
+        else:
+            _email_row_start += 1
+
+        # ── Email address / SMTP username ─────────────────────────────────────
+        ttk.Label(email_cfg_frame, text='Email address:').grid(
             row=_email_row_start+0, column=0, sticky='e', **_ep)
         _smtp_user_var = tk.StringVar()
         ttk.Entry(email_cfg_frame, textvariable=_smtp_user_var,
                   width=34).grid(row=_email_row_start+0, column=1, **_ep)
+        _user_hint = ('Used as From address'
+                      if _outlook_available
+                      else 'This is also your SMTP login')
         ttk.Label(email_cfg_frame,
-                  text='This is also your SMTP login',
+                  text=_user_hint,
                   font=('Segoe UI', 8)).grid(row=_email_row_start+0, column=2, sticky='w')
+
+        # When the user picks an Outlook account from the combo, auto-fill
+        # the email address field to match. Uses _outlook_cb_var (checkbox)
+        # not the old _backend_var (radio button) which no longer exists.
+        def _sync_email_from_ol_combo(*_a):
+            picked = _ol_acct_var.get()
+            if picked and _outlook_cb_var.get():
+                _smtp_user_var.set(picked)
+        if _ol_acct_combo is not None:
+            _ol_acct_var.trace_add('write', _sync_email_from_ol_combo)
 
         ttk.Label(email_cfg_frame, text='SMTP host:').grid(
             row=_email_row_start+1, column=0, sticky='e', **_ep)
         _smtp_host_var = tk.StringVar()
-        ttk.Entry(email_cfg_frame, textvariable=_smtp_host_var,
-                  width=34).grid(row=_email_row_start+1, column=1, **_ep)
+        _smtp_host_entry = ttk.Entry(email_cfg_frame, textvariable=_smtp_host_var,
+                                     width=34)
+        _smtp_host_entry.grid(row=_email_row_start+1, column=1, **_ep)
         ttk.Label(email_cfg_frame,
                   text='Auto-filled from your email address above',
                   font=('Segoe UI', 8)).grid(row=_email_row_start+1, column=2, sticky='w')
@@ -11748,13 +13125,14 @@ or from the Help menu."""
         ttk.Label(email_cfg_frame, text='Port:').grid(
             row=_email_row_start+2, column=0, sticky='e', **_ep)
         _smtp_port_var = tk.StringVar(value='587')
-        ttk.Entry(email_cfg_frame, textvariable=_smtp_port_var,
-                  width=8).grid(row=_email_row_start+2, column=1, sticky='w', **_ep)
+        _smtp_port_entry = ttk.Entry(email_cfg_frame, textvariable=_smtp_port_var,
+                                     width=8)
+        _smtp_port_entry.grid(row=_email_row_start+2, column=1, sticky='w', **_ep)
         ttk.Label(email_cfg_frame,
                   text='587 = STARTTLS (most common)  /  465 = SMTPS',
                   font=('Segoe UI', 8)).grid(row=_email_row_start+2, column=2, sticky='w')
 
-        ttk.Label(email_cfg_frame, text='Password:').grid(
+        ttk.Label(email_cfg_frame, text='App password:').grid(
             row=_email_row_start+3, column=0, sticky='e', **_ep)
         _smtp_pass_var = tk.StringVar()
         _smtp_pass_entry = ttk.Entry(email_cfg_frame,
@@ -11765,10 +13143,13 @@ or from the Help menu."""
         def _toggle_smtp_pass():
             _smtp_pass_entry.configure(
                 show='' if _smtp_show_var.get() else '\u25cf')
-        ttk.Checkbutton(email_cfg_frame, text='Show',
+        _smtp_show_cb = ttk.Checkbutton(email_cfg_frame, text='Show',
                         variable=_smtp_show_var,
-                        command=_toggle_smtp_pass).grid(
-            row=_email_row_start+3, column=2, sticky='w')
+                        command=_toggle_smtp_pass)
+        _smtp_show_cb.grid(row=_email_row_start+3, column=2, sticky='w')
+
+        # Apply initial backend state (hide SMTP fields if Outlook selected)
+        _on_backend_change()
 
         # ── Provider info: SMTP host/port + app-password link, keyed by domain ──
         # SMTP hosts/ports verified against each provider's official docs:
@@ -11909,21 +13290,35 @@ or from the Help menu."""
             import json as _j, base64 as _b
             p = Path.home() / '.ai-prowler' / 'email_config.json'
             if not p.exists():
-                # No saved config yet (first run) — leave the autofill flags
-                # armed so typing an email address fills in host/port.
+                # First run — apply initial checkbox field states
+                _on_backend_change()
                 return
             try:
                 d = _j.loads(p.read_text(encoding='utf-8-sig')) or {}
+
+                # Restore checkboxes from saved backend key (R-053: both modes)
+                # outlook+smtp → both checked
+                # outlook      → Outlook checked, SMTP unchecked
+                # smtp / legacy (no backend key) → SMTP checked
+                saved_backend = d.get('backend', 'smtp')
+                uses_ol   = saved_backend in ('outlook', 'outlook+smtp')
+                uses_smtp = saved_backend in ('smtp', 'outlook+smtp') \
+                            or 'smtp_host' in d   # legacy config always SMTP
+                # Outlook only if classic COM Outlook is available
+                _outlook_cb_var.set(uses_ol and _outlook_available)
+                # SMTP: force True when no classic Outlook (new Outlook or none)
+                _smtp_cb_var.set(uses_smtp or not _outlook_available)
+                # Show/hide account picker
+                if uses_ol and _outlook_available:
+                    _ol_acct_frame.grid()
+                else:
+                    _ol_acct_frame.grid_remove()
+
+                # Populate SMTP fields (always, so they're ready as fallback)
                 saved_host = d.get('smtp_host', '')
                 saved_port = str(d.get('smtp_port', 587))
                 _smtp_host_var.set(saved_host)
                 _smtp_port_var.set(saved_port)
-                # A non-blank saved host/port means the user (or a prior
-                # auto-fill) already settled on a value — treat it as
-                # "manually set" so re-typing the same email doesn't
-                # silently overwrite a deliberately customised host.
-                # A blank saved value (older config, or never configured)
-                # leaves autofill armed so it still works for this user.
                 _host_autofilled['value'] = not bool(saved_host)
                 _port_autofilled['value'] = not bool(saved_port)
                 _smtp_user_var.set(d.get('username', ''))
@@ -11935,55 +13330,163 @@ or from the Help menu."""
                     except Exception:
                         pass
                 _smtp_pass_var.set(pw)
-                _email_cfg_status.set('Loaded existing config.')
+
+                # Restore Outlook account picker selection
+                saved_user = d.get('username', '')
+                current_accts = list(_ol_acct_combo['values'])
+                # R-054: the page-load refresh no longer starts Outlook, so the
+                # list is empty when Outlook isn't already running — keep the
+                # saved account selectable instead of showing a blank picker.
+                if saved_user and uses_ol and saved_user not in current_accts:
+                    current_accts.append(saved_user)
+                    _ol_acct_combo['values'] = current_accts
+                if saved_user in current_accts:
+                    _ol_acct_var.set(saved_user)
+                elif current_accts:
+                    _ol_acct_var.set(current_accts[0])
+
+                # Apply field-enable/disable state
+                _on_backend_change()
+
+                labels = {
+                    'outlook+smtp': 'Outlook + SMTP fallback',
+                    'outlook':      'Outlook only',
+                    'smtp':         'SMTP only',
+                }
+                _email_cfg_status.set(
+                    f"Loaded existing config "
+                    f"({labels.get(saved_backend, saved_backend)} backend).")
             except Exception as _e:
                 _email_cfg_status.set(f'Could not load config: {_e}')
 
         def _save_smtp_cfg():
             import json as _j, base64 as _b
-            host  = _smtp_host_var.get().strip()
-            port_s = _smtp_port_var.get().strip()
-            user  = _smtp_user_var.get().strip()
-            pw    = _smtp_pass_var.get()
-            if not host or not user:
-                _email_cfg_status.set('SMTP host and username are required.')
+
+            # Determine backend from the two checkboxes (R-053: both modes —
+            # server mode used to force SMTP here).
+            using_ol   = _outlook_cb_var.get()
+            using_smtp = _smtp_cb_var.get()
+
+            if not using_ol and not using_smtp:
+                _email_cfg_status.set(
+                    'Select at least one backend (Outlook or SMTP).')
                 return
-            try:
-                port = int(port_s)
-            except ValueError:
-                _email_cfg_status.set('Port must be a number.')
+
+            # For Outlook backend, the dropdown is the authoritative account —
+            # override the Email address field which may not have synced yet.
+            if using_ol:
+                ol_pick = _ol_acct_var.get().strip()
+                if ol_pick:
+                    _smtp_user_var.set(ol_pick)
+
+            user = _smtp_user_var.get().strip()
+            if not user:
+                _email_cfg_status.set('Email address is required.')
                 return
+
+            # Resolve backend key
+            if using_ol and using_smtp:
+                backend_key = 'outlook+smtp'
+            elif using_ol:
+                backend_key = 'outlook'
+            else:
+                backend_key = 'smtp'
+
+            # Build the config dict
             cfg = {
-                'smtp_host':     host,
-                'smtp_port':     port,
-                'username':      user,
-                '_password_b64': _b.b64encode(pw.encode()).decode(),
-                'from_name':     _smtp_from_var.get().strip() or 'AI-Prowler',
-                'use_tls':       True,
-                # v8.1.5 fix: Proactive Alerts (scheduler_engine._read_default_to_email)
-                # and this panel's own _read_default_to() both read cfg['default_to'],
-                # but this dict never wrote that key — so Morning Briefing and every
-                # other alert always saw "no default recipient configured" even with
-                # SMTP fully set up. Default the recipient to the same address used
-                # for SMTP login, since for personal use they're normally the same
-                # inbox. (documented in COMPLETE_USER_GUIDE.md as settable here)
-                'default_to':    user,
+                'backend':      backend_key,
+                'username':     user,
+                'from_address': user,
+                'from_name':    _smtp_from_var.get().strip() or 'AI-Prowler',
+                'default_to':   user,
             }
+
+            # Outlook account override (pick the selected account from the combo)
+            if using_ol and _ol_acct_var.get():
+                cfg['username']     = _ol_acct_var.get()
+                cfg['from_address'] = _ol_acct_var.get()
+
+            # SMTP credentials — required when SMTP is part of the config
+            if using_smtp:
+                host   = _smtp_host_var.get().strip()
+                port_s = _smtp_port_var.get().strip()
+                pw     = _smtp_pass_var.get()
+                if not host:
+                    _email_cfg_status.set(
+                        'SMTP host is required when SMTP is enabled.')
+                    return
+                try:
+                    port = int(port_s)
+                except ValueError:
+                    _email_cfg_status.set('Port must be a number.')
+                    return
+                cfg['smtp_host'] = host
+                cfg['smtp_port'] = port
+                cfg['use_tls']   = True
+                if pw:
+                    cfg['_password_b64'] = _b.b64encode(pw.encode()).decode()
+            else:
+                # SMTP is disabled — preserve existing SMTP credentials from disk
+                # so the app password is not wiped when the user temporarily
+                # switches to Outlook-only and then re-enables SMTP later.
+                _p2 = Path.home() / '.ai-prowler' / 'email_config.json'
+                try:
+                    _existing = _j.loads(
+                        _p2.read_text(encoding='utf-8')) if _p2.exists() else {}
+                except Exception:
+                    _existing = {}
+                for _k in ('smtp_host', 'smtp_port', 'use_tls', '_password_b64'):
+                    if _k in _existing:
+                        cfg[_k] = _existing[_k]
+
             p = Path.home() / '.ai-prowler' / 'email_config.json'
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(_j.dumps(cfg, indent=2), encoding='utf-8')
-            _email_cfg_status.set('Email config saved.')
+
+            labels = {
+                'outlook+smtp': 'Outlook + SMTP fallback',
+                'outlook':      'Outlook only',
+                'smtp':         'SMTP only',
+            }
+            _email_cfg_status.set(
+                f"✅ Email config saved ({labels[backend_key]}).")
 
         def _test_smtp_cfg():
+            # Read checkbox state BEFORE saving — save may alter state
+            # so capture what the user sees on screen right now.
+            # R-053: same in both modes (server mode used to force SMTP).
+            using_ol   = _outlook_cb_var.get()
+            using_smtp = _smtp_cb_var.get()
+            # Save config so the test uses the current on-screen settings
+            _save_smtp_cfg()
             _email_cfg_status.set('Sending test email...')
             scrollable_frame.update_idletasks()
+            # Build subject and body to reflect the actual backend being tested
+            if using_ol and using_smtp:
+                backend_label = 'Outlook + SMTP fallback'
+                detail = ('Sent via Outlook COM. SMTP fallback is also '
+                          'configured and will activate automatically if '
+                          'Outlook becomes unavailable.')
+            elif using_ol:
+                backend_label = 'Outlook'
+                detail = ('Sent via Outlook COM — no app password required.')
+            else:
+                backend_label = 'SMTP'
+                detail = ('Sent via SMTP — your app password is configured '
+                          'correctly.')
+            if _settings_is_server_mode:
+                detail += ('\n\nServer mode: this is the company account every '
+                           "user's email is sent from.")
+
             ok, msg = self._admin_send_email_direct(
                 _smtp_user_var.get().strip(),
-                'AI-Prowler SMTP Test',
-                'This is a test email from AI-Prowler. '
-                'If you received this, SMTP is configured correctly.')
+                f'AI-Prowler {backend_label} Test',
+                f'This is a test email from AI-Prowler. '
+                f'If you received this, your {backend_label} email backend '
+                f'is configured correctly.\n\n{detail}')
             _email_cfg_status.set(
-                'Test email sent.' if ok else f'Test failed: {msg}')
+                f'✅ Test email sent via {backend_label}.'
+                if ok else f'Test failed: {msg}')
 
         _load_smtp_cfg()
         _smtp_btn_row = ttk.Frame(email_cfg_frame)
@@ -13074,24 +14577,6 @@ or from the Help menu."""
             except Exception as e:
                 messagebox.showerror("Error", f"Could not open editor:\n{e}\n\nPath: {cp}")
 
-        def _open_example_config():
-            """Open claude_desktop_config_example.json in Notepad."""
-            example = Path(__file__).parent / 'claude_desktop_config_example.json'
-            if not example.exists():
-                messagebox.showwarning("File Not Found",
-                                       f"claude_desktop_config_example.json not found in:\n"
-                                       f"{Path(__file__).parent}")
-                return
-            try:
-                if sys.platform == 'win32':
-                    import subprocess as _sp
-                    _sp.Popen(['notepad.exe', str(example)])
-                else:
-                    import subprocess as _sp
-                    _sp.Popen(['open' if sys.platform == 'darwin' else 'xdg-open', str(example)])
-            except Exception as e:
-                messagebox.showerror("Error", f"Could not open file:\n{e}")
-
         def _copy_config_path():
             """Copy the Claude Desktop config path to clipboard."""
             info = self._check_mcp_status()
@@ -13111,8 +14596,9 @@ or from the Help menu."""
         mcp_btn_row2.pack(fill='x', pady=(0, 4))
         ttk.Button(mcp_btn_row2, text="📂 Open Config File",
                    command=_open_claude_config).pack(side='left', padx=(0, 8))
-        ttk.Button(mcp_btn_row2, text="📋 View Example Config",
-                   command=_open_example_config).pack(side='left', padx=(0, 8))
+        # (2026-10-02: "📋 View Example Config" removed with
+        # claude_desktop_config_example.json — no longer shipped; the installer
+        # and ⚙️ Auto-configure write the real config.)
         ttk.Button(mcp_btn_row2, text="📌 Copy Config Path",
                    command=_copy_config_path).pack(side='left', padx=(0, 8))
         ttk.Button(mcp_btn_row2, text="🔬 Run MCP Diagnostics",
@@ -13153,7 +14639,8 @@ or from the Help menu."""
                       font=('Arial', 9, 'bold')).pack(anchor='w')
             ttk.Label(remote_frame, font=('Arial', 8), foreground='gray',
                       text="Paste this token into Claude mobile's MCP config. "
-                           "Anyone with this token can query your knowledge base."
+                           "Anyone with this token can query your knowledge base.\n"
+                           "Changing this token requires a restart of AI-Prowler to take effect."
                       ).pack(anchor='w', pady=(0, 4))
 
             token_row = ttk.Frame(remote_frame)
@@ -13570,6 +15057,17 @@ or from the Help menu."""
                             # ── v8.0.0: auto-refresh all config fields ───────────────
                             _license_key_var.set(result.get('license_key', ''))
                             _tun_domain_var.set(result.get('domain', ''))
+                            # Bug fix: refresh the Jobs App URL in the Small Biz tab
+                            # immediately — that widget is in a separate closure and
+                            # was only populated at tab-build time, so it stayed blank
+                            # after activation until the user restarted AI-Prowler.
+                            try:
+                                d = result.get('domain', '').strip()
+                                d = d.replace('https://','').replace('http://','').rstrip('/')
+                                if d and hasattr(self, '_jobs_url_var'):
+                                    self._jobs_url_var.set(f"https://{d}/jobs/")
+                            except Exception:
+                                pass
                             try:
                                 import json as _jcfg_r
                                 _cfgr = Path.home() / '.ai-prowler' / 'config.json'
@@ -14546,9 +16044,13 @@ or from the Help menu."""
         _HTTP_LED_DEBUG_LOG = Path.home() / '.ai-prowler' / 'http_led_debug.log'
 
         def _log_http_led_debug(msg):
-            """Developer-only trail of LED decisions. Never shown in the UI —
-            open %USERPROFILE%\\.ai-prowler\\http_led_debug.log to read it."""
+            """Developer-only trail of LED decisions. Only written when
+            debug_logging=true in config.json — silent in release builds."""
             try:
+                import json as _json_led
+                _cfg_led = json.loads((Path.home() / '.ai-prowler' / 'config.json').read_text(encoding='utf-8')) if (Path.home() / '.ai-prowler' / 'config.json').exists() else {}
+                if not _cfg_led.get('debug_logging'):
+                    return
                 _HTTP_LED_DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
                 import datetime as _dtm
                 ts = _dtm.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -15136,6 +16638,41 @@ or from the Help menu."""
                       text="← auto opens Claude.ai with URL copied to clipboard",
                       font=('Arial', 8), foreground='gray').pack(side='left')
 
+            # ── Connect Grok / Muse (auto) — same idea as Claude (2026-09-30) ──
+            # Shared with the Setup Center (setup_wizard.open_ai_connector) so
+            # both places behave the same. Uses the domain this tab shows, so
+            # the buttons work right after ⚡ Configure Mobile Access.
+            ai_row = ttk.Frame(remote_frame)
+            ai_row.pack(fill='x', pady=(0, 6))
+
+            def _connect_ai(ai_id):
+                try:
+                    import setup_wizard as _swc
+                    _d = _tun_domain_var.get().strip().replace(
+                        'https://', '').replace('http://', '').rstrip('/')
+                    _swc.open_ai_connector(self.root, ai_id, domain=_d)
+                except Exception as _e_ai:
+                    messagebox.showerror("Connect your AI", f"Couldn't open the connector setup:\n{_e_ai}")
+
+            def _open_connect_window():
+                try:
+                    import setup_wizard as _swc
+                    _swc.ConnectAIFlow.open_from(self)
+                except Exception as _e_ai:
+                    messagebox.showerror("Connect your AI", f"Couldn't open the Connect window:\n{_e_ai}")
+
+            tk.Button(ai_row, text="📖 Connect Grok  (auto)",
+                      command=lambda: _connect_ai('grok'),
+                      relief='raised', bd=1, font=('Arial', 9)).pack(side='left', padx=(0, 4))
+            tk.Button(ai_row, text="📖 Connect Muse  (auto)",
+                      command=lambda: _connect_ai('muse'),
+                      relief='raised', bd=1, font=('Arial', 9)).pack(side='left', padx=(0, 4))
+            ttk.Button(ai_row, text="📱 Phone / QR · Copy · Email link…",
+                       command=_open_connect_window).pack(side='left', padx=(0, 8))
+            ttk.Label(ai_row,
+                      text="← Grok: grok.com/connectors · Muse: sends a ready-made message",
+                      font=('Arial', 8), foreground='gray').pack(side='left')
+
         else:
             # ── Server mode: Connection Test panel (v8.1.0) ───────────────────
             # Shows the public MCP URL employees need, tests reachability from
@@ -15449,7 +16986,21 @@ or from the Help menu."""
         ttk.Button(remote_url_row, text="\U0001f4cb Copy",
                    command=_copy_remote_url).pack(side='left', padx=(0, 4))
         ttk.Button(remote_url_row, text="\U0001f4e7 Email",
-                   command=_email_remote_url).pack(side='left', padx=(0, 8))
+                   command=_email_remote_url).pack(side='left', padx=(0, 4))
+
+        def _qr_remote_url():
+            # Shared QR window (setup_wizard.show_qr_window, 2026-09-30) — the
+            # code holds only the link, never the Bearer Token.
+            try:
+                import setup_wizard as _sw_q
+                _sw_q.show_qr_window(self.root, "Remote app — scan with your phone",
+                                     _remote_url_var.get().strip(),
+                                     "Opens the AI-Prowler Remote app on your phone.")
+            except Exception as _e_q:
+                messagebox.showerror("QR code", f"Couldn't show the QR code:\n{_e_q}")
+
+        ttk.Button(remote_url_row, text="\U0001f4f1 QR",
+                   command=_qr_remote_url).pack(side='left', padx=(0, 8))
         ttk.Label(remote_url_row,
                   text="\u2190 open on your phone to remote control AI-Prowler",
                   font=('Arial', 8), foreground='gray').pack(side='left')
@@ -15985,56 +17536,26 @@ or from the Help menu."""
             _detail_vars[idx].set(detail)
 
         def _check_power_settings():
-            import subprocess, winreg
-            CREATE_NO_WIN = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-
-            def _powercfg_query(sub, setting):
-                try:
-                    r = subprocess.run(
-                        ['powercfg', '/query', 'SCHEME_CURRENT', sub, setting],
-                        capture_output=True, text=True, creationflags=CREATE_NO_WIN)
-                    for line in r.stdout.splitlines():
-                        if 'AC Power Setting Index' in line:
-                            return int(line.split(':')[-1].strip(), 16)
-                except Exception:
-                    pass
-                return None
-
-            def _reg_dword(hive, path, name, default=None):
-                try:
-                    with winreg.OpenKey(hive, path) as k:
-                        val, _ = winreg.QueryValueEx(k, name)
-                        return int(val)
-                except Exception:
-                    return default
-
-            # LED 0: Sleep (plugged in) — must be Never (0)
-            v = _powercfg_query('SUB_SLEEP', 'STANDBYIDLE')
-            _set_led(0, v == 0, f"({v//60} min)" if v and v > 0 else "")
-
-            # LED 1: Hibernate — disabled when hiberfil.sys absent
-            import os as _os
-            hib_off = not _os.path.exists(r'C:\hiberfil.sys')
-            _set_led(1, hib_off, "(hiberfil.sys present)" if not hib_off else "")
-
-            # LED 2: Active hours — green if start <= 6 AND end >= 23
-            WU_PATH = r'SOFTWARE\Microsoft\WindowsUpdate\UX\Settings'
-            ah_start = _reg_dword(winreg.HKEY_LOCAL_MACHINE, WU_PATH, 'ActiveHoursStart')
-            ah_end   = _reg_dword(winreg.HKEY_LOCAL_MACHINE, WU_PATH, 'ActiveHoursEnd')
-            if ah_start is not None and ah_end is not None:
-                ah_ok = (ah_start <= 6 and ah_end >= 23)
-                _set_led(2, ah_ok, f"({ah_start}:00\u2013{ah_end}:00)")
-            else:
-                _set_led(2, False, "(not set)")
-
-            # LED 3: Auto-restart off
-            AU_PATH = r'SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
-            no_reboot = _reg_dword(winreg.HKEY_LOCAL_MACHINE, AU_PATH,
-                                   'NoAutoRebootWithLoggedOnUsers')
-            _set_led(3, no_reboot == 1, "(not set)" if no_reboot is None else "")
+            # The four checks live in setup_wizard.power_status() (2026-09-30)
+            # — ONE copy, shared with the Setup Center's "Phone access" step, so
+            # these lights and that step can never disagree.
+            try:
+                import setup_wizard as _sw_p
+                _ps = _sw_p.power_status()
+                for _i, (_key, _label) in enumerate(_sw_p.POWER_CHECKS):
+                    _ok, _detail = _ps.get(_key, (False, ""))
+                    _set_led(_i, _ok, _detail)
+            except Exception as _e_p:
+                for _i in range(len(_kir_checks)):
+                    _set_led(_i, False, f"(check failed: {_e_p})" if _i == 0 else "")
 
         def _check_power_bg():
             threading.Thread(target=_check_power_settings, daemon=True).start()
+
+        # Shared with the Setup Center's "Phone access" step (2026-09-30): the
+        # same Apply script (UAC) and the same lights refresh.
+        self._apply_power_settings = _apply_power_settings
+        self._refresh_power_lights = _check_power_bg
 
         # ── Button row ─────────────────────────────────────────────────────────
         ttk.Separator(kir_frame, orient='horizontal').pack(fill='x', pady=(8, 6))
@@ -16262,10 +17783,13 @@ or from the Help menu."""
           1. Overview banner — short summary + buttons opening the Job
              Tracker guide and the full Service Tools popup (tool catalog,
              end-to-end workflow, and example prompts all live there now —
-             see get_service_tools_guide_content() — to keep this tab short)
-          2. Job Spreadsheet Updater panel — usage guide + open-file shortcut
-          3. Jobs App (PWA) URL panel — mobile link, copy/email shortcuts
-          4. Online Payment Links panel — real config (Stripe/Square keys,
+             see get_service_tools_guide_content() — to keep this tab short),
+             followed by the Jobs App (PWA) mobile URL panel (moved here
+             2026-09-14 — the link crew members actually need, right where
+             someone reads what the tools can do)
+          2. Your Business Data panel — database folder, export, backup/
+             restore, scheduled backups
+          3. Online Payment Links panel — real config (Stripe/Square keys,
              writes to config.json), not documentation
 
         Configuration is read from / written to:
@@ -16306,16 +17830,19 @@ or from the Help menu."""
         # tab meant to be a quick jumping-off point. The full tool catalog +
         # example prompts now live in a popup instead — see
         # get_service_tools_guide_content() — kept short here on purpose.
-        banner = ttk.LabelFrame(f, text="🔧 Small Business Service Tools — Overview",
+        banner = ttk.LabelFrame(f, text="🔧 Small Business Service Tools",
                                 padding=(12, 8))
         banner.pack(fill='x', padx=16, pady=(10, 6))
 
-        ttk.Label(banner, justify='left', font=('Arial', 9),
+        ttk.Label(banner, justify='left', font=('Arial', 9), wraplength=760,
                   text=(
-                      "Claude acts as your field-service assistant through these MCP tools — "
-                      "ask in a conversation, no forms to fill out.\n"
-                      "Free tools (weather, routing, maps) work immediately. Contractor tools "
-                      "(invoicing, SMS, time logging, AR aging) need Twilio/SMTP — see Settings."
+                      "Claude AI can act as your field-service assistant by adding customers, "
+                      "job scheduling, and job tracking, time logging, multiple crews — ask in "
+                      "a conversation, no forms to fill out. Tools such as a job board, weather, "
+                      "routing all work on your cell phone/tablet with the free Jobs mobile App. "
+                      "Contractor customer tools like quotes/invoicing/receipt, SMS texting "
+                      "(with setup), Email, AR aging reports all available by Claude AI "
+                      "text/voice or through the Jobs Mobile App."
                   )).pack(anchor='w')
 
         # v8.1.3: the Job Tracker's real value — multi-employee scheduling,
@@ -16332,157 +17859,13 @@ or from the Help menu."""
                    command=self.show_service_tools_guide
                    ).pack(anchor='w', pady=(6, 0))
 
-        ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
-
-        # ── 2. FREE TOOLS PANEL ───────────────────────────────────────────────
-        # v9.1.x: removed — this duplicated content now covered by the
-        # "Free Tools — No API Key or Setup Required" section of the popup
-        # opened from the "View All Service Tools & Example Prompts" button
-        # above (see get_service_tools_guide_content()). Keeping the tab
-        # itself short is the point of that popup existing.
-
-        # ── 3. JOB SPREADSHEET UPDATER ────────────────────────────────────────
-        xl_outer = ttk.LabelFrame(f,
-                                  text="📊 Job Spreadsheet Updater  —  update_job_spreadsheet()",
-                                  padding=(12, 8))
-        xl_outer.pack(fill='x', padx=16, pady=(0, 6))
-
-        ttk.Label(xl_outer, justify='left', font=('Arial', 8), foreground='gray',
-                  text=("Finds a customer row in your .xlsx job tracker by name and writes new\n"
-                        "values to any columns (status, invoice #, amount, last service date, etc.).\n"
-                        "Uses openpyxl — already installed, no extra packages needed.")
-                  ).pack(anchor='w', pady=(0, 6))
-
-        # Usage example
-        usage_frame = ttk.LabelFrame(xl_outer, text="Example Claude prompt", padding=(8, 4))
-        usage_frame.pack(fill='x', pady=(0, 6))
-        usage_text = (
-            '"Update my jobs spreadsheet C:/Users/Dave/Documents/jobs.xlsx:\n'
-            ' Find the Miller Windows row and set Status = Complete,\n'
-            ' Last Service = 2026-03-30, Invoice # = 1048, Amount = 312.00"'
-        )
-        ttk.Label(usage_frame, text=usage_text, font=('Arial', 8),
-                  foreground='#444444', justify='left').pack(anchor='w')
-
-        # Default spreadsheet path config
-        xl_path_row = ttk.Frame(xl_outer)
-        xl_path_row.pack(fill='x', pady=(4, 0))
-        ttk.Label(xl_path_row, text="Default spreadsheet path:",
-                  font=('Arial', 9), width=26, anchor='w').pack(side='left')
-        _xl_path_var = tk.StringVar()
-
-        # Auto-detect default path with fallbacks. Some installs may not have
-        # written default_spreadsheet_path to config.json (e.g. the bundled
-        # template went missing at compile time, or installer-side config init
-        # failed silently). In that case we look for the template in the
-        # standard install location and use it if present.
-        def _detect_default_xl_path():
-            cfg_val = _load_cfg().get('default_spreadsheet_path', '')
-            if cfg_val:
-                return cfg_val
-            # Standard install location written by the Inno [Files] section:
-            #     %USERPROFILE%\Documents\AI-Prowler\AI-Prowler_Job_Tracker.xlsx
-            import os as _os
-            for candidate in (
-                Path.home() / 'Documents' / 'AI-Prowler' / 'AI-Prowler_Job_Tracker.xlsx',
-                # Older installs may have used OneDrive's redirected Documents
-                Path.home() / 'OneDrive' / 'Documents' / 'AI-Prowler' / 'AI-Prowler_Job_Tracker.xlsx',
-                # Fall back to the file shipped next to rag_gui.py (dev runs)
-                Path(__file__).parent / 'AI-Prowler_Job_Tracker.xlsx',
-            ):
-                try:
-                    if candidate.exists():
-                        return str(candidate).replace('/', _os.sep)
-                except Exception:
-                    pass
-            return ''
-
-        _xl_path_var.set(_detect_default_xl_path())
-        ttk.Entry(xl_path_row, textvariable=_xl_path_var, width=44
-                  ).pack(side='left', padx=4)
-
-        def _browse_xl():
-            from tkinter import filedialog as _fd
-            path = _fd.askopenfilename(
-                title="Select default job spreadsheet",
-                filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
-            )
-            if path:
-                _xl_path_var.set(path.replace('/', '\\'))
-
-        ttk.Button(xl_path_row, text="Browse…",
-                   command=_browse_xl).pack(side='left')
-
-        xl_hint = ttk.Label(xl_outer,
-                            text="Setting a default path lets you just say 'update my jobs spreadsheet' without specifying the full path.",
-                            font=('Arial', 8), foreground='gray', justify='left')
-        xl_hint.pack(anchor='w', pady=(2, 0))
-
-        def _save_xl():
-            _save_cfg({'default_spreadsheet_path': _xl_path_var.get().strip()})
-            self.status_var.set("✅  Default spreadsheet path saved")
-            self.root.after(3000, lambda: self.status_var.set("Ready"))
-
-        def _open_xl():
-            path = _xl_path_var.get().strip()
-            if path and __import__('os').path.exists(path):
-                __import__('os').startfile(path)
-            else:
-                messagebox.showinfo("No Spreadsheet",
-                                    "Set and save a default spreadsheet path first,\n"
-                                    "or open your spreadsheet manually from File Explorer.")
-
-        xl_btn_row = ttk.Frame(xl_outer)
-        xl_btn_row.pack(fill='x', pady=(8, 0))
-        ttk.Button(xl_btn_row, text="💾  Save Default Path",
-                   command=_save_xl).pack(side='left', padx=(0, 8))
-        ttk.Button(xl_btn_row, text="📂  Open Spreadsheet Now",
-                   command=_open_xl).pack(side='left', padx=(0, 8))
-        ttk.Button(xl_btn_row, text="📖  Multi-Employee & QuickBooks Guide",
-                   command=self.show_job_tracker_guide).pack(side='left')
-
-        # ── Spreadsheet migration indicator ───────────────────────────────────
-        mig_frame = ttk.LabelFrame(
-            xl_outer,
-            text="📋  Spreadsheet Schema Update",
-            padding=(8, 6))
-        mig_frame.pack(fill='x', pady=(10, 0))
-
-        mig_top = ttk.Frame(mig_frame)
-        mig_top.pack(fill='x')
-
-        # Status indicator — updated by _update_migration_indicator()
-        self._migration_indicator_lbl = ttk.Label(
-            mig_top,
-            text="⬤  Checking…",
-            foreground="gray",
-            font=("Segoe UI", 10, "bold"))
-        self._migration_indicator_lbl.pack(side='left')
-
-        # On-demand run button — enabled when migration is needed
-        self._migration_run_btn = ttk.Button(
-            mig_top,
-            text="🔄  Update Spreadsheet Now",
-            command=self._on_demand_migration,
-            state="disabled")
-        self._migration_run_btn.pack(side='right')
-
-        ttk.Label(mig_frame,
-                  text=("Updates the spreadsheet structure to work with the latest "
-                        "version of AI-Prowler. Required for the Mobile Jobs App. "
-                        "Your data is never deleted — a full backup is made first."),
-                  font=("Arial", 8),
-                  foreground="gray",
-                  justify="left",
-                  wraplength=480).pack(anchor='w', pady=(4, 0))
-
-        # Trigger initial status check (non-blocking)
-        self.root.after(500, self._check_migration_status)
-
-
         # ── Jobs App (PWA) URL ────────────────────────────────────────────────
-        # Mobile URL for crew phones. Reads tunnel_domain from config.json.
-        pwa_lf = ttk.LabelFrame(xl_outer,
+        # Moved here (2026-09-14, on request) from inside the "Your Business
+        # Data" panel further down — this is the first thing most users want
+        # after seeing what the tools can do: the link to actually hand crew
+        # members. Mobile URL for crew phones, reads tunnel_domain from
+        # config.json.
+        pwa_lf = ttk.LabelFrame(banner,
                                  text="📱 Jobs App — Mobile URL for Job Updates",
                                  padding=(8, 4))
         pwa_lf.pack(fill='x', pady=(8, 0))
@@ -16502,6 +17885,9 @@ or from the Help menu."""
                 return ""
 
         _jobs_url_var = tk.StringVar(value=_load_jobs_url())
+        # Expose on self so the mobile activation callback can refresh it
+        # without needing to be inside this closure.
+        self._jobs_url_var = _jobs_url_var
         pwa_url_row = ttk.Frame(pwa_lf)
         pwa_url_row.pack(fill='x')
         ttk.Entry(pwa_url_row, textvariable=_jobs_url_var, width=44,
@@ -16579,7 +17965,21 @@ or from the Help menu."""
         ttk.Button(pwa_url_row, text="📋 Copy",
                    command=_copy_jobs_url).pack(side='left', padx=(0, 4))
         ttk.Button(pwa_url_row, text="📧 Email to user",
-                   command=_email_jobs_url).pack(side='left', padx=(0, 8))
+                   command=_email_jobs_url).pack(side='left', padx=(0, 4))
+
+        def _qr_jobs_url():
+            # Shared QR window (setup_wizard.show_qr_window, 2026-09-30) — crew
+            # scan it from your screen; the code holds only the link.
+            try:
+                import setup_wizard as _sw_q
+                _sw_q.show_qr_window(self.root, "Jobs app — scan with your phone",
+                                     _jobs_url_var.get().strip(),
+                                     "Opens the AI-Prowler Jobs app (customers, jobs, invoices, routes).")
+            except Exception as _e_q:
+                messagebox.showerror("QR code", f"Couldn't show the QR code:\n{_e_q}")
+
+        ttk.Button(pwa_url_row, text="📱 QR",
+                   command=_qr_jobs_url).pack(side='left', padx=(0, 8))
 
         ttk.Label(pwa_url_row, text="← send to crew phones",
                   font=('Arial', 8), foreground='gray').pack(side='left')
@@ -17033,14 +18433,703 @@ or from the Help menu."""
         ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
         # ── end Employee Backups ────────────────────────────────────────────
 
-        # ── 4. ROUTE & NAVIGATION NOTES ──────────────────────────────────────
-        # v9.1.x: removed this whole panel. Real usage never goes through
-        # the GUI at all — the user just tells Claude to map the route and
-        # email/text the tap-to-navigate URL, then opens that on their phone
-        # to hand off to CarPlay/Android Auto. The optimize_route() /
-        # build_maps_url() reference content that used to live here now
-        # lives in the expanded "End-to-End Workflow" section of the Service
-        # Tools popup instead — see get_service_tools_guide_content().
+        # ── 2. FREE TOOLS PANEL ───────────────────────────────────────────────
+        # v9.1.x: removed — this duplicated content now covered by the
+        # "Free Tools — No API Key or Setup Required" section of the popup
+        # opened from the "View All Service Tools & Example Prompts" button
+        # above (see get_service_tools_guide_content()). Keeping the tab
+        # itself short is the point of that popup existing.
+
+        # ── 3. YOUR BUSINESS DATA ────────────────────────────────────────────
+        # 2026-09-13 redesign (Job Board Architecture Spec §12): this panel
+        # used to be "Job Spreadsheet Updater", describing update_job_
+        # spreadsheet()'s now-obsolete openpyxl/.xlsx mental model — every
+        # write that tool makes has been SQLite-backed since Phase 1, and
+        # framing it around "your .xlsx job tracker" was actively wrong
+        # (found during the September 2026 openpyxl audit). Retired in favor
+        # of what users actually need now that the .xlsx file is gone:
+        # sharing data with an accountant/QuickBooks, backing it up, and
+        # moving it to a new computer (spec §12.1-§12.6).
+        xl_outer = ttk.LabelFrame(f,
+                                  text="🗄️ Your Business Jobs Data",
+                                  padding=(12, 8))
+        xl_outer.pack(fill='x', padx=16, pady=(0, 6))
+
+        ttk.Label(xl_outer, justify='left', font=('Arial', 8), foreground='gray',
+                  text=("AI-Prowler stores everything in a local database. Use these tools\n"
+                        "to share your data, back it up, or move it to a new computer.")
+                  ).pack(anchor='w', pady=(0, 6))
+
+        # Bootstrap default_spreadsheet_path (2026-09-16, restored after
+        # removing the old editable "Default database folder" box below):
+        # this config value is STILL the real, live setting behind
+        # export_to_excel()'s default output location and the legacy
+        # _resolve_job_spreadsheet_path() — removing the editable Entry
+        # must not also remove the safety net that used to populate it.
+        # Some installs may not have written default_spreadsheet_path to
+        # config.json (e.g. the bundled template went missing at compile
+        # time, or installer-side config init failed silently). Pure
+        # detect-and-persist, no UI — nothing here is user-facing anymore.
+        def _bootstrap_default_spreadsheet_path():
+            if _load_cfg().get('default_spreadsheet_path', '').strip():
+                return  # already set — real installs get this from the installer
+            import os as _os
+            for candidate in (
+                Path.home() / 'Documents' / 'AI-Prowler' / 'AI-Prowler_Job_Tracker.xlsx',
+                # Older installs may have used OneDrive's redirected Documents
+                Path.home() / 'OneDrive' / 'Documents' / 'AI-Prowler' / 'AI-Prowler_Job_Tracker.xlsx',
+                # Fall back to the file shipped next to rag_gui.py (dev runs)
+                Path(__file__).parent / 'AI-Prowler_Job_Tracker.xlsx',
+            ):
+                try:
+                    if candidate.exists():
+                        _save_cfg({'default_spreadsheet_path': str(candidate).replace('/', _os.sep)})
+                        return
+                except Exception:
+                    pass
+
+        _bootstrap_default_spreadsheet_path()
+
+        # Fixed database folder (2026-09-16): no longer user-configurable.
+        # The live database always lives in AI-Prowler's own state folder
+        # (~/.ai-prowler/jobs_database/), the same place every other piece
+        # of AI-Prowler's state already lives — never a folder a person
+        # could accidentally point at a cloud-synced location. Found live:
+        # a OneDrive-redirected Documents folder was a real, if unproven,
+        # data-loss risk factor for a live, actively-written SQLite file
+        # (see _resolve_job_db_path()'s docstring in ai_prowler_mcp.py for
+        # the full reasoning and the stress test that investigated it).
+        # The old Entry/Browse/Save controls are gone; every function
+        # below that used to read _xl_path_var now calls _get_db_folder()
+        # instead, which resolves through the real _resolve_job_db_path()
+        # so this GUI can never drift from what the MCP tools actually use.
+        def _get_db_folder():
+            try:
+                import ai_prowler_mcp as _mcp
+                _dbp = _mcp._resolve_job_db_path(None, "")
+                return os.path.dirname(_dbp) if _dbp else ""
+            except Exception:
+                return ""
+
+        _xl_path_var = tk.StringVar(value=_get_db_folder() or "(not yet available)")
+
+        xl_path_row = ttk.Frame(xl_outer)
+        xl_path_row.pack(fill='x', pady=(4, 0))
+        ttk.Label(xl_path_row, text="Database folder:",
+                  font=('Arial', 9), width=26, anchor='w').pack(side='left')
+        ttk.Label(xl_path_row, textvariable=_xl_path_var, font=('Arial', 9),
+                  foreground='#444').pack(side='left', padx=4)
+
+        xl_hint = ttk.Label(xl_outer,
+                            text="ai_prowler_jobs.db and its backups always live here — fixed, "
+                                 "not configurable, so it can never end up in a cloud-synced "
+                                 "folder by accident.",
+                            font=('Arial', 8), foreground='gray', justify='left', wraplength=520)
+        xl_hint.pack(anchor='w', pady=(2, 0))
+
+        # 2026-09-13: the Job Board migration (Job_Board_Architecture_Spec.md)
+        # moved the live job tracker off the .xlsx file entirely and onto a
+        # SQLite database (ai_prowler_jobs.db, same folder). These four
+        # actions (spec §12) call the real MCP tools directly — plain
+        # functions underneath @mcp.tool(), same as every tool call this GUI
+        # already makes elsewhere in this file — so they work with no MCP
+        # client needed.
+        def _export_to_excel_gui():
+            try:
+                import ai_prowler_mcp as _mcp
+                import db_export_ops  # noqa: F401 — import-order sanity check;
+                # export_to_excel() imports this itself, but failing fast
+                # here with a clear message beats a buried traceback if
+                # this install's db_export_ops.py is somehow missing.
+            except Exception as _imp_exc:
+                messagebox.showerror(
+                    "Export Unavailable",
+                    f"Could not load the export tool: {_imp_exc}\n\n"
+                    "This feature requires ai_prowler_mcp.py and db_export_ops.py "
+                    "to be present in the install folder."
+                )
+                return
+            try:
+                result = _mcp.export_to_excel(filepath="", output_path="", ctx=None)
+            except Exception as _exc:
+                messagebox.showerror("Export Failed", f"Export to Excel failed:\n\n{_exc}")
+                return
+            if not result.startswith("✅"):
+                messagebox.showerror("Export Failed", result)
+                return
+            # First line is "✅ Export saved: <path>" — pull the path back
+            # out so the "Open Folder" button has something to point at,
+            # without needing export_to_excel() to change its return shape.
+            _export_path = ""
+            _first_line = result.splitlines()[0]
+            if "Export saved:" in _first_line:
+                _export_path = _first_line.split("Export saved:", 1)[1].strip()
+            if messagebox.askyesno(
+                "Export Complete",
+                result + "\n\nOpen the exported file now?"
+            ) and _export_path:
+                try:
+                    __import__('os').startfile(_export_path)
+                except Exception:
+                    pass
+            self.status_var.set("✅  Exported to Excel")
+            self.root.after(3000, lambda: self.status_var.set("Ready"))
+
+        def _export_to_csv_gui():
+            from tkinter import filedialog as _fd
+            _folder = _xl_path_var.get().strip()
+            out_dir = _fd.askdirectory(title="Choose a folder for the CSV files",
+                                        initialdir=_folder or None)
+            if not out_dir:
+                return
+            try:
+                import ai_prowler_mcp as _mcp
+                import db_backup_ops  # noqa: F401 — same import-order sanity check as Export to Excel.
+            except Exception as _imp_exc:
+                messagebox.showerror("Export Unavailable", f"Could not load the export tool: {_imp_exc}")
+                return
+            try:
+                result = _mcp.export_to_csv(filepath="", output_dir=out_dir, tables=None, ctx=None)
+            except Exception as _exc:
+                messagebox.showerror("Export Failed", f"Export to CSV failed:\n\n{_exc}")
+                return
+            if not result.startswith("✅"):
+                messagebox.showerror("Export Failed", result)
+                return
+            if messagebox.askyesno("Export Complete", result + "\n\nOpen the folder now?"):
+                try:
+                    __import__('os').startfile(out_dir)
+                except Exception:
+                    pass
+            self.status_var.set("✅  Exported to CSV")
+            self.root.after(3000, lambda: self.status_var.set("Ready"))
+
+        def _backup_now_gui():
+            from tkinter import filedialog as _fd
+            # Default to the configured database folder, not whatever
+            # folder the OS file dialog happened to remember last — a
+            # real bug found live (2026-09-14): the dialog was opening in
+            # Downloads with no initialdir set at all, so a user backing
+            # up for the first time had no reason to expect their backup
+            # landed anywhere near the actual database.
+            _folder = _xl_path_var.get().strip()
+            dest = _fd.asksaveasfilename(
+                title="Save backup as",
+                initialdir=_folder or None,
+                defaultextension=".db",
+                filetypes=[("AI-Prowler database", "*.db"), ("All files", "*.*")],
+                initialfile=f"AI-Prowler-Backup-{__import__('datetime').datetime.now().strftime('%Y%m%d_%H%M%S')}.db",
+            )
+            if not dest:
+                return
+            try:
+                import ai_prowler_mcp as _mcp
+                import db_backup_ops  # noqa: F401
+            except Exception as _imp_exc:
+                messagebox.showerror("Backup Unavailable", f"Could not load the backup tool: {_imp_exc}")
+                return
+            try:
+                result = _mcp.backup_job_database(filepath="", destination_path=dest, ctx=None)
+            except Exception as _exc:
+                messagebox.showerror("Backup Failed", f"Backup failed:\n\n{_exc}")
+                return
+            if not result.startswith("✅"):
+                messagebox.showerror("Backup Failed", result)
+                return
+            messagebox.showinfo("Backup Complete", result)
+            self.status_var.set("✅  Backup saved")
+            self.root.after(3000, lambda: self.status_var.set("Ready"))
+
+        def _restore_from_backup_gui():
+            from tkinter import filedialog as _fd
+            # Same fix as _backup_now_gui — default to where backups
+            # actually live (<folder>/backup), not the OS's remembered
+            # last-used dialog location.
+            _folder = _xl_path_var.get().strip()
+            _backups_subdir = os.path.join(_folder, "backup") if _folder else ""
+            _initial = _backups_subdir if _backups_subdir and os.path.isdir(_backups_subdir) else (_folder or None)
+            backup_path = _fd.askopenfilename(
+                title="Select a backup file to restore",
+                initialdir=_initial,
+                filetypes=[("AI-Prowler database", "*.db"), ("All files", "*.*")],
+            )
+            if not backup_path:
+                return
+            try:
+                import ai_prowler_mcp as _mcp
+                import db_backup_ops as _dbo
+            except Exception as _imp_exc:
+                messagebox.showerror("Restore Unavailable", f"Could not load the restore tool: {_imp_exc}")
+                return
+            # R-050: show what is live now vs. what the backup holds, and in
+            # server mode make a non-empty live database need a typed REPLACE.
+            try:
+                _live_db = _mcp._resolve_job_db_path(None, "") or ""
+            except Exception:
+                _live_db = ""
+            try:
+                _live_total = _dbo.db_business_row_count(_live_db)
+                _live_line = _dbo._business_counts_line(_live_db)
+                _bk_line = _dbo._business_counts_line(backup_path)
+            except Exception:
+                _live_total, _live_line, _bk_line = 0, "unknown", "unknown"
+            _server = bool(self._is_business_server_mode())
+            _replace_existing = False
+            _counts_txt = (f"Live now:\n    {_live_line}\n\n"
+                           f"In the backup:\n    {_bk_line}\n\n")
+            if _live_total > 0 and _server:
+                from tkinter import simpledialog as _sd
+                _typed = _sd.askstring(
+                    "Restore from Backup — database is NOT empty",
+                    "Restore is meant for setting up a NEW PC.\n\n"
+                    "This server's job database already has records. Restoring "
+                    "WIPES them and replaces them with the backup.\n\n"
+                    + _counts_txt +
+                    "A safety copy of the current data is made first.\n\n"
+                    "Type REPLACE to wipe the current data and restore:",
+                    parent=self.root,
+                )
+                if (_typed or "").strip() != "REPLACE":
+                    if _typed is not None:
+                        messagebox.showinfo("Restore Cancelled",
+                                            "You didn't type REPLACE — nothing was changed.")
+                    return
+                _replace_existing = True
+            else:
+                _warn = ("⚠️ The current database is NOT empty — restoring wipes "
+                         "those records.\n\n" if _live_total > 0 else "")
+                if not messagebox.askyesno(
+                    "Restore from Backup",
+                    "This replaces ALL current data with what's in the selected backup.\n\n"
+                    + _counts_txt + _warn +
+                    "A safety copy of what's here now will be made first, so this can "
+                    "always be undone — but please confirm this is really what you want.\n\n"
+                    "Continue?",
+                    icon='warning',
+                ):
+                    return
+            try:
+                result = _mcp.restore_job_database(backup_path, filepath="", confirm=True,
+                                                   replace_existing=_replace_existing, ctx=None)
+            except Exception as _exc:
+                messagebox.showerror("Restore Failed", f"Restore failed:\n\n{_exc}")
+                return
+            if not result.startswith("✅"):
+                messagebox.showerror("Restore Failed", result)
+                return
+            messagebox.showinfo("Restore Complete", result)
+            self.status_var.set("✅  Database restored")
+            self.root.after(3000, lambda: self.status_var.set("Ready"))
+
+        share_row = ttk.Frame(xl_outer)
+        share_row.pack(fill='x', pady=(10, 0))
+        ttk.Label(share_row, text="Share your data:", font=('Arial', 9, 'bold')
+                  ).pack(anchor='w')
+        share_btn_row = ttk.Frame(xl_outer)
+        share_btn_row.pack(fill='x', pady=(2, 0))
+        ttk.Button(share_btn_row, text="📤  Export to Excel",
+                   command=_export_to_excel_gui).pack(side='left', padx=(0, 8))
+        ttk.Button(share_btn_row, text="📄  Export to CSV",
+                   command=_export_to_csv_gui).pack(side='left', padx=(0, 8))
+        ttk.Button(share_btn_row, text="📖  Multi-Employee & QuickBooks Guide",
+                   command=self.show_job_tracker_guide).pack(side='left')
+
+        backup_row = ttk.Frame(xl_outer)
+        backup_row.pack(fill='x', pady=(10, 0))
+        ttk.Label(backup_row, text="Backup & Restore:", font=('Arial', 9, 'bold')
+                  ).pack(anchor='w')
+        backup_btn_row = ttk.Frame(xl_outer)
+        backup_btn_row.pack(fill='x', pady=(2, 0))
+        ttk.Button(backup_btn_row, text="🗄️  Backup Now",
+                   command=_backup_now_gui).pack(side='left', padx=(0, 8))
+        ttk.Button(backup_btn_row, text="♻️  Restore from Backup",
+                   command=_restore_from_backup_gui).pack(side='left')
+        ttk.Label(xl_outer,
+                  text="Moving to a new computer? Backup Now here, copy that one file over, "
+                       "then Restore from Backup on the new install.",
+                  font=('Arial', 8), foreground='gray', justify='left'
+                  ).pack(anchor='w', pady=(4, 0))
+
+        # ── Scheduled automatic backups (Job Board Architecture Spec §12.8) ────
+        # A direct, code-based periodic check rather than routing through the
+        # AI-driven custom-analysis-task queue (create_analysis_task) — that
+        # queue's tasks are natural-language prompts an autonomous Claude loop
+        # interprets, which is the wrong dependency for something as basic and
+        # important as "back up my data on a schedule": it should keep working
+        # even if the Autonomous AI Task Queue toggle is off, or no AI call
+        # succeeds that day. This reuses backup_job_database() directly instead.
+        sched_lf = ttk.LabelFrame(xl_outer, text="Scheduled Backups", padding=(8, 6))
+        sched_lf.pack(fill='x', pady=(10, 0))
+
+        _sched_cfg = _load_cfg()
+        _sched_enabled_var = tk.BooleanVar(value=bool(_sched_cfg.get('db_backup_schedule_enabled', False)))
+        _sched_freq_var = tk.StringVar(value=_sched_cfg.get('db_backup_schedule_frequency', 'weekly'))
+        _sched_dow_var = tk.StringVar(value=str(_sched_cfg.get('db_backup_schedule_day_of_week', 6)))  # default Sunday
+        _sched_month_pos_var = tk.StringVar(value=_sched_cfg.get('db_backup_schedule_month_position', 'end'))
+
+        _DOW_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+
+        sched_top_row = ttk.Frame(sched_lf)
+        sched_top_row.pack(fill='x')
+        ttk.Checkbutton(sched_top_row, text="Enable scheduled backups",
+                         variable=_sched_enabled_var).pack(side='left')
+
+        sched_opts_row = ttk.Frame(sched_lf)
+        sched_opts_row.pack(fill='x', pady=(6, 0))
+        ttk.Label(sched_opts_row, text="Frequency:").pack(side='left')
+        _freq_combo = ttk.Combobox(sched_opts_row, textvariable=_sched_freq_var,
+                                    values=['weekly', 'monthly'], state='readonly', width=10)
+        _freq_combo.pack(side='left', padx=(4, 12))
+
+        _dow_combo = ttk.Combobox(sched_opts_row, textvariable=_sched_dow_var,
+                                   values=[str(i) for i in range(7)], state='readonly', width=4)
+        _dow_label_var = tk.StringVar()
+        _dow_display = ttk.Label(sched_opts_row, textvariable=_dow_label_var, width=10)
+
+        _month_pos_combo = ttk.Combobox(sched_opts_row, textvariable=_sched_month_pos_var,
+                                         values=['start', 'end'], state='readonly', width=8)
+
+        def _update_dow_label(*_a):
+            try:
+                _dow_label_var.set(_DOW_NAMES[int(_sched_dow_var.get())])
+            except (ValueError, IndexError):
+                _dow_label_var.set('')
+        _sched_dow_var.trace_add('write', _update_dow_label)
+        _update_dow_label()
+
+        def _refresh_sched_controls(*_a):
+            for w in (_dow_combo, _dow_display, _month_pos_combo):
+                w.pack_forget()
+            if _sched_freq_var.get() == 'weekly':
+                ttk.Label(sched_opts_row, text="Day:").pack(side='left')
+                _dow_combo.pack(side='left', padx=(4, 4))
+                _dow_display.pack(side='left')
+            else:
+                ttk.Label(sched_opts_row, text="When:").pack(side='left')
+                _month_pos_combo.pack(side='left', padx=(4, 4))
+                ttk.Label(sched_opts_row, text="of month").pack(side='left')
+        _sched_freq_var.trace_add('write', _refresh_sched_controls)
+        _refresh_sched_controls()
+
+        def _save_schedule():
+            _save_cfg({
+                'db_backup_schedule_enabled': _sched_enabled_var.get(),
+                'db_backup_schedule_frequency': _sched_freq_var.get(),
+                'db_backup_schedule_day_of_week': int(_sched_dow_var.get()),
+                'db_backup_schedule_month_position': _sched_month_pos_var.get(),
+            })
+            self.status_var.set("✅  Backup schedule saved")
+            self.root.after(3000, lambda: self.status_var.set("Ready"))
+
+        ttk.Button(sched_lf, text="💾  Save Schedule", command=_save_schedule
+                   ).pack(anchor='w', pady=(8, 0))
+        ttk.Label(sched_lf,
+                  text="Runs a Backup Now to the database folder automatically. If AI-Prowler "
+                       "wasn't open on the scheduled day, it catches up the next time it opens.",
+                  font=('Arial', 8), foreground='gray', justify='left', wraplength=520
+                  ).pack(anchor='w', pady=(4, 0))
+
+        # ── Scheduled-backup check — runs at startup and hourly thereafter ──────
+        # Date-due logic lives in the module-level most_recent_scheduled_backup_date()
+        # below (not nested here) specifically so it's unit-testable independent
+        # of the Tkinter GUI construction.
+        def _check_scheduled_backup():
+            import datetime as _sdt
+            try:
+                cfg = _load_cfg()
+                if not cfg.get('db_backup_schedule_enabled', False):
+                    return
+                today = _sdt.date.today()
+                due_date = most_recent_scheduled_backup_date(
+                    cfg.get('db_backup_schedule_frequency', 'weekly'),
+                    int(cfg.get('db_backup_schedule_day_of_week', 6)),
+                    cfg.get('db_backup_schedule_month_position', 'end'),
+                    today,
+                )
+                last_run_str = cfg.get('db_backup_schedule_last_run', '')
+                try:
+                    last_run = _sdt.date.fromisoformat(last_run_str) if last_run_str else _sdt.date.min
+                except ValueError:
+                    last_run = _sdt.date.min
+                if due_date <= last_run:
+                    return  # already backed up for this scheduled occurrence
+
+                import ai_prowler_mcp as _mcp
+                import db_backup_ops  # noqa: F401
+                result = _mcp.backup_job_database(filepath="", destination_path="", ctx=None)
+                _save_cfg({'db_backup_schedule_last_run': today.isoformat()})
+                if result.startswith("✅"):
+                    self.status_var.set("✅  Scheduled backup completed")
+                    self.root.after(4000, lambda: self.status_var.set("Ready"))
+                else:
+                    print(f"[scheduled backup] did not complete cleanly: {result}")
+            except Exception as _e:
+                print(f"[scheduled backup] check failed (non-fatal): {_e}")
+
+        # First check shortly after the tab is built (not immediately — let
+        # the rest of the GUI finish laying out first), then every hour so a
+        # long-running session still catches the scheduled day arriving.
+        self.root.after(10000, _check_scheduled_backup)
+
+        def _recurring_sched_check():
+            _check_scheduled_backup()
+            self.root.after(3600000, _recurring_sched_check)
+        self.root.after(3600000, _recurring_sched_check)
+
+        ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
+
+        # ── 4. AI ROUTE OPTIMIZER TASK ────────────────────────────────────────
+        # 2026-09-18 (Job Board Architecture Spec §14.12 follow-up): one-click
+        # way to create (or recreate) the "AI Route Optimizer (full reasoning)"
+        # custom analysis task in the Links & Analysis tab's My Custom
+        # Analyses queue — calls custom_tasks_manager directly (same module
+        # create_analysis_task()/list_analysis_tasks() already use), so the
+        # task this button makes is indistinguishable from one Claude creates
+        # via create_analysis_task() in a conversation — same file, same
+        # queue, same Run/Queue controls over there.
+        #
+        # Deliberately narrow scope: this button ONLY creates/replaces the
+        # task DEFINITION, always with schedule="none" (one-off, manual run).
+        # It never queues it and never sets a recurring schedule — that
+        # decision, and choosing when the Autonomous AI Task Queue's checker
+        # should pick it up, is the user's to make from the Links & Analysis
+        # tab, not something this button should do on their behalf.
+        _ROUTE_AI_TASK_LABEL = "AI Route Optimizer (full reasoning)"
+        _ROUTE_AI_TASK_PROMPT = (
+            "Plan the best possible field-service route for a given ROUTE_DATE "
+            "(default: today's date if not otherwise specified when this task "
+            "is queued/run). Do NOT use suggest_route_schedule (\"Get AI "
+            "Suggestion\") -- that is a cheap nearest-neighbor heuristic with "
+            "no real time-window reasoning. Instead, do the actual reasoning "
+            "yourself, then commit it with apply_route_order. Steps:\n\n"
+            "1. read_job_spreadsheet(sheet_name=\"Jobs_Schedule\", "
+            "filter_date=ROUTE_DATE) to get every job that day: JobID, "
+            "address, lat/lon, Schedule Type (Hard/Soft), Start Time, End "
+            "Time, Est. Duration.\n"
+            "2. read_job_spreadsheet(sheet_name=\"Settings\") for Workday "
+            "Start Time, Workday End Time, Lunch Break Start, Lunch Break "
+            "Duration (min), Hard Time Tolerance (min).\n"
+            "3. get_route_drive_matrix(route_date=ROUTE_DATE) for real drive "
+            "time/distance between every geocoded job. If any job isn't "
+            "geocoded, note it as NOT PLACED and leave it out -- do not "
+            "guess its location.\n"
+            "4. Reason through the day BEFORE writing anything:\n"
+            "   - Hard jobs (Schedule Type = hard) have a committed Start "
+            "Time that must be respected. Arriving early is fine (the crew "
+            "waits) -- arriving so late it exceeds Hard Time Tolerance is a "
+            "real problem to avoid if any better order exists.\n"
+            "   - Soft jobs (Schedule Type = soft) have only a duration and, "
+            "sometimes, their own Start Time/End Time as a preferred window "
+            "-- they are flexible filler, not fixed appointments.\n"
+            "   - Look for idle gaps: time between Workday Start and the "
+            "first hard job's committed start, and time between consecutive "
+            "hard jobs. For each gap, check whether a soft job's duration + "
+            "the real drive times to/from it actually fit inside that gap "
+            "without pushing a later hard job's arrival past its own "
+            "tolerance. Prefer filling a gap with a soft job that is "
+            "geographically close to the jobs on either side of it (per the "
+            "drive matrix) over one that is far away.\n"
+            "   - A soft job whose duration and location don't fit cleanly "
+            "into any gap should be deferred to open time after the last "
+            "hard commitment of the day, rather than forced into a tight "
+            "morning slot that risks a hard violation.\n"
+            "   - The lunch break (extends whichever job is in progress when "
+            "Lunch Break Start is crossed, or the gap before the next stop) "
+            "is handled automatically by apply_route_order's own timeline "
+            "engine -- you do not need to reason about it yourself, just be "
+            "aware total elapsed time includes it.\n"
+            "   - The goal is: zero avoidable HARD TIME VIOLATION / SOFT "
+            "WINDOW VIOLATION warnings, every job placed (or a clear, "
+            "justified reason why one is deferred), and the day finishing "
+            "at or before Workday End Time.\n"
+            "5. Once you have a final visit order, call "
+            "apply_route_order(route_date=ROUTE_DATE, "
+            "stop_order=\"JOB-####,JOB-####,...\") with every geocoded job "
+            "for that date included exactly once, in your reasoned order.\n"
+            "6. Read back the tool's own response -- it will repeat any HARD "
+            "TIME VIOLATION / SOFT WINDOW VIOLATION / DRIVE TIME UNKNOWN / "
+            "DAY DOES NOT FIT warnings using the same real timeline engine "
+            "\"Get AI Suggestion\" uses, so you can verify your reasoning "
+            "actually worked. If a warning fired that you believe a "
+            "different order would have avoided, try once more with a "
+            "revised order before finishing.\n\n"
+            "Do not modify Jobs_Schedule directly and do not click/simulate "
+            "\"Approve\" -- leave the Route tab's own Approve button for the "
+            "owner to press after reviewing. Do not send any text/SMS or "
+            "record any learning -- the only side effects for this task "
+            "are planning/applying the route and the completion email."
+        )
+
+        route_ai_lf = ttk.LabelFrame(f, text="🧭 AI Route Optimizer Task", padding=(12, 8))
+        # Server mode (David, 2026-09-28): the Small Business tab stays — server
+        # mode is built for small businesses — but this section does not. Its
+        # task half feeds the Links & Analysis task queue, which doesn't exist in
+        # server mode, and its runner half duplicates the Admin tab's "AI Route
+        # runner" panel (the server's real setup, with the per-user Claude
+        # accounts). Built but never packed, so nothing below needs changing.
+        if self._is_business_server_mode():
+            ttk.Label(f, justify='left', font=('Arial', 8), foreground='gray', wraplength=620,
+                      text=("🧭 AI Routing on this server is set up on the Admin tab "
+                            "(🧠 AI Route runner), where each user's own Claude account is "
+                            "connected.")
+                      ).pack(anchor='w', padx=16, pady=(0, 6))
+        else:
+            route_ai_lf.pack(fill='x', padx=16, pady=(0, 6))
+
+        ttk.Label(route_ai_lf, justify='left', font=('Arial', 8), foreground='gray',
+                  text=("Creates a one-time custom AI analysis task that reasons through a day's\n"
+                        "jobs — real drive times, hard/soft commitments, idle-gap filling — instead\n"
+                        "of the quick \u2728 Get AI Suggestion heuristic. Lands in the Links & Analysis\n"
+                        "tab's My Custom Analyses queue once created.")
+                  ).pack(anchor='w', pady=(0, 6))
+
+        _route_ai_status_row = ttk.Frame(route_ai_lf)
+        _route_ai_status_row.pack(fill='x', pady=(0, 6))
+        _route_ai_led = tk.Label(_route_ai_status_row, text="\u25cf", font=('Arial', 12), fg='gray')
+        _route_ai_led.pack(side='left')
+        _route_ai_status_var = tk.StringVar(value="Not created yet")
+        ttk.Label(_route_ai_status_row, textvariable=_route_ai_status_var,
+                  font=('Arial', 9)).pack(side='left', padx=(4, 0))
+
+        def _refresh_route_ai_led():
+            try:
+                import custom_tasks_manager as _ctm
+                _exists = any(t.get('label') == _ROUTE_AI_TASK_LABEL
+                              for t in _ctm.load_custom_tasks())
+            except Exception:
+                _exists = False
+            if _exists:
+                _route_ai_led.config(fg='#2ecc71')
+                _route_ai_status_var.set("Created — queue/schedule it from Links & Analysis")
+            else:
+                _route_ai_led.config(fg='gray')
+                _route_ai_status_var.set("Not created yet")
+
+        def _build_route_ai_task_gui():
+            try:
+                import custom_tasks_manager as _ctm
+            except Exception as _exc:
+                messagebox.showerror("Unavailable", f"Could not load the task manager: {_exc}")
+                return
+            try:
+                # Recreate cleanly: remove any existing task under this exact
+                # label FIRST and persist that removal before creating the
+                # replacement, so pressing this button again never piles up
+                # duplicates and never trips the 25-task cap on its own account.
+                _tasks = _ctm.load_custom_tasks()
+                _dupe_ids = [t['task_id'] for t in _tasks if t.get('label') == _ROUTE_AI_TASK_LABEL]
+                if _dupe_ids:
+                    for _tid in _dupe_ids:
+                        _ctm.delete_task(_tasks, _tid)
+                    _ctm.save_custom_tasks(_tasks)
+                _new_task = _ctm.create_task(
+                    label=_ROUTE_AI_TASK_LABEL,
+                    prompt=_ROUTE_AI_TASK_PROMPT,
+                    schedule="none",
+                    # Defaults to emailing a completion summary (David,
+                    # 2026-09-18) — also conveniently satisfies
+                    # create_task()'s own validation, which rejects a task
+                    # with all three outputs (Learnings/Document/Email)
+                    # off ("At least one output must be selected"). Learnings
+                    # and Document stay off (this task's real output is the
+                    # apply_route_order() database write, not a learning or
+                    # a report) — the person can flip Email off too from
+                    # the Links & Analysis tab's task editor if they decide
+                    # they don't want it after all.
+                    output_learnings=False,
+                    output_email=True,
+                )
+                _tasks = _ctm.load_custom_tasks()
+                _tasks.append(_new_task)
+                _ctm.save_custom_tasks(_tasks)
+            except ValueError as _ve:
+                messagebox.showerror("Could Not Create Task", str(_ve))
+                return
+            except Exception as _exc:
+                messagebox.showerror("Failed", f"Could not create the task:\n\n{_exc}")
+                return
+            _refresh_route_ai_led()
+            self.status_var.set("✅  AI Route Optimizer task created")
+            self.root.after(3000, lambda: self.status_var.set("Ready"))
+
+        ttk.Button(route_ai_lf, text="🧭 Build / Recreate AI Route Optimizer Task",
+                   command=_build_route_ai_task_gui).pack(anchor='w')
+
+        ttk.Label(route_ai_lf,
+                  text="This only creates the task definition — it does not queue it or set a "
+                       "schedule. Queuing it, and choosing when it actually runs, is up to you "
+                       "from the Links & Analysis tab.",
+                  font=('Arial', 8), foreground='gray', justify='left', wraplength=520
+                  ).pack(anchor='w', pady=(4, 0))
+
+        _refresh_route_ai_led()
+
+        ttk.Separator(route_ai_lf, orient='horizontal').pack(fill='x', pady=8)
+
+        # ── On-demand runner setup ──────────────────────────────────────
+        # 2026-09-18: the Jobs PWA Route tab's "Run AI Routing" button
+        # needs a SEPARATE, dedicated, trigger-less Scheduled Task
+        # (task_queue_automation.AI_ROUTING_TASK_NAME) — never the main
+        # queue runner, since firing that on demand would sweep up and run
+        # every OTHER due queued task early too, not just this one. See
+        # AI_ROUTING_TASK_NAME's module comment for the full reasoning.
+        # Registering a new S4U-principal Scheduled Task genuinely requires
+        # one UAC consent click — there is no way to do this silently from
+        # a background thread, so it has to be a real button here.
+        ttk.Label(route_ai_lf, justify='left', font=('Arial', 8), foreground='gray',
+                  text=("The Jobs PWA's \u201cRun AI Routing\u201d button needs its own dedicated,\n"
+                        "on-demand-only runner (separate from the scheduled queue above, so it\n"
+                        "never sweeps up and runs your other queued tasks early). One-time setup,\n"
+                        "one Windows confirmation prompt.")
+                  ).pack(anchor='w', pady=(0, 6))
+
+        _ai_routing_status_row = ttk.Frame(route_ai_lf)
+        _ai_routing_status_row.pack(fill='x', pady=(0, 6))
+        _ai_routing_led = tk.Label(_ai_routing_status_row, text="\u25cf", font=('Arial', 12), fg='gray')
+        _ai_routing_led.pack(side='left')
+        _ai_routing_status_var = tk.StringVar(value="Checking\u2026")
+        ttk.Label(_ai_routing_status_row, textvariable=_ai_routing_status_var,
+                  font=('Arial', 9)).pack(side='left', padx=(4, 0))
+
+        def _refresh_ai_routing_led():
+            try:
+                import task_queue_automation as _tqa2
+                _exists = _tqa2.ai_routing_task_exists()
+            except Exception:
+                _exists = False
+            if _exists:
+                _ai_routing_led.config(fg='#2ecc71')
+                _ai_routing_status_var.set("Set up \u2014 \u201cRun AI Routing\u201d is ready in the Jobs PWA")
+            else:
+                _ai_routing_led.config(fg='gray')
+                _ai_routing_status_var.set("Not set up yet")
+
+        def _setup_ai_routing_runner_gui():
+            try:
+                import task_queue_automation as _tqa2
+            except Exception as _exc:
+                messagebox.showerror("Unavailable", f"Could not load the task automation module: {_exc}")
+                return
+            self.status_var.set("Requesting Windows confirmation\u2026")
+            self.root.update_idletasks()
+            try:
+                ok, detail = _tqa2.install_ai_routing_task()
+            except Exception as _exc:
+                messagebox.showerror("Setup Failed", f"Could not set up the on-demand runner:\n\n{_exc}")
+                self.status_var.set("Ready")
+                return
+            if not ok:
+                messagebox.showerror("Setup Failed", detail)
+                self.status_var.set("Ready")
+                return
+            _refresh_ai_routing_led()
+            self.status_var.set("✅  On-demand AI Routing runner set up")
+            self.root.after(3000, lambda: self.status_var.set("Ready"))
+
+        ttk.Button(route_ai_lf, text="🔧 Set Up On-Demand AI Routing (one-time)",
+                   command=_setup_ai_routing_runner_gui).pack(anchor='w')
+
+        _refresh_ai_routing_led()
 
         # ── 5. ONLINE PAYMENT LINKS (real config, not documentation) ────────────
         # v9.1.x: the old "Contractor Workflow Tools" wrapper LabelFrame that
@@ -19434,10 +21523,19 @@ or from the Help menu."""
         err_lbl.pack(anchor='w', pady=(0, 4))
 
         tok_var = tk.StringVar()
-        tok_entry = ttk.Entry(frm, textvariable=tok_var, show='●', width=34,
+        tok_row = ttk.Frame(frm)
+        tok_row.pack(fill='x', pady=(0, 12))
+        tok_entry = ttk.Entry(tok_row, textvariable=tok_var, show='●', width=30,
                               font=('Consolas', 10))
-        tok_entry.pack(fill='x', pady=(0, 12))
+        tok_entry.pack(side='left', padx=(0, 4))
         tok_entry.focus_set()
+
+        _tok_show_var = tk.BooleanVar(value=False)
+        def _toggle_tok_show():
+            tok_entry.configure(show='' if _tok_show_var.get() else '●')
+        ttk.Checkbutton(tok_row, text='👁 Show',
+                        variable=_tok_show_var,
+                        command=_toggle_tok_show).pack(side='left')
 
         result = [False]   # mutable so inner functions can write it
 
@@ -19506,71 +21604,40 @@ or from the Help menu."""
     # who forget their bearer token.
 
     def _admin_email_configured(self):
-        """Return True if email_config.json exists and has smtp_host + username."""
+        """Return True if email_config.json exists and has a usable config.
+
+        Accepts both SMTP configs (smtp_host + username) and Outlook configs
+        (backend='outlook' or 'outlook+smtp' with username).
+        """
         import json as _j
         p = Path.home() / ".ai-prowler" / "email_config.json"
         if not p.exists():
             return False
         try:
             d = _j.loads(p.read_text(encoding="utf-8")) or {}
-            return bool(d.get("smtp_host", "").strip()) and                    bool(d.get("username", "").strip())
+            backend = d.get("backend", "smtp")
+            username = d.get("username", "").strip()
+            if not username:
+                return False
+            if backend in ("outlook", "outlook+smtp"):
+                return True   # Outlook — no smtp_host needed
+            return bool(d.get("smtp_host", "").strip())
         except Exception:
             return False
 
     def _admin_send_email_direct(self, to, subject, body):
         """Send an email directly from the GUI using email_config.json.
-        Returns (success: bool, message: str)."""
-        import json as _j, smtplib, ssl as _ssl, base64 as _b
-        from email.mime.multipart import MIMEMultipart as _MM
-        from email.mime.text import MIMEText as _MT
 
-        p = Path.home() / ".ai-prowler" / "email_config.json"
-        if not p.exists():
-            return (False, "Email not configured. "
-                           "Configure SMTP in Settings -> Email Configuration.")
+        Routes through the MCP _send_smtp() function which handles both
+        the Outlook COM backend and the SMTP backend correctly.
+        Returns (success: bool, message: str).
+        """
         try:
-            cfg = _j.loads(p.read_text(encoding="utf-8")) or {}
+            import ai_prowler_mcp as _mcp
+            ok, msg = _mcp._send_smtp(to, subject, body)
+            return (ok, msg)
         except Exception as e:
-            return (False, f"Could not read email config: {e}")
-
-        if "_password_b64" in cfg:
-            try:
-                cfg["password"] = _b.b64decode(cfg["_password_b64"]).decode()
-            except Exception:
-                pass
-
-        smtp_host = cfg.get("smtp_host", "").strip()
-        smtp_port = int(cfg.get("smtp_port", 587))
-        username  = cfg.get("username", "").strip()
-        password  = cfg.get("password", "")
-        from_name = cfg.get("from_name", "AI-Prowler")
-
-        if not smtp_host or not username:
-            return (False, "Incomplete email config.")
-
-        msg = _MM("mixed")
-        msg["From"]    = f"{from_name} <{username}>"
-        msg["To"]      = to
-        msg["Subject"] = subject
-        msg.attach(_MT(body, "plain", "utf-8"))
-
-        try:
-            ctx = _ssl.create_default_context()
-            if smtp_port == 465:
-                with smtplib.SMTP_SSL(smtp_host, smtp_port,
-                                      context=ctx, timeout=20) as s:
-                    s.login(username, password)
-                    s.sendmail(username, [to], msg.as_bytes())
-            else:
-                with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as s:
-                    s.ehlo()
-                    if cfg.get("use_tls", True):
-                        s.starttls(context=ctx)
-                    s.login(username, password)
-                    s.sendmail(username, [to], msg.as_bytes())
-            return (True, f"Sent to {to}")
-        except Exception as e:
-            return (False, str(e))
+            return (False, f"Send failed: {e}")
 
     def _admin_recovery_eligible_users(self):
         """Return list of (display_name, user_key, user_record) tuples for
@@ -19969,7 +22036,7 @@ or from the Help menu."""
         table_frame = ttk.Frame(f)
         table_frame.pack(fill='both', expand=True, pady=(0, 6))
 
-        columns = ('name', 'email', 'phone', 'role', 'scopes', 'admin', 'private', 'seat', 'status', 'token')
+        columns = ('name', 'email', 'phone', 'role', 'scopes', 'admin', 'private', 'home', 'airoute', 'seat', 'status', 'token')
         tree_scroll = ttk.Scrollbar(table_frame, orient='vertical')
         self._admin_tree = ttk.Treeview(table_frame, columns=columns,
                                         show='headings', height=12,
@@ -19985,6 +22052,8 @@ or from the Help menu."""
             ('scopes',  'Scopes',        130, 'w'),
             ('admin',   'Manages Users',  90, 'center'),
             ('private', 'Private Coll.',  80, 'center'),
+            ('home',    'Home Addr.',     75, 'center'),
+            ('airoute', 'AI Route',        65, 'center'),
             ('seat',    'Seat (key)',     220, 'w'),
             ('status',  'Status',         70, 'center'),
             ('token',   'Token',         120, 'w'),   # always masked — use name/email to identify
@@ -20014,10 +22083,44 @@ or from the Help menu."""
                    command=self._admin_send_token_via_sms).pack(side='left', padx=4)
         ttk.Button(btn_row, text="🏷️ Manage Scopes",
                    command=self._admin_manage_scope_catalog_dialog).pack(side='left', padx=4)
+        ttk.Button(btn_row, text="🤖 AI Route Token",
+                   command=self._admin_set_ai_route_token).pack(side='left', padx=4)
         ttk.Button(btn_row, text="↻ Refresh",
                    command=self._admin_refresh_table).pack(side='right')
         ttk.Button(btn_row, text="☁ Refresh Seats",
                    command=self._admin_sync_seats_from_worker).pack(side='right', padx=(0, 4))
+
+        # ── AI Route runner (one-time server setup) ───────────────────────
+        # The Jobs app's 🧠 AI Routing runs a headless Claude Code session
+        # through its own dedicated Windows Scheduled Task. The Small Business
+        # tab IS shown in server mode (server mode is built for small
+        # businesses), but its AI Route Optimizer section is personal-install
+        # only — it feeds the Links & Analysis task queue, which server mode
+        # doesn't have — so the server's one-time runner setup lives here,
+        # next to the users it's set up for. Each USER then connects
+        # their own Claude account from the Jobs app the first time they tap
+        # AI Route (or an admin pastes their token via 🤖 AI Route Token).
+        ai_lf = ttk.LabelFrame(f, text=" 🧠 AI Route runner (one-time server setup) ", padding=8)
+        ai_lf.pack(fill='x', pady=(0, 6))
+        self._admin_ai_route_var = tk.StringVar(value="Checking…")
+        ttk.Label(ai_lf, textvariable=self._admin_ai_route_var, font=('Segoe UI', 9),
+                  justify='left', wraplength=720).pack(anchor='w')
+        ai_btns = ttk.Frame(ai_lf)
+        ai_btns.pack(fill='x', pady=(6, 0))
+        self._admin_ai_cli_btn = ttk.Button(ai_btns, text="⬇ Install Claude Code CLI",
+                                            command=self._admin_ai_route_install_cli)
+        self._admin_ai_cli_btn.pack(side='left', padx=(0, 6))
+        self._admin_ai_runner_btn = ttk.Button(ai_btns, text="🔧 Set Up AI Route Runner",
+                                               command=self._admin_ai_route_setup_runner)
+        self._admin_ai_runner_btn.pack(side='left', padx=(0, 6))
+        ttk.Button(ai_btns, text="↻ Re-check",
+                   command=self._admin_ai_route_refresh_status).pack(side='left')
+        ttk.Label(ai_lf, font=('Segoe UI', 8), foreground='gray', wraplength=720, justify='left',
+                  text=("Do these once, on this server. Setting up the runner needs one Windows "
+                        "confirmation prompt. After that, each user connects their own Claude "
+                        "account from the Jobs app the first time they tap AI Route — or use "
+                        "🤖 AI Route Token above to paste one for them.")
+                  ).pack(anchor='w', pady=(6, 0))
 
 
         self._admin_refresh_table()
@@ -20097,11 +22200,24 @@ or from the Help menu."""
             phone  = u.get("cell_phone", "")
             # Bearer token stays masked — it's the employee's password
             tok_display = "●" * 8
+            # Home address / AI Route token: only whether each is SET is shown
+            # — never the address text or (obviously) the token itself.
+            home_flag = "✓" if (u.get("home_address") or "").strip() else ""
+            try:
+                import task_queue_automation as _tqa_admin
+                ai_flag = "✓" if _tqa_admin.has_user_oauth_token(
+                    self._admin_ai_token_key(u)) else ""
+            except Exception:
+                ai_flag = ""
 
             self._admin_tree.insert(
                 '', 'end', iid=token,
                 values=(u.get("name", "(unnamed)"), u.get("email", ""), phone,
-                        role, scopes, admin_flag, private, seat, status, tok_display))
+                        role, scopes, admin_flag, private, home_flag, ai_flag,
+                        seat, status, tok_display))
+        # AI Route runner panel: keeps "users connected" current after any
+        # add / edit / token change that refreshes this table.
+        self._admin_ai_route_refresh_status()
         # Seat summary strip — v8.0.0 aware
         if hasattr(self, "_admin_seat_label"):
             v8_seats = seats.get("_v8_seats") or []
@@ -20490,6 +22606,20 @@ or from the Help menu."""
 
 
 
+        # ── Row 14: Home address (AI Routing start/end point) ─────────────
+        # Optional. Where this user's day starts and ends when AI Routing
+        # is run for them — added around their route as a bookend, not a
+        # stop. Stored as one geocodable string in users.json's home_address.
+        ttk.Label(frm, text="Home address:").grid(row=14, column=0, sticky='e', **pad)
+        home_var = tk.StringVar(value=ex.get("home_address", ""))
+        ttk.Entry(frm, textvariable=home_var, width=34).grid(row=14, column=1,
+                                                             columnspan=2, sticky='ew', **pad)
+        ttk.Label(frm, text="(optional — full street address, e.g. 123 Main St, "
+                            "New Smyrna Beach, FL 32168 — used as the AI Routing "
+                            "start/end point)",
+                  font=('Segoe UI', 8), wraplength=380, justify='left'
+                  ).grid(row=15, column=1, columnspan=2, sticky='w', padx=8)
+
         # ── Row 12: Bearer token (Add only) ────────────────────────────────
         is_edit = bool(existing)
         token_var = tk.StringVar(value="")
@@ -20528,6 +22658,15 @@ or from the Help menu."""
                                        parent=dlg)
                 return
             full_name = f"{first} {last}"
+            _home = home_var.get().strip()
+            if _home and not self._admin_home_address_geocodes(_home):
+                if not messagebox.askyesno(
+                        "Home address not found",
+                        "This address couldn't be found on the map (or the lookup "
+                        "service couldn't be reached), so AI Routing may not be "
+                        "able to use it as a start/end point.\n\nSave it anyway?",
+                        parent=dlg):
+                    return
             scopes = [scopes_listbox.get(_i) for _i in scopes_listbox.curselection()]
             chosen_key = key_labels.get(seat_var.get(), "")
             _role = role_var.get()
@@ -20539,6 +22678,7 @@ or from the Help menu."""
                 "slug":  _to_slug(first, last),
                 "email": email_var.get().strip(),
                 "cell_phone":   phone_var.get().strip(),
+                "home_address": _home,
                 "role": _role,
                 "scopes": scopes,
                 "can_manage_users": _can_manage,
@@ -20553,7 +22693,7 @@ or from the Help menu."""
             dlg.destroy()
 
         btns = ttk.Frame(frm)
-        btns.grid(row=15, column=0, columnspan=3, pady=(10, 0))
+        btns.grid(row=16, column=0, columnspan=3, pady=(10, 0))
         ttk.Button(btns, text="Save", command=_ok).pack(side='left', padx=4)
         ttk.Button(btns, text="Cancel", command=_cancel).pack(side='left', padx=4)
 
@@ -20669,6 +22809,215 @@ or from the Help menu."""
         return False
 
 
+    def _admin_ai_route_refresh_status(self):
+        """Updates the AI Route runner panel: is the Claude Code CLI installed,
+        is the on-demand runner registered, and how many active users have
+        connected their Claude account. Cheap and read-only."""
+        if not hasattr(self, "_admin_ai_route_var"):
+            return
+        try:
+            import task_queue_automation as _tqa
+            cli = bool(_tqa.claude_code_cli_installed())
+            runner = bool(_tqa.ai_routing_task_exists())
+            users = [u for u in (self._admin_load_users().get("users") or {}).values()
+                     if isinstance(u, dict) and u.get("status", "active") == "active"]
+            connected = sum(1 for u in users if _tqa.has_user_oauth_token(
+                self._admin_ai_token_key(u)))
+        except Exception as e:
+            self._admin_ai_route_var.set(f"Could not check AI Route setup: {e}")
+            return
+        lines = [
+            f"{'✅' if cli else '❌'} Claude Code CLI: {'installed' if cli else 'not installed'}",
+            f"{'✅' if runner else '❌'} On-demand runner: {'set up' if runner else 'not set up yet'}",
+            f"👤 Users connected to Claude: {connected} of {len(users)}",
+        ]
+        if cli and runner:
+            lines.append("AI Routing is ready — users connect their own Claude account "
+                         "the first time they tap AI Route.")
+        self._admin_ai_route_var.set("\n".join(lines))
+        # Nothing to install once it's there; the runner button stays enabled
+        # (registering is idempotent, so it doubles as a repair).
+        self._admin_ai_cli_btn.state(['disabled'] if cli else ['!disabled'])
+
+    def _admin_ai_route_install_cli(self):
+        """Installs the Claude Code CLI on this server (Anthropic's official
+        installer, same one Links & Analysis uses in Personal). Runs on a
+        background thread — the installer can take a minute."""
+        import threading
+        from tkinter import messagebox
+        if not self._admin_gate():
+            return
+        self._admin_ai_cli_btn.state(['disabled'])
+        self._admin_ai_route_var.set("Installing Claude Code CLI… this can take a minute.")
+
+        def _work():
+            try:
+                import task_queue_automation as _tqa
+                ok, detail = _tqa.install_claude_code_cli()
+            except Exception as e:  # noqa: BLE001
+                ok, detail = False, str(e)
+
+            def _done():
+                self._admin_ai_route_refresh_status()
+                (messagebox.showinfo if ok else messagebox.showerror)("Claude Code CLI", detail)
+            self.root.after(0, _done)
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _admin_ai_route_setup_runner(self):
+        """Registers the dedicated on-demand AI Routing Scheduled Task on this
+        server. Needs ONE Windows confirmation prompt, which appears on this
+        machine's desktop (so an admin must be at the server). Runs on a
+        background thread so the window doesn't freeze while it waits."""
+        import threading
+        from tkinter import messagebox
+        if not self._admin_gate():
+            return
+        self._admin_ai_runner_btn.state(['disabled'])
+        self._admin_ai_route_var.set("Setting up the runner… approve the Windows "
+                                     "confirmation prompt when it appears.")
+
+        def _work():
+            try:
+                import task_queue_automation as _tqa
+                ok, detail = _tqa.install_ai_routing_task()
+            except Exception as e:  # noqa: BLE001
+                ok, detail = False, str(e)
+
+            def _done():
+                self._admin_ai_runner_btn.state(['!disabled'])
+                self._admin_ai_route_refresh_status()
+                if not ok:
+                    messagebox.showerror("AI Route Runner", f"Setup failed:\n\n{detail}")
+                elif detail and detail != "ok":
+                    messagebox.showwarning("AI Route Runner",
+                                           f"The runner was registered, but:\n\n{detail}")
+                else:
+                    messagebox.showinfo("AI Route Runner", "The AI Route runner is set up.")
+            self.root.after(0, _done)
+        threading.Thread(target=_work, daemon=True).start()
+
+    @classmethod
+    def _admin_ai_token_key(cls, u):
+        """R-048 (2026-09-28): the key a user's AI Route token file is saved
+        and looked up under — their users.json id, exactly what the server uses
+        (start_ai_routing, the Jobs app's connect screen), with the name slug
+        only as a fallback for a record that has no id."""
+        u = u if isinstance(u, dict) else {}
+        return (u.get("id") or "").strip() or cls._admin_user_slug(u.get("name", ""))
+
+    @staticmethod
+    def _admin_user_slug(name):
+        """firstname-lastname slug — must match _make_user_id in
+        ai_prowler_mcp.py exactly, since it names the user's AI Route token
+        file and the server looks that file up by the same slug."""
+        import re as _re
+        s = (name or "").strip().lower()
+        s = _re.sub(r'[\s_]+', '-', s)
+        s = _re.sub(r'[^a-z0-9-]', '', s)
+        s = _re.sub(r'-+', '-', s)
+        return s.strip('-') or "unknown-user"
+
+    def _admin_home_address_geocodes(self, address):
+        """True if the address can be found on the map (Nominatim, same lookup
+        AI Routing itself uses). False covers both 'not found' and 'lookup
+        service unreachable' — the caller asks before saving either way."""
+        try:
+            from db_route_ops import _geocode
+            return _geocode(address) is not None
+        except Exception:
+            return False
+
+    def _admin_set_ai_route_token(self):
+        """Save / replace / remove the selected user's Claude Code token, used
+        when THEY run AI Routing from the Jobs app (the run is billed to their
+        own Claude subscription). Stored in its own file, never users.json."""
+        import tkinter as tk
+        from tkinter import ttk, messagebox
+        if not self._admin_gate():
+            return
+        token_key = self._admin_selected_token()
+        if not token_key:
+            messagebox.showinfo("AI Route Token", "Select a user first.")
+            return
+        u = (self._admin_load_users().get("users") or {}).get(token_key)
+        if not isinstance(u, dict):
+            messagebox.showerror("AI Route Token", "User not found (refresh the table).")
+            return
+        name = u.get("name", "")
+        # R-048 (2026-09-28): key the token file by the user's id — exactly what
+        # the server looks it up by (start_ai_routing / the Jobs app's connect
+        # screen use user["id"] first). The name slug is only the fallback for a
+        # record with no id; keying by name alone lost the token when a user was
+        # renamed after being created (the id stays, the name slug changes).
+        slug = self._admin_ai_token_key(u)
+        try:
+            import task_queue_automation as _tqa
+        except Exception as e:
+            messagebox.showerror("AI Route Token", f"Task automation module unavailable: {e}")
+            return
+        already = _tqa.has_user_oauth_token(slug)
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title(f"AI Route Token — {name}")
+        dlg.transient(self.root)
+        dlg.grab_set()
+        dlg.resizable(True, False)
+        dlg.minsize(520, 0)
+        frm = ttk.Frame(dlg, padding=12)
+        frm.pack(fill='both', expand=True)
+
+        ttk.Label(frm, text=f"Claude token for {name}", font=('Segoe UI', 9, 'bold')
+                  ).pack(anchor='w')
+        ttk.Label(
+            frm, justify='left', foreground='#555555', wraplength=490,
+            text=("Lets this user run 🧠 AI Routing from the Jobs app. The run is "
+                  "billed to THEIR Claude subscription, not yours.\n\n"
+                  "To get the token: on a computer signed in to this user's Claude "
+                  "account, run  claude setup-token  and copy the value it prints "
+                  "(it starts with sk-ant-oat). Paste it below.\n\n"
+                  "It is saved in its own file on this server — not in users.json, "
+                  "the job database, or any export.")
+        ).pack(anchor='w', pady=(4, 8))
+        ttk.Label(frm, text=("A token is currently saved for this user." if already
+                             else "No token saved yet."),
+                  font=('Segoe UI', 9, 'italic')).pack(anchor='w', pady=(0, 6))
+
+        tok_var = tk.StringVar()
+        ttk.Entry(frm, textvariable=tok_var, width=52, show='●',
+                  font=('Consolas', 10)).pack(fill='x')
+
+        def _save():
+            try:
+                _tqa.save_user_oauth_token(slug, tok_var.get())
+            except ValueError as ve:
+                messagebox.showerror("AI Route Token", str(ve), parent=dlg)
+                return
+            dlg.destroy()
+            self._admin_refresh_table()
+            messagebox.showinfo("AI Route Token",
+                                f"Saved. {name} can now run AI Routing.")
+
+        def _remove():
+            if not already:
+                return
+            if messagebox.askyesno("Remove token",
+                                   f"Remove the saved Claude token for {name}? "
+                                   f"They will no longer be able to run AI Routing.",
+                                   parent=dlg):
+                _tqa.delete_user_oauth_token(slug)
+                dlg.destroy()
+                self._admin_refresh_table()
+
+        btns = ttk.Frame(frm)
+        btns.pack(pady=(10, 0))
+        ttk.Button(btns, text="Save", command=_save).pack(side='left', padx=4)
+        rm = ttk.Button(btns, text="Remove saved token", command=_remove)
+        rm.pack(side='left', padx=4)
+        if not already:
+            rm.state(['disabled'])
+        ttk.Button(btns, text="Cancel", command=dlg.destroy).pack(side='left', padx=4)
+        dlg.wait_window()
+
     def _admin_add_user(self):
         """Add a new user: collect fields, generate a bearer token, write
         users.json, then show the token so the admin can send it securely."""
@@ -20733,6 +23082,7 @@ or from the Help menu."""
             "name":  fields["name"],
             "email": fields["email"],
             "cell_phone": fields.get("cell_phone", ""),
+            "home_address": fields.get("home_address", ""),
             "role":   fields["role"],
             "scopes": fields["scopes"],
             "can_manage_users":          fields["can_manage_users"],
@@ -21020,6 +23370,9 @@ or from the Help menu."""
         # Persist optional recovery contact field if provided.
         if fields.get("cell_phone"):
             u["cell_phone"] = fields["cell_phone"]
+        # Home address is always written (an empty value clears it) — unlike
+        # cell_phone above, an admin must be able to remove a stale address.
+        u["home_address"] = fields.get("home_address", "")
         if self._admin_save_users(data):
             self._admin_refresh_table()
             self._admin_update_lock_ui()
@@ -21371,6 +23724,24 @@ or from the Help menu."""
                         self._refresh_proactive_alerts_display()
                     except Exception:
                         pass
+            # 🏠 Home: refresh the Setup Center (2026-10-01, David) — its lights
+            # follow the REAL settings, so anything set up on another tab (email,
+            # payments, phone access…) shows up the moment the user comes back.
+            # Matched by label (positions shift as tabs are added/hidden);
+            # at most once every 2 s so quick tab-clicking doesn't re-check.
+            try:
+                _tab_text = self.notebook.tab(self.notebook.select(), "text").strip()
+            except Exception:
+                _tab_text = ""
+            if _tab_text == "🏠 Home" and getattr(self, "_setup_center", None) is not None:
+                import time as _t_sc
+                _now_sc = _t_sc.monotonic()
+                if _now_sc - getattr(self, "_setup_center_refreshed_at", 0.0) > 2.0:
+                    self._setup_center_refreshed_at = _now_sc
+                    try:
+                        self._setup_center.render()
+                    except Exception as _e_sc:
+                        print(f"Setup Center refresh failed: {_e_sc}")
             # Settings tab: no synchronous refresh — background poller keeps list current
         except Exception:
             pass

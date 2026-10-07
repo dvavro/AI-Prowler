@@ -29,6 +29,19 @@
 #updateBanner button{border:none;border-radius:9px;padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer;-webkit-tap-highlight-color:transparent}
 #updateBanner .btn-later{background:transparent;border:1px solid var(--border);color:var(--dim)}
 #updateBanner .btn-refresh{background:var(--accent);color:#fff}
+/* Install-app banner - PWA install prompt (2026-10-01, David).
+   Android/Chrome: beforeinstallprompt gives us a one-tap "Install" button.
+   iOS: Apple allows no programmatic install, so the banner shows the manual
+   Share -> Add to Home Screen steps instead. Never shown when already running
+   as an installed app (display-mode: standalone). */
+#installBanner{position:fixed;top:calc(env(safe-area-inset-top,0px) + 10px);left:12px;right:12px;z-index:9998;background:var(--surface);border:1px solid var(--accent);border-radius:14px;padding:12px 14px;box-shadow:0 8px 30px rgba(0,0,0,.5);display:none;align-items:center;justify-content:space-between;gap:10px}
+#installBanner.show{display:flex}
+#installBanner .msg{font-size:13px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px}
+#installBanner .steps{font-size:12px;color:var(--dim);margin-top:6px;line-height:1.5}
+#installBanner .actions{display:flex;gap:8px;flex-shrink:0}
+#installBanner button{border:none;border-radius:9px;padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer;-webkit-tap-highlight-color:transparent}
+#installBanner .btn-later{background:transparent;border:1px solid var(--border);color:var(--dim)}
+#installBanner .btn-install{background:var(--accent);color:#fff}
 html,body{height:100%;background:var(--bg);color:var(--text);
   font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
   overscroll-behavior:none;-webkit-font-smoothing:antialiased;}
@@ -53,6 +66,17 @@ html,body{height:100%;background:var(--bg);color:var(--text);
 .btn-primary{background:var(--accent);color:#fff;border:none;border-radius:10px;
   padding:14px;font-size:15px;font-weight:600;cursor:pointer;width:100%;}
 .btn-primary:hover{background:var(--accent2);}
+/* Auth eye button — matches Jobs PWA style.
+   RM-R-010 (2026-09-30, David): 34px → 44px so it's finger-sized like every
+   other button (RM-02 / Jobs R-037); input padding widened so text never runs
+   under it. */
+.auth-inp-wrap{position:relative;width:100%;}
+.auth-inp-wrap input{padding-right:54px;}
+.auth-eye-btn{position:absolute;right:4px;top:50%;transform:translateY(-50%);
+  width:44px;height:44px;background:none;border:none;font-size:19px;line-height:1;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;
+  color:var(--dim);opacity:.85;}
+.auth-eye-btn:active{opacity:.6;}
 /* App */
 #app{display:none;flex-direction:column;height:100vh;height:100dvh;}
 .topbar{min-height:var(--topbar-h);padding-top:var(--safe-top);background:var(--surface);
@@ -64,8 +88,18 @@ html,body{height:100%;background:var(--bg);color:var(--text);
 .topbar-title{font-size:15px;font-weight:700;color:var(--accent);}
 .topbar-sub{font-size:11px;color:var(--dim);}
 .conn-dot{width:8px;height:8px;border-radius:50%;background:var(--dim2);
-  margin-left:auto;transition:background .3s;}
+  transition:background .3s;}
 .conn-dot.live{background:var(--green);}
+.topbar-refresh{margin-left:auto;background:none;border:none;color:var(--dim);
+  font-size:18px;cursor:pointer;padding:4px 6px;border-radius:8px;
+  /* RM-R-009 (2026-09-29, Remote PWA E2E RM-02): was 38x30 px — below the
+     finger-size bar (same rule as the Jobs app, R-037). */
+  min-width:44px;min-height:44px;justify-content:center;
+  display:flex;align-items:center;transition:color .2s;-webkit-tap-highlight-color:transparent;}
+.topbar-refresh:hover{color:var(--accent);}
+.topbar-refresh:disabled{opacity:.4;cursor:default;}
+.topbar-refresh .ri{display:inline-block;transition:transform .3s;}
+.topbar-refresh.spinning .ri{animation:spin .7s linear infinite;}
 .screens{flex:1;overflow:hidden;position:relative;}
 .screen{position:absolute;inset:0;overflow-y:auto;padding:16px;
   display:none;flex-direction:column;gap:14px;}
@@ -147,10 +181,12 @@ html,body{height:100%;background:var(--bg);color:var(--text);
 .modal-inp-wrap{position:relative;}
 .modal-inp-wrap input{width:100%;background:var(--surface);
   border:1px solid var(--border);border-radius:10px;
-  padding:12px 40px 12px 14px;color:var(--text);font-size:15px;outline:none;}
+  padding:12px 54px 12px 14px;color:var(--text);font-size:15px;outline:none;}
 .modal-inp-wrap input:focus{border-color:var(--accent);}
-.show-btn{position:absolute;right:10px;top:50%;transform:translateY(-50%);
-  background:none;border:none;color:var(--dim);cursor:pointer;font-size:15px;}
+/* RM-R-010: the grant modal's 👁 had no size at all (~20px, just the emoji) — 44px now. */
+.show-btn{position:absolute;right:4px;top:50%;transform:translateY(-50%);
+  width:44px;height:44px;display:flex;align-items:center;justify-content:center;
+  background:none;border:none;color:var(--dim);cursor:pointer;font-size:17px;}
 .modal-err{color:var(--red);font-size:12px;display:none;}
 .modal-locked{color:var(--yellow);font-size:12px;display:none;}
 .modal-btns{display:flex;gap:10px;}
@@ -199,10 +235,13 @@ html,body{height:100%;background:var(--bg);color:var(--text);
   <div class="auth-title">AI-Prowler Remote</div>
   <div class="auth-sub">Enter your Bearer token to access remote control</div>
   <div class="auth-card">
-    <label for="authInput">Bearer Token</label>
-    <input type="password" id="authInput" placeholder="Your bearer token"
-      autocomplete="current-password"
-      onkeydown="if(event.key==='Enter')doAuth()">
+      <label for="authInput">Bearer Token</label>
+      <div class="auth-inp-wrap">
+        <input type="password" id="authInput" placeholder="Your bearer token"
+          autocomplete="current-password"
+          onkeydown="if(event.key==='Enter')doAuth()">
+        <button type="button" class="auth-eye-btn" id="authEyeBtn" onclick="toggleAuthShow()" aria-label="Show token" tabindex="-1">&#x1F441;&#xFE0F;</button>
+      </div>
     <div class="auth-err" id="authErr">Incorrect token. Check Settings &#8594; Remote Access.</div>
     <button class="btn-primary" onclick="doAuth()">Unlock Remote</button>
   </div>
@@ -225,7 +264,10 @@ html,body{height:100%;background:var(--bg);color:var(--text);
       <div class="topbar-title">AI-Prowler Remote</div>
       <div class="topbar-sub" id="topbarSub">Personal</div>
     </div>
-    <div class="conn-dot" id="connDot"></div>
+      <button class="topbar-refresh" id="refreshBtn" onclick="refreshAll()" title="Refresh all data">
+        <span class="ri">&#8635;</span>
+      </button>
+      <div class="conn-dot" id="connDot" style="margin-left:8px"></div>
   </div>
 
   <div class="screens">
@@ -290,10 +332,14 @@ html,body{height:100%;background:var(--bg);color:var(--text);
     <!-- Files -->
     <div class="screen" id="screenFiles">
       <div class="card" style="background:rgba(155,93,229,.07);border-color:rgba(155,93,229,.3);padding:12px 14px;margin-bottom:4px">
-        <div style="font-size:13px;font-weight:700;color:var(--accent);margin-bottom:4px">&#128228; Upload to AI-Prowler</div>
-        <div style="font-size:12px;color:var(--dim);margin-bottom:8px">Tap <strong style="color:var(--text)">Upload</strong> next to any writable folder to choose a file or photo from your device. It will be saved to that folder and indexed into AI-Prowler automatically.</div>
-        <div id="uploadStatus" style="font-size:12px;margin-top:4px;display:none;padding:6px 10px;border-radius:8px;background:var(--surface)"></div>
-      </div>
+          <div style="font-size:13px;font-weight:700;color:var(--accent);margin-bottom:4px">&#128228; Upload to AI-Prowler</div>
+          <div style="font-size:12px;color:var(--dim);margin-bottom:8px">Tap <strong style="color:var(--text)">Upload</strong> next to any writable folder to choose a file or photo from your device. It will be saved to that folder and indexed into AI-Prowler automatically.</div>
+          <div id="uploadStatus" style="font-size:12px;margin-top:4px;display:none;padding:6px 10px;border-radius:8px;background:var(--surface)"></div>
+        </div>
+        <div class="card" style="background:rgba(52,199,89,.07);border-color:rgba(52,199,89,.3);padding:12px 14px;margin-bottom:4px">
+          <div style="font-size:13px;font-weight:700;color:#34c759;margin-bottom:4px">&#128229; Download from AI-Prowler</div>
+          <div style="font-size:12px;color:var(--dim)">Tap <strong style="color:var(--text)">Download</strong> next to any folder to browse its files, then tap a file to download it to your device.</div>
+        </div>
       <div id="breadcrumb" style="font-size:12px;color:var(--dim);padding:4px 0 6px 2px;display:flex;gap:4px;flex-wrap:wrap;align-items:center"></div>
       <div id="fileList"><div class="spinner"></div></div>
       <div class="preview-wrap" id="previewWrap">
@@ -664,6 +710,18 @@ html,body{height:100%;background:var(--bg);color:var(--text);
 
 <div class="toast" id="toast"></div>
 
+<!-- PWA install banner: one-tap Install on Android/Chrome, manual steps on iOS (2026-10-01, David) -->
+<div id="installBanner">
+  <div style="flex:1;min-width:0">
+    <div class="msg">&#128241; Install AI-Prowler Remote</div>
+    <div class="steps" id="installSteps"></div>
+  </div>
+  <div class="actions">
+    <button class="btn-later" onclick="_dismissInstallBanner()">Later</button>
+    <button class="btn-install" id="installBtn" style="display:none" onclick="_doInstall()">Install</button>
+  </div>
+</div>
+
 
 <script>
 // ── State ─────────────────────────────────────────────────────────────────
@@ -675,29 +733,59 @@ let raDirPath = null, raId = null, raCb = null;
 const TABS = ['Dash','Files','Search','Perms','Learn','Tasks','System'];
 
 // ── Token ─────────────────────────────────────────────────────────────────
+// SECURITY FIX 2026-09-25: /pwa-token no longer hands out the Bearer Token,
+// so this only learns the mode/owner name. BEARER comes from what the owner
+// types (checked by the server, /pwa-verify) or the saved session.
 async function loadToken() {
   try {
     const r = await fetch('/pwa-token');
     if (r.ok) {
       const d = await r.json();
-      BEARER = d.token || '';
       ownerName = d.owner_name || '';
       serverMode = (d.mode || 'personal') === 'server';
     }
   } catch(e) {}
 }
 
+// Asks the server whether a token is valid (never compared in the browser).
+async function verifyToken(t) {
+  if (!t) return false;
+  try {
+    const r = await fetch('/pwa-verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: t }),
+    });
+    return r.ok;
+  } catch (e) { return false; }
+}
+
 // ── Auth ──────────────────────────────────────────────────────────────────
+function toggleAuthShow() {
+  const inp = document.getElementById('authInput');
+  const btn = document.getElementById('authEyeBtn');
+  if (inp.type === 'password') {
+    inp.type = 'text';
+    btn.innerHTML = '&#x1F648;';
+    btn.setAttribute('aria-label', 'Hide token');
+  } else {
+    inp.type = 'password';
+    btn.innerHTML = '&#x1F441;&#xFE0F;';
+    btn.setAttribute('aria-label', 'Show token');
+  }
+}
+
 async function doAuth() {
   const v = document.getElementById('authInput').value.trim();
   document.getElementById('authErr').style.display = 'none';
   if (!v) return;
-  if (!BEARER) await loadToken();
-  if (v !== BEARER) {
+  // The server decides (SECURITY FIX 2026-09-25) — no downloaded copy to compare against.
+  if (!(await verifyToken(v))) {
     document.getElementById('authErr').style.display = 'block';
     document.getElementById('authInput').value = '';
     return;
   }
+  BEARER = v;
   sessionStorage.setItem('ap_remote', JSON.stringify({ token: BEARER }));
   boot();
 }
@@ -800,15 +888,93 @@ function _refreshForUpdate() {
   window.location.reload();
 }
 
+// ── PWA INSTALL BANNER ────────────────────────────────────────────────────
+// 2026-10-01 (David): the QR popup gets the phone to the URL, but nothing on
+// the page itself helped install it. Fully automatic home-screen installation
+// is impossible by platform design — both Apple and Google require a user
+// gesture (anti-abuse). The closest each platform allows:
+//   • Android/Chrome: the beforeinstallprompt event lets us show our own
+//     one-tap "Install" button. preventDefault() stashes the event so the
+//     browser's own mini-infobar doesn't race us.
+//   • iOS Safari: no install API exists at all — Apple requires the manual
+//     Share → Add to Home Screen path, so the banner shows those steps.
+// The banner never shows when already running installed (standalone mode),
+// and "Later" is remembered in localStorage so it doesn't nag forever.
+let _deferredInstallPrompt = null;
+
+function _isIOS() {
+  return /iphone|ipad|ipod/i.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+function _isStandalone() {
+  return window.matchMedia('(display-mode: standalone)').matches ||
+    window.navigator.standalone === true;
+}
+
+function _initInstallBanner() {
+  if (_isStandalone()) return;  // already installed — nothing to do
+  const banner = document.getElementById('installBanner');
+  const steps  = document.getElementById('installSteps');
+  const btn    = document.getElementById('installBtn');
+  if (!banner || !steps || !btn) return;
+  try {
+    if (localStorage.getItem('ap_remote_install_dismissed') === '1') return;
+  } catch(e) {}
+
+  if (_isIOS()) {
+    // No programmatic install on iOS — show the manual path. Note the Safari
+    // requirement: the iPhone Camera QR scanner opens links in the DEFAULT
+    // browser, so if that isn't Safari the Share → Add to Home Screen step
+    // won't be there.
+    steps.innerHTML = 'iPhone needs one manual step &mdash; Apple allows no automatic install:<br>' +
+      '1. Open this page in <b>Safari</b> (if the QR opened in another browser, copy the link into Safari)<br>' +
+      '2. Tap <b>Share</b> &rarr; <b>Add to Home Screen</b>';
+    banner.classList.add('show');
+    return;
+  }
+
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();  // stash it; we show our own button
+    _deferredInstallPrompt = e;
+    steps.textContent = 'Add it to your home screen for full-screen, app-like use.';
+    btn.style.display = '';
+    banner.classList.add('show');
+  });
+  window.addEventListener('appinstalled', () => {
+    _deferredInstallPrompt = null;
+    banner.classList.remove('show');
+  });
+}
+
+async function _doInstall() {
+  const banner = document.getElementById('installBanner');
+  if (_deferredInstallPrompt) {
+    _deferredInstallPrompt.prompt();
+    try { await _deferredInstallPrompt.userChoice; } catch(e) {}
+    _deferredInstallPrompt = null;
+  }
+  if (banner) banner.classList.remove('show');
+}
+
+function _dismissInstallBanner() {
+  const banner = document.getElementById('installBanner');
+  if (banner) banner.classList.remove('show');
+  try { localStorage.setItem('ap_remote_install_dismissed', '1'); } catch(e) {}
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────
 (async () => {
   _initUpdateBanner();
+  _initInstallBanner();
   await loadToken();
   const saved = sessionStorage.getItem('ap_remote');
   if (saved) {
     try {
       const s = JSON.parse(saved);
-      if (s.token && s.token === BEARER) { boot(); return; }
+      // Resume only if the SERVER still accepts the saved token (2026-09-25).
+      if (s.token && await verifyToken(s.token)) { BEARER = s.token; boot(); return; }
+      sessionStorage.removeItem('ap_remote');
     } catch(e) { sessionStorage.removeItem('ap_remote'); }
   }
   document.getElementById('authScreen').style.display = 'flex';
@@ -847,8 +1013,21 @@ function _parseFlexDate(dateStr) {
   return new Date(dateStr);
 }
 
+// RM-R-008 (2026-09-29, Remote PWA E2E RT-03): the server wraps a tool's own
+// refusal as {ok:true, result:"❌ …"} — and every screen here only checked ok,
+// so refusals looked like success (e.g. "Task created" for a weekly task with no
+// first due date — nothing was saved). Turn a ❌ result into a real error, once,
+// for every call.
+function _asResult(d) {
+  if (d && d.ok && typeof d.result === 'string' && d.result.trim().startsWith('\u274C')) {
+    return { ok: false, error: d.result.trim().slice(1).trim(), result: d.result };
+  }
+  return d;
+}
+
 async function api(tool, args) {
-  dbg('CALL api(' + tool + ') BEARER=' + (BEARER ? BEARER.slice(0,8)+'...' : 'EMPTY!'));
+  // RQ-02 (2026-09-29): never write any part of the token into the debug log.
+  dbg('CALL api(' + tool + ') token ' + (BEARER ? 'set' : 'EMPTY!'));
   try {
     const r = await fetch('/remote-api', {
       method: 'POST',
@@ -861,7 +1040,7 @@ async function api(tool, args) {
     const txt = await r.text();
     dbg('  HTTP ' + r.status + ' len=' + txt.length + ' raw: ' + txt.slice(0,120),
         r.ok ? '#44ff44' : '#ff4444');
-    try { return JSON.parse(txt); }
+    try { return _asResult(JSON.parse(txt)); }
     catch(e) {
       dbg('  JSON.parse FAILED: ' + e, '#ff4444');
       return { ok: false, error: 'Bad JSON from server: ' + txt.slice(0,80) };
@@ -872,20 +1051,41 @@ async function api(tool, args) {
   }
 }
 
-// Download a file — token injected at click time so it's always current
-function downloadFile(path) {
-  if (!BEARER) {
-    alert('Not authenticated. Please refresh and log in again.');
-    return;
+// RM-R-001 (2026-09-29, Remote PWA E2E RX-04): the token used to ride in the URL
+// (?token=…) — into server/tunnel access logs and browser history. Every file
+// fetch now sends it as an Authorization header instead.
+function _fetchDownload(path) {
+  return fetch('/remote/download?path=' + encodeURIComponent(path),
+               { headers: { 'Authorization': 'Bearer ' + BEARER } });
+}
+
+// Download a file — uses fetch+blob so mobile browsers stay in the PWA
+// instead of navigating away to the download URL.
+async function downloadFile(path) {
+  if (!BEARER) { alert('Not authenticated. Please refresh and log in again.'); return; }
+  const fname = path.split('\\').pop() || path.split('/').pop() || 'file';
+  dbg('downloadFile: ' + fname);
+  try {
+    const resp = await _fetchDownload(path);
+    if (!resp.ok) {
+      const txt = await resp.text();
+      alert('Download failed: ' + (txt || resp.status));
+      return;
+    }
+    const blob = await resp.blob();
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objUrl;
+    a.download = fname;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    // Revoke after short delay so the download has time to start
+    setTimeout(() => URL.revokeObjectURL(objUrl), 3000);
+    dbg('downloadFile: triggered blob download for ' + fname);
+  } catch(e) {
+    alert('Download error: ' + e);
   }
-  const url = '/remote/download?path=' + encodeURIComponent(path) +
-              '&token=' + encodeURIComponent(BEARER);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = path.split('\\').pop() || path.split('/').pop() || 'file';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
 }
 
 // Slow API call with 30s timeout for search/RAG operations
@@ -899,7 +1099,7 @@ async function apiSlow(tool, args) {
       body: JSON.stringify({ tool, args: args || {} }),
       signal: ctrl.signal,
     });
-    return r.json();
+    return _asResult(await r.json());   // RM-R-008
   } catch(e) {
     if (e.name === 'AbortError') return { ok: false, error: 'Search timed out (30s). Try a shorter query.' };
     throw e;
@@ -920,26 +1120,37 @@ async function handleUpload(inp) {
   inp.value = '';
   const statusEl = document.getElementById('uploadStatus');
   statusEl.style.display = 'block';
-  statusEl.textContent = 'Uploading ' + file.name + '\u2026';
+  statusEl.textContent = 'Uploading ' + file.name + '…';
   statusEl.style.color = 'var(--accent)';
 
   try {
-    const fd = new FormData();
-    fd.append('file', file);
-    fd.append('dir', dirPath);
-    fd.append('token', BEARER);
-    const r = await fetch('/remote/upload', { method: 'POST', body: fd });
+    // v9.1.x -- base64 JSON body instead of multipart FormData+File.
+    // Same iOS Safari WebKit fix applied to the Jobs PWA photo upload:
+    // fetch()+FormData+File was confirmed to deliver a genuinely empty
+    // request body on iPhone (0 bytes received server-side, even for a
+    // 2 KB test file). This sidesteps FormData/File entirely.
+    const fileData = await new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve((fr.result || '').split(',')[1] || '');
+      fr.onerror = reject;
+      fr.readAsDataURL(file);
+    });
+    const r = await fetch('/remote/upload', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ file_data: fileData, filename: file.name, dir: dirPath, token: BEARER }),
+    });
     const data = await r.json().catch(() => ({}));
     if (r.ok && data.ok) {
-      statusEl.textContent = '\u2705 Uploaded: ' + file.name + ' (' + Math.round((data.size||0)/1024) + ' KB) — indexed into AI-Prowler';
+      statusEl.textContent = '✅ Uploaded: ' + file.name + ' (' + Math.round((data.size||0)/1024) + ' KB) — indexed into AI-Prowler';
       statusEl.style.color = 'var(--green)';
       browseDir(dirPath);  // refresh listing
     } else {
-      statusEl.textContent = '\u274c Failed: ' + (data.error || ('HTTP ' + r.status));
+      statusEl.textContent = '❌ Failed: ' + (data.error || ('HTTP ' + r.status));
       statusEl.style.color = 'var(--red)';
     }
   } catch(e) {
-    statusEl.textContent = '\u274c Error: ' + String(e);
+    statusEl.textContent = '❌ Error: ' + String(e);
     statusEl.style.color = 'var(--red)';
   }
   setTimeout(() => { statusEl.style.display = 'none'; }, 6000);
@@ -977,6 +1188,36 @@ function switchTab(tab) {
   if (tab === 'tasks')  loadTasks();
   if (tab === 'learn')  loadLearnings();
   _maybeReshowUpdateBanner();
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────
+let _toastTimer = null;
+function showToast(msg, ms=2200) {
+  const el = document.getElementById('toast');
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove('show'), ms);
+}
+
+// ── Refresh All ───────────────────────────────────────────────────────────
+async function refreshAll() {
+  const btn = document.getElementById('refreshBtn');
+  if (btn) { btn.disabled = true; btn.classList.add('spinning'); }
+  try {
+    await Promise.allSettled([
+      loadDash(),
+      loadFilesList(),
+      loadPerms(),
+      loadLearnings(),
+      loadTasks(),
+      loadSystem(),
+    ]);
+    showToast('Refreshed ✓');
+  } finally {
+    if (btn) { btn.disabled = false; btn.classList.remove('spinning'); }
+  }
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────
@@ -1028,39 +1269,239 @@ async function loadFilesList() {
       return l.replace(/[^\x20-\x7E]/g,'').trim().replace(/^\d+\.\s*/, '').trim();
     }).filter(l => l.length > 3 && /[:\\/]/.test(l));
 
-    if (!dirs.length) { el.innerHTML = '<div class="empty">No tracked directories</div>'; return; }
+      if (!dirs.length) { el.innerHTML = '<div class="empty">No tracked directories</div>'; return; }
 
-    el.innerHTML = '<div class="card">' + dirs.map((d, i) => {
-      const isW = wSet.has(d.toLowerCase());
-      // Use label wrapping a file input — guaranteed to work on all mobile browsers
-      // The label click IS the file input click — no programmatic .click() needed
-      const uid = 'upl_' + i;
-      const action = isW
-        ? '<label for="' + uid + '" class="btn-primary" ' +
-          'style="width:auto;padding:6px 12px;font-size:12px;border-radius:8px;cursor:pointer;display:inline-block">' +
-          '&#128247; Upload' +
-          '<input type="file" id="' + uid + '" accept="*/*" ' +
-          'style="display:none" ' +
-          'data-dir="' + esc(d) + '" ' +
-          'onchange="handleUpload(this)">' +
-          '</label>'
-        : '<span style="font-size:11px;color:var(--dim)">&#128274; Read only</span>';
-      return '<div class="row">' +
-        '<div class="ri">&#128193;</div>' +
-        '<div class="rm">' +
-          '<div class="rn">' + esc(tail(d)) + (isW ? '' : ' <span style="font-size:10px;color:var(--dim)">[R]</span>') + '</div>' +
-          '<div class="rs" style="font-size:10px;font-family:monospace">' + esc(d) + '</div>' +
-        '</div>' +
-        '<div class="ra">' + action + '</div>' +
-      '</div>';
-    }).join('') + '</div>';
-  } catch(e) { el.innerHTML = '<div class="empty">Error: ' + esc(String(e)) + '</div>'; }
-}
+      el.innerHTML = '<div class="card">' + dirs.map((d, i) => {
+        const isW = wSet.has(d.toLowerCase());
+        const uid = 'upl_' + i;
+        const did = 'dlp_' + i;
+
+        // Detect if this tracked entry is a single file (has extension after last separator)
+        const basename = d.split('\\').pop().split('/').pop();
+        const isSingleFile = basename.includes('.') && !basename.startsWith('.');
+
+        const uploadBtn = (!isSingleFile && isW)
+          ? '<label for="' + uid + '" class="btn-primary" ' +
+            'style="width:auto;padding:6px 12px;font-size:12px;border-radius:8px;cursor:pointer;display:inline-block">' +
+            '&#128247; Upload' +
+            '<input type="file" id="' + uid + '" accept="*/*" ' +
+            'style="display:none" ' +
+            'data-dir="' + esc(d) + '" ' +
+            'onchange="handleUpload(this)">' +
+            '</label>'
+          : (!isSingleFile ? '<span style="font-size:11px;color:var(--dim)">&#128274; Read only</span>' : '');
+
+        // Single tracked file: direct Get button. Directory: picker button.
+        const downloadBtn = isSingleFile
+          ? '<button class="dl-direct-btn" data-path="' + esc(d) + '" ' +
+            'style="background:#34c759;border:none;color:#fff;' +
+            'border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;margin-left:6px">' +
+            '&#11015; Get</button>'
+          : '<button class="dl-picker-btn" data-dir="' + esc(d) + '" data-picker="' + did + '" ' +
+            'style="background:rgba(52,199,89,.15);border:1px solid rgba(52,199,89,.4);color:#34c759;' +
+            'border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;margin-left:6px">' +
+            '&#128229; Download</button>';
+
+        const icon = isSingleFile ? '&#128196;' : '&#128193;';
+        return '<div>' +
+          '<div class="row">' +
+            '<div class="ri">' + icon + '</div>' +
+            '<div class="rm">' +
+              '<div class="rn">' + esc(basename) + (isW || isSingleFile ? '' : ' <span style="font-size:10px;color:var(--dim)">[R]</span>') + '</div>' +
+              '<div class="rs" style="font-size:10px;font-family:monospace">' + esc(d) + '</div>' +
+            '</div>' +
+            '<div class="ra" style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">' +
+              uploadBtn + downloadBtn +
+            '</div>' +
+          '</div>' +
+          (isSingleFile ? '' : '<div id="' + did + '" style="display:none;padding:4px 0 4px 36px"></div>') +
+        '</div>';
+      }).join('') + '</div>';
+
+      // Direct download buttons (single tracked files)
+      el.querySelectorAll('.dl-direct-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const p = btn.getAttribute('data-path');
+          dbg('Direct download clicked path=' + p);
+          downloadFile(p);
+        });
+      });
+      // Download picker buttons (directories)
+      el.querySelectorAll('.dl-picker-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const dir = btn.getAttribute('data-dir');
+          const picker = btn.getAttribute('data-picker');
+          dbg('Download picker clicked dir=' + dir + ' picker=' + picker);
+          toggleDownloadPicker(dir, picker);
+        });
+      });
+    } catch(e) { el.innerHTML = '<div class="empty">Error: ' + esc(String(e)) + '</div>'; }
+  }
+
+  // ── Download file browser ─────────────────────────────────────────────────
+  // toggleDownloadPicker: open/close the browser panel for a tracked root dir
+  async function toggleDownloadPicker(dirPath, pickerId) {
+    const el = document.getElementById(pickerId);
+    if (!el) { dbg('toggleDownloadPicker: no element ' + pickerId); return; }
+    if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+    el.style.display = 'block';
+    await browseDownloadDir(dirPath, el, dirPath);
+  }
+
+  // browseDownloadDir: render the contents of dirPath inside containerEl.
+  // rootPath is always the tracked root so the Back button can't go above it.
+  async function browseDownloadDir(dirPath, containerEl, rootPath) {
+    containerEl.innerHTML = '<div class="spinner" style="margin:6px 0"></div>';
+
+    const r = await api('list_directory', { dirpath: dirPath });
+    if (!r.ok) {
+      containerEl.innerHTML = '<div style="font-size:12px;color:var(--red);padding:4px 0">' +
+        'Cannot list folder: ' + esc(r.error || 'unknown') + '</div>';
+      return;
+    }
+
+    const raw = r.result || '';
+    const base = dirPath.replace(/[/\\]+$/, '');
+
+      // Parse subdirs — lines with 📁 emoji AND trailing slash AND no colon (not the header line)
+      const subdirs = raw.split('\n')
+        .filter(l => l.indexOf('📁') !== -1 && l.trim().endsWith('/') && l.indexOf(':') === -1)
+        .map(l => l.replace(/📁/gu, '').replace(/\//g, '').trim())
+        .filter(n => n.length > 0 && n !== '.' && n !== '..');
+
+    // Parse files — lines with 📄 emoji
+    const files = raw.split('\n')
+      .filter(l => l.indexOf('📄') !== -1)
+      .map(l => l.replace(/📄/gu, '').replace(/\s*\([\d,]+ bytes\)\s*$/, '').trim())
+      .filter(n => n.length > 0);
+
+    dbg('browseDownloadDir: path=' + dirPath + ' subdirs=' + subdirs.length + ' files=' + files.length);
+
+    // ── Build the panel HTML ──────────────────────────────────────────────
+    const isRoot = (dirPath === rootPath);
+
+    // Breadcrumb — show path relative to root
+    let crumb = dirPath;
+    if (dirPath.startsWith(rootPath)) {
+      const rel = dirPath.slice(rootPath.length).replace(/^[/\\]+/, '');
+      crumb = rel.length ? rel : '📁 ' + rootPath.split('\\').pop();
+    }
+
+    let html = '';
+
+    // Back button (not shown at root)
+    if (!isRoot) {
+      const parent = base.includes('\\')
+        ? base.substring(0, base.lastIndexOf('\\'))
+        : base.substring(0, base.lastIndexOf('/'));
+      html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">' +
+        '<button class="dl-back-btn" data-path="' + esc(parent) + '" ' +
+        'style="background:var(--surface);border:1px solid var(--border);color:var(--text);' +
+        'border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer">← Back</button>' +
+        '<span style="font-size:11px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+        esc(crumb) + '</span>' +
+        '</div>';
+    }
+
+    // Empty state
+    if (!subdirs.length && !files.length) {
+      html += '<div style="font-size:12px;color:var(--dim);padding:4px 0">Empty folder</div>';
+      containerEl.innerHTML = html;
+      attachBrowseHandlers(containerEl, rootPath);
+      return;
+    }
+
+    // Subdirectories
+    subdirs.forEach(name => {
+      const fullPath = base + '\\' + name;
+      html += '<div class="dl-subdir-row" style="display:flex;align-items:center;' +
+        'padding:5px 8px;border-radius:6px;margin-bottom:2px;background:var(--surface);cursor:pointer">' +
+        '<span style="margin-right:6px">📁</span>' +
+        '<span style="font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+        esc(name) + '</span>' +
+        '<button class="dl-subdir-btn" data-path="' + esc(fullPath) + '" ' +
+        'style="background:var(--surface);border:1px solid var(--border);color:var(--accent);' +
+        'border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;white-space:nowrap">' +
+        'Open →</button>' +
+        '</div>';
+    });
+
+    // Files
+    files.forEach(name => {
+      const fullPath = base + '\\' + name;
+      // RQ-08 (2026-09-29, David): a 👁 View button on text and image files
+      // opens the preview panel (previewFile existed but nothing called it).
+      const viewBtn = _isPreviewable(name)
+        ? '<button class="dl-prev-btn" data-path="' + esc(fullPath) + '" data-name="' + esc(name) + '" ' +
+          'style="background:var(--surface);border:1px solid var(--border);color:var(--accent);' +
+          'border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;white-space:nowrap;margin-right:6px">' +
+          '👁 View</button>'
+        : '';
+      html += '<div class="dl-file-row" style="display:flex;align-items:center;' +
+        'padding:5px 8px;border-radius:6px;margin-bottom:2px;background:var(--surface)">' +
+        '<span style="margin-right:6px">📄</span>' +
+        '<span style="font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
+        esc(name) + '</span>' +
+        viewBtn +
+        '<button class="dl-btn" data-path="' + esc(fullPath) + '" ' +
+        'style="background:#34c759;border:none;color:#fff;border-radius:6px;' +
+        'padding:4px 10px;font-size:11px;cursor:pointer;white-space:nowrap">' +
+        '⬇ Get</button>' +
+        '</div>';
+    });
+
+    containerEl.innerHTML = html;
+    attachBrowseHandlers(containerEl, rootPath);
+  }
+
+  // attachBrowseHandlers: wire up Back, Open, and Get buttons after innerHTML set
+  function attachBrowseHandlers(containerEl, rootPath) {
+    // Back button
+    const backBtn = containerEl.querySelector('.dl-back-btn');
+    if (backBtn) {
+      backBtn.addEventListener('click', () => {
+        const p = backBtn.getAttribute('data-path');
+        dbg('Browse back to: ' + p);
+        browseDownloadDir(p, containerEl, rootPath);
+      });
+    }
+    // Subdir open buttons
+    containerEl.querySelectorAll('.dl-subdir-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const p = btn.getAttribute('data-path');
+        dbg('Browse into subdir: ' + p);
+        browseDownloadDir(p, containerEl, rootPath);
+      });
+    });
+    // File download buttons
+    containerEl.querySelectorAll('.dl-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const p = btn.getAttribute('data-path');
+        dbg('Download file: ' + p);
+        downloadFile(p);
+      });
+    });
+    // File preview buttons (RQ-08)
+    containerEl.querySelectorAll('.dl-prev-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        previewFile(btn.getAttribute('data-path'), btn.getAttribute('data-name'));
+      });
+    });
+  }
 
 // pickUpload replaced by label+input pattern
 
 // Stub — kept for any remaining references
 function browseDir(d) { loadFilesList(); }
+// RQ-08 (2026-09-29): which files get a 👁 View button. Kept in step with the
+// server's /remote/download allow-list — .svg is NOT on it, so it's not here.
+var PREVIEW_IMG_EXTS = ['png','jpg','jpeg','gif','webp'];
+var PREVIEW_TXT_EXTS = ['txt','md','log','json','py','js','html','css','csv'];
+function _isPreviewable(name) {
+  var ext = String(name || '').split('.').pop().toLowerCase();
+  return PREVIEW_IMG_EXTS.indexOf(ext) !== -1 || PREVIEW_TXT_EXTS.indexOf(ext) !== -1;
+}
+
 function previewFile(path, name) {
   var ext = (name || path).split('.').pop().toLowerCase();
   var previewEl      = document.getElementById('previewWrap');
@@ -1069,14 +1510,28 @@ function previewFile(path, name) {
   if (!previewEl || !previewContent) { downloadFile(path, name); return; }
   if (previewTitle) previewTitle.textContent = name || path.split('/').pop();
   previewEl.style.display = 'block';
-  var imgExts = ['png','jpg','jpeg','gif','webp','svg'];
-  var txtExts = ['txt','md','log','json','py','js','html','css','csv'];
+  previewEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  var imgExts = PREVIEW_IMG_EXTS;
+  var txtExts = PREVIEW_TXT_EXTS;
   if (imgExts.indexOf(ext) !== -1) {
-    previewContent.innerHTML = '<img src="/remote/download?path=' + encodeURIComponent(path) +
-      '" style="max-width:100%;border-radius:8px" alt="' + esc(name||'') + '">';
+    // RM-R-002 (2026-09-29, Remote PWA E2E RF-03): the <img src> URL carried no
+    // token, so the server answered 401 and every image preview was broken. An
+    // <img> can't send headers, so fetch the bytes with the Authorization header
+    // (RM-R-001: never the token in a URL) and show them from a blob URL.
+    previewContent.innerHTML = '<div class="spinner"></div>';
+    _fetchDownload(path).then(function(resp) {
+      if (!resp.ok) { previewContent.innerHTML = '<div class="empty">Could not preview image</div>'; return null; }
+      return resp.blob();
+    }).then(function(blob) {
+      if (!blob) return;
+      var u = URL.createObjectURL(blob);
+      previewContent.innerHTML = '<img src="' + u + '" style="max-width:100%;border-radius:8px" alt="' + esc(name||'') + '">';
+    }).catch(function() { previewContent.innerHTML = '<div class="empty">Could not preview image</div>'; });
   } else if (txtExts.indexOf(ext) !== -1) {
     previewContent.innerHTML = '<div class="spinner"></div>';
-    api('read_file_lines', { filepath: path, max_lines: 100 }).then(function(r) {
+    // RM-R-005 (2026-09-29, Remote PWA E2E audit): start_line is REQUIRED by
+    // read_file_lines — without it every text preview failed ("Could not preview file").
+    api('read_file_lines', { filepath: path, start_line: 1, max_lines: 100 }).then(function(r) {
       previewContent.innerHTML = r.ok
         ? '<pre style="font-size:12px;white-space:pre-wrap;word-break:break-all">' + esc(r.result||'') + '</pre>'
         : '<div class="empty">Could not preview file</div>';
@@ -1086,7 +1541,14 @@ function previewFile(path, name) {
   }
 }
 
-function closePreview() {}
+// RM-R-003 (2026-09-29, Remote PWA E2E RF-03): this was an empty function, so
+// the preview's ✕ never closed it.
+function closePreview() {
+  var el = document.getElementById('previewWrap');
+  if (el) el.style.display = 'none';
+  var body = document.getElementById('previewBody');
+  if (body) body.innerHTML = '';
+}
 
 // ── Search ────────────────────────────────────────────────────────────────
 async function doSearch() {
@@ -1181,13 +1643,16 @@ async function onPerm(cb, path, id) {
     cb.disabled = true;
     try {
       const r = await api('revoke_write_access', { directory: path });
-      if (r.ok) {
+      // RM-R-007: the tool answers ❌ (with ok:true) when a folder can't be made
+      // read-only on its own — treat that as a refusal, not a success.
+      const refused = r.ok && String(r.result || '').trim().startsWith('\u274C');
+      if (r.ok && !refused) {
         document.getElementById('pb'+id).className = 'badge badge-r';
         document.getElementById('pb'+id).textContent = 'R';
         toast('&#128274; Write access revoked');
       } else {
         cb.checked = true;
-        toast('&#10060; ' + (r.error || 'Failed to revoke'));
+        toast('&#10060; ' + esc(refused ? String(r.result).trim().slice(1).trim() : (r.error || 'Failed to revoke')));
       }
     } catch(e) { cb.checked = true; }
     cb.disabled = false;
@@ -1246,7 +1711,9 @@ async function confirmGrant() {
   document.getElementById('raConfirm').disabled = true;
   try {
     const r = await api('grant_write_access', { directory: raDirPath });
-    if (r.ok) {
+    // RM-R-007: a ❌ answer (ok:true) is a refusal — e.g. a blocked system folder.
+    const refused = r.ok && String(r.result || '').trim().startsWith('\u274C');
+    if (r.ok && !refused) {
       if (raCb) raCb.checked = true;
       if (raId !== null) {
         document.getElementById('pb'+raId).className = 'badge badge-w';
@@ -1255,7 +1722,8 @@ async function confirmGrant() {
       toast('&#9989; Write access granted');
       closeReAuth();
     } else {
-      document.getElementById('raErr').textContent = r.error || 'Failed';
+      document.getElementById('raErr').textContent =
+        refused ? String(r.result).trim().slice(1).trim() : (r.error || 'Failed');
       document.getElementById('raErr').style.display = 'block';
       document.getElementById('raConfirm').disabled = false;
     }
@@ -1464,14 +1932,11 @@ function _timeAgo(iso) {
   } catch(e) { return ''; }
 }
 
-async function syncTasks() {
-  toast('⏳ Syncing queue…');
-  try {
-    const r = await api('sync_due_tasks_to_queue');
-    toast(r.ok ? '✅ Queue synced' : '❌ ' + (r.error || 'Sync failed'));
-    await loadTasks();
-  } catch(e) { toast('❌ Error: ' + String(e)); }
-}
+// No "Sync" here on purpose (David, 2026-09-30). The old syncTasks() called
+// sync_due_tasks_to_queue — a bulk "queue every due task" the server removed,
+// since one tap could start several AI runs (credits) at once. The queue is
+// filled one task at a time with Run now; the top-bar ↻ refreshes the lists.
+// (RM-R-006 had turned it into a plain refresh; nothing ever called it, so it's gone.)
 
 async function runTaskNow(taskId) {
   dbg('Queue button clicked: taskId=' + taskId, '#44aaff');
@@ -1801,7 +2266,7 @@ async function loadLearnList() {
 }
 
 async function searchLearnings() {
-  const q = document.getElementById('learnSearch').value.trim();  if (!q) { loadLearnList(); return; }  const el = document.getElementById('learnList');  el.innerHTML = '<div class="spinner"></div>';  try {    const r = await apiSlow('search_learnings', { query: q, top_k: 10 });    if (!r.ok) { el.innerHTML = '<div class="empty">Search error</div>'; return; }    const txt = (r.result||'').trim();    if (!txt || txt.toLowerCase().includes('no result')) {      el.innerHTML = '<div class="empty">No learnings found for: ' + esc(q) + '</div>';      return;    }    el.innerHTML = renderLearnings(txt);  } catch(e) { el.innerHTML = '<div class="empty">Search error</div>'; }}function renderLearnings(txt) {
+  const q = document.getElementById('learnSearch').value.trim();  if (!q) { loadLearnList(); return; }  const el = document.getElementById('learnList');  el.innerHTML = '<div class="spinner"></div>';  try {    const r = await apiSlow('search_learnings', { query: q, n_results: 10 });  /* RM-R-004 (2026-09-29): was top_k — the tool takes n_results, so every search failed */    if (!r.ok) { el.innerHTML = '<div class="empty">Search error</div>'; return; }    const txt = (r.result||'').trim();    if (!txt || txt.toLowerCase().includes('no result')) {      el.innerHTML = '<div class="empty">No learnings found for: ' + esc(q) + '</div>';      return;    }    el.innerHTML = renderLearnings(txt);  } catch(e) { el.innerHTML = '<div class="empty">Search error</div>'; }}function renderLearnings(txt) {
   if (!txt || txt.trim().length < 10) return '<div class="empty">No learnings</div>';
   var blocks = txt.split(/\n(?=\[\d+\])/).map(function(b){ return b.trim(); }).filter(function(b){ return b.length > 4; });
   if (!blocks.length) return '<div class="empty">No learnings found</div>';

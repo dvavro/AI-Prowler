@@ -57,12 +57,10 @@ class TestLoginPersistenceClaimIsAccurate:
         assert "profile screen" in guide_content.lower()
 
 
-class TestExistingSpreadsheetModelContentUnchanged:
-    """Regression guard — the pre-existing Model A/B explanation must
-    survive this edit intact."""
-
-    def test_shared_master_still_documented(self, guide_content):
-        assert "Shared master" in guide_content
-
-    def test_per_user_tracking_still_documented(self, guide_content):
-        assert "Per-user tracking files" in guide_content or "per-user tracking" in guide_content.lower()
+# NOTE: TestExistingSpreadsheetModelContentUnchanged (Model A "shared master
+# spreadsheet" vs. Model B "per-user tracking files") removed 2026-09-14.
+# That dual-mode spreadsheet-routing explanation was retired by the Job
+# Board Architecture Spec's SQLite migration — there's now one shared
+# database always, with no Model A/B distinction left to document. See
+# the spec's author's note and §8.3 ("per-user .xlsx routing... is a
+# non-issue... nothing currently depends on it").

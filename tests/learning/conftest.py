@@ -2,7 +2,7 @@
 Conftest for tests/learning/ — re-exports the shared learning fixtures.
 
 The fixtures themselves live in tests/learning_fixtures.py so that sibling
-test directories (tests/mcp/, tests/gui/) can also import them. Pytest
+test directories (tests/mcp_tests/, tests/gui/) can also import them. Pytest
 auto-discovers conftest.py files by walking UP the directory tree, not
 across siblings — that's why we need this import-based sharing pattern
 rather than just defining the fixtures here.

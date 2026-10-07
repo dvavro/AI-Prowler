@@ -66,7 +66,7 @@ by hand.
 
 ## 3. Drop the new tests into the test tree
 
-- [ ] Copy `test_write_tools.py` to `tests/mcp/test_write_tools.py`
+- [ ] Copy `test_write_tools.py` to `tests/mcp_tests/test_write_tools.py`
 - [ ] The file is auto-discovered by pytest under the existing rules
       (no harness changes needed — verified by inspection of conftest.py).
 
@@ -74,7 +74,7 @@ by hand.
 
 - [ ] Run all pre-existing tests to confirm no regressions:
       ```
-      py -m pytest tests --ignore=tests/mcp/test_write_tools.py
+      py -m pytest tests --ignore=tests/mcp_tests/test_write_tools.py
       ```
       Expected: **212 passed** (same as v6.0.2 baseline). If anything fails,
       something in the patches affected existing behaviour — investigate
@@ -84,7 +84,7 @@ by hand.
 
 - [ ] Run just the new tests, verbose:
       ```
-      py -m pytest tests/mcp/test_write_tools.py -v
+      py -m pytest tests/mcp_tests/test_write_tools.py -v
       ```
       Expected: **75 passed**. Test IDs run from
       `test_C_MCP_WRITE_01_blocklist_windows_dir` through

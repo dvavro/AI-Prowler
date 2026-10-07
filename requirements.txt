@@ -88,6 +88,9 @@ pytesseract==0.3.13
 pypdfium2==5.12.1
 pillow==12.3.0
 pillow-heif==1.5.0
+# Setup Center QR codes (setup_wizard.py) — pure Python, no dependencies.
+# Optional at runtime: without it the QR is simply not drawn (Copy / Email still work).
+segno==1.6.6
 
 # ── SMS notifications (Action Tool: send_sms) ─────────────────────────────────
 # twilio: official Twilio SDK — sends SMS for on-my-way texts, appointment

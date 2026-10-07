@@ -100,23 +100,25 @@
 ; UNINSTALL BEHAVIOR:
 ;   - Attempts to run Python and Ollama uninstallers if present
 ;   - Attempts to delete Python, Ollama, and Ollama data folders
-;   - Prompts user whether to delete the RAG database folder,
-;     index tracking files, AND the Job Tracker spreadsheet together
-;     (all three are user data — one combined prompt, default NO)
+;   - Prompts user whether to delete the RAG database folder and
+;     index tracking files together (both are user data — one
+;     combined prompt, default NO)
 ;
 ; SMALL BUSINESS JOB TRACKER:
-;   - Bundles AI-Prowler_Job_Tracker.xlsx (rename from Cronin_cleaning_tracking.xlsx
-;     before compile — generic name suitable for any SMB customer)
-;   - Deployed to: %USERPROFILE%\Documents\AI-Prowler\AI-Prowler_Job_Tracker.xlsx
-;     (Documents, not Program Files — user needs write access; Excel cannot
-;      save back to UAC-protected Program Files folders)
-;   - onlyifdoesntexist flag: reinstalls NEVER overwrite the user's live data
-;   - Installer writes default_spreadsheet_path into ~/.ai-prowler/config.json
-;     so the Small Business tab in the GUI shows the path pre-filled
-;   - 8 interconnected tabs: Customers, Jobs_Schedule, Route_Planner, Quotes,
-;     Invoices, QB_Daily_Export, Services_Pricing, AI-Prowler_Commands
-;   - Column headers are what update_job_spreadsheet() MCP tool matches on —
-;     do not rename headers or the tool will fail to find rows
+;   - No Excel spreadsheet is bundled or installed (AI-Prowler_Job_Tracker.xlsx
+;     and migrate_spreadsheet.py are gone). The job tracker's data lives in a
+;     SQLite database (ai_prowler_jobs.db) that the app creates itself the
+;     first time it runs — never shipped by this installer.
+;   - Installer still writes default_spreadsheet_path into
+;     ~/.ai-prowler/config.json, anchored at %USERPROFILE%\Documents\AI-Prowler.
+;     The .xlsx file it names is never created or opened; only its FOLDER is
+;     used: the default save location for Export to Excel, and the fallback
+;     folder for Restore Job Database on a fresh install. Keep the key.
+;   - The database's tables: Customers, Jobs_Schedule, Quotes, Invoices,
+;     TimeLog, Route_Planner, Settings, Services_Pricing (the default Settings
+;     rows, e.g. Working Days, are added by the app the first time the Settings
+;     sheet is opened or saved — not by the installer; until then every reader
+;     uses the same default)
 ;
 ; CLAUDE DESKTOP:
 ;   - Checks for an existing Claude_* package folder in %LOCALAPPDATA%\Packages
@@ -134,8 +136,9 @@
 ;     so it is ready as soon as the user installs Claude Desktop.
 ;   - Kills Claude Desktop before writing so changes take effect on
 ;     next launch  -  user does NOT need to edit any config files.
-;   - claude_desktop_config_example.json is kept in {app} as a
-;     reference / fallback for manual repair if ever needed.
+;   - (2026-10-02: claude_desktop_config_example.json is no longer shipped —
+;     it was a manual-repair reference no user could realistically use; the
+;     installer writes the real config itself, above.)
 ;
 ; NEW FILES IN v8.0.0:
 ;   custom_tasks_manager.py — Analysis task CRUD and scheduling engine
@@ -227,6 +230,17 @@ UsedUserAreasWarning=no
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+[InstallDelete]
+; 2026-10-02: files earlier versions put in the PROGRAM folder that are no
+; longer shipped — removed on upgrade so an older install doesn't keep stale
+; copies. Program folder ({app}) only: nothing under Documents (user data) is
+; ever touched here. The job data lives in ai_prowler_jobs.db, not these.
+Type: files; Name: "{app}\claude_desktop_config_example.json"
+Type: files; Name: "{app}\claude_desktop_config_snippet.json"
+Type: files; Name: "{app}\AI-Prowler_Job_Tracker.xlsx"
+Type: files; Name: "{app}\migrate_spreadsheet.py"
+Type: files; Name: "{app}\README.md"
+
 [Files]
 ; --- Application files ---
 ; VERSION is read at compile time above (line 166) to stamp AppVersion in
@@ -241,40 +255,58 @@ Source: "VERSION"; DestDir: "{app}"; Flags: ignoreversion
 ; ChromaDB path / HF cache). Same class of bug as VERSION above:
 ; referenced by rag_gui.py but never listed here, so it would have failed
 ; the same way the moment anything called it unconditionally.
-Source: "migrate_spreadsheet.py"; DestDir: "{app}"; Flags: ignoreversion
-; AI-Prowler_Job_Tracker.xlsx — Program Files reference copy, NOT the user's
-; live data copy (that one is deployed separately below to
-; Documents\AI-Prowler with onlyifdoesntexist — see the "Small Business Job
-; Tracker template spreadsheet" block further down). migrate_spreadsheet.py's
-; _get_template_path() reads this exact path (_APP_DIR / the .xlsx filename,
-; which resolves to {app} once frozen) as the schema "source of truth" that a
-; user's spreadsheet is diffed against and migrated toward. Before this line
-; existed there was NO [Files] entry that ever placed a copy here at all, so
-; on every real install (fresh or upgrade) get_migration_plan() /
-; check_and_migrate() would find nothing at {app}\AI-Prowler_Job_Tracker.xlsx
-; and the entire migration feature would fail with "Template not found" —
-; found 2026-08-26 auditing the v9.1.0 migration feature end-to-end.
-; ignoreversion (not onlyifdoesntexist): this copy must always reflect the
-; CURRENT release's schema, so every reinstall/upgrade should overwrite it —
-; unlike the user's own working copy, it is not live data.
-Source: "AI-Prowler_Job_Tracker.xlsx"; DestDir: "{app}"; Flags: ignoreversion
+; migrate_spreadsheet.py / AI-Prowler_Job_Tracker.xlsx (both the {app}
+; reference copy and the Documents\AI-Prowler user-data copy) are
+; deliberately NOT installed here as of the SQLite job-tracker migration —
+; no production install ever had the spreadsheet-based job tracker
+; deployed, so there is no live user data or in-place-migration path
+; this ever needs to support. The live job-tracker store is the SQLite
+; database ai_prowler_jobs.db, created at runtime, not shipped by the
+; installer. See InstallJobTrackerSpreadsheet further down for the
+; (still-needed) job-database-folder + config.json bootstrap step this
+; used to share space with.
 Source: "startup_log.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "rag_gui.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "rag_preprocessor.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "ai_prowler_mcp.py"; DestDir: "{app}"; Flags: ignoreversion
+; Added 2026-09-19: the SQLite-backed Job Board data-access layer.
+; ai_prowler_mcp.py imports every one of these for the job/customer/
+; invoice/quote/route MCP tools (db_access.py connect/transaction
+; primitives, db_schema.py table definitions + migrations, plus the
+; read/write/route/backup/export op modules) — a fresh install without
+; them fails the moment any such tool is called. Same missing-from-
+; [Files] bug class already documented elsewhere in this script for
+; other modules, just never caught for this one because no fresh
+; install had been run against a version that needed the DB layer
+; until this was found. See scripts/release.py's MANIFEST_FILES for
+; the matching auto-update-manifest fix (this list and that one must
+; stay in sync — see that file's own comment).
+Source: "db_access.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: "db_schema.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: "db_read_ops.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: "db_write_ops.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: "db_route_ops.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: "db_backup_ops.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: "db_export_ops.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "scope_resolver.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "scope_lookup.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "file_watchdog.py"; DestDir: "{app}"; Flags: ignoreversion
-Source: "claude_desktop_config_example.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "RAG_RUN.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "requirements.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "create_shortcut.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "rag_icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "COMPLETE_USER_GUIDE.md"; DestDir: "{app}"; Flags: ignoreversion
-Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion
+; (2026-10-02: README.md is no longer installed — it's the GitHub project page,
+; nothing in AI-Prowler reads it; the in-app help is COMPLETE_USER_GUIDE.md.)
 Source: "subscription_instructions.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "mcp_diagnostics.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: "mcp_tool_catalog.py"; DestDir: "{app}"; Flags: ignoreversion
+; tool_config_store.py (2026-10-03): the safe-save module behind Settings ->
+; MCP Tool Configuration -> Save. rag_gui.py refuses to save without it, so it
+; must ship with every install (it was only in update_install*.bat).
+Source: "tool_config_store.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "self_learning.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: "setup_wizard.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "subscription_client.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: "mobile_activator.py"; DestDir: "{app}"; Flags: ignoreversion
 ; cloudflared_service_helper.py — standalone elevated helper launched by
@@ -370,21 +402,35 @@ Source: "task_queue_automation.py"; DestDir: "{app}"; Flags: ignoreversion
 Source: ".claude\settings.json"; DestDir: "{%USERPROFILE}\.ai-prowler\.claude"; Flags: ignoreversion
 Source: ".claude\hooks\log_tool_call.py"; DestDir: "{%USERPROFILE}\.ai-prowler\.claude\hooks"; Flags: ignoreversion
 Source: ".claude\skills\ai-prowler-tasks\SKILL.md"; DestDir: "{%USERPROFILE}\.ai-prowler\.claude\skills\ai-prowler-tasks"; Flags: ignoreversion
+
+; --- AI Routing: per-user Claude connection (Business Server mode) ---
+; cli_signin_relay.py : Phone sign-in relay. Runs `claude setup-token` in a hidden
+;                       console for one server user, hands the sign-in link to the
+;                       Jobs app, and captures the resulting token once the user
+;                       pastes back the code Claude shows. Imported by
+;                       ai_prowler_mcp.py (start_cli_signin / submit_cli_signin_code
+;                       / cancel_cli_signin) the first time a user taps AI Route
+;                       without a saved token.
+; console_inject.py   : Tiny helper cli_signin_relay.py launches as its own process
+;                       to type the pasted code into that hidden console
+;                       (AttachConsole + WriteConsoleInput, Windows only).
+;                       Never imported — always run as a script by path, so it MUST
+;                       sit next to cli_signin_relay.py in {app}.
+; Both are needed together: without console_inject.py the sign-in link appears but
+; the pasted code can never be delivered.
+Source: "cli_signin_relay.py"; DestDir: "{app}"; Flags: ignoreversion
+Source: "console_inject.py"; DestDir: "{app}"; Flags: ignoreversion
 ; --- Full Python installer bundled into {app} so Exec() can find it ---
 Source: "python-3.11.8-amd64.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; NOTE: Ollama is downloaded from the internet at install time, not bundled here
 
-; --- Small Business Job Tracker template spreadsheet ---
-; Deployed to the user's Documents\AI-Prowler folder (NOT Program Files).
-; onlyifdoesntexist: never overwrites the user's live working copy on reinstall.
-; uninsneveruninstall: the uninstaller does NOT auto-delete it — we ask the user
-;   in CurUninstallStepChanged (same prompt as the RAG database), because this
-;   is the user's live business data and silent deletion would be catastrophic.
-; The source filename is the generic product name; the original
-;   Cronin_cleaning_tracking.xlsx is renamed at compile time by placing a
-;   copy named AI-Prowler_Job_Tracker.xlsx alongside this .iss file.
-Source: "AI-Prowler_Job_Tracker.xlsx"; DestDir: "{%USERPROFILE}\Documents\AI-Prowler"; \
-  Flags: onlyifdoesntexist uninsneveruninstall
+; --- Small Business Job Tracker — no template spreadsheet shipped ---
+; No production install ever had AI-Prowler_Job_Tracker.xlsx deployed as
+; live data, so there is nothing to preserve in place and no [Files] entry
+; is needed here. The live job-tracker store is the SQLite database
+; ai_prowler_jobs.db, created by the app itself at runtime (not shipped),
+; anchored to this same Documents\AI-Prowler folder by the
+; default_spreadsheet_path config key — see InstallJobTrackerSpreadsheet.
 
 ; --- User Guide — copied to Documents\AI-Prowler so it can be indexed ---
 ; ignoreversion: always update the guide on reinstall (it's our content, not user data).
@@ -481,15 +527,18 @@ const
   OLLAMA_DATA_FOLDER = '{%USERPROFILE}\.ollama';
   RAG_DB_FOLDER      = '{%USERPROFILE}\AI-Prowler\rag_database';
 
-  // Job Tracker spreadsheet — deployed to the user's Documents folder.
-  // Using Documents (not Program Files) because:
-  //   1. The user needs write access to edit their own job data
-  //   2. Program Files is UAC-protected — Excel cannot save back to it
+  // Job database folder anchor — Documents\AI-Prowler.
+  // No spreadsheet template is bundled or deployed under this name; no
+  // production install ever had one. This path still matters though:
+  // default_spreadsheet_path (below, written into ~/.ai-prowler/config.json)
+  // is a legacy key name that's still load-bearing — the app reads it at
+  // runtime to anchor the job database's (ai_prowler_jobs.db) folder, so
+  // the Small Business tab's "Default database folder" field shows
+  // pre-filled without the user having to browse for it. Using Documents
+  // (not Program Files) because:
+  //   1. The user needs write access for exports, backups, and the database
+  //   2. Program Files is UAC-protected
   //   3. Documents is the natural home for business data files
-  // The installer writes this path into ~/.ai-prowler/config.json as
-  // default_spreadsheet_path so the Small Business tab shows it pre-filled.
-  // The installer-side filename is generic (AI-Prowler_Job_Tracker.xlsx) so
-  // it makes sense for any small business, not just a specific customer.
   SPREADSHEET_DEST_FOLDER = '{%USERPROFILE}\Documents\AI-Prowler';
   SPREADSHEET_DEST_FILE   = '{%USERPROFILE}\Documents\AI-Prowler\AI-Prowler_Job_Tracker.xlsx';
   AI_PROWLER_CFG_FILE     = '{%USERPROFILE}\.ai-prowler\config.json';
@@ -776,20 +825,8 @@ begin
   GInstallMode := 'personal';
 end;
 
-// ============================================================
-// HELPER: JsonEscapePath
-// Doubles every backslash in a Windows path so it is valid inside
-// a JSON string literal.  e.g.  C:\foo\bar  ->  C:\\foo\\bar
-// Used when writing claude_desktop_config_snippet.json at install time.
-// ============================================================
-function JsonEscapePath(const Path: String): String;
-var
-  S: String;
-begin
-  S := Path;
-  StringChange(S, '\', '\\');
-  Result := S;
-end;
+// (2026-10-02: HELPER JsonEscapePath removed — its only use was writing
+// claude_desktop_config_snippet.json, which the installer no longer does.)
 
 // ============================================================
 // HELPER: JsonRemoveKey
@@ -1047,22 +1084,30 @@ end;
 // ============================================================
 
 // ============================================================
-// JOB TRACKER SPREADSHEET — Post-deploy configuration
+// JOB DATABASE FOLDER — Post-deploy configuration
 //
-// The [Files] section copies AI-Prowler_Job_Tracker.xlsx to:
-//     Documents\AI-Prowler\AI-Prowler_Job_Tracker.xlsx
-// with the onlyifdoesntexist flag, so reinstalls never overwrite
-// the user's live working data.
-//
-// This procedure handles everything the [Files] section cannot:
-//   1. Ensures the destination folder exists (ForceDirectories).
-//   2. Verifies the file actually landed on disk after the copy.
-//   3. Writes default_spreadsheet_path into ~/.ai-prowler/config.json
-//      so the Small Business tab shows the path pre-filled without
-//      the user having to browse for it manually.
-//   4. If the config file already contains a different path (user has
+// The job tracker's live data store is a SQLite database
+// (ai_prowler_jobs.db), not a shipped spreadsheet — no template
+// file is bundled or copied by this installer anymore. This
+// procedure still does real, necessary work:
+//   1. Ensures the Documents\AI-Prowler destination folder exists
+//      (ForceDirectories) — also home to COMPLETE_USER_GUIDE.md
+//      and, once the app runs, the job database itself.
+//   2. Writes default_spreadsheet_path into ~/.ai-prowler/config.json
+//      — this key name is legacy but still load-bearing: the app
+//      reads it at runtime to anchor the job database's folder
+//      (see _resolve_job_db_path() in ai_prowler_mcp.py), so the
+//      Small Business tab's "Default database folder" field shows
+//      pre-filled without the user having to browse for it.
+//   3. If the config file already contains a different path (user has
 //      customised it), the existing path is preserved — we only write
 //      when the key is absent or empty.
+//   4. This is also where the rest of a fresh install's config.json
+//      gets bootstrapped — edition, mode, telemetry_enabled,
+//      debug_logging — and where an existing config gets missing
+//      keys merged in on reinstall, so removing this procedure
+//      entirely was never an option even though the spreadsheet
+//      file deployment it used to also handle is gone.
 //   5. All steps are logged to install_log.txt.
 // ============================================================
 procedure InstallJobTrackerSpreadsheet;
@@ -1072,7 +1117,7 @@ var
   ExistingJsonAnsi: AnsiString;   // LoadStringFromFile requires AnsiString
   EditionStr, ModeStr: String;    // set from GInstallMode wizard selection
 begin
-  AppendInstallLog('[Spreadsheet] === Job Tracker spreadsheet setup ===');
+  AppendInstallLog('[JobDB] === Job database folder setup ===');
 
   DestFolder := ExpandConstant(SPREADSHEET_DEST_FOLDER);
   DestFile   := ExpandConstant(SPREADSHEET_DEST_FILE);
@@ -1080,46 +1125,28 @@ begin
   CfgDir     := ExpandConstant('{%USERPROFILE}\.ai-prowler');
 
   // ── Step 1: Ensure destination folder exists ─────────────────────────────
-  // Inno's [Files] section creates the folder automatically, but ForceDirectories
-  // here guarantees it even if the file copy step was somehow skipped.
+  // Inno's [Files] section already creates this folder for COMPLETE_USER_GUIDE.md,
+  // but ForceDirectories here guarantees it exists regardless of file-copy order.
   if not DirExists(DestFolder) then
   begin
     if ForceDirectories(DestFolder) then
-      AppendInstallLog('[Spreadsheet] Created destination folder: ' + DestFolder)
+      AppendInstallLog('[JobDB] Created destination folder: ' + DestFolder)
     else
-      AppendInstallLog('[Spreadsheet] WARNING: Could not create folder: ' + DestFolder);
+      AppendInstallLog('[JobDB] WARNING: Could not create folder: ' + DestFolder);
   end
   else
-    AppendInstallLog('[Spreadsheet] Destination folder already exists: ' + DestFolder);
+    AppendInstallLog('[JobDB] Destination folder already exists: ' + DestFolder);
 
-  // ── Step 2: Verify the file landed on disk ────────────────────────────────
-  if FileExists(DestFile) then
-    AppendInstallLog('[Spreadsheet] File confirmed on disk: ' + DestFile)
-  else
-  begin
-    // onlyifdoesntexist means a reinstall skips the copy — that is correct.
-    // But if this is a FIRST install and the file is missing, something went wrong.
-    // Log it clearly so it is diagnosable from install_log.txt.
-    AppendInstallLog('[Spreadsheet] WARNING: File not found after install step.');
-    AppendInstallLog('[Spreadsheet]   Expected: ' + DestFile);
-    AppendInstallLog('[Spreadsheet]   Possible causes:');
-    AppendInstallLog('[Spreadsheet]     1. AI-Prowler_Job_Tracker.xlsx missing from installer package');
-    AppendInstallLog('[Spreadsheet]     2. Destination folder creation failed above');
-    AppendInstallLog('[Spreadsheet]   The Small Business tab Browse button can be used to locate it manually.');
-    // Non-fatal — continue and write the config path anyway so the user
-    // at least sees where the file should be when they open the tab.
-  end;
-
-  // ── Step 3: Write default_spreadsheet_path to ~/.ai-prowler/config.json ──
+  // ── Step 2: Write default_spreadsheet_path to ~/.ai-prowler/config.json ──
   // Ensure the config directory exists.
   if not DirExists(CfgDir) then
   begin
     if ForceDirectories(CfgDir) then
-      AppendInstallLog('[Spreadsheet] Created config directory: ' + CfgDir)
+      AppendInstallLog('[JobDB] Created config directory: ' + CfgDir)
     else
     begin
-      AppendInstallLog('[Spreadsheet] WARNING: Could not create config directory: ' + CfgDir);
-      AppendInstallLog('[Spreadsheet]   Skipping config write.');
+      AppendInstallLog('[JobDB] WARNING: Could not create config directory: ' + CfgDir);
+      AppendInstallLog('[JobDB]   Skipping config write.');
       Exit;
     end;
   end;
@@ -1131,16 +1158,16 @@ begin
     if LoadStringFromFile(CfgFile, ExistingJsonAnsi) then
     begin
       ExistingJson := ExistingJsonAnsi;   // widen AnsiString → String safely
-      AppendInstallLog('[Spreadsheet] Loaded existing config: ' + CfgFile)
+      AppendInstallLog('[JobDB] Loaded existing config: ' + CfgFile)
     end
     else
     begin
-      AppendInstallLog('[Spreadsheet] WARNING: Could not read existing config — will create fresh.');
+      AppendInstallLog('[JobDB] WARNING: Could not read existing config — will create fresh.');
       ExistingJson := '';
     end;
   end
   else
-    AppendInstallLog('[Spreadsheet] No existing config — will create.');
+    AppendInstallLog('[JobDB] No existing config — will create.');
 
   // Do NOT exit early if default_spreadsheet_path already exists.
   // The new merge logic below handles that key — AND also writes edition,
@@ -1177,13 +1204,14 @@ begin
   if ExistingJson = '' then
   begin
     // Fresh install — write the complete starter config.
-    NewJson :=
-      '{' + #13#10 +
-      '  "edition": "' + EditionStr + '",' + #13#10 +
-      '  "mode": "' + ModeStr + '",' + #13#10 +
-      '  "telemetry_enabled": true,' + #13#10 +
-      '  "default_spreadsheet_path": "' + ExistingPath + '"' + #13#10 +
-      '}';
+      NewJson :=
+        '{' + #13#10 +
+        '  "edition": "' + EditionStr + '",' + #13#10 +
+        '  "mode": "' + ModeStr + '",' + #13#10 +
+        '  "telemetry_enabled": true,' + #13#10 +
+        '  "debug_logging": false,' + #13#10 +
+        '  "default_spreadsheet_path": "' + ExistingPath + '"' + #13#10 +
+        '}';
     AppendInstallLog('[Config] Fresh install — writing edition=' + EditionStr +
                      ' mode=' + ModeStr);
   end
@@ -1246,9 +1274,13 @@ begin
       AppendInstallLog('[Config] Added missing mode=' + ModeStr);
     end;
 
-    // Add telemetry_enabled if missing
-    if Pos('"telemetry_enabled"', ExistingJson) = 0 then
-      NewJson := NewJson + ',' + #13#10 + '  "telemetry_enabled": true';
+      // Add telemetry_enabled if missing
+      if Pos('"telemetry_enabled"', ExistingJson) = 0 then
+        NewJson := NewJson + ',' + #13#10 + '  "telemetry_enabled": true';
+
+      // Add debug_logging if missing — always false in release builds
+      if Pos('"debug_logging"', ExistingJson) = 0 then
+        NewJson := NewJson + ',' + #13#10 + '  "debug_logging": false';
 
     // Add default_spreadsheet_path if missing or empty
     if (Pos('"default_spreadsheet_path"', ExistingJson) = 0) or
@@ -1262,14 +1294,14 @@ begin
 
   if SaveStringToFile(CfgFile, NewJson, False) then
   begin
-    AppendInstallLog('[Spreadsheet] Wrote default_spreadsheet_path to config:');
-    AppendInstallLog('[Spreadsheet]   File:  ' + CfgFile);
-    AppendInstallLog('[Spreadsheet]   Path:  ' + DestFile);
+    AppendInstallLog('[JobDB] Wrote default_spreadsheet_path to config:');
+    AppendInstallLog('[JobDB]   File:  ' + CfgFile);
+    AppendInstallLog('[JobDB]   Path:  ' + DestFile);
   end
   else
-    AppendInstallLog('[Spreadsheet] WARNING: Could not write config file: ' + CfgFile);
+    AppendInstallLog('[JobDB] WARNING: Could not write config file: ' + CfgFile);
 
-  AppendInstallLog('[Spreadsheet] === Job Tracker setup complete ===');
+  AppendInstallLog('[JobDB] === Job Tracker setup complete ===');
 end;
 
 procedure SeedUserGuideTracking;
@@ -1600,7 +1632,6 @@ procedure CurStepChanged(CurStep: TSetupStep);
 var
   PyFolder, ModelPath, TessSetup, TessFolder, TessTask, TessBat, RoamingPython, VCRedistPs: String;
   CfgFile: String;
-  McpPythonPath, McpScriptPath, McpConfigJson, McpConfigFile: String;
   PsFile, PsContents: String;
   WaitSeconds, TessElapsed, TessResultCode: Integer;
   ClaudeCodeCheckResult, ClaudeCodeInstallResult: Integer;
@@ -2224,41 +2255,10 @@ begin
       // Spreadsheet tools use openpyxl (installed via requirements.txt).
       // ----------------------------------------------------------
 
-      // ----------------------------------------------------------
-      // WRITE CLAUDE DESKTOP CONFIG SNIPPET
-      // Writes claude_desktop_config_snippet.json to {app} with the
-      // exact python.exe path and script path for THIS machine.
-      // The user copies the mcpServers block into:
-      //   %APPDATA%\Claude\claude_desktop_config.json
-      // and restarts Claude Desktop once to enable MCP tools.
-      // ----------------------------------------------------------
-      McpPythonPath := JsonEscapePath(PyFolder + '\python.exe');
-      McpScriptPath := JsonEscapePath(ExpandConstant('{app}') + '\ai_prowler_mcp.py');
-
-      McpConfigJson :=
-        '{' + #13#10 +
-        '  "_readme": "Copy the mcpServers block below into your Claude Desktop config file.",' + #13#10 +
-        '  "_config_location": "%APPDATA%\\\\Claude\\\\claude_desktop_config.json",' + #13#10 +
-        '  "_step1": "Open the config file above (create it if it does not exist).",' + #13#10 +
-        '  "_step2": "Add the AI-Prowler entry inside the mcpServers object.",' + #13#10 +
-        '  "_step3": "Save the file and restart Claude Desktop.",' + #13#10 +
-        '  "mcpServers": {' + #13#10 +
-        '    "AI-Prowler": {' + #13#10 +
-        '      "command": "' + McpPythonPath + '",' + #13#10 +
-        '      "args": ["' + McpScriptPath + '"],' + #13#10 +
-        '      "env": {' + #13#10 +
-        '        "PYTHONNOUSERSITE": "1",' + #13#10 +
-        '        "PYTHONIOENCODING": "utf-8"' + #13#10 +
-        '      }' + #13#10 +
-        '    }' + #13#10 +
-        '  }' + #13#10 +
-        '}';
-
-      McpConfigFile := ExpandConstant('{app}') + '\claude_desktop_config_snippet.json';
-      SaveStringToFile(McpConfigFile, McpConfigJson, False);
-      AppendInstallLog('[MCP] Wrote Claude Desktop config snippet to: ' + McpConfigFile);
-      AppendInstallLog('[MCP] Python path in snippet: ' + PyFolder + '\python.exe');
-      AppendInstallLog('[MCP] Script path in snippet: ' + ExpandConstant('{app}') + '\ai_prowler_mcp.py');
+      // (2026-10-02: the step that wrote claude_desktop_config_snippet.json —
+      // a copy-and-paste repair aid nobody could realistically use — was
+      // removed. The AUTO-CONFIGURE step below writes the real Claude Desktop
+      // config itself, and [InstallDelete] removes an old snippet on upgrade.)
 
       // ----------------------------------------------------------
       // AUTO-CONFIGURE CLAUDE DESKTOP  (progress 77)
@@ -3065,13 +3065,15 @@ begin
     AppendInstallLog('[Ollama] Model auto-pull disabled. User installs models manually.');
 
     // ----------------------------------------------------------
-    // JOB TRACKER SPREADSHEET  (progress 97)
-    // Ensures the bundled spreadsheet landed in Documents\AI-Prowler
-    // and writes its path into ~/.ai-prowler/config.json so the
-    // Small Business tab shows it pre-filled without user action.
-    // onlyifdoesntexist in [Files] protects live data on reinstall.
+    // JOB DATABASE FOLDER  (progress 97)
+    // No spreadsheet template is deployed — the job tracker's live
+    // store is a SQLite database created by the app at runtime. This
+    // step ensures the Documents\AI-Prowler folder exists and writes
+    // default_spreadsheet_path into ~/.ai-prowler/config.json so the
+    // Small Business tab's "Default database folder" field shows
+    // pre-filled without user action.
     // ----------------------------------------------------------
-    SetProgress(97, 'Setting up Job Tracker spreadsheet...');
+    SetProgress(97, 'Setting up job database folder...');
     InstallJobTrackerSpreadsheet;
 
     // ----------------------------------------------------------
@@ -3549,9 +3551,8 @@ begin
     // after reinstall the app knows the database is already up to date
     // and does not re-index everything from scratch.
     // If they delete the database, those files are meaningless and go too.
-    // The Job Tracker spreadsheet lives in the same Documents\AI-Prowler
-    // folder — we ask about it in the same prompt so the user can make
-    // one informed decision about all their AI-Prowler data at once.
+    // (No spreadsheet to ask about here — nothing is ever deployed under
+    // that name; see [Files] section and InstallJobTrackerSpreadsheet.)
     //
     // SILENT MODE GUARD: When Inno runs our uninstaller automatically
     // during an upgrade it passes /SILENT, which suppresses MsgBox.
@@ -3567,17 +3568,15 @@ begin
       'Delete AI-Prowler data files?' + #13#10 +
       '' + #13#10 +
       'This includes:' + #13#10 +
-      '  • RAG vector database (re-indexing required after reinstall)' + #13#10 +
-      '  • Index tracking files (.rag_file_tracking.json, etc.)' + #13#10 +
-      '  • Self-Learning knowledge base (all recorded learnings)' + #13#10 +
-      '  • Job Tracker spreadsheet (AI-Prowler_Job_Tracker.xlsx)' + #13#10 +
+      '  - RAG vector database (re-indexing required after reinstall)' + #13#10 +
+      '  - Index tracking files (.rag_file_tracking.json, etc.)' + #13#10 +
+      '  - Self-Learning knowledge base (all recorded learnings)' + #13#10 +
       '' + #13#10 +
-      'YES - delete all data files (clean slate — your data will be lost)' + #13#10 +
-      'NO  - keep all data files (safe for reinstall — your data is preserved)' + #13#10 +
+      'YES - delete all data files (clean slate - your data will be lost)' + #13#10 +
+      'NO  - keep all data files (safe for reinstall - your data is preserved)' + #13#10 +
       '' + #13#10 +
       'RAG database:       ' + ExpandConstant(RAG_DB_FOLDER) + #13#10 +
-      'Learnings folder:   ' + ExpandConstant(LEARNINGS_FOLDER) + #13#10 +
-      'Job Tracker folder: ' + ExpandConstant(SPREADSHEET_DEST_FOLDER),
+      'Learnings folder:   ' + ExpandConstant(LEARNINGS_FOLDER),
       mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES;
 
     if DeleteRagDB then
@@ -3620,23 +3619,13 @@ begin
       else
         AppendUninstallLog('[Learnings] Learnings folder not found: ' + Folder);
 
-      // ── Job Tracker spreadsheet ──────────────────────────────────────────
-      // uninsneveruninstall in [Files] means Inno will NOT auto-delete the
-      // spreadsheet.  We handle it explicitly here so deletion is tied to
-      // the user's informed YES choice above.
-      // Delete the file first, then remove the folder only if it is now empty
-      // (the user may have added other files there we should not touch).
-      DeleteFileIfExists(ExpandConstant(SPREADSHEET_DEST_FILE));
-      AppendUninstallLog('[Spreadsheet] Deleted: ' + ExpandConstant(SPREADSHEET_DEST_FILE));
-      // Only remove the folder if empty — RemoveDir fails silently if non-empty.
-      if DirExists(ExpandConstant(SPREADSHEET_DEST_FOLDER)) then
-      begin
-        if RemoveDir(ExpandConstant(SPREADSHEET_DEST_FOLDER)) then
-          AppendUninstallLog('[Spreadsheet] Removed empty folder: ' + ExpandConstant(SPREADSHEET_DEST_FOLDER))
-        else
-          AppendUninstallLog('[Spreadsheet] Folder not empty — left in place: ' + ExpandConstant(SPREADSHEET_DEST_FOLDER));
-      end;
-
+      // Job database folder anchor — no spreadsheet file to delete here.
+      // No production install ever had AI-Prowler_Job_Tracker.xlsx deployed
+      // (see [Files] section), so there is nothing on disk under this name
+      // to clean up. default_spreadsheet_path in config.json is still a
+      // real, load-bearing key though — it anchors the job database's
+      // folder at runtime — so it's still cleared below as part of a
+      // clean-slate delete-all-data choice.
       // Remove default_spreadsheet_path from ~/.ai-prowler/config.json
       // We do this with a PowerShell one-liner to avoid hand-rolling JSON
       // manipulation in Pascal for the uninstall path.
@@ -3654,7 +3643,7 @@ begin
         '    catch { Write-Host "Could not update config: $_" }' + #13#10 +
         '} else { Write-Host "Config not found — nothing to update." }' + #13#10;
       SaveStringToFile(PsFileXl, PsContentsXl, False);
-      ExecWithLogging(False, '[Spreadsheet] RemoveCfgPath', 'powershell.exe',
+      ExecWithLogging(False, '[JobDB] RemoveCfgPath', 'powershell.exe',
         '-NoProfile -ExecutionPolicy Bypass -File "' + PsFileXl + '"');
       DeleteFileIfExists(PsFileXl);
     end
@@ -3666,7 +3655,6 @@ begin
       AppendUninstallLog('[RAG]   Kept: .rag_email_index.json');
       AppendUninstallLog('[RAG]   Kept: .rag_auto_update_dirs.json');
       AppendUninstallLog('[Learnings]   Kept: ' + ExpandConstant(LEARNINGS_FOLDER));
-      AppendUninstallLog('[Spreadsheet]   Kept: ' + ExpandConstant(SPREADSHEET_DEST_FILE));
     end;
 
     // ----------------------------------------------------------------
@@ -3729,12 +3717,8 @@ begin
     else
       AppendUninstallLog('[Summary] Startup task (' + STARTUP_TASK_NAME + '): STILL PRESENT - remove manually via Task Scheduler');
 
-    // Spreadsheet summary
-    if FileExists(ExpandConstant(SPREADSHEET_DEST_FILE)) then
-      AppendUninstallLog('[Summary] Job Tracker spreadsheet: KEPT (user chose NO)')
-    else
-      AppendUninstallLog('[Summary] Job Tracker spreadsheet: REMOVED or NOT FOUND');
-
+    // (No spreadsheet summary — nothing is ever deployed under that name;
+    // see [Files] section and InstallJobTrackerSpreadsheet.)
     AppendUninstallLog('=== UNINSTALL FINISHED ===');
   end
   else if CurUninstallStep = usPostUninstall then

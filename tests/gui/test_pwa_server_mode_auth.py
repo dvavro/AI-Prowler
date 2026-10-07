@@ -61,10 +61,10 @@ class TestNoLeftoverSessionStorage:
 
 class TestServerModeLoginCallsRealEndpoint:
     def test_doauth_calls_pwa_login_for_server_mode(self, source):
-        assert "/pwa-login" in source
-        idx = source.index("/pwa-login")
-        nearby = source[idx - 200:idx + 400]
-        assert "state.serverMode" in nearby
+        idx = source.index("async function doAuth()")
+        body = source[idx:source.index("\nfunction signOut()", idx)]
+        call = body.index("'/pwa-login'")
+        assert "if (state.serverMode)" in body[:call]
 
     def test_access_token_stored_separately_from_bearer_token(self, source):
         """The pre-existing bug: server mode's login compared the entered
@@ -76,42 +76,59 @@ class TestServerModeLoginCallsRealEndpoint:
         assert "ACCESS_TOKEN    = data.access_token" in source or \
                "ACCESS_TOKEN = data.access_token" in source
 
-    def test_personal_mode_comparison_still_present_unchanged(self, source):
-        """Regression guard: personal mode's original single-owner-token
-        comparison must still exist for the non-server-mode branch."""
-        assert "entered !== BEARER_TOKEN" in source
+    def test_personal_mode_password_is_checked_by_the_server(self, source):
+        """SECURITY FIX 2026-09-25: personal mode used to compare the typed
+        password against a copy of the token the server handed to ANY
+        visitor (/pwa-token) — so anyone could read it. The server now
+        checks it (/pwa-verify) and the browser never holds a copy."""
+        assert "entered !== BEARER_TOKEN" not in source
+        idx = source.index("async function doAuth()")
+        body = source[idx:source.index("\nfunction signOut()", idx)]
+        assert "/pwa-verify" in body
+
+
+def _with_auth_body(source):
+    idx = source.index("function _withAuth(")
+    return source[idx:source.index("\n}", idx)]
 
 
 class TestAuthorizationHeaderAttached:
-    def test_mcp_call_attaches_bearer_header_in_server_mode(self, source):
+    """Every request carries the login token in BOTH modes since the
+    2026-09-25 security fix (personal mode used to send none, and the
+    server accepted anyone). One helper, _withAuth(), builds the header."""
+
+    def test_with_auth_picks_the_right_token_per_mode(self, source):
+        body = _with_auth_body(source)
+        assert "state.serverMode" in body
+        assert "ACCESS_TOKEN" in body and "BEARER_TOKEN" in body
+        assert "Authorization" in body and "'Bearer '" in body
+
+    def test_mcp_call_attaches_bearer_header(self, source):
         idx = source.index("async function mcpCall")
         nearby = source[idx:idx + 600]
-        assert "state.serverMode" in nearby
-        assert "ACCESS_TOKEN" in nearby
-        assert "Authorization" in nearby
-        assert "Bearer " in nearby
+        assert "_withAuth(" in nearby
 
-    def test_photo_upload_attaches_bearer_header_in_server_mode(self, source):
+    def test_photo_upload_attaches_bearer_header(self, source):
         idx = source.index("/photos/upload'")
         nearby = source[idx - 300:idx + 300]
-        assert "Authorization" in nearby
-        assert "ACCESS_TOKEN" in nearby
+        assert "_withAuth(" in nearby
 
-    def test_personal_mode_sends_no_auth_header(self, source):
-        """Personal mode's /pwa-api and /photos/upload require no auth at
-        all — the header must be conditional on state.serverMode, not
-        always sent."""
-        idx = source.index("async function mcpCall")
-        nearby = source[idx:idx + 600]
-        assert "if (state.serverMode" in nearby
+    def test_personal_mode_sends_its_bearer_token(self, source):
+        """Personal mode's /pwa-api and /photos/upload now require the
+        owner's Bearer Token — the header is no longer server-mode only."""
+        body = _with_auth_body(source)
+        assert "BEARER_TOKEN" in body
 
 
 class TestSignOutClearsServerModeToken:
     def test_signout_resets_access_token(self, source):
+        # Whole function body — R-038 added the /pwa-logout call at the top,
+        # which pushed these lines past the old fixed 200-char window.
         idx = source.index("function signOut()")
-        nearby = source[idx:idx + 200]
+        nearby = source[idx:source.index("\n}\n", idx)]
         assert "ACCESS_TOKEN = ''" in nearby
         assert "localStorage.removeItem" in nearby
+        assert "/pwa-logout" in nearby
 
 
 class TestResumeFromStorageHandlesBothModes:

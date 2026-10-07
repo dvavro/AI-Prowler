@@ -15,7 +15,7 @@ and calling it actually opens a window.
 Test IDs
 --------
   JTG-01  get_job_tracker_guide_content() returns a non-trivial string
-  JTG-02  content mentions all 9 real sheet names
+  JTG-02  content mentions all 8 real table names
   JTG-03  content covers multi-employee scheduling (Crew / Technician,
           server-mode auto-scoping)
   JTG-04  content covers mobile access
@@ -49,8 +49,7 @@ def test_jtg02_content_mentions_all_sheets(gui):
     content = gui.app.get_job_tracker_guide_content()
     expected_sheets = [
         "Customers", "Jobs_Schedule", "Route_Planner", "Quotes",
-        "Invoices", "TimeLog", "QB_Daily_Export", "Services_Pricing",
-        "AI-Prowler_Commands",
+        "Invoices", "TimeLog", "Services_Pricing", "Settings",
     ]
     missing = [s for s in expected_sheets if s not in content]
     assert not missing, f"JTG-02 FAIL: guide is missing sheet names: {missing}"

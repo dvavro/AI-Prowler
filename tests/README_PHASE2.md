@@ -12,7 +12,7 @@ tests/
 
 ## What's new
 
-### MCP layer (`tests/mcp/`)
+### MCP layer (`tests/mcp_tests/`)
 
 Tests every `@mcp.tool()`-decorated function in `ai_prowler_mcp.py` that touches indexing or tracking. Calls them directly as Python functions instead of spawning a JSON-RPC subprocess — that's much faster and exercises the same code paths.
 
@@ -36,7 +36,7 @@ py -m pytest tests
 py -m pytest tests/unit
 
 # Just the MCP tests
-py -m pytest tests/mcp
+py -m pytest tests/mcp_tests
 
 # Just the GUI tests
 py -m pytest tests/gui
@@ -57,7 +57,7 @@ Need the `mcp` Python SDK installed (you already have it, since `ai_prowler_mcp.
 py -m pip install mcp
 ```
 
-If MCP isn't installed the entire `tests/mcp/` directory will error out at collection — that's intentional, it tells you to install the SDK.
+If MCP isn't installed the entire `tests/mcp_tests/` directory will error out at collection — that's intentional, it tells you to install the SDK.
 
 ### GUI tests
 

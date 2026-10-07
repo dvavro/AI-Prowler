@@ -496,7 +496,13 @@ def load_sms_config() -> dict:
     Returns {} if the file doesn't exist or can't be parsed.
     """
     import json
-    cfg_path = Path.home() / ".ai-prowler" / "config.json"
+    import os
+    # R-066 (2026-09-29): honour the test sandbox like every other state file
+    # (ai_prowler_mcp._state_dir, sms_inbox, sms_consent). Before, a sandboxed
+    # process (unit tests, the E2E time machine) read the REAL config.json and
+    # so had the owner's real Twilio credentials — a real text could go out.
+    _td = os.environ.get("AIPROWLER_TEST_STATE_DIR", "").strip()
+    cfg_path = (Path(_td) if _td else Path.home() / ".ai-prowler") / "config.json"
     if not cfg_path.exists():
         return {}
     try:

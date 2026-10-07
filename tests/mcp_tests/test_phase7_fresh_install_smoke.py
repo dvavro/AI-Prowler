@@ -1,0 +1,214 @@
+"""
+tests/mcp_tests/test_phase7_fresh_install_smoke.py
+================================================
+Job Board Architecture Spec — Phase 7 (spec §8, §11).
+
+Fresh-install smoke test: a brand-new install, no prior data, walking
+through the entire E2E flow this whole migration was built around —
+customer through invoice — start to finish with zero manual data
+seeding, entirely through the real @mcp.tool() functions (not the
+db_write_ops/db_read_ops layer directly, so this genuinely exercises
+the same surface a new user's first session would).
+
+Run in BOTH personal mode and server mode, since spec §8's "cutover"
+deliverable is that the DB-backed tool layer is now simply the default
+for new installs in both modes — there is no feature flag or legacy
+path left to choose between; every write/read tool in ai_prowler_mcp.py
+already goes straight to SQLite. This test is the closest thing to
+proof of that: a brand-new user gets a working system with zero setup
+beyond pointing at an (empty, not-yet-existing) database.
+
+Run with:
+    run_tests.bat tests\\mcp\\test_phase7_fresh_install_smoke.py -v
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
+
+_SRC = Path(__file__).resolve().parent.parent.parent
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+
+@pytest.fixture(scope="module")
+def mcp_mod():
+    import ai_prowler_mcp as ap
+    ap._prewarm_event.set()
+    return ap
+
+
+def _make_ctx(user):
+    if user is None:
+        return None
+    ctx = MagicMock()
+    ctx.request_context.request.state.user = user
+    return ctx
+
+
+def _marker(result: str, key: str) -> str:
+    for line in result.splitlines():
+        if line.startswith(f"{key}="):
+            return line.split("=", 1)[1].strip()
+    raise AssertionError(f"{key}= marker not found in: {result!r}")
+
+
+def _run_fresh_install_flow(mcp_mod, filepath: str, ctx, check_fresh: bool = True):
+    """The actual E2E script: customer -> quote -> job -> route ->
+    clock in/out -> invoice -> export. Every step's success is asserted
+    before moving to the next, exactly like a human walking through it
+    for the first time would notice immediately if a step failed.
+
+    check_fresh is skipped in server mode: server-mode tools ignore the
+    `filepath` argument entirely (by design — see _resolve_job_db_path),
+    always resolving from the configured default_spreadsheet_path
+    instead, so `filepath` here is never the actual on-disk location to
+    check for server-mode calls. Every call below still passes the same
+    `filepath` value consistently, which server mode resolves to the
+    same real path every time — the flow itself is equally valid in
+    both modes; only this one pre-condition check isn't meaningful for
+    server mode.
+    """
+    if check_fresh:
+        assert not os.path.exists(filepath), "fresh-install test must start with NO existing database"
+
+    # 2. Customer.
+    cust_result = mcp_mod.create_customer(
+        {"Company Name": "Blue Wave Cafe", "Phone": "386-555-0101",
+         "Street Address": "42 Beachside Dr", "City": "New Smyrna Beach",
+         "State": "FL", "ZIP": "32168", "Frequency": "Monthly"},
+        filepath=filepath, backup=False, ctx=ctx,
+    )
+    assert cust_result.startswith("✅"), f"create_customer failed:\n{cust_result}"
+    cust_id = _marker(cust_result, "NEW_CUST_ID")
+    assert cust_id == "CUST-0001"
+
+    # 3. Quote.
+    quote_result = mcp_mod.create_quote(
+        {"CustomerID": cust_id, "Customer Name / Company": "Blue Wave Cafe",
+         "Subtotal ($)": 150.0, "Status (Open/Approved/Declined)": "Approved"},
+        filepath=filepath, backup=False, ctx=ctx,
+    )
+    assert quote_result.startswith("✅"), f"create_quote failed:\n{quote_result}"
+    quote_id = _marker(quote_result, "NEW_QTE_ID")
+    assert quote_id == "QTE-0001"
+
+    # 4. Job (on today's date so build_daily_route can find it, with an
+    #    address so it's routable and Quote Amount so it can be invoiced).
+    import datetime
+    today_iso = datetime.date.today().isoformat()
+    job_result = mcp_mod.create_job(
+        {"CustomerID (Customers!A)": cust_id, "Customer Name / Company": "Blue Wave Cafe",
+         "Service Date": today_iso, "Service Type": "Window",
+         "Street Address": "42 Beachside Dr", "City": "New Smyrna Beach",
+         "State": "FL", "ZIP": "32168",
+         "Latitude (AI Geocode)": 29.02, "Longitude (AI Geocode)": -80.92,
+         "Quote Amount ($)": 150.0, "Job Status": "Scheduled",
+         # R-055 (2026-09-28): in server mode the owner's blank-crew route is
+         # his OWN jobs, so the job is his (personal mode ignores the crew).
+         "Crew / Technician": "Dave Owner"},
+        filepath=filepath, backup=False, ctx=ctx,
+    )
+    assert job_result.startswith("✅"), f"create_job failed:\n{job_result}"
+    job_id = _marker(job_result, "NEW_JOB_ID")
+    assert job_id == "JOB-0001"
+
+    # 5. Route (no origin — the personal/server-agnostic no-network-dependency
+    #    path, since a fresh-install smoke test shouldn't require live
+    #    Nominatim/OSRM access to prove the DB-backed layer itself works).
+    route_result = mcp_mod.build_daily_route(
+        today_iso, filepath=filepath, backup=False, email_link=False, ctx=ctx,
+    )
+    assert route_result.startswith("🗺️"), f"build_daily_route failed:\n{route_result}"
+    assert "Stops:  1" in route_result
+
+    # 6. Clock in, then out.
+    start_result = mcp_mod.log_time_entry(job_id, "start", filepath=filepath, ctx=ctx)
+    assert start_result.startswith("⏱️"), f"log_time_entry(start) failed:\n{start_result}"
+
+    import sqlite3, time
+    time.sleep(1.1)  # last_edited_at / clock math has second-level granularity
+    stop_result = mcp_mod.log_time_entry(job_id, "stop", filepath=filepath, ctx=ctx)
+    assert stop_result.startswith("⏱️"), f"log_time_entry(stop) failed:\n{stop_result}"
+
+    # 7. Invoice.
+    invoice_result = mcp_mod._create_invoice_impl(
+        job_id, None, None, "", "", 0.07, 30, filepath, False, ctx,
+    )
+    assert invoice_result.startswith("✅"), f"create_invoice failed:\n{invoice_result}"
+    inv_id = _marker(invoice_result, "NEW_INVOICE_ID")
+    assert inv_id == "INV-0001"
+    assert "$160.50" in invoice_result  # 150 + 7% tax
+
+    # 8. Read it all back — the same tools a follow-up session would use.
+    board = mcp_mod.read_job_spreadsheet(filepath=filepath, ctx=ctx)
+    assert "Blue Wave Cafe" in board
+    assert "Complete" not in board  # job status was never advanced to Complete this flow — sanity
+
+    ar_report = mcp_mod.get_ar_aging_report(filepath=filepath, ctx=ctx)
+    assert "Blue Wave Cafe" in ar_report
+    assert "160.50" in ar_report
+
+    updates_json = mcp_mod.get_board_updates(since="2000-01-01T00:00:00", filepath=filepath, ctx=ctx)
+    updates = json.loads(updates_json)
+    assert any(r.get("Customer Name / Company") == "Blue Wave Cafe" for r in updates)
+
+    # 9. Export — the whole flow's data must appear in a fresh spreadsheet
+    #    snapshot with zero manual seeding, per spec §7/§8.
+    export_path = filepath.replace(".db", "_export.xlsx")
+    export_result = mcp_mod.export_to_excel(filepath=filepath, output_path=export_path, ctx=ctx)
+    assert export_result.startswith("✅"), f"export_to_excel failed:\n{export_result}"
+
+    import openpyxl
+    wb = openpyxl.load_workbook(export_path)
+    all_values = []
+    for sheet in ("Jobs_Schedule", "Customers", "Quotes", "Invoices"):
+        for row in wb[sheet].iter_rows(values_only=True):
+            all_values.extend(row)
+    assert "Blue Wave Cafe" in all_values
+    assert job_id in all_values
+    assert inv_id in all_values
+
+    return {"customer_id": cust_id, "quote_id": quote_id, "job_id": job_id, "invoice_id": inv_id}
+
+
+def test_fresh_install_personal_mode(tmp_path, monkeypatch, mcp_mod):
+    master = tmp_path / "AI-Prowler_Job_Tracker.xlsx"  # never created — proves no .xlsx dependency
+    monkeypatch.setattr(mcp_mod, "_get_default_spreadsheet_path", lambda: str(master))
+    monkeypatch.setattr(mcp_mod, "_test_db_folder_override", lambda: str(tmp_path))
+    monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: None)
+    # _get_personal_owner_address() reads ~/.ai-prowler/config.json — the
+    # REAL on-disk config, never sandboxed by _test_db_folder_override or
+    # AIPROWLER_TEST_STATE_DIR. A genuine fresh install has no home address
+    # configured there yet, so this must be stubbed out too, or the test's
+    # route step silently picks up whatever real home address the machine
+    # actually has configured and adds an unexpected round-trip leg.
+    monkeypatch.setattr(mcp_mod, "_get_personal_owner_address",
+                         lambda: {"street": "", "city": "", "state": "", "zip": ""})
+
+    db_path = str(tmp_path / "personal" / "ai_prowler_jobs.db")
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+
+    result = _run_fresh_install_flow(mcp_mod, db_path, ctx=None)
+    assert result["job_id"] == "JOB-0001"
+    assert not master.exists()  # confirms nothing in this flow ever touched .xlsx
+
+
+def test_fresh_install_server_mode(tmp_path, monkeypatch, mcp_mod):
+    master = tmp_path / "AI-Prowler_Job_Tracker.xlsx"
+    monkeypatch.setattr(mcp_mod, "_get_default_spreadsheet_path", lambda: str(master))
+    monkeypatch.setattr(mcp_mod, "_test_db_folder_override", lambda: str(tmp_path))
+    owner = {"id": "dave", "name": "Dave Owner", "role": "owner", "status": "active", "scopes": []}
+    monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: owner)
+
+    db_path = str(tmp_path / "server" / "ai_prowler_jobs.db")
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+
+    result = _run_fresh_install_flow(mcp_mod, db_path, ctx=_make_ctx(owner), check_fresh=False)
+    assert result["job_id"] == "JOB-0001"
+    assert not master.exists()

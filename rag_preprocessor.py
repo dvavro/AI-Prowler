@@ -3170,6 +3170,47 @@ class _SentenceTransformerEmbedding:
             from sentence_transformers import SentenceTransformer
 
             def _load():
+                """Load the SentenceTransformer model, offline-first.
+
+                v9.2.x fix: SentenceTransformer/huggingface_hub makes a live
+                network round-trip (HEAD/GET calls to huggingface.co) on
+                EVERY load by default, to verify file hashes/etags — even
+                when the model is already fully cached locally, which it
+                normally is after first run. That network call has no
+                bounded timeout on some networks; when it hangs, whichever
+                thread is loading the model freezes with it. This was
+                confirmed to hang the entire MCP HTTP server (2026-09-14
+                incident — mcp_server.log shows the process dying mid-load,
+                right after "Load pretrained SentenceTransformer", with no
+                exception and no clean shutdown — while a check_ai_prowler_
+                status call was waiting on it, though any first ChromaDB-
+                touching tool call in a session could equally have been the
+                one holding the bag).
+
+                Fix: try a fully offline load first (HF_HUB_OFFLINE=1 for
+                just this call, restored after) — this skips every network
+                call and loads straight from the local cache. Only fall
+                back to a normal, network-permitted load if that fails,
+                which covers the genuine first-run case where the model
+                isn't cached yet (fresh install, cache was cleared, etc.).
+                The env var is restored in a finally so this never leaks
+                into any other code that happens to run afterward.
+                """
+                _prior_offline = os.environ.get('HF_HUB_OFFLINE')
+                os.environ['HF_HUB_OFFLINE'] = '1'
+                try:
+                    return SentenceTransformer(model_name, device=device)
+                except Exception:
+                    pass
+                finally:
+                    if _prior_offline is None:
+                        os.environ.pop('HF_HUB_OFFLINE', None)
+                    else:
+                        os.environ['HF_HUB_OFFLINE'] = _prior_offline
+                # Offline load failed — not cached locally yet (e.g. first
+                # run). Fall back to a normal load that's allowed to hit
+                # the network; the retry/Errno-22-repair logic below still
+                # applies to this call exactly as it did before this fix.
                 return SentenceTransformer(model_name, device=device)
 
             try:

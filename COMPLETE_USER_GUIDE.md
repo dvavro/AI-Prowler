@@ -1,5 +1,5 @@
 # AI-Prowler — Complete User Guide
-## Version 9.1.0
+## Version 9.2.0
 
 ---
 
@@ -13,8 +13,8 @@
 6. MCP Tools Reference
 7. Remote Access — Claude.ai on Mobile and Web
 8. Mobile Subscription Management
-9. Business Server Mode — Multi-User Access
-10. Small Business Service Tools & Job Tracker Workflow
+9. Business Server Mode — Multi-User Access (roles, scopes, Admin tab, Jobs App access)
+10. Small Business Service Tools & Job Tracker Workflow (Job Board & SQLite-Backed Database)
 11. SMS & WhatsApp Messaging
 12. Quick Links Tab
 13. Settings & Configuration
@@ -30,6 +30,8 @@
 22. Self-Learning System
 23. Welcome Page & Update Notifications
 24. Heartbeats & Analytics
+25. Jobs PWA App (the mobile app for crews and owners — incl. roles & data access in server mode)
+26. Remote PWA App
 
 ---
 
@@ -49,82 +51,20 @@ Traditional RAG retrieves a chunk, hands it to a small local model, and gets a m
 
 This produces dramatically better results — equivalent to having a skilled research assistant who knows your entire document library. Hardware requirements are minimal. Because Claude does the reasoning, AI-Prowler only needs to run the embedding model (~400 MB RAM) and ChromaDB. No GPU is required. No large local AI model is needed.
 
-**New in v6.0.0 — Self-Learning at full strength:** Claude can record business lessons, fact corrections, project insights, and process improvements into a structured knowledge base — and check that knowledge before answering future questions. Learnings are instant (no GPU training required) and managed through a dedicated 🧠 Learnings tab in the GUI.
+### Key Capabilities
 
-**New in v7.0.0:** Business Server Mode for multi-user team deployments, roles and scopes, role-based tool access, Tier A tool suppression, binary file write, script execution tools, and more.
+Beyond core document search, AI-Prowler includes:
 
-**New in v8.0.0:** This release adds two-way SMS and WhatsApp messaging for field crew, new file-editing tools, RAG preprocessor improvements, Remote Access GUI enhancements, and token recovery improvements:
-
-- **Two-Way SMS & WhatsApp** — field crew can send and receive SMS and WhatsApp messages to registered server users and spreadsheet customers directly from Claude. Five new MCP tools: `send_sms`, `send_whatsapp`, `check_sms_inbox`, `check_sms_replies`, `check_whatsapp_replies`. Provider abstraction supports Twilio, SignalWire, Vonage, and WhatsApp Business API.
-- **Webhook-based inbound messaging** — inbound SMS and WhatsApp messages are captured in real time via `/sms-webhook` and `/whatsapp-webhook` endpoints and stored in a local inbox, eliminating polling lag.
-- **SMS provider abstraction** — Twilio, SignalWire, and Vonage are all supported as SMS backends. Switching providers is a configuration change, not a code change.
-- **New file-editing tools** — `fuzzy_replace_in_file` (whitespace-tolerant surgical edit) and `line_replace_in_file` (edit by line number range) added alongside the existing `str_replace_in_file`, giving three escalation levels for in-place file editing.
-- **RAG preprocessor fixes** — code files are now indexed as single security-scan chunks; ChromaDB batch-add bug fixed.
-- **Remote Access GUI — Keep It Running panel** — LED power status indicators and one-click automated power settings (sleep, hibernate, Windows Update active hours) to keep the MCP server online.
-- **Token recovery simplified** — token recovery is now email-only (SMS removed). The "Forgot your token?" flow sends a recovery code to the admin's configured email address.
-- **`send_sms` and `send_email` enabled for all roles** — `can_send_sms` and `can_send_email` are now `True` for owner, manager, staff, and field_crew roles in server mode.
-- **`send_learnings_report` available in server mode** — with expanded filters (category, date range, tag).
-- **Total tools: 80** — up from 77 in v7.0.0. New in v8.0.0: 3 agentic analysis tools (`get_pending_analysis_tasks`, `complete_analysis_task`, `save_analysis_report`), plus expanded contractor/business workflow tools. (Job image storage tools, present earlier in v8.0.0, were removed.)
-- **Common Business AI Analysis renamed** — the "AI Analysis" section in the Quick Links tab is now named "Common Business AI Analysis" for clarity.
-- **Scope Directory Picker** — AI Analysis buttons and Custom Analyses tasks now support optional scope restriction to specific indexed directories before queuing.
-- **Server mode GUI suppression** — Common Business AI Analysis and My Custom Analyses sections are now fully hidden in server mode.
-- **`last_updated` scope bug fixed** — metadata keys no longer appear as fake directory checkboxes in the scope picker.
-
-**New in v8.1.0:**
-
-- **Newsletter opt-in** — a dismissible "📬 Get AI-Prowler updates and usage tips by email" banner on the Home tab. Purely opt-in, independent of licensing — reaches Home, Mobile, and Business users alike. See **Section 23**.
-- **Proactive Alerts redesign** — the six background email jobs (morning briefing, overdue invoices, etc.) now use independent per-job ON/OFF toggles instead of one master "Enable proactive alerts" checkbox plus a separate Save/Start/Stop button row. Every field (job toggle, time, days, shared email) auto-saves the instant it changes — Save Config and Start/Stop buttons are gone. The background engine starts automatically the moment any job is switched on, and stops automatically when the last one is switched off. See **Section 17**.
-- **Two new MCP tools:**
-  - `list_analysis_tasks` — lists the FULL custom-analysis task definition list (up to 25), regardless of due date. Complements `get_pending_analysis_tasks`, which only shows tasks already queued into the run queue.
-  - `cleanup_job_logs` — deletes old `run_script_start` job files (`.json`/`.log`/`_wrapper.py`) from `~/.ai-prowler/jobs/`, which had no automatic retention and could accumulate thousands of files over time. Mirrors `cleanup_backups`'s dry-run-by-default design.
-
-**New in v8.1.1:**
-
-- **Newsletter double opt-in** — subscribing now sends a confirmation email first; you're not added to the active mailing list until you click the link in it. This protects against typos in the email field and confirms the address is actually reachable before anything gets sent to it. See **Section 23**.
-- **Reset Newsletter State** — a new option in Help → Notification Status lets you manually clear your local subscription state (e.g. if you want to resubscribe with a different address, or dismissed the confirmation reminder by mistake).
-
-**New in v8.1.2 (Business Server only):**
-
-- **Server-mode collection routing fix** — all three background/automated indexing paths (the File Watchdog, the Windows Scheduled Task, and the GUI's Update Selected/Update All buttons) now correctly route indexed content into its proper scoped collection instead of silently falling back to the single default collection. A file that doesn't safely match a scope rule is now skipped and logged rather than mis-filed. See **Section 4 → Server-Mode Collection Routing** and **Section 17**.
-
-**New in v8.1.3:**
-
-- **One source of truth for Proactive Alerts' recipient and location** — the Proactive Alerts panel no longer has its own separate Email/Location fields with their own hardcoded defaults. The recipient now always comes from Settings → Email Configuration, and the weather location from a new Home Address field under Settings → Owner Name. See **Section 17 → Proactive Alerts**.
-- **Per-job weather in Morning Briefing** — each of today's scheduled jobs now gets weather checked for its own City/State (read from the Jobs_Schedule spreadsheet), with a rain-risk flag shown next to affected jobs, instead of one fixed location's weather disconnected from the actual job list. See **Section 17 → Proactive Alerts**.
-- **Proactive Alerts HTML formatting fix** — background email jobs (Morning Briefing, Weather Watch, etc.) were sending their HTML body as plain text, so recipients saw raw `<h2>`, `<p>`, `<hr>` tags instead of a formatted email. `send_email()` now accepts a `body_html` parameter and sends a proper `multipart/alternative` message, with a tag-stripped plain-text fallback for clients that don't render HTML. See **Section 17 → Proactive Alerts**.
-- **SMTP configuration status LED** — the Proactive Alerts panel now shows a green/red indicator confirming whether SMTP is actually set up (Settings → Email Configuration), separate from the "Email:" field there (which is only the *recipient* address). Previously, alerts could run and log "sent" indefinitely with nothing arriving if SMTP was never configured, with no indication why. See **Section 17 → Proactive Alerts**.
-- **`fuzzy_replace_in_file` removed** — this whitespace-tolerant file-editing tool (added in v8.0.0) had a bug where, if its stricter matching strategies failed and it fell back to whitespace-collapse matching, that normalization was applied to the *entire file* rather than just the matched region, risking corruption of unrelated content. Removed entirely; `str_replace_in_file` (exact match) and `line_replace_in_file` (by line number) remain as the two-tool escalation path for surgical file edits. See **Section 6.2c** and **Section 6 → Code Tools — Write-Side**.
-- **Total tools: 82** — down from 83, reflecting the `fuzzy_replace_in_file` removal above.
-- **Auto-updater now refreshes the Documents\AI-Prowler user guide copy** — `update_manifest.json` has included `COMPLETE_USER_GUIDE.md` since v8.1.0, but the in-app updater (`RAG_RUN.bat`) only ever applied staged files into the install directory (`C:\Program Files\AI-Prowler`), never to the separate `%USERPROFILE%\Documents\AI-Prowler\COMPLETE_USER_GUIDE.md` copy the installer seeds — which is both the copy most users actually open and the one tracked for ChromaDB indexing, so Claude's own answers about AI-Prowler went stale after every auto-update even though the app code updated correctly. `RAG_RUN.bat` now also copies the updated guide into Documents\AI-Prowler if a copy already exists there. See **Section 23 → Update Notifications**.
-
-**New in v9.1.0:**
-
-- **Spreadsheet schema migration** — existing users' `AI-Prowler_Job_Tracker.xlsx` can now be upgraded in place to match the current release's sheet/column structure (new sheets, new columns, corrected freeze panes) without ever touching or losing existing data. Strictly manual and opt-in — nothing runs automatically at startup. A red/green indicator on the **Small Business tab** shows whether an update is available; clicking **Update Spreadsheet Now** shows exactly what will change and where the automatic backup will be saved before anything is touched, and a result dialog confirms success or (on any failure) that the original file was fully restored from that backup. See **Section 10 → Spreadsheet Schema Migration**.
-- **Small Business tab condensed** — the tab used to list every tool's description, setup requirements, and example prompts inline, which grew long and went stale as tools were added. That content — the full tool catalog (including the newer tools built for the Jobs PWA below), an end-to-end daily workflow walkthrough from morning schedule check through route, invoicing, and AR aging, and example voice prompts for each step — now lives in a single **🔧 View All Service Tools & Example Prompts** popup opened from the tab, keeping the tab itself down to just the spreadsheet path, Jobs App URL, spreadsheet update indicator, and Online Payment Links configuration.
-- **Create Invoice from the Jobs PWA** — the job-detail popup now has a green 🧾 Create Invoice button for any unpaid, un-invoiced job. Tapping it opens a pre-filled form (quote, discount, tax rate, service type, description, payment terms) with a live Taxable / Tax / Total Due strip that recalculates on every keystroke using ceiling rounding on tax. Submitting calls `create_invoice` via the `/pwa-api` endpoint and works in both personal and server mode. Email Invoice / Text Invoice buttons are enabled immediately after the invoice is created. See **Section 22 → Jobs PWA**.
-- **Live invoice totals use ceiling rounding on tax** — the PWA's `ifRecalc()` function now applies `Math.ceil` (ceiling to the nearest penny) on the tax amount and `Math.round` (half-up, 2 dp) on taxable and total, with `Number.EPSILON` added before each operation to prevent IEEE-754 float drift. This ensures the pre-submission display never under-states what will be collected.
-- **Invoices sheet header row now frozen** — the Invoices tab in `AI-Prowler_Job_Tracker.xlsx` now freezes rows 1–2 (title banner + column headers) at `A3`, matching the Customers, Jobs_Schedule, and TimeLog sheets. Scrolling vertically through invoice rows keeps the column headers visible.
-- **Auto-updater: exponential back-off retry** — the in-app updater now retries each file up to 4 times (waiting 1 s, 2 s, then 4 s between attempts) instead of failing immediately on a GitHub CDN connection reset (WinError 10054). PNG and other binary files are now hashed correctly (raw bytes, no LF normalization). A full debug log of every download attempt, retry, timing, and hash result is written to `~/.ai-prowler/update_debug.log` for future diagnostics.
-
-**New in v9.0.0:**
-
-- **▶ NOW button removed from Common Business AI Analysis** — the Claude Code CLI headless launch path had reliability issues (ChromaDB contention when both the GUI and a headless `claude -p` process hit the same database simultaneously). Use **▶ Queue** to schedule the next run; the 🤖 Autonomous AI Task Queue handles automated execution. The ▶ NOW button on **My Custom AI Analyses** rows is unaffected.
-- **Audit log rotation** — `autonomous_run_audit.log` is now automatically rotated (up to 2 backup files kept) at the start of each Task Queue run, preventing unbounded growth.
-- **Jobs directory auto-cleanup** — files in `~/.ai-prowler/jobs/` older than 3 days are purged automatically each time `run_script_start` launches a new job.
-- **Indexing bug fixes** — `.css`, `.scss`, `.sass`, `.less`, and `.sql` files were incorrectly treated as code-scan-only; they are now fully semantically chunked. `.env` files are now skipped (security). `.md`/`.rst`/`.markdown` files returning 0 chunks after `reindex_file()` fixed.
-
----
-
-**New in v8.1.4 (Business Server — single unified knowledge base):**
-
-- **One shared knowledge base instead of one collection per scope** — Business Server installs now index everything into a single ChromaDB database, with each chunk tagged by a `scope` label instead of being routed into a separate physical collection. Simpler under the hood, and removes an entire class of "which collection is this in" bugs. See **Section 4 → Server-Mode Scope Tagging** and **Section 9 → Scopes**.
-- **No more owner search-visibility exception** — every role, including the owner, now sees exactly `shared` + their own assigned scopes + their own private scope (if enabled) — no exceptions. If the owner needs to see a scope, it's assigned to them the same way as anyone else. See **Section 9 → Scopes**.
-- **Indexing opened up to every role** — `index_path`, `update_tracked_directories`, `reindex_file`, and `reindex_directory` no longer require owner/manager and are no longer confined to a field crew member's own personal directory. Indexing was never the actual confidentiality boundary — scope-based search access is, and that boundary is unchanged. `untrack_directory` remains owner/manager-only. `list_tracked_directories` (v8.1.5) is now gated by **scope, not role** — every role may call it, and the result is filtered to only the paths within their own accessible scopes, matching what they can already search. See **Section 6.3**.
-- **Admin-managed scope catalog** — scopes are now picked from a shared, admin-managed list (🏷️ Manage Scopes in the Admin tab, up to 15 entries) instead of free-typed comma-separated text on each user. See **Section 9**.
-- **Multi-select scope picker on Add/Edit User** — replaces the old comma-separated text field. See **Section 9**.
-- **Editable scope column on the Update Index tab** — assign or change a tracked folder's scope directly from Update Index via **🔀 Change Scope for Selected**; the change is staged and takes effect the next time you run Update Selected/Update All. See **Section 9 → Assigning Scopes to Folders**.
-- **Scheduler jobs (Morning Briefing, Weather Watch) now read the email recipient and owner location live from Settings** instead of a separate `scheduler_config.json` copy with its own hardcoded defaults, closing a gap where the two could silently diverge from your actual SMTP setup. See **Section 17 → Proactive Alerts**.
-- **Learnings tab live auto-refresh** — a learning recorded by Claude during a live session now appears in the 🧠 Learnings tab without a manual Refresh click, while that tab is the one currently open. Never refreshes with Semantic search toggled on (that mode fires a live ChromaDB query, which should only ever happen on an explicit action) or while looking at a different tab.
+- **Self-Learning knowledge base** — Claude can record business lessons, fact corrections, project insights, and process improvements into a structured knowledge base, and checks that knowledge before answering future questions. Instant — no GPU training required. Managed through a dedicated 🧠 Learnings tab in the GUI. See **Section 22**.
+- **Business Server Mode** — multi-user team deployments with roles, scopes, and role-based tool access, so a whole company reaches one shared knowledge base from Claude on their own phones and laptops. See **Section 9**.
+- **Small Business / Job Tracker tools** — a full contractor workflow (customers, scheduling, quoting, invoicing, route planning, time tracking, AR aging) that Claude reads and writes in plain English, backed by a SQLite database (`ai_prowler_jobs.db`). Excel is available as a generated export. See **Section 10**.
+- **Job Board** — a live admin kanban/grid of the day's jobs, updating on a 1-minute poll as crew clock in, upload photos, and complete work, with safe concurrent editing all day long. See **Section 10 → Job Board**.
+- **Data Portability** — export to Excel/CSV/QuickBooks-ready CSV for accountants and bookkeeping, plus lossless backup/restore for safekeeping or moving to a new PC. See **Section 10 → Data Portability**.
+- **Two-way SMS & WhatsApp messaging** — field crew can send and receive SMS and WhatsApp messages to customers directly from Claude, with real-time inbound capture via webhook (no polling lag). Provider abstraction supports Twilio, SignalWire, Vonage, and WhatsApp Business API. See **Section 11**.
+- **File editing & code tools** — Claude can create, edit, and manage files directly (exact-match replace, line-number replace, directory tools, backups), plus run and debug scripts. See **Section 6**.
+- **Remote Access & mobile apps** — reach AI-Prowler from Claude.ai on any phone or browser, plus two dedicated PWAs: the **Jobs App** for field crew (Section 25) and the **Remote PWA** for managing AI-Prowler itself remotely (Section 26).
+- **Agentic analysis task queue** — schedule recurring or one-off AI analysis tasks (e.g. "check overdue invoices every Monday") that run autonomously and record their findings as learnings. See **Section 10** and **Section 26**.
+- **Proactive email alerts** — background jobs (morning briefing, overdue invoices, weather watch, etc.) with independent per-job scheduling. See **Section 17**.
 
 ---
 
@@ -223,15 +163,15 @@ Indexing is incremental — on subsequent runs, only new or modified files are p
 
 When you delete a file from a tracked folder and run **Update Selected** or **Update All**, AI-Prowler automatically purges that file's chunks from ChromaDB. The vector database stays in sync with your file system — no manual cleanup required.
 
-### Server-Mode Scope Tagging (Business Server Only, v8.1.4)
+### Server-Mode Scope Tagging (Business Server Only)
 
 On a Business Server install, every indexed chunk is tagged with a **scope** (`sales`, `office`, `shared`, `private:<user>`, etc.) instead of being routed into a separate physical database. All indexed content lives in one shared knowledge base; the scope tag is what search filters on at query time — see **Section 9 → Scopes** for the full access-control picture. This applies no matter *how* a file gets indexed: manually via **Update Selected**/**Update All**, the File Watchdog's real-time auto-indexing (below), or the Scheduled Task.
 
 **Every tracked directory has exactly one assigned scope**, set from the Update Index tab (**Section 9 → Assigning Scopes to Folders**). From then on, any file placed anywhere inside that directory is tagged with that scope automatically — you never have to think about it file-by-file.
 
-**A directory with no scope assigned is never skipped or blocked** — it indexes normally and defaults to `shared`, visible to everyone. Earlier versions silently skipped an unmatched directory and logged a warning instead; that behavior is gone, since scope is now purely a metadata label applied at index time, not a routing decision that can misfire.
+**A directory with no scope assigned is never skipped or blocked** — it indexes normally and defaults to `shared`, visible to everyone. Scope is purely a metadata label applied at index time, not a routing decision that can misfire.
 
-Personal/Home installs are entirely unaffected by any of this — everything simply goes into the single database, exactly as always (this has always been true for personal mode; what changed in v8.1.4 is that Business Server now works the same way under the hood too, just with the scope tag doing the access-control work that used to be done by separate collections).
+Personal/Home installs are entirely unaffected by any of this — everything simply goes into the single database, with no scope tagging needed since there's only one user.
 
 ### Mobile Write Zones — Granting Claude Write Access
 
@@ -275,31 +215,50 @@ When you ask Claude a question with AI-Prowler connected, Claude follows this pa
 
 ## 6. MCP Tools Reference
 
-AI-Prowler exposes **85 tools** total to Claude across thirteen categories (this doc's own category breakdown — a separate, narrower ten-family grouping is used internally by the `how_to_use_ai_prowler` tool's guide text; 81 of the 83 shipped in v8.0.0, `list_analysis_tasks` and `cleanup_job_logs` were added since, and `list_sms_consents`/`delete_sms_consent` were added with the SMS consent capture feature). Exactly how many are actually *visible* on a given connection depends on mode — see the table below.
+AI-Prowler exposes its features to Claude as MCP tools, grouped in this guide by category (§6.4). Which tools are actually *visible* on a given connection isn't a fixed number — it depends on the install's mode and on what the owner has chosen to turn off, as described below.
 
-### 6.1 Tool Counts by Mode
+### 6.1 Which Tools Are Available
 
-| Install type | Mode | Tools visible | Notes |
-|---|---|---|---|
-| Personal / Home | personal | 85 | All 86 tools minus `check_sms_replies` (§6.2b — meaningless with a single user) |
-| Business — employee personal install | personal | 85 | Same as above — personal mode is personal mode regardless of edition |
-| Business — company server | server | 53 | All 86 tools minus the 33 in `_TIER_A_SUPPRESSED` (§6.2, +3 in v8.1.9: `sync_due_tasks_to_queue`, `delete_analysis_task`, `update_analysis_task`; +1 in v8.1.11: `get_home_address`) — remaining 53 are further gated per-role/per-call inside the tool itself, not by registration |
+Three layers decide whether a tool is available, in this order:
+
+| Layer | Who controls it | What it does |
+|---|---|---|
+| **1. Mode** | Built into AI-Prowler | Some tools only exist in one mode. Server mode hides developer, unscoped-filesystem, and single-owner tools (§6.2); personal mode hides the one tool that only makes sense with multiple users (§6.2b). Every other tool, including the Job Tracker, Route & Schedule Advisor, and AI Routing families, is available in both modes. |
+| **2. Your tool configuration** | The install's owner, in **Settings → 🧩 MCP Tool Configuration** | Turns off whole feature groups (or individual tools) this install doesn't use. Can only remove tools — it can never bring back one that layer 1 hides. |
+| **3. Role gates (server mode)** | Built into each tool | A registered tool still checks the caller's role on every call (§6.3, §6.2c) — e.g. who may delete a customer or write outside their personal directory. |
+
+**Seeing the current number.** The MCP Tool Configuration panel shows a live "*N* of *M* tools enabled in *personal/server* mode" line for this install. That line is the authoritative count; this guide deliberately doesn't quote one, because it changes whenever a tool is added or a group is turned off. You can also ask Claude *"What tools do you have available?"* to see exactly what it can call on the current connection.
+
+**Using the MCP Tool Configuration panel.** The panel is folded by default, like the Home page's **🧭 Set up AI-Prowler** panel: its header row always shows a **▸ / ▾** button and the live tool count; click the button to open or close the panel. AI-Prowler remembers whether you left it open. When open, each feature group is one row:
+
+- 🔒 groups (Status & System, Core Knowledge Base & Search, Self-Learning, Email, Agentic Analysis, File & Code Tools) are always on. Click **Details…** to see every tool in the group and what it does.
+- Groups with a checkbox (currently Job Tracker & Routing and SMS & WhatsApp) can be turned off. Click the checkbox to turn the whole group on or off, or click **Configure…** to pick individual tools. A dash in the checkbox means some of the group's tools are off.
+- **Turning a tool off also turns it off in the Jobs App.** The app can't use a tool you've switched off here — for example, turning off *Send an SMS* removes texting from the app too. Every tool the app uses is marked, and you're asked to confirm before turning one off.
+- **The Jobs App is optional.** Turn off the whole **Job Tracker & Routing** group and the Jobs App is switched off: anyone who tries to sign in is told the Jobs App is turned off on this AI-Prowler.
+- Ticking and unticking boxes changes nothing until you click **💾 Save (restart required)**; then restart AI-Prowler — tools are registered at startup, so changes don't apply to a running session. **↺ Reset to Defaults** only re-ticks every box in the panel; it too is saved only when you click Save.
+- **Save changes only your tool choices.** It writes `tool_config.json` and nothing else, and afterwards checks your other settings files (`config.json`, email, remote access, scheduler and analysis settings) — if any of them came out missing or damaged, it puts the previous copy back. The message after saving confirms *"Saved MCP tool choices only — your other settings were not changed."*
+
+Personal and server mode keep separate settings (saved in `~/.ai-prowler/tool_config.json`), so changing one never alters the other.
 
 ### 6.2 Tier A Tool Suppression (Server Mode Only)
 
-The following tools are never registered when AI-Prowler runs in server mode:
+The following tools are never registered when AI-Prowler runs in server mode (this table mirrors the `_TIER_A_SUPPRESSED` set in `ai_prowler_mcp.py`):
 
 | Category | Suppressed tools |
 |---|---|
 | Dev / code execution | `run_script`, `run_script_start`, `run_script_status`, `run_script_kill`, `compile_check`, `check_python_import`, `syntax_check`, `lint_check` |
 | Host filesystem writes (unscoped) | `list_directory`, `copy_to_backup`, `list_backups`, `restore_backup`, `cleanup_backups`, `cleanup_job_logs`, `reset_write_counter`, `grant_write_access`, `revoke_write_access` — backup/restore/approval-management tools remain operator/dev-only. `create_file`, `write_file`, `str_replace_in_file`, `line_replace_in_file`, and `create_directory` are **not** in this list — see §6.2c, they're gated per-call instead of blanket-suppressed. |
 | Raw filesystem reads | `read_file_lines`, `grep_documents` |
-| Email operator tools | `configure_email`, `send_file` — use personal SMTP credentials, not appropriate for a shared server. `send_learnings_report` is **not** in this category — see the note below. |
-| Bulk index rebuild | `reindex_all` |
-| Agentic analysis task queue | `get_pending_analysis_tasks`, `complete_analysis_task`, `save_analysis_report`, `create_analysis_task`, `list_analysis_tasks`, `sync_due_tasks_to_queue`, `delete_analysis_task`, `update_analysis_task` (last 3 added v8.1.9) — the Quick Links tab's Common Business AI Analysis / My Custom AI Analyses panels are hidden in server mode's GUI, so the queue these tools drive has no server-mode caller |
+| Email operator tools | `configure_email`, `send_file`, `list_outlook_accounts` — use personal SMTP credentials or the local Outlook profile, not appropriate for a shared server. `send_learnings_report` is **not** in this category — see the note below. |
+| Learnings export/rebuild | `export_learnings_file`, `rebuild_learnings_index` — file-export and destructive index-rebuild operator actions. |
+| Agentic analysis task queue | `get_pending_analysis_tasks`, `complete_analysis_task`, `save_analysis_report`, `create_analysis_task`, `list_analysis_tasks`, `delete_analysis_task`, `update_analysis_task`, `queue_single_task`, `get_all_queued_tasks` — the Links & Analysis tab's Common Business AI Analysis / My Custom AI Analyses panels are hidden in server mode's GUI, so the queue these tools drive has no server-mode caller. (Server-mode AI Routing doesn't use this queue — it has its own runner, set up on the Admin tab.) |
 | Raw/unscoped SMS inbox | `check_sms_inbox` — reads the local inbox with no per-user filtering (unlike `check_sms_replies`, which uses the per-user-scoped read path). In a multi-user server this would let any employee read every inbound SMS/WhatsApp message company-wide, not just their own. `check_sms_replies` is the server-mode equivalent. |
+| Home address (single-owner concept) | `get_home_address` — the Settings tab's Home address field is one street/city/state/zip with no per-user equivalent in a multi-user server; there's no meaningful "whose home address" to resolve for a shared install. `get_route_start_options` is the server-mode, per-crew-member equivalent. |
+| File transfer bridge tools | `get_file_download_url`, `get_file_upload_url` — bridge Claude directly to the `/remote/download` and `/remote/upload` HTTP endpoints built into the Remote Control PWA, both of which are themselves personal-mode-only (403 in server mode). |
 
 > **Note:** `send_sms`, `send_email`, `send_alert`, `send_whatsapp`, `send_learnings_report` (user-facing) are **not** suppressed in server mode — they remain available to users via the Tier B role gate.
+
+> **Resolved — `reindex_all` is intentionally open to every role, and that's correct.** Its own source comment confirms this was a deliberate design decision, not an oversight: *"role-based manage_db gate removed — indexing isn't a leak; every tracked path was already admin/owner-created"* (the identical rationale `index_path` uses). It is correctly absent from `_TIER_A_SUPPRESSED`. One clarification worth keeping in mind, though: despite the name pattern suggesting "reindex what changed," `reindex_all`'s default (`purge_first=True`) is a **full wipe-and-rebuild of the entire ChromaDB index** across every tracked directory — the incremental, changed-files-only tool is `update_tracked_directories`, a different tool. Not an access-control concern, just a heavier operation ("may take several minutes") than its name might suggest to someone triggering it casually.
 
 ### 6.2b Personal-Mode-Only Tool Suppression (Mirror Gate)
 
@@ -323,7 +282,7 @@ Unlike the blanket suppression in §6.2, five write/modify tools use **per-call 
 | User has a personal directory configured but the target path is anywhere else — a shared scope, another user's private directory, the job tracker, etc. | 🚫 Denied — "outside your personal directory" |
 | User does not have a personal directory configured at all (`private_collection_enabled=False`, or no folder was ever set up in the Admin tab) | 🚫 Denied for **any** path — read-only until an admin sets one up |
 
-This means a field crew member with a personal directory can save their own notes, drafts, or working files there — but cannot touch the job tracker spreadsheet, another employee's private folder, or any shared company document. A field crew member with no personal directory configured has no write access anywhere, full stop; they can still use every read tool (`search_documents`, `read_document`, etc.).
+This means a field crew member with a personal directory can save their own notes, drafts, or working files there — but cannot touch the job tracker database, another employee's private folder, or any shared company document. A field crew member with no personal directory configured has no write access anywhere, full stop; they can still use every read tool (`search_documents`, `read_document`, etc.).
 
 **Setup:** a personal directory is the same private-collection folder created via the Admin tab's "Set Up Private Folder" flow when adding or editing a user (§6 — Admin Tab). If `Private collection` isn't ticked for a user, or the folder was never created, that user gets no server-mode write access under this feature.
 
@@ -334,7 +293,7 @@ This scoping applies independently of Tier B role gating (§6.3) — even an own
 | Tool group | owner | manager | staff | field_crew |
 |---|---|---|---|---|
 | RAG Search (search, overview, list docs, etc.) | ✅ | ✅ | ✅ | ✅ |
-| Field Service (weather, geocode, route, maps, spreadsheet) | ✅ | ✅ | ✅ | ✅ |
+| Field Service (weather, geocode, route, maps, job tracker) | ✅ | ✅ | ✅ | ✅ |
 | SMS & WhatsApp (send_sms, send_whatsapp, check_sms_replies, check_whatsapp_replies) | ✅ | ✅ | ✅ | ✅ |
 | Self-Learning (record, check, list, update, delete, stats) | ✅ | ✅ | ✅ | ✅ |
 | `check_ai_prowler_status`, `how_to_use_ai_prowler` | ✅ | ✅ | ✅ | ✅ |
@@ -345,17 +304,17 @@ This scoping applies independently of Tier B role gating (§6.3) — even an own
 | `list_tracked_directories` | ✅ | ✅ | ✅ | ✅ |
 | `untrack_directory` | ✅ | ✅ | ⚠️ own dir only¹ | ⚠️ own dir only¹ |
 
-¹ **v8.1.5 two-tier gate:** any role may untrack a path inside their OWN personal directory (no admin flag needed). Outside it — a shared scope, another user's private folder, or general company-wide tracked state — requires the owner, or a manager/staff member with delegated admin rights ("Can manage users" in the Admin tab). A plain manager or staff member without that flag is denied outside their own directory; the flag, not the role name, is what actually grants it.
+¹ **Two-tier gate for `untrack_directory`:** any role may untrack a path inside their OWN personal directory (no admin flag needed). Outside it — a shared scope, another user's private folder, or general company-wide tracked state — requires the owner, or a manager/staff member with delegated admin rights ("Can manage users" in the Admin tab). A plain manager or staff member without that flag is denied outside their own directory; the flag, not the role name, is what actually grants it.
 
-**Indexing is open to every role (v8.1.4).** Earlier versions gated `index_path`/`update_tracked_directories`/`reindex_*` down to owner/manager, with a narrower carve-out letting field_crew index only inside their own personal directory. That role gate is gone — indexing was never the actual confidentiality boundary, since every role's *search* results are already scoped independently (§9 — Scopes). Any authenticated user can trigger indexing on any already-tracked path; a path only becomes tracked in the first place through an owner/manager action in the Admin tab or Index Docs tab, so this doesn't open up arbitrary filesystem access. `untrack_directory` (v8.1.5) moved from a blanket owner/manager role gate to the two-tier gate described above — own personal directory (any role) vs. everywhere else (owner or delegated admin). `list_tracked_directories` (v8.1.5) is instead gated by **scope**, not role: it never revealed anything beyond shared + the caller's own assigned scopes + their own private folder in the first place, so the earlier owner/manager-only gate was hiding a subset of the caller's own accessible paths from them for no confidentiality reason — every role now sees the list, filtered to what they can already reach.
+**Indexing is open to every role.** `index_path`, `update_tracked_directories`, and `reindex_*` have no owner/manager gate — indexing was never the actual confidentiality boundary, since every role's *search* results are already scoped independently (§9 — Scopes). Any authenticated user can trigger indexing on any already-tracked path; a path only becomes tracked in the first place through an owner/manager action in the Admin tab or Index Docs tab, so this doesn't open up arbitrary filesystem access. `untrack_directory` uses the two-tier gate described above — own personal directory (any role) vs. everywhere else (owner or delegated admin). `list_tracked_directories` is gated by **scope**, not role: it never reveals anything beyond shared + the caller's own assigned scopes + their own private folder, so every role sees the list, filtered to what they can already reach.
 
-**`reindex_file` / `reindex_directory` / `reindex_all` — single unified index (v8.1.4).** These purge and rebuild against the one shared ChromaDB collection every install uses now — there's no longer a separate physical collection per scope to sweep. Each chunk is retagged with its current scope during the rebuild (see §9), so a reindex always reflects whatever scope assignment is in effect at that moment. `reindex_all` calls `reindex_directory()` once per tracked directory and inherits this automatically. Personal mode is unaffected either way — always the single database, as it always has been.
+**`reindex_file` / `reindex_directory` / `reindex_all` — single unified index.** These purge and rebuild against the one shared ChromaDB collection every install uses — there's no separate physical collection per scope to sweep. Each chunk is retagged with its current scope during the rebuild (see §9), so a reindex always reflects whatever scope assignment is in effect at that moment. `reindex_all` calls `reindex_directory()` once per tracked directory and inherits this automatically. Personal mode is unaffected either way — always the single database.
 
 ### 6.4 Complete Tool Reference Table
 
 ---
 
-#### Agentic RAG — Knowledge Base Search (10 tools)
+#### Agentic RAG — Knowledge Base Search
 
 | Tool | What It Does | Mode |
 |---|---|---|
@@ -373,19 +332,19 @@ This scoping applies independently of Tier B role gating (§6.3) — even an own
 
 ---
 
-#### Knowledge Base Management (5 tools)
+#### Knowledge Base Management
 
 | Tool | What It Does | Mode |
 |---|---|---|
 | `index_path` | Indexes all supported documents in a folder (or a single file) and optionally adds the path to the auto-update tracking list. | Personal + Server |
 | `update_tracked_directories` | Re-scans all tracked paths and re-indexes only new or changed files. | Personal + Server |
-| `list_tracked_directories` | Lists every path currently registered for auto-update tracking. **Server mode (v8.1.5):** gated by scope, not role — every role may call it; filtered to paths within the caller's own accessible scopes. | Personal + Server |
+| `list_tracked_directories` | Lists every path currently registered for auto-update tracking. **Server mode:** gated by scope, not role — every role may call it; filtered to paths within the caller's own accessible scopes. | Personal + Server |
 | `untrack_directory` | Removes a path from the tracking list and deletes all its chunks from ChromaDB. Destructive — chunks are gone until re-indexed. | Personal + Server |
 | `get_database_stats` | Chunk count, unique document count, and file-type breakdown for the ChromaDB index. Personal mode always covers the whole database. **Server mode:** scoped to the caller's own accessible scopes — every role, including owner, sees only their own private, assigned scope, and shared totals (§9 — no role gets a company-wide-total exception). | Personal + Server |
 
 ---
 
-#### Indexing — Reindex Tools (3 tools)
+#### Indexing — Reindex Tools
 
 | Tool | What It Does | Mode |
 |---|---|---|
@@ -395,7 +354,7 @@ This scoping applies independently of Tier B role gating (§6.3) — even an own
 
 ---
 
-#### Self-Learning Knowledge Base (10 tools)
+#### Self-Learning Knowledge Base
 
 | Tool | What It Does | Mode |
 |---|---|---|
@@ -412,28 +371,75 @@ This scoping applies independently of Tier B role gating (§6.3) — even an own
 
 ---
 
-#### Small Business Action Tools (7 tools)
+#### Small Business Action Tools
 
 | Tool | What It Does | Mode |
 |---|---|---|
 | `get_weather` | Current conditions and multi-day forecast. Uses Open-Meteo and Nominatim — free, no API key. Rain probability ≥ 50% is flagged. | Personal + Server |
 | `geocode_address` | Converts a street address to GPS coordinates via Nominatim / OpenStreetMap — free, no API key. | Personal + Server |
+| `get_home_address` | **New.** Returns the owner's configured home/business address (Street, City, State, ZIP) from Settings → Home address, formatted as a single string — resolves "my address," "the shop," "home" before a routing or geocoding call, most commonly right before `optimize_route()` or `geocode_address()`. | Personal only — see §6.2. The server-mode, per-crew-member equivalent is `get_route_start_options` (§6.4 → Route & Schedule Advisor). |
 | `optimize_route` | Solves the Traveling Salesman Problem for a list of job stops using real street routing via OSRM. Returns stops in optimal order with estimated arrival times. | Personal + Server |
 | `build_maps_url` | Generates a tap-to-navigate Google Maps (or Apple Maps) URL with all stops pre-loaded in optimized order. Splits into multiple leg links for routes over 9 stops. | Personal + Server |
-| `read_job_spreadsheet` | Reads job data from the AI-Prowler Job Tracker spreadsheet. Supports date filtering to show today's or a specific day's jobs. **Server mode, `Jobs_Schedule` sheet only:** staff/field_crew see only rows where `Crew / Technician` matches their own name; owner/manager see every row. Doesn't apply to the `Customers` sheet (stays fully readable for `send_email`/`send_sms` lookups) or to anyone on their own per-employee spreadsheet file — those rows already belong to them by construction. | Personal + Server |
-| `update_job_spreadsheet` | Updates a row in the job tracker after a job is completed — status, invoice number, duration, actual amount, etc. Auto-backs up the spreadsheet before writing. **Server mode, `Jobs_Schedule` sheet only:** rejected if the row isn't assigned to you; owner/manager and anyone on their own per-employee file are unrestricted. | Personal + Server |
-| `check_tools_status` | Field-service health check. Reports which action tools are ready to use and which need configuration (SMTP, spreadsheet path, routing APIs). **Server mode:** the dev-tools/file-editing section reflects the caller's actual availability — most dev tools (code execution, backups, `list_directory`) are unavailable in server mode; the write/edit tools show a live check of whether the caller currently has a personal directory configured. | Personal + Server |
+| `read_job_spreadsheet` | Reads job data from AI-Prowler's job tracker database — the same data the Jobs PWA App's Board/Jobs/Database tabs show. Supports date filtering to show today's or a specific day's jobs. **Server mode, `Jobs_Schedule` sheet only:** field_crew see only rows where `Crew / Technician` matches their own name — the same filtering the Jobs PWA App applies to their view; owner, manager and staff see every row. `field_crew` has no access at all to the `Settings`, `Services_Pricing`, `Quotes`, or `Invoices` sheets. Doesn't apply to the `Customers` sheet (stays fully readable for `send_email`/`send_sms` lookups) or to anyone on their own per-employee database file — those rows already belong to them by construction. | Personal + Server |
+| `update_job_spreadsheet` | Updates a row in the job tracker after a job is completed — status, invoice number, duration, actual amount, etc. — the same edit a person could make from the Jobs PWA App's Database tab or an edit form. Auto-backs up the database before writing. **Server mode:** rejected if the row isn't assigned to you (`Jobs_Schedule`, `TimeLog`, `Route_Planner`); `field_crew` is locked out of `Settings` and `Services_Pricing` entirely, and out of pricing/status master fields on `Customers` (Frequency, Standard Quote, Discount, Net Price, Status, Total Jobs Completed, Lifetime Revenue) even for their own customers. Owner, manager, staff and anyone on their own per-employee file are unrestricted. | Personal + Server |
+| `get_working_days` | Returns the **Working Days** setting (e.g. `Mon,Tue,Wed,Thu,Fri`) — the days multi-day jobs are worked and routed. Read-only and open to every role, so field crew (who can't read the Settings sheet) get the same working days on their Calendar as the office. See **Section 10 → Multi-day jobs and Working Days**. | Personal + Server (all roles) |
+| `get_sheet_columns` | **New.** Returns a sheet's full ordered column list, plus any dropdown-backed columns (e.g. Customers' `Frequency`), so an edit form can show every field a row could have — including ones empty on that particular row — rather than only the fields already populated. Powers the Jobs PWA's row-edit form. | Personal + Server |
+| `check_tools_status` | Field-service health check. Reports which action tools are ready to use and which need configuration (SMTP, database path, routing APIs). **Server mode:** the dev-tools/file-editing section reflects the caller's actual availability — most dev tools (code execution, backups, `list_directory`) are unavailable in server mode; the write/edit tools show a live check of whether the caller currently has a personal directory configured. | Personal + Server |
 
 ---
 
-#### SMS & WhatsApp Tools (7 tools — 5 New in v8.0.0, 2 added later)
+#### Job Tracker — Record Creation
 
-These tools enable two-way SMS and WhatsApp communication between field crew, registered server users, and spreadsheet customers. `check_sms_inbox` and `check_sms_replies` are mode-exclusive — see §6.2 and §6.2b — because they answer the same underlying question ("what's come in?") with different scoping that only makes sense in one mode or the other.
+Before these tools existed, `update_job_spreadsheet()` could only edit an existing row — there was no way to add a brand-new customer, job, quote, invoice, setting, or pricing entry at all. Each of these always appends a new row and auto-assigns the next ID in that sheet's own numbering (`CUST-####`, `JOB-####`, `QTE-####`, `INV-####`); none of them ever edits an existing row.
 
 | Tool | What It Does | Mode |
 |---|---|---|
-| `send_sms` | Sends an SMS message to a registered user (from users.json) or a spreadsheet customer (from AI-Prowler_Job_Tracker.xlsx). If neither matches, falls back to your own saved personal contacts (`save_contact`) — server mode: your own contacts only, never a coworker's. Provider-abstracted: works with Twilio, SignalWire, or Vonage. In server mode, the sending employee's identity is stamped in the thread log. | Personal + Server |
-| `send_whatsapp` | Sends a WhatsApp message via the Twilio WhatsApp Business API. Same three-tier recipient lookup as `send_sms` (registered users → spreadsheet customers → your own saved contacts). Works worldwide — no carrier gateway issues. Server mode: sender identity stamped in the thread log, same as `send_sms`. | Personal + Server |
+| `create_job` | Appends a new row to `Jobs_Schedule`, auto-assigning the next `JOB-####`. **Requires an existing `CustomerID`** — a job can no longer be created for a customer that doesn't exist yet (`create_customer` first, then pass the `CustomerID` it returns). Unlike `update_job_spreadsheet`, creation is not restricted to a crew member's own existing jobs, since a brand-new row has no prior owner to check against. | Personal + Server (all roles) |
+| `create_customer` | Appends a new row to `Customers`, auto-assigning the next `CUST-####`. | Personal + Server (all roles) |
+| `create_quote` | Appends a new row to `Quotes`, auto-assigning the next `QTE-####`. Does not compute totals/tax/discount — pass the amounts you want written directly. | Personal + Server (all roles) |
+| `create_invoice` | Creates an invoice for a job and links it back (writes the new `InvoiceID` onto the job's `Jobs_Schedule` row) — the missing step between a priced job and `email_invoice()`/`text_invoice()`, neither of which can create one. Any price/description override you pass is written back onto the job row too, so the job listing stays in sync. Refuses to run if the job is already invoiced (one invoice per job). **Server mode:** a restricted role may only invoice jobs assigned to them; owner/manager unrestricted. | Personal + Server |
+| `create_setting` | Appends a new key/value row to `Settings`. Fails if the key already exists (use `update_job_spreadsheet` to change an existing key). | **Server: staff/manager/owner only** — company-wide configuration, not per-job data a field_crew member would create. Personal: unrestricted. |
+| `create_service_pricing` | Appends a new priced service line to `Services_Pricing` (e.g. "Window Cleaning — $150 flat"). The `Service Code` you supply is the row's own key and must be unique. | **Server: staff/manager/owner only.** Personal: unrestricted. |
+
+---
+
+#### Job Tracker — Record Deletion
+
+By design, almost nothing in AI-Prowler deletes a row — the standard pattern is to retire a record (e.g. set a customer's Status to Inactive) rather than remove it, so history stays intact. These six tools are the deliberate, narrow exceptions, each gated by a two-step confirmation (`confirm=True` required; a first, unconfirmed call only returns a preview of what would be deleted and changes nothing) and each preceded by an automatic safety backup of the whole database.
+
+| Tool | What It Does | Mode |
+|---|---|---|
+| `delete_customer` | Permanently deletes a customer **and every row that references them** (Jobs, Invoices, Quotes, TimeLog entries, route stops). Requires the customer to already be Status = Inactive — there is no way to delete an Active customer in one call. | **Server: staff/manager/owner only.** Personal: unrestricted. |
+| `delete_job` | Permanently deletes a job. Requires Job Status = Cancelled. A Completed job can **never** be deleted through this tool, under any confirm value — it's linked to invoicing/accounting history and must stay in the database permanently. Cascades to any TimeLog entries and route-stop rows the cancelled job had. | **Server: staff/manager/owner only.** Personal: unrestricted. |
+| `delete_quote` | Permanently deletes a quote, any status (not just Declined). No cascade — nothing else references a quote by foreign key. | **Server: staff/manager/owner only.** Personal: unrestricted. |
+| `delete_service_pricing` | Permanently deletes a Services_Pricing entry. No cascade — Jobs and Invoices always copy their own Service Type/amount at creation time rather than linking back to the price list. | **Server: staff/manager/owner only.** Personal: unrestricted. |
+| `delete_route` | Permanently deletes an **entire day's route** (every stop for a given date), not one stop at a time — the whole-route sibling of `delete_route_stop`. | Personal + Server, crew-scoped: a field_crew member may delete a day's route only if every stop on it is their own. |
+| `delete_route_stop` | Permanently deletes a single `Route_Planner` stop. No status pre-condition, no cascade. | Personal + Server, crew-scoped: a field_crew member may delete a stop only on their own route. |
+
+---
+
+#### Job Tracker — Billing Variants, Reminders & Mileage
+
+| Tool | What It Does | Mode |
+|---|---|---|
+| `text_invoice` | Sends an SMS notification for an invoice — amount due, plus a payment link if enabled in Settings → Small Business. Text alone can't carry the actual formatted invoice document; use `email_invoice` for that. Mutually exclusive with `email_invoice` by design — bill through one channel, not both. | Personal + Server |
+| `email_receipt` | Emails a payment-received receipt (not an invoice) after a customer pays by cash, check, or other offline method — a thank-you / proof-of-payment, not a bill. | Personal + Server |
+| `text_receipt` | Same as `email_receipt`, sent via SMS. | Personal + Server |
+| `find_stale_customers` | Lists Active customers who haven't had a Completed job in `days_threshold` days (default reads Settings → "Stale Customer Reminder Days," 60 if never set) — or have never had one at all — most-overdue first. "Last serviced" comes from actual job history, not the Customers sheet's hand-maintained field. Powers Reports → Customer Reminders. | **Server: owner only.** Personal: unrestricted. |
+| `send_customer_reminders` | Sends a check-in/reminder message to specific customers found by `find_stale_customers` — by email or SMS, using each customer's own contact info on file. Nothing messages a customer automatically; this is the explicit, reviewed send step. Greets by the actual person (First Name / On-Site Contact), not the account name. | **Server: owner only.** Personal: unrestricted. |
+| `get_daily_mileage` | Estimates miles driven on a given day, computed from real GPS points already captured at clock-in/clock-out (not continuous background tracking — a browser PWA can't do that reliably, especially iOS Safari). Sums OSRM driving distance between consecutive clock-out → clock-in GPS pairs; legs with a missing GPS point are skipped and listed separately rather than guessed. | Personal + Server |
+
+---
+
+#### SMS & WhatsApp Tools
+
+These tools enable two-way SMS and WhatsApp communication between field crew, registered server users, and customers from the job tracker's Customers records (the same list shown in the Jobs PWA App). `check_sms_inbox` and `check_sms_replies` are mode-exclusive — see §6.2 and §6.2b — because they answer the same underlying question ("what's come in?") with different scoping that only makes sense in one mode or the other.
+
+| Tool | What It Does | Mode |
+|---|---|---|
+| `check_sms_configured` | **New.** Lightweight check for whether an SMS provider (Twilio, SignalWire, or Vonage) is configured — returns exactly `"✅ SMS configured"` or `"❌ SMS not configured"`. Backs the Jobs PWA's SMS-dependent buttons, same pattern as `check_email_configured` (§ Email Tools). | Personal + Server |
+| `send_sms` | Sends an SMS message to a registered user (from users.json) or a job tracker Customer record (the same Customers list shown in the Jobs PWA App). If neither matches, falls back to your own saved personal contacts (`save_contact`) — server mode: your own contacts only, never a coworker's. Provider-abstracted: works with Twilio, SignalWire, or Vonage. **The old email-to-SMS carrier-gateway fallback (vtext.com, txt.att.net, etc.) has been removed** — see the note below. In server mode, the sending employee's identity is stamped in the thread log. | Personal + Server |
+| `send_whatsapp` | Sends a WhatsApp message via the Twilio WhatsApp Business API. Same three-tier recipient lookup as `send_sms` (registered users → job tracker Customer records → your own saved contacts). Works worldwide — no carrier gateway issues. Server mode: sender identity stamped in the thread log, same as `send_sms`. | Personal + Server |
 | `check_sms_inbox` | Reads the entire local SMS/WhatsApp inbox (populated in real time via the `/sms-webhook` and `/whatsapp-webhook` endpoints) — every inbound message from any sender, not just people you've texted. Filterable by provider and unread-only; `since_hours=0` returns everything ever received. Personal mode only — it has no per-user scoping, so it's suppressed in server mode to prevent one employee from reading everyone's messages. | Personal |
 | `check_sms_replies` | Checks for inbound SMS replies, scoped to threads **you personally sent** — in server mode, Mike sees only Karen's reply, not Jake's or Bob's. Server mode only — with a single personal-install user this attribution is meaningless, so `check_sms_inbox` covers personal mode instead. | Server |
 | `check_whatsapp_replies` | Checks for inbound WhatsApp messages. **Server mode:** scoped to threads you personally sent — same per-user isolation as `check_sms_replies` (it no longer delegates to `check_sms_inbox` internally, which would have bypassed that scoping entirely). | Personal + Server |
@@ -445,26 +451,32 @@ These tools enable two-way SMS and WhatsApp communication between field crew, re
 **SMS Setup (Server Mode):** Configure SMS credentials directly in the AI-Prowler GUI under **Settings → SMS Configuration**. The webhook endpoints `/sms-webhook`, `/whatsapp-webhook`, and `/consent-signup` are registered automatically when the HTTP server starts.
 
 **SMS Recipients:** Recipients are resolved by name or partial match against:
-1. Registered server users in `users.json` (with `cell_phone` and `cell_carrier` set in the Admin tab)
-2. Customers in the Customers sheet of `AI-Prowler_Job_Tracker.xlsx` (with Phone and Cell Carrier columns)
+1. Registered server users in `users.json`
+2. Customers in the Customers sheet / `Customers` table (by Phone)
+
+> **The free email-to-SMS carrier-gateway approach has been removed.** Earlier revisions of this guide (and the `Customers` sheet's `Cell Carrier`/`SMS Gateway` columns, described below) documented `send_sms` as able to fall back to a carrier's email-to-SMS gateway (e.g. `@vtext.com`, `@mypixmessages.com`, `@txt.att.net`). That path is gone — those gateways are being shut down industry-wide (AT&T's is already gone; Verizon's is mid-shutdown through 2027) and were unreliable even while active (spam filtering, no delivery confirmation, no two-way replies). `send_sms` now requires a real SMS provider — Twilio, SignalWire, or Vonage — configured in Settings → SMS / Text Messaging. The `Cell Carrier` and `SMS Gateway` columns on the Customers sheet are vestigial as far as `send_sms` is concerned; they are not read by the current implementation.
 
 ---
 
-#### Email Tools (5 tools)
+#### Email Tools
 
 Most email tools are personal-mode only, but `send_email` and `send_alert` are also available in server mode to all roles. See Section 6.5 for SMTP setup instructions.
 
 | Tool | What It Does | Mode |
 |---|---|---|
 | `configure_email` | Saves SMTP credentials so Claude can send email. Auto-detects provider from email domain. Called once; credentials persist. | Personal only |
-| `send_email` | Sends a plain-text email. Optional file attachment from any tracked directory. In server mode uses the server's SMTP config with employee Reply-To header. Resolves a name-only `to` in order: Customers sheet, registered users (`users.json`), then your own saved personal contacts (`save_contact`) as a final fallback. The Customers-sheet lookup always reads the single master spreadsheet directly (unlike the job-spreadsheet tools under "Server Mode: Which Spreadsheet Gets Used," it does **not** follow per-user tracker routing) — same behavior in both modes. | Personal + Server (all roles) |
+| `check_email_configured` | **New.** Lightweight check for whether SMTP email is configured — returns exactly `"✅ Email configured"` or `"❌ Email not configured"`, safe for exact-match parsing. Backs the Jobs PWA's Email Invoice button (enabled/dimmed before the user taps it). | Personal + Server |
+| `send_email` | Sends a plain-text email. Optional file attachment from any tracked directory. In server mode uses the server's SMTP config with employee Reply-To header. Resolves a name-only `to` in order: Customers sheet, registered users (`users.json`), then your own saved personal contacts (`save_contact`) as a final fallback. The Customers-sheet lookup reads the one shared job database — same behavior in both modes. | Personal + Server (all roles) |
 | `send_alert` | Fires a quick one-line alert email — subject auto-generated from the message. Great for voice-commanded notifications from the field. | Personal + Server (all roles) |
 | `send_file` | Sends any tracked file as an email attachment. Auto-generates subject from filename if not specified. | Personal only |
 | `send_learnings_report` | Emails a formatted HTML learnings report. Available in server mode with expanded filters. | Personal + Server |
+| `list_outlook_accounts` | **New.** Lists every email account configured in the local Microsoft Outlook installation, so `send_email`'s optional `from_account` argument can target a specific one (e.g. "email the Torres invoice from my Yahoo account, not my work email") instead of always sending from the default. Only meaningful when the Outlook backend is active. | Personal only |
+
+> Both SMS and email now have a matching "is this configured?" pre-check tool — `check_sms_configured` (§ SMS & WhatsApp Tools) and `check_email_configured` above — both return the same `"✅ … configured"` / `"❌ … not configured"` shape so the Jobs PWA can enable or dim a send button before the user taps it, rather than letting them tap something that's guaranteed to fail.
 
 ---
 
-#### Write Zone Management (2 tools — Personal Installs Only)
+#### Write Zone Management (Personal Installs Only)
 
 | Tool | What It Does | Mode |
 |---|---|---|
@@ -473,7 +485,7 @@ Most email tools are personal-mode only, but `send_email` and `send_alert` are a
 
 ---
 
-#### Code Tools — Write-Side (13 tools — Personal + Server, Server Scoped to Own Directory)
+#### Code Tools — Write-Side (Personal + Server, Server Scoped to Own Directory)
 
 All write operations are protected by four independent layers: read allowlist, writable allowlist, hard blocklist, and per-session circuit breaker. In server mode, a fifth layer applies to `create_file`, `write_file`, `str_replace_in_file`, `line_replace_in_file`, and `create_directory`: writes are scoped to the caller's own personal directory only, and denied entirely for users without one configured (see §6.2b). The remaining dev/backup-management tools (`copy_to_backup`, `restore_backup`, `list_backups`, `list_directory`, `reset_write_counter`, `grant_write_access`, `revoke_write_access`, `cleanup_backups`, `cleanup_job_logs`) stay fully suppressed in server mode (§6.2).
 
@@ -482,7 +494,7 @@ All write operations are protected by four independent layers: read allowlist, w
 | `create_file` | Creates a new file. Fails if the file already exists. **Server mode:** scoped to the caller's own personal directory only — denied entirely for users without one configured. | Personal + Server (own dir) |
 | `write_file` | Overwrites an existing file. Auto-backs up to `.bakN` before writing. **Server mode:** scoped to the caller's own personal directory only. | Personal + Server (own dir) |
 | `str_replace_in_file` | Surgical in-place edit: replaces one unique occurrence of `old_str` with `new_str`. Requires exact whitespace match including indentation. Use `dry_run=True` to preview the diff before committing. 1000× cheaper than a full file rewrite for large files. **Server mode:** scoped to the caller's own personal directory only. | Personal + Server (own dir) |
-| `line_replace_in_file` | **New in v8.0.0.** Replaces a range of lines by line number. Zero text-matching ambiguity — works on any file regardless of encoding or Unicode. Always pair with `read_file_lines` first to confirm exact line numbers. Last resort when `str_replace_in_file` fails (e.g. whitespace or Unicode differences make an exact match impractical). **Server mode:** scoped to the caller's own personal directory only. | Personal + Server (own dir) |
+| `line_replace_in_file` | Replaces a range of lines by line number. Zero text-matching ambiguity — works on any file regardless of encoding or Unicode. Always pair with `read_file_lines` first to confirm exact line numbers. Last resort when `str_replace_in_file` fails (e.g. whitespace or Unicode differences make an exact match impractical). **Server mode:** scoped to the caller's own personal directory only. | Personal + Server (own dir) |
 | `create_directory` | Creates a directory and any missing parents. Idempotent. **Server mode:** scoped to the caller's own personal directory only. | Personal + Server (own dir) |
 | `list_directory` | Lists the immediate contents of a directory: files, subdirectories, and backups. Read-only. | Personal |
 | `copy_to_backup` | Takes a manual snapshot of a file as `.bakN` without modifying the original. | Personal |
@@ -497,9 +509,9 @@ All write operations are protected by four independent layers: read allowlist, w
 
 ---
 
-#### Dev Tools (8 tools — Personal Installs Only)
+#### Dev Tools (Personal Installs Only)
 
-Eight tools for code verification and script execution. Suppressed in server mode.
+Tools for code verification, comparison, and script execution. Suppressed in server mode.
 
 **Verification tools (check code without running it):**
 
@@ -509,6 +521,7 @@ Eight tools for code verification and script execution. Suppressed in server mod
 | `check_python_import` | Imports a Python module in a separate process to catch load-time errors that `compile_check` misses (NameError, ImportError, bad module-level references). | Personal |
 | `syntax_check` | Multi-language syntax checker. Supports Python, JavaScript, TypeScript, C, C++, Go, Java, Perl, Ruby, PHP, Bash, Verilog, SystemVerilog, VHDL. | Personal |
 | `lint_check` | Multi-language linter — catches unused imports, undefined names, and style issues. Uses pyflakes (Python), tsc (TypeScript), go vet (Go), ghdl -a (VHDL). | Personal |
+| `diff_files` | **New.** Compares two text files and returns a unified diff Claude can read directly — verify what `str_replace_in_file` just changed, compare a file to an older `.bakN` backup, or confirm a fix before running tests. Both files must be under a tracked directory (or be `.bakN` backups of one). | Personal |
 
 **Execution tools (actually run scripts and programs):**
 
@@ -523,7 +536,7 @@ Eight tools for code verification and script execution. Suppressed in server mod
 
 ---
 
-#### Status & System (2 tools)
+#### Status & System
 
 Two different status tools — know which to call:
 
@@ -532,39 +545,93 @@ Two different status tools — know which to call:
 
 | Tool | What It Does | Mode |
 |---|---|---|
-| `check_ai_prowler_status` | RAG engine health check. Verifies ChromaDB connectivity, embedding model status, and chunk count — always shown to every role, a basic health signal. The tracked-paths list (real folder/file names) is still shown only to owner/manager in server mode; staff/field_crew still get the health check, just without that section. (Note: this is a role gate, unlike `list_tracked_directories`, which became scope-gated in v8.1.5 — the two tools' tracked-paths sections are no longer gated the same way.) | Personal + Server |
+| `check_ai_prowler_status` | RAG engine health check. Verifies ChromaDB connectivity, embedding model status, and chunk count — always shown to every role, a basic health signal. The tracked-paths list (real folder/file names) is still shown only to owner/manager in server mode; staff/field_crew still get the health check, just without that section. (Note: this is a role gate, unlike `list_tracked_directories`, which is scope-gated — the two tools' tracked-paths sections are gated differently.) | Personal + Server |
 | `how_to_use_ai_prowler` | Returns the recommended Agentic RAG workflow and tool-call sequence. Call at the start of any new research session. **The main guide is identical across every mode and role** — deliberate, so a conversation with two connectors attached (e.g. a personal install and a company server) can't have Claude conflate "not available on this connector" with "doesn't exist at all." Server-mode caveats (dev tools, code-aware retrieval, file-editing scoping, agentic analysis) are written inline in the guide text itself, present for every reader. Only the "THIS CONNECTION" footer varies — computed live per caller, including their personal-directory write status. | Personal + Server |
 
 ---
 
-#### Contractor & Job Tracker Tools (7 tools — Personal + Server)
+#### Contractor & Job Tracker Tools (Personal + Server)
 
 | Tool | What It Does | Mode |
 |---|---|---|
-| `log_time_entry` | Clocks in or out for a job. Records start/stop times and computes duration in the TimeLog sheet of the Job Tracker spreadsheet. Requires an exact, unambiguous job match — an identifier matching zero or multiple jobs is rejected rather than guessed. **Server mode:** rejected outright if the job isn't assigned to you (`Crew / Technician` column) — checked before any TimeLog entry is written, not just stamped afterward. Owner/manager and anyone on their own per-employee spreadsheet file are unrestricted. The `Crew / Technician` field is then stamped with the caller's own name, and a new `Logged By (User ID)` column tracks ownership — you can only clock out an entry you personally opened, and one teammate's open shift never blocks another's on the same job. | Personal + Server |
-| `email_invoice` | Reads the Invoices sheet and emails a branded HTML invoice directly to the customer. **Server mode:** rejected if the invoice's job isn't assigned to you (cross-referenced against `Jobs_Schedule`'s `Crew / Technician` column, since Invoices has no crew column of its own). Owner/manager and anyone on their own per-employee spreadsheet file are unrestricted. | Personal + Server |
-| `schedule_next_recurring_job` | Auto-creates the next recurring job entry (weekly, bi-weekly, monthly, quarterly) after a job is marked complete. Requires an exact, unambiguous job match — a `job_identifier` matching zero or multiple jobs is rejected with a candidate list rather than guessed. Accepts a `when` argument in **both** modes — `"today"` (default if omitted, in both modes), `"tomorrow"`, `"yesterday"`, `"this_week"`, `"next_week"`, `"any"` (no date restriction), or an explicit `"YYYY-MM-DD"` — to scope which jobs are searched by date. **Server mode:** staff/field_crew only search jobs assigned to them (`Crew / Technician` matches their own name); owner/manager search every crew's jobs. | Personal + Server |
+| `log_time_entry` | Clocks in or out for a job — the same action available from the Jobs PWA App's Clock screen. Records start/stop times and computes duration in the TimeLog sheet of the job tracker database. Requires an exact, unambiguous job match — an identifier matching zero or multiple jobs is rejected rather than guessed. **Server mode:** rejected outright if the job isn't assigned to you (`Crew / Technician` column) — checked before any TimeLog entry is written, not just stamped afterward. Owner, manager, staff and anyone on their own per-employee database file are unrestricted. The `Crew / Technician` field is then stamped with the caller's own name, and a new `Logged By (User ID)` column tracks ownership — you can only clock out an entry you personally opened, and one teammate's open shift never blocks another's on the same job. | Personal + Server |
+| `email_invoice` | Reads the Invoices sheet and emails a branded HTML invoice directly to the customer — the same invoice the Jobs PWA App can email from its own Invoices screen. **Server mode:** rejected if the invoice's job isn't assigned to you (cross-referenced against `Jobs_Schedule`'s `Crew / Technician` column, since Invoices has no crew column of its own). Owner, manager, staff and anyone on their own per-employee database file are unrestricted. | Personal + Server |
+| `schedule_next_recurring_job` | Auto-creates the next recurring job entry (weekly, bi-weekly, monthly, quarterly) after a job is marked complete. Requires an exact, unambiguous job match — a `job_identifier` matching zero or multiple jobs is rejected with a candidate list rather than guessed. Accepts a `when` argument in **both** modes — `"today"` (default if omitted, in both modes), `"tomorrow"`, `"yesterday"`, `"this_week"`, `"next_week"`, `"any"` (no date restriction), or an explicit `"YYYY-MM-DD"` — to scope which jobs are searched by date. **Server mode:** field_crew only search jobs assigned to them (`Crew / Technician` matches their own name); owner, manager and staff search every crew's jobs. | Personal + Server |
 | `get_ar_aging_report` | Generates an Accounts Receivable aging report from the Invoices sheet, broken into Current / 1–30 / 31–60 / 61–90 / 90+ day buckets. | Personal + Server |
 | `save_contact` | Saves or updates a personal contact (phone and/or email) so future `send_sms` / `send_email` calls can resolve them by name. Merges with any existing saved fields rather than overwriting. **Server mode:** each user gets their own separate file (`contacts_cache_<user_id>.json`) — genuinely private, not a shared company address book; the confirmation message shows exactly which file it saved to. | Personal + Server |
 | `get_sms_thread` | Returns the full two-way conversation thread with a contact — both outbound and inbound messages in chronological order. **Server mode:** only shown if you personally last sent to this contact — threads are keyed by phone number company-wide, so this prevents seeing another employee's conversation just by naming their contact. | Personal + Server |
 | `list_sms_contacts_with_replies` | Lists all contacts you've texted recently, with unread inbound reply counts highlighted. **Server mode:** scoped to threads you personally sent — same per-user isolation as `check_sms_replies`. A brand-new user with no thread history yet sees everything until they send their first message. | Personal + Server |
+| `get_board_updates` | **New.** Returns every row changed since a given timestamp (`WHERE last_edited_at > ?`) — the live-update polling query behind the admin Job Board (§10 → Job Board), meant to be called on a ~60-second interval so the board reflects crew activity without a manual refresh. Returns raw JSON, not a formatted digest — built for a UI to render into cards. **Server mode:** field_crew only receive `Jobs_Schedule` rows assigned to them; `field_crew` gets no access at all to Settings, Services_Pricing, Quotes, or Invoices via this path either. | Personal + Server |
 
 ---
 
-#### Agentic Analysis Tools (8 tools — Personal Only)
+#### Route & Schedule Advisor
+
+Everything the Jobs PWA's **Route** tab buttons call — building, reordering, re-planning, and approving a day's route — plus the tools behind letting Claude reason through a day's stop order itself rather than using the built-in nearest-neighbor heuristic.
+
+| Tool | What It Does | Mode |
+|---|---|---|
+| `build_daily_route` | The Route tab's full route builder: finds every job scheduled on a date (optionally one crew), geocodes any missing addresses and writes the coordinates back onto the job row, orders the stops (by TSP-optimized order from a given `origin`, or by each job's own Start Time if no origin is given), and writes the result into `Route_Planner` — replacing whatever was there for that day/crew. Runs a pre-flight savings check when an origin is given: if reordering would save 10+ minutes of drive time, it stops and asks for confirmation (`accept_reorder=True`) before committing. Surfaces GEOCODING FAILED / LATE ARRIVAL / SCHEDULE OVERLAP warnings without blocking the write. | Personal + Server |
+| `suggest_route_schedule` | The Route tab's "Get AI Suggestion" button — a free, instant, deterministic scheduling heuristic (not a live LLM call): splits hard-committed jobs from soft (placeable-anywhere) jobs, builds a geographically sensible order, then repairs it so hard jobs never violate their own committed order, chains real OSRM drive times through the day, and applies the daily lunch pause wherever it lands. Writes straight into `Route_Planner`, same storage path as manual route-building. | Personal + Server |
+| `apply_route_order` | Writes a **caller-reasoned** visit order into `Route_Planner` — the "let something that can actually think about the day decide the order" alternative to `suggest_route_schedule`'s heuristic. Runs the exact same timeline engine (real drive times, lunch pause, hard/soft violation checking), so the result looks and behaves identically either way; the only difference is who chose the order. Get the day's real numbers first via `get_route_drive_matrix()`, reason through the order, then call this. | Personal + Server |
+| `get_route_drive_matrix` | Returns a real drive-time/drive-distance matrix (minutes and miles) between every geocoded job scheduled on a date — one OSRM `/table` call — for something doing its own reasoning about visit order to work from before calling `apply_route_order`. | Personal + Server |
+| `reorder_route_stop` | Moves one stop to a new position within its own day's route (the Route tab's drag-and-drop / ▲▼ buttons), then **re-plans the whole day** in the new order using the same timeline engine as `build_daily_route` — every stop's arrival time is recomputed, not just the moved ones, so moving a stop and moving it back always returns exactly the same times. | Personal + Server, crew-scoped |
+| `replan_route_day` | Re-plans a day's stored route **in its current order** — recomputes every arrival time, the lunch pause, and every warning after a job's own schedule (Start Time, Duration, Hard/Soft type) was edited elsewhere, without changing the visit order itself. | Personal + Server, crew-scoped |
+| `approve_route_schedule` | The Route tab's "Approve" button — pushes each routed non-hard job's computed arrival time into its actual Start Time (with End Time derived from Est. Duration). Hard jobs are skipped — their Start Time is already a real commitment. Never touches Original Start Time/Original End Time, which is what makes `unapprove_route_schedule` a safe, repeatable undo. | Personal + Server |
+| `unapprove_route_schedule` | The direct inverse of `approve_route_schedule` — copies each non-hard job's Original Start Time/Original End Time back into Start Time/End Time, restoring the customer's actually-agreed schedule after any amount of trial-and-error route approving. | Personal + Server |
+| `email_route_now` | Emails the currently-saved route (stop order + arrival times + tap-to-navigate link) for a date/crew right now, on request — independent of whether Settings → "Email Route On Build" auto-email is on. **Server mode:** a field_crew caller can only email their own route; owner/manager/staff may email any crew's. | Personal + Server, crew-scoped |
+| `get_route_start_options` | Backs the Jobs PWA's AI Routing start/end picker: reports which home address to offer next to "Current location (GPS)." Read-only — never geocodes, writes, or spends anything. **Server mode:** the home address saved for the relevant user in the Admin tab (a field_crew caller can only see their own); this is the per-user, server-mode equivalent of `get_home_address` (§6.2, Personal-only). | Personal + Server |
+
+---
+
+#### AI Routing — Autonomous Claude Code Sessions
+
+The Jobs PWA's **"🧠 Run AI Routing (uses Credits)"** button: a real headless Claude Code session that reasons through a day's jobs the way `apply_route_order` describes, then writes the result via `apply_route_order` itself — genuinely spending Claude usage, as opposed to `suggest_route_schedule`'s free heuristic. Split into start/poll so a multi-minute agentic run can't be cut off by an idle-connection timeout.
+
+| Tool | What It Does | Mode |
+|---|---|---|
+| `start_ai_routing` | Kicks off the background Claude Code session and returns immediately with a `job_id`. Calling it again for the same date+crew while a run is in flight hands back the existing `job_id` instead of starting a second one, so a double-tap can't spend usage twice. **Server mode:** billed to the caller using the Claude token an admin saved for them in the Admin tab; a field_crew caller can only route their own day. | Personal + Server |
+| `poll_ai_routing` | Checks progress on a run started by `start_ai_routing` — running / done / error, with the session's final summary once finished. | Personal + Server |
+| `start_cli_signin` | Step 1 of the Jobs app's "Connect your Claude account" phone sign-in flow (server mode): starts a Claude sign-in for the caller and returns the link to open on their phone. | Server |
+| `submit_cli_signin_code` | Step 2: the code shown after signing in on the phone. On success, the server saves the token for the caller and emails them a copy. | Server |
+| `cancel_cli_signin` | Abandons the caller's pending phone sign-in. Safe to call when nothing is pending. | Server |
+| `save_my_cli_token` | The "I already have a token" path — saves a Claude Code token the user already made (typically copied from AI-Prowler Personal's Links & Analysis page) as the caller's AI Routing credential, without minting a new one or invalidating a Personal install's own token. | Personal + Server |
+
+---
+
+#### Agentic Analysis Tools (Personal Only)
 
 These tools power the **Common Business AI Analysis** and **My Custom AI Analyses** sections in the Quick Links tab. Not available in server mode.
 
 | Tool | What It Does | Mode |
 |---|---|---|
-| `create_analysis_task` | Defines a new recurring or one-off custom task from a plain-language request — the same thing the "+ New Custom Analysis" GUI dialog builds. **Day-granularity scheduling only** — there's no time-of-day in this system, so "every Monday at 8am" is stored as "due every Monday"; the "8am" isn't representable. Enforces the same 25-task cap as the GUI dialog (`MAX_CUSTOM_TASKS`, centralized inside `create_task()` itself). | Personal |
+| `create_analysis_task` | Defines a new recurring or one-off custom task from a plain-language request — the same thing the "+ New Custom Analysis" GUI dialog builds. **Day-granularity scheduling only for weekly/biweekly/monthly** — `schedule="daily"` additionally supports `daily_start_time`/`daily_end_time`/`daily_times_per_day` for N evenly-spaced runs per day; weekly/biweekly/monthly remain day-granularity only, and `schedule_day_of_week` can pin the run to a specific weekday. Enforces the same 25-task cap as the GUI dialog (`MAX_CUSTOM_TASKS`). | Personal |
 | `list_analysis_tasks` | Lists the FULL custom-analysis task definition list (`custom_analysis_tasks.json`), up to 25, regardless of due date — with an `is_due` flag per task. Complements `get_pending_analysis_tasks`, which only shows tasks that have already been queued into the run queue (`pending_tasks.json`). Strictly read-only; never modifies or queues anything. | Personal |
-| `sync_due_tasks_to_queue` | **New in v8.1.9.** Pushes any DUE custom task definitions into the run queue that aren't already sitting there — the missing link that makes "the queue gets checked and runs whatever's due" actually true without a manual GUI Queue click. Idempotent (safe to call repeatedly; won't duplicate). Call this before `get_pending_analysis_tasks()` for a fully autonomous "check and run" pass. Does not touch Common Business Analysis (built-in) tasks — those have no separate definition to sync from. | Personal |
-| `get_pending_analysis_tasks` | Returns tasks from `~/.ai-prowler/pending_tasks.json` that are **due right now** — `status == "pending"` AND `is_queue_entry_ready()`. **v8.1.9: now due-filtered** — a recurring task queued ahead of its `next_due` date stays hidden until that date arrives (it remains in the queue, it just isn't "ready" yet). One-shot entries (`schedule: "none"`) are always ready once queued. Returns a JSON object with `pending_count`, `tasks` array (including `task_id`, `label`, `prompt`, `scope_dirs`, `schedule`, `next_due`, `queued_ago`), and execution instructions. If the queue has items but none are due yet, says so explicitly rather than implying the queue is empty. | Personal |
-| `complete_analysis_task` | Marks a queued task as done for this run. **v8.1.9 unified re-arm:** one-shot entries (`schedule: "none"`, built-in or custom) complete permanently. Recurring entries — **built-in and custom now behave identically by design** — instead have `next_due` advanced and `status` reset back to `"pending"`, so the SAME queue entry re-arms itself and resurfaces automatically once next_due arrives, rather than requiring a manual re-queue. Anchors to the original due date, not the completion date; for custom tasks the source definition in `custom_analysis_tasks.json` is kept in sync. | Personal |
-| `delete_analysis_task` | **New in v8.1.9.** Removes a task from chat. Accepts either a custom definition's `task_id` (deletes the definition AND any linked queue entries) or a single queue entry's `task_id` (removes just that instance, leaving a recurring definition intact). | Personal |
-| `update_analysis_task` | **New in v8.1.9.** Edits an existing custom task's label, prompt, schedule, first_due, output options, or scope_dirs from chat — only the fields you pass are changed. Uses the same `update_task()` logic as the GUI editor, including the v8.1.9 fix for `next_due` correctly recomputing when schedule or first_due actually change (previously silently had no effect — see Known Issues history). Built-in tasks aren't editable this way; they have no standalone definition. | Personal |
+| `get_pending_analysis_tasks` | Returns tasks from `~/.ai-prowler/pending_tasks.json` that are **due right now** — `status == "pending"` AND `is_queue_entry_ready()`. Due-filtered: a recurring task queued ahead of its `next_due` date stays hidden until that date arrives (it remains in the queue, it just isn't "ready" yet). One-shot entries (`schedule: "none"`) are always ready once queued. If the queue has items but none are due yet, says so explicitly rather than implying the queue is empty. | Personal |
+| `queue_single_task` | **New — replaces the removed `sync_due_tasks_to_queue`.** Queues exactly one custom task for immediate execution regardless of its scheduled `next_due`, without touching any other task in the queue. Idempotent — a task already pending/ready is skipped. The queue is populated manually only (there is no bulk "sync everything currently due" tool anymore); this is the tool for "run this one now." | Personal |
+| `get_all_queued_tasks` | **New — replaces part of the removed `sync_due_tasks_to_queue`'s use case.** Returns EVERY item currently in the queue, regardless of whether it's due yet, so the user can see what's scheduled to run in the future — not just what `get_pending_analysis_tasks` would surface right now. | Personal |
+| `complete_analysis_task` | Marks a queued task as done for this run. **Unified re-arm:** one-shot entries (`schedule: "none"`, built-in or custom) complete permanently. Recurring entries — **built-in and custom behave identically by design** — instead have `next_due` advanced and `status` reset back to `"pending"`, so the SAME queue entry re-arms itself and resurfaces automatically once next_due arrives, rather than requiring a manual re-queue. Anchors to the original due date, not the completion date; for custom tasks the source definition in `custom_analysis_tasks.json` is kept in sync. | Personal |
+| `delete_analysis_task` | Removes a task from chat. Accepts either a custom definition's `task_id` (deletes the definition AND any linked queue entries) or a single queue entry's `task_id` (removes just that instance, leaving a recurring definition intact). | Personal |
+| `update_analysis_task` | Edits an existing custom task's label, prompt, schedule, first_due, output options, or scope_dirs from chat — only the fields you pass are changed. Uses the same `update_task()` logic as the GUI editor, including correctly recomputing `next_due` when schedule, first_due, or the daily-time fields actually change. Built-in tasks aren't editable this way; they have no standalone definition. | Personal |
 | `save_analysis_report` | Saves a full analysis as a Word document (`.docx`) to the configured report folder. Default: `~/Documents/AI-Prowler_tasks_reports`. | Personal |
+
+> **Note — stale tool name removed:** earlier revisions of this guide (and this section) referenced `sync_due_tasks_to_queue`, which pushed all due custom tasks into the run queue automatically. It was fully removed from the codebase once the real usage model turned out to be "the user adds tasks to the queue manually only, no auto-syncing." `queue_single_task` (queue one specific task now) and `get_all_queued_tasks` (see everything queued, due or not) cover what it did. If you have an older prompt or script that calls `sync_due_tasks_to_queue`, it will fail — switch to one of these two.
+
+---
+
+#### Data Portability & Backup
+
+Full detail, decision table ("which one do I want?"), and the Small Business tab's own panel: **§10 → Data Portability — Export, Backup, Restore.**
+
+**Who can use these in server mode:** the owner, managers and staff. Field crew are always refused — an export, backup or restore contains the whole company's data, not just their own jobs. Personal mode is unchanged.
+
+| Tool | What It Does | Mode |
+|---|---|---|
+| `export_to_excel` | One-way, lossy-by-design snapshot: a workbook with one sheet per table, built from whatever's in the database right now. Edits made to the exported file are never read back. | Personal + Server (not field crew) |
+| `export_to_csv` | Same idea as `export_to_excel`, as one `.csv` per table; scope with `tables=[...]` for just a couple of tables. | Personal + Server (not field crew) |
+| `export_to_quickbooks_csv` | Customers/Invoices CSVs pre-labeled with QuickBooks Online's own field names — QBO's own "map your fields" import screen still appears, but the mapping is fast since the column names already match. | Personal + Server (not field crew) |
+| `backup_job_database` | Lossless, round-trippable full-database backup via SQLite's own online Backup API — safe to run while the database is being actively written to. Defaults to `backup/AI-Prowler-Backup-<timestamp>.db` next to the live database. | Personal + Server (not field crew) |
+| `restore_job_database` | Replaces the live database with a backup file — meant for **moving to a new PC**. Requires `confirm=True`; an unconfirmed call changes nothing and shows how many jobs, customers, invoices, quotes, time entries and route stops are live now and how many are in the backup. Always validates the incoming file and takes a safety backup of whatever's live before overwriting it. **Server mode:** if the live database already has records, a confirmed restore is still refused unless `replace_existing=True` is also passed — Claude should only do that after you have seen both counts and said plainly that you want the current data wiped. | Personal + Server (not field crew) |
 
 
 
@@ -639,7 +706,7 @@ When the customer clicks Reply, the reply goes directly to the employee's person
 
 The Remote Access feature lets you use AI-Prowler with Claude.ai from any device — your phone, tablet, or any web browser — using the same agentic RAG capability as Claude Desktop.
 
-### Personal Mode Setup (v8.0.0 — Fully Automated)
+### Personal Mode Setup (Fully Automated)
 
 1. **Set a Bearer Token** — In Settings → Remote Access, enter any string as your Bearer token — this is the password Claude uses to connect to your knowledge base. Make it something strong (e.g. `MySecret123!`). Click **Save Token**.
 2. **Start the HTTP Server** — Click **▶ Start HTTP Server**. The status light turns green.
@@ -654,7 +721,7 @@ The Remote Access feature lets you use AI-Prowler with Claude.ai from any device
 
 > **No Cloudflare account needed.** The subscription automatically provisions and manages your Cloudflare tunnel. No manual DNS, no dashboard setup, no domain purchase required.
 
-### Business Server Mode Setup (v8.0.0 — Fully Automated)
+### Business Server Mode Setup (Fully Automated)
 
 See **Section 9** for the full server deployment guide. In brief:
 
@@ -691,6 +758,90 @@ The **Keep It Running** panel ensures Windows doesn't interrupt your MCP server.
 7. Click **Add** — Claude.ai connects to your tunnel and prompts for auth
 8. Enter your Bearer token
 9. Set **Always Allow** for all tools in the connector panel
+
+---
+
+> **Remote PWA app (personal mode only — not available in Server mode):** the same tunnel also serves a standalone browsable dashboard app at `/remote/` — separate from the MCP connection above. Full setup and tab-by-tab reference: **Section 26 — Remote PWA App**.
+
+---
+
+### File Transfer Tools (Personal Mode Only)
+
+Two MCP tools let Claude read and write files directly via the Remote Control PWA's existing HTTP endpoints, with no base64 encoding and no context-window overhead. Both tools are **personal mode only** — they are invisible in the MCP tool list on server-mode installs (Tier A suppressed) and return a ⛔ error if somehow called on a server install. The underlying HTTP endpoints enforce the same gate independently.
+
+#### Prerequisites
+
+- Remote Access must be configured (Cloudflare Tunnel active, bearer token set)
+- The file must be inside a **tracked directory** (use `index_path()` if not already tracked)
+- For uploads: the destination directory must be in the **writable allowlist** — call `grant_write_access(directory)` first if it's a new destination
+
+#### `get_file_download_url(file_path)` — Reading files without base64
+
+Returns a signed HTTPS URL that Claude passes straight to `web_fetch()` to read any tracked file directly into the conversation.
+
+**The workflow:**
+```
+You: "Read the contents of C:\Users\david\Documents\Misc\notes.md"
+Claude: [calls get_file_download_url("C:\Users\david\Documents\Misc\notes.md")]
+Claude: [tool returns {"download_url": "https://your-tunnel.../remote/download?path=...&token=..."}]
+Claude: [calls web_fetch(download_url)]
+Claude: [file content arrives inline — readable in the conversation]
+```
+
+**What the endpoint enforces:**
+- Bearer-token auth (embedded in the URL query string)
+- File must be inside a tracked readable directory
+- Extension allowlist: `.pdf`, `.docx`, `.xlsx`, `.doc`, `.xls`, `.pptx`, `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.heic`, `.mp4`, `.mov`, `.avi`, `.txt`, `.md`, `.csv`, `.json`, `.log`, `.py`, `.js`, `.html`, `.css`
+- 50 MB size limit
+- 20 downloads per bearer-token per hour (rate limit)
+
+**Text files** (`.txt`, `.md`, `.csv`, `.py`, `.js`, `.html`, `.json`, `.log`) arrive fully readable inline in the conversation. **Binary files** (`.pdf`, `.docx`, `.xlsx`, images, video) arrive as describable content Claude can summarise or comment on.
+
+**Common errors:**
+- `❌ File not found` — check the path is correct and the file exists on disk
+- `❌ not in the download allowlist` — file type not supported; convert or use a supported extension
+- `❌ not inside a tracked directory` — call `index_path(directory)` to track the parent folder first
+- `❌ exceeds the 50 MB download limit` — split or compress the file
+- `❌ No tunnel_domain configured` — set up Remote Access (Cloudflare Tunnel) in Settings first
+- `❌ No remote_token configured` — set a Bearer Token in Settings → Remote Access first
+
+#### `get_file_upload_url(filename, target_directory)` — Uploading files without base64
+
+Returns a signed HTTPS URL and `multipart/form-data` field instructions so Claude can upload a file to any writable tracked directory. The file is saved and automatically re-indexed into ChromaDB so it immediately becomes searchable.
+
+**Workflow — Claude uploads a file it generated (via `run_script`):**
+```
+You: "Save this report to C:\Users\david\Documents\Misc\report.md"
+Claude: [calls get_file_upload_url("report.md", "C:\Users\david\Documents\Misc")]
+Claude: [tool returns {"upload_url": "...", "curl_example": "curl -X POST ..."}]
+Claude: [creates the file locally, then calls run_script(curl_example)]
+```
+
+**Workflow — Browser artifact upload:**
+```
+Claude: [calls get_file_upload_url("data.csv", target_dir)]
+Claude: [builds a React/HTML artifact with the returned upload_url and field names]
+You: [drag-drop your file into the artifact — it POSTs directly to AI-Prowler]
+```
+
+**What the endpoint enforces:**
+- Bearer-token auth (token in the `token` form field)
+- Directory must be in the writable allowlist
+- File is saved as `target_directory\filename` and the directory is re-indexed immediately
+- Any existing file with the same name is overwritten
+
+**Multipart fields (for custom artifact/curl use):**
+| Field | Value |
+|---|---|
+| `file` | The file bytes, with the correct filename |
+| `dir` | Absolute Windows path to the target directory |
+| `token` | Your bearer token (from `config.json → remote_token`) |
+
+**Common errors:**
+- `❌ not in the writable allowlist` — call `grant_write_access(target_directory)` first, then retry
+- `❌ not inside a tracked directory` — call `index_path(directory)` to track the folder, then `grant_write_access()` to make it writable, then retry
+- `❌ filename must not be empty` — provide a non-empty filename
+- `❌ No tunnel_domain configured` — set up Remote Access first
 
 ---
 
@@ -845,14 +996,18 @@ The Admin tab appears only when `edition = business` AND `mode = server`.
 |---|---|---|
 | owner | The company account holder. One per company. | ✅ Always |
 | manager | Senior user. Can be granted delegated admin rights. | ✅ If granted |
-| staff | Regular employee. | ❌ |
-| field_crew | Field employee. | ❌ |
+| staff | Regular employee — also the crew-lead tier: sees and edits every crew's jobs in the Jobs App. | ❌ |
+| field_crew | Field employee — sees and edits only the jobs assigned to them in the Jobs App. | ❌ |
 
-Role only ever gates two things: Admin tab access (owner, and manager if granted "Can manage users") and part of `untrack_directory` (see §6.3 — v8.1.5: own personal directory is open to every role; owner or delegated admin is required only outside it). It does **not** gate what a user can search, whether they can index, or (as of v8.1.5) whether they can list tracked paths (`list_tracked_directories` is scope-gated now, same visibility as search) — those are controlled entirely by scopes, below. The role labels themselves are also useful just for the Admin tab's own bookkeeping — a quick visual read of who's who in the Active Users table.
+**For the knowledge base, role gates only two things:** Admin tab access (owner, and manager if granted "Can manage users") and part of `untrack_directory` (see §6.3 — own personal directory is open to every role; owner or delegated admin is required only outside it). It does **not** gate what a user can search, whether they can index, or whether they can list tracked paths (`list_tracked_directories` is scope-gated, same visibility as search) — those are controlled entirely by scopes, below.
 
-### Scopes — Controlling What Each User Can See (v8.1.4)
+**For job data (the job tracker and the Jobs App), role does matter** — it decides which jobs a user sees and edits, which Database tables they can open, and whether they get the Reports screen. Scopes play no part there. See **Roles and Scopes in the Jobs App** below and **Section 25**.
 
-Scopes are the data-access groups you define to match how your business is organized. Under the hood, every install now uses **one shared knowledge base** — there's no longer a separate database "collection" per scope. Each indexed chunk carries a scope tag (`sales`, `office`, `shared`, `private:<user>`, etc.), and search results are filtered by that tag at query time. This is simpler and safer than the old per-scope-collection design: a scope is purely a label you assign, not infrastructure you have to keep in sync.
+The role labels are also useful for the Admin tab's own bookkeeping — a quick visual read of who's who in the Active Users table.
+
+### Scopes — Controlling What Each User Can See
+
+Scopes are the data-access groups you define to match how your business is organized. Under the hood, every install uses **one shared knowledge base** — there's no separate database "collection" per scope. Each indexed chunk carries a scope tag (`sales`, `office`, `shared`, `private:<user>`, etc.), and search results are filtered by that tag at query time. A scope is purely a label you assign, not infrastructure you have to keep in sync.
 
 **Every user's search visibility follows the exact same formula, with no exceptions for role — including the owner:**
 
@@ -860,7 +1015,7 @@ Scopes are the data-access groups you define to match how your business is organ
 - their own assigned scopes
 - their own private scope, if **Private collection enabled** is ticked for them
 
-There is no "see everything" role anymore. If the owner needs to see a scope, it has to be assigned to them like anyone else. This also means indexing content doesn't leak it to anyone new — indexing was never the confidentiality boundary; scope + search always was, and it's the *only* boundary now.
+There is no "see everything" role. If the owner needs to see a scope, it has to be assigned to them like anyone else. This also means indexing content doesn't leak it to anyone new — indexing was never the confidentiality boundary; scope + search is the *only* boundary.
 
 **Managing the scope catalog:** scopes are picked from an admin-managed list, not free-typed. In the Admin tab, click **🏷️ Manage Scopes** to add or remove entries (up to 15). `shared` is always available and isn't listed — it can't be removed. Private scopes are per-user and also aren't listed here — they're controlled by the **Private collection enabled** checkbox on each user, not the catalog. Removing a scope from the catalog only stops it being offered for *new* assignments — it does not retroactively unassign it from anyone who already has it, or unscope any file already tagged with it.
 
@@ -873,6 +1028,28 @@ There is no "see everything" role anymore. If the owner needs to see a scope, it
 | Jake (field crew) | `field` | ✅ | job sheets/manuals, shared, own private |
 
 Note David (the owner) only sees `office`/`sales`/shared/his own private here — not Maria's or Jake's content — because there's no more owner-sees-everything exception. If David needs visibility into a scope he doesn't have, he assigns it to himself the same way he'd assign it to anyone else.
+
+### Roles and Scopes in the Jobs App
+
+Every server-mode user can open the Jobs App (Section 25) at `/jobs/` on the server's tunnel URL and log in with their **name and personal token** from the Admin tab. What they see there depends on their **role**, not their scopes:
+
+| In the Jobs App… | owner | manager | staff | field_crew |
+|---|---|---|---|---|
+| Jobs, Board, Calendar, Route — whose jobs | every crew | every crew | every crew | only jobs whose **Crew / Technician** is their name (a blank crew means *unassigned*, not *everyone*) |
+| Edit, reschedule, delete a job | any job | any job | any job | their own jobs only |
+| Route for another crew (build, reorder, approve, 📧 email) | ✅ | ✅ | ✅ | their own route; 📧 Email Route always goes to themselves |
+| Clock in / out | ✅ | ✅ | ✅ | ✅ on their own jobs |
+| Photos | any job | any job | any job | their own jobs |
+| Database tab — Jobs_Schedule, Customers, TimeLog, Route_Planner | ✅ | ✅ | ✅ | ✅ (job rows filtered to their own; Customers readable for gate codes and access notes; pricing/status fields on Customers are locked) |
+| Database tab — Settings, Services_Pricing, Quotes, Invoices | ✅ | ✅ | ✅ | ❌ not shown, and refused by the server |
+| Reports screen (revenue, hours, stale customers, reminders) | ✅ | ❌ | ❌ | ❌ |
+| Messages (SMS/WhatsApp) | ✅ | ✅ | ✅ | ✅ |
+
+- **Scopes don't apply to job data.** Scopes decide which *indexed documents* a user can search. The job tracker is one database; the role decides how much of it a user sees. A field crew member with no scopes at all still sees their own jobs.
+- **One job database for everyone.** Every user works in the same shared job database; only their role decides which rows they see (see Section 10 → *Server Mode: One Shared Job Database*).
+- **Tools hidden on the server.** Tools that act on the server machine itself (running scripts, file tools, the SMS inbox — see §6.2 Tier A) are not available to anyone in server mode, including the owner, and so never appear in the Jobs App.
+- **Rules are enforced on the server.** Hiding a tab in the app is only a convenience; the server refuses the same actions if they are tried another way.
+- **Changing a role** takes effect the next time the user logs in to the Jobs App.
 
 ### The Admin Tab (Server Mode Only)
 
@@ -905,14 +1082,14 @@ The Admin tab appears only when `edition = business` AND `mode = server`. Authen
 | 🔑 Regenerate Token | Issues a new random bearer token — old token stops working immediately |
 | 🚫 Suspend/Activate | Toggles active/suspended without deleting the user |
 | 🗑 Remove | Permanently deletes the user and frees their seat |
-| 🏷️ Manage Scopes | **New in v8.1.4.** Add or remove entries in the shared scope catalog (up to 15) — see the Scopes section above |
+| 🏷️ Manage Scopes | Add or remove entries in the shared scope catalog (up to 15) — see the Scopes section above |
 | ↻ Refresh | Reloads users.json and repaints the table |
 
 **Adding a User (Step by Step)**
 1. Click ➕ Add User
 2. Fill in Name (required), Email (optional), Cell Phone (optional), Cell Carrier (optional)
 3. Choose a Role
-4. **Select Scopes** — a multi-select list (Ctrl/Shift-click for multiple) populated from the scope catalog. Manage the catalog itself via 🏷️ Manage Scopes if the scope you need isn't listed yet. **(v8.1.4 — replaces the old comma-separated free-text field.)**
+4. **Select Scopes** — a multi-select list (Ctrl/Shift-click for multiple) populated from the scope catalog. Manage the catalog itself via 🏷️ Manage Scopes if the scope you need isn't listed yet.
 5. Optionally tick **Can manage users** (managers only) and **Private collection enabled**
 6. Assign a **License seat** from the dropdown (unassigned child keys)
 7. Bearer token — leave blank to auto-generate (recommended)
@@ -925,7 +1102,7 @@ Once added, hand them:
 
 The employee adds that connector in Claude.ai settings, authenticates with their bearer token, and starts a new conversation. Their personal AI-Prowler (from their seat email) connects them to their private documents. The server connector connects them to the shared company knowledge base. Both connectors can be active simultaneously in Claude.ai.
 
-### Assigning Scopes to Folders — Update Index Tab (v8.1.4)
+### Assigning Scopes to Folders — Update Index Tab
 
 Beyond assigning scopes to *users*, an owner/manager also assigns a scope to each tracked *folder or file*, from the Update Index tab:
 
@@ -953,56 +1130,234 @@ A folder with no scope assigned at all defaults to `shared` once it's tracked an
 
 The Small Business tab provides configuration and quick-reference for the field service automation MCP tools. These tools let Claude act as your field service assistant from a conversation.
 
+> **The job tracker's canonical live data store is a SQLite database (`ai_prowler_jobs.db`) — see Job Tracker Database (SQLite) below.** This section also covers two purpose-built features: the **Job Board** (a live admin kanban view) and **Data Portability** (export/backup/restore tools).
+
 ### Free Tools
 
-Four tools require no setup and work immediately: `get_weather` (Open-Meteo + Nominatim), `geocode_address` (Nominatim / OpenStreetMap), `optimize_route` (OSRM public routing server), and `build_maps_url` (Google Maps / Apple Maps URL scheme). None need an API key.
+Five tools require no setup and work immediately: `get_weather` (Open-Meteo + Nominatim), `geocode_address` (Nominatim / OpenStreetMap), `optimize_route` (OSRM public routing server), `build_maps_url` (Google Maps / Apple Maps URL scheme), and `build_daily_route` (Nominatim + OSRM, same as `optimize_route` — see below). None need an API key.
 
-> As of v9.1.0 these are documented, along with every other Small Business tool, an end-to-end daily workflow, and example prompts, in the **🔧 View All Service Tools & Example Prompts** popup opened from the Small Business tab — they no longer have a dedicated always-visible panel there.
+> These tools are documented, along with every other Small Business tool, an end-to-end daily workflow, and example prompts, in the **🔧 View All Service Tools & Example Prompts** popup opened from the Small Business tab — they no longer have a dedicated always-visible panel there.
 
-### Spreadsheet Schema Migration
+### Complete Contractor / Job Tracker Tool List
 
-Each release may add new sheets, new columns, or corrected formatting to `AI-Prowler_Job_Tracker.xlsx`. Existing users' spreadsheets don't pick these up automatically — the installer's `onlyifdoesntexist` behavior deliberately never overwrites a live working file. The Spreadsheet Schema Migration feature closes that gap safely.
+Every MCP tool built for the field-service/contractor workflow, in one place. Full detail on `create_customer`, `create_quote`, and `build_daily_route` is in the section immediately below this table; everything else is documented at the point where it's first used in the **Typical Small Business Contractor Workflow** walkthrough further down this section.
 
-**How it works:**
+**Reading & editing job tracker data** *(the same data shown in the Jobs PWA App's Board, Jobs, and Database tabs)*
 
-- The **Small Business tab** shows a status light: 🔴 **Update required** or 🟢 **Up to date**, based on comparing your spreadsheet's recorded schema version (`spreadsheet_schema_version` in `~/.ai-prowler/config.json`) against the version this release targets.
-- This check is purely informational — **nothing runs automatically**, including at startup. The only way a migration ever runs is by clicking **Update Spreadsheet Now**.
-- Clicking it shows a consent dialog stating exactly which file will be updated, where the automatic backup will be saved (a timestamped copy in a `_backups` subfolder next to your spreadsheet), and a plain-English list of what will change (new sheets, new columns, freeze-pane corrections) — plus which of your own custom sheets and columns will be left untouched. You choose **✅ Migrate Now** or **Cancel — Do It Later**.
-- On success, a result dialog confirms what changed and where the backup is. On any failure, the original file is automatically restored from that backup before you see the failure dialog — your data is never left in a partially-migrated state.
-- A copy of the new template (`AI-Prowler_Job_Tracker_TEMPLATE_v<N>.xlsx`) is placed alongside your file after a successful migration, so you (or Claude) can compare it against your working copy if needed.
-- Every migration attempt — success or failure, including the full error and stack trace on failure — is logged to `~/.ai-prowler/spreadsheet_migration.log`.
+| Tool | What it does |
+|---|---|
+| `read_job_spreadsheet` | Reads rows from any table, with optional date/customer/status filters |
+| `update_job_spreadsheet` | Edits an **existing** row's columns by exact header match — status, payment, notes, anything |
+| `get_sheet_columns` | Lists a table's exact column headers — useful before an `update_job_spreadsheet` call that needs to match them precisely |
+| `check_tools_status` | Reports which Small Business tools are configured/available on this connection |
 
-### Job Tracker Spreadsheet
+**Creating new records** *(each appends a brand-new row with an auto-generated ID — never use these to edit an existing row; use `update_job_spreadsheet` for that)*
 
-The installer deploys a pre-built `AI-Prowler_Job_Tracker.xlsx` to `Documents\AI-Prowler\`.
+| Tool | Sheet | Auto-generated ID |
+|---|---|---|
+| `create_job` | `Jobs_Schedule` | `JOB-####` |
+| `create_customer` | `Customers` | `CUST-####` |
+| `create_quote` | `Quotes` | `QTE-####` |
 
-> **Column headers are what `update_job_spreadsheet()` and `read_job_spreadsheet()` match on — do not rename headers or the tools will fail to find the right columns.**
+**Routing & location** *(all free, no API key needed)*
 
-#### Server Mode: Which Spreadsheet Gets Used
+| Tool | What it does |
+|---|---|
+| `geocode_address` | Address → latitude/longitude (Nominatim / OpenStreetMap) |
+| `get_weather` | Current conditions + forecast (Open-Meteo + Nominatim) |
+| `optimize_route` | Solves the optimal visit order + drive times for a list of stops (OSRM) |
+| `build_maps_url` | Turns a stop list into a tap-to-navigate Google/Apple Maps link |
+| `build_daily_route` | Builds the **whole day's** route from `Jobs_Schedule` in one call — auto-geocodes, flags conflicts, writes `Route_Planner`, emails the link. See below. |
+| `get_home_address` | Returns your configured home/shop address (personal mode only) |
 
-Every job-spreadsheet tool (`read_job_spreadsheet`, `update_job_spreadsheet`, `email_invoice`, `schedule_next_recurring_job`, `log_time_entry`, `get_ar_aging_report`) resolves the file differently depending on mode:
+**Time tracking**
 
-**Personal mode:** unrestricted — an explicit `filepath` argument is used as given; otherwise falls back to the configured default path.
+| Tool | What it does |
+|---|---|
+| `log_time_entry` | Clocks in or out for a job and calculates elapsed time |
 
-**Server mode:** any `filepath` argument is **ignored**. Instead, the file is resolved from **Settings → Business → Default Spreadsheet Path** (the same path/filename you pick via that tab's Browse button — defaults to `AI-Prowler_Job_Tracker.xlsx` unless you saved it under a different name):
+**Billing & collections**
 
-- **Shared master (default)** — everyone reads and writes the exact file at that path. Simple, and the whole crew stays in sync automatically.
-- **Per-user tracking** — drop additional files named exactly `<user_id>.xlsx` (e.g. `jake-r.xlsx`, `vicki-vavro.xlsx` — the user's ID from the Admin tab, not their display name) into the **same folder** as the master file. A user with a matching file gets their own private tracker instead of the shared one; anyone without one still falls back to the master. No separate setting to configure — it's entirely folder-based.
+| Tool | What it does |
+|---|---|
+| `create_invoice` | Generates an invoice from a completed job |
+| `email_invoice` | Emails an existing invoice to the customer |
+| `text_invoice` | Texts an existing invoice to the customer (requires SMS configured) |
+| `email_receipt` | Emails a payment receipt after an invoice is marked paid |
+| `text_receipt` | Texts a payment receipt after an invoice is marked paid (requires SMS configured) |
+| `schedule_next_recurring_job` | Creates the next occurrence of a recurring job from a completed one |
+| `get_ar_aging_report` | Lists unpaid invoices grouped by how overdue they are |
 
-**Row-level scoping on the shared master:** which *file* gets used is only half the story. On the shared master, `read_job_spreadsheet`, `update_job_spreadsheet`, `log_time_entry`, and `email_invoice` additionally restrict staff/field_crew to only the `Jobs_Schedule` rows where `Crew / Technician` matches their own name — a blank crew field is treated as unassigned, not as "visible to everyone." Owner/manager are never restricted. Anyone on their own per-user file needs no additional row filtering — every row in that file already belongs to them by construction, so filtering is skipped entirely there.
+**Job Board — live updates**
 
-**Concurrent writes:** `update_job_spreadsheet`, `schedule_next_recurring_job`, and `log_time_entry` are serialized behind an internal write lock, so two crew members saving at the same moment queue up instead of one silently overwriting the other's change. Combined with the automatic pre-write backup (see below), this means a bad or conflicting write is always recoverable, and simultaneous writes are always applied cleanly one after another rather than racing.
+| Tool | What it does |
+|---|---|
+| `get_board_updates` | Returns every row changed since a given timestamp (`WHERE last_edited_at > ?`) — the polling query behind the admin Job Board. Returns raw JSON for a UI, not the formatted text `read_job_spreadsheet` returns. See **Job Board** below. |
+
+**Data portability — export, backup & restore**
+
+| Tool | What it does |
+|---|---|
+| `export_to_excel` | Generates a fresh `.xlsx` snapshot of the whole job tracker from the live database — one sheet per table. One-way; never a write target. |
+| `export_to_csv` | Generates one `.csv` per table (or a `tables=[...]`-scoped subset) — the lowest-common-denominator format for accountants and manual QuickBooks import. |
+| `export_to_quickbooks_csv` | Same idea as `export_to_csv`, but Customers/Invoices columns are labeled with QuickBooks Online's own field names, so QBO's mandatory field-mapping screen goes faster. |
+| `backup_job_database` | Makes a lossless, byte-faithful copy of the live `ai_prowler_jobs.db` via SQLite's own online Backup API — safe to run mid-write. Renamed from `backup_database` — this operates on the job tracker database, not the ChromaDB knowledge-base index, which has no backup/restore tool of its own. |
+| `restore_job_database` | Replaces the live database with a previous backup — meant for moving to a new PC. Requires `confirm=True`; shows live-vs-backup record counts; always safety-backs-up whatever's currently live first. In server mode a non-empty live database also needs `replace_existing=True`. The one genuinely destructive tool in AI-Prowler. Renamed from `restore_database`. |
+
+> **Server mode:** export, backup and restore are for the owner, managers and staff only — field crew are always refused.
+
+> Export tools (`export_to_excel`/`export_to_csv`/`export_to_quickbooks_csv`) and backup/restore tools solve **different** problems — see **Data Portability** below for which to reach for.
+
+### create_customer, create_quote, build_daily_route
+
+`update_job_spreadsheet()` only ever edits a row that *already exists* — it can't add a brand-new customer or quote, and building a whole day's route from scratch (rather than one stop at a time) needs its own dedicated logic. These three tools cover that ground.
+
+**`create_customer(updates, filepath="", backup=True)`** — appends a new row to the `Customers` sheet with an auto-generated `CustomerID (CUST-####)`. Always creates a new row; never use it to edit an existing customer (e.g. marking one inactive) — use `update_job_spreadsheet(sheet_name="Customers", ...)` for that instead.
+
+> *"Add a new customer: Sunshine Grill, 501 Canal St, New Smyrna Beach FL 32168, phone 386-555-0142, biweekly pressure washing"*
+
+**`create_quote(updates, filepath="", backup=True)`** — same append-with-auto-ID pattern for the `Quotes` sheet (`QuoteID (QTE-####)`). Does not compute totals/tax/discount math — pass the amounts you want written directly, mirroring the manual quoting workflow it replaces. To approve or edit an existing quote afterward, use `update_job_spreadsheet(sheet_name="Quotes", ...)`, never `create_quote` again (that would append a second, duplicate row).
+
+> *"Create a quote for Sunshine Grill — pressure washing, $275, valid for 30 days"*
+> *"Sunshine Grill accepted the quote — mark it approved"* (→ `update_job_spreadsheet`, not `create_quote`)
+
+**`build_daily_route(route_date, crew="", departure_hour=7, accept_reorder=False, email_link=True, email_to="", backup=True)`** — builds the full optimized route for every job scheduled on a given date and writes it to `Route_Planner`, replacing whatever was there before (Route_Planner always shows exactly one day, never a history — see §10 "Sheets" above). What it does, end to end:
+
+1. Finds every `Jobs_Schedule` row for `route_date` (optionally filtered to one `crew`).
+2. Auto-geocodes any matching job missing `Latitude`/`Longitude` and writes the result back to that job's own row — no need to run `geocode_address()` separately first. A job whose address can't be geocoded is excluded from the route and clearly flagged, never silently dropped.
+3. Computes the optimal visit order and real drive times (OSRM `/trip`, the same engine `optimize_route()` uses), starting and ending at the address from `get_home_address()`.
+4. **Pre-flight savings check:** also computes the drive time for the jobs' *currently scheduled* order (by Start Time). If reordering to the optimal sequence would save 10+ minutes, the tool stops here and returns a comparison — Route_Planner is **not** written yet. Call it again with `accept_reorder=True` to proceed with the faster order.
+5. Flags two kinds of scheduling problems as warnings (the route still builds either way — these are advisory, not a block): **LATE ARRIVAL** (the route's computed arrival at a stop is 10+ minutes after that job's own recorded Start Time) and **SCHEDULE OVERLAP** (two jobs that day have overlapping Start Time/Duration windows, independent of routing).
+6. Writes the day's stops to `Route_Planner` with a tap-to-navigate link per stop, and **also** persists that same link onto each matched job's own `Jobs_Schedule` row (the `Route Map URL` column) — this is what lets the link survive Route_Planner later being rebuilt for a *different* date, and is what the Jobs App's "today's route" banner and Calendar day view read from.
+7. Emails the route link by default (`email_link=True`) once the build succeeds. If email isn't configured, this is skipped with a plain note — the route still builds, and the link is still available as a clickable cell in Route_Planner and the Jobs App either way.
+
+> *"Build the route for tomorrow"*
+> *"Plan the route for September 22nd for Carlos"*
+
+Uses the same free Nominatim/OSRM services as `optimize_route()` — no API key needed.
+
+### Job Tracker Database (SQLite)
+
+The job tracker's canonical live store is a SQLite database file, `ai_prowler_jobs.db`. Excel is available as a generated export (`export_to_excel()`) — see **Excel Export**, below — never a live file.
+
+- Every write tool (`create_job`, `create_customer`, `create_quote`, `create_invoice`, `update_job_spreadsheet`, `log_time_entry`, `build_daily_route`, `schedule_next_recurring_job`) writes via a row-level SQLite transaction. Tool names, arguments, and return shapes are exactly what's documented throughout this section — nothing calling these tools (Claude, voice commands, your own prompts) needs to think about the database underneath them.
+- Concurrent writes to *different* rows happen in parallel — no whole-file lock. You (or an admin) can have the **Job Board** (see below) open and actively editing all day while field crew clock in/out, upload photos, and create jobs — none of it can block or corrupt anything else.
+- The `Jobs_Schedule`/`Customers`/`Invoices`/`Quotes`/`TimeLog`/`Route_Planner`/`Settings`/`Services_Pricing` names live on as the tools' `sheet_name` argument and as table concepts — refer to them the same way in a prompt.
+- Crew-scoping rules (field_crew sees only their own assigned jobs; the locked pricing fields on Customers; audit trail columns) apply exactly as documented throughout this section.
+- No delete capability anywhere — "retire" means `Status = Inactive`, never destructive.
+
+#### Excel Export
+
+Call **`export_to_excel()`** any time you want a spreadsheet snapshot — one sheet per table, built from whatever's in the database right now. If you (or an accountant) edit that exported file and save it, **those edits go nowhere** — nothing ever reads changes back out of an export. Think of it the same way you'd think of a PDF export: useful to look at, print, or hand to someone, never something to write into.
+
+#### Job Board
+
+A live kanban/grid view of the day's jobs (Scheduled / In Progress / Completed columns), with drag-and-drop to reschedule or reassign.
+
+- **Live updates via 1-minute polling.** The board calls `get_board_updates(since=...)` roughly every 60 seconds and refreshes only the rows that actually changed (clock-ins, photo uploads, completions, any edit) — no manual refresh needed, and no push/SSE infrastructure required.
+- **Conflict handling: reload-and-redo, no silent auto-merge.** Every edit carries the row's `last_edited_at` from when it was loaded. If that row changed underneath since then, the write is rejected outright with a clear "this job was updated by [name] at [time] — reload and try again." There's no attempt at field-level merging — genuine same-field conflicts between two people are rare enough that an honest "someone beat you to it" is the right amount of complexity.
+- **Personal mode gets the Job Board too — merged into one app, not split off.** In Server mode, the admin Job Board and the crew-facing Jobs App are naturally two different experiences for two different people. In Personal mode there's only ever one person, who is simultaneously admin and field crew — so Personal mode's app shows the Job Board and the crew tools (Clock, Photos, etc.) side by side in one unified navigation, with no role-based screen-hiding.
+- **Server mode — each crew's route is independent.** Routes are keyed by date *and* crew, so each crew's stops live in their own independently addressable rows — building Sam's route never touches Vicki's, and admin/staff/manager can see every crew's route for the day at once.
+- **No missed changes.** Change times are recorded to the millisecond, so two changes made within the same second (a job created and then marked In Progress straight away, say) both reach every open Board on the next poll.
+- **A drag always sticks.** If you drag a card while the Board is still loading, refreshing (↻), or in the middle of its 60-second check, that load's result is from *before* your move — the Board recognises this and ignores it instead of putting the card back in its old column. The next check picks everything up.
+
+#### Multi-day jobs and Working Days
+
+A job can last more than one day — a roof, a fence, a renovation. Give it an **End Date** (or an **Est. Duration** with **Est. Duration Unit** = *day*, and the End Date is worked out for you), and the job appears on each of its days on the Calendar, on each day's route, and in each day's job list.
+
+**Working Days** decides *which* of those days count. It's a row in the **Settings** sheet (Database tab → Settings, or ask Claude), default **`Mon,Tue,Wed,Thu,Fri`**:
+
+- A multi-day job is shown, routed and listed only on working days inside its span. The day it was **booked for** always counts, even if that's a Saturday.
+- A job measured in days gets its End Date by counting working days — a 7-day job starting Monday ends the following Tuesday with Mon–Fri, but the following Monday with Mon–Sat.
+- A job still open after its End Date carries over to the **next working day**, so it doesn't drop off the plan while it's running late.
+- **Running behind on a project?** Add the weekend: `Mon,Tue,Wed,Thu,Fri,Sat,Sun`. Friendly forms work too — `Mon-Sat`, `Weekdays,Sat`, `Fri-Mon`, `All`. AI-Prowler stores it in one tidy form, and refuses anything it can't read (e.g. a typo like `Wendsday`) with a clear message instead of quietly falling back to Mon–Fri.
+- **Changes apply immediately** — no restart and no reload. The server reads the setting fresh every time; saving it in the Jobs App shows *"✓ Working Days applied: …"*, and the Calendar and the Route tab's day list follow straight away (also on other phones the next time they open those screens).
+- When the working days change, the End Date of every **open** job measured in days is recounted. Completed and cancelled jobs keep their history.
+- In server mode, field crew can't open the Settings sheet, but their Calendar still uses the company's Working Days (through `get_working_days`).
+- **In-app switch instead of a sheet edit (2026-10-02):** the Jobs app's Settings now offers a simple **weekday-only vs every-day** choice for Working Days — weekday-only saves `Mon,Tue,Wed,Thu,Fri`, every-day saves `Mon,Tue,Wed,Thu,Fri,Sat,Sun`, the same values the sheet row holds, so everything above applies either way.
+
+#### Email Route On Build
+
+Whether building a route also emails it out automatically. A Settings-sheet row (Database tab → Settings, or ask Claude) — a simple on/off toggle, **`Enabled`** or **`Disabled`** (default):
+
+- **Disabled (default)** = no automatic email after **Route Today** or **Run AI Route**. When you want the route in your inbox, use the **📧 Email Approved Route Now** button on the Jobs page or the Route tab — it sends the currently saved route on request, any time, and it works regardless of this setting.
+- **Enabled** = the route results + link are also emailed automatically every time **Route Today** or **Run AI Route** builds one.
+- **Server mode:** the auto-email goes to the requesting user's own email (Admin → Users). The manual button lets any crew member fetch their own copy of an admin-approved route even with this Disabled.
+- **Personal mode:** the auto-email uses the SMTP recipient configured in Email Configuration (see §6.5).
+
+#### Customer Reminder Email Enabled
+
+The master switch for sending customer reminders by email. A Settings-sheet row — **`Enabled`** (default) or **`Disabled`**:
+
+- **Enabled (default)** = the **Reports → Customer Reminders** screen's **"Email Selected"** button works normally (and `send_customer_reminders` with `channel=email` sends).
+- **Disabled** = that button is grayed out and the send is refused with a clear message — no email goes out.
+- Independent of **Customer Reminder SMS Enabled** — either channel, both, or neither can be on.
+- This does *not* touch the daily digest (**Customer Reminder Daily Digest**) — that one only ever emails the owner, never a customer.
+
+#### Customer Reminder SMS Enabled
+
+The master switch for sending customer reminders by text. A Settings-sheet row — **`Enabled`** (default) or **`Disabled`**:
+
+- **Enabled (default)** = the **Reports → Customer Reminders** screen's **"Text Selected"** button works normally (and `send_customer_reminders` with `channel=sms` sends).
+- **Disabled** = that button is grayed out and the send is refused with a clear message — no text goes out.
+- Independent of **Customer Reminder Email Enabled** — either channel, both, or neither can be on.
+- Even when Enabled, you still need an SMS provider configured in **Settings → SMS / Text Messaging** (Section 11) for anything to actually send.
+
+#### Route Origin Mode
+
+Where your routes start and end. A Settings-sheet row with two values — **`Jobs Only`** (default) or **`Company Location`** (added 2026-09-29):
+
+- **Jobs Only (default)** = the route is your scheduled jobs in order. Your home address counts as the start and end for mileage, but the phone's tap-to-navigate link starts from your live GPS location (which is not a stop), visits each job, and ends at your home address.
+- **Company Location** = the **Start/End Address** below is added as the first and last stop of the route. The navigation link starts from your live GPS location, goes to the Start/End Address, then your jobs, then back to the Start/End Address — and on to your home address (if you decide not to go home, just end the route manually).
+- The Start/End Address can be different from the **Business Address** — your yard, office, or shop isn't always where the invoices say you are.
+- Not to be confused with `build_daily_route()`'s `origin` *tool parameter* — that's a per-call routing input; this setting is the standing choice for where your routes begin and end.
+
+#### Start/End Street Address
+
+The street line of the start/end address used when **Route Origin Mode** is set to **Company Location**. A plain Settings-sheet row — not a toggle, so there's nothing to switch on or off; just fill it in once (with the City/State/ZIP rows below). The Route Origin Mode form re-saves the current values automatically when Company Location mode is used, so switching modes won't lose them.
+
+#### Start/End City
+
+The city part of the start/end address (see **Start/End Street Address** above). A plain Settings-sheet row, not a toggle — only used when **Route Origin Mode** is **Company Location**, and re-saved automatically by the Route Origin Mode form in that mode.
+
+#### Start/End State
+
+The state part of the start/end address (see **Start/End Street Address** above). A plain Settings-sheet row, not a toggle — only used when **Route Origin Mode** is **Company Location**, and re-saved automatically by the Route Origin Mode form in that mode.
+
+#### Start/End ZIP
+
+The ZIP part of the start/end address (see **Start/End Street Address** above). A plain Settings-sheet row, not a toggle — only used when **Route Origin Mode** is **Company Location**, and re-saved automatically by the Route Origin Mode form in that mode.
+
+### Job Tracker Database — File Layout Reference
+
+> **Column headers are what `update_job_spreadsheet()` and `read_job_spreadsheet()` match on — do not rename headers or the tools will fail to find the right columns.** This is the sheet/column layout the SQLite tables mirror, and it's what any export uses too.
+
+#### Server Mode: One Shared Job Database
+
+There is exactly **one** job database, `ai_prowler_jobs.db`, and every server-mode user — every role — reads and writes it. It lives in AI-Prowler's own data folder on the server (`.ai-prowler\jobs_database\` in the home folder of the Windows account the server runs as), deliberately away from Documents/OneDrive so a sync client can never interfere with it. There is no setting for it and no per-user copy; the whole crew always stays in sync.
+
+**Personal mode:** the same single database in your own `.ai-prowler\jobs_database\` folder.
+
+**Server mode:** any `filepath` argument a tool is given is **ignored** — every call uses the one shared database.
+
+**Row-level scoping:** what a user *sees* inside that database depends only on their role. `read_job_spreadsheet`, `get_board_updates`, `update_job_spreadsheet`, `log_time_entry`, `email_invoice` and the route tools restrict **field_crew** to the rows tied to their own name — `Jobs_Schedule` rows where `Crew / Technician` matches them, their own clock-ins in `TimeLog`, and their own route in `Route_Planner`. A blank crew field is treated as unassigned, not as "visible to everyone." Owner, manager and staff (the crew-lead tier) are never restricted. Full table: **Section 9 → Roles and Scopes in the Jobs App**.
+
+> Older versions (spreadsheet era) let you give a user their own tracker by dropping a `<user_id>.xlsx` file next to the master. That no longer exists — v9.2 removed the last of it.
+
+**Concurrent writes:** handled at the row level by SQLite (see **Job Tracker Database (SQLite)** above). Two crew members writing to *different* rows proceed in parallel — no queuing, no waiting on each other. Two writes to the exact *same* row are resolved safely and in order (SQLite's own row-level locking), and the Job Board's stale-write rejection (reload-and-redo, no silent auto-merge) is what surfaces a genuine same-row conflict to the person making the second edit, rather than either silently overwriting the other.
 
 #### The Jobs App (Server Mode)
 
 Beyond talking to Claude directly, each server-mode employee also gets a dedicated mobile app screen for the field — reachable at `/jobs/` on your tunnel URL, installable to the phone's home screen like any other app ("Add to Home Screen," no app store).
 
-- **Filtered automatically** to the employee's own jobs, using the exact same row-level scoping described above.
+- **Filtered by role** — field crew see only their own jobs, using the exact same row-level scoping described above; owner, manager and staff see every crew's jobs. Full table: **Section 9 → Roles and Scopes in the Jobs App**.
 - **Clock in / clock out**, **attach job photos** straight from the camera, and **email invoices** — all without opening a Claude conversation.
-- **Log in once.** An employee enters their personal token the first time they open the app; the login persists (stored on the device, not tied to the browser tab or app staying open) until they explicitly tap **Sign Out / Change Device** in the app's profile screen — closing or restarting the app never signs them out.
+- **Log in once.** An employee enters their name and personal token the first time they open the app; the login persists (stored on the device, not tied to the browser tab or app staying open) until they tap **Sign Out / Change Device** in the app's profile screen, or until the app goes **unused for 30 days** — then it simply asks them to sign in again. Closing or restarting the app never signs them out. (A server restart also ends every session.)
 - **Personal mode** gets the same app and the same one-time login screen, but checks the entered password against the single owner token fetched automatically from AI-Prowler's own config — nothing to set up per employee, since there's only one user.
 
-The Jobs App and talking to Claude directly are two paths into the same data, not two separate systems — an employee can clock in from the app in the truck, then later ask Claude "what's my schedule tomorrow?" from the same phone's browser, and both are reading and writing the identical spreadsheet.
+The Jobs PWA App and talking to Claude directly are two paths into the same data, not two separate systems — an employee can clock in from the app in the truck, then later ask Claude "what's my schedule tomorrow?" from the same phone's browser, and both are reading and writing the identical job tracker database.
+
+> **Full tab-by-tab reference, setup, and every feature (including today's route banner, Calendar route indicators, and the Sheet tab's refresh button and clickable map links):** **Section 25 — Jobs PWA App**.
 
 #### Sheets
 
@@ -1010,13 +1365,47 @@ The Jobs App and talking to Claude directly are two paths into the same data, no
 |---|---|
 | `Customers` | Customer master list — addresses, service type, frequency, email, phone, carrier, access notes |
 | `Jobs_Schedule` | All service appointments with route, weather, billing, and status columns |
-| `Route_Planner` | Daily route optimization — AI fills lat/lon and map URLs |
+| `Route_Planner` | ONE day's optimized route at a time per crew, not a history — rebuilt from scratch by `build_daily_route()` each time it's called for a given date+crew (see §10 above); previous rows for that same crew/date are cleared, not appended to. Routes are keyed by date *and* crew, so building one crew's route never touches another crew's route for the same day — see **Job Board** above. |
 | `Quotes` | Estimates sent to customers before booking |
 | `Invoices` | Billing, payment tracking, AR aging |
 | `TimeLog` | Clock-in/clock-out per job via `log_time_entry()` |
 | `QB_Daily_Export` | Daily export rows for QuickBooks / accounting software import |
 | `Services_Pricing` | Service catalog with base prices, multipliers, and tax categories |
 | `AI-Prowler_Commands` | Quick-reference Claude prompt cheat sheet |
+
+---
+
+#### Data Portability — Export, Backup, Restore
+
+Two distinct capabilities cover "give my data to my accountant," "get this into QuickBooks," "back this up," and "move to a new PC" — pick the one that matches what you're doing:
+
+**Capability A — Export for humans/other software** (lossy-by-design, one-way, never a write target):
+
+| Need | Tool | Notes |
+|---|---|---|
+| Hand data to an accountant / tax preparer | `export_to_excel()` | One workbook, one sheet per table — usually all a bookkeeper needs |
+| Same, but as plain files | `export_to_csv()` | One `.csv` per table; scope with `tables=[...]` if you only need a couple |
+| Import into QuickBooks Online | `export_to_quickbooks_csv()` | Customers/Invoices columns pre-labeled with QBO's own field names — QBO's own "map your fields" screen still appears (that's built into QBO's importer, not something any export can skip), but the mapping is fast because the column names already match |
+
+**Capability B — Backup/Restore** (lossless, round-trippable, operates on the database file itself):
+
+| Need | Tool | Notes |
+|---|---|---|
+| Keep a safety backup | `backup_job_database(destination_path="")` | Uses SQLite's own online Backup API — safe to run even while the database is being actively written to. Defaults to `backup/AI-Prowler-Backup-<timestamp>.db` next to the live database if no destination is given. |
+| Move to a new PC | `backup_job_database()` on the old PC → copy that one file → `restore_job_database(<path>, confirm=True)` on the new PC | A full-database restore *is* the migration — there's no separate migration wizard. The new PC's database is empty, so no extra step is needed. |
+| Recover from a bad state | `restore_job_database(backup_path, confirm=True)` (server mode: plus `replace_existing=True`) | Always takes a safety backup of whatever's currently live **before** overwriting it, and validates the incoming file actually looks like an AI-Prowler database first. Requires `confirm=True` — a first, unconfirmed call makes no changes and shows the live-vs-backup record counts. In server mode, a live database that already has records is only replaced when `replace_existing=True` is passed as well. |
+
+> **Restore safety (server mode):** restore is meant for setting up a new PC. If the server's job database already has jobs, customers, invoices, quotes, time entries or route stops, restoring would wipe them. So: through Claude, a restore is refused unless you explicitly say to wipe the current data; with the ♻️ Restore from Backup button, you see both record counts and must type **REPLACE** to go ahead. Either way a safety copy of the current data is made first. Only the owner, managers and staff can export, back up or restore — field crew are always refused.
+
+> **Scheduled automatic backups:** the "Your Business Data" panel (Small Business tab — see below) has a Backup & Restore row with a Weekly/Monthly dropdown that reuses the same scheduler as automatic Excel exports. Off by default; turning it on schedules the first run immediately.
+
+**The write-safety backup mechanism is separate.** Every write tool already makes its own timestamped safety copy (`_backups/ai_prowler_jobs_<timestamp>.db`) before writing, purely to protect against a bad write corrupting the live file — that's automatic, local-only, and not the same thing as a user-facing "give me a backup right now."
+
+**"Your Business Data" panel (Small Business tab):**
+
+- The database itself has no folder setting — it always lives in `.ai-prowler\jobs_database\` (see *Server Mode: One Shared Job Database* above).
+- **Share your data:** 📤 Export to Excel · 📄 Export to CSV · 📖 Multi-Employee & QuickBooks Guide
+- **Backup & Restore:** 🗄️ Backup Now · ♻️ Restore from Backup (shows how many records are live now and in the backup; in server mode a non-empty database needs you to type REPLACE) · a Weekly/Monthly scheduled-backup dropdown
 
 ---
 
@@ -1031,10 +1420,10 @@ The Jobs App and talking to Claude directly are two paths into the same data, no
 | `Last Name` | Contact last name | `Walsh` |
 | `Phone` | Primary phone number | `386-555-0101` |
 | `Email` | Customer email — used by `send_email()` for lookup by name | `karen@sunshine.com` |
-| `Street Address ★ AI Route` | Street — used by `geocode_address()` and `optimize_route()` | `125 Harbor Blvd` |
-| `City ★ AI Route` | City — used for geocoding | `New Smyrna Beach` |
+| `Street Address` | Street — used by `geocode_address()` and `optimize_route()` | `125 Harbor Blvd` |
+| `City` | City — used for geocoding | `New Smyrna Beach` |
 | `State` | State | `FL` |
-| `ZIP ★ AI Route` | ZIP — used for geocoding | `32168` |
+| `ZIP` | ZIP — used for geocoding | `32168` |
 | `Service Type(s) Win/Press/Both` | Services this customer receives | `Both` |
 | `Frequency W/BW/M/Q/OT` | Weekly / Biweekly / Monthly / Quarterly / One-Time | `Monthly` |
 | `Preferred Day(s)` | Preferred service days | `Mon,Wed` |
@@ -1044,8 +1433,8 @@ The Jobs App and talking to Claude directly are two paths into the same data, no
 | `Discount (%)` | Default discount percentage (decimal) | `0.1` (= 10%) |
 | `Gate Code / Access Notes` | Entry instructions for field crew | `Gate code 4421` |
 | `On-Site Contact` | Who to ask for on arrival | `On-site mgr: Tom` |
-| `Cell Carrier` | Carrier for `send_sms()` email-to-SMS gateway | `Spectrum Mobile` |
-| `SMS Gateway` | Gateway address auto-filled from carrier | `@mypixmessages.com` |
+| `Cell Carrier` | Legacy field — not read by `send_sms()`. The email-to-SMS carrier-gateway path this supported was removed (see §6.4 → SMS & WhatsApp Tools); `send_sms()` now sends via a configured Twilio/SignalWire/Vonage provider using the `Phone` column instead. | `Spectrum Mobile` |
+| `SMS Gateway` | Legacy field — not read by `send_sms()`, for the same reason as `Cell Carrier` above. | `@mypixmessages.com` |
 | `Status Active/Inactive` | Whether customer is currently active | `Active` |
 
 ---
@@ -1058,10 +1447,10 @@ The Jobs App and talking to Claude directly are two paths into the same data, no
 | `CustomerID (Customers!A)` | Foreign key to Customers sheet | `CUST-0001` |
 | `Customer Name / Company` | Display name | `Sunshine Realty LLC` |
 | `Customer Type` | Commercial or Residential | `Commercial` |
-| `Street Address ★ AI Route` | Address for geocoding and routing | `125 Harbor Blvd` |
-| `City ★ AI Route` | City | `New Smyrna Beach` |
+| `Street Address` | Address for geocoding and routing | `125 Harbor Blvd` |
+| `City` | City | `New Smyrna Beach` |
 | `State` | State | `FL` |
-| `ZIP ★ AI Route` | ZIP | `32168` |
+| `ZIP` | ZIP | `32168` |
 | `Latitude (AI Geocode)` | Auto-filled by `geocode_address()` | `28.9831` |
 | `Longitude (AI Geocode)` | Auto-filled by `geocode_address()` | `-80.8512` |
 | `Service Date` | Scheduled date (YYYY-MM-DD) | `2026-03-30` |
@@ -1073,9 +1462,9 @@ The Jobs App and talking to Claude directly are two paths into the same data, no
 | `Crew / Technician` | Assigned crew member | `Mike C.` |
 | `Est. Duration (min)` | Estimated job time | `90` |
 | `Actual Duration (min)` | Filled by `log_time_entry()` after completion | `86` |
-| `Route Stop # ★ AI Route` | Stop order in optimized route — filled by `optimize_route()` | `1` |
-| `Route Map URL ★ AI Prowler` | Google Maps link — filled by `build_maps_url()` | `https://maps.google.com/...` |
-| `Weather Check ★ AI Prowler` | Weather note — filled by `get_weather()` | `Partly cloudy 81°F` |
+| `Route Stop #` | Stop order in optimized route — filled by `optimize_route()` | `1` |
+| `Route Map URL` | Google Maps link — filled by `build_maps_url()`, or persisted here per-job by `build_daily_route()` so the link survives Route_Planner later being rebuilt for a different date | `https://maps.google.com/...` |
+| `Weather Check` | Weather note — filled by `get_weather()` | `Partly cloudy 81°F` |
 | `Job Status` | Scheduled / In Progress / Complete / Cancelled | `Scheduled` |
 | `Quote Amount ($)` | Original quoted price | `350` |
 | `Actual Amount ($)` | Final charged amount (Quote − Discount) | `350` |
@@ -1162,7 +1551,7 @@ To log time: *"Clock me in on job JOB-0003"* → Claude calls `log_time_entry()`
 
 #### update_job_spreadsheet() — Column name reference
 
-When Claude writes back to the spreadsheet, it matches on the **exact column header text**. Multi-line headers in Excel use `\n`. Most commonly updated columns:
+When Claude writes back to the job tracker, it matches on the **exact column header text** — the same field labels shown on the Jobs PWA App's own edit forms. Multi-line headers (carried over from the original Excel template) use `\n`. Most commonly updated columns:
 
 ```python
 {
@@ -1172,7 +1561,7 @@ When Claude writes back to the spreadsheet, it matches on the **exact column hea
     "Discount\nApplied ($)":     0,
     "Payment\nStatus":           "Paid",
     "Invoice\nSent Date":        "2026-06-25",
-    "Route Stop # ★ AI Route":   1,
+    "Route Stop #":   1,
     "Latitude\n(AI Geocode)":    28.9831,
     "Longitude\n(AI Geocode)":   -80.8512,
     "Route Map URL\n★ AI Prowler": "https://maps.google.com/...",
@@ -1181,7 +1570,7 @@ When Claude writes back to the spreadsheet, it matches on the **exact column hea
 ```
 ### Typical Small Business Contractor Workflow
 
-The following is a recommended day-to-day workflow for a small contracting business using AI-Prowler and the Job Tracker spreadsheet. Claude handles the data work; you focus on the jobs.
+The following is a recommended day-to-day workflow for a small contracting business using AI-Prowler and the Jobs PWA App as the day-to-day view of the job tracker. Claude handles the data work; you focus on the jobs.
 
 ---
 
@@ -1224,7 +1613,7 @@ Claude calls `send_sms`, looks up Mike in the Customers sheet, finds his cell nu
 When the job is done, tell Claude:
 > *"Mark the Johnson job complete. I charged $185, took 2 hours."*
 
-Claude calls `update_job_spreadsheet` to update the row: status = complete, actual amount = $185, duration = 2 hours. It auto-backs up the spreadsheet before writing.
+Claude calls `update_job_spreadsheet` to update the row: status = complete, actual amount = $185, duration = 2 hours — the same change reflected instantly on the Jobs PWA App's Board and Database tabs. It auto-backs up the database before writing.
 
 ---
 
@@ -1251,7 +1640,22 @@ Claude calls `record_learning` and stores it in the self-learning knowledge base
 When you land a new customer:
 > *"Add a new customer: Sarah Connelly, 456 Oak St, Orlando FL 32801. Window cleaning, monthly service. Cell: 407-555-1234, Carrier: Verizon."*
 
-Claude updates the Customers sheet in the Job Tracker spreadsheet with the new record, including the phone number and carrier for future SMS messaging.
+Claude calls `create_customer()` and appends the new record to the Customers sheet, including the phone number and carrier for future SMS messaging.
+
+---
+
+**Step 8 — Quote, Then Build the Day's Route**
+
+Before booking a job, send a quote:
+> *"Create a quote for Sarah Connelly — window cleaning, $185, valid for 30 days."*
+
+Claude calls `create_quote()`. Once she accepts:
+> *"Sarah accepted — mark the quote approved and schedule the job for next Tuesday."*
+
+When the day arrives, instead of manually chaining `geocode_address` → `optimize_route` → `build_maps_url` for each job (Step 1 above), one call handles the whole day:
+> *"Build today's route."*
+
+Claude calls `build_daily_route()` — it geocodes anything missing automatically, computes the optimal order and real drive times, flags any job that's now running late or overlapping another, writes the route to Route_Planner with a tap-to-navigate link on every stop, and emails you the link. See §10 above for the full behavior, including the pre-flight savings check if your jobs' scheduled times aren't already in the fastest order.
 
 ---
 
@@ -1277,7 +1681,7 @@ Claude updates the Customers sheet in the Job Tracker spreadsheet with the new r
 
 ### Overview
 
-v8.0.0 introduces full two-way SMS and WhatsApp messaging for AI-Prowler. Field crew can send and receive messages from Claude.ai on their phone — no separate app or desktop required. A later update adds a configurable outbound message footer, a HELP auto-reply, and a website SMS-consent capture widget so a business can collect opt-ins directly from their own site.
+AI-Prowler supports full two-way SMS and WhatsApp messaging. Field crew can send and receive messages from Claude.ai on their phone — no separate app or desktop required. This includes a configurable outbound message footer, a HELP auto-reply, and a website SMS-consent capture widget so a business can collect opt-ins directly from their own site.
 
 ### Provider Support
 
@@ -1382,7 +1786,7 @@ Claude can walk through the entire Twilio setup and troubleshooting process conv
 When you say *"text Mike"*, Claude resolves the recipient by searching:
 
 1. **Registered server users** — names and phone numbers from `users.json` (set in Admin tab)
-2. **Spreadsheet customers** — names and phone numbers from the Customers sheet of `AI-Prowler_Job_Tracker.xlsx` (columns: Phone, Cell Carrier, SMS Gateway)
+2. **Job tracker customers** — names and phone numbers from the Customers table (the same list shown in the Jobs PWA App's Sheet tab), columns: Phone, Cell Carrier, SMS Gateway
 
 Partial name matches work. If multiple matches are found, Claude asks for clarification.
 
@@ -1423,14 +1827,14 @@ These are AI-assisted tasks that can be queued and stored for repeated and/or fu
 
 A single large button — reading **"Toggle On/Off"** with **"Autonomous AI Task Queue OFF"** beneath it in red, or **"Autonomous AI Task Queue ON"** in green — is the entire control for turning automation on and off. Click it and it flips color and state immediately: green/ON installs (or updates) a Windows Scheduled Task at the time and frequency you've set below; red/OFF genuinely removes the real Windows Scheduled Task (`schtasks /delete`), not just a soft disable. There's no separate checkbox to keep in sync — the button's color and text are always the real, currently-applied state.
 
-**v8.1.11:** below the toggle, a live status line shows the *actual* Windows-reported state — e.g. **🟢 Armed — Daily at 06:00:00 (next: 7/27/2026 6:00:00 AM)** or **🔴 Not armed** — read directly from `schtasks /query`, not just echoed back from what's typed into the fields above it. This closes a real gap where the GUI's own fields could silently drift from what Windows actually had scheduled; now you can always tell at a glance whether real automated runs are currently armed.
+Below the toggle, a live status line shows the *actual* Windows-reported state — e.g. **🟢 Armed — Daily at 06:00:00 (next: 7/27/2026 6:00:00 AM)** or **🔴 Not armed** — read directly from `schtasks /query`, not just echoed back from what's typed into the fields above it. This ensures the GUI's own fields never silently drift from what Windows actually has scheduled; you can always tell at a glance whether real automated runs are currently armed.
 
 #### Setup
 
 | Field | Description |
 |---|---|
-| **Scheduled time** | 24-hour `HH:MM` — the time of the single daily run when **Check queue** (below) is set to 1×/day. Click **💾 Apply** right next to the field to push a change to the real Windows Scheduled Task immediately — editing the field alone has no effect until Apply is clicked or the toggle is cycled. Apply works whether automation is currently on or off, and **flashes green** on click as visual confirmation it took effect (v8.1.11). |
-| **Check queue: N times/day** (v8.1.11) | How often the queue itself gets checked for due work — independent of any individual task's own schedule. **1** (default) keeps the classic once-a-day check at Scheduled time above. **>1** switches to an hourly-interval Windows trigger instead (e.g. 10×/day ≈ every 2 hours), checking around the clock. A task still only actually *runs* when it's due per its own schedule — this field only controls how often AI-Prowler looks. |
+| **Scheduled time** | 24-hour `HH:MM` — the time of the single daily run when **Check queue** (below) is set to 1×/day. Click **💾 Apply** right next to the field to push a change to the real Windows Scheduled Task immediately — editing the field alone has no effect until Apply is clicked or the toggle is cycled. Apply works whether automation is currently on or off, and **flashes green** on click as visual confirmation it took effect. |
+| **Check queue: N times/day** | How often the queue itself gets checked for due work — independent of any individual task's own schedule. **1** (default) keeps the classic once-a-day check at Scheduled time above. **>1** switches to an hourly-interval Windows trigger instead (e.g. 10×/day ≈ every 2 hours), checking around the clock. A task still only actually *runs* when it's due per its own schedule — this field only controls how often AI-Prowler looks. |
 | **Credit-usage warning** | Appears automatically next to the times/day field once it's set above 1 — a reminder that each automatic check draws from your Claude subscription's usage pool (or metered API billing, if configured that way). Not shown at 1×/day, since a single daily check barely costs anything. |
 | **Text me when a run finishes** | Optional SMS/WhatsApp notification, sent to whichever method is selected. |
 | **Auth** | **Subscription (OAuth)** — uses your Claude Pro/Max plan; click **🔑 Get / Renew Token** to sign in. **API Key (metered billing)** — a separate pay-as-you-go account; paste a key from console.anthropic.com and click **Save Key** (and **Clear Key** to remove one). |
@@ -1441,7 +1845,7 @@ Turning automation on for the first time (off → on) automatically resyncs any 
 
 ---
 
-### 🧠 Common Business AI Analysis (v8.0.0)
+### 🧠 Common Business AI Analysis
 
 The **Common Business AI Analysis** section provides five one-click analysis commands that use Claude's full reasoning capability over your local data — no API key required, no cloud uploads.
 
@@ -1468,12 +1872,12 @@ This approach works entirely within the MCP architecture — Claude is the reaso
 | Button | What it does |
 |---|---|
 | 🧠 **Run Pending Analysis** | Copies the run-queue command to clipboard immediately — no popup. Opens a small info box reminding you to press Ctrl+V in Claude. Each queued task already has its own scope, output, and schedule from when it was created. |
-| 📊 **Analyze My Business** | Full business health check. Uses QuickBooks (invoices, payments, customers, P&L, AR aging) if connected; otherwise reads Job Tracker spreadsheet. Searches indexed documents and learnings. Records 3–5 `business_insight` learnings. |
-| 💡 **Weekly Business Advisor** | End-of-week debrief. Uses QuickBooks (invoices/payments this week, cash in vs out, overdue this week) if connected; otherwise reads Job Tracker. Also checks weather for next week's scheduling. Records `weekly_review` learnings. |
+| 📊 **Analyze My Business** | Full business health check. Uses QuickBooks (invoices, payments, customers, P&L, AR aging) if connected; otherwise reads job tracker data (the same data shown in the Jobs PWA App). Searches indexed documents and learnings. Records 3–5 `business_insight` learnings. |
+| 💡 **Weekly Business Advisor** | End-of-week debrief. Uses QuickBooks (invoices/payments this week, cash in vs out, overdue this week) if connected; otherwise reads the job tracker. Also checks weather for next week's scheduling. Records `weekly_review` learnings. |
 | ⚠️ **Find Problems** | Scans for overdue invoices by aging bucket (using QuickBooks AR/AP aging if connected, otherwise AI-Prowler AR report), jobs over estimate by >20%, unanswered customer SMS, unresolved problem flags. Records each as a `problem_flag` learning. |
 | 📈 **Growth Opportunities** | Mines financial data for growth signals. With QuickBooks: P&L by service type, net margin per service, seasonal revenue trends, customer value rankings. Without QuickBooks: job history, fast-paying customers, geographic clusters, upsell pairs. Records 3–5 `growth_opportunity` learnings. |
 
-> **🔌 QuickBooks Integration:** If you connect the QuickBooks Online MCP connector in Claude.ai (Settings → Connectors), Claude will automatically detect it when executing any of these analyses and use QuickBooks as the primary financial data source — giving you real P&L, true net margins, expense ratios, AP aging, and cash flow data that goes beyond what the Job Tracker spreadsheet can provide. No configuration change needed in AI-Prowler; the prompts detect and use QuickBooks automatically at runtime.
+> **🔌 QuickBooks Integration:** If you connect the QuickBooks Online MCP connector in Claude.ai (Settings → Connectors), Claude will automatically detect it when executing any of these analyses and use QuickBooks as the primary financial data source — giving you real P&L, true net margins, expense ratios, AP aging, and cash flow data that goes beyond what the job tracker can provide on its own. No configuration change needed in AI-Prowler; the prompts detect and use QuickBooks automatically at runtime.
 
 #### Configure Popup
 
@@ -1487,9 +1891,9 @@ When you click any button except 🧠 Run Pending Analysis, a scrollable **Confi
 | **Scope directories** | Scrollable checklist of all indexed directories. Check one or more to restrict the analysis. Leave all unchecked to search everything. |
 | **Output — 💡 Save key insights to Learnings** | Default ✅. Appends `record_learning()` instruction to the prompt. |
 | **Output — 📄 Save full analysis as Word document (.docx)** | Default ☐. Appends `save_analysis_report()` instruction with the report folder path. |
-| **Output — ✉️ Email the analysis** (v8.1.10) | Default ☐. Sends the finished analysis via AI-Prowler's own configured SMTP account (`send_email`) — if a Word document is also checked, the report is attached automatically. **At least one of the three outputs must be selected** — a task with none checked has nowhere for its results to go when run unattended, since there's no chat window in a headless run to display them in. |
+| **Output — ✉️ Email the analysis** | Default ☐. Sends the finished analysis via AI-Prowler's own configured SMTP account (`send_email`) — if a Word document is also checked, the report is attached automatically. **At least one of the three outputs must be selected** — a task with none checked has nowhere for its results to go when run unattended, since there's no chat window in a headless run to display them in. |
 | **Schedule** | **Manual only** (default) = one-shot, runs once. Choose Daily / Weekly / Every 2 weeks / Monthly / Quarterly / Yearly to make this a recurring task. AI-Prowler tracks when it's next due and surfaces it automatically. |
-| **Start time / End time / Times per day** (v8.1.11, Daily only) | Shown only when **Daily** is selected. Times per day = 1 (default) runs once, at Start time. Greater than 1 spreads that many runs evenly across the day, landing exactly on Start time and exactly on End time (e.g. Start 08:00, End 20:00, 3×/day → 08:00, 14:00, 20:00). Max 24/day — "24× between 00:00–23:00" is how an hourly cadence is expressed; there's no separate Hourly option. A live **"Runs at: ..."** preview below the fields shows exactly what your settings produce, and the credit-usage warning (below) appears automatically once times/day is set above 1. |
+| **Start time / End time / Times per day** (Daily only) | Shown only when **Daily** is selected. Times per day = 1 (default) runs once, at Start time. Greater than 1 spreads that many runs evenly across the day, landing exactly on Start time and exactly on End time (e.g. Start 08:00, End 20:00, 3×/day → 08:00, 14:00, 20:00). Max 24/day — "24× between 00:00–23:00" is how an hourly cadence is expressed; there's no separate Hourly option. A live **"Runs at: ..."** preview below the fields shows exactly what your settings produce, and the credit-usage warning (below) appears automatically once times/day is set above 1. |
 | **First due date** | YYYY-MM-DD. Enabled when a schedule is selected. Defaults to today if left blank. The anchor date for schedule advancement — e.g. a "Weekly" task due June 24 will next be due July 1, then July 8, etc. |
 | **Report folder** | Where `.docx` reports are saved. Defaults to `~/Documents/AI-Prowler_tasks_reports`. Click **Browse…** to change. |
 | **Ctrl+V reminder** | Italic reminder: *"After clicking Queue Analysis → open a new Claude chat and press Ctrl+V to run all queued tasks."* |
@@ -1500,7 +1904,7 @@ When you click any button except 🧠 Run Pending Analysis, a scrollable **Confi
 
 #### Task queue JSON schema
 
-Tasks are stored in `~/.ai-prowler/pending_tasks.json`. The full schema (v8.0.0):
+Tasks are stored in `~/.ai-prowler/pending_tasks.json`. The full schema:
 
 ```json
 {
@@ -1526,9 +1930,9 @@ Tasks are stored in `~/.ai-prowler/pending_tasks.json`. The full schema (v8.0.0)
 
 `next_due` is a full date+time (`YYYY-MM-DDTHH:MM:SS`) for `"daily"` schedule entries — it carries the actual next run time, not just the date — and stays a plain date (`YYYY-MM-DD`) for every other schedule (weekly, monthly, etc.), which have no time-of-day granularity.
 
-When Claude completes the task, a one-shot entry (`schedule: "none"`) has `status` change to `"completed"` permanently — `completed_at` and `completion_summary` are added, and it's kept for audit rather than deleted. A recurring entry instead has `next_due` advanced and `status` reset back to `"pending"` (v8.1.9 re-arm) — it stays live in the queue and resurfaces on its own next cycle rather than needing to be re-queued manually.
+When Claude completes the task, a one-shot entry (`schedule: "none"`) has `status` change to `"completed"` permanently — `completed_at` and `completion_summary` are added, and it's kept for audit rather than deleted. A recurring entry instead has `next_due` advanced and `status` reset back to `"pending"` (re-armed) — it stays live in the queue and resurfaces on its own next cycle rather than needing to be re-queued manually.
 
-The collapsible **▶ Show Queue** panel (below the analysis buttons) lets you see what's waiting, remove individual items (✕), or clear everything (🗑 Clear Queue). **v8.1.9:** each recurring item now shows a due badge — 🟢 **Due now** if it's actually ready to run, or ⏳ **Due YYYY-MM-DD** if it's queued but the date hasn't arrived yet — so you can tell at a glance whether something sitting in the queue is about to fire or just waiting. The list also now refreshes live the moment a new task is saved & queued while the panel is already expanded, instead of requiring a manual collapse/re-expand.
+The collapsible **▶ Show Queue** panel (below the analysis buttons) lets you see what's waiting, remove individual items (✕), or clear everything (🗑 Clear Queue). Each recurring item shows a due badge — 🟢 **Due now** if it's actually ready to run, or ⏳ **Due YYYY-MM-DD** if it's queued but the date hasn't arrived yet — so you can tell at a glance whether something sitting in the queue is about to fire or just waiting. The list also refreshes live the moment a new task is saved & queued while the panel is already expanded, instead of requiring a manual collapse/re-expand.
 
 #### Tips
 
@@ -1540,7 +1944,7 @@ The collapsible **▶ Show Queue** panel (below the analysis buttons) lets you s
 
 ---
 
-### 📋 My Custom AI Analyses (v8.0.0, renamed)
+### 📋 My Custom AI Analyses
 
 **My Custom AI Analyses** lets you define your own analysis tasks — with a custom name, prompt, optional directory scope, schedule, and output format. Up to **25** custom tasks are supported.
 
@@ -1558,11 +1962,11 @@ Click **+ New Custom Analysis** to open the task editor (scrollable, 806×884). 
 | **Prompt** | Full instruction for Claude — describe what to analyze and what to produce. Be specific: mention which tools to use, which learning categories to record under, and any report preferences. |
 | **Scope directories** | Scrollable checklist. Only absolute directory paths shown — metadata fields filtered out automatically. Leave all unchecked to search everything. |
 | **Schedule** | Manual only / Daily / Weekly / Every 2 weeks / Monthly / Quarterly / Yearly |
-| **Start time / End time / Times per day** (v8.1.11, Daily only) | Shown only when **Daily** is selected. Times per day = 1 (default) runs once, at Start time. Greater than 1 spreads that many runs evenly across the day, landing exactly on Start time and exactly on End time (e.g. Start 08:00, End 20:00, 3×/day → 08:00, 14:00, 20:00). Max 24/day — "24× between 00:00–23:00" is how an hourly cadence is expressed; there's no separate Hourly option. A live **"Runs at: ..."** preview shows exactly what your settings produce. |
+| **Start time / End time / Times per day** (Daily only) | Shown only when **Daily** is selected. Times per day = 1 (default) runs once, at Start time. Greater than 1 spreads that many runs evenly across the day, landing exactly on Start time and exactly on End time (e.g. Start 08:00, End 20:00, 3×/day → 08:00, 14:00, 20:00). Max 24/day — "24× between 00:00–23:00" is how an hourly cadence is expressed; there's no separate Hourly option. A live **"Runs at: ..."** preview shows exactly what your settings produce. |
 | **First due date** | YYYY-MM-DD. When the first scheduled run should occur. Leave blank for manual-only tasks. Auto-populates with today when you select a schedule. |
 | **Output — 💡 Save key insights to Learnings** | Claude's prompt instructs it to call `record_learning()` with key findings |
 | **Output — 📄 Save full analysis as Word document (.docx)** | Claude's prompt instructs it to call `save_analysis_report()` and save a `.docx` report |
-| **Output — ✉️ Email the analysis** (v8.1.10) | Sends the finished analysis via AI-Prowler's own configured SMTP account — attaches the Word document automatically if that output is also checked. **At least one of the three outputs must be selected.** |
+| **Output — ✉️ Email the analysis** | Sends the finished analysis via AI-Prowler's own configured SMTP account — attaches the Word document automatically if that output is also checked. **At least one of the three outputs must be selected.** |
 | **Report folder** | Defaults to `~/Documents/AI-Prowler_tasks_reports`. Click **Browse…** to change. |
 
 A static reminder — *"If the Autonomous AI Task Queue is enabled, each automatic check uses Claude subscription usage credits"* — appears in this dialog too, matching the Common Business Configure popup.
@@ -1591,12 +1995,12 @@ There is no longer a manual "Run Due Tasks" batch button in this panel — runni
 
 Here is a well-formed custom prompt for a monthly customer review:
 
-> Review all customers in my Job Tracker spreadsheet. Identify: (1) customers with no jobs in the last 60 days, (2) customers with 3 or more completed jobs this quarter, (3) any unpaid invoices over 30 days old. Call `read_job_spreadsheet()` for the Jobs_Schedule and Invoices sheets. Record each finding as a learning with category `client_preference` or `problem_flag` as appropriate. Save the full analysis as a Word document via `save_analysis_report()`. Then call `complete_analysis_task(task_id, summary)` with a one-sentence summary of what was found.
+> Review all customers in my job tracker. Identify: (1) customers with no jobs in the last 60 days, (2) customers with 3 or more completed jobs this quarter, (3) any unpaid invoices over 30 days old. Call `read_job_spreadsheet()` for the Jobs_Schedule and Invoices sheets. Record each finding as a learning with category `client_preference` or `problem_flag` as appropriate. Save the full analysis as a Word document via `save_analysis_report()`. Then call `complete_analysis_task(task_id, summary)` with a one-sentence summary of what was found.
 
 #### Custom Task Lifecycle
 
 1. Task created → saved in `~/.ai-prowler/custom_analysis_tasks.json`
-2. Task queued via **▶ Queue**, or automatically by `sync_due_tasks_to_queue()` once due — written to `pending_tasks.json` with `status: pending` and its own `schedule`/`next_due` (v8.1.9: self-describing, no longer requires a separate lookup)
+2. Task queued via **▶ Queue** (in the GUI, or the same **▶ Queue / ▶ Re-Queue** button in the Remote App, or `queue_single_task()`) — written to `pending_tasks.json` with `status: pending` and its own self-describing `schedule`/`next_due`. Tasks are queued one at a time only; there's no bulk "queue everything that's due" step, since one tap could otherwise start several AI runs (and spend credits) at once.
 3. `get_pending_analysis_tasks()` returns it once `next_due` is today or earlier (`is_queue_entry_ready()`) — a task queued ahead of time stays hidden until then
 4. Claude picks it up and executes the prompt
 5. Claude calls `complete_analysis_task(task_id, summary)` → for a recurring task, `next_due` advances and `status` resets back to `pending` (re-armed, not closed) — same entry surfaces again automatically next cycle. A one-shot (`schedule: none`) task closes permanently instead.
@@ -1608,14 +2012,14 @@ Here is a well-formed custom prompt for a monthly customer review:
 Both Common Business buttons and Custom Analyses share the same scheduling engine:
 
 - **Anchor-based advancement** — `next_due` advances from the previous `next_due`, not from the completion date. A weekly task due Monday stays on Mondays even if Claude runs it on Wednesday.
-- **`complete_analysis_task()` unified re-arm (v8.1.9)** — built-in and custom recurring tasks are now handled by the exact same code path and behave identically: `next_due` advances and `status` resets to `pending`, so the queue entry stays alive and resurfaces on its own next cycle. Custom tasks additionally sync the advanced `next_due` back to `custom_analysis_tasks.json` so the GUI's task list stays accurate. Only one-shot (`schedule: none`) tasks — built-in or custom — close permanently.
-- **`sync_due_tasks_to_queue()`** pushes due custom definitions into the run queue automatically; built-in tasks have no separate definition, so their first queueing is still a GUI action.
-- **Schedules available:** Manual only, Daily, Weekly, Every 2 weeks, Monthly, Quarterly, Yearly.
+- **`complete_analysis_task()` unified re-arm** — built-in and custom recurring tasks are handled by the exact same code path and behave identically: `next_due` advances and `status` resets to `pending`, so the queue entry stays alive and resurfaces on its own next cycle. Custom tasks additionally sync the advanced `next_due` back to `custom_analysis_tasks.json` so the GUI's task list stays accurate. Only one-shot (`schedule: none`) tasks — built-in or custom — close permanently.
+- **Queueing is manual, one task at a time** — `queue_single_task()` (or ▶ Queue in the GUI / Remote App) puts one specific task in the run queue now. The old `sync_due_tasks_to_queue()`, which pushed every due custom task in at once, was removed so a single tap can't start several AI runs together.
+- **Schedules available:** Manual only, Daily (once a day, or up to 24 evenly spaced runs between a start and end time), Weekly, Every 2 weeks, Monthly. Weekly, every-2-weeks and monthly tasks can be pinned to a weekday. (Quarterly and Yearly were removed — use Monthly.)
 - **Default report folder** for all outputs: `~/Documents/AI-Prowler_tasks_reports` (created automatically if it doesn't exist)
 
 ---
 
-### ⏰ Proactive Alerts (v8.0.0)
+### ⏰ Proactive Alerts
 
 **Proactive Alerts** is a background scheduler built into AI-Prowler that pushes email alerts to you automatically — no Claude session needed, zero API cost. It runs as a daemon thread inside the AI-Prowler process and checks every 60 seconds whether any job is due.
 
@@ -1751,7 +2155,7 @@ Learnings are **always preserved**. The `ai_prowler_learnings` ChromaDB collecti
 
 See Section 9 for full details. Appears only when `edition = business` AND `mode = server`.
 
-### SMS Configuration (Settings Tab — v8.0.0)
+### SMS Configuration (Settings Tab)
 
 In server mode, SMS is configured in the GUI rather than via Claude:
 
@@ -1781,7 +2185,7 @@ AI-Prowler indexes 65+ file formats by default.
 | `.rtf` | Rich Text Format | striprtf | RTF codes stripped |
 | `.html`, `.htm` | Web | beautifulsoup4 | All tags stripped |
 | `.csv`, `.tsv` | Tabular data | csv module | Column: Value per-row format |
-| `.py`, `.js`, `.ts`, `.go`, `.rs`, etc. | Code | Plain text (single security-scan chunk) | Source code is searchable; indexed as one chunk per file in v8.0.0 |
+| `.py`, `.js`, `.ts`, `.go`, `.rs`, etc. | Code | Plain text (single security-scan chunk) | Source code is searchable; indexed as one chunk per file |
 | `.json`, `.yaml`, `.toml`, `.ini`, `.cfg` | Config / Data | Plain text | Config files |
 | `.jpg`, `.jpeg`, `.png`, `.tif`, `.tiff`, `.bmp`, `.webp` | Images | Tesseract OCR | OCR extracts embedded text |
 | `.eml` | Email (single) | email / extract-msg | Headers, sender, recipient, subject, body |
@@ -1959,12 +2363,12 @@ Proactive Alerts sends scheduled email briefings and alerts without needing an a
 
 **Six built-in jobs:** Morning Briefing, Overdue Invoice Alert, Due Analysis Tasks, SMS Reply Monitor, Weather Watch, End-of-Day Summary. Each has its own ON/OFF toggle, a time field (`HH:MM` 24-hour, or `every_Nh`/`every_Nm` for interval jobs), and a days selector (daily / weekdays / weekends / a specific day).
 
-**Recipient and location come from Settings, not this panel (v8.1.3).** This panel shows two read-only lines — "📧 Sends to: ..." and "📍 Weather location: ..." — confirming what will actually be used, but neither is editable here anymore. Earlier versions had separate Email and Location fields right in this panel, each with its own hardcoded default and no relationship to anything else in the app; that meant up to three different, silently disconnected copies of "who/where" could exist at once. There is now exactly one place to change each:
+**Recipient and location come from Settings, not this panel.** This panel shows two read-only lines — "📧 Sends to: ..." and "📍 Weather location: ..." — confirming what will actually be used, but neither is editable here. There is exactly one place to change each:
 
 - **Recipient:** set the default recipient in **Settings → Email Configuration** — the same SMTP setup used for every other emailing feature in AI-Prowler.
 - **Location:** set your home address (Street/City/State/ZIP) in **Settings → Owner Name → Home Address**. If you've never set one, the panel shows "(not set — ...)" instead of guessing a town.
 
-**Per-job weather (v8.1.3):** Morning Briefing no longer checks one fixed location for the whole day — it looks up weather for **each job's own City/State** (read directly from the Jobs_Schedule spreadsheet), since a real day's jobs are often scattered across several towns. Weather is fetched once per unique town among the day's jobs, not once per job, so having five jobs in the same town doesn't trigger five lookups. A job with no rain risk shows plainly; a job with a rainy forecast gets a **⚠️ Rain risk** flag right next to it. Your Settings home address is only used as a fallback — when a specific job has no City on file, or when there are no jobs scheduled at all for the day. Weekly Weather Watch always uses your Settings home address, since it's a general week-ahead outlook rather than a per-job breakdown; with no address configured, it simply produces nothing that week rather than reporting on a guessed town.
+**Per-job weather:** Morning Briefing looks up weather for **each job's own City/State** (read directly from the Jobs_Schedule table — the same data shown in the Jobs PWA App), since a real day's jobs are often scattered across several towns — rather than one fixed location for the whole day. Weather is fetched once per unique town among the day's jobs, not once per job, so having five jobs in the same town doesn't trigger five lookups. A job with no rain risk shows plainly; a job with a rainy forecast gets a **⚠️ Rain risk** flag right next to it. Your Settings home address is only used as a fallback — when a specific job has no City on file, or when there are no jobs scheduled at all for the day. Weekly Weather Watch always uses your Settings home address, since it's a general week-ahead outlook rather than a per-job breakdown; with no address configured, it simply produces nothing that week rather than reporting on a guessed town.
 
 **Auto-save, no manual Save/Start/Stop:** every field saves the instant it changes — clicking a job's toggle, tabbing out of the time field, or selecting a day all save immediately. There is no separate "Save Config" button and no master "Enable proactive alerts" checkbox. The background engine starts automatically the moment any single job is switched ON, and stops automatically the moment the last enabled job is switched OFF — the engine's running/stopped state is fully derived from the job toggles, never a separate thing to manage.
 
@@ -2002,8 +2406,8 @@ PyTorch stable does not yet include CUDA 12.8 compute kernels for Blackwell SM 1
 | SMS thread log | `~/.ai-prowler/sms_threads.json` | Outbound SMS thread history per crew member |
 | Proactive Alerts log | `~/.ai-prowler/scheduler_log.txt` | Every scheduled job run — sent / nothing to report / error, capped at 500 lines |
 | File Watchdog log | `~/AI-Prowler/logs/file_watchdog.log` | Real-time auto-indexing activity — every file detected and indexed |
-| Scheduled Task (index) log | `~/AI-Prowler/.rag_update.log` | Full output of every Windows-Task-Scheduler-triggered index update (v8.1.2+; previously only logged a completion timestamp, not the actual output) |
-| Scope-routing skip log (Business Server) | `~/AI-Prowler/logs/index_scope_skips.log` | Shared across the File Watchdog, Scheduled Task, and GUI Update buttons — one line per file skipped because it didn't safely match a collection scope rule (v8.1.2+) |
+| Scheduled Task (index) log | `~/AI-Prowler/.rag_update.log` | Full output of every Windows-Task-Scheduler-triggered index update |
+| Scope-routing skip log (Business Server) | `~/AI-Prowler/logs/index_scope_skips.log` | Shared across the File Watchdog, Scheduled Task, and GUI Update buttons — one line per file skipped because it didn't safely match a collection scope rule |
 
 ### MCP Server Log
 
@@ -2087,7 +2491,7 @@ Known bug on some Windows builds. The launcher sets `HF_HOME` explicitly to prev
 
 Run the uninstaller from `C:\Program Files\AI-Prowler\uninstall.exe` or use Windows Settings → Add or Remove Programs → AI-Prowler.
 
-The uninstaller removes all AI-Prowler application files and Python (if installed by AI-Prowler), and offers to remove the RAG database, tracking files, self-learning knowledge base, and Job Tracker spreadsheet (default: keep all — safe for reinstall).
+The uninstaller removes all AI-Prowler application files and Python (if installed by AI-Prowler), and offers to remove the RAG database, tracking files, self-learning knowledge base, and the job tracker database (default: keep all — safe for reinstall).
 
 ---
 
@@ -2112,7 +2516,7 @@ No GPU. No training. New knowledge is queryable within roughly 1 second of being
 | `get_learnings_report` | Return learnings as formatted text in-conversation |
 | `export_learnings_file` | Export to JSON pack or spreadsheet file |
 | `rebuild_learnings_index` | Rebuild ChromaDB index from JSON data file |
-| `send_learnings_report` | Email a formatted HTML learnings report (all roles in v8.0.0) |
+| `send_learnings_report` | Email a formatted HTML learnings report (available to all roles) |
 
 ### Learning Categories
 
@@ -2162,9 +2566,26 @@ The footer at the bottom of the Welcome tab can be customized by the AI-Prowler 
 
 A dismissible banner — "📬 Get AI-Prowler updates and usage tips by email" — appears on the Home tab for anyone not already subscribed. Enter an email and click Subscribe, or click the ✕ to dismiss it for the current session (it reappears next launch, since it only fully disappears once you've actually subscribed).
 
-**Double opt-in (v8.1.1):** clicking Subscribe doesn't add you to the mailing list immediately. It sends a confirmation email first, and the banner changes to "📬 Check your email to confirm your subscription" with a **Dismiss** checkbox next to it. You're only added to the active list once you click the confirmation link in that email — this protects against typos in the email field and confirms the address is actually reachable. Checking Dismiss hides the reminder permanently (not just for the session); if you want it back — for example, to resubscribe with a different address — use **Reset Newsletter State** in Help → Notification Status, which clears your local subscription state entirely and brings back the original Subscribe form.
+**Double opt-in:** clicking Subscribe doesn't add you to the mailing list immediately. It sends a confirmation email first, and the banner changes to "📬 Check your email to confirm your subscription" with a **Dismiss** checkbox next to it. You're only added to the active list once you click the confirmation link in that email — this protects against typos in the email field and confirms the address is actually reachable. Checking Dismiss hides the reminder permanently (not just for the session); if you want it back — for example, to resubscribe with a different address — use **Reset Newsletter State** in Help → Notification Status, which clears your local subscription state entirely and brings back the original Subscribe form.
 
 This is a separate, purely opt-in mailing list — independent of licensing or telemetry. Subscribing or not has no effect on which features are available, and unsubscribing (via the link in any newsletter email) doesn't affect your license or account in any way.
+
+### Setup Center — What the Status Lights Mean
+
+The **Setup Center** is the panel on the Home tab — look for the "🧭 Set up AI-Prowler" header. It’s a step-by-step guide for new users, and for adding new capabilities later (connecting an AI, phone access, the Jobs app, and more). You start by answering "What do you want AI-Prowler to do?" — your answers build your personal setup plan, and the header shows a status light plus "N of M done" so you always know where you stand.
+
+Each step has its own light:
+
+- 🟢 **Green** — the step is done.
+- 🟡 **Yellow** — partly done (started, or half-configured).
+- 🔴 **Red** — not done yet.
+- ⚪ **Grey** — you skipped this step (it can be undone later with the step’s **Undo skip** button).
+
+The overall light follows one simple rule: **red is reserved for the core steps you chose yourself.** Those are the four steps that come with "🔎 Ask questions about my own files" — **Index your first folder**, **Connect your AI**, **Keep your index up to date**, and **Teach AI-Prowler**. If any of those isn’t finished, the overall light stays red.
+
+Everything else shows yellow until it’s done — requirements pulled into your plan automatically (Phone access, the Jobs app, Email), and other steps you chose yourself that aren’t core (crew routes, scheduled analyses). The overall light turns green when every step in your plan is finished.
+
+Two things that never happen: a skipped step never shows red — it counts as decided. And steps you never chose are invisible to the light — they can never turn anything red.
 
 ---
 
@@ -2198,6 +2619,128 @@ Set `"heartbeat_enabled": false` in `config.json` and restart AI-Prowler.
 - First heartbeat: ~5 minutes after first launch
 - Subsequent: every 24 hours
 - Server-side 12-hour throttle prevents duplicates
+
+---
+
+## 25. Jobs PWA App
+
+### What It Is
+
+The Jobs App is a mobile-friendly web app for field crew and business owners to manage the day's work without opening a Claude conversation — clock in/out, view the schedule, build and follow routes, take job photos, message customers, and send invoices, all from a phone in the truck. It reads and writes the exact same SQLite-backed job tracker database Claude uses through its MCP tools — the app and talking to Claude are two paths into one dataset, never two separate systems. Since the job tracker's canonical store is a database rather than a spreadsheet you'd open in Excel, **the Jobs App is the primary day-to-day view into that data for a person** — Claude handles conversational and bulk work, the app handles the moment-to-moment tapping-on-a-phone work. Clocking in from the app and later asking Claude "what's my schedule tomorrow?" from the same phone's browser both see the identical, up-to-date data.
+
+### Setup & Access
+
+1. **Turn on Remote Access first** (Section 7) — the Jobs App is served over the same Cloudflare Tunnel used for Claude.ai mobile access. Personal mode: Settings → Remote Access → Start HTTP Server + Subscribe + Configure. Server mode: see Section 9.
+2. **Open the app URL** — `https://your-tunnel-domain.ai-prowler.com/jobs/`. The exact URL is also shown on the **Small Business tab** next to "Jobs App URL."
+3. **Install to the home screen (recommended)** — **iPhone:** open it in **Safari** → Share → Add to Home Screen. If the QR opened in another browser, copy the link into Safari first (or set Safari as the default in Settings → Apps — the iPhone Camera QR scanner opens links in your default browser, not necessarily Safari). **Android:** open it in **Chrome** and tap the **Install** button on the page (or ⋮ → Install app). It then opens full-screen like a native app, no browser chrome, no app store needed.
+4. **Log in once:**
+   - **Personal mode** — enter your single owner token (the same Bearer Token set in Settings → Remote Access).
+   - **Server mode** — each employee enters their **name** and their own personal token, set up for them in the Admin tab. What they then see depends on their role: **field crew** see only their own assigned jobs (schedule, board, calendar, route, database rows); **owner, manager and staff** see every crew's jobs. See **Server Mode — Roles and What Each User Sees** below.
+5. **Login persists on the device** — not tied to the browser tab or the app staying open. Closing or restarting the app never signs you out. To switch users or sign out, use **Sign Out / Change Device** on the Profile tab.
+
+### Jobs Setup Popup — Skipping What You Don’t Need Yet
+
+When you set up the Jobs app from the Setup Center on AI-Prowler’s Home page, a setup popup walks you through three sections:
+
+1. **Your business** — name, address, tax rate, and the other details printed on invoices and receipts.
+2. **Customers** — add your first customer, or import a whole list from a CSV file.
+3. **The Jobs app on your phone** — scan the QR code (or copy/email the link), install the app, and sign in.
+
+You don’t have to do everything at once. Sections 1 and 2 each have their own **Skip** button, so you can get going and come back later. Each skipped section shows a note: you can add the data anytime in the Jobs app → Database tab — and the skip clears itself automatically as soon as the real data is entered. Section 3 can’t be skipped: the Jobs setup only counts as complete once the app has signed in from a phone.
+
+### What It Can Do — Tab by Tab
+
+The app has ten bottom-nav tabs: **Jobs**, **Board**, **Route**, **Calendar**, **Clock**, **Photos**, **Messages**, **Database**, **Reports**, **Profile**. (**Reports** appears in personal mode and, in server mode, for the owner only.)
+
+**Jobs** — today's schedule at a glance, split into a **Today** section and an **Upcoming** section. Each job is a card showing its ID, customer, service type, status badge, time window, city, and assigned crew. Tapping a card opens the full job-detail popup: clock in/out for that job, add notes, and — for any unpaid, un-invoiced completed job — a green **🧾 Create Invoice** button that opens a pre-filled form (quote, discount, tax rate, service type, description, payment terms) with a live Taxable / Tax / Total Due strip that recalculates on every keystroke. Once an invoice exists, **Email Invoice** / **Text Invoice** buttons send it directly from the app.
+- If a route has been built for today (via Claude calling `build_daily_route()` — see Section 10), a tappable **"📍 Today's route is ready — tap to navigate"** banner appears at the top of this tab, above the job list.
+- A refresh button (spinning-icon control, top-right) manually re-fetches the list. Simply navigating to this tab also refreshes it automatically — you'll never see stale data just from switching back to it.
+
+**Board** — the live kanban/grid Job Board described in **Section 10 → Job Board**: Scheduled / In Progress / Completed columns, drag-and-drop to reschedule or reassign, polling `get_board_updates()` roughly every 60 seconds so it reflects crew activity without a manual refresh. The exact same markup renders for every role — owner, manager, staff, field_crew — in both Personal and Server mode; what actually differs is only which rows come back from the server (the same crew-scoping every other job-tracker tool applies), never anything role-specific on the client side.
+
+**Calendar** — a rolling 2-week day-by-day agenda, followed by a scrollable 12-month overview grid. Tapping any day, past or future, in either view opens a modal listing that day's jobs.
+- Any day that has a built route shows a small tappable **📍** icon — next to the date header in the 2-week agenda, next to the day number in the 12-month grid, and as a full "Route for this day — tap to navigate" banner inside the day-tap modal. This works for *any* date that currently has a route, not just today, which is what makes it practical to build routes for several days ahead of time and still have each one reachable later from the Calendar.
+- Auto-refreshes every time you navigate to this tab.
+
+**Route** — pick a day, check it for problems (prescreen), build the day's route, adjust the stop order (▲▼, drag ✋, edit ✏️, remove 🗑️), approve it, and send the route or a phone link to the crew. Where each route starts and ends is set by **Route Origin Mode** (see #### Route Origin Mode). Whether building a route also emails it automatically is set by **Email Route On Build** — the **📧 Email Approved Route Now** button sends the saved route on request either way (see #### Email Route On Build). In server mode field crew work only with their own route.
+
+**Clock** — shows active clock-in status and a simple manual clock in/out control, the same underlying action as asking Claude to clock you in or out.
+
+**Photos** — attach job photos straight from the camera or camera roll.
+
+**Messages** — the SMS/WhatsApp thread view, where SMS is configured (Section 11). Checking for new replies is a deliberate manual action (a button press), not automatic, so opening this tab never silently fires an outbound API call.
+
+**Database** — a raw, tab-switchable table view of every table in the job tracker (Jobs_Schedule, Customers, Invoices, Quotes, TimeLog, Route_Planner, Services_Pricing, Settings, Commands) — this is the app's general-purpose, row-level view into the same SQLite database Claude reads and writes, for anything the Board and Jobs tabs don't have a purpose-built screen for. (Labeled "Database" in the app; still called the "Sheet" screen internally and in a few places in this guide — same tab, same name change reflecting that there's no underlying spreadsheet file anymore.) Every row is editable via a generic edit form, and tables that support it have a **+ Add** button for appending a brand-new row.
+- A manual refresh button next to the table tabs re-fetches whichever one is currently open, in place — no need to switch tabs away and back just to see new data. Switching between table tabs has always re-fetched fresh data on every switch.
+- Any cell whose value is a URL (`Route Map URL`, `Waypoint Map URL`) renders as a real tappable **"📍 Open in Maps"** link — in both the row-edit form and the plain table list view — instead of unclickable raw text.
+- Auto-refreshes every time you navigate to this tab.
+
+**Reports** — weekly revenue (collected and still owed), hours, stale customers and customer reminders. Owner only in server mode.
+
+**Profile** — the logged-in user's info (in server mode: name and role) and **Sign Out / Change Device**.
+
+### Personal Mode vs. Server Mode
+
+| | Personal mode | Server mode |
+|---|---|---|
+| Login | Single owner token, fetched automatically from AI-Prowler's own config — nothing to set up per user | Each employee's name + own personal token, configured in the Admin tab |
+| Data shown | Every job in the job tracker, on every tab | **By role:** field crew see only their own assigned jobs (same filtering on every tab); owner, manager and staff see every crew's jobs |
+| Screens | All ten tabs | Reports for the owner only; field crew don't get the Settings, Services_Pricing, Quotes and Invoices tables |
+| Setup | Automatic — same app, same login flow, no extra configuration | Requires each employee to be added as a user first (Section 9) |
+
+### Server Mode — Roles and What Each User Sees
+
+In server mode the Jobs App is shared by everyone the owner has added in the Admin tab. Each person logs in with their name and personal token, and the **role** set for them in the Admin tab decides what they get. The full table is in **Section 9 → Roles and Scopes in the Jobs App**; in short:
+
+- **owner** — everything, including the Reports screen.
+- **manager** and **staff** — every crew's jobs, routes and database tables; no Reports screen. Staff is the crew-lead tier: unrestricted for jobs, even though staff don't manage users.
+- **field_crew** — only the jobs assigned to them (by name in **Crew / Technician**): their own schedule, board, calendar, route, clock entries and photos. Customers are readable (gate codes, access notes, on-site contact); Settings, Services_Pricing, Quotes and Invoices are not available.
+
+Knowledge-base **scopes** (Section 9 → Scopes) do not change what anyone sees in the Jobs App — they only affect document search.
+
+Good to know:
+- A job with no name in **Crew / Technician** is invisible to field crew until someone assigns it.
+- The top bar and the Profile tab show who is logged in and their role — useful when several people share a tablet.
+- If a role is changed in the Admin tab, the person sees the change the next time they log in.
+
+---
+
+## 26. Remote PWA App
+
+> **Personal mode only.** Unlike the Jobs App (Section 25), the Remote PWA is not available in Business Server mode at all. It gives whoever's logged in full access to browse and write files anywhere on the machine, manage the tracked-directory permission allowlist, and view system internals — appropriate for the single owner of a personal install, but not something to expose to individual field crew members on a shared company server. There is no per-employee scoping here the way the Jobs App has; if it were available in server mode, any employee with the login would effectively be remote-controlling the server machine itself, not just their own job data.
+
+### What It Is
+
+The Remote PWA is a standalone, human-facing dashboard for managing your own personal AI-Prowler install from any phone or browser — separate from the Jobs App (field-service focused, Section 25) and separate from the MCP connection Claude.ai uses to actually reach your knowledge base. Where the Jobs App is about running the day's work, the Remote PWA is about checking on and administering AI-Prowler while away from the PC it runs on: browsing files, running a search, managing permissions, reviewing self-learning entries, checking the agentic task queue, and viewing system health — all without a Claude conversation open.
+
+### Setup & Access
+
+1. **Turn on Remote Access first** (Section 7) — the same Cloudflare Tunnel and Bearer Token used for Claude.ai mobile access also serves this app. If you've already set up mobile access, there's nothing additional to configure.
+2. **Open the app URL** — `https://your-tunnel-domain.ai-prowler.com/remote/`. It shows as **AI-Prowler Remote** in the browser tab.
+3. **Install to the home screen (recommended)** — an install banner appears at the top of the page the first time you open it in the phone's browser. On **Android/Chrome** it shows a one-tap **Install** button (via the browser's install prompt); on **iPhone** there's one manual step — Apple allows no automatic install: (1) open the page in **Safari** (if the QR opened in another browser, copy the link into Safari first), (2) tap **Share → Add to Home Screen**. Once installed, it opens full-screen like a native app — no browser chrome, no app store needed. The banner never appears when the app is already installed (running standalone), and tapping **Later** dismisses it; that choice is remembered on the device, so it won't nag you again.
+4. **Log in with your Bearer Token** — the same token from Settings → Remote Access. The session persists on the device.
+
+### What It Can Do — Tab by Tab
+
+The app has seven bottom-nav tabs: **Dashboard**, **Files**, **Search**, **Perms**, **Learn**, **Tasks**, **System**.
+
+**Dashboard** — an at-a-glance status view, plus a **Quick Access** panel of shortcuts straight into the other six tabs.
+
+**Files** — browse, download, and upload tracked files directly from the phone or browser, with no Claude conversation needed. This is the human-usable counterpart to the `get_file_download_url()` / `get_file_upload_url()` MCP tools (Section 7 → File Transfer Tools), which let *Claude* do the same thing programmatically during a conversation.
+
+**Search** — run a semantic search against your knowledge base directly from this tab, using the same underlying search `search_documents()` uses when Claude searches on your behalf.
+
+**Perms** — view and manage the readable/writable directory allowlist, the same permission set the `list_writable_directories()`, `grant_write_access()`, and `revoke_write_access()` MCP tools operate on. Useful for checking or fixing folder permissions without needing to ask Claude to do it.
+
+**Learn** — browse existing self-learning entries, and add a new one directly (**+ New Learning**) without a conversation — the same knowledge base `record_learning()` and `search_learnings()` read from and write to.
+
+**Tasks** — the agentic analysis task queue, grouped into **Due Now**, **Scheduled**, and **Completed / One-off**, with a **+ New Custom AI Task** form for defining a new one. Mirrors what `list_analysis_tasks()`, `get_pending_analysis_tasks()`, and `create_analysis_task()` work with.
+
+**System** — **AI-Prowler Status** and **Database Stats** panels, the same information `check_ai_prowler_status()` and `get_database_stats()` return to Claude.
+
+### Personal Mode vs. Server Mode
+
+**Personal mode only — not available in Server mode at all.** This matches the same restriction already documented for the underlying `get_file_download_url()` / `get_file_upload_url()` MCP tools (Section 7 → File Transfer Tools), which are also personal-mode-only for the identical reason: unrestricted file/permission/system access has no safe per-employee scoping story on a shared company server. The Jobs App (Section 25) is the field-crew-facing app for Business Server installs — it has the row-level scoping this app deliberately lacks.
 
 ---
 

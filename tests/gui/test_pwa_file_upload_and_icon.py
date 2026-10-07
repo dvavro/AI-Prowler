@@ -97,7 +97,10 @@ class TestExtensionPreservationBugFixed:
         assert '_ext_map4.get(_orig_ext4, ".jpg")' not in mcp_source
 
     def test_both_handlers_use_original_extension_fallback(self, mcp_source):
-        occurrences = mcp_source.count('_ext_map4.get(_orig_ext4, _orig_ext4 or ".jpg")')
+        # 2026-09-26: both handlers now call the shared _safe_upload_ext()
+        # (keeps the file's own extension, .jpg only when there is none, and
+        # strips anything but letters/digits — see tests/mcp_tests/test_job_upload_paths.py).
+        occurrences = mcp_source.count('_safe_upload_ext(_orig_name4, _ext_map4)')
         assert occurrences == 2, (
             f"Expected the fixed extension-fallback pattern in exactly 2 "
             f"places (server-mode and personal-mode photo upload handlers), "
@@ -192,19 +195,21 @@ class TestJobModalAlsoHasTwoButtons:
 
     def test_go_photos_accepts_a_picker_argument(self, pwa_source):
         idx = pwa_source.index("function goPhotos(id")
-        nearby = pwa_source[idx:idx + 700]
-        assert "picker" in nearby
-        assert "fileInputCamera" in nearby
-        assert "fileInputFiles" in nearby
+        end = pwa_source.index("\n}", idx)
+        body = pwa_source[idx:end]
+        assert "picker" in body
+        assert "fileInputCamera" in body
+        assert "fileInputFiles" in body
 
+    # The job id is escaped since 2026-09-26 (R-018): ${esc(j.id)}.
     def test_job_modal_has_two_photo_buttons_not_one(self, pwa_source):
         idx = pwa_source.index("quickClock")  # unique to the job-detail modal template
-        nearby = pwa_source[idx:idx + 700]
-        assert "goPhotos('${j.id}','camera')" in nearby
-        assert "goPhotos('${j.id}','files')" in nearby
+        nearby = pwa_source[idx:idx + 1000]
+        assert "goPhotos('${esc(j.id)}','camera')" in nearby
+        assert "goPhotos('${esc(j.id)}','files')" in nearby
 
     def test_job_modal_buttons_labeled_photos_and_files(self, pwa_source):
-        idx = pwa_source.index("goPhotos('${j.id}','camera')")
+        idx = pwa_source.index("goPhotos('${esc(j.id)}','camera')")
         nearby = pwa_source[idx:idx + 300]
         assert "Add Photos" in nearby
         assert "Add Files" in nearby

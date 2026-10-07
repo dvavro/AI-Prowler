@@ -1,26 +1,36 @@
 {
-  "version": "9.1.0",
-  "generated": "2026-08-26T18:11:31",
+  "version": "9.2.0",
+  "generated": "2026-10-03T14:47:37",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "363c8666ad182d21376cdf773d6ee7b83365941d663dae7cac4d072a50131cd6",
-      "bytes": 1297621
+      "sha256": "6f706c346b566a149db431ca0cce7caa29d66b6de4b7f027d5228245c41ad16d",
+      "bytes": 1424206
     },
     {
       "path": "rag_preprocessor.py",
-      "sha256": "71b9dd1324b202124eedd5a12323c6786dac08a6943d0bd897f4d1db2b004190",
-      "bytes": 315848
+      "sha256": "98e335d2aa9dd5cd310f8d1c74b504fbd596b4a898d6f799be8a6102eaa5a839",
+      "bytes": 318329
     },
     {
       "path": "ai_prowler_mcp.py",
-      "sha256": "a69fb465d26c4e43a9354581ce1048bd45683b404519f422957520bdad4811ee",
-      "bytes": 969449
+      "sha256": "1b9488e2afe0fc2a7b8dfe460687ad1a2a11a6bb92cc107b62775e2877295e3b",
+      "bytes": 1301792
     },
     {
       "path": "mcp_diagnostics.py",
-      "sha256": "aa8784b1de7cb6b2155824a5048f573812e4814122c85e0b46946922acfd3591",
-      "bytes": 21338
+      "sha256": "67745347562bbce8d98f3f3e9fa1ff4fda99a395b6fe09759db50e5708fd137f",
+      "bytes": 21487
+    },
+    {
+      "path": "mcp_tool_catalog.py",
+      "sha256": "4013a970d0d5d1bf0000a01dbcac572f2f40008c0ec3224b79fe4cd6ffb8555c",
+      "bytes": 40817
+    },
+    {
+      "path": "tool_config_store.py",
+      "sha256": "7abc753f248b8ff0eaf4a4c45b7ad79ab485c9cb036ea613828d124658bf4e84",
+      "bytes": 7831
     },
     {
       "path": "self_learning.py",
@@ -39,13 +49,8 @@
     },
     {
       "path": "requirements.txt",
-      "sha256": "751340036370dbdab107488d7d4ae9a5c9e104b9390f2d299cd5f7fe9ad74079",
-      "bytes": 8882
-    },
-    {
-      "path": "claude_desktop_config_example.json",
-      "sha256": "e27111dd428c360cedf9f010f7067db808c54d2f071ab47288a13de302e5b9b3",
-      "bytes": 3772
+      "sha256": "8a14431fb205fae5c1f0615d7180c5df63b71b9b68682ef41d88f71b680878fe",
+      "bytes": 9059
     },
     {
       "path": "subscription_instructions.txt",
@@ -53,18 +58,13 @@
       "bytes": 3830
     },
     {
-      "path": "README.md",
-      "sha256": "f394e68daa55d7304da6365e9bfea7c941ca721eecf55da5be70e652a407bc44",
-      "bytes": 18979
-    },
-    {
       "path": "COMPLETE_USER_GUIDE.md",
-      "sha256": "5c0706d7c72ff2c784f8cb581f288ceb11aad1a5c7bad2f835c48c90510a6403",
-      "bytes": 182040
+      "sha256": "685bb79b7a116198068e09207104073ddb1ea7d1e82552f6727ff7a18d093dbf",
+      "bytes": 242618
     },
     {
       "path": "VERSION",
-      "sha256": "077ee5b3a3a7fc2622ceff6466fea0c28f3fb08b24653dcc7f4baab29b9aef36",
+      "sha256": "1b9487d55bea47fea50d226cc9c53bc548877ad2a318bac8fbc8b320f429e5c5",
       "bytes": 6
     },
     {
@@ -89,8 +89,8 @@
     },
     {
       "path": "mobile_activator.py",
-      "sha256": "0ab0f4f5ea3480949df44e0145923ceec51008b2b5a226c3887535f06ce75cd2",
-      "bytes": 28433
+      "sha256": "0c9f80a9582785d60cc065f3a09221690fae38548775efb35fe86416a6cc6568",
+      "bytes": 28694
     },
     {
       "path": "cloudflared_service_helper.py",
@@ -99,23 +99,13 @@
     },
     {
       "path": "sms_backends.py",
-      "sha256": "0c1c037b6dc30a1ad145a22df811ce404df24ee9dbc99914ca6401d878a6672f",
-      "bytes": 21306
+      "sha256": "c863997d49f4e31d807bded54792c05a5aa36f229d916ab36132c963a10e0a62",
+      "bytes": 21724
     },
     {
       "path": "sms_inbox.py",
       "sha256": "71ac0edfb8883dac44469d3104f4031064bee73f638d1ea2e59c93a4fc96b4b8",
       "bytes": 18904
-    },
-    {
-      "path": "migrate_spreadsheet.py",
-      "sha256": "84b452465a038134e339ed42fbe3fc3652c45f31499d130e1b482e9c01845c6e",
-      "bytes": 43812
-    },
-    {
-      "path": "AI-Prowler_Job_Tracker.xlsx",
-      "sha256": "3084fed2825a373204601bc4da845d7f053a4abb4c7e203a85c7a11b6b2efe30",
-      "bytes": 75685
     },
     {
       "path": "custom_tasks_manager.py",
@@ -124,8 +114,8 @@
     },
     {
       "path": "scheduler_jobs.py",
-      "sha256": "d11fb20929bb4bad7bf278cdb468ce8db8498d66667669377bddc21124893e84",
-      "bytes": 19244
+      "sha256": "544bb3aeb45e479b9417584fbfe60f9eb4e9256fe598308323a1b04604bd53ec",
+      "bytes": 19755
     },
     {
       "path": "scheduler_engine.py",
@@ -134,8 +124,8 @@
     },
     {
       "path": "task_queue_automation.py",
-      "sha256": "747f11fa2112288336119574bf74138e2f11b85599a8d10dc17fe64fc6008101",
-      "bytes": 142640
+      "sha256": "37453ed1ea05555f2ebb465608d216c5a5beca5871e8b4ec3eda70f95a0c2e27",
+      "bytes": 162134
     },
     {
       "path": ".claude/settings.json",
@@ -158,9 +148,54 @@
       "bytes": 10791
     },
     {
+      "path": "db_access.py",
+      "sha256": "0f61276256548785ceba2f51bb90e6a2e3c4ec0df7d32ad7d4d69cce876f08e4",
+      "bytes": 9494
+    },
+    {
+      "path": "db_schema.py",
+      "sha256": "dbbff3380b3f67f03f65a86ee91477227988598055142be5f39fcb102a1c9214",
+      "bytes": 33605
+    },
+    {
+      "path": "db_read_ops.py",
+      "sha256": "e954125635958445dc006c9ffbff727b31ad2ffff3505b8d4e8c0db15da06042",
+      "bytes": 37745
+    },
+    {
+      "path": "db_write_ops.py",
+      "sha256": "d17ae4faed20de4f8be6ade68ceca197ec783ffc7095a7b82d49e32e395939de",
+      "bytes": 212953
+    },
+    {
+      "path": "db_route_ops.py",
+      "sha256": "00dd0e2c135f77433ec553ea38c08fa62e5b2570a7628a891c4e469dd6218e64",
+      "bytes": 102119
+    },
+    {
+      "path": "db_backup_ops.py",
+      "sha256": "9c5537a64b397faa6ea245cf9ab621c85f7833c551b6da3a268634e2ad41117e",
+      "bytes": 20608
+    },
+    {
+      "path": "db_export_ops.py",
+      "sha256": "19823ce8555e3500ca19474fd035b6e02c52f29711560876a732dbfc896c1ed8",
+      "bytes": 4892
+    },
+    {
+      "path": "cli_signin_relay.py",
+      "sha256": "2fc726402e223dc548b8121059133e5ee27793d44c5e5c81c178648f92751642",
+      "bytes": 11038
+    },
+    {
+      "path": "console_inject.py",
+      "sha256": "837ef06cb8d97c11e5205c1e14814bad0ad545f7268c489a045f2c0caa08837c",
+      "bytes": 3388
+    },
+    {
       "path": "jobs/index.html",
-      "sha256": "4df80f2d6a173838fb14e55057feed49ab49ceb78270bb782c7b0cb3b3e51a4f",
-      "bytes": 520926
+      "sha256": "fea6321a2e8fe38ea3acf14552feb5f50ca4a50be45187e04ebd35a3d9d0520c",
+      "bytes": 861794
     },
     {
       "path": "jobs/manifest.json",
@@ -169,8 +204,8 @@
     },
     {
       "path": "jobs/sw.js",
-      "sha256": "f52d3e3191ceca3395e22c53c73266d8e1f7e6eccc47c801e4b35255e835d936",
-      "bytes": 2525
+      "sha256": "095822e1698386fff0c0b538ececabb4710ac02806f294e27aed6afde98c9b12",
+      "bytes": 3555
     },
     {
       "path": "jobs/icon-192.png",
@@ -189,8 +224,8 @@
     },
     {
       "path": "remote/index.html",
-      "sha256": "51442014ee93014d6fe42d3149d7c1424fd193363e2b63d8f95f20dc6ca16c4e",
-      "bytes": 94999
+      "sha256": "128aa49602b7537f63b76d7b3bca36ff9c6ae15927f757ee59e20bf262475c95",
+      "bytes": 118405
     },
     {
       "path": "remote/manifest.json",
