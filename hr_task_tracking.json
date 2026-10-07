@@ -1,0 +1,28 @@
+{
+  "_meta": {
+    "description": "HR task scheduler state: digest timestamps, notification logs, and scheduler heartbeat. Managed by the background scheduler — do not edit manually.",
+    "spec_version": "v2.1"
+  },
+  "scheduler": {
+    "last_run": null,
+    "last_overdue_check": null,
+    "last_digest_sent": null,
+    "last_48h_check": null,
+    "last_due_today_check": null,
+    "last_overdue_first_notice_check": null,
+    "last_escalation_check": null,
+    "last_welcome_email_check": null,
+    "last_benefits_warning_check": null,
+    "last_doc_expiration_check": null,
+    "last_weekly_owner_summary": null,
+    "last_reminder_email_check": null
+  },
+  "digest_state": {
+    "last_digest_at": null,
+    "last_digest_recipients": [],
+    "last_digest_task_count": 0,
+    "last_digest_overdue_count": 0,
+    "last_digest_due_today_count": 0
+  },
+  "notification_acks": []
+}

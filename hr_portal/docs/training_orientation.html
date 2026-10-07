@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>New Employee Orientation — AI-Prowler</title>
+<style>
+  body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; background: #f6f8fa; color: #0d1117; }
+  .doc { max-width: 820px; margin: 0 auto; background: #fff; padding: 0; min-height: 100vh; }
+
+  /* Hero */
+  .hero { background: linear-gradient(135deg, #0d1117 0%, #161b22 60%, #1f3a5f 100%); padding: 48px 52px 40px; color: #fff; }
+  .hero-brand { font-size: 12px; font-weight: 700; color: #58a6ff; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 16px; }
+  .hero h1 { font-size: 32px; font-weight: 800; margin: 0 0 10px; color: #fff; }
+  .hero p { font-size: 14px; color: #8b949e; margin: 0 0 20px; line-height: 1.7; }
+  .hero-meta { display: flex; gap: 20px; flex-wrap: wrap; }
+  .hero-badge { background: rgba(88,166,255,.15); border: 1px solid rgba(88,166,255,.3); color: #58a6ff; font-size: 11px; font-weight: 600; padding: 4px 12px; border-radius: 20px; }
+
+  /* Progress bar */
+  .progress-bar { background: #161b22; padding: 20px 52px; border-bottom: 1px solid #21262d; }
+  .progress-label { display: flex; justify-content: space-between; font-size: 12px; color: #8b949e; margin-bottom: 8px; }
+  .progress-track { background: #21262d; border-radius: 10px; height: 8px; }
+  .progress-fill { background: linear-gradient(90deg, #58a6ff, #3fb950); height: 8px; border-radius: 10px; width: 0%; transition: width 1s ease; }
+
+  /* Content */
+  .content { padding: 40px 52px; }
+  h2 { font-size: 20px; font-weight: 800; color: #0d1117; margin: 36px 0 14px; display: flex; align-items: center; gap: 10px; }
+  h2 .sec-num { background: #1f6feb; color: #fff; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; flex-shrink: 0; }
+  h3 { font-size: 15px; font-weight: 700; color: #24292f; margin: 20px 0 8px; }
+  p { font-size: 14px; line-height: 1.8; color: #24292f; margin: 0 0 12px; }
+  ul, ol { font-size: 14px; line-height: 1.8; color: #24292f; margin: 0 0 12px; padding-left: 22px; }
+  li { margin-bottom: 6px; }
+
+  /* Cards */
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; margin: 16px 0 24px; }
+  .info-card { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 10px; padding: 16px; }
+  .info-card .icon { font-size: 24px; margin-bottom: 8px; }
+  .info-card .label { font-size: 11px; color: #636e7b; text-transform: uppercase; letter-spacing: .5px; font-weight: 600; margin-bottom: 4px; }
+  .info-card .value { font-size: 14px; font-weight: 700; color: #0d1117; }
+
+  /* Highlight boxes */
+  .highlight { background: #fff8e1; border-left: 4px solid #f0a500; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .green-box { background: #f0fff4; border-left: 4px solid #22c55e; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .blue-box { background: #eff6ff; border-left: 4px solid #1f6feb; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+
+  /* Checklist */
+  .checklist { list-style: none; padding: 0; margin: 0 0 16px; }
+  .checklist li { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 1px solid #eaeef2; font-size: 14px; color: #24292f; }
+  .checklist li:last-child { border-bottom: none; }
+  .checklist li::before { content: '☐'; font-size: 16px; color: #1f6feb; flex-shrink: 0; margin-top: 1px; }
+
+  /* Table */
+  .table-wrap { overflow-x: auto; margin: 14px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { background: #f6f8fa; color: #24292f; font-weight: 700; padding: 10px 14px; text-align: left; border-bottom: 2px solid #d0d7de; }
+  td { padding: 9px 14px; border-bottom: 1px solid #eaeef2; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+
+  /* Quiz */
+  .quiz-section { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 12px; padding: 24px; margin: 24px 0; }
+  .quiz-q { font-size: 14px; font-weight: 600; color: #0d1117; margin-bottom: 12px; }
+  .quiz-options { display: flex; flex-direction: column; gap: 8px; }
+  .quiz-opt { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: #fff; border: 1.5px solid #d0d7de; border-radius: 8px; cursor: pointer; font-size: 13px; color: #24292f; transition: all .15s; }
+  .quiz-opt:hover { border-color: #1f6feb; background: #eff6ff; }
+  .quiz-opt.correct { border-color: #22c55e; background: #f0fff4; color: #166534; font-weight: 600; }
+  .quiz-opt.wrong { border-color: #f85149; background: #fff5f5; color: #cf222e; }
+  .quiz-feedback { display: none; margin-top: 10px; font-size: 13px; font-weight: 600; }
+  .quiz-feedback.show { display: block; }
+
+  /* Complete button */
+  .complete-section { background: linear-gradient(135deg, #0d1117, #1f3a5f); border-radius: 12px; padding: 28px; text-align: center; margin: 32px 0 0; }
+  .complete-section h3 { color: #fff; font-size: 18px; margin: 0 0 8px; }
+  .complete-section p { color: #8b949e; font-size: 13px; margin: 0 0 20px; }
+  .complete-btn { padding: 12px 32px; background: #22c55e; color: #fff; border: none; border-radius: 8px; font-size:14px; font-weight: 700; cursor: pointer; transition: opacity .15s; }
+  .complete-btn:hover { opacity: .9; }
+  .complete-done { display: none; }
+  .complete-done .check { font-size: 48px; margin-bottom: 12px; }
+  .complete-done h3 { color: #3fb950; }
+
+  .divider { border: none; border-top: 1px solid #eaeef2; margin: 32px 0; }
+  .footer { padding: 20px 52px; border-top: 1px solid #eaeef2; font-size: 11px; color: #8c959f; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="doc">
+
+  <!-- HERO -->
+  <div class="hero">
+    <div class="hero-brand">AI-Prowler &middot; Human Resources &middot; Required Training</div>
+    <h1>🚀 New Employee Orientation</h1>
+    <p>Welcome to AI-Prowler! This orientation will introduce you to our company, culture, tools, and everything you need to hit the ground running as a remote team member.</p>
+    <div class="hero-meta">
+      <span class="hero-badge">⏱ 45 min</span>
+      <span class="hero-badge">📋 Required</span>
+      <span class="hero-badge">🏠 Remote / WFH</span>
+      <span class="hero-badge">✅ Complete by end of first week</span>
+    </div>
+  </div>
+
+  <!-- PROGRESS -->
+  <div class="progress-bar">
+    <div class="progress-label"><span>Course Progress</span><span id="progress-pct">0%</span></div>
+    <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+  </div>
+
+  <div class="content">
+
+    <!-- SECTION 1 -->
+    <h2><span class="sec-num">1</span> Welcome to AI-Prowler</h2>
+    <p>AI-Prowler is a technology company specializing in AI-powered business automation tools. Our flagship product — the AI-Prowler platform — helps small businesses manage jobs, invoices, scheduling, HR, and communications all in one place, powered by Claude AI.</p>
+    <p>We are a <strong>fully remote company</strong>. Every team member works from home, which means our culture, communication, and collaboration tools are built for a distributed team. This isn't a perk — it's how we operate, and we've built everything around making remote work as seamless and productive as possible.</p>
+    <div class="card-grid">
+      <div class="info-card"><div class="icon">🏢</div><div class="label">Company</div><div class="value">AI-Prowler</div></div>
+      <div class="info-card"><div class="icon">📍</div><div class="label">Headquarters</div><div class="value">Chandler, AZ</div></div>
+      <div class="info-card"><div class="icon">🏠</div><div class="label">Work Style</div><div class="value">Fully Remote</div></div>
+      <div class="info-card"><div class="icon">⏰</div><div class="label">Time Zone</div><div class="value">MST / MDT</div></div>
+    </div>
+
+    <!-- SECTION 2 -->
+    <h2><span class="sec-num">2</span> Our Mission & Values</h2>
+    <p>AI-Prowler's mission is to make powerful AI tools accessible to every small business owner — not just large enterprises. We believe that the right tools, thoughtfully built, can help everyday business owners save time, reduce errors, and grow confidently.</p>
+    <h3>Our Core Values</h3>
+    <ul>
+      <li><strong>🤖 AI-First Thinking</strong> — We embrace AI as a collaborator, not just a tool. We use it to do our best work.</li>
+      <li><strong>🤝 Trust by Default</strong> — We trust our team to do great work without micromanagement. Transparency keeps us aligned.</li>
+      <li><strong>🚀 Bias Toward Action</strong> — We move fast, ship often, learn from feedback, and iterate quickly.</li>
+      <li><strong>🧩 Simplicity First</strong> — We build things that are easy to use. If it's complicated, it's not done yet.</li>
+      <li><strong>❤️ People Over Process</strong> — Our team and our customers are always more important than any policy or procedure.</li>
+    </ul>
+
+    <!-- SECTION 3 -->
+    <h2><span class="sec-num">3</span> Your HR Portal</h2>
+    <p>The AI-Prowler HR Employee Portal is your home base for everything work-related. You're using it right now! Here's a quick tour of what's inside:</p>
+    <div class="table-wrap">
+      <table>
+        <tr><th>Section</th><th>What You'll Find</th></tr>
+        <tr><td>⏱ <strong>Time Clock</strong></td><td>Clock in and out every day — your hours sync automatically to HR</td></tr>
+        <tr><td>🏖 <strong>PTO & Time Off</strong></td><td>Request vacation, sick days, and personal days</td></tr>
+        <tr><td>💰 <strong>Payroll</strong></td><td>View pay stubs and earnings history</td></tr>
+        <tr><td>💳 <strong>Deposits</strong></td><td>Set up and manage your direct deposit</td></tr>
+        <tr><td>📅 <strong>Schedule</strong></td><td>See your upcoming shifts and schedule changes</td></tr>
+        <tr><td>📄 <strong>Documents</strong></td><td>Download forms, handbooks, and HR documents</td></tr>
+        <tr><td>💬 <strong>Messages</strong></td><td>Send private, confidential messages directly to HR</td></tr>
+        <tr><td>📚 <strong>HR Handbook</strong></td><td>Read all company policies — attendance, pay, conduct, and more</td></tr>
+        <tr><td>🚨 <strong>Incident Reports</strong></td><td>File a work-related incident report securely and confidentially</td></tr>
+        <tr><td>🎓 <strong>Trainings</strong></td><td>Complete required and optional training courses (you're here now!)</td></tr>
+      </table>
+    </div>
+    <div class="green-box">✅ Bookmark the portal on your phone! Go to the URL in your mobile browser and tap <strong>Add to Home Screen</strong> for quick daily access.</div>
+
+    <!-- SECTION 4 -->
+    <h2><span class="sec-num">4</span> Your First Week Checklist</h2>
+    <p>Complete all of the following during your first week:</p>
+    <ul class="checklist">
+      <li>Complete this New Employee Orientation training</li>
+      <li>Set up your direct deposit in the <strong>Deposits</strong> tab</li>
+      <li>Upload your profile photo in the <strong>Portfolio</strong> tab</li>
+      <li>Review your schedule in the <strong>Schedule</strong> tab</li>
+      <li>Clock in for your first shift using the <strong>Time Clock</strong> tab</li>
+      <li>Read the <strong>Attendance & Punctuality</strong> policy in HR Handbook</li>
+      <li>Read the <strong>Code of Conduct</strong> policy in HR Handbook</li>
+      <li>Send HR a quick intro message via the <strong>Messages</strong> tab</li>
+      <li>Complete the <strong>Workplace Safety & OSHA Basics</strong> training</li>
+      <li>Complete the <strong>Anti-Harassment & Discrimination</strong> training</li>
+    </ul>
+
+    <!-- SECTION 5 -->
+    <h2><span class="sec-num">5</span> Remote Work Expectations</h2>
+    <p>Working remotely at AI-Prowler comes with freedom — and responsibility. Here's what we expect:</p>
+    <ul>
+      <li><strong>Be online during your agreed core hours.</strong> Your manager needs to be able to reach you.</li>
+      <li><strong>Clock in and out every day</strong> using the Time Clock tab in the HR portal.</li>
+      <li><strong>Respond to messages within 2 hours</strong> during your core hours.</li>
+      <li><strong>Be camera-ready</strong> for scheduled video calls. A clean, quiet background is all we need.</li>
+      <li><strong>Use company-approved tools</strong> for all work. Don't use personal accounts for work communications.</li>
+      <li><strong>Notify your manager immediately</strong> if you'll be late or out — use the Running Late / Out Today buttons in Time Clock.</li>
+    </ul>
+    <div class="highlight">⏱ Pay is bi-weekly, every Friday via direct deposit. Set up your deposit info in the <strong>Deposits</strong> tab as soon as possible to ensure your first paycheck arrives on time.</div>
+
+    <!-- SECTION 6 -->
+    <h2><span class="sec-num">6</span> Communication & Tools</h2>
+    <p>At AI-Prowler, clear communication is everything — especially because we're remote. Here are the primary tools you'll use:</p>
+    <div class="card-grid">
+      <div class="info-card"><div class="icon">💬</div><div class="label">HR Messages</div><div class="value">Private messages to HR via the portal</div></div>
+      <div class="info-card"><div class="icon">📧</div><div class="label">Email</div><div class="value">Company email for external & formal comms</div></div>
+      <div class="info-card"><div class="icon">📹</div><div class="label">Video Calls</div><div class="value">Scheduled team meetings & check-ins</div></div>
+      <div class="info-card"><div class="icon">🤖</div><div class="label">AI-Prowler</div><div class="value">Your main work platform for daily tasks</div></div>
+    </div>
+    <div class="blue-box">💬 Have a question for HR? Always use the <strong>Messages tab</strong> in the portal — not personal text or email. It keeps everything documented and confidential.</div>
+
+    <!-- SECTION 7 -->
+    <h2><span class="sec-num">7</span> Pay, Benefits & Time Off</h2>
+    <h3>Pay</h3>
+    <ul>
+      <li>Pay schedule: <strong>bi-weekly, every Friday</strong> via direct deposit</li>
+      <li>Pay stubs available in the <strong>Payroll</strong> tab the day before payday</li>
+      <li>Questions about pay? Message HR through the portal</li>
+    </ul>
+    <h3>Time Off</h3>
+    <ul>
+      <li><strong>PTO:</strong> 15 days/year for full-time employees, accrues at 1.25 days per month</li>
+      <li><strong>Sick Days:</strong> 5 days per calendar year</li>
+      <li><strong>Personal Days:</strong> 2 days per calendar year</li>
+      <li><strong>Holidays:</strong> 11 paid company holidays per year</li>
+    </ul>
+    <h3>Benefits</h3>
+    <ul>
+      <li>Health, dental, and vision insurance</li>
+      <li>All benefits details are available in the <strong>Pay & Benefits</strong> tab</li>
+    </ul>
+
+    <!-- SECTION 8 -->
+    <h2><span class="sec-num">8</span> Who to Contact</h2>
+    <div class="table-wrap">
+      <table>
+        <tr><th>Need Help With</th><th>Who to Contact</th><th>How</th></tr>
+        <tr><td>Pay, PTO, policies, HR questions</td><td>HR Department</td><td>Messages tab in portal</td></tr>
+        <tr><td>Technical issues, equipment, software</td><td>IT Support</td><td>Help / Support tab → IT Support</td></tr>
+        <tr><td>Work tasks, schedule, daily questions</td><td>Your Manager</td><td>Direct message or video call</td></tr>
+        <tr><td>Workplace concerns or safety incidents</td><td>HR Department</td><td>Incident Reports tab in portal</td></tr>
+        <tr><td>General feedback or ideas</td><td>HR Department</td><td>Help / Support tab → Submit Feedback</td></tr>
+      </table>
+    </div>
+
+    <hr class="divider">
+
+    <!-- KNOWLEDGE CHECK -->
+    <h2><span class="sec-num">9</span> Knowledge Check</h2>
+    <p>Answer these quick questions to confirm you've completed the orientation.</p>
+
+    <div class="quiz-section">
+      <div class="quiz-q">1. How often are employees paid at AI-Prowler?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this, false, 'q1')">Weekly on Monday</div>
+        <div class="quiz-opt" onclick="answer(this, true, 'q1')">Bi-weekly every Friday via direct deposit</div>
+        <div class="quiz-opt" onclick="answer(this, false, 'q1')">Monthly on the 1st</div>
+        <div class="quiz-opt" onclick="answer(this, false, 'q1')">Bi-monthly on the 15th and 30th</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q1"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">2. Where do you go to request time off?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this, false, 'q2')">Email your manager directly</div>
+        <div class="quiz-opt" onclick="answer(this, false, 'q2')">Text HR on their personal phone</div>
+        <div class="quiz-opt" onclick="answer(this, true, 'q2')">The PTO & Time Off tab in the HR Portal</div>
+        <div class="quiz-opt" onclick="answer(this, false, 'q2')">Fill out a paper form</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q2"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">3. What should you do if you're running late to work?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this, false, 'q3')">Don't say anything and just start late</div>
+        <div class="quiz-opt" onclick="answer(this, true, 'q3')">Use the Running Late button in Time Clock to notify HR and your manager</div>
+        <div class="quiz-opt" onclick="answer(this, false, 'q3')">Send a personal text to HR</div>
+        <div class="quiz-opt" onclick="answer(this, false, 'q3')">Skip the day and call in sick</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q3"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">4. How much PTO does a full-time employee earn per year?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this, false, 'q4')">10 days</div>
+        <div class="quiz-opt" onclick="answer(this, false, 'q4')">12 days</div>
+        <div class="quiz-opt" onclick="answer(this, true, 'q4')">15 days (1.25 days per month)</div>
+        <div class="quiz-opt" onclick="answer(this, false, 'q4')">20 days</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q4"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">5. Where should you have a question for HR go?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this, false, 'q5')">A personal text or email to HR</div>
+        <div class="quiz-opt" onclick="answer(this, true, 'q5')">The Messages tab in the portal</div>
+        <div class="quiz-opt" onclick="answer(this, false, 'q5')">A public team channel</div>
+        <div class="quiz-opt" onclick="answer(this, false, 'q5')">A sticky note</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q5"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">6. How quickly are you expected to respond to messages during your core hours?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this, false, 'q6')">Within 24 hours</div>
+        <div class="quiz-opt" onclick="answer(this, true, 'q6')">Within 2 hours</div>
+        <div class="quiz-opt" onclick="answer(this, false, 'q6')">There is no expectation</div>
+        <div class="quiz-opt" onclick="answer(this, false, 'q6')">Only if it's urgent</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q6"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">7. How many paid company holidays does AI-Prowler offer per year?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this, false, 'q7')">5</div>
+        <div class="quiz-opt" onclick="answer(this, true, 'q7')">11</div>
+        <div class="quiz-opt" onclick="answer(this, false, 'q7')">15</div>
+        <div class="quiz-opt" onclick="answer(this, false, 'q7')">0 — holidays are unpaid</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q7"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">8. Who should you contact for a technical issue or equipment problem?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this, false, 'q8')">HR via Incident Reports</div>
+        <div class="quiz-opt" onclick="answer(this, true, 'q8')">IT Support via Help / Support tab</div>
+        <div class="quiz-opt" onclick="answer(this, false, 'q8')">Your manager's personal phone</div>
+        <div class="quiz-opt" onclick="answer(this, false, 'q8')">Nobody — figure it out yourself</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q8"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">9. Where can you read all of AI-Prowler's company policies?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this, false, 'q9')">They aren't written down anywhere</div>
+        <div class="quiz-opt" onclick="answer(this, true, 'q9')">The HR Handbook tab</div>
+        <div class="quiz-opt" onclick="answer(this, false, 'q9')">Only your manager knows them</div>
+        <div class="quiz-opt" onclick="answer(this, false, 'q9')">The Payroll tab</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q9"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">10. Which of these is one of AI-Prowler's core values?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this, false, 'q10')">Process Over People</div>
+        <div class="quiz-opt" onclick="answer(this, true, 'q10')">Trust by Default</div>
+        <div class="quiz-opt" onclick="answer(this, false, 'q10')">Move Slow and Be Careful</div>
+        <div class="quiz-opt" onclick="answer(this, false, 'q10')">Complexity First</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q10"></div>
+    </div>
+
+    <!-- COMPLETE -->
+    <div class="complete-section" id="complete-section">
+      <div id="complete-prompt">
+        <h3>🎓 Ready to Complete?</h3>
+        <p>Once you've answered all questions and reviewed each section, mark this training complete.</p>
+        <button class="complete-btn" onclick="markComplete()">✅ Mark as Complete</button>
+      </div>
+      <div class="complete-done" id="complete-done">
+        <div class="check">🎉</div>
+        <h3>Orientation Complete!</h3>
+        <p style="color:#8b949e;font-size:13px">You've completed the New Employee Orientation. Your progress has been saved. Welcome to the team!</p>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="footer">AI-Prowler &middot; Human Resources &middot; New Employee Orientation &middot; Required Training &middot; &copy; 2026 AI-Prowler</div>
+
+</div>
+
+<script>
+var quizAnswers = {};
+
+function answer(el, correct, qid) {
+  if (quizAnswers[qid]) return; // already answered
+  quizAnswers[qid] = correct ? 'correct' : 'wrong';
+  var opts = el.parentElement.querySelectorAll('.quiz-opt');
+  opts.forEach(function(o) { o.style.pointerEvents = 'none'; });
+  if (correct) {
+    el.classList.add('correct');
+    el.innerHTML = '✅ ' + el.textContent;
+  } else {
+    el.classList.add('wrong');
+    el.innerHTML = '❌ ' + el.textContent;
+    // Show correct answer
+    opts.forEach(function(o) {
+      if (o.getAttribute('onclick') && o.getAttribute('onclick').includes('true')) {
+        o.classList.add('correct');
+        o.innerHTML = '✅ ' + o.textContent;
+      }
+    });
+  }
+  var fb = document.getElementById('fb-' + qid);
+  if (fb) {
+    fb.textContent = correct ? '✅ Correct! Well done.' : '❌ Not quite — review the section above and remember the correct answer.';
+    fb.style.color = correct ? '#166534' : '#cf222e';
+    fb.classList.add('show');
+  }
+  updateProgress();
+}
+
+function updateProgress() {
+  var total = 10;
+  var done = Object.keys(quizAnswers).length;
+  var pct = Math.round((done / total) * 100);
+  document.getElementById('progress-fill').style.width = pct + '%';
+  document.getElementById('progress-pct').textContent = pct + '%';
+}
+
+function markComplete() {
+  var correct = Object.values(quizAnswers).filter(function(v){return v==='correct';}).length;
+  var total = 10;
+  var pct = Math.round((correct/total)*100);
+  var passed = pct >= 75;
+
+  // Show completion screen
+  document.getElementById('complete-prompt').style.display = 'none';
+  document.getElementById('complete-done').style.display = 'block';
+  document.getElementById('progress-fill').style.width = '100%';
+  document.getElementById('progress-pct').textContent = '100%';
+  document.getElementById('complete-done').innerHTML =
+    '<div class="check">' + (passed ? '🎉' : '📋') + '</div>' +
+    '<h3 style="color:' + (passed ? '#3fb950' : '#f0a500') + '">' + (passed ? 'Orientation Complete!' : 'Review Recommended') + '</h3>' +
+    '<p style="color:#8b949e;font-size:13px">Quiz Score: <strong style="color:' + (passed ? '#3fb950' : '#f0a500') + '">' + correct + '/' + total + ' (' + pct + '%)</strong> — ' + (passed ? 'You passed! Welcome to the team!' : 'Score below 75%. Consider reviewing and retaking.') + '</p>';
+
+  // Get employee name from parent portal
+  var empName = 'Employee';
+  try {
+    var s = JSON.parse(window.parent.localStorage.getItem('hr_portal_session') || '{}');
+    if (s.name) empName = s.name;
+  } catch(e) {}
+
+  // Build results report
+  var questionLabels = [
+    'Pay frequency',
+    'How to request time off',
+    'What to do if running late',
+    'PTO days per year',
+    'Where to send HR questions',
+    'Message response expectation',
+    'Paid company holidays',
+    'Who to contact for tech issues',
+    'Where to find company policies',
+    'A core company value'
+  ];
+  var resultsBody = '=== TRAINING COMPLETION REPORT ===\n\n' +
+    'Training: New Employee Orientation\n' +
+    'Employee: ' + empName + '\n' +
+    'Date Completed: ' + new Date().toLocaleDateString('en-US', {year:'numeric',month:'long',day:'numeric'}) + '\n' +
+    'Time: ' + new Date().toLocaleTimeString() + '\n' +
+    'Score: ' + correct + '/' + total + ' (' + pct + '%)\n' +
+    'Result: ' + (passed ? '✅ PASSED' : '⚠️ NEEDS REVIEW') + '\n\n' +
+    '--- Quiz Results ---\n';
+
+  questionLabels.forEach(function(q, i) {
+    var ans = quizAnswers['q'+(i+1)];
+    resultsBody += (i+1) + '. ' + q + ': ' + (ans === 'correct' ? '✅ Correct' : ans === 'wrong' ? '❌ Incorrect' : '— Not answered') + '\n';
+  });
+
+  resultsBody += '\n--- Completion Confirmation ---\n';
+  resultsBody += passed
+    ? 'Employee has successfully completed the New Employee Orientation and is cleared to begin work.'
+    : 'Employee did not achieve the 75% passing score. HR should follow up to ensure understanding.';
+
+  // Send to HR via portal messages API
+  fetch('/hr-api/messages', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      sender_name: empName,
+      subject: '🎓 Training Complete — New Employee Orientation — ' + empName + ' — ' + pct + '% (' + (passed ? 'PASSED' : 'NEEDS REVIEW') + ')',
+      body: resultsBody,
+      message_type: 'training_result'
+    })
+  }).then(function(r){ return r.json(); }).then(function(d){
+    if (d.ok) console.log('Training results sent to HR');
+  }).catch(function(e){ console.log('Could not send results:', e); });
+
+  // Notify parent window
+  try {
+    window.parent.postMessage({
+      type: 'training-complete',
+      id: 'new-employee-orientation',
+      employee: empName,
+      score: pct,
+      passed: passed
+    }, '*');
+  } catch(e) {}
+}
+</script>
+
+</body>
+</html>

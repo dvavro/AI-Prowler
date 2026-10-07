@@ -1,0 +1,91 @@
+AI-Prowler HR — Full QA Suite
+node: C:\Program Files\nodejs\node.EXE   python: 3.11.8
+
+=== Backend ===
+  PASS  ai_prowler_mcp.py exists (source)
+  PASS  backend compiles (source)
+  PASS  backend HR routes discovered  -> 62 exact, 14 prefix, 0 regex
+  FAIL  deployed backend matches source
+  PASS  hr_db.json valid JSON
+  PASS  employee IDs unique
+  PASS  employee emails unique
+  PASS  no tasks pointing at deleted employees  -> 0 orphan task(s)
+  PASS  no documents pointing at deleted employees  -> 0 orphan doc(s)
+  PASS  hr_db.json size sane (< 25 MB)  -> 423,128 bytes
+
+=== HR Admin: files & PWA ===
+  PASS  index.html exists
+  PASS  index.html size sane (< 2 MB)  -> 854,685 bytes
+  PASS  manifest.json valid JSON
+  PASS  manifest icon exists: icon-192.png
+  PASS  manifest icon exists: icon-512.png
+  PASS  manifest has start_url
+  PASS  sw.js syntax
+  PASS  sw.js has cache version name
+  FAIL  deployed index.html matches source  -> source 854,685 B vs deployed 859,545 B
+
+=== HR Admin: JavaScript ===
+  PASS  found 5 inline script block(s)
+  PASS  script block #1 syntax (starts html line 1289)
+  PASS  script block #2 syntax (starts html line 1294)
+  PASS  script block #3 syntax (starts html line 2536)
+  PASS  script block #4 syntax (starts html line 13232)
+  PASS  script block #5 syntax (starts html line 13447)
+  PASS  all script blocks load together (no cross-block redeclare)
+  PASS  no duplicate top-level function definitions
+  PASS  inline event handlers call defined functions (313 checked)
+  FAIL  getElementById targets exist (393 ids checked)  -> #training-list @ line 5980; #rev-overall @ line 6121; #att-quick-row @ line 7592; #logo-dot-sidebar @ line 13713; #logo-dot-topbar @ line 13713; #app-screen @ line 13749
+  PASS  no duplicate element IDs in page markup
+
+=== HR Admin: API calls vs backend ===
+  PASS  found API calls to check (48)
+  PASS  every API call has a matching backend route
+
+=== HR Portal: files & PWA ===
+  PASS  index.html exists
+  PASS  index.html size sane (< 2 MB)  -> 609,263 bytes
+  PASS  manifest.json valid JSON
+  PASS  manifest icon exists: icon-192.png
+  PASS  manifest icon exists: icon-512.png
+  PASS  manifest has start_url
+  FAIL  deployed index.html matches source  -> source 609,263 B vs deployed 614,422 B
+
+=== HR Portal: JavaScript ===
+  PASS  found 24 inline script block(s)
+  PASS  script block #1 syntax (starts html line 725)
+  PASS  script block #2 syntax (starts html line 730)
+  PASS  script block #3 syntax (starts html line 774)
+  PASS  script block #4 syntax (starts html line 800)
+  PASS  script block #5 syntax (starts html line 1319)
+  PASS  script block #6 syntax (starts html line 1619)
+  PASS  script block #7 syntax (starts html line 1819)
+  PASS  script block #8 syntax (starts html line 1918)
+  PASS  script block #9 syntax (starts html line 1976)
+  PASS  script block #10 syntax (starts html line 2562)
+  PASS  script block #11 syntax (starts html line 2620)
+  PASS  script block #12 syntax (starts html line 3026)
+  PASS  script block #13 syntax (starts html line 3167)
+  PASS  script block #14 syntax (starts html line 3642)
+  PASS  script block #15 syntax (starts html line 5473)
+  PASS  script block #16 syntax (starts html line 5512)
+  PASS  script block #17 syntax (starts html line 5671)
+  PASS  script block #18 syntax (starts html line 5806)
+  PASS  script block #19 syntax (starts html line 5905)
+  PASS  script block #20 syntax (starts html line 5928)
+  PASS  script block #21 syntax (starts html line 5988)
+  PASS  script block #22 syntax (starts html line 6177)
+  PASS  script block #23 syntax (starts html line 6309)
+  PASS  script block #24 syntax (starts html line 6388)
+  PASS  all script blocks load together (no cross-block redeclare)
+  PASS  no duplicate top-level function definitions
+  PASS  inline event handlers call defined functions (82 checked)
+  FAIL  getElementById targets exist (283 ids checked)  -> #pay-bar-chart @ line 1920; #pay-donut-chart @ line 1920; #trainings-badge @ line 3879; #ai-chat @ line 3933; #aboutme-bio @ line 3989; #aboutme-funfact @ line 3990; #about-nickname @ line 4833; #about-pronouns @ line 4834; #about-dob @ line 4835; #about-phone @ line 4836; #about-email @ line 4837; #about-address @ line 4838; #about-saved @ line 4841; #ec-name @ line 4847; #ec-rel @ line 4848; #ec-phone @ line 4849; #ec-email @ line 4850; #ec2-name @ line 4851; #ec2-phone @ line 4852; #ec-saved @ line 4855; #fun-fact @ line 4861; #fun-hobbies @ line 4862; #fun-food @ line 4863; #fun-music @ line 4864; #fun-superpower @ line 4865; #fun-coffee @ line 4866; #fun-vacation @ line 4867; #fun-pets @ line 4868; #fun-bio @ line 4869; #fun-saved @ line 4872
+  PASS  no duplicate element IDs in page markup
+
+=== HR Portal: API calls vs backend ===
+  PASS  found API calls to check (6)
+  PASS  every API call has a matching backend route
+
+============================================================
+TOTAL: 66 passed | 5 failed | 0 warnings
+============================================================

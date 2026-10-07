@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>About AI-Prowler — Our Company, Mission & Vision</title>
+<style>
+  body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; background: #f6f8fa; color: #0d1117; }
+  .doc { max-width: 820px; margin: 0 auto; background: #fff; padding: 0; min-height: 100vh; }
+  .hero { background: linear-gradient(135deg, #0d1117 0%, #0a1628 50%, #1a2744 100%); padding: 48px 52px 40px; color: #fff; }
+  .hero-brand { font-size: 12px; font-weight: 700; color: #58a6ff; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 16px; }
+  .hero h1 { font-size: 32px; font-weight: 800; margin: 0 0 10px; }
+  .hero p { font-size: 14px; color: #8b949e; margin: 0 0 20px; line-height: 1.7; }
+  .hero-meta { display: flex; gap: 20px; flex-wrap: wrap; }
+  .hero-badge { background: rgba(88,166,255,.15); border: 1px solid rgba(88,166,255,.3); color: #58a6ff; font-size: 11px; font-weight: 600; padding: 4px 12px; border-radius: 20px; }
+  .progress-bar { background: #161b22; padding: 20px 52px; border-bottom: 1px solid #21262d; }
+  .progress-label { display: flex; justify-content: space-between; font-size: 12px; color: #8b949e; margin-bottom: 8px; }
+  .progress-track { background: #21262d; border-radius: 10px; height: 8px; }
+  .progress-fill { background: linear-gradient(90deg, #58a6ff, #79c0ff); height: 8px; border-radius: 10px; width: 0%; transition: width 1s ease; }
+  .content { padding: 40px 52px; }
+  h2 { font-size: 20px; font-weight: 800; color: #0d1117; margin: 36px 0 14px; display: flex; align-items: center; gap: 10px; }
+  h2 .sec-num { background: #1f6feb; color: #fff; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; flex-shrink: 0; }
+  h3 { font-size: 15px; font-weight: 700; color: #24292f; margin: 20px 0 8px; }
+  p { font-size: 14px; line-height: 1.8; color: #24292f; margin: 0 0 12px; }
+  ul, ol { font-size: 14px; line-height: 1.8; color: #24292f; margin: 0 0 12px; padding-left: 22px; }
+  li { margin-bottom: 6px; }
+  .value-card { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: 16px; margin: 10px 0; display: flex; gap: 14px; align-items: flex-start; }
+  .value-card .icon { font-size: 28px; flex-shrink: 0; }
+  .value-card h4 { font-size: 14px; font-weight: 700; color: #0d1117; margin: 0 0 4px; }
+  .value-card p { margin: 0; font-size: 13px; color: #636e7b; }
+  .stat-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin: 16px 0; }
+  .stat { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 10px; padding: 16px; text-align: center; }
+  .stat .num { font-size: 28px; font-weight: 800; color: #1f6feb; }
+  .stat .label { font-size: 11px; color: #636e7b; text-transform: uppercase; letter-spacing: .5px; margin-top: 4px; }
+  .product-card { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 10px; padding: 18px; margin: 12px 0; }
+  .product-card .product-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .product-card .product-icon { font-size: 28px; }
+  .product-card h4 { font-size: 15px; font-weight: 700; color: #0d1117; margin: 0; }
+  .product-card p { margin: 0; font-size: 13px; color: #636e7b; }
+  .highlight { background: #eff6ff; border-left: 4px solid #1f6feb; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .green-box { background: #f0fff4; border-left: 4px solid #22c55e; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .quiz-section { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 12px; padding: 24px; margin: 24px 0; }
+  .quiz-q { font-size: 14px; font-weight: 600; color: #0d1117; margin-bottom: 12px; }
+  .quiz-options { display: flex; flex-direction: column; gap: 8px; }
+  .quiz-opt { padding: 10px 14px; background: #fff; border: 1.5px solid #d0d7de; border-radius: 8px; cursor: pointer; font-size: 13px; color: #24292f; transition: all .15s; }
+  .quiz-opt:hover { border-color: #1f6feb; background: #eff6ff; }
+  .quiz-opt.correct { border-color: #22c55e; background: #f0fff4; color: #166534; font-weight: 600; }
+  .quiz-opt.wrong { border-color: #f85149; background: #fff5f5; color: #cf222e; }
+  .quiz-feedback { display: none; margin-top: 10px; font-size: 13px; font-weight: 600; }
+  .quiz-feedback.show { display: block; }
+  .complete-section { background: linear-gradient(135deg, #0d1117, #1a2744); border-radius: 12px; padding: 28px; text-align: center; margin: 32px 0 0; }
+  .complete-section h3 { color: #fff; font-size: 18px; margin: 0 0 8px; }
+  .complete-section p { color: #8b949e; font-size: 13px; margin: 0 0 20px; }
+  .complete-btn { padding: 12px 32px; background: #1f6feb; color: #fff; border: none; border-radius: 8px; font-size: 14px; font-weight: 700; cursor: pointer; }
+  .divider { border: none; border-top: 1px solid #eaeef2; margin: 32px 0; }
+  .footer { padding: 20px 52px; border-top: 1px solid #eaeef2; font-size: 11px; color: #8c959f; text-align: center; }
+  .timeline { border-left: 3px solid #bfdbfe; padding-left: 20px; margin: 16px 0; }
+  .timeline-item { position: relative; margin-bottom: 20px; }
+  .timeline-item::before { content: ''; position: absolute; left: -26px; top: 4px; width: 10px; height: 10px; border-radius: 50%; background: #1f6feb; }
+  .timeline-item .year { font-size: 11px; font-weight: 700; color: #1f6feb; text-transform: uppercase; letter-spacing: .5px; }
+  .timeline-item h4 { font-size: 14px; font-weight: 700; color: #0d1117; margin: 2px 0 4px; }
+  .timeline-item p { font-size: 13px; color: #636e7b; margin: 0; }
+</style>
+</head>
+<body>
+<div class="doc">
+  <div class="hero">
+    <div class="hero-brand">AI-Prowler &middot; Company Training &middot; Optional</div>
+    <h1>🤖 About AI-Prowler — Our Company, Mission & Vision</h1>
+    <p>Everything you need to know about who we are, what we build, why we exist, and where we're going. Understanding our company makes you a better, more connected team member.</p>
+    <div class="hero-meta">
+      <span class="hero-badge">⏱ 30 min</span>
+      <span class="hero-badge">⭐ Optional</span>
+      <span class="hero-badge">🏢 Company Culture</span>
+      <span class="hero-badge">🚀 Good to Know</span>
+    </div>
+  </div>
+  <div class="progress-bar">
+    <div class="progress-label"><span>Course Progress</span><span id="progress-pct">0%</span></div>
+    <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+  </div>
+  <div class="content">
+
+    <h2><span class="sec-num">1</span> Who We Are</h2>
+    <p>AI-Prowler is a technology company that builds AI-powered business automation tools for small and medium-sized businesses. We are headquartered in <strong>Chandler, Arizona</strong> and operate as a <strong>fully remote company</strong> — every member of our team works from home.</p>
+    <p>Our platform is powered by Claude AI (built by Anthropic) and connects with dozens of tools, services, and workflows that small business owners use every day. We believe that AI shouldn't just be for large corporations with big IT budgets — it should be accessible, practical, and transformative for everyone.</p>
+    <div class="stat-row">
+      <div class="stat"><div class="num">100%</div><div class="label">Remote Team</div></div>
+      <div class="stat"><div class="num">🇺🇸</div><div class="label">Chandler, AZ HQ</div></div>
+      <div class="stat"><div class="num">AI</div><div class="label">Powered by Claude</div></div>
+      <div class="stat"><div class="num">SMB</div><div class="label">Our Focus Market</div></div>
+    </div>
+
+    <h2><span class="sec-num">2</span> Our Mission</h2>
+    <p style="font-size:18px;font-weight:700;color:#1f6feb;line-height:1.5;border-left:4px solid #1f6feb;padding-left:16px;margin:16px 0">"To make powerful AI tools accessible to every small business owner — not just large enterprises."</p>
+    <p>Small business owners are some of the hardest-working people in the world. They handle sales, operations, HR, customer service, finances, and marketing — often all on the same day. AI-Prowler exists to give them back time, reduce errors, and help them grow with confidence.</p>
+    <p>We're not building AI for AI's sake. Every feature we build has to answer one question: <strong>does this make a real difference for a real business owner?</strong> If the answer is no, we don't build it.</p>
+
+    <h2><span class="sec-num">3</span> Our Vision</h2>
+    <p>Our vision is a future where any small business — a one-person landscaping company, a family-owned restaurant, a freelance graphic designer — has access to the same quality of intelligent business tools as a Fortune 500 company.</p>
+    <p>We believe AI will be as fundamental to business operations as email or spreadsheets are today. We want AI-Prowler to be the platform that gets small businesses there first, safely, and affordably.</p>
+    <div class="highlight">🚀 We're not just building software — we're helping small business owners reclaim their time and grow their dreams. That's what we show up for every day.</div>
+
+    <h2><span class="sec-num">4</span> Our Core Values</h2>
+    <div class="value-card"><div class="icon">🤖</div><div><h4>AI-First Thinking</h4><p>We don't just use AI — we think about how AI can fundamentally improve every process, every product, and every interaction. We embrace it as a collaborator.</p></div></div>
+    <div class="value-card"><div class="icon">🤝</div><h4></h4><div><h4>Trust by Default</h4><p>We trust our team, our customers, and our partners until given reason not to. Transparency and accountability keep that trust strong.</p></div></div>
+    <div class="value-card"><div class="icon">🚀</div><div><h4>Bias Toward Action</h4><p>We move fast and ship often. We learn from real feedback more than from planning in isolation. Done and imperfect beats perfect and delayed.</p></div></div>
+    <div class="value-card"><div class="icon">🧩</div><div><h4>Simplicity First</h4><p>If it's complicated to explain, it's not ready. We build things that a busy business owner can understand and use on day one without training.</p></div></div>
+    <div class="value-card"><div class="icon">❤️</div><div><h4>People Over Process</h4><p>Our team and our customers come before policies, procedures, or profit metrics. We take care of the people, and the rest follows.</p></div></div>
+
+    <h2><span class="sec-num">5</span> Our Products</h2>
+    <p>AI-Prowler is a platform — a collection of connected tools that work together. Here's what we build:</p>
+    <div class="product-card">
+      <div class="product-head"><div class="product-icon">🏢</div><h4>AI-Prowler Core Platform</h4></div>
+      <p>The central hub. Handles job tracking, invoicing, scheduling, client management, and AI-powered automation for service-based small businesses. Connects to dozens of external tools via MCP (Model Context Protocol).</p>
+    </div>
+    <div class="product-card">
+      <div class="product-head"><div class="product-icon">👥</div><h4>AI-Prowler HR Suite</h4></div>
+      <p>The HR platform you're using right now. Includes the Employee Portal (this app) and the HR Admin app. Handles onboarding, attendance, payroll, time off, trainings, incident reports, and employee documents.</p>
+    </div>
+    <div class="product-card">
+      <div class="product-head"><div class="product-icon">📱</div><h4>AI-Prowler PWA Apps</h4></div>
+      <p>Progressive Web Apps (PWAs) that work like native mobile apps but run in the browser. No app store required. Employees and business owners can add them to their home screen for instant access.</p>
+    </div>
+    <div class="product-card">
+      <div class="product-head"><div class="product-icon">🤖</div><h4>AI-Prowler AI Assistant</h4></div>
+      <p>Powered by Claude (Anthropic). Embedded throughout our products to answer questions, automate tasks, draft communications, analyze data, and help users get more done in less time.</p>
+    </div>
+
+    <h2><span class="sec-num">6</span> Our Technology — What Powers AI-Prowler</h2>
+    <p>Understanding our tech stack helps you understand what we build and why it matters:</p>
+    <ul>
+      <li><strong>Claude AI (Anthropic):</strong> The AI brain behind AI-Prowler. Claude handles conversations, document generation, analysis, and automation across all our products.</li>
+      <li><strong>MCP (Model Context Protocol):</strong> An open standard that lets Claude connect to external tools and services — think of it as a universal translator between AI and business software.</li>
+      <li><strong>Python:</strong> Our backend server language. Powers all API endpoints, data processing, and business logic.</li>
+      <li><strong>HTML/CSS/JavaScript:</strong> Our frontend. All our apps are built as web applications that work on any device with a browser.</li>
+      <li><strong>Cloudflare:</strong> Our cloud and security layer. Routes traffic, provides DDoS protection, and powers our remote access tunneling.</li>
+      <li><strong>ChromaDB:</strong> Our vector database for AI memory and knowledge retrieval. Stores and searches documents intelligently.</li>
+    </ul>
+    <div class="green-box">💡 You don't need to be a developer to work at AI-Prowler — but understanding what these tools do helps you talk about our products intelligently with customers and colleagues.</div>
+
+    <h2><span class="sec-num">7</span> Our Customers</h2>
+    <p>AI-Prowler's primary customers are <strong>small and medium-sized business owners</strong> — specifically those in service-based industries:</p>
+    <ul>
+      <li>Landscaping, lawn care, and outdoor services</li>
+      <li>Home services (plumbing, HVAC, electrical, cleaning)</li>
+      <li>Freelancers and independent contractors</li>
+      <li>Small retail and e-commerce businesses</li>
+      <li>Health and wellness practitioners</li>
+      <li>Restaurants and food service businesses</li>
+    </ul>
+    <p>These customers typically have <strong>1-50 employees</strong> and need tools that are affordable, easy to use, and powerful enough to replace multiple separate apps.</p>
+
+    <h2><span class="sec-num">8</span> Our Remote Culture</h2>
+    <p>Being fully remote is a core part of who we are — not just a perk or a policy. We've built our entire company from the ground up as a remote organization, which means:</p>
+    <ul>
+      <li>Our tools and processes are designed for async communication</li>
+      <li>Documentation is taken seriously — if it's not written down, it doesn't exist</li>
+      <li>We trust team members to manage their own time and deliver results</li>
+      <li>We invest in making remote work feel connected, not isolated</li>
+      <li>Geography doesn't determine opportunity — talent does</li>
+    </ul>
+    <div class="highlight">🏠 Working remotely at AI-Prowler isn't just where you work — it's how we think. Our products are built for remote and distributed businesses because we ARE a remote and distributed business.</div>
+
+    <h2><span class="sec-num">9</span> Where We're Going — Our Roadmap Vision</h2>
+    <p>We're building toward a future where AI-Prowler is the all-in-one operating system for small businesses. Key areas we're expanding:</p>
+    <ul>
+      <li><strong>More industry-specific tools:</strong> Deeper functionality for specific verticals like landscaping, home services, and food service</li>
+      <li><strong>Multi-user and team features:</strong> Expanding from solo business owners to teams with multiple employees and roles</li>
+      <li><strong>Deeper AI automation:</strong> Moving from AI that answers questions to AI that takes actions — scheduling, invoicing, customer follow-up — automatically</li>
+      <li><strong>Mobile-first experiences:</strong> Better PWA and native mobile experiences for business owners who live on their phone</li>
+      <li><strong>Partner integrations:</strong> Connecting AI-Prowler with the accounting, CRM, and payroll tools our customers already use</li>
+    </ul>
+
+    <hr class="divider">
+    <h2><span class="sec-num">10</span> Knowledge Check</h2>
+
+    <div class="quiz-section">
+      <div class="quiz-q">1. What is AI-Prowler's primary mission?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q1')">To build AI tools exclusively for Fortune 500 companies</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q1')">To make powerful AI tools accessible to every small business owner</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q1')">To replace all human workers with AI automation</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q1')">To build the world's most advanced AI research platform</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q1"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">2. What AI powers the AI-Prowler platform?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q2')">ChatGPT by OpenAI</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q2')">Gemini by Google</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q2')">Claude by Anthropic</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q2')">Llama by Meta</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q2"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">3. Which of these best describes AI-Prowler's primary customer?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q3')">Enterprise companies with 10,000+ employees</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q3')">Government agencies and nonprofits</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q3')">Small and medium-sized service-based businesses with 1-50 employees</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q3')">Tech startups in Silicon Valley</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q3"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">4. Which of these is one of AI-Prowler's core values?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q4')">Move slow and plan everything carefully</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q4')">Process Over People</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q4')">Bias Toward Action — ship fast, learn from feedback</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q4')">AI-Last Thinking — use traditional tools first</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q4"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">5. Where is AI-Prowler headquartered?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q5')">San Francisco, CA</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q5')">Chandler, AZ</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q5')">Austin, TX</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q5')">New York, NY</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q5"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">6. What open standard lets Claude connect to external tools and services?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q6')">API Gateway</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q6')">MCP (Model Context Protocol)</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q6')">HTTP/2</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q6')">OAuth</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q6"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">7. What is the AI-Prowler HR Suite?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q7')">A third-party product AI-Prowler resells</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q7')">The HR platform you're using right now — Employee Portal and HR Admin app</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q7')">A customer-facing invoicing tool only</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q7')">An internal engineering wiki</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q7"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">8. Roughly how many employees do AI-Prowler's typical customers have?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q8')">1,000+</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q8')">1–50</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q8')">Exactly 100</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q8')">AI-Prowler only serves solo founders</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q8"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">9. What does being "fully remote" mean at AI-Prowler?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q9')">It's an occasional perk for senior staff</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q9')">It's how the whole company operates — every team member works from home</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q9')">Only the support team works remotely</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q9')">Remote work is being phased out</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q9"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">10. What is one area AI-Prowler is expanding toward, per its roadmap vision?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q10')">Moving away from AI entirely</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q10')">Deeper AI automation — AI that takes actions, not just answers questions</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q10')">Shifting focus exclusively to enterprise clients</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q10')">Ending remote work</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q10"></div>
+    </div>
+
+    <div class="complete-section">
+      <div id="complete-prompt">
+        <h3>🤖 Ready to Complete?</h3>
+        <p>Now you know who we are, what we build, and why we do it. Click below to submit your results.</p>
+        <button class="complete-btn" onclick="markComplete()">✅ Mark as Complete</button>
+      </div>
+      <div id="complete-done" style="display:none"></div>
+    </div>
+  </div>
+  <div class="footer">AI-Prowler &middot; Company Training &middot; About AI-Prowler &middot; Optional &middot; &copy; 2026 AI-Prowler</div>
+</div>
+<script>
+var quizAnswers={};
+function answer(el,correct,qid){
+  if(quizAnswers[qid])return;
+  quizAnswers[qid]=correct?'correct':'wrong';
+  var opts=el.parentElement.querySelectorAll('.quiz-opt');
+  opts.forEach(function(o){o.style.pointerEvents='none';});
+  if(correct){el.classList.add('correct');el.textContent='✅ '+el.textContent;}
+  else{el.classList.add('wrong');el.textContent='❌ '+el.textContent;opts.forEach(function(o){if(o.getAttribute('onclick')&&o.getAttribute('onclick').includes('true')){o.classList.add('correct');o.textContent='✅ '+o.textContent;}});}
+  var fb=document.getElementById('fb-'+qid);
+  if(fb){fb.textContent=correct?'✅ Correct!':'❌ Not quite — review the section above.';fb.style.color=correct?'#166534':'#cf222e';fb.classList.add('show');}
+  document.getElementById('progress-fill').style.width=Math.round(Object.keys(quizAnswers).length/10*100)+'%';
+  document.getElementById('progress-pct').textContent=Math.round(Object.keys(quizAnswers).length/10*100)+'%';
+}
+function markComplete(){
+  var correct=Object.values(quizAnswers).filter(function(v){return v==='correct';}).length;
+  var pct=Math.round(correct/10*100),passed=pct>=75;
+  document.getElementById('complete-prompt').style.display='none';
+  document.getElementById('complete-done').style.display='block';
+  document.getElementById('progress-fill').style.width='100%';
+  document.getElementById('progress-pct').textContent='100%';
+  document.getElementById('complete-done').innerHTML='<div style="font-size:48px;margin-bottom:12px">'+(passed?'🎉':'📋')+'</div><h3 style="color:'+(passed?'#3fb950':'#f0a500')+';margin:0 0 8px">'+(passed?'Complete — Welcome to the family!':'Review Recommended')+'</h3><p style="color:#8b949e;font-size:13px">Score: <strong style="color:'+(passed?'#3fb950':'#f0a500')+'">'+correct+'/10 ('+pct+'%)</strong></p>';
+  var empName='Employee';
+  try{var s=JSON.parse(window.parent.localStorage.getItem('hr_portal_session')||'{}');if(s.name)empName=s.name;}catch(e){}
+  fetch('/hr-api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sender_name:empName,subject:'🎓 Training Complete — About AI-Prowler — '+empName+' — '+pct+'% ('+(passed?'PASSED':'NEEDS REVIEW')+')',body:'Training: About AI-Prowler\nEmployee: '+empName+'\nDate: '+new Date().toLocaleDateString()+'\nScore: '+correct+'/10 ('+pct+'%)\nResult: '+(passed?'✅ PASSED':'⚠️ NEEDS REVIEW'),message_type:'training_result'})}).catch(function(){});
+  try{window.parent.postMessage({type:'training-complete',id:'about-ai-prowler',employee:empName,score:pct,passed:passed},'*');}catch(e){}
+}
+</script>
+</body>
+</html>

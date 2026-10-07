@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Customer Service Excellence — AI-Prowler</title>
+<style>
+  body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; background: #f6f8fa; color: #0d1117; }
+  .doc { max-width: 820px; margin: 0 auto; background: #fff; padding: 0; min-height: 100vh; }
+  .hero { background: linear-gradient(135deg, #0d1117 0%, #0a1f1a 60%, #0f3327 100%); padding: 48px 52px 40px; color: #fff; }
+  .hero-brand { font-size: 12px; font-weight: 700; color: #34d399; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 16px; }
+  .hero h1 { font-size: 32px; font-weight: 800; margin: 0 0 10px; color: #fff; }
+  .hero p { font-size: 14px; color: #8b949e; margin: 0 0 20px; line-height: 1.7; }
+  .hero-meta { display: flex; gap: 20px; flex-wrap: wrap; }
+  .hero-badge { background: rgba(52,211,153,.15); border: 1px solid rgba(52,211,153,.3); color: #34d399; font-size: 11px; font-weight: 600; padding: 4px 12px; border-radius: 20px; }
+  .progress-bar { background: #161b22; padding: 20px 52px; border-bottom: 1px solid #21262d; }
+  .progress-label { display: flex; justify-content: space-between; font-size: 12px; color: #8b949e; margin-bottom: 8px; }
+  .progress-track { background: #21262d; border-radius: 10px; height: 8px; }
+  .progress-fill { background: linear-gradient(90deg, #34d399, #6ee7b7); height: 8px; border-radius: 10px; width: 0%; transition: width 1s ease; }
+  .content { padding: 40px 52px; }
+  h2 { font-size: 20px; font-weight: 800; color: #0d1117; margin: 36px 0 14px; display: flex; align-items: center; gap: 10px; }
+  h2 .sec-num { background: #059669; color: #fff; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; flex-shrink: 0; }
+  h3 { font-size: 15px; font-weight: 700; color: #24292f; margin: 20px 0 8px; }
+  p { font-size: 14px; line-height: 1.8; color: #24292f; margin: 0 0 12px; }
+  ul, ol { font-size: 14px; line-height: 1.8; color: #24292f; margin: 0 0 12px; padding-left: 22px; }
+  li { margin-bottom: 6px; }
+  .highlight { background: #ecfdf5; border-left: 4px solid #34d399; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .red-box { background: #fff5f5; border-left: 4px solid #f85149; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .blue-box { background: #eff6ff; border-left: 4px solid #1f6feb; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .scenario { background: #f0fdf4; border: 1px solid #86efac; border-radius: 10px; padding: 16px 20px; margin: 14px 0; }
+  .scenario .label { font-size: 10px; font-weight: 700; color: #059669; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
+  .scenario h4 { font-size: 13px; font-weight: 700; color: #0d1117; margin: 0 0 4px; }
+  .scenario p { margin: 0; font-size: 13px; color: #636e7b; }
+  .bad { background: #fff5f5; border: 1px solid #fca5a5; border-radius: 10px; padding: 12px 16px; margin: 8px 0; font-size: 13px; color: #cf222e; }
+  .good { background: #f0fdf4; border: 1px solid #86efac; border-radius: 10px; padding: 12px 16px; margin: 8px 0; font-size: 13px; color: #166534; }
+  .table-wrap { overflow-x: auto; margin: 14px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { background: #f0fdf4; color: #059669; font-weight: 700; padding: 10px 14px; text-align: left; border-bottom: 2px solid #bbf7d0; }
+  td { padding: 9px 14px; border-bottom: 1px solid #eaeef2; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  .quiz-section { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 12px; padding: 24px; margin: 24px 0; }
+  .quiz-q { font-size: 14px; font-weight: 600; color: #0d1117; margin-bottom: 12px; }
+  .quiz-options { display: flex; flex-direction: column; gap: 8px; }
+  .quiz-opt { padding: 10px 14px; background: #fff; border: 1.5px solid #d0d7de; border-radius: 8px; cursor: pointer; font-size: 13px; color: #24292f; transition: all .15s; }
+  .quiz-opt:hover { border-color: #059669; background: #f0fdf4; }
+  .quiz-opt.correct { border-color: #22c55e; background: #f0fff4; color: #166534; font-weight: 600; }
+  .quiz-opt.wrong { border-color: #f85149; background: #fff5f5; color: #cf222e; }
+  .quiz-feedback { display: none; margin-top: 10px; font-size: 13px; font-weight: 600; }
+  .quiz-feedback.show { display: block; }
+  .complete-section { background: linear-gradient(135deg, #0d1117, #0f3327); border-radius: 12px; padding: 28px; text-align: center; margin: 32px 0 0; }
+  .complete-section h3 { color: #fff; font-size: 18px; margin: 0 0 8px; }
+  .complete-section p { color: #8b949e; font-size: 13px; margin: 0 0 20px; }
+  .complete-btn { padding: 12px 32px; background: #059669; color: #fff; border: none; border-radius: 8px; font-size: 14px; font-weight: 700; cursor: pointer; }
+  .divider { border: none; border-top: 1px solid #eaeef2; margin: 32px 0; }
+  .footer { padding: 20px 52px; border-top: 1px solid #eaeef2; font-size: 11px; color: #8c959f; text-align: center; }
+</style>
+</head>
+<body>
+<div class="doc">
+  <div class="hero">
+    <div class="hero-brand">AI-Prowler &middot; Human Resources &middot; Optional Training</div>
+    <h1>🌟 Customer Service Excellence</h1>
+    <p>Learn the communication skills, de-escalation techniques, and customer-first mindset that create exceptional experiences for AI-Prowler's clients and users.</p>
+    <div class="hero-meta">
+      <span class="hero-badge">⏱ 1 hr</span>
+      <span class="hero-badge">⭐ Optional</span>
+      <span class="hero-badge">💬 Communication</span>
+      <span class="hero-badge">🤝 Client Relations</span>
+    </div>
+  </div>
+  <div class="progress-bar">
+    <div class="progress-label"><span>Course Progress</span><span id="progress-pct">0%</span></div>
+    <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+  </div>
+  <div class="content">
+
+    <h2><span class="sec-num">1</span> The Customer Service Mindset</h2>
+    <p>Exceptional customer service isn't about scripts or procedures — it's about a mindset. Every interaction is an opportunity to build trust, demonstrate competence, and make someone's day a little better.</p>
+    <p>At AI-Prowler, our customers are small business owners who often wear every hat in their business. When they reach out to us, they are frequently stressed, busy, or frustrated. Our job is to be a calm, competent, and caring presence in their day.</p>
+    <div class="highlight">🌟 The best customer service makes the customer feel heard, respected, and helped — in that order.</div>
+
+    <h2><span class="sec-num">2</span> Active Listening</h2>
+    <p>Most customer frustration comes from feeling unheard. Active listening is the #1 customer service skill.</p>
+    <ul>
+      <li><strong>Let them finish:</strong> Never interrupt a customer who is explaining their problem</li>
+      <li><strong>Acknowledge before solving:</strong> "I understand how frustrating that must be" before jumping to solutions</li>
+      <li><strong>Paraphrase to confirm:</strong> "Just to make sure I understand — you're saying that X happened and now Y isn't working. Is that right?"</li>
+      <li><strong>Ask clarifying questions:</strong> "Can you tell me more about when this started?" rather than assuming</li>
+      <li><strong>Take notes:</strong> Show the customer you value what they're saying enough to write it down</li>
+    </ul>
+
+    <h2><span class="sec-num">3</span> Communication Best Practices</h2>
+    <div class="table-wrap">
+      <table>
+        <tr><th>Instead of saying...</th><th>Say this instead</th><th>Why it's better</th></tr>
+        <tr><td>"That's not possible"</td><td>"Here's what I can do for you..."</td><td>Focuses on solutions, not limitations</td></tr>
+        <tr><td>"You need to..."</td><td>"What I'd recommend is..."</td><td>Less commanding, more collaborative</td></tr>
+        <tr><td>"I don't know"</td><td>"Great question — let me find out for you"</td><td>Shows initiative and care</td></tr>
+        <tr><td>"That's not my department"</td><td>"I'll connect you with the right person and make sure they're expecting you"</td><td>Takes ownership of the handoff</td></tr>
+        <tr><td>"Calm down"</td><td>"I hear you — let's work through this together"</td><td>"Calm down" escalates; this de-escalates</td></tr>
+        <tr><td>"No" (alone)</td><td>"No, but here's an alternative..."</td><td>Always offer an alternative when declining</td></tr>
+      </table>
+    </div>
+
+    <h2><span class="sec-num">4</span> De-Escalation Techniques</h2>
+    <p>Sometimes customers are upset — even angry. De-escalation is the skill of bringing a heated interaction back to a calm, productive place.</p>
+    <h3>The LEAP Method</h3>
+    <ul>
+      <li><strong>L — Listen:</strong> Let them vent without interrupting. Most people just need to feel heard first.</li>
+      <li><strong>E — Empathize:</strong> Acknowledge their frustration genuinely. "I completely understand why that's upsetting."</li>
+      <li><strong>A — Apologize:</strong> Apologize for the experience, even if it wasn't your fault. "I'm really sorry this happened."</li>
+      <li><strong>P — Problem-solve:</strong> Now that they feel heard, work together toward a solution. "Here's what I can do..."</li>
+    </ul>
+    <div class="scenario">
+      <div class="label">📌 De-escalation in action</div>
+      <h4>Customer: "I've been waiting 3 days for a response and nobody cares about my problem!"</h4>
+      <div class="bad">❌ "Our response time is typically 3-5 business days per our terms of service."</div>
+      <div class="good">✅ "You're absolutely right to be frustrated — 3 days is too long and I'm sorry for that experience. I'm here now and I'm going to make this a priority. Can you walk me through what's happening so I can help you right away?"</div>
+    </div>
+
+    <h2><span class="sec-num">5</span> Written Communication with Customers</h2>
+    <p>Most AI-Prowler customer interactions happen in writing — email, chat, or in-app messages. Written communication requires extra care because tone is harder to convey.</p>
+    <ul>
+      <li><strong>Start with empathy:</strong> Lead with acknowledgment before diving into solutions</li>
+      <li><strong>Be clear and concise:</strong> Customers are busy. Get to the point quickly but warmly.</li>
+      <li><strong>Use plain language:</strong> Avoid technical jargon unless you're sure the customer understands it</li>
+      <li><strong>Proofread everything:</strong> Typos undermine trust and professionalism</li>
+      <li><strong>End with a next step:</strong> Always close with what happens next: "I'll follow up by end of day tomorrow"</li>
+      <li><strong>Use the customer's name:</strong> "Hi Sarah" feels more personal than "Hi there"</li>
+    </ul>
+    <div class="scenario">
+      <div class="label">📌 Email Example</div>
+      <div class="bad">❌ "Your account issue has been noted. We will look into it."</div>
+      <div class="good">✅ "Hi [Name], Thank you for reaching out. I completely understand how disruptive it is when your account isn't working as expected — I'm sorry you're dealing with this. I've escalated this to our technical team and will follow up with you by end of business tomorrow with an update. In the meantime, please don't hesitate to reply here if anything else comes up. — [Your Name]"</div>
+    </div>
+
+    <h2><span class="sec-num">6</span> Handling Complaints & Escalations</h2>
+    <p>Not every issue can be resolved in the first interaction. Know when and how to escalate:</p>
+    <ul>
+      <li><strong>Escalate when:</strong> You don't have the authority to resolve the issue, it's a technical problem outside your expertise, the customer requests a manager, or the customer is threatening legal action</li>
+      <li><strong>How to escalate well:</strong> Brief the next person before transferring — never make the customer repeat their whole story</li>
+      <li><strong>Set expectations:</strong> Tell the customer exactly when they'll hear back and from whom</li>
+      <li><strong>Follow up:</strong> After an escalation, check back to make sure the customer was helped</li>
+    </ul>
+    <div class="blue-box">📋 Document every customer interaction — what was reported, what was promised, and what action was taken. If it wasn't documented, it didn't happen.</div>
+
+    <h2><span class="sec-num">7</span> Self-Care in Customer-Facing Roles</h2>
+    <p>Dealing with frustrated or upset customers day after day can be emotionally draining. This is sometimes called "emotional labor" — and it's real and valid.</p>
+    <ul>
+      <li>Take your breaks — stepping away between difficult interactions helps reset your emotional state</li>
+      <li>Don't take it personally — an angry customer is usually angry at the situation, not at you as a person</li>
+      <li>Debrief with a colleague after a particularly hard interaction</li>
+      <li>Talk to your manager if you're feeling consistently burned out — they want to help</li>
+      <li>Use the AI-Prowler HR portal to contact HR confidentially if you need support</li>
+    </ul>
+
+    <hr class="divider">
+    <h2><span class="sec-num">8</span> Knowledge Check</h2>
+    <p>Answer all 10 questions. You need 75% to pass.</p>
+
+    <div class="quiz-section">
+      <div class="quiz-q">1. A customer is very upset and speaking loudly. What should you do first?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q1')">Tell them to calm down and speak professionally</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q1')">Immediately transfer them to a manager</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q1')">Let them finish, then acknowledge their frustration with empathy before problem-solving</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q1')">Explain the company policy that caused the issue</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q1"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">2. What does the LEAP de-escalation method stand for?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q2')">Learn, Educate, Act, Proceed</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q2')">Listen, Empathize, Apologize, Problem-solve</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q2')">Lead, Engage, Assess, Plan</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q2')">Look, Evaluate, Answer, Perform</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q2"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">3. A customer asks a question you don't know the answer to. What should you say?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q3')">"I don't know — you'll have to contact someone else."</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q3')">Make your best guess so the customer has an answer</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q3')">"Great question — let me find out for you and get back to you by [specific time]."</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q3')">Ignore the question and move on to what you do know</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q3"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">4. When should you escalate a customer issue to a manager or specialist?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q4')">Every time a customer is unhappy</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q4')">Only when the customer specifically demands it</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q4')">When you lack the authority or expertise to resolve it, or when the customer requests a manager</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q4')">Never — always resolve every issue yourself</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q4"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">5. Instead of saying "That's not possible," what should you say?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q5')">"That's against policy."</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q5')">"Here's what I can do for you..."</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q5')">Say nothing and change the subject</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q5')">"You'll have to figure that out yourself."</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q5"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">6. What should you do before jumping to a solution when a customer explains a problem?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q6')">Interrupt as soon as you know the answer</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q6')">Let them finish and acknowledge their frustration first</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q6')">Ask them to submit a written ticket instead</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q6')">Transfer them immediately</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q6"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">7. What should every written customer reply end with?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q7')">A generic sign-off with no next step</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q7')">A clear next step, like when they'll hear back</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q7')">A request for a positive review</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q7')">Technical jargon explaining the root cause</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q7"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">8. When escalating a customer to someone else, what should you do?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q8')">Make the customer repeat their whole story again</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q8')">Brief the next person first so the customer doesn't have to repeat themselves</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q8')">Just transfer them with no explanation</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q8')">Tell them it's not your problem anymore</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q8"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">9. Why is it important to document every customer interaction?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q9')">It isn't — documentation is optional</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q9')">If it wasn't documented, it didn't happen — it protects both the customer and the company</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q9')">Only complaints need to be documented</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q9')">Documentation is only for legal disputes</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q9"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">10. If you're feeling burned out from customer-facing work, what should you do?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q10')">Push through and never mention it</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q10')">Talk to your manager or contact HR confidentially — they want to help</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q10')">Take it out on the next difficult customer</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q10')">Quit without discussing it</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q10"></div>
+    </div>
+
+    <div class="complete-section">
+      <div id="complete-prompt">
+        <h3>🌟 Ready to Complete?</h3>
+        <p>Answer all questions and click below to submit your results to HR.</p>
+        <button class="complete-btn" onclick="markComplete()">✅ Mark as Complete</button>
+      </div>
+      <div id="complete-done" style="display:none"></div>
+    </div>
+  </div>
+  <div class="footer">AI-Prowler &middot; Human Resources &middot; Customer Service Excellence &middot; Optional Training &middot; &copy; 2026 AI-Prowler</div>
+</div>
+<script>
+var quizAnswers={};
+function answer(el,correct,qid){
+  if(quizAnswers[qid])return;
+  quizAnswers[qid]=correct?'correct':'wrong';
+  var opts=el.parentElement.querySelectorAll('.quiz-opt');
+  opts.forEach(function(o){o.style.pointerEvents='none';});
+  if(correct){el.classList.add('correct');el.textContent='✅ '+el.textContent;}
+  else{el.classList.add('wrong');el.textContent='❌ '+el.textContent;opts.forEach(function(o){if(o.getAttribute('onclick')&&o.getAttribute('onclick').includes('true')){o.classList.add('correct');o.textContent='✅ '+o.textContent;}});}
+  var fb=document.getElementById('fb-'+qid);
+  if(fb){fb.textContent=correct?'✅ Correct!':'❌ Not quite — review the section above.';fb.style.color=correct?'#166534':'#cf222e';fb.classList.add('show');}
+  var pct=Math.round((Object.keys(quizAnswers).length/10)*100);
+  document.getElementById('progress-fill').style.width=pct+'%';
+  document.getElementById('progress-pct').textContent=pct+'%';
+}
+function markComplete(){
+  var correct=Object.values(quizAnswers).filter(function(v){return v==='correct';}).length;
+  var pct=Math.round((correct/10)*100);
+  var passed=pct>=75;
+  document.getElementById('complete-prompt').style.display='none';
+  document.getElementById('complete-done').style.display='block';
+  document.getElementById('progress-fill').style.width='100%';
+  document.getElementById('progress-pct').textContent='100%';
+  document.getElementById('complete-done').innerHTML='<div style="font-size:48px;margin-bottom:12px">'+(passed?'🎉':'📋')+'</div><h3 style="color:'+(passed?'#3fb950':'#f0a500')+';margin:0 0 8px">'+(passed?'Training Complete!':'Review Recommended')+'</h3><p style="color:#8b949e;font-size:13px">Score: <strong style="color:'+(passed?'#3fb950':'#f0a500')+'">'+correct+'/10 ('+pct+'%)</strong> — '+(passed?'Excellent — your customers are lucky to have you!':'Score below 75%. Review and try again.')+'</p>';
+  var empName='Employee';
+  try{var s=JSON.parse(window.parent.localStorage.getItem('hr_portal_session')||'{}');if(s.name)empName=s.name;}catch(e){}
+  var labels=['De-escalating upset customers','LEAP method','Handling unknown questions','When to escalate','Reframing "not possible"','Listening before solving','Ending written replies well','Briefing before transfer','Documenting interactions','Handling burnout'];
+  var body='=== TRAINING COMPLETION REPORT ===\n\nTraining: Customer Service Excellence (Optional)\nEmployee: '+empName+'\nDate: '+new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})+'\nTime: '+new Date().toLocaleTimeString()+'\nScore: '+correct+'/10 ('+pct+'%)\nResult: '+(passed?'✅ PASSED':'⚠️ NEEDS REVIEW')+'\n\n--- Quiz Results ---\n';
+  labels.forEach(function(q,i){var ans=quizAnswers['q'+(i+1)];body+=(i+1)+'. '+q+': '+(ans==='correct'?'✅ Correct':ans==='wrong'?'❌ Incorrect':'— Not answered')+'\n';});
+  body+='\n'+(passed?'✅ Employee completed optional Customer Service Excellence training.':'⚠️ Employee did not pass.');
+  fetch('/hr-api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sender_name:empName,subject:'🎓 Training Complete — Customer Service Excellence — '+empName+' — '+pct+'% ('+(passed?'PASSED':'NEEDS REVIEW')+')',body:body,message_type:'training_result'})}).catch(function(){});
+  try{window.parent.postMessage({type:'training-complete',id:'customer-service',employee:empName,score:pct,passed:passed},'*');}catch(e){}
+}
+</script>
+</body>
+</html>

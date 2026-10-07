@@ -1,0 +1,11 @@
+{
+  "_note": "Optional. Copy to test_config.json to change settings. No passwords go here: the admin token is read from AI-Prowler's config.json, and Test Tester gets a fresh random PIN every run.",
+  "base_url": "https://ap-jamievavroaiprowler-f68efeed.ai-prowler.com",
+  "test_employee": {
+    "first_name": "Test",
+    "last_name": "Tester",
+    "email": "jamievavroaiprowler+hrtest@gmail.com"
+  },
+  "watch": true,
+  "slow_mo_ms": 400
+}

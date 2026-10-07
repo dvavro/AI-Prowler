@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI-Prowler — Incident Report Form</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --blue:   #1f6feb;
+    --red:    #cf222e;
+    --dark:   #0d1117;
+    --border: #d0d7de;
+    --muted:  #636e7b;
+    --bg:     #f6f8fa;
+    --white:  #ffffff;
+    --section-bg: #1f6feb;
+  }
+
+  body {
+    font-family: 'Inter', sans-serif;
+    background: var(--bg);
+    color: var(--dark);
+    font-size: 13px;
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+
+  /* ── TOP BAR ── */
+  .topbar {
+    background: var(--dark);
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: 0 1px 3px rgba(0,0,0,.3);
+  }
+  .topbar-logo { color: var(--blue); font-size: 15px; font-weight: 700; letter-spacing: -.3px; }
+  .topbar-title { color: #e6edf3; font-size: 13px; font-weight: 500; }
+  .topbar-back {
+    color: #7d8590; font-size: 12px; text-decoration: none;
+    display: flex; align-items: center; gap: 5px;
+  }
+  .topbar-back:hover { color: #e6edf3; }
+
+  /* ── FORM WRAPPER ── */
+  .form-wrap {
+    max-width: 820px;
+    margin: 32px auto 80px;
+    padding: 0 16px;
+  }
+
+  /* ── FORM HEADER ── */
+  .form-header {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 10px 10px 0 0;
+    padding: 28px 32px 20px;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    border-bottom: 2px solid var(--blue);
+  }
+  .form-header .logo { color: var(--blue); font-size: 22px; font-weight: 700; }
+  .form-header .title { text-align: center; font-size: 19px; font-weight: 700; color: var(--dark); }
+  .form-header .conf { text-align: right; color: var(--red); font-size: 11px; font-weight: 700; letter-spacing: .5px; }
+  .form-subheader {
+    background: var(--white);
+    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    padding: 10px 32px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 11.5px;
+    font-style: italic;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* ── FORM BODY ── */
+  .form-body {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-top: none;
+    border-radius: 0 0 10px 10px;
+    padding: 0 32px 32px;
+  }
+
+  /* ── SECTION HEADER ── */
+  .section-hdr {
+    background: var(--section-bg);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .8px;
+    padding: 9px 14px;
+    margin: 24px -32px 18px;
+    text-transform: uppercase;
+  }
+
+  /* ── FIELD GRID ── */
+  .field-row { display: grid; gap: 16px; margin-bottom: 16px; }
+  .col-2 { grid-template-columns: 1fr 1fr; }
+  .col-3 { grid-template-columns: 1fr 1fr 1fr; }
+  .col-1 { grid-template-columns: 1fr; }
+
+  .field label {
+    display: block;
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--muted);
+    margin-bottom: 5px;
+    text-transform: uppercase;
+    letter-spacing: .3px;
+  }
+  .field label .req { color: var(--red); margin-left: 2px; }
+
+  .field input[type=text],
+  .field input[type=date],
+  .field input[type=time],
+  .field select,
+  .field textarea {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--dark);
+    background: #fff;
+    transition: border-color .15s, box-shadow .15s;
+    appearance: none;
+  }
+  .field input:focus, .field select:focus, .field textarea:focus {
+    outline: none;
+    border-color: var(--blue);
+    box-shadow: 0 0 0 3px rgba(31,111,235,.12);
+  }
+  .field textarea { resize: vertical; min-height: 80px; line-height: 1.6; }
+  .field select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23636e7b' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 28px;
+    cursor: pointer;
+  }
+
+  /* ── DIVIDER ── */
+  .field-divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 20px 0;
+  }
+
+  /* ── SIGNATURE AREA ── */
+  .sig-row { display: grid; grid-template-columns: 1fr 160px; gap: 16px; margin-bottom: 20px; }
+  .sig-box {
+    border-bottom: 1.5px solid var(--dark);
+    min-height: 36px;
+    margin-top: 4px;
+  }
+
+  /* ── SUBMIT AREA ── */
+  .submit-area {
+    margin-top: 28px;
+    padding: 20px 24px;
+    background: #f0f4ff;
+    border: 1px solid #c5d4f7;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+  .submit-area p {
+    font-size: 12px;
+    color: var(--muted);
+    text-align: center;
+    max-width: 480px;
+  }
+  #feedback-msg {
+    width: 100%;
+    padding: 10px 14px;
+    border-radius: 7px;
+    font-size: 13px;
+    font-weight: 500;
+    display: none;
+    text-align: center;
+  }
+  #feedback-msg.success { background: #d4f5e0; color: #1a7f37; border: 1px solid #b2dfcc; }
+  #feedback-msg.error   { background: #fde8e8; color: var(--red); border: 1px solid #f5c6c6; }
+
+  .btn-submit {
+    padding: 12px 48px;
+    background: var(--blue);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    letter-spacing: .2px;
+    transition: background .15s, transform .1s;
+    box-shadow: 0 2px 6px rgba(31,111,235,.3);
+  }
+  .btn-submit:hover { background: #1a5fca; }
+  .btn-submit:active { transform: scale(.98); }
+  .btn-submit:disabled { background: #8fb8f5; cursor: not-allowed; transform: none; }
+
+  .btn-pdf {
+    color: var(--muted);
+    font-size: 12px;
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 16px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: color .15s, border-color .15s;
+  }
+  .btn-pdf:hover { color: var(--dark); border-color: #999; }
+
+  /* ── SUCCESS SCREEN ── */
+  #success-screen {
+    display: none;
+    text-align: center;
+    padding: 64px 32px;
+  }
+  .success-icon {
+    width: 72px; height: 72px;
+    background: #d4f5e0;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 36px;
+    margin: 0 auto 20px;
+  }
+  #success-screen h2 { font-size: 22px; font-weight: 700; margin-bottom: 8px; color: var(--dark); }
+  #success-screen p { color: var(--muted); font-size: 14px; max-width: 400px; margin: 0 auto 24px; }
+  #success-ref { display: inline-block; padding: 6px 16px; background: #f0f4ff; border: 1px solid #c5d4f7; border-radius: 20px; font-size: 12px; font-weight: 600; color: var(--blue); }
+  .btn-back-portal {
+    display: inline-block; margin-top: 20px;
+    padding: 10px 24px; background: var(--blue); color: #fff;
+    border: none; border-radius: 7px; font-size: 13px; font-weight: 600;
+    cursor: pointer; font-family: inherit; text-decoration: none;
+  }
+
+  @media (max-width: 600px) {
+    .form-header { grid-template-columns: 1fr 1fr; gap: 8px; }
+    .form-header .title { grid-column: 1/-1; font-size: 16px; text-align: left; }
+    .form-body { padding: 0 16px 24px; }
+    .section-hdr { margin-left: -16px; margin-right: -16px; }
+    .col-2, .col-3 { grid-template-columns: 1fr; }
+    .sig-row { grid-template-columns: 1fr; }
+    .topbar-title { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <a class="topbar-back" href="/hr_portal/">&#8592; Back to Portal</a>
+  <span class="topbar-title">AI-Prowler HR Portal</span>
+  <span class="topbar-logo">AI-Prowler</span>
+</div>
+
+<div class="form-wrap">
+  <div class="form-header">
+    <div class="logo">AI-Prowler</div>
+    <div class="title">INCIDENT REPORT FORM</div>
+    <div class="conf">CONFIDENTIAL</div>
+  </div>
+  <div class="form-subheader">
+    Complete this form as soon as possible after an incident occurs. Submit to your supervisor and HR within 24 hours.
+  </div>
+  <div class="form-body">
+
+    <div id="success-screen">
+      <div class="success-icon">✅</div>
+      <h2>Report Submitted</h2>
+      <p>Your incident report has been sent to HR and will be reviewed promptly. Keep your reference number for follow-up.</p>
+      <div id="success-ref">—</div>
+      <br>
+      <a class="btn-back-portal" href="/hr_portal/">Return to Portal</a>
+    </div>
+
+    <div id="form-content">
+
+      <!-- S1 -->
+      <div class="section-hdr">Section 1 — Report Information</div>
+      <div class="field-row col-3">
+        <div class="field"><label>Report Number <span style="color:var(--muted);font-size:9px">(auto-assigned)</span></label><input type="text" id="f-report-num" placeholder="Auto-assigned on submit" disabled style="background:#f6f8fa;color:var(--muted)"></div>
+        <div class="field"><label>Date of Report</label><input type="date" id="f-report-date"></div>
+        <div class="field"><label>Time Filed</label><input type="time" id="f-report-time"></div>
+      </div>
+      <div class="field-row col-2">
+        <div class="field"><label>Reported By (Name) <span class="req">*</span></label><input type="text" id="f-name" placeholder="Full name"></div>
+        <div class="field"><label>Title / Position</label><input type="text" id="f-title" placeholder="Your job title"></div>
+      </div>
+      <div class="field-row col-2">
+        <div class="field"><label>Department</label><input type="text" id="f-dept" placeholder="e.g. Operations"></div>
+        <div class="field"><label>Phone / Extension</label><input type="text" id="f-phone" placeholder="555-0100"></div>
+      </div>
+
+      <!-- S2 -->
+      <div class="section-hdr">Section 2 — Incident Details</div>
+      <div class="field-row col-3">
+        <div class="field"><label>Date of Incident <span class="req">*</span></label><input type="date" id="f-inc-date"></div>
+        <div class="field"><label>Time of Incident</label><input type="time" id="f-inc-time"></div>
+        <div class="field"><label>Exact Location <span class="req">*</span></label><input type="text" id="f-location" placeholder="e.g. Warehouse Bay 3"></div>
+      </div>
+      <div class="field-row col-2">
+        <div class="field"><label>Type of Incident <span class="req">*</span></label>
+          <select id="f-type">
+            <option value="">— Select —</option>
+            <option>Injury</option><option>Near Miss</option><option>Property Damage</option><option>Illness</option><option>Other</option>
+          </select>
+        </div>
+        <div class="field"><label>Severity <span class="req">*</span></label>
+          <select id="f-severity">
+            <option value="">— Select —</option>
+            <option>Minor</option><option>Moderate</option><option>Serious</option><option>Critical</option>
+          </select>
+        </div>
+      </div>
+      <div class="field-row col-1">
+        <div class="field"><label>Description of Incident <span class="req">*</span><span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0"> — be specific, include sequence of events</span></label>
+          <textarea id="f-desc" placeholder="Describe what happened step by step…" style="min-height:100px"></textarea>
+        </div>
+      </div>
+      <div class="field-row col-1">
+        <div class="field"><label>Immediate Actions Taken</label>
+          <textarea id="f-actions" placeholder="First aid administered, area secured, supervisor notified…" style="min-height:60px"></textarea>
+        </div>
+      </div>
+
+      <!-- S3 -->
+      <div class="section-hdr">Section 3 — Injured / Affected Person(s)</div>
+      <div class="field-row col-2">
+        <div class="field"><label>Full Name</label><input type="text" id="f-inj-name" placeholder="If different from reporter"></div>
+        <div class="field"><label>Employee ID</label><input type="text" id="f-inj-id" placeholder="e.g. EMP-00001"></div>
+      </div>
+      <div class="field-row col-3">
+        <div class="field"><label>Job Title</label><input type="text" id="f-inj-title"></div>
+        <div class="field"><label>Department</label><input type="text" id="f-inj-dept"></div>
+        <div class="field"><label>Length of Employment</label><input type="text" id="f-inj-tenure" placeholder="e.g. 2 years"></div>
+      </div>
+      <div class="field-row col-2">
+        <div class="field"><label>Employment Status</label>
+          <select id="f-emp-status">
+            <option value="">— Select —</option>
+            <option>Full-Time</option><option>Part-Time</option><option>Contractor</option><option>Visitor / Guest</option>
+          </select>
+        </div>
+        <div class="field"><label>Medical Treatment</label>
+          <select id="f-medical">
+            <option value="">— Select —</option>
+            <option>None Required</option><option>First Aid Only</option><option>Doctor Visit</option><option>Emergency Room</option><option>Hospitalized</option>
+          </select>
+        </div>
+      </div>
+      <div class="field-row col-1">
+        <div class="field"><label>Nature of Injury / Illness</label>
+          <textarea id="f-injury" placeholder="Body part affected, type of injury or illness…" style="min-height:60px"></textarea>
+        </div>
+      </div>
+      <div class="field-row col-2">
+        <div class="field"><label>Medical Facility (if applicable)</label><input type="text" id="f-facility" placeholder="Hospital or clinic name"></div>
+        <div class="field"><label>Physician Name</label><input type="text" id="f-physician"></div>
+      </div>
+
+      <!-- S4 -->
+      <div class="section-hdr">Section 4 — Witnesses</div>
+      <div class="field-row col-2">
+        <div class="field"><label>Witness 1 — Name</label><input type="text" id="f-w1-name"></div>
+        <div class="field"><label>Witness 1 — Phone / Contact</label><input type="text" id="f-w1-contact"></div>
+      </div>
+      <div class="field-row col-2">
+        <div class="field"><label>Witness 2 — Name</label><input type="text" id="f-w2-name"></div>
+        <div class="field"><label>Witness 2 — Phone / Contact</label><input type="text" id="f-w2-contact"></div>
+      </div>
+
+      <!-- S5 -->
+      <div class="section-hdr">Section 5 — Root Cause Analysis</div>
+      <div class="field-row col-2">
+        <div class="field"><label>Primary Contributing Factor</label>
+          <select id="f-factor">
+            <option value="">— Select —</option>
+            <option>Unsafe Condition</option><option>Human Error</option><option>Equipment Failure</option><option>Lack of Training</option><option>Policy Violation</option><option>Unknown</option>
+          </select>
+        </div>
+        <div class="field"><label>Was this preventable?</label>
+          <select id="f-preventable">
+            <option value="">— Select —</option>
+            <option>Yes</option><option>No</option><option>Unknown</option>
+          </select>
+        </div>
+      </div>
+      <div class="field-row col-1">
+        <div class="field"><label>Root Cause — Why did this happen?</label>
+          <textarea id="f-root-cause" placeholder="Underlying reason(s) for the incident…" style="min-height:70px"></textarea>
+        </div>
+      </div>
+      <div class="field-row col-1">
+        <div class="field"><label>Corrective Actions / Preventive Measures Recommended</label>
+          <textarea id="f-corrective" placeholder="Steps to prevent recurrence…" style="min-height:70px"></textarea>
+        </div>
+      </div>
+
+      <!-- S6 -->
+      <div class="section-hdr">Section 6 — Signatures</div>
+      <p style="font-size:11.5px;color:var(--muted);margin-bottom:16px">By submitting this form digitally you confirm the information above is accurate to the best of your knowledge.</p>
+      <div class="sig-row">
+        <div class="field"><label>Employee / Reporter Full Name (digital signature)</label><input type="text" id="f-sig-name" placeholder="Type your full name to sign"></div>
+        <div class="field"><label>Date</label><input type="date" id="f-sig-date"></div>
+      </div>
+
+      <hr class="field-divider">
+
+      <!-- SUBMIT -->
+      <div class="submit-area">
+        <p>This report will be sent directly to HR. You will receive a confirmation reference number. For emergencies, call 911 immediately.</p>
+        <div id="feedback-msg"></div>
+        <button class="btn-submit" id="submit-btn" onclick="submitForm()">Send Report to HR</button>
+        <button class="btn-pdf" onclick="window.open('/hr_portal/docs/AI-Prowler_Incident_Report_Form.pdf','_blank')">Download blank PDF instead</button>
+      </div>
+
+    </div><!-- /form-content -->
+  </div><!-- /form-body -->
+</div><!-- /form-wrap -->
+
+<script>
+// Pre-fill dates on load
+window.addEventListener('DOMContentLoaded', () => {
+  const today = new Date().toISOString().split('T')[0];
+  const now = new Date().toTimeString().slice(0,5);
+  document.getElementById('f-report-date').value = today;
+  document.getElementById('f-report-time').value = now;
+  document.getElementById('f-inc-date').value = today;
+  document.getElementById('f-sig-date').value = today;
+});
+
+async function submitForm() {
+  const btn = document.getElementById('submit-btn');
+  const fb  = document.getElementById('feedback-msg');
+  fb.className = ''; fb.style.display = 'none';
+
+  // Validation
+  const name  = document.getElementById('f-name').value.trim();
+  const iDate = document.getElementById('f-inc-date').value;
+  const iLoc  = document.getElementById('f-location').value.trim();
+  const iType = document.getElementById('f-type').value;
+  const iSev  = document.getElementById('f-severity').value;
+  const iDesc = document.getElementById('f-desc').value.trim();
+  const iSig  = document.getElementById('f-sig-name').value.trim();
+
+  if (!name || !iDate || !iLoc || !iType || !iSev || !iDesc || !iSig) {
+    fb.textContent = 'Please complete all required fields (marked with *) and sign before submitting.';
+    fb.className = 'error'; fb.style.display = 'block';
+    fb.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return;
+  }
+
+  btn.textContent = 'Sending…'; btn.disabled = true;
+
+  const payload = {
+    reporter_name:      name,
+    reporter_title:     document.getElementById('f-title').value.trim(),
+    department:         document.getElementById('f-dept').value.trim(),
+    phone:              document.getElementById('f-phone').value.trim(),
+    report_date:        document.getElementById('f-report-date').value,
+    report_time:        document.getElementById('f-report-time').value,
+    incident_date:      iDate,
+    incident_time:      document.getElementById('f-inc-time').value,
+    location:           iLoc,
+    type:               iType,
+    severity:           iSev,
+    description:        iDesc,
+    immediate_actions:  document.getElementById('f-actions').value.trim(),
+    injured_name:       document.getElementById('f-inj-name').value.trim(),
+    injured_id:         document.getElementById('f-inj-id').value.trim(),
+    injured_title:      document.getElementById('f-inj-title').value.trim(),
+    injured_dept:       document.getElementById('f-inj-dept').value.trim(),
+    injured_tenure:     document.getElementById('f-inj-tenure').value.trim(),
+    employment_status:  document.getElementById('f-emp-status').value,
+    medical_treatment:  document.getElementById('f-medical').value,
+    injury_nature:      document.getElementById('f-injury').value.trim(),
+    medical_facility:   document.getElementById('f-facility').value.trim(),
+    physician:          document.getElementById('f-physician').value.trim(),
+    witness1_name:      document.getElementById('f-w1-name').value.trim(),
+    witness1_contact:   document.getElementById('f-w1-contact').value.trim(),
+    witness2_name:      document.getElementById('f-w2-name').value.trim(),
+    witness2_contact:   document.getElementById('f-w2-contact').value.trim(),
+    contributing_factor:document.getElementById('f-factor').value,
+    preventable:        document.getElementById('f-preventable').value,
+    root_cause:         document.getElementById('f-root-cause').value.trim(),
+    corrective_actions: document.getElementById('f-corrective').value.trim(),
+    digital_signature:  iSig,
+    sig_date:           document.getElementById('f-sig-date').value,
+  };
+
+  const lines = [
+    '🚨 INCIDENT REPORT — DIGITAL SUBMISSION',
+    '══════════════════════════════════════',
+    '',
+    `Reporter:           ${payload.reporter_name}${payload.reporter_title ? ' · ' + payload.reporter_title : ''}`,
+    `Department:         ${payload.department || '—'}    Phone: ${payload.phone || '—'}`,
+    `Report Date/Time:   ${payload.report_date} ${payload.report_time}`,
+    '',
+    '── INCIDENT ──────────────────────────',
+    `Date/Time:          ${payload.incident_date}${payload.incident_time ? ' at ' + payload.incident_time : ''}`,
+    `Location:           ${payload.location}`,
+    `Type:               ${payload.type}`,
+    `Severity:           ${payload.severity}`,
+    '',
+    'DESCRIPTION:',
+    payload.description,
+    '',
+    `Immediate Actions:  ${payload.immediate_actions || '—'}`,
+    '',
+    '── INJURED PERSON ────────────────────',
+    `Name:               ${payload.injured_name || 'Same as reporter'}${payload.injured_id ? ' ('+payload.injured_id+')' : ''}`,
+    `Title / Dept:       ${payload.injured_title || '—'} / ${payload.injured_dept || '—'}`,
+    `Employment:         ${payload.employment_status || '—'}   Tenure: ${payload.injured_tenure || '—'}`,
+    `Nature of Injury:   ${payload.injury_nature || '—'}`,
+    `Medical Treatment:  ${payload.medical_treatment || '—'}`,
+    `Facility/Physician: ${payload.medical_facility || '—'} / ${payload.physician || '—'}`,
+    '',
+    '── WITNESSES ─────────────────────────',
+    `Witness 1:  ${payload.witness1_name || '—'} ${payload.witness1_contact ? '('+payload.witness1_contact+')' : ''}`,
+    `Witness 2:  ${payload.witness2_name || '—'} ${payload.witness2_contact ? '('+payload.witness2_contact+')' : ''}`,
+    '',
+    '── ROOT CAUSE ────────────────────────',
+    `Factor:     ${payload.contributing_factor || '—'}   Preventable: ${payload.preventable || '—'}`,
+    `Root Cause: ${payload.root_cause || '—'}`,
+    '',
+    'CORRECTIVE ACTIONS:',
+    payload.corrective_actions || '—',
+    '',
+    '── SIGNATURE ─────────────────────────',
+    `Signed by:  ${payload.digital_signature}   Date: ${payload.sig_date}`,
+  ];
+
+  try {
+    const res = await fetch('/hr-api/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sender_name:    payload.reporter_name,
+        sender_dept:    payload.department,
+        subject:        '🚨 Incident Report — ' + payload.type + ' · ' + payload.incident_date,
+        body:           lines.join('\n'),
+        message_type:   'incident_report',
+        incident_data:  payload
+      })
+    });
+      const data = await res.json();
+      if (data.ok) {
+        // ── Write to HR Admin Incident Reports tab via localStorage ──
+        try {
+          const stored = JSON.parse(localStorage.getItem('hr_incidents') || '[]');
+          const record = {
+            id:                  data.id || ('INC-' + Date.now()),
+            incident_number:     data.incident_number || '',
+            reporter_name:       payload.reporter_name,
+            reporter_title:      payload.reporter_title,
+            department:          payload.department,
+            date_of_incident:    payload.incident_date,
+            time_of_incident:    payload.incident_time,
+            location:            payload.location,
+            incident_type:       payload.type,
+            severity:            payload.severity,
+            description:         payload.description,
+            immediate_actions:   payload.immediate_actions,
+            injured_person_name: payload.injured_name,
+            nature_of_injury:    payload.injury_nature,
+            contributing_factor: payload.contributing_factor,
+            corrective_actions:  payload.corrective_actions,
+            hr_status:           'open',
+            submitted_at:        new Date().toISOString()
+          };
+          stored.push(record);
+          localStorage.setItem('hr_incidents', JSON.stringify(stored));
+          try { window.parent.postMessage({ type: 'incident-submitted', record: record }, '*'); } catch(pe) {}
+        } catch(le) { console.log('Could not save incident locally:', le); }
+
+        document.getElementById('form-content').style.display = 'none';
+        document.getElementById('success-ref').textContent = data.incident_number || ('Reference: ' + (data.id || 'INC-' + Date.now()));
+        document.getElementById('success-screen').style.display = 'block';
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      } else {
+        // API failed — still save locally so HR Admin gets it
+        try {
+          const stored = JSON.parse(localStorage.getItem('hr_incidents') || '[]');
+          const fallbackId = 'INC-' + Date.now();
+          stored.push({
+            id: fallbackId, reporter_name: payload.reporter_name,
+            reporter_title: payload.reporter_title, department: payload.department,
+            date_of_incident: payload.incident_date, time_of_incident: payload.incident_time,
+            location: payload.location, incident_type: payload.type, severity: payload.severity,
+            description: payload.description, immediate_actions: payload.immediate_actions,
+            injured_person_name: payload.injured_name, nature_of_injury: payload.injury_nature,
+            contributing_factor: payload.contributing_factor, corrective_actions: payload.corrective_actions,
+            hr_status: 'open', submitted_at: new Date().toISOString()
+          });
+          localStorage.setItem('hr_incidents', JSON.stringify(stored));
+          document.getElementById('form-content').style.display = 'none';
+          document.getElementById('success-ref').textContent = 'Reference: ' + fallbackId + ' (saved locally)';
+          document.getElementById('success-screen').style.display = 'block';
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        } catch(le) {
+          throw new Error(data.error || 'Submission failed');
+        }
+      }
+  } catch(e) {
+    fb.textContent = '❌ Could not send report — please try again or download the PDF version. (' + e.message + ')';
+    fb.className = 'error'; fb.style.display = 'block';
+    btn.textContent = 'Send Report to HR'; btn.disabled = false;
+  }
+}
+</script>
+</body>
+</html>

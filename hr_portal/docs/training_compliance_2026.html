@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Annual Compliance Refresher 2026 — AI-Prowler</title>
+<style>
+  body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; background: #f6f8fa; color: #0d1117; }
+  .doc { max-width: 820px; margin: 0 auto; background: #fff; padding: 0; min-height: 100vh; }
+  .hero { background: linear-gradient(135deg, #0d1117 0%, #1a1200 60%, #2d1f00 100%); padding: 48px 52px 40px; color: #fff; }
+  .hero-brand { font-size: 12px; font-weight: 700; color: #f0a500; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 16px; }
+  .hero h1 { font-size: 32px; font-weight: 800; margin: 0 0 10px; color: #fff; }
+  .hero p { font-size: 14px; color: #8b949e; margin: 0 0 20px; line-height: 1.7; }
+  .hero-meta { display: flex; gap: 20px; flex-wrap: wrap; }
+  .hero-badge { background: rgba(240,165,0,.15); border: 1px solid rgba(240,165,0,.3); color: #f0a500; font-size: 11px; font-weight: 600; padding: 4px 12px; border-radius: 20px; }
+  .progress-bar { background: #161b22; padding: 20px 52px; border-bottom: 1px solid #21262d; }
+  .progress-label { display: flex; justify-content: space-between; font-size: 12px; color: #8b949e; margin-bottom: 8px; }
+  .progress-track { background: #21262d; border-radius: 10px; height: 8px; }
+  .progress-fill { background: linear-gradient(90deg, #f0a500, #fbbf24); height: 8px; border-radius: 10px; width: 0%; transition: width 1s ease; }
+  .content { padding: 40px 52px; }
+  h2 { font-size: 20px; font-weight: 800; color: #0d1117; margin: 36px 0 14px; display: flex; align-items: center; gap: 10px; }
+  h2 .sec-num { background: #d97706; color: #fff; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; flex-shrink: 0; }
+  h3 { font-size: 15px; font-weight: 700; color: #24292f; margin: 20px 0 8px; }
+  p { font-size: 14px; line-height: 1.8; color: #24292f; margin: 0 0 12px; }
+  ul, ol { font-size: 14px; line-height: 1.8; color: #24292f; margin: 0 0 12px; padding-left: 22px; }
+  li { margin-bottom: 6px; }
+  .highlight { background: #fff8e1; border-left: 4px solid #f0a500; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .red-box { background: #fff5f5; border-left: 4px solid #f85149; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .green-box { background: #f0fff4; border-left: 4px solid #22c55e; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .blue-box { background: #eff6ff; border-left: 4px solid #1f6feb; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .update-card { background: #fff8e1; border: 1px solid #f0a500; border-radius: 10px; padding: 16px 20px; margin: 12px 0; }
+  .update-card .update-tag { font-size: 10px; font-weight: 700; color: #d97706; text-transform: uppercase; letter-spacing: .5px; background: rgba(240,165,0,.15); padding: 2px 8px; border-radius: 10px; display: inline-block; margin-bottom: 8px; }
+  .update-card h4 { font-size: 14px; font-weight: 700; color: #0d1117; margin: 0 0 6px; }
+  .update-card p { margin: 0; font-size: 13px; color: #636e7b; }
+  .table-wrap { overflow-x: auto; margin: 14px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { background: #fff8e1; color: #d97706; font-weight: 700; padding: 10px 14px; text-align: left; border-bottom: 2px solid #fde68a; }
+  td { padding: 9px 14px; border-bottom: 1px solid #eaeef2; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  .quiz-section { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 12px; padding: 24px; margin: 24px 0; }
+  .quiz-q { font-size: 14px; font-weight: 600; color: #0d1117; margin-bottom: 12px; }
+  .quiz-options { display: flex; flex-direction: column; gap: 8px; }
+  .quiz-opt { padding: 10px 14px; background: #fff; border: 1.5px solid #d0d7de; border-radius: 8px; cursor: pointer; font-size: 13px; color: #24292f; transition: all .15s; }
+  .quiz-opt:hover { border-color: #d97706; background: #fff8e1; }
+  .quiz-opt.correct { border-color: #22c55e; background: #f0fff4; color: #166534; font-weight: 600; }
+  .quiz-opt.wrong { border-color: #f85149; background: #fff5f5; color: #cf222e; }
+  .quiz-feedback { display: none; margin-top: 10px; font-size: 13px; font-weight: 600; }
+  .quiz-feedback.show { display: block; }
+  .complete-section { background: linear-gradient(135deg, #0d1117, #2d1f00); border-radius: 12px; padding: 28px; text-align: center; margin: 32px 0 0; }
+  .complete-section h3 { color: #fff; font-size: 18px; margin: 0 0 8px; }
+  .complete-section p { color: #8b949e; font-size: 13px; margin: 0 0 20px; }
+  .complete-btn { padding: 12px 32px; background: #d97706; color: #fff; border: none; border-radius: 8px; font-size: 14px; font-weight: 700; cursor: pointer; }
+  .divider { border: none; border-top: 1px solid #eaeef2; margin: 32px 0; }
+  .footer { padding: 20px 52px; border-top: 1px solid #eaeef2; font-size: 11px; color: #8c959f; text-align: center; }
+</style>
+</head>
+<body>
+<div class="doc">
+
+  <div class="hero">
+    <div class="hero-brand">AI-Prowler &middot; Human Resources &middot; Annual Required Training &middot; 2026</div>
+    <h1>📋 Annual Compliance Refresher 2026</h1>
+    <p>This annual refresher covers important policy updates, legal compliance reminders, and key changes at AI-Prowler for 2026. All employees must complete this training by September 30, 2026.</p>
+    <div class="hero-meta">
+      <span class="hero-badge">⏱ 30 min</span>
+      <span class="hero-badge">📋 Required</span>
+      <span class="hero-badge">📅 Due Sep 30, 2026</span>
+      <span class="hero-badge">⚖️ Legal Compliance</span>
+    </div>
+  </div>
+
+  <div class="progress-bar">
+    <div class="progress-label"><span>Course Progress</span><span id="progress-pct">0%</span></div>
+    <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+  </div>
+
+  <div class="content">
+
+    <h2><span class="sec-num">1</span> 2026 Policy Updates at AI-Prowler</h2>
+    <p>Each year, AI-Prowler reviews and updates its policies to reflect changes in law, best practices, and company growth. Here are the key updates for 2026 that every employee needs to know:</p>
+
+    <div class="update-card">
+      <div class="update-tag">🆕 Updated</div>
+      <h4>Attendance & Punctuality Policy — Remote Work Standards</h4>
+      <p>Core hour expectations have been clarified. All employees must be reachable within 2 hours during agreed core hours. The Running Late and Out Today quick-action buttons in the Time Clock tab are now the required notification method — texting your manager directly is no longer sufficient.</p>
+    </div>
+
+    <div class="update-card">
+      <div class="update-tag">🆕 Updated</div>
+      <h4>PTO Rollover Cap</h4>
+      <p>Effective January 1, 2026, unused PTO rolls over to the next year up to a maximum of 10 days (80 hours). Any balance above 10 days at year-end will be forfeited. Plan your time off early to avoid losing earned PTO.</p>
+    </div>
+
+    <div class="update-card">
+      <div class="update-tag">🆕 New</div>
+      <h4>HR Portal — Mandatory for All Requests</h4>
+      <p>Effective 2026, ALL time off requests, incident reports, IT support requests, and HR communications must go through the AI-Prowler HR Employee Portal. Requests made via personal text, personal email, or verbal agreement only are no longer accepted as official submissions.</p>
+    </div>
+
+    <div class="update-card">
+      <div class="update-tag">🆕 Updated</div>
+      <h4>Data Privacy & Remote Work</h4>
+      <p>New guidance for 2026: employees must use company-approved tools for all work files. Personal cloud accounts (personal Google Drive, Dropbox, iCloud) may not be used to store or share work files. All work must remain in company-approved systems.</p>
+    </div>
+
+    <h2><span class="sec-num">2</span> Legal Compliance Reminders</h2>
+    <p>The following federal laws govern your employment at AI-Prowler. All employees are expected to understand their rights and responsibilities under these laws.</p>
+    <div class="table-wrap">
+      <table>
+        <tr><th>Law / Regulation</th><th>What It Covers</th><th>Your Rights</th></tr>
+        <tr><td><strong>Title VII</strong></td><td>Prohibits discrimination based on race, color, religion, sex, national origin</td><td>Right to a workplace free from discrimination; right to report without retaliation</td></tr>
+        <tr><td><strong>ADA</strong></td><td>Americans with Disabilities Act — prohibits disability discrimination</td><td>Right to reasonable accommodation; right to equal employment opportunity</td></tr>
+        <tr><td><strong>FMLA</strong></td><td>Family & Medical Leave Act — up to 12 weeks unpaid leave</td><td>Job protection during qualifying leave; continued health benefits</td></tr>
+        <tr><td><strong>FLSA</strong></td><td>Fair Labor Standards Act — minimum wage, overtime rules</td><td>Non-exempt employees entitled to 1.5x pay for 40+ hours/week</td></tr>
+        <tr><td><strong>NLRA</strong></td><td>National Labor Relations Act — protects concerted activity</td><td>Right to discuss wages and working conditions with coworkers</td></tr>
+        <tr><td><strong>OSHA</strong></td><td>Occupational Safety and Health Act</td><td>Right to a safe workplace; right to report safety concerns without retaliation</td></tr>
+      </table>
+    </div>
+    <div class="highlight">⚖️ You have the right to discuss your wages, hours, and working conditions with your coworkers. AI-Prowler cannot retaliate against you for exercising your rights under federal law.</div>
+
+    <h2><span class="sec-num">3</span> Anti-Harassment & Discrimination Refresher</h2>
+    <p>AI-Prowler maintains a zero-tolerance policy for harassment and discrimination. As a refresher:</p>
+    <ul>
+      <li><strong>Harassment</strong> includes any unwelcome conduct based on a protected characteristic (race, gender, religion, age, disability, sexual orientation, etc.) that creates a hostile work environment</li>
+      <li><strong>Sexual harassment</strong> includes unwelcome advances, inappropriate comments, and quid pro quo situations — all prohibited</li>
+      <li><strong>Discrimination</strong> means treating someone less favorably in employment decisions because of a protected characteristic</li>
+      <li><strong>Retaliation</strong> against anyone who reports harassment or participates in an investigation is strictly prohibited</li>
+    </ul>
+    <div class="red-box">🚨 If you experience or witness harassment or discrimination, report it immediately via the <strong>Messages tab</strong> or <strong>Incident Reports tab</strong> in the HR portal. All reports are confidential and protected.</div>
+
+    <h2><span class="sec-num">4</span> Data Privacy & Confidentiality Refresher</h2>
+    <p>Protecting company and client data is every employee's responsibility. Key reminders for 2026:</p>
+    <ul>
+      <li>Never store work files on personal cloud accounts or personal devices without authorization</li>
+      <li>Lock your screen whenever you step away from your workspace</li>
+      <li>Do not share client names, data, or project details on social media</li>
+      <li>Report any suspected data breach immediately to HR — do not try to investigate on your own</li>
+      <li>Your NDA obligations continue after employment ends</li>
+    </ul>
+    <div class="blue-box">🔒 A data breach must be reported within hours, not days. Every hour of delay increases potential harm. When in doubt, report it.</div>
+
+    <h2><span class="sec-num">5</span> Workplace Safety Refresher</h2>
+    <p>Quick reminders for maintaining a safe home office in 2026:</p>
+    <ul>
+      <li>All work-related injuries must be reported via Incident Reports within 24 hours — even minor ones</li>
+      <li>Apply the 20-20-20 rule for eye health: every 20 minutes, look 20 feet away for 20 seconds</li>
+      <li>Take a movement break every 60-90 minutes to prevent ergonomic injury</li>
+      <li>Keep your workspace free of trip hazards, electrical risks, and fire hazards</li>
+      <li>Know your nearest emergency exit and the address of your nearest emergency room</li>
+    </ul>
+
+    <h2><span class="sec-num">6</span> Payroll & Time Off Reminders</h2>
+    <div class="table-wrap">
+      <table>
+        <tr><th>Topic</th><th>2026 Reminder</th></tr>
+        <tr><td><strong>Pay Schedule</strong></td><td>Bi-weekly, every Friday via direct deposit. Payroll cutoff: Wednesday noon of pay week.</td></tr>
+        <tr><td><strong>Overtime</strong></td><td>Non-exempt employees: must be pre-approved in writing before working OT. Unauthorized OT may still be compensated but will result in formal conversation.</td></tr>
+        <tr><td><strong>PTO Accrual</strong></td><td>1.25 days/month (15 days/year full-time). PTO available after 90-day probationary period.</td></tr>
+        <tr><td><strong>PTO Rollover</strong></td><td>Max 10 days (80 hours) rollover. Balance above cap forfeited at year-end. Use your PTO!</td></tr>
+        <tr><td><strong>Sick Days</strong></td><td>5 days/year, granted January 1. Must notify HR before shift start. No rollover.</td></tr>
+        <tr><td><strong>Time Off Requests</strong></td><td>Submit via PTO & Time Off tab in HR portal. 5 business days notice required for planned PTO.</td></tr>
+      </table>
+    </div>
+
+    <h2><span class="sec-num">7</span> Code of Conduct Refresher</h2>
+    <p>A quick refresher on our professional standards heading into the rest of 2026:</p>
+    <ul>
+      <li><strong>Communication:</strong> Be clear, professional, and respectful in all written and verbal communication. Respond within 2 hours during core hours.</li>
+      <li><strong>Confidentiality:</strong> Never share internal information, client data, or business strategies outside AI-Prowler without authorization.</li>
+      <li><strong>Conflicts of interest:</strong> Disclose any relationship that could influence a business decision. When in doubt, tell HR.</li>
+      <li><strong>Social media:</strong> Do not share confidential company information or make statements that could be interpreted as official AI-Prowler positions.</li>
+      <li><strong>Substance use:</strong> Do not attend video calls or perform work duties while impaired.</li>
+    </ul>
+    <div class="green-box">✅ When in doubt about whether something is appropriate, ask HR via the Messages tab. It's always better to ask than to assume.</div>
+
+    <h2><span class="sec-num">8</span> Your Rights & Reporting Channels</h2>
+    <p>As an AI-Prowler employee, you always have the right to:</p>
+    <ul>
+      <li>Report safety concerns, harassment, or policy violations without fear of retaliation</li>
+      <li>Request reasonable accommodations for disability or religious observance</li>
+      <li>Discuss your wages and working conditions with coworkers</li>
+      <li>Take legally protected leave (FMLA, sick leave, jury duty)</li>
+      <li>File a complaint with the EEOC, OSHA, or your state labor board if needed</li>
+    </ul>
+    <div class="table-wrap">
+      <table>
+        <tr><th>Report This</th><th>Here</th></tr>
+        <tr><td>Harassment, discrimination, safety concerns</td><td>HR Portal → Messages or Incident Reports</td></tr>
+        <tr><td>Pay disputes or errors</td><td>HR Portal → Messages</td></tr>
+        <tr><td>IT or technical issues</td><td>HR Portal → Help/Support → IT Support</td></tr>
+        <tr><td>Feedback or suggestions</td><td>HR Portal → Help/Support → Submit Feedback</td></tr>
+        <tr><td>External complaints (EEOC, OSHA, etc.)</td><td>Contact the agency directly — AI-Prowler cannot interfere</td></tr>
+      </table>
+    </div>
+
+    <hr class="divider">
+
+    <h2><span class="sec-num">9</span> Knowledge Check</h2>
+    <p>Answer all 10 questions. You need 75% to pass this annual compliance refresher.</p>
+
+    <div class="quiz-section">
+      <div class="quiz-q">1. What is the new PTO rollover cap effective January 1, 2026?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q1')">5 days (40 hours)</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q1')">10 days (80 hours)</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q1')">15 days (120 hours)</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q1')">There is no rollover cap</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q1"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">2. Effective 2026, where must ALL time off requests and HR communications be submitted?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q2')">By text message to your manager</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q2')">By personal email to HR</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q2')">Through the AI-Prowler HR Employee Portal</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q2')">Verbally during your weekly check-in</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q2"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">3. Under federal law, which of the following are you legally permitted to do?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q3')">Share client data with your personal contacts</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q3')">Discuss your wages and working conditions with coworkers</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q3')">Work overtime without prior manager approval</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q3')">Store work files in your personal Dropbox account</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q3"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">4. After reporting harassment to HR, your manager stops including you in team meetings. This is:</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q4')">Normal — managers can run meetings however they want</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q4')">Probably a coincidence — don't read into it</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q4')">Retaliation — a serious separate violation that should be reported to HR immediately</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q4')">Your fault for reporting in the first place</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q4"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">5. Where must work files be stored, per 2026 guidance?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q5')">Any personal cloud account is fine</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q5')">Only in company-approved systems</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q5')">On a personal external hard drive</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q5')">Wherever is most convenient</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q5"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">6. How quickly must a suspected data breach be reported to HR?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q6')">Within a week</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q6')">Within hours — every hour of delay increases potential harm</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q6')">Only if client data was involved</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q6')">After investigating it yourself first</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q6"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">7. Under FLSA, non-exempt employees are entitled to what for hours worked over 40/week?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q7')">No extra pay</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q7')">1.5x pay (overtime)</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q7')">Extra PTO instead of pay</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q7')">2x pay for every hour worked that week</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q7"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">8. Must overtime be pre-approved for non-exempt employees?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q8')">No, employees can work OT freely anytime</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q8')">Yes, it must be pre-approved in writing</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q8')">Only during holidays</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q8')">Only exempt employees need approval</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q8"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">9. Do your NDA obligations end when your employment ends?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q9')">Yes, immediately</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q9')">No — NDA obligations continue after employment ends</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q9')">Only for one week after</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q9')">Only if you were terminated, not if you resigned</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q9"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">10. Where can you file an external complaint like an EEOC or OSHA report?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q10')">You cannot — all complaints must stay internal</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q10')">Directly with the relevant agency — AI-Prowler cannot interfere</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q10')">Only through your manager</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q10')">Only after being terminated</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q10"></div>
+    </div>
+
+    <div class="complete-section">
+      <div id="complete-prompt">
+        <h3>📋 Ready to Complete?</h3>
+        <p>Answer all questions and click below to certify your 2026 annual compliance training.</p>
+        <button class="complete-btn" onclick="markComplete()">✅ Certify Completion</button>
+      </div>
+      <div id="complete-done" style="display:none"></div>
+    </div>
+
+  </div>
+  <div class="footer">AI-Prowler &middot; Human Resources &middot; Annual Compliance Refresher 2026 &middot; Due September 30, 2026 &middot; &copy; 2026 AI-Prowler</div>
+</div>
+
+<script>
+var quizAnswers={};
+function answer(el,correct,qid){
+  if(quizAnswers[qid])return;
+  quizAnswers[qid]=correct?'correct':'wrong';
+  var opts=el.parentElement.querySelectorAll('.quiz-opt');
+  opts.forEach(function(o){o.style.pointerEvents='none';});
+  if(correct){el.classList.add('correct');el.textContent='✅ '+el.textContent;}
+  else{el.classList.add('wrong');el.textContent='❌ '+el.textContent;opts.forEach(function(o){if(o.getAttribute('onclick')&&o.getAttribute('onclick').includes('true')){o.classList.add('correct');o.textContent='✅ '+o.textContent;}});}
+  var fb=document.getElementById('fb-'+qid);
+  if(fb){fb.textContent=correct?'✅ Correct!':'❌ Not quite — review the section above.';fb.style.color=correct?'#166534':'#cf222e';fb.classList.add('show');}
+  var pct=Math.round((Object.keys(quizAnswers).length/10)*100);
+  document.getElementById('progress-fill').style.width=pct+'%';
+  document.getElementById('progress-pct').textContent=pct+'%';
+}
+function markComplete(){
+  var correct=Object.values(quizAnswers).filter(function(v){return v==='correct';}).length;
+  var pct=Math.round((correct/10)*100);
+  var passed=pct>=75;
+  document.getElementById('complete-prompt').style.display='none';
+  document.getElementById('complete-done').style.display='block';
+  document.getElementById('progress-fill').style.width='100%';
+  document.getElementById('progress-pct').textContent='100%';
+  document.getElementById('complete-done').innerHTML='<div style="font-size:48px;margin-bottom:12px">'+(passed?'🎉':'📋')+'</div><h3 style="color:'+(passed?'#3fb950':'#f0a500')+';margin:0 0 8px">'+(passed?'Compliance Certified!':'Review Required')+'</h3><p style="color:#8b949e;font-size:13px">Score: <strong style="color:'+(passed?'#3fb950':'#f0a500')+'">'+correct+'/10 ('+pct+'%)</strong> — '+(passed?'You are certified for 2026 annual compliance!':'Score below 75%. Please review and retake before Sep 30.')+'</p>';
+  var empName='Employee';
+  try{var s=JSON.parse(window.parent.localStorage.getItem('hr_portal_session')||'{}');if(s.name)empName=s.name;}catch(e){}
+  var labels=['2026 PTO rollover cap','Where to submit requests','Federal rights at work','Identifying retaliation','Where to store work files','Data breach reporting time','FLSA overtime pay','Overtime pre-approval','NDA obligations after employment','Filing external complaints'];
+  var body='=== ANNUAL COMPLIANCE CERTIFICATION ===\n\nTraining: Annual Compliance Refresher 2026\nEmployee: '+empName+'\nDate Certified: '+new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})+'\nTime: '+new Date().toLocaleTimeString()+'\nScore: '+correct+'/10 ('+pct+'%)\nResult: '+(passed?'✅ CERTIFIED':'⚠️ NEEDS REVIEW — did not pass by Sep 30 deadline')+'\n\n--- Quiz Results ---\n';
+  labels.forEach(function(q,i){var ans=quizAnswers['q'+(i+1)];body+=(i+1)+'. '+q+': '+(ans==='correct'?'✅ Correct':ans==='wrong'?'❌ Incorrect':'— Not answered')+'\n';});
+  body+='\n'+(passed?'✅ Employee has completed 2026 annual compliance certification. Valid through December 31, 2026.':'⚠️ Employee did not achieve 75% passing score. HR must follow up before September 30, 2026 deadline.');
+  fetch('/hr-api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sender_name:empName,subject:'🎓 2026 Compliance Certified — '+empName+' — '+pct+'% ('+(passed?'PASSED':'NEEDS REVIEW')+')',body:body,message_type:'training_result'})}).catch(function(){});
+  try{window.parent.postMessage({type:'training-complete',id:'annual-compliance-2026',employee:empName,score:pct,passed:passed},'*');}catch(e){}
+}
+</script>
+</body>
+</html>

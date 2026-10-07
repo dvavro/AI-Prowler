@@ -16586,6 +16586,453 @@ or from the Help menu."""
 
         ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
 
+        # ── HR Admin Application ──────────────────────────────────────────────
+        # Mobile/desktop URL for the HR Admin PWA (hr_admin folder).
+        # Located at: AI-Prowler\hr_admin
+        hr_admin_lf = ttk.LabelFrame(f,
+                                text="👥 HR Admin — Mobile URL for HR Admin Portal",
+                                padding=(8, 4))
+        hr_admin_lf.pack(fill='x', padx=16, pady=(0, 6))
+
+        def _load_hr_admin_url():
+            try:
+                import json as _jm, pathlib as _pl
+                _cfg = _jm.loads(
+                    (_pl.Path.home() / '.ai-prowler' / 'config.json')
+                    .read_text(encoding='utf-8'))
+                d = (_cfg.get('tunnel_domain', '')
+                     .strip().replace('https://','').replace('http://','')
+                     .rstrip('/'))
+                return f"https://{d}/hr_admin/" if d else ""
+            except Exception:
+                return ""
+
+        _hr_admin_url_var = tk.StringVar(value=_load_hr_admin_url())
+        hr_admin_url_row = ttk.Frame(hr_admin_lf)
+        hr_admin_url_row.pack(fill='x')
+        ttk.Entry(hr_admin_url_row, textvariable=_hr_admin_url_var, width=44,
+                  state='readonly', font=('Courier New', 9)
+                  ).pack(side='left', padx=(0, 4))
+
+        def _copy_hr_admin_url():
+            url = _hr_admin_url_var.get()
+            if not url:
+                messagebox.showwarning("No URL",
+                    "Activate Remote Access in Settings tab first.")
+                return
+            self.root.clipboard_clear()
+            self.root.clipboard_append(url)
+            self.root.update()
+            self.status_var.set(f"📋  Copied: {url}")
+            self.root.after(3000, lambda: self.status_var.set("Ready"))
+
+        def _email_hr_admin_url():
+            import json as _jm, pathlib as _pl, base64 as _b64
+            import smtplib, ssl
+            from email.mime.text import MIMEText
+            url = _hr_admin_url_var.get()
+            if not url:
+                messagebox.showwarning("No URL",
+                    "Activate Remote Access in Settings tab first.")
+                return
+            cfg_path = _pl.Path.home() / '.ai-prowler' / 'email_config.json'
+            if not cfg_path.exists():
+                messagebox.showwarning("No Email Config",
+                    "Configure your email in Settings → Email first.")
+                return
+            try:
+                ecfg = _jm.loads(cfg_path.read_text(encoding='utf-8'))
+                host     = ecfg.get('smtp_host', '')
+                port     = int(ecfg.get('smtp_port', 587))
+                username = ecfg.get('username', '')
+                password = _b64.b64decode(ecfg.get('_password_b64', '')).decode()
+                from_name = ecfg.get('from_name', username)
+                to_addr  = ecfg.get('default_to', username)
+                use_tls  = ecfg.get('use_tls', True)
+            except Exception as _e:
+                messagebox.showerror("Email Config Error", str(_e))
+                return
+            body = (
+                f"Open this link to access the HR Admin Application:\n\n"
+                f"  {url}\n\n"
+                f"Tip: on a phone, tap the browser menu and choose 'Add to Home Screen' "
+                f"to install it as an app icon."
+            )
+            msg = MIMEText(body, 'plain')
+            msg['Subject'] = "AI-Prowler HR Admin Application"
+            msg['From']    = f"{from_name} <{username}>"
+            msg['To']      = to_addr
+            try:
+                if use_tls:
+                    ctx = ssl.create_default_context()
+                    with smtplib.SMTP(host, port) as srv:
+                        srv.ehlo()
+                        srv.starttls(context=ctx)
+                        srv.login(username, password)
+                        srv.sendmail(username, to_addr, msg.as_string())
+                else:
+                    with smtplib.SMTP_SSL(host, port) as srv:
+                        srv.login(username, password)
+                        srv.sendmail(username, to_addr, msg.as_string())
+                messagebox.showinfo("Email Sent",
+                    f"HR Admin Application link sent to {to_addr}")
+                self.status_var.set(f"📧  HR Admin Application link emailed to {to_addr}")
+                self.root.after(4000, lambda: self.status_var.set("Ready"))
+            except Exception as _e:
+                messagebox.showerror("Send Failed", str(_e))
+
+        ttk.Button(hr_admin_url_row, text="📋 Copy",
+                   command=_copy_hr_admin_url).pack(side='left', padx=(0, 4))
+        ttk.Button(hr_admin_url_row, text="📧 Email to user",
+                   command=_email_hr_admin_url).pack(side='left', padx=(0, 8))
+
+        ttk.Label(hr_admin_url_row, text="← send to managers/admins",
+                  font=('Arial', 8), foreground='gray').pack(side='left')
+
+        ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
+        # ── end HR Admin Application ──────────────────────────────────────────
+
+        # ── HR Portal (Employee Self-Service) ─────────────────────────────────
+        # Mobile/desktop URL for the Employee HR Portal PWA (hr_portal folder).
+        # Located at: AI-Prowler\hr_portal
+        hr_portal_lf = ttk.LabelFrame(f,
+                                text="🧑‍💼 HR Portal — Mobile URL for Employee Self-Service",
+                                padding=(8, 4))
+        hr_portal_lf.pack(fill='x', padx=16, pady=(0, 6))
+
+        def _load_hr_portal_url():
+            try:
+                import json as _jm, pathlib as _pl
+                _cfg = _jm.loads(
+                    (_pl.Path.home() / '.ai-prowler' / 'config.json')
+                    .read_text(encoding='utf-8'))
+                d = (_cfg.get('tunnel_domain', '')
+                     .strip().replace('https://','').replace('http://','')
+                     .rstrip('/'))
+                return f"https://{d}/hr_portal/" if d else ""
+            except Exception:
+                return ""
+
+        _hr_portal_url_var = tk.StringVar(value=_load_hr_portal_url())
+        hr_portal_url_row = ttk.Frame(hr_portal_lf)
+        hr_portal_url_row.pack(fill='x')
+        ttk.Entry(hr_portal_url_row, textvariable=_hr_portal_url_var, width=44,
+                  state='readonly', font=('Courier New', 9)
+                  ).pack(side='left', padx=(0, 4))
+
+        def _copy_hr_portal_url():
+            url = _hr_portal_url_var.get()
+            if not url:
+                messagebox.showwarning("No URL",
+                    "Activate Remote Access in Settings tab first.")
+                return
+            self.root.clipboard_clear()
+            self.root.clipboard_append(url)
+            self.root.update()
+            self.status_var.set(f"📋  Copied: {url}")
+            self.root.after(3000, lambda: self.status_var.set("Ready"))
+
+        def _email_hr_portal_url():
+            import json as _jm, pathlib as _pl, base64 as _b64
+            import smtplib, ssl
+            from email.mime.text import MIMEText
+            url = _hr_portal_url_var.get()
+            if not url:
+                messagebox.showwarning("No URL",
+                    "Activate Remote Access in Settings tab first.")
+                return
+            cfg_path = _pl.Path.home() / '.ai-prowler' / 'email_config.json'
+            if not cfg_path.exists():
+                messagebox.showwarning("No Email Config",
+                    "Configure your email in Settings → Email first.")
+                return
+            try:
+                ecfg = _jm.loads(cfg_path.read_text(encoding='utf-8'))
+                host     = ecfg.get('smtp_host', '')
+                port     = int(ecfg.get('smtp_port', 587))
+                username = ecfg.get('username', '')
+                password = _b64.b64decode(ecfg.get('_password_b64', '')).decode()
+                from_name = ecfg.get('from_name', username)
+                to_addr  = ecfg.get('default_to', username)
+                use_tls  = ecfg.get('use_tls', True)
+            except Exception as _e:
+                messagebox.showerror("Email Config Error", str(_e))
+                return
+            body = (
+                f"Open this link to access the HR Employee Portal:\n\n"
+                f"  {url}\n\n"
+                f"Tip: on a phone, tap the browser menu and choose 'Add to Home Screen' "
+                f"to install it as an app icon."
+            )
+            msg = MIMEText(body, 'plain')
+            msg['Subject'] = "AI-Prowler HR Employee Portal"
+            msg['From']    = f"{from_name} <{username}>"
+            msg['To']      = to_addr
+            try:
+                if use_tls:
+                    ctx = ssl.create_default_context()
+                    with smtplib.SMTP(host, port) as srv:
+                        srv.ehlo()
+                        srv.starttls(context=ctx)
+                        srv.login(username, password)
+                        srv.sendmail(username, to_addr, msg.as_string())
+                else:
+                    with smtplib.SMTP_SSL(host, port) as srv:
+                        srv.login(username, password)
+                        srv.sendmail(username, to_addr, msg.as_string())
+                messagebox.showinfo("Email Sent",
+                    f"HR Employee Portal link sent to {to_addr}")
+                self.status_var.set(f"📧  HR Employee Portal link emailed to {to_addr}")
+                self.root.after(4000, lambda: self.status_var.set("Ready"))
+            except Exception as _e:
+                messagebox.showerror("Send Failed", str(_e))
+
+        ttk.Button(hr_portal_url_row, text="📋 Copy",
+                   command=_copy_hr_portal_url).pack(side='left', padx=(0, 4))
+        ttk.Button(hr_portal_url_row, text="📧 Email to user",
+                   command=_email_hr_portal_url).pack(side='left', padx=(0, 8))
+
+        ttk.Label(hr_portal_url_row, text="← send to employees",
+                  font=('Arial', 8), foreground='gray').pack(side='left')
+
+        ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
+        # ── end HR Portal ─────────────────────────────────────────────────────
+
+        # ── Employee Backups ────────────────────────────────────────────────
+        # Reads/writes the SAME hr_db.json config["employee_backup"] block the
+        # hr_get_backup_settings / hr_set_backup_settings / hr_backup_now /
+        # hr_list_backups / hr_restore_employee MCP tools use (ai_prowler_mcp.py)
+        # -- so a setting saved here or in chat shows up in the other. "Back Up
+        # Now" re-implements _hr_run_employee_backup()'s algorithm locally
+        # (plain json/os/shutil) rather than importing ai_prowler_mcp, so a
+        # button click here never has to pull in that module's full dependency
+        # set (torch/chromadb/etc.) just to copy some folders. If that backend
+        # algorithm changes, mirror the change in _bk_run_backup_now() below.
+        backup_lf = ttk.LabelFrame(f,
+                                text="🗄️ Employee Backups — full record + documents, auto-pruned",
+                                padding=(8, 6))
+        backup_lf.pack(fill="x", padx=16, pady=(0, 6))
+
+        ttk.Label(backup_lf, justify="left", font=("Arial", 8), foreground="gray",
+                  text=("Recurring, scheduled backup of every actively-employed employee's "
+                        "full folder (profile, tasks, document index, and all uploaded "
+                        "documents) to a separate location — so their data survives a "
+                        "computer failure, not just accidental deletion. Restoring a "
+                        "snapshot is done via chat (\"restore EMP-00001 from backup\").")
+                  ).pack(anchor="w", pady=(0, 8))
+
+        _BK_WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+        def _bk_state_dir():
+            import os as _bos
+            return (_bos.environ.get("AIPROWLER_TEST_STATE_DIR", "").strip()
+                    or str(Path.home() / ".ai-prowler" / "hr"))
+
+        def _bk_db_path():
+            import os as _bos
+            return _bos.path.join(_bk_state_dir(), "hr_db.json")
+
+        def _bk_load_db():
+            import json as _bjson
+            try:
+                with open(_bk_db_path(), "r", encoding="utf-8-sig") as _f:
+                    return _bjson.load(_f)
+            except Exception:
+                return {}
+
+        def _bk_save_db(_db):
+            import json as _bjson, os as _bos
+            path = _bk_db_path()
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as _f:
+                _bjson.dump(_db, _f, indent=2, ensure_ascii=False)
+            _bos.replace(tmp, path)
+
+        _bk_db = _bk_load_db()
+        _bk_cfg = (_bk_db.get("config", {}) or {}).get("employee_backup", {}) or {}
+
+        _bk_enabled_var   = tk.BooleanVar(value=bool(_bk_cfg.get("enabled", False)))
+        _bk_dir_var       = tk.StringVar(value=_bk_cfg.get("backup_dir", ""))
+        _bk_schedule_var  = tk.StringVar(value=_bk_cfg.get("schedule", "weekly"))
+        _bk_weekday_var   = tk.StringVar(value=_BK_WEEKDAYS[max(0, min(6, int(_bk_cfg.get("weekday", 6))))])
+        _bk_dom_var       = tk.StringVar(value=str(max(1, min(28, int(_bk_cfg.get("day_of_month", 1))))))
+        _bk_hour_var      = tk.StringVar(value=f"{max(0, min(23, int(_bk_cfg.get('hour', 2)))):02d}")
+        _bk_minute_var    = tk.StringVar(value=f"{max(0, min(59, int(_bk_cfg.get('minute', 0)))):02d}")
+        _bk_retention_var = tk.StringVar(value=str(max(1, int(_bk_cfg.get("retention_count", 3)))))
+
+        ttk.Checkbutton(backup_lf, text="Enable recurring backup",
+                        variable=_bk_enabled_var).pack(anchor="w")
+
+        bk_dir_row = ttk.Frame(backup_lf)
+        bk_dir_row.pack(fill="x", pady=(6, 0))
+        ttk.Label(bk_dir_row, text="Backup destination folder:",
+                  font=("Arial", 9), width=26, anchor="w").pack(side="left")
+        ttk.Entry(bk_dir_row, textvariable=_bk_dir_var, width=38).pack(side="left", padx=4)
+
+        def _bk_browse_dir():
+            from tkinter import filedialog as _fd
+            path = _fd.askdirectory(title="Select employee backup destination folder")
+            if path:
+                _bk_dir_var.set(path.replace('/', '\\'))
+
+        ttk.Button(bk_dir_row, text="Browse…", command=_bk_browse_dir).pack(side="left")
+
+        ttk.Label(backup_lf,
+                  text="Tip: put this on a different drive/device than the live install "
+                       "so one failure doesn't take out both copies.",
+                  font=("Arial", 8), foreground="gray", justify="left"
+                  ).pack(anchor="w", pady=(2, 6))
+
+        bk_sched_row = ttk.Frame(backup_lf)
+        bk_sched_row.pack(fill="x", pady=(0, 4))
+        ttk.Label(bk_sched_row, text="Schedule:", font=("Arial", 9),
+                  width=26, anchor="w").pack(side="left")
+        ttk.Radiobutton(bk_sched_row, text="Weekly", value="weekly",
+                         variable=_bk_schedule_var).pack(side="left")
+        ttk.Radiobutton(bk_sched_row, text="Monthly", value="monthly",
+                         variable=_bk_schedule_var).pack(side="left", padx=(8, 0))
+
+        bk_weekday_row = ttk.Frame(backup_lf)
+        bk_weekday_row.pack(fill="x", pady=(0, 4))
+        ttk.Label(bk_weekday_row, text="If weekly, on:", font=("Arial", 9),
+                  width=26, anchor="w").pack(side="left")
+        ttk.Combobox(bk_weekday_row, textvariable=_bk_weekday_var, width=11,
+                     state="readonly", values=_BK_WEEKDAYS).pack(side="left")
+
+        bk_dom_row = ttk.Frame(backup_lf)
+        bk_dom_row.pack(fill="x", pady=(0, 4))
+        ttk.Label(bk_dom_row, text="If monthly, day of month:", font=("Arial", 9),
+                  width=26, anchor="w").pack(side="left")
+        ttk.Spinbox(bk_dom_row, from_=1, to=28, width=4, textvariable=_bk_dom_var).pack(side="left")
+        ttk.Label(bk_dom_row, text="(capped at 28 so it always exists)",
+                  font=("Arial", 8), foreground="gray").pack(side="left", padx=(6, 0))
+
+        bk_time_row = ttk.Frame(backup_lf)
+        bk_time_row.pack(fill="x", pady=(0, 4))
+        ttk.Label(bk_time_row, text="Time (UTC):", font=("Arial", 9),
+                  width=26, anchor="w").pack(side="left")
+        ttk.Spinbox(bk_time_row, from_=0, to=23, width=3, format="%02.0f",
+                    textvariable=_bk_hour_var).pack(side="left")
+        ttk.Label(bk_time_row, text=":").pack(side="left")
+        ttk.Spinbox(bk_time_row, from_=0, to=59, width=3, format="%02.0f",
+                    textvariable=_bk_minute_var).pack(side="left")
+
+        bk_ret_row = ttk.Frame(backup_lf)
+        bk_ret_row.pack(fill="x", pady=(0, 4))
+        ttk.Label(bk_ret_row, text="Keep per employee:", font=("Arial", 9),
+                  width=26, anchor="w").pack(side="left")
+        ttk.Spinbox(bk_ret_row, from_=1, to=20, width=4,
+                    textvariable=_bk_retention_var).pack(side="left")
+        ttk.Label(bk_ret_row, text="most recent backups (older ones auto-deleted)",
+                  font=("Arial", 8), foreground="gray").pack(side="left", padx=(6, 0))
+
+        def _bk_save_settings():
+            if _bk_enabled_var.get() and not _bk_dir_var.get().strip():
+                messagebox.showwarning("No Destination Folder",
+                    "Set a backup destination folder before enabling recurring backup.")
+                return
+            db = _bk_load_db()
+            cfg = db.setdefault("config", {}).setdefault("employee_backup", {})
+            cfg["enabled"] = bool(_bk_enabled_var.get())
+            cfg["backup_dir"] = _bk_dir_var.get().strip()
+            cfg["schedule"] = _bk_schedule_var.get()
+            cfg["weekday"] = _BK_WEEKDAYS.index(_bk_weekday_var.get())
+            cfg["day_of_month"] = max(1, min(28, int(_bk_dom_var.get() or 1)))
+            cfg["hour"] = max(0, min(23, int(_bk_hour_var.get() or 0)))
+            cfg["minute"] = max(0, min(59, int(_bk_minute_var.get() or 0)))
+            cfg["retention_count"] = max(1, int(_bk_retention_var.get() or 3))
+            _bk_save_db(db)
+            self.status_var.set("✅  Employee backup settings saved")
+            self.root.after(3000, lambda: self.status_var.set("Ready"))
+
+        def _bk_open_dir():
+            import os as _bos
+            path = _bk_dir_var.get().strip()
+            if path and _bos.path.isdir(path):
+                _bos.startfile(path)
+            else:
+                messagebox.showinfo("No Backup Folder",
+                    "Set and save a backup destination folder first.")
+
+        def _bk_run_backup_now():
+            # Mirror of ai_prowler_mcp.py's _hr_run_employee_backup() -- see
+            # the module-level comment above this section for why this is a
+            # local re-implementation rather than an import.
+            import os as _bos, shutil as _bshutil, json as _bjson, datetime as _bdt
+            db = _bk_load_db()
+            cfg = (db.get("config", {}) or {}).get("employee_backup", {}) or {}
+            backup_dir = (cfg.get("backup_dir") or "").strip()
+            if not backup_dir:
+                messagebox.showwarning("No Destination Folder",
+                    "Set and save a backup destination folder first.")
+                return
+            retention = max(1, int(cfg.get("retention_count") or 3))
+            active_statuses = {"Pre-Start", "Onboarding", "Active", "On Leave"}
+            employees = [e for e in db.get("employees", []) if e.get("status") in active_statuses]
+            doc_root = db.get("config", {}).get("doc_root", "./hr_documents")
+            base = doc_root if _bos.path.isabs(doc_root) else _bos.path.join(_bk_state_dir(), doc_root)
+            backed_up, skipped, errors = 0, 0, []
+            for emp in employees:
+                emp_id = emp.get("id", "?")
+                try:
+                    folder_name = emp.get("doc_folder") or emp_id
+                    src = _bos.path.join(base, folder_name)
+                    # Re-sync record.json before copying, exactly like the
+                    # scheduled/chat-triggered backup does, so a GUI-triggered
+                    # backup is never stale relative to the last HR save.
+                    _bos.makedirs(src, exist_ok=True)
+                    record = {
+                        "_meta": {"description": "Self-contained snapshot of this employee's "
+                                                  "record -- regenerated automatically; do not "
+                                                  "edit by hand.",
+                                  "synced_at": _bdt.datetime.utcnow().isoformat() + "Z"},
+                        "employee": emp,
+                        "tasks": [t for t in db.get("tasks", []) if t.get("employee_id") == emp_id],
+                        "documents": [d for d in db.get("documents", []) if d.get("employee_id") == emp_id],
+                        "audit_log": [a for a in db.get("audit_log", []) if a.get("employee_id") == emp_id],
+                    }
+                    rec_tmp = _bos.path.join(src, "record.json.tmp")
+                    with open(rec_tmp, "w", encoding="utf-8") as _f:
+                        _bjson.dump(record, _f, indent=2, ensure_ascii=False)
+                    _bos.replace(rec_tmp, _bos.path.join(src, "record.json"))
+
+                    if not _bos.path.isdir(src):
+                        skipped += 1
+                        continue
+                    ts = _bdt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+                    emp_backup_root = _bos.path.join(backup_dir, folder_name)
+                    dest = _bos.path.join(emp_backup_root, ts)
+                    _bshutil.copytree(src, dest)
+                    backed_up += 1
+                    snaps = sorted(d for d in _bos.listdir(emp_backup_root)
+                                    if _bos.path.isdir(_bos.path.join(emp_backup_root, d)))
+                    for old in snaps[:max(0, len(snaps) - retention)]:
+                        _bshutil.rmtree(_bos.path.join(emp_backup_root, old), ignore_errors=True)
+                except Exception as exc:
+                    errors.append(f"{emp_id}: {exc}")
+            msg = f"Backed up {backed_up} of {len(employees)} active employee(s) to:\n{backup_dir}"
+            if skipped:
+                msg += f"\n\n{skipped} skipped (no document folder yet)."
+            if errors:
+                msg += "\n\nErrors:\n" + "\n".join(errors[:5])
+                messagebox.showwarning("Backup Completed With Errors", msg)
+            else:
+                messagebox.showinfo("Backup Complete", msg)
+            self.status_var.set(f"🗄️  Employee backup: {backed_up} backed up")
+            self.root.after(4000, lambda: self.status_var.set("Ready"))
+
+        bk_btn_row = ttk.Frame(backup_lf)
+        bk_btn_row.pack(fill="x", pady=(8, 0))
+        ttk.Button(bk_btn_row, text="💾  Save Backup Settings",
+                   command=_bk_save_settings).pack(side="left", padx=(0, 8))
+        ttk.Button(bk_btn_row, text="▶  Back Up Now",
+                   command=_bk_run_backup_now).pack(side="left", padx=(0, 8))
+        ttk.Button(bk_btn_row, text="📂  Open Backup Folder",
+                   command=_bk_open_dir).pack(side="left")
+
+        ttk.Separator(f, orient='horizontal').pack(fill='x', padx=16, pady=6)
+        # ── end Employee Backups ────────────────────────────────────────────
+
         # ── 4. ROUTE & NAVIGATION NOTES ──────────────────────────────────────
         # v9.1.x: removed this whole panel. Real usage never goes through
         # the GUI at all — the user just tells Claude to map the route and

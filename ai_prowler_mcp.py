@@ -349,6 +349,2908 @@ def _patch_sw_cache_version(rel_path: str, pwa_root: str, body: bytes) -> bytes:
         return body
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# HR MODULE — BACKEND ENGINE  (AI-Prowler HR — /hr/ PWA + /hr-api/*)
+# ══════════════════════════════════════════════════════════════════════════════
+# Added 2026-08-27. Backs the HR onboarding PWA already shipped at hr/index.html
+# (Architecture Spec v1.1, Implementation Plan v2.1). This section owns:
+#   - hr_db.json / hr_state_rules.json / hr_task_templates.json /
+#     hr_forms_library.json read/write (atomic, same directory as this file)
+#   - the task auto-generation engine (base/offboarding templates -> per-
+#     employee tasks, with state_overrides / applicable_states /
+#     not_required_states applied)
+#   - the single _hr_api_route() dispatcher called from BOTH the personal-mode
+#     and server-mode ASGI handlers below, so the two request-routing blocks
+#     stay thin (auth resolution only) while all business logic lives here once.
+# Everything in this section uses locally-aliased stdlib imports (matching the
+# rest of this file's convention, e.g. _compute_pwa_sw_cache_version's
+# `import os as _pwa_hos`) rather than assuming any particular bare name is
+# already bound at module scope by the time this section runs.
+import os as _hros
+import json as _hrjson
+import re as _hrre
+import datetime as _hrdt
+import secrets as _hrsecrets
+import threading as _hrthreading
+
+_HR_ROOT_DIR            = _hros.path.dirname(_hros.path.abspath(__file__))
+
+# ── HR's own MUTABLE state directory ─────────────────────────────────────────
+# Read-only shipped assets (task/state-rule/forms templates, the /hr PWA
+# bundle) always resolve under the real install dir (_HR_ROOT_DIR below)
+# since they're never written to and carry no isolation risk.
+#
+# HR's mutable state -- hr_db.json and uploaded documents under doc_root --
+# must NOT live under _HR_ROOT_DIR in production: on a real Windows install
+# that's C:\Program Files\AI-Prowler, which a non-elevated process cannot
+# write to. (Bug found 2026-08-29: every POST /hr-api/setup/complete was
+# throwing PermissionError on hr_db.json.tmp because of exactly this --
+# confirmed in mcp_server.log.) So the real default now mirrors _state_dir()
+# further down in this file -- a per-user, always-writable folder -- and
+# AIPROWLER_TEST_STATE_DIR still overrides it for the test sandbox exactly as
+# before, so an automated test suite can keep exercising the real HR code
+# paths (employee CRUD, document upload, task generation) against an
+# isolated directory instead of ever touching the operator's real hr_db.json
+# or hr_documents/. SAFETY: like the main hook, this only redirects WHERE
+# state is read/written -- it does not disable any auth check.
+_HR_STATE_DIR           = (_hros.environ.get("AIPROWLER_TEST_STATE_DIR", "").strip()
+                            or _hros.path.join(_hros.path.expanduser("~"), ".ai-prowler", "hr"))
+_hros.makedirs(_HR_STATE_DIR, exist_ok=True)
+_HR_DB_PATH             = _hros.path.join(_HR_STATE_DIR, "hr_db.json")
+_HR_STATE_RULES_PATH    = _hros.path.join(_HR_ROOT_DIR, "hr_state_rules.json")
+_HR_TASK_TEMPLATES_PATH = _hros.path.join(_HR_ROOT_DIR, "hr_task_templates.json")
+_HR_FORMS_LIBRARY_PATH  = _hros.path.join(_HR_ROOT_DIR, "hr_forms_library.json")
+_HR_PWA_DIR             = _hros.path.join(_HR_ROOT_DIR, "hr")
+
+_hr_db_lock = _hrthreading.RLock()
+
+
+def _hr_read_json(path: str, default):
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            return _hrjson.load(f)
+    except Exception:
+        return default
+
+
+def _hr_write_json_atomic(path: str, data) -> None:
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        _hrjson.dump(data, f, indent=2, ensure_ascii=False)
+    _hros.replace(tmp, path)
+
+
+def _hr_load_db() -> dict:
+    return _hr_read_json(_HR_DB_PATH, {
+        "config": {"setup_complete": False, "doc_root": "./hr_documents"},
+        "employees": [], "tasks": [], "documents": [], "events": [],
+        "training": [], "attendance": [],
+        "notifications": [], "users": [], "setup_tasks": [], "audit_log": [],
+        "_meta": {"schema_version": "1.1.0", "app": "AI-Prowler HR"},
+    })
+
+
+def _hr_save_db(db: dict) -> None:
+    db.setdefault("config", {})["updated_at"] = _hrdt.datetime.utcnow().isoformat() + "Z"
+    _hr_write_json_atomic(_HR_DB_PATH, db)
+    try:
+        _hr_sync_all_employee_records(db)
+    except Exception:
+        _log.warning("_hr_save_db: per-employee record.json sync failed")
+
+
+def _hr_load_templates() -> dict:
+    return _hr_read_json(_HR_TASK_TEMPLATES_PATH, {"base": [], "offboarding": [], "annual": []})
+
+
+def _hr_load_state_rules() -> dict:
+    return _hr_read_json(_HR_STATE_RULES_PATH, {"states": {}, "task_priorities": {}, "task_statuses": []})
+
+
+def _hr_load_forms() -> dict:
+    return _hr_read_json(_HR_FORMS_LIBRARY_PATH, {})
+
+
+def _hr_next_id(items: list, prefix: str, width: int = 5) -> str:
+    """EMP-00001 / TASK-00001 style sequential ID, based on the highest existing
+    numeric suffix for this prefix (not just len(items)+1, so a manually
+    edited/pruned db.json never collides with an existing higher ID)."""
+    best = 0
+    for it in items:
+        val = str(it.get("id", ""))
+        if val.startswith(prefix + "-"):
+            try:
+                best = max(best, int(val.split("-")[-1]))
+            except ValueError:
+                pass
+    return f"{prefix}-{best + 1:0{width}d}"
+
+
+def _hr_add_days(date_str: str, days: int) -> str:
+    try:
+        d = _hrdt.date.fromisoformat(str(date_str)[:10])
+    except Exception:
+        d = _hrdt.date.today()
+    return (d + _hrdt.timedelta(days=days)).isoformat()
+
+
+def _hr_resolve_form_url(tmpl: dict, work_state: str, forms: dict) -> str:
+    """Best-effort form/portal URL for a task: per-state form map first, then
+    the template's single form_ref, then a bare portal_link_key that's
+    already a URL (as stored in hr_task_templates.json today)."""
+    ref_by_state = tmpl.get("form_ref_by_state") or {}
+    ref = ref_by_state.get(work_state) or tmpl.get("form_ref")
+    if ref and ref in forms:
+        entry = forms[ref]
+        # Prefer pdf_url, then model_notice_url (added 2026-08-31), then instructions_url
+        url = (entry.get("pdf_url") or entry.get("model_notice_url")
+               or entry.get("instructions_url") or "")
+        if url:
+            return url
+    link = tmpl.get("portal_link_key") or ""
+    if isinstance(link, str) and link.startswith("http"):
+        return link
+    # Named portal key (e.g. "benefits_portal") — look it up from the HR
+    # config saved during company setup, then fall back to the known-platform
+    # table so benefits_portal → the right URL for Gusto/ADP/Rippling/etc.
+    if isinstance(link, str) and link:
+        PLATFORM_PORTALS = {
+            "gusto":      {"benefits_portal": "https://app.gusto.com/benefits",      "direct_deposit": "https://app.gusto.com/direct_deposit", "tax_filings": "https://app.gusto.com/taxes", "pay_stubs": "https://app.gusto.com/pay_stubs"},
+            "adp":        {"benefits_portal": "https://my.adp.com",                  "direct_deposit": "https://my.adp.com",                   "tax_filings": "https://my.adp.com",           "pay_stubs": "https://my.adp.com"},
+            "rippling":   {"benefits_portal": "https://app.rippling.com/benefits",   "direct_deposit": "https://app.rippling.com/payroll",     "tax_filings": "https://app.rippling.com/taxes","pay_stubs": "https://app.rippling.com/payroll"},
+            "quickbooks": {"benefits_portal": "https://app.qbo.intuit.com/app/payroll","direct_deposit":"https://app.qbo.intuit.com/app/payroll","tax_filings": "https://app.qbo.intuit.com/app/taxes","pay_stubs":"https://app.qbo.intuit.com/app/payroll"},
+            "google":     {"benefits_portal": "https://workspace.google.com/products/pay/", "direct_deposit": "https://workspace.google.com/products/pay/", "tax_filings": "https://workspace.google.com/products/pay/", "pay_stubs": "https://workspace.google.com/products/pay/"},
+            "paychex":    {"benefits_portal": "https://myapps.paychex.com",          "direct_deposit": "https://myapps.paychex.com",           "tax_filings": "https://myapps.paychex.com",   "pay_stubs": "https://myapps.paychex.com"},
+            "justworks":  {"benefits_portal": "https://secure.justworks.com",        "direct_deposit": "https://secure.justworks.com",         "tax_filings": "https://secure.justworks.com", "pay_stubs": "https://secure.justworks.com"},
+        }
+        try:
+            db = _hr_load_db()
+            platform = (db.get("config", {}).get("payroll_platform") or "").lower().replace(" ", "")
+        except Exception:
+            platform = ""
+        for key, links in PLATFORM_PORTALS.items():
+            if key in platform:
+                resolved = links.get(link, "")
+                if resolved:
+                    return resolved
+    return ""
+
+
+def _hr_resolve_penalty(tmpl: dict, work_state: str) -> str:
+    by_state = tmpl.get("penalty_by_state")
+    if isinstance(by_state, dict):
+        return by_state.get(work_state) or by_state.get("_default") or tmpl.get("penalty") or ""
+    return tmpl.get("penalty") or ""
+
+
+def _hr_template_applies(tmpl: dict, work_state: str) -> bool:
+    if not tmpl.get("state_specific"):
+        return True
+    allow = tmpl.get("applicable_states")
+    if allow:
+        return work_state in allow
+    deny = tmpl.get("not_required_states")
+    if deny:
+        return work_state not in deny
+    return True  # state-specific but no explicit list -> generic HR-review task, always include
+
+
+def _hr_build_task(emp: dict, tmpl: dict, forms: dict, existing_tasks: list, anchor_field: str) -> dict:
+    work_state = emp.get("work_state", "")
+    overrides = (tmpl.get("state_overrides") or {}).get(work_state, {})
+    merged = {**tmpl, **overrides}
+    anchor_date = emp.get(anchor_field) or _hrdt.date.today().isoformat()
+    due_date = _hr_add_days(anchor_date, int(merged.get("due_offset_days", 0)))
+    return {
+        "id": _hr_next_id(existing_tasks, "TASK"),
+        "employee_id": emp["id"],
+        "template_id": tmpl.get("template_id"),
+        "phase": tmpl.get("phase"),
+        "name": merged.get("name"),
+        "priority": merged.get("priority", "MEDIUM"),
+        "assigned_to_role": merged.get("assigned_to_role", "HR"),
+        "assigned_to_id": None,
+        "due_date": due_date,
+        "status": "Not Started",
+        "federal_required": bool(tmpl.get("federal_required")),
+        "state_specific": bool(tmpl.get("state_specific")),
+        "instructions": merged.get("instructions", ""),
+        "form_ref": tmpl.get("form_ref"),
+        "portal_url": _hr_resolve_form_url(tmpl, work_state, forms),
+        "penalty": _hr_resolve_penalty(merged, work_state),
+        "escalation_hours": merged.get("escalation_hours"),
+        "upload_required": bool(tmpl.get("upload_required")),
+        "upload_folder": tmpl.get("upload_folder"),
+        "completed_at": None, "completed_by": None, "completion_notes": None,
+        "waived_at": None, "waived_by": None, "waive_reason": None,
+        "escalated": False, "escalation_sent_at": None, "last_reminder_sent_at": None,
+        "reassignments": [],
+        "created_at": _hrdt.datetime.utcnow().isoformat() + "Z",
+    }
+
+
+def _hr_generate_onboarding_tasks(emp: dict, db: dict) -> list:
+    templates = _hr_load_templates()
+    forms = _hr_load_forms()
+    new_tasks = []
+    for tmpl in templates.get("base", []):
+        if not _hr_template_applies(tmpl, emp.get("work_state", "")):
+            continue
+        anchor = "hire_date" if tmpl.get("due_anchor") == "hire_date" else "start_date"
+        task = _hr_build_task(emp, tmpl, forms, db["tasks"] + new_tasks, anchor)
+        new_tasks.append(task)
+    return new_tasks
+
+
+def _hr_generate_offboarding_tasks(emp: dict, db: dict, term_date: str) -> list:
+    templates = _hr_load_templates()
+    forms = _hr_load_forms()
+    new_tasks = []
+    emp_for_term = {**emp, "term_date": term_date}
+    for tmpl in templates.get("offboarding", []):
+        if not _hr_template_applies(tmpl, emp.get("work_state", "")):
+            continue
+        task = _hr_build_task(emp_for_term, tmpl, forms, db["tasks"] + new_tasks, "term_date")
+        new_tasks.append(task)
+    return new_tasks
+
+
+def _hr_sweep_overdue(db: dict) -> bool:
+    """Flip any non-terminal task whose due_date has passed to Overdue.
+    Returns True if anything changed (caller should persist)."""
+    today = _hrdt.date.today().isoformat()
+    changed = False
+    for t in db.get("tasks", []):
+        if t.get("status") in ("Not Started", "In Progress", "Awaiting Document") \
+                and t.get("due_date") and t["due_date"] < today:
+            t["status"] = "Overdue"
+            changed = True
+    return changed
+
+
+def _hr_employee_task_stats(emp_id: str, tasks: list) -> dict:
+    mine = [t for t in tasks if t.get("employee_id") == emp_id]
+    done = [t for t in mine if t.get("status") in ("Completed", "Waived")]
+    pct = round(len(done) / len(mine) * 100) if mine else 0
+    has_critical_overdue = any(
+        t.get("priority") in ("CRITICAL", "HIGH") and t.get("status") == "Overdue" for t in mine
+    )
+    return {"task_completion_pct": pct, "has_critical_overdue": has_critical_overdue}
+
+
+def _hr_create_document_folders(doc_root: str, folder_name: str) -> None:
+    base = doc_root if _hros.path.isabs(doc_root) else _hros.path.join(_HR_STATE_DIR, doc_root)
+    for sub in ("hiring", "onboarding", "active", "termination", "general"):
+        try:
+            _hros.makedirs(_hros.path.join(base, folder_name, sub), exist_ok=True)
+        except Exception:
+            pass
+
+
+def _hr_employee_dir_path(db: dict, emp: dict) -> str:
+    """Resolve one employee's own directory (their document folder tree AND,
+    since 2026-09, their record.json metadata snapshot -- see
+    _hr_sync_employee_record). Every admin- or employee-initiated write for
+    this employee -- uploads, metadata syncs, backups -- resolves through
+    this single function so there is exactly one place that knows the path
+    rule."""
+    doc_root = db.get("config", {}).get("doc_root", "./hr_documents")
+    base = doc_root if _hros.path.isabs(doc_root) else _hros.path.join(_HR_STATE_DIR, doc_root)
+    return _hros.path.join(base, emp.get("doc_folder") or emp.get("id", ""))
+
+
+def _hr_sync_employee_record(db: dict, emp: dict) -> None:
+    """Write a self-contained record.json into this employee's own
+    directory: their full profile, their tasks, their document index
+    (metadata only -- the actual files already live alongside this in the
+    same directory), and the audit-log entries that mention them. This is
+    what makes the per-employee directory a genuinely self-contained unit
+    (data + files + metadata together), independent of the central
+    hr_db.json, and is also exactly what job_employee_backup()
+    (hr_scheduler.py) copies off-box on each scheduled run. Best-effort: a
+    write failure here must never block the caller's real save of
+    hr_db.json."""
+    emp_id = emp.get("id")
+    if not emp_id:
+        return
+    emp_dir = _hr_employee_dir_path(db, emp)
+    try:
+        _hros.makedirs(emp_dir, exist_ok=True)
+        record = {
+            "_meta": {
+                "description": "Self-contained snapshot of this employee's record -- "
+                                "profile, tasks, document index, and audit history. "
+                                "Regenerated automatically on every HR save; do not "
+                                "edit by hand.",
+                "synced_at": _hrdt.datetime.utcnow().isoformat() + "Z",
+            },
+            "employee": emp,
+            "tasks": [t for t in db.get("tasks", []) if t.get("employee_id") == emp_id],
+            "documents": [d for d in db.get("documents", []) if d.get("employee_id") == emp_id],
+            "audit_log": [a for a in db.get("audit_log", []) if a.get("employee_id") == emp_id],
+        }
+        _hr_write_json_atomic(_hros.path.join(emp_dir, "record.json"), record)
+    except Exception:
+        _log.warning("hr_sync_employee_record: failed to sync %s", emp_id)
+
+
+def _hr_sync_all_employee_records(db: dict) -> None:
+    """Called from _hr_save_db after every HR write. Small-business employee
+    counts make a full resync cheap; if that stops being true, narrow this
+    to only the employee_id(s) actually touched by the write that triggered
+    it."""
+    for emp in db.get("employees", []):
+        _hr_sync_employee_record(db, emp)
+
+
+def _hr_describe_backup_settings(cfg: dict) -> str:
+    if not cfg.get("backup_dir"):
+        return ("No backup directory configured yet. Set one with "
+                "hr_set_backup_settings(backup_dir=...).")
+    schedule = cfg.get("schedule", "weekly")
+    weekday_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    if schedule == "monthly":
+        when = f"monthly on day {cfg.get('day_of_month', 1)}"
+    else:
+        when = f"weekly on {weekday_names[cfg.get('weekday', 6) % 7]}"
+    return (
+        f"Employee backup settings:\n"
+        f"  • Enabled: {'Yes' if cfg.get('enabled') else 'No'}\n"
+        f"  • Destination: {cfg.get('backup_dir')}\n"
+        f"  • Schedule: {when} at {cfg.get('hour', 2):02d}:{cfg.get('minute', 0):02d} UTC\n"
+        f"  • Keep per employee: {cfg.get('retention_count', 3)} most recent backups\n"
+        f"  • Covers: actively-employed employees only (Pre-Start/Onboarding/Active/On Leave)"
+    )
+
+
+def _hr_run_employee_backup(db: dict = None) -> dict:
+    """Copy every actively-employed employee's own directory (record.json +
+    all uploaded documents, via _hr_employee_dir_path/_hr_sync_employee_record)
+    to the admin-configured backup destination, then prune old snapshots
+    beyond the configured retention count. Shared by hr_backup_now() (manual)
+    and hr_scheduler.job_employee_backup() (scheduled) -- exactly one place
+    that knows how a backup actually happens.
+
+    Returns {"ok": bool, "backup_dir": str, "backed_up": int, "skipped": int,
+             "errors": [str, ...]}.
+    """
+    import shutil as _hr_shutil
+    if db is None:
+        with _hr_db_lock:
+            db = _hr_load_db()
+    cfg = (db.get("config", {}) or {}).get("employee_backup", {}) or {}
+    backup_dir = (cfg.get("backup_dir") or "").strip()
+    if not backup_dir:
+        return {"ok": False, "backup_dir": "", "backed_up": 0, "skipped": 0,
+                "errors": ["No backup directory configured."]}
+    retention = max(1, int(cfg.get("retention_count") or 3))
+    active_statuses = {"Pre-Start", "Onboarding", "Active", "On Leave"}
+    employees = [e for e in db.get("employees", []) if e.get("status") in active_statuses]
+    backed_up, skipped, errors = 0, 0, []
+    for emp in employees:
+        emp_id = emp.get("id", "?")
+        try:
+            _hr_sync_employee_record(db, emp)  # ensure record.json is current before copying
+            src = _hr_employee_dir_path(db, emp)
+            if not _hros.path.isdir(src):
+                skipped += 1
+                continue
+            folder_name = emp.get("doc_folder") or emp_id
+            ts = _hrdt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+            emp_backup_root = _hros.path.join(backup_dir, folder_name)
+            dest = _hros.path.join(emp_backup_root, ts)
+            _hr_shutil.copytree(src, dest)
+            backed_up += 1
+            try:
+                snaps = sorted(d for d in _hros.listdir(emp_backup_root)
+                                if _hros.path.isdir(_hros.path.join(emp_backup_root, d)))
+                for old in snaps[:max(0, len(snaps) - retention)]:
+                    _hr_shutil.rmtree(_hros.path.join(emp_backup_root, old), ignore_errors=True)
+            except Exception:
+                pass
+        except Exception as exc:
+            errors.append(f"{emp_id}: {exc}")
+    return {"ok": (backed_up > 0 or not employees), "backup_dir": backup_dir,
+            "backed_up": backed_up, "skipped": skipped, "errors": errors}
+
+
+def _hr_pin_hash(pin: str, employee_id: str) -> str:
+    import hashlib as _hr_hl
+    return _hr_hl.sha256(f"{employee_id}:{pin}".encode()).hexdigest()
+
+
+def _hr_session_secret(db: dict) -> str:
+    cfg = db.setdefault("config", {})
+    if not cfg.get("_session_secret"):
+        cfg["_session_secret"] = _hrsecrets.token_hex(32)
+        _hr_save_db(db)
+    return cfg["_session_secret"]
+
+
+def _hr_sign_session(employee_id: str, email: str, secret: str) -> str:
+    import hmac as _hr_hmac, hashlib as _hr_hashlib
+    return _hr_hmac.new(secret.encode(), f"{employee_id}:{email}".encode(), _hr_hashlib.sha256).hexdigest()
+
+
+def _hr_verify_employee_session(session_header: str, db: dict):
+    """Returns the employee_id if the X-Employee-Session header's signature
+    checks out against this install's session secret, else None."""
+    try:
+        sess = _hrjson.loads(session_header)
+        secret = _hr_session_secret(db)
+        expected = _hr_sign_session(sess.get("employee_id", ""), sess.get("email", ""), secret)
+        if sess.get("sig") == expected:
+            return sess.get("employee_id")
+    except Exception:
+        pass
+    return None
+
+
+def _hr_json_response(status: int, payload) -> tuple:
+    return status, b"application/json", _hrjson.dumps(payload).encode("utf-8")
+
+
+def _hr_create_employee_impl(personal: dict, employment: dict, compensation: dict, db: dict) -> dict:
+    """Core employee-creation logic shared by the POST /employees HTTP route
+    and the hr_create_employee MCP tool, so there is exactly one place that
+    knows how to build an employee record and generate its onboarding tasks.
+    Mutates `db` in place (appends to employees/tasks/audit_log) and creates
+    the on-disk document-folder tree, but does NOT persist db — the caller
+    saves once, after this returns, so a caller doing other work in the same
+    transaction only writes the file once.
+    Returns the created employee dict, with a transient "temp_pin" and
+    "tasks_generated" key added for the caller's response only (not part of
+    the employee schema stored back into hr_db.json's own record — those two
+    keys are popped by the caller before appending... actually they ARE
+    stored as-is here for simplicity; temp_pin is fine to keep on the record
+    since only the pin_hash is used for auth, and HR may need to look the
+    plaintext PIN up again before the employee's first login).
+    """
+    personal = personal or {}
+    employment = employment or {}
+    compensation = compensation or {}
+    emp_id = _hr_next_id(db["employees"], "EMP")
+    last = personal.get("last_name", "employee")
+    first = personal.get("first_name", "")
+    folder_name = f"{emp_id}_{last}_{first}".replace(" ", "")
+    temp_pin = f"{_hrsecrets.randbelow(10000):04d}"
+    portal_token = _hrsecrets.token_urlsafe(24)
+    today = _hrdt.date.today().isoformat()
+    start_date = employment.get("start_date") or today
+    status = "Pre-Start" if start_date > today else "Onboarding"
+    emp = {
+        "id": emp_id, "status": status,
+        "first_name": first, "last_name": last,
+        "personal_email": personal.get("personal_email", ""),
+        "work_email": "", "phone": personal.get("phone", ""),
+        "address": personal.get("address", ""),
+        "emergency_contact": None,
+        "title": employment.get("title", ""), "department": employment.get("department", ""),
+        "manager_name": employment.get("manager_name", ""),
+        "start_date": start_date, "work_state": employment.get("work_state", ""),
+        "employment_type": employment.get("employment_type", "Full-time"),
+        "remote_status": employment.get("remote_status", "On-site"),
+        "flsa_classification": None,
+        "pay_type": compensation.get("pay_type", "salary"),
+        "pay_rate": compensation.get("pay_rate", 0),
+        "pay_frequency": compensation.get("pay_frequency", "Bi-weekly"),
+        "payroll_platform": db.get("config", {}).get("payroll_platform", ""),
+        "doc_folder": folder_name,
+        "pin_hash": _hr_pin_hash(temp_pin, emp_id),
+        "portal_token_hash": _hr_pin_hash(portal_token, emp_id),
+        "created_at": _hrdt.datetime.utcnow().isoformat() + "Z",
+    }
+    db["employees"].append(emp)
+    new_tasks = _hr_generate_onboarding_tasks(emp, db)
+    db["tasks"].extend(new_tasks)
+    db.setdefault("audit_log", []).append({
+        "at": emp["created_at"], "action": "employee_created",
+        "employee_id": emp_id, "task_count": len(new_tasks),
+    })
+    _hr_create_document_folders(db.get("config", {}).get("doc_root", "./hr_documents"), folder_name)
+    return {**emp, "temp_pin": temp_pin, "portal_token": portal_token, "tasks_generated": len(new_tasks)}
+
+
+def _hr_parse_multipart(raw: bytes, content_type: str):
+    """Minimal multipart/form-data parser — same manual boundary-split +
+    content-disposition-regex technique as the existing Jobs PWA
+    /photos/upload handler elsewhere in this file (server-mode and
+    personal-mode variants), kept local rather than adding a new third-party
+    dependency for one endpoint.
+    Returns (fields: {name: str}, files: [(field_name, filename, bytes), ...]).
+    Raises ValueError if no boundary can be found in content_type."""
+    boundary = None
+    for part in (content_type or "").split(";"):
+        part = part.strip()
+        if part.startswith("boundary="):
+            boundary = part[9:].strip().encode()
+            break
+    if not boundary:
+        raise ValueError("No multipart boundary found")
+    fields: dict = {}
+    files: list = []
+    delim = b"--" + boundary
+    for seg in raw.split(delim)[1:]:
+        if seg.strip() in (b"", b"--", b"--\r\n"):
+            continue
+        if b"\r\n\r\n" in seg:
+            hdrs, part_body = seg.split(b"\r\n\r\n", 1)
+        elif b"\n\n" in seg:
+            hdrs, part_body = seg.split(b"\n\n", 1)
+        else:
+            continue
+        # (2026-09-30, E2E bug #23) Remove ONLY the single line break the multipart format adds
+        # before the next boundary. rstrip(b"\r\n") also ate line-break bytes that were part of
+        # the file itself (e.g. PDFs ending "%%EOF\n"), so uploads came back changed.
+        if part_body.endswith(b"\r\n"):
+            part_body = part_body[:-2]
+        elif part_body.endswith(b"\n"):
+            part_body = part_body[:-1]
+        hdrs_str = hdrs.decode(errors="replace")
+        cd = ""
+        for line in hdrs_str.splitlines():
+            if line.lower().startswith("content-disposition"):
+                cd = line
+        nm = _hrre.search(r'name="([^"]+)"', cd)
+        fn = _hrre.search(r'filename="([^"]+)"', cd)
+        name = nm.group(1) if nm else ""
+        filename = fn.group(1) if fn else None
+        if not name:
+            continue
+        if filename:
+            files.append((name, filename, part_body))
+        else:
+            fields[name] = part_body.decode(errors="replace").strip()
+    return fields, files
+
+
+def _hr_handle_document_upload(raw_bytes: bytes, content_type: str, auth: dict) -> tuple:
+    """POST /hr-api/documents/upload — multipart/form-data. Called directly
+    from both mode's ASGI handlers (NOT through _hr_api_route, since that
+    dispatcher's body param is parsed JSON — multipart needs the raw bytes
+    and the request's Content-Type header instead), same pattern as the
+    existing Jobs PWA /photos/upload endpoint being its own dedicated block
+    rather than going through a shared JSON-body dispatcher.
+
+    Fields (multipart form parts):
+        employee_id:      required.
+        name:              required — document label, e.g. "Driver's License".
+        category:          optional, one of hiring/onboarding/active/
+                           termination/general (default "general") — must
+                           match one of the folders _hr_create_document_folders()
+                           already creates for every employee.
+        expiration_date:   optional, YYYY-MM-DD — feeds job_doc_expiration_check
+                           in hr_scheduler.py.
+        task_id:           optional — if given and that task has
+                           upload_required set and isn't already Completed/
+                           Waived, its status flips to "Awaiting Document" so
+                           it shows up for HR to review and hr_verify_document
+                           (already-existing MCP tool) to finish.
+    File field name: "file" (first file part found is used; extras ignored).
+    Returns (status_code, content_type_bytes, response_body_bytes) — same
+    convention as _hr_json_response / _hr_api_route.
+    """
+    if auth.get("role") not in ("admin", "employee"):
+        return _hr_json_response(401, {"error": "unauthorized"})
+    try:
+        fields, files = _hr_parse_multipart(raw_bytes, content_type)
+    except Exception as exc:
+        return _hr_json_response(400, {"error": f"multipart_parse_failed: {exc}"})
+
+    employee_id = (fields.get("employee_id") or "").strip()
+    doc_name = (fields.get("name") or "").strip()
+    category = (fields.get("category") or "general").strip().lower()
+    expiration_date = (fields.get("expiration_date") or "").strip() or None
+    task_id = (fields.get("task_id") or "").strip() or None
+
+    if not employee_id or not doc_name:
+        return _hr_json_response(400, {"error": "employee_id_and_name_required"})
+    if category not in ("hiring", "onboarding", "active", "termination", "general"):
+        category = "general"
+    if auth.get("role") == "employee" and auth.get("employee_id") != employee_id:
+        return _hr_json_response(403, {"error": "forbidden"})
+    if not files:
+        return _hr_json_response(400, {"error": "no_file_uploaded"})
+
+    _field_name, orig_filename, file_bytes = files[0]
+    if len(file_bytes) > 25 * 1024 * 1024:  # 25MB cap — generous for scans/PDFs
+        return _hr_json_response(413, {"error": "file_too_large_25mb_limit"})
+
+    with _hr_db_lock:
+        db = _hr_load_db()
+        emp = next((e for e in db["employees"] if e["id"] == employee_id), None)
+        if not emp:
+            return _hr_json_response(404, {"error": "employee_not_found"})
+
+        doc_root = db.get("config", {}).get("doc_root", "./hr_documents")
+        base = doc_root if _hros.path.isabs(doc_root) else _hros.path.join(_HR_STATE_DIR, doc_root)
+        save_dir = _hros.path.join(base, emp.get("doc_folder", employee_id), category)
+        try:
+            _hros.makedirs(save_dir, exist_ok=True)
+        except Exception as exc:
+            return _hr_json_response(500, {"error": f"could_not_create_dir: {exc}"})
+
+        orig_ext = _hros.path.splitext(orig_filename)[1].lower()
+        orig_stem = _hros.path.splitext(orig_filename)[0]
+        safe_stem = _hrre.sub(r'[^A-Za-z0-9 _.-]', '_', orig_stem).strip()[:80] or "file"
+        ts = _hrdt.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        out_name = f"{ts}_{safe_stem}{orig_ext}"
+        out_path = _hros.path.join(save_dir, out_name)
+        try:
+            with open(out_path, "wb") as f:
+                f.write(file_bytes)
+        except Exception as exc:
+            return _hr_json_response(500, {"error": f"could_not_write_file: {exc}"})
+
+        doc = {
+            "id": _hr_next_id(db.get("documents", []), "DOC"),
+            "employee_id": employee_id,
+            "name": doc_name,
+            "category": category,
+            "file_path": out_path,
+            "original_filename": orig_filename,
+            "size_bytes": len(file_bytes),
+            "expiration_date": expiration_date,
+            "status": "Pending",
+            "verified_at": None, "verified_by": None, "verification_notes": None,
+            "uploaded_at": _hrdt.datetime.utcnow().isoformat() + "Z",
+            "uploaded_by": auth.get("employee_id") if auth.get("role") == "employee" else "HR Admin",
+            "task_id": task_id,
+        }
+        db.setdefault("documents", []).append(doc)
+
+        # Save profile photo as base64 data-URL on the employee record
+        is_profile = fields.get("is_profile_photo", "").strip().lower() in ("true", "1", "yes")
+        if is_profile:
+            import base64 as _b64p
+            import mimetypes as _mtp
+            mime_p, _ = _mtp.guess_type(orig_filename)
+            mime_p = mime_p or "image/jpeg"
+            b64_photo = _b64p.b64encode(file_bytes).decode("ascii")
+            data_url = "data:{};base64,{}".format(mime_p, b64_photo)
+            for emp_rec in db.get("employees", []):
+                if emp_rec["id"] == employee_id:
+                    emp_rec["photo_url"] = data_url
+                    break
+
+        if task_id:
+            task = next((t for t in db["tasks"] if t["id"] == task_id), None)
+            if task and task.get("upload_required") and task.get("status") not in ("Completed", "Waived"):
+                task["status"] = "Awaiting Document"
+
+        db.setdefault("audit_log", []).append({
+            "at": doc["uploaded_at"], "action": "document_uploaded",
+            "employee_id": employee_id, "document_id": doc["id"],
+        })
+        _hr_save_db(db)
+
+        return _hr_json_response(200, {"ok": True, "document": doc})
+
+
+def _hr_api_route(method: str, subpath: str, query: dict, body: dict, auth: dict) -> tuple:
+    """Shared HR REST dispatcher. `auth` = {"role": "admin"} or
+    {"role": "employee", "employee_id": "EMP-00001"} or {"role": None}.
+    Returns (status_code, content_type_bytes, response_body_bytes).
+    Called identically from the personal-mode and server-mode ASGI handlers —
+    only bearer/PIN-token resolution differs between the two, and that
+    happens at the call site before this function is invoked. Plain sync
+    function (no I/O here is actually async) — ASGI callers call it directly
+    without await, same as the rest of this file's blocking file-read routes.
+    """
+    with _hr_db_lock:
+        db = _hr_load_db()
+        role = auth.get("role")
+
+        # ── /auth/employee — public, no auth required ──────────────────────
+        # Employee logs in with their personal/work email + THEIR OWN portal
+        # bearer token (or short PIN) — never the system-wide remote_token.
+        # Each employee's token/PIN is set at creation (hr_create_employee)
+        # and can be reset any time via POST /portal/regenerate-token
+        # (long bearer token) or POST /portal/set-pin (short numeric PIN).
+        if subpath == "/auth/employee" and method == "POST":
+            email = (body.get("email") or "").strip().lower()
+            token = (body.get("pin") or body.get("token") or "").strip()
+            if not email or not token:
+                return _hr_json_response(401, {"error": "invalid_credentials"})
+            # Email must match an employee record
+            match = None
+            for e in db["employees"]:
+                emails = {(e.get("personal_email") or "").lower(),
+                          (e.get("work_email") or "").lower()}
+                emails.discard("")
+                if email in emails:
+                    match = e
+                    break
+            if not match:
+                return _hr_json_response(401, {"error": "invalid_credentials"})
+            # Check against THIS employee's own bearer token first, then
+            # their short PIN as a fallback (either credential works).
+            candidate_hash = _hr_pin_hash(token, match["id"])
+            token_ok = bool(match.get("portal_token_hash")) and candidate_hash == match["portal_token_hash"]
+            pin_ok = bool(match.get("pin_hash")) and candidate_hash == match["pin_hash"]
+            if not (token_ok or pin_ok):
+                return _hr_json_response(401, {"error": "invalid_credentials"})
+            secret = _hr_session_secret(db)
+            sig = _hr_sign_session(match["id"], email, secret)
+            session = {"employee_id": match["id"],
+                       "name": f"{match.get('first_name','')} {match.get('last_name','')}".strip(),
+                       "email": email, "sig": sig}
+            return _hr_json_response(200, {"session": session})
+
+        # ── /ai-chat — smart HR Q&A ───────────────────────────────────────
+        if subpath == "/ai-chat" and method == "POST":
+            user_msg = (body.get("message") or "").strip()
+            if not user_msg:
+                return _hr_json_response(400, {"error": "message required"})
+            m = user_msg.lower()
+            if any(x in m for x in ["time off","pto","vacation","leave","sick","request off","day off"]):
+                reply = "To request time off:\n1. Click PTO & Time Off in the sidebar\n2. Select your dates\n3. Choose the type (Vacation, Sick, Personal)\n4. Add a note and click Submit Request\n\nYou earn 1.25 days PTO per month (15 days/year full-time). HR will approve or decline and notify you."
+            elif any(x in m for x in ["pay","paid","paycheck","payroll","salary","direct deposit","deposit","money"]):
+                reply = "AI-Prowler pays bi-weekly every Friday via direct deposit.\n\nTo view your pay stubs go to Payroll in the sidebar under Money. To set up or change direct deposit go to Deposits.\n\nPay periods run Sunday–Saturday for 2 weeks, paid the following Friday."
+            elif any(x in m for x in ["clock","time clock","clock in","clock out","log hours"]):
+                reply = "To clock in or out:\n1. Click Time Clock in the sidebar\n2. Press the green Clock In button when you start\n3. Press Clock Out when done\n\nYour hours are sent to HR Admin automatically. If you miss a clock-in, contact HR via the Messages tab."
+            elif any(x in m for x in ["incident","report","injury","accident","hurt","safety","hazard"]):
+                reply = "To file an incident report:\n1. Click Incident Reports in the HR section of the sidebar\n2. Click + New Incident Report\n3. Fill out all required sections\n4. Sign digitally and click Submit\n\nReports go directly to HR and are confidential. File within 24 hours."
+            elif any(x in m for x in ["benefit","health","dental","vision","insurance"]):
+                reply = "To view your benefits:\n1. Click Pay & Benefits in the sidebar\n2. Scroll to the Benefits section\n\nAI-Prowler offers health, dental, and vision insurance. For questions about coverage or enrollment, message HR via the Messages tab."
+            elif any(x in m for x in ["message","contact hr","reach hr","talk to hr","hr help"]):
+                reply = "To message HR:\n1. Click Messages in the sidebar under Company\n2. Type your subject and message\n3. Click Send Message to HR\n\nAll messages are private and confidential. HR typically responds within 1 business day."
+            elif any(x in m for x in ["handbook","policy","policies","code of conduct","rules","guidelines"]):
+                reply = "All AI-Prowler policies are in the HR Handbook:\n1. Click HR Handbook in the sidebar under HR\n2. Click any Policy Section to read it\n\nPolicies available: Attendance, Compensation & Pay, Time Off & Leave, Code of Conduct, Privacy & Confidentiality, Health & Safety."
+            elif any(x in m for x in ["write up","writeup","disciplinary","warning"]):
+                reply = "To view your disciplinary record:\n1. Click Write-Ups in the sidebar under HR\n\nYou have the right to respond to any write-up and dispute it if issued in error. Contact HR via the Messages tab for questions."
+            elif any(x in m for x in ["training","course","certification","learn"]):
+                reply = "To view your training courses:\n1. Click Trainings in the sidebar under HR\n\nYou'll see required and optional courses with completion status. Complete required trainings by their due date."
+            elif any(x in m for x in ["schedule","shift","work schedule"]):
+                reply = "To view your schedule:\n1. Click Schedule in the sidebar under Workspace\n\nYour upcoming shifts are listed there. For scheduling concerns, contact your manager or HR via the Messages tab."
+            elif any(x in m for x in ["hello","hi","hey","help","what can"]):
+                reply = "Hi! I'm your AI-Prowler HR assistant. I can help with:\n\n• Time off & PTO requests\n• Pay schedule & payroll\n• Clocking in and out\n• Filing incident reports\n• Benefits information\n• HR policies & handbook\n• Contacting HR\n\nJust ask me anything!"
+            else:
+                reply = "Here's how to get help with common topics:\n\n• Time off → PTO & Time Off tab\n• Pay questions → Payroll tab\n• HR policies → HR Handbook\n• Contact HR → Messages tab\n• Report an issue → Incident Reports tab\n\nWhat specifically can I help you find?"
+            return _hr_json_response(200, {"reply": reply})
+
+
+        # ── /incidents — submit (public) or list (admin only) ─────────────
+        if subpath == "/incidents" and method == "POST":
+            import uuid as _hr_uuid, datetime as _hr_dt
+            report = {
+                "id": "INC-" + str(_hr_uuid.uuid4())[:8].upper(),
+                "submitted_at": _hr_dt.datetime.now().isoformat(timespec="seconds"),
+                "status": "new",
+            }
+            report.update({k: v for k, v in body.items() if k not in ("id", "submitted_at", "status")})
+            if "incidents" not in db:
+                db["incidents"] = []
+            db["incidents"].append(report)
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "id": report["id"]})
+
+        if subpath == "/incidents" and method == "GET":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            return _hr_json_response(200, {"incidents": db.get("incidents", [])})
+
+        # ── /messages — employee sends, admin reads/replies ────────────────
+        if subpath == "/messages" and method == "POST":
+            # SECURITY (2026-09-28, found by E2E test PRT-SEC-03): this used to accept
+            # messages from anyone without sign-in, under any name/employee ID.
+            # Now: must be signed in; for employees the sender identity comes from
+            # their session, never from the request body.
+            if role not in ("admin", "employee"):
+                return _hr_json_response(401, {"error": "sign_in_required"})
+            import uuid as _msg_uuid, datetime as _msg_dt
+            msg = {
+                "id": "MSG-" + str(_msg_uuid.uuid4())[:8].upper(),
+                "sent_at": _msg_dt.datetime.now().isoformat(timespec="seconds"),
+                "read": False,
+                "reply": None,
+            }
+            msg.update({k: v for k, v in body.items() if k not in ("id", "sent_at", "read", "reply")})
+            if role == "employee":
+                _anon = bool(body.get("anonymous")) or (str(body.get("sender_name") or "").strip() == "Anonymous Employee")
+                if _anon:
+                    # Anonymous feedback ("HR will not see your name"): signed-in employees only,
+                    # but store NO identity at all.
+                    msg["sender_name"] = "Anonymous Employee"
+                    msg["anonymous"] = True
+                    msg.pop("employee_id", None)
+                    msg.pop("sender_email", None)
+                    body["sender_name"] = "Anonymous Employee"
+                else:
+                    _me = next((e for e in db.get("employees", []) if e.get("id") == auth.get("employee_id")), {}) or {}
+                    msg["employee_id"] = auth.get("employee_id")
+                    msg["sender_name"] = f"{_me.get('first_name','')} {_me.get('last_name','')}".strip() or msg.get("sender_name", "")
+                    msg["sender_email"] = _me.get("personal_email") or _me.get("work_email") or msg.get("sender_email", "")
+                    body["sender_name"] = msg["sender_name"]      # keep training-result matching below consistent
+            if "messages" not in db:
+                db["messages"] = []
+            db["messages"].append(msg)
+
+            # ── Auto-save training results to employee's documents folder ──
+            if body.get("message_type") == "training_result":
+                import uuid as _tr_uuid
+                sender_name = (body.get("sender_name") or "").strip().lower()
+                # Find matching employee
+                matched_emp = None
+                for _emp in db.get("employees", []):
+                    full = (_emp.get("first_name","") + " " + _emp.get("last_name","")).strip().lower()
+                    if full == sender_name or _emp.get("personal_email","").lower() == sender_name:
+                        matched_emp = _emp
+                        break
+                doc_record = {
+                    "id": "DOC-" + str(_tr_uuid.uuid4())[:8].upper(),
+                    "employee_id": matched_emp["id"] if matched_emp else None,
+                    "employee_name": body.get("sender_name",""),
+                    "category": "training",
+                    "name": body.get("subject", "Training Completion Record"),
+                    "content": body.get("body",""),
+                    "type": "text",
+                    "uploaded_at": _msg_dt.datetime.now().isoformat(timespec="seconds"),
+                    "uploaded_by": "system",
+                    "source": "training_auto"
+                }
+                if "documents" not in db:
+                    db["documents"] = []
+                db["documents"].append(doc_record)
+
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "id": msg["id"]})
+
+        if subpath == "/messages" and method == "GET":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            return _hr_json_response(200, {"messages": db.get("messages", [])})
+
+        if subpath == "/messages/read" and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            msg_id = body.get("id")
+            for m in db.get("messages", []):
+                if m["id"] == msg_id:
+                    m["read"] = True
+                    break
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True})
+
+        # ── /messages/incident-status — HR updates an incident report's status
+        # (open / under_review / resolved). Restored 2026-09-23 (lost in the
+        # 09-19 rollback). Status lives directly on the message record.
+        if subpath == "/messages/incident-status" and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            msg_id = (body or {}).get("id")
+            new_status = (body or {}).get("hr_status")
+            if new_status not in ("open", "under_review", "resolved"):
+                return _hr_json_response(400, {"error": "invalid_status"})
+            target = next((m for m in db.get("messages", []) if str(m.get("id")) == str(msg_id)), None)
+            if not target:
+                return _hr_json_response(404, {"error": "not_found"})
+            target["hr_status"] = new_status
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True})
+
+        if subpath == "/messages/my-reports" and method == "POST":
+            # Employee fetches THEIR OWN incident reports.
+            # SECURITY (2026-09-28, found by E2E test PRT-SEC-02): this used to answer
+            # without sign-in and matched names partially both ways ("a" matched most
+            # people), exposing other employees' incident reports. Now: signed-in
+            # employee only; match by their employee ID, or — for older reports saved
+            # without an ID — their exact full name or email.
+            if role != "employee":
+                return _hr_json_response(401, {"error": "sign_in_required"})
+            me_id = auth.get("employee_id")
+            me = next((e for e in db.get("employees", []) if e.get("id") == me_id), {}) or {}
+            me_name = f"{me.get('first_name','')} {me.get('last_name','')}".strip().lower()
+            me_emails = {(me.get("personal_email") or "").strip().lower(), (me.get("work_email") or "").strip().lower()} - {""}
+            reports = []
+            for m in db.get("messages", []):
+                if m.get("message_type") != "incident_report":
+                    continue
+                if m.get("employee_id"):
+                    if m.get("employee_id") == me_id:
+                        reports.append(m)
+                    continue
+                m_email = (m.get("sender_email") or "").strip().lower()
+                m_name  = (m.get("sender_name") or "").strip().lower()
+                if (m_email and m_email in me_emails) or (me_name and m_name == me_name):
+                    reports.append(m)
+            return _hr_json_response(200, {"reports": reports})
+
+        if subpath == "/messages/delete" and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            msg_id = body.get("id")
+            box = body.get("box", "inbox")  # 'inbox' or 'outbox'
+            key = "outbox" if box == "outbox" else "messages"
+            before = len(db.get(key, []))
+            db[key] = [m for m in db.get(key, []) if m.get("id") != msg_id]
+            if len(db.get(key, [])) < before:
+                _hr_save_db(db)
+                return _hr_json_response(200, {"ok": True})
+            return _hr_json_response(404, {"error": "message_not_found"})
+
+        if subpath == "/messages/hr-outbox" and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            import uuid as _ob_uuid, datetime as _ob_dt
+            msg = {
+                "id": "MSG-" + str(_ob_uuid.uuid4())[:8].upper(),
+                "sent_at": _ob_dt.datetime.now().isoformat(timespec="seconds"),
+                "message_type": "hr_outbound",
+            }
+            msg.update({k: v for k, v in body.items() if k not in ("id", "sent_at")})
+            if "outbox" not in db:
+                db["outbox"] = []
+            db["outbox"].append(msg)
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "id": msg["id"]})
+
+        if subpath == "/messages/outbox" and method == "GET":
+            # Employees can read HR outbound broadcasts — signed-in users only
+            # (SECURITY 2026-09-28, E2E test PRT-SEC-03: was readable without sign-in).
+            if role not in ("admin", "employee"):
+                return _hr_json_response(401, {"error": "sign_in_required"})
+            return _hr_json_response(200, {"messages": db.get("outbox", [])})
+
+        if subpath == "/messages/mine" and method == "GET":
+            # Employee's own sent messages, including any HR reply attached
+            # to them -- this is how a reply surfaces back to the Portal,
+            # since replies are stored on the original message, not in outbox.
+            if role != "employee":
+                return _hr_json_response(403, {"error": "employee_only"})
+            emp_id = auth.get("employee_id")
+            emp_name = ""
+            emp_match = next((e for e in db.get("employees", []) if e["id"] == emp_id), None)
+            if emp_match:
+                emp_name = f"{emp_match.get('first_name','')} {emp_match.get('last_name','')}".strip().lower()
+            mine = [
+                m for m in db.get("messages", [])
+                if m.get("employee_id") == emp_id
+                or (emp_name and (m.get("sender_name") or "").strip().lower() == emp_name)
+            ]
+            mine = sorted(mine, key=lambda m: m.get("sent_at", ""), reverse=True)
+            return _hr_json_response(200, {"messages": mine})
+
+        if subpath == "/messages/reply" and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            import datetime as _rp_dt
+            msg_id = body.get("id")
+            reply_text = body.get("reply", "").strip()
+            for m in db.get("messages", []):
+                if m["id"] == msg_id:
+                    m["reply"] = reply_text
+                    m["replied_at"] = _rp_dt.datetime.now().isoformat(timespec="seconds")
+                    m["read"] = True
+                    break
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True})
+
+        # ── everything else requires admin OR resolved employee auth ───────
+        if role not in ("admin", "employee"):
+            return _hr_json_response(401, {"error": "unauthorized"})
+
+        # ── /config ──────────────────────────────────────────────────────
+        if subpath == "/config" and method == "GET":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            return _hr_json_response(200, db.get("config", {}))
+
+        # ── /recruiting ── positions/candidates/interviews/offers, saved
+        # server-side (previously lived only in the admin's browser
+        # localStorage, which meant it wasn't shared across devices and
+        # had no real persistence). The frontend still edits this as one
+        # bundle client-side and posts the whole thing back -- this just
+        # gives that bundle a real home in the database.
+        if subpath == "/recruiting" and method == "GET":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            default_rec = {"positions": [], "candidates": [], "interviews": [], "offers": []}
+            saved = db.get("recruiting", default_rec)
+            return _hr_json_response(200, {"recruiting": saved, "version": int(db.get("recruiting_version", 0))})
+
+        if subpath == "/recruiting" and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            body = body or {}
+            # (2026-09-28, approved by Jamie) Stop recruiting edits overwriting each other.
+            # The whole bundle is saved at once, so two people (or devices) editing at the
+            # same time used to silently erase each other's changes. Now each save carries
+            # the version it was based on; an out-of-date save is refused (409) with the
+            # latest copy, instead of replacing someone else's work. Saves with no version
+            # (older clients) are still accepted.
+            current_ver = int(db.get("recruiting_version", 0))
+            if "version" in body and body.get("version") is not None and int(body.get("version")) != current_ver:
+                return _hr_json_response(409, {
+                    "error": "stale_version",
+                    "message": "Someone else changed recruiting since you loaded it.",
+                    "version": current_ver,
+                    "recruiting": db.get("recruiting", {"positions": [], "candidates": [], "interviews": [], "offers": []}),
+                })
+            db["recruiting_version"] = current_ver + 1
+            db["recruiting"] = {
+                "positions": body.get("positions", []),
+                "candidates": body.get("candidates", []),
+                "interviews": body.get("interviews", []),
+                "offers": body.get("offers", []),
+            }
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "recruiting": db["recruiting"], "version": db["recruiting_version"]})
+
+        # ── /directory ── the Company Directory shown in the Portal. Any
+        # signed-in employee can view, add, edit, or remove entries here --
+        # this is a shared team address book, not HR-managed employee
+        # records (those live in db["employees"] and require admin). Seeds
+        # itself once with the five sample contacts that used to be
+        # hardcoded directly into the page, so nothing disappears on the
+        # first load after this endpoint went live.
+        if subpath == "/directory" and method == "GET":
+            if role not in ("admin", "employee"):
+                return _hr_json_response(403, {"error": "unauthorized"})
+            if "directory_contacts" not in db:
+                db["directory_contacts"] = [
+                    {"id": "DIR-00001", "name": "David Vavro", "role": "Systems Admin · IT", "ext": "101", "email": "david@company.com"},
+                    {"id": "DIR-00002", "name": "Jamie Vavro", "role": "Operations Lead", "ext": "102", "email": "jamie@company.com"},
+                    {"id": "DIR-00003", "name": "Sara Mills", "role": "HR Manager", "ext": "103", "email": "hr@company.com"},
+                    {"id": "DIR-00004", "name": "Tyler Kim", "role": "Finance · Payroll", "ext": "104", "email": "payroll@company.com"},
+                    {"id": "DIR-00005", "name": "Ana Lopez", "role": "Customer Support Lead", "ext": "105", "email": "support@company.com"},
+                ]
+                _hr_save_db(db)
+            return _hr_json_response(200, {"contacts": db["directory_contacts"]})
+
+        if subpath == "/directory" and method == "POST":
+            if role not in ("admin", "employee"):
+                return _hr_json_response(403, {"error": "unauthorized"})
+            body = body or {}
+            name = (body.get("name") or "").strip()
+            if not name:
+                return _hr_json_response(400, {"error": "name required"})
+            contacts = db.setdefault("directory_contacts", [])
+            contact = {
+                "id": _hr_next_id(contacts, "DIR"),
+                "name": name,
+                "role": (body.get("role") or "").strip(),
+                "ext": (body.get("ext") or "").strip(),
+                "email": (body.get("email") or "").strip(),
+            }
+            contacts.append(contact)
+            _hr_save_db(db)
+            return _hr_json_response(201, {"ok": True, "contact": contact})
+
+        if subpath.startswith("/directory/") and subpath.count("/") == 2 and method == "PATCH":
+            if role not in ("admin", "employee"):
+                return _hr_json_response(403, {"error": "unauthorized"})
+            contact_id = subpath.split("/")[2]
+            contacts = db.setdefault("directory_contacts", [])
+            contact = next((c for c in contacts if c["id"] == contact_id), None)
+            if not contact:
+                return _hr_json_response(404, {"error": "not_found"})
+            body = body or {}
+            for field in ("name", "role", "ext", "email"):
+                if field in body:
+                    contact[field] = (body[field] or "").strip()
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "contact": contact})
+
+        if subpath.startswith("/directory/") and subpath.count("/") == 2 and method == "DELETE":
+            if role not in ("admin", "employee"):
+                return _hr_json_response(403, {"error": "unauthorized"})
+            contact_id = subpath.split("/")[2]
+            contacts = db.setdefault("directory_contacts", [])
+            before = len(contacts)
+            contacts[:] = [c for c in contacts if c["id"] != contact_id]
+            if len(contacts) == before:
+                return _hr_json_response(404, {"error": "not_found"})
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True})
+
+        if subpath == "/setup/complete" and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            db["config"].update(body)
+            db["config"]["setup_complete"] = True
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "config": db["config"]})
+
+        # ── /employees ───────────────────────────────────────────────────
+        if subpath == "/employees" and method == "GET":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            changed = _hr_sweep_overdue(db)
+            if changed:
+                _hr_save_db(db)
+            out = []
+            for e in db["employees"]:
+                stats = _hr_employee_task_stats(e["id"], db["tasks"])
+                out.append({**e, **stats})
+            return _hr_json_response(200, {"employees": out})
+
+        if subpath == "/employees" and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            result = _hr_create_employee_impl(
+                body.get("personal"), body.get("employment"), body.get("compensation"), db)
+            _hr_save_db(db)
+            return _hr_json_response(200, result)
+
+        # GET /employees/<id> — one employee. Named sub-routes like
+        # /employees/birthdays are handled further down, so skip them here
+        # (otherwise "birthdays" was treated as an employee ID → 403/404).
+        if (subpath.startswith("/employees/") and method == "GET"
+                and subpath.split("/")[2] not in ("birthdays",)):
+            emp_id = subpath.split("/")[2]
+            if role == "employee" and auth.get("employee_id") != emp_id:
+                return _hr_json_response(403, {"error": "forbidden"})
+            emp = next((e for e in db["employees"] if e["id"] == emp_id), None)
+            if not emp:
+                return _hr_json_response(404, {"error": "not_found"})
+            return _hr_json_response(200, emp)
+
+        # ── /tasks ───────────────────────────────────────────────────────
+        if subpath == "/tasks" and method == "GET":
+            changed = _hr_sweep_overdue(db)
+            if changed:
+                _hr_save_db(db)
+            tasks = db["tasks"]
+            emp_filter = query.get("employee_id")
+            if role == "employee":
+                emp_filter = auth.get("employee_id")  # server-side scoping, C-HR-ACCESS-03
+            if emp_filter:
+                tasks = [t for t in tasks if t.get("employee_id") == emp_filter]
+            for key in ("status", "phase", "priority", "assigned_to"):
+                if query.get(key):
+                    field = "assigned_to_role" if key == "assigned_to" else key
+                    tasks = [t for t in tasks if t.get(field) == query[key]]
+            if query.get("overdue") == "true":
+                tasks = [t for t in tasks if t.get("status") == "Overdue"]
+            return _hr_json_response(200, {"tasks": tasks})
+
+        if subpath.startswith("/tasks/") and subpath.count("/") == 2 and method == "GET":
+            task_id = subpath.split("/")[2]
+            task = next((t for t in db["tasks"] if t["id"] == task_id), None)
+            if not task:
+                return _hr_json_response(404, {"error": "not_found"})
+            if role == "employee" and task.get("employee_id") != auth.get("employee_id"):
+                return _hr_json_response(403, {"error": "forbidden"})
+            # Re-resolve portal_url on every GET — fixes tasks created before
+            # form URLs were populated correctly (e.g. FCRA-NOTICE tasks with
+            # a blank or stale portal_url baked in at employee-creation time).
+            if not task.get("portal_url") and task.get("form_ref"):
+                forms = _hr_load_forms()
+                entry = forms.get(task["form_ref"], {})
+                resolved = (entry.get("pdf_url") or entry.get("model_notice_url")
+                            or entry.get("instructions_url") or "")
+                if resolved:
+                    task = dict(task)  # shallow copy — don't mutate db in memory
+                    task["portal_url"] = resolved
+            return _hr_json_response(200, task)
+
+        if subpath.startswith("/tasks/") and subpath.endswith("/complete") and method == "POST":
+            task_id = subpath.split("/")[2]
+            task = next((t for t in db["tasks"] if t["id"] == task_id), None)
+            if not task:
+                return _hr_json_response(404, {"error": "not_found"})
+            if role == "employee":
+                if task.get("employee_id") != auth.get("employee_id") \
+                        or task.get("assigned_to_role") != "Employee":
+                    return _hr_json_response(403, {"error": "forbidden"})
+            task["status"] = "Completed"
+            task["completed_at"] = _hrdt.datetime.utcnow().isoformat() + "Z"
+            task["completed_by"] = auth.get("employee_id") if role == "employee" else "HR Admin"
+            task["completion_notes"] = body.get("notes", "")
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "task": task})
+
+        if subpath.startswith("/tasks/") and subpath.endswith("/waive") and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            task_id = subpath.split("/")[2]
+            task = next((t for t in db["tasks"] if t["id"] == task_id), None)
+            if not task:
+                return _hr_json_response(404, {"error": "not_found"})
+            reason = (body.get("reason") or "").strip()
+            if not reason:
+                return _hr_json_response(400, {"error": "reason_required"})
+            task["status"] = "Waived"
+            task["waived_at"] = _hrdt.datetime.utcnow().isoformat() + "Z"
+            task["waived_by"] = "HR Admin"
+            task["waive_reason"] = reason
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "task": task})
+
+        if subpath.startswith("/tasks/") and subpath.endswith("/reassign") and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            task_id = subpath.split("/")[2]
+            task = next((t for t in db["tasks"] if t["id"] == task_id), None)
+            if not task:
+                return _hr_json_response(404, {"error": "not_found"})
+            new_assignee = body.get("new_assignee", "")
+            task.setdefault("reassignments", []).append({
+                "from_id": task.get("assigned_to_id"), "to_id": new_assignee,
+                "by_id": "HR Admin", "at": _hrdt.datetime.utcnow().isoformat() + "Z",
+                "reason": body.get("reason", ""),
+            })
+            task["assigned_to_id"] = new_assignee
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "task": task})
+
+        # ── /training/complete — the properly-categorized completion path.
+        # Every training_*.html page postMessage()s to the Portal, which
+        # calls this with the correct Admin Training Portfolio category
+        # already resolved client-side (TRAINING_CATEGORY_MAP). This
+        # endpoint never previously existed, so every one of those calls
+        # was failing silently (.catch(()=>{})) and no training ever
+        # reached the Admin Training Portfolio's category folders, even
+        # though the Portal's own "Completed" badges were showing fine.
+        if subpath == "/training/complete" and method == "POST":
+            if role != "employee":
+                return _hr_json_response(403, {"error": "employee_only"})
+            body = body or {}
+            title = (body.get("title") or "").strip()
+            if not title:
+                return _hr_json_response(400, {"error": "title required"})
+            valid_categories = {
+                "safety", "harassment", "hipaa", "onboarding", "technical",
+                "leadership", "compliance", "certifications", "other",
+            }
+            category = body.get("category") or "other"
+            if category not in valid_categories:
+                category = "other"
+            emp_id = auth.get("employee_id")
+            emp_name = body.get("employee_name") or auth.get("email") or ""
+            completed_date = body.get("completed_date") or _hrdt.date.today().isoformat()
+            import uuid as _train_uuid
+            docs = db.setdefault("documents", [])
+            # Idempotent: re-completing (or a duplicate postMessage firing
+            # twice) updates the existing record's date rather than piling
+            # up duplicate entries for the same training.
+            existing = next((d for d in docs if d.get("employee_id") == emp_id
+                              and d.get("source") == "training_complete"
+                              and d.get("training_title") == title), None)
+            if existing:
+                existing["uploaded_at"] = completed_date
+                _hr_save_db(db)
+                return _hr_json_response(200, {"ok": True, "document": existing})
+            doc_record = {
+                "id": "DOC-" + str(_train_uuid.uuid4())[:8].upper(),
+                "employee_id": emp_id,
+                "employee_name": emp_name,
+                "category": category,
+                "training_title": title,
+                "name": f"{title} — Completed {completed_date}",
+                "content": f"Training completed: {title}\nEmployee: {emp_name}\nDate: {completed_date}",
+                "type": "text",
+                "uploaded_at": completed_date,
+                "uploaded_by": "system",
+                "source": "training_complete",
+            }
+            docs.append(doc_record)
+            _hr_save_db(db)
+            return _hr_json_response(201, {"ok": True, "document": doc_record})
+
+        # ── /documents ───────────────────────────────────────────────────
+        if subpath == "/documents" and method == "GET":
+            docs = db.get("documents", [])
+            emp_filter = query.get("employee_id")
+            if role == "employee":
+                emp_filter = auth.get("employee_id")
+            if emp_filter:
+                docs = [d for d in docs if d.get("employee_id") == emp_filter]
+            return _hr_json_response(200, {"documents": docs})
+
+        # ── /reminders — business calendar reminders (added 2026-08-29) ────
+        # Storage: db["events"] -- a schema key that existed in _hr_load_db's
+        # default since before this feature but was never read or written by
+        # anything else in this file. UI/API terminology is "reminders";
+        # the on-disk key stays "events" to avoid a schema migration.
+        if subpath == "/reminders" and method == "GET":
+            reminders = sorted(db.get("events", []), key=lambda r: r.get("date", ""))
+            return _hr_json_response(200, {"reminders": reminders})
+
+        if subpath == "/reminders" and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            title = (body.get("title") or "").strip()
+            date = (body.get("date") or "").strip()
+            if not title or not date:
+                return _hr_json_response(400, {"error": "title_and_date_required"})
+            events = db.setdefault("events", [])
+            reminder = {
+                "id": _hr_next_id(events, "REM"),
+                "title": title, "date": date,
+                "note": (body.get("note") or "").strip(),
+                "email_sent": False, "email_sent_at": None,
+                "created_at": _hrdt.datetime.utcnow().isoformat() + "Z",
+                "created_by": "HR Admin",
+            }
+            events.append(reminder)
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "reminder": reminder})
+
+        if subpath.startswith("/reminders/") and subpath.count("/") == 2 and method == "PATCH":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            reminder_id = subpath.split("/")[2]
+            events = db.setdefault("events", [])
+            reminder = next((r for r in events if r.get("id") == reminder_id), None)
+            if not reminder:
+                return _hr_json_response(404, {"error": "not_found"})
+            if "title" in body:
+                reminder["title"] = (body.get("title") or "").strip()
+            if "note" in body:
+                reminder["note"] = (body.get("note") or "").strip()
+            if "date" in body:
+                new_date = (body.get("date") or "").strip()
+                if new_date and new_date != reminder.get("date"):
+                    # a moved reminder should still get its own reminder email
+                    reminder["date"] = new_date
+                    reminder["email_sent"] = False
+                    reminder["email_sent_at"] = None
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "reminder": reminder})
+
+        if subpath.startswith("/reminders/") and subpath.count("/") == 2 and method == "DELETE":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            reminder_id = subpath.split("/")[2]
+            events = db.setdefault("events", [])
+            before = len(events)
+            db["events"] = [r for r in events if r.get("id") != reminder_id]
+            if len(db["events"]) == before:
+                return _hr_json_response(404, {"error": "not_found"})
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True})
+
+        # ── /training — employee training records (added 2026-08-31) ──────
+        # Training records live in db["training"], keyed by TRN-##### id.
+        # Each record: {id, employee_id, employee_name, title, provider,
+        #   status (assigned|in_progress|completed), due_date, completed_date,
+        #   notes, created_at}
+
+        if subpath == "/training" and method == "GET":
+            records = sorted(db.setdefault("training", []),
+                             key=lambda r: r.get("due_date", "") or "")
+            # Employees only see their own training records; admin sees all.
+            if role == "employee":
+                emp_id_t = auth.get("employee_id")
+                records = [r for r in records if r.get("employee_id") == emp_id_t]
+            elif role != "admin":
+                return _hr_json_response(403, {"error": "forbidden"})
+            # Enrich with employee name
+            emp_map = {e["id"]: e for e in db.get("employees", [])}
+            for r in records:
+                emp = emp_map.get(r.get("employee_id", ""), {})
+                r["employee_name"] = emp.get("first_name", "") + " " + emp.get("last_name", "")
+            return _hr_json_response(200, {"records": records})
+
+        if subpath == "/training" and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            body = body or {}
+            if not body.get("employee_id") or not body.get("title"):
+                return _hr_json_response(400, {"error": "employee_id and title required"})
+            import datetime as _dt2
+            emp_map2 = {e["id"]: e for e in db.get("employees", [])}
+            emp2 = emp_map2.get(body["employee_id"], {})
+            record = {
+                "id": _hr_next_id(db.setdefault("training", []), "TRN"),
+                "employee_id": body["employee_id"],
+                "employee_name": emp2.get("first_name", "") + " " + emp2.get("last_name", ""),
+                "title": body["title"],
+                "provider": body.get("provider", ""),
+                "status": "assigned",
+                "due_date": body.get("due_date") or None,
+                "completed_date": None,
+                "notes": body.get("notes", ""),
+                "created_at": _dt2.datetime.utcnow().isoformat() + "Z",
+            }
+            db.setdefault("training", []).append(record)
+            _hr_save_db(db)
+            return _hr_json_response(201, {"ok": True, "record": record})
+
+        if subpath.startswith("/training/") and subpath.count("/") == 2 and method == "PATCH":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            trn_id = subpath.split("/")[2]
+            records = db.setdefault("training", [])
+            for r in records:
+                  if r.get("id") == trn_id:
+                      body = body or {}
+                      for k in ("status", "due_date", "completed_date", "notes", "provider", "title"):
+                          if k in body:
+                              r[k] = body[k]
+                      _hr_save_db(db)
+                      return _hr_json_response(200, {"ok": True, "record": r})
+            return _hr_json_response(404, {"error": "not_found"})
+
+        if subpath.startswith("/training/") and subpath.count("/") == 2 and method == "DELETE":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            trn_id = subpath.split("/")[2]
+            before = len(db.setdefault("training", []))
+            db["training"] = [r for r in db["training"] if r.get("id") != trn_id]
+            if len(db["training"]) == before:
+                return _hr_json_response(404, {"error": "not_found"})
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True})
+
+        # ── /attendance — daily attendance log (added 2026-08-31) ──────────
+        # Records live in db["attendance"]. Each record: {id, employee_id,
+        #   employee_name, date (YYYY-MM-DD), status (present|absent|late|pto),
+        #   note, created_at}
+
+        if subpath == "/attendance" and method == "GET":
+            import datetime as _dt3
+            records = db.setdefault("attendance", [])
+            period = (query or {}).get("period", ["week"])
+            period = period[0] if isinstance(period, list) else period
+            emp_id_filter = (query or {}).get("employee_id", [None])
+            emp_id_filter = emp_id_filter[0] if isinstance(emp_id_filter, list) else emp_id_filter
+            today = _dt3.date.today()
+            if period == "week":
+                cutoff = (today - _dt3.timedelta(days=today.weekday())).isoformat()
+                records = [r for r in records if r.get("date", "") >= cutoff]
+            elif period == "month":
+                cutoff = today.replace(day=1).isoformat()
+                records = [r for r in records if r.get("date", "") >= cutoff]
+            # "Clear History" only hides records from the main aggregate view
+            # (no employee_id filter). Per-employee profile fetches pass
+            # employee_id and always see the full, un-hidden history.
+            if not emp_id_filter:
+                records = [r for r in records if not r.get("hidden_from_main")]
+            records = sorted(records, key=lambda r: r.get("date", ""), reverse=True)
+            emp_map3 = {e["id"]: e for e in db.get("employees", [])}
+            for r in records:
+                emp = emp_map3.get(r.get("employee_id", ""), {})
+                r["employee_name"] = emp.get("first_name", "") + " " + emp.get("last_name", "")
+            return _hr_json_response(200, {"records": records})
+
+        # ── /attendance/clear — hides matching records from the main
+        #    History list without deleting them; per-employee profiles
+        #    still show full history. Admin only.
+        if subpath == "/attendance/clear" and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            import datetime as _dt3b
+            body = body or {}
+            filt = body.get("filter", "all")
+            records = db.setdefault("attendance", [])
+            today3b = _dt3b.date.today()
+            month_cutoff = today3b.replace(day=1).isoformat()
+            cleared = 0
+            for r in records:
+                if r.get("hidden_from_main"):
+                    continue
+                d = r.get("date", "")
+                match = False
+                if filt == "all":
+                    match = True
+                elif filt == "month":
+                    match = d >= month_cutoff
+                elif filt == "before_month":
+                    match = d < month_cutoff
+                if match:
+                    r["hidden_from_main"] = True
+                    cleared += 1
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "cleared": cleared})
+
+        if subpath == "/attendance" and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            body = body or {}
+            if not body.get("employee_id") or not body.get("date"):
+                return _hr_json_response(400, {"error": "employee_id and date required"})
+            import datetime as _dt4
+            emp_map4 = {e["id"]: e for e in db.get("employees", [])}
+            emp4 = emp_map4.get(body["employee_id"], {})
+            record = {
+                "id": _hr_next_id(db.setdefault("attendance", []), "ATT"),
+                "employee_id": body["employee_id"],
+                "employee_name": emp4.get("first_name", "") + " " + emp4.get("last_name", ""),
+                "date": body["date"],
+                "status": body.get("status", "present"),
+                "note": body.get("note", ""),
+                "created_at": _dt4.datetime.utcnow().isoformat() + "Z",
+            }
+            db.setdefault("attendance", []).append(record)
+            _hr_save_db(db)
+            return _hr_json_response(201, {"ok": True, "record": record})
+
+        # ── /settings — company-wide toggles (currently: location tracking
+        # on/off per feature). Any authenticated role can read; only admin
+        # can change. Defaults live here so a fresh install is well-defined.
+        _hr_default_settings = {
+            "location_running_late": False,  # "Running Late" self-report
+            "location_out_today": False,     # "Out Today" self-report
+            "location_clock": True,          # Clock In / Clock Out
+        }
+        if subpath == "/settings" and method == "GET":
+            saved = db.get("settings", {})
+            merged = dict(_hr_default_settings)
+            merged.update(saved)
+            return _hr_json_response(200, {"settings": merged})
+
+        # ── Location tracking consent ── a written, timestamped record that
+        # an employee agreed to one-time location capture on self-reported
+        # Running Late / Out Today messages. This exists independently of
+        # the admin's on/off setting above: even with the setting ON, an
+        # individual employee's location is only ever captured if THEY have
+        # signed this consent -- it's a per-person legal safeguard, not just
+        # a company-wide switch.
+        if subpath == "/consent/location/status" and method == "GET":
+            if role != "employee":
+                return _hr_json_response(403, {"error": "employee_only"})
+            emp_id = auth.get("employee_id")
+            rec = next((c for c in db.get("location_consents", []) if c.get("employee_id") == emp_id), None)
+            return _hr_json_response(200, {"signed": bool(rec), "consent": rec})
+
+        if subpath == "/consent/location" and method == "POST":
+            if role != "employee":
+                return _hr_json_response(403, {"error": "employee_only"})
+            body = body or {}
+            signature = (body.get("signature_name") or "").strip()
+            if not signature:
+                return _hr_json_response(400, {"error": "signature_name required"})
+            import datetime as _dt15
+            emp_id = auth.get("employee_id")
+            emp15 = next((e for e in db["employees"] if e["id"] == emp_id), {})
+            consents = db.setdefault("location_consents", [])
+            # Replace any prior record for this employee rather than stacking duplicates
+            consents[:] = [c for c in consents if c.get("employee_id") != emp_id]
+            rec = {
+                "id": _hr_next_id(consents, "CONSENT"),
+                "employee_id": emp_id,
+                "employee_name": f"{emp15.get('first_name','')} {emp15.get('last_name','')}".strip(),
+                "signature_name": signature,
+                "agreement_text": "I consent to a one-time capture of my device location "
+                                   "when I submit a 'Running Late' or 'Out Today' self-report. "
+                                   "I understand this is separate from, and not required for, "
+                                   "clocking in or out of a shift.",
+                "signed_at": _dt15.datetime.utcnow().isoformat() + "Z",
+            }
+            consents.append(rec)
+            _hr_save_db(db)
+            # Best-effort email to HR so there's an off-app paper trail too.
+            # Never let a mail failure block the consent from being saved.
+            try:
+                notify_to = (db.get("config", {}).get("hr_admin_email")
+                             or db.get("config", {}).get("owner_email"))
+                if notify_to:
+                    _send_smtp(
+                        to=notify_to,
+                        subject=f"Location tracking consent signed — {rec['employee_name'] or emp_id}",
+                        body=(f"{rec['employee_name'] or emp_id} signed the location-tracking consent "
+                              f"for self-reported Running Late / Out Today messages.\n\n"
+                              f"Signed: {rec['signed_at']}\n"
+                              f"Typed signature: {rec['signature_name']}\n\n"
+                              f"Agreement text:\n{rec['agreement_text']}"),
+                    )
+            except Exception as _mail_err:
+                _log.warning("consent notification email failed: %s", _mail_err)
+            return _hr_json_response(201, {"ok": True, "consent": rec})
+
+        if subpath == "/consent/location" and method == "GET":
+            # Admin-facing roster: who has and hasn't signed, for onboarding
+            # / compliance visibility before this setting is ever turned on.
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            consents = db.get("location_consents", [])
+            signed_ids = {c["employee_id"] for c in consents}
+            roster = []
+            for e in db.get("employees", []):
+                if e.get("status") in ("Terminated", "Offboarded"):
+                    continue
+                rec = next((c for c in consents if c["employee_id"] == e["id"]), None)
+                roster.append({
+                    "employee_id": e["id"],
+                    "employee_name": f"{e.get('first_name','')} {e.get('last_name','')}".strip(),
+                    "signed": e["id"] in signed_ids,
+                    "signed_at": rec["signed_at"] if rec else None,
+                })
+            return _hr_json_response(200, {"roster": roster})
+
+        if subpath == "/settings" and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            body = body or {}
+            # NOTE: location_running_late / location_out_today CAN be saved
+            # here now (the admin toggle is fully interactive) -- but saving
+            # a True value here does NOT actually turn on GPS capture. That
+            # capture is separately hard-coded off in /attendance/self-report
+            # below regardless of this setting, pending a signed consent
+            # agreement. See the comment there for how to actually unlock it.
+            current = db.setdefault("settings", dict(_hr_default_settings))
+            for key in _hr_default_settings:
+                if key in body:
+                    current[key] = bool(body[key])
+            _hr_save_db(db)
+            merged = dict(_hr_default_settings)
+            merged.update(current)
+            return _hr_json_response(200, {"settings": merged})
+
+        # ── /attendance/self-report — employee reports their own late/absent
+        # status for today, lands in the same db["attendance"] collection
+        # the admin's own attendance views/stats already read from. ────────
+        if subpath == "/attendance/self-report" and method == "POST":
+            if role != "employee":
+                return _hr_json_response(403, {"error": "employee_only"})
+            body = body or {}
+            status = body.get("status")
+            if status not in ("late", "absent"):
+                return _hr_json_response(400, {"error": "status must be 'late' or 'absent'"})
+            import datetime as _dt14
+            emp_id = auth.get("employee_id")
+            emp14 = next((e for e in db["employees"] if e["id"] == emp_id), {})
+            today14 = _dt14.date.today().isoformat()
+            # Location is only captured if BOTH: (a) the admin has THIS
+            # specific status type enabled (late vs. absent are independent
+            # switches), AND (b) this employee has signed consent. Either
+            # one being off means no location is stored, full stop.
+            # HARD LOCK (see /settings POST above): this whole feature is
+            # disabled pending legal/consent review, regardless of what's
+            # saved in db["settings"] -- remove this line together with the
+            # matching block in /settings once that review is complete.
+            setting_key = "location_running_late" if status == "late" else "location_out_today"
+            loc_enabled = False  # was: db.get("settings", {}).get(setting_key, False)
+            has_consent = any(c.get("employee_id") == emp_id for c in db.get("location_consents", []))
+            record = {
+                "id": _hr_next_id(db.setdefault("attendance", []), "ATT"),
+                "employee_id": emp_id,
+                "employee_name": f"{emp14.get('first_name','')} {emp14.get('last_name','')}".strip(),
+                "date": today14,
+                "status": status,
+                "note": body.get("note", "") + " (self-reported)",
+                "created_at": _dt14.datetime.now().isoformat(),
+            }
+            if loc_enabled and has_consent:
+                record["lat"] = body.get("lat")
+                record["lng"] = body.get("lng")
+                record["maps_url"] = (body.get("maps_url") or "").strip()
+
+            db.setdefault("attendance", []).append(record)
+            _hr_save_db(db)
+            return _hr_json_response(201, {"ok": True, "record": record})
+
+
+        if subpath.startswith("/attendance/") and subpath.count("/") == 2 and method == "PATCH":
+            att_id = subpath.split("/")[2]
+            rec = next((a for a in db.get("attendance", []) if a.get("id") == att_id), None)
+            if not rec:
+                return _hr_json_response(404, {"error": "not_found"})
+            # Location can never be added/edited on a self-reported entry
+            # through this endpoint, full stop -- this was previously the
+            # loophole that let "Share Location Now" bypass every consent
+            # check in the system. Non-self-reported (e.g. real clock-in/out)
+            # records are unaffected.
+            is_self_reported = "(self-reported)" in (rec.get("note") or "")
+            allowed_fields = ("note", "status") if is_self_reported else ("lat", "lng", "maps_url", "note", "status")
+            for field in allowed_fields:
+                if field in body:
+                    rec[field] = body[field]
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "record": rec})
+
+            if (subpath == "/attendance/history" or subpath.startswith("/attendance/history?")) and method == "DELETE":
+                import datetime as _dt2
+                filt = (params.get("filter") or ["all"])[0]
+                db = _hr_load_db()
+                now2 = _dt2.datetime.utcnow()
+                if filt == "week":
+                    cutoff = (now2 - _dt2.timedelta(days=7)).strftime("%Y-%m-%d")
+                elif filt == "month":
+                    cutoff = (now2 - _dt2.timedelta(days=30)).strftime("%Y-%m-%d")
+                else:
+                    cutoff = "0000-00-00"
+                before = len(db.get("attendance", []))
+                db["attendance"] = [r for r in db.get("attendance", []) if r.get("date", "") > cutoff]
+                _hr_save_db(db)
+                return _hr_json_response(200, {"ok": True, "deleted": before - len(db["attendance"])})
+
+        if subpath.startswith("/attendance/") and subpath.count("/") == 2 and method == "DELETE" and not subpath.endswith("/history"):
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            att_id = subpath.split("/")[2]
+            before = len(db.setdefault("attendance", []))
+            db["attendance"] = [r for r in db["attendance"] if r.get("id") != att_id]
+            if len(db["attendance"]) == before:
+                return _hr_json_response(404, {"error": "not_found"})
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True})
+
+        # ── /pto — employee-submitted time-off requests (added 2026-09-05) ──
+        # Records live in db["pto_requests"]. Each record: {id, employee_id,
+        #   employee_name, type, start_date, end_date, notes, status
+        #   (pending|approved|denied), created_at, decided_at, decided_by,
+        #   decision_note}. This is the shared source of truth the HR Portal
+        #   (employee submit + own history) and HR Admin (approval queue)
+        #   both read/write — no separate code path, no drift between apps.
+
+        if subpath == "/pto/mine" and method == "GET":
+            if role != "employee":
+                return _hr_json_response(403, {"error": "employee_only"})
+            emp_id = auth.get("employee_id")
+            records = [r for r in db.setdefault("pto_requests", []) if r.get("employee_id") == emp_id and not r.get("hidden_by_employee")]
+            records = sorted(records, key=lambda r: r.get("created_at", ""), reverse=True)
+            return _hr_json_response(200, {"requests": records})
+
+        # ── /pto/company — approved time off across ALL employees, for the
+        #    company-wide calendar view. Any authenticated employee or admin
+        #    may read this (dates + names only, no notes, for privacy).
+        if subpath == "/pto/company" and method == "GET":
+            if not role:
+                return _hr_json_response(401, {"error": "auth_required"})
+            records = [r for r in db.setdefault("pto_requests", []) if r.get("status") == "approved"]
+            slim = [{
+                "employee_name": r.get("employee_name", ""),
+                "type": r.get("type", ""),
+                "start_date": r.get("start_date", ""),
+                "end_date": r.get("end_date", ""),
+            } for r in records]
+            return _hr_json_response(200, {"requests": slim})
+
+        # ── /employees/birthdays — name + month/day (no birth year, for
+        #    privacy) for every active employee with a date_of_birth on
+        #    file. Any authenticated employee or admin may read this, for
+        #    the company calendar's birthday markers.
+        if subpath == "/employees/birthdays" and method == "GET":
+            if not role:
+                return _hr_json_response(401, {"error": "auth_required"})
+            out = []
+            for e in db.get("employees", []):
+                dob = e.get("date_of_birth")
+                if not dob or e.get("status") == "terminated":
+                    continue
+                out.append({
+                    "employee_name": f"{e.get('first_name','')} {e.get('last_name','')}".strip(),
+                    "month_day": dob[5:10] if len(dob) >= 10 else "",
+                })
+            return _hr_json_response(200, {"birthdays": [b for b in out if b["month_day"]]})
+
+        # ── CALENDAR NOTES (save employee notes, visible to admin) ──────────
+        if subpath == "/calendar/notes" and method == "POST":
+            if role != "employee":
+                return _hr_json_response(403, {"error": "employee_only"})
+            import datetime as _dtcn
+            emp_id = auth.get("employee_id")
+            body = body or {}
+            notes_text = body.get("notes", "")
+            cal_notes = db.setdefault("calendar_notes", [])
+            existing = next((n for n in cal_notes if n.get("employee_id") == emp_id), None)
+            if existing:
+                existing["notes"] = notes_text
+                existing["updated_at"] = _dtcn.datetime.utcnow().isoformat() + "Z"
+            else:
+                emp_cn = next((e for e in db["employees"] if e["id"] == emp_id), {})
+                cal_notes.append({
+                    "employee_id": emp_id,
+                    "employee_name": f"{emp_cn.get('first_name','')} {emp_cn.get('last_name','')}".strip(),
+                    "notes": notes_text,
+                    "updated_at": _dtcn.datetime.utcnow().isoformat() + "Z",
+                })
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True})
+
+        if subpath == "/calendar/notes" and method == "GET":
+            if role == "employee":
+                emp_id = auth.get("employee_id")
+                note = next((n for n in db.get("calendar_notes", []) if n.get("employee_id") == emp_id), {})
+                return _hr_json_response(200, {"notes": note.get("notes", "")})
+            if role == "admin":
+                return _hr_json_response(200, {"notes": db.get("calendar_notes", [])})
+            return _hr_json_response(403, {"error": "forbidden"})
+
+        # ── CALENDAR REMINDERS (save employee reminders, visible to admin) ──
+        if subpath == "/calendar/reminders" and method == "POST":
+            if role != "employee":
+                return _hr_json_response(403, {"error": "employee_only"})
+            import datetime as _dtcr
+            emp_id = auth.get("employee_id")
+            body = body or {}
+            reminders = body.get("reminders", [])
+            cal_rems = db.setdefault("calendar_reminders", [])
+            existing = next((r for r in cal_rems if r.get("employee_id") == emp_id), None)
+            if existing:
+                existing["reminders"] = reminders
+                existing["updated_at"] = _dtcr.datetime.utcnow().isoformat() + "Z"
+            else:
+                emp_cr = next((e for e in db["employees"] if e["id"] == emp_id), {})
+                cal_rems.append({
+                    "employee_id": emp_id,
+                    "employee_name": f"{emp_cr.get('first_name','')} {emp_cr.get('last_name','')}".strip(),
+                    "reminders": reminders,
+                    "updated_at": _dtcr.datetime.utcnow().isoformat() + "Z",
+                })
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True})
+
+        # ── /attendance/<id>/accept — HR accepts a self-reported Late / Out Today ──
+        # (2026-09-29, approved by Jamie) The "accepted" mark used to live only in one
+        # browser's localStorage, so on another computer (or after clearing browser data)
+        # accepted reports looked un-accepted again. Now it's stored on the record itself.
+        if subpath.startswith("/attendance/") and subpath.endswith("/accept") and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            att_id = subpath.split("/")[2]
+            rec = next((a for a in db.get("attendance", []) if a.get("id") == att_id), None)
+            if not rec:
+                return _hr_json_response(404, {"error": "not_found"})
+            import datetime as _acc_dt
+            accepted = bool((body or {}).get("accepted", True))
+            rec["hr_accepted"] = accepted
+            rec["hr_accepted_at"] = _acc_dt.datetime.utcnow().isoformat() + "Z" if accepted else None
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "record": rec})
+
+        # ── /calendar/events — HR business calendar events (meetings, reminders, company events) ──
+        # (2026-09-28, approved by Jamie) These used to live only in one browser's
+        # localStorage, so they didn't show on other computers/phones and could vanish
+        # if the browser's data was cleared. Now they're stored on the server. HR only.
+        if subpath == "/calendar/events" and method == "GET":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            return _hr_json_response(200, {"events": db.get("calendar_events", [])})
+
+        if subpath == "/calendar/events" and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            body = body or {}
+            title = str(body.get("title") or "").strip()
+            date = str(body.get("date") or "").strip()
+            if not title or not date:
+                return _hr_json_response(400, {"error": "title and date required"})
+            import uuid as _ce_uuid, datetime as _ce_dt
+            events = db.setdefault("calendar_events", [])
+            ev_id = str(body.get("id") or "").strip()
+            if not ev_id or any(e.get("id") == ev_id for e in events):
+                ev_id = "CAL-" + str(_ce_uuid.uuid4())[:8].upper()
+            ev = {
+                "id": ev_id, "title": title[:200], "date": date[:10],
+                "end_date": str(body.get("end_date") or date)[:10],
+                "notes": str(body.get("notes") or "")[:2000],
+                "type": str(body.get("type") or "event")[:40],
+                "created_at": _ce_dt.datetime.utcnow().isoformat() + "Z",
+            }
+            events.append(ev)
+            _hr_save_db(db)
+            return _hr_json_response(201, {"ok": True, "event": ev})
+
+        if subpath.startswith("/calendar/events/") and subpath.endswith("/delete") and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            ev_id = subpath.split("/")[3]
+            before = len(db.get("calendar_events", []))
+            db["calendar_events"] = [e for e in db.get("calendar_events", []) if e.get("id") != ev_id]
+            if len(db["calendar_events"]) == before:
+                return _hr_json_response(404, {"error": "not_found"})
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "deleted": ev_id})
+
+        if subpath == "/calendar/reminders" and method == "GET":
+            if role == "employee":
+                emp_id = auth.get("employee_id")
+                rec = next((r for r in db.get("calendar_reminders", []) if r.get("employee_id") == emp_id), {})
+                return _hr_json_response(200, {"reminders": rec.get("reminders", [])})
+            if role == "admin":
+                return _hr_json_response(200, {"reminders": db.get("calendar_reminders", [])})
+            return _hr_json_response(403, {"error": "forbidden"})
+
+        if subpath == "/pto/request" and method == "POST":
+            # Employees request their own time off. (2026-09-28, E2E bug #12) HR can also
+            # create one on an employee's behalf (HR Admin → Time Off → + Add Event → Time off),
+            # by passing employee_id — that button used to crash and save nothing.
+            if role not in ("employee", "admin"):
+                return _hr_json_response(403, {"error": "forbidden"})
+            body = body or {}
+            if role == "admin":
+                emp_id = (body.get("employee_id") or "").strip()
+                if not any(e.get("id") == emp_id for e in db.get("employees", [])):
+                    return _hr_json_response(400, {"error": "employee_id required (unknown employee)"})
+            else:
+                emp_id = auth.get("employee_id")
+            if not body.get("start_date") or not body.get("end_date"):
+                return _hr_json_response(400, {"error": "start_date and end_date required"})
+            half_day = bool(body.get("half_day")) and body["start_date"] == body["end_date"]
+            half_day_period = body.get("half_day_period") if half_day else None
+            if half_day_period not in ("AM", "PM"):
+                half_day_period = "AM" if half_day else None
+            import datetime as _dt5
+            emp5 = next((e for e in db["employees"] if e["id"] == emp_id), {})
+            record = {
+                "id": _hr_next_id(db.setdefault("pto_requests", []), "PTOREQ"),
+                "employee_id": emp_id,
+                "employee_name": f"{emp5.get('first_name','')} {emp5.get('last_name','')}".strip(),
+                "type": body.get("type", "PTO (Vacation)"),
+                "start_date": body["start_date"],
+                "end_date": body["end_date"],
+                "half_day": half_day,
+                "half_day_period": half_day_period,
+                "notes": body.get("notes", ""),
+                "status": "pending",
+                "created_at": _dt5.datetime.utcnow().isoformat() + "Z",
+                "decided_at": None,
+                "decided_by": None,
+                "decision_note": "",
+            }
+            db.setdefault("pto_requests", []).append(record)
+            _hr_save_db(db)
+            return _hr_json_response(201, {"ok": True, "request": record})
+
+        if subpath == "/pto" and method == "GET":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            records = db.setdefault("pto_requests", [])
+            status_filter = (query or {}).get("status")
+            if isinstance(status_filter, list):
+                status_filter = status_filter[0] if status_filter else None
+            if status_filter:
+                records = [r for r in records if r.get("status") == status_filter]
+            records = sorted(records, key=lambda r: r.get("created_at", ""), reverse=True)
+            return _hr_json_response(200, {"requests": records})
+
+        if subpath.startswith("/pto/") and subpath.endswith("/approve") and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            req_id = subpath.split("/")[2]
+            req = next((r for r in db.setdefault("pto_requests", []) if r.get("id") == req_id), None)
+            if not req:
+                return _hr_json_response(404, {"error": "not_found"})
+            import datetime as _dt6
+            # Clear any attendance days this request mirrored before (e.g. approved →
+            # denied → approved again) so re-approving never creates duplicate days.
+            _s6 = str(req.get("start_date", "")); _e6 = str(req.get("end_date", _s6)); _t6 = str(req.get("type", "PTO"))
+            db["attendance"] = [a for a in db.setdefault("attendance", []) if not (
+                a.get("employee_id") == req.get("employee_id") and a.get("status") == "pto"
+                and _s6 <= str(a.get("date", "")) <= _e6 and str(a.get("note", "")).startswith(_t6))]
+            req["status"] = "approved"
+            req["decided_at"] = _dt6.datetime.utcnow().isoformat() + "Z"
+            req["decided_by"] = (body or {}).get("decided_by", "admin")
+            req["decision_note"] = (body or {}).get("note", "")
+            # Mirror onto the attendance log so existing admin PTO stats/
+            # calendar (which already read attendance status=="pto") reflect
+            # approved time off automatically, without a second data model.
+            emp6 = next((e for e in db["employees"] if e["id"] == req["employee_id"]), {})
+            d = _dt6.date.fromisoformat(req["start_date"])
+            end_d = _dt6.date.fromisoformat(req["end_date"])
+            while d <= end_d:
+                db.setdefault("attendance", []).append({
+                    "id": _hr_next_id(db.setdefault("attendance", []), "ATT"),
+                    "employee_id": req["employee_id"],
+                    "employee_name": f"{emp6.get('first_name','')} {emp6.get('last_name','')}".strip(),
+                    "date": d.isoformat(),
+                    "status": "pto",
+                    "note": f"{req.get('type','PTO')} — {req.get('notes','')}".strip(" —"),
+                    "created_at": _dt6.datetime.utcnow().isoformat() + "Z",
+                })
+                d += _dt6.timedelta(days=1)
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "request": req})
+
+        if subpath.startswith("/pto/") and subpath.endswith("/deny") and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            req_id = subpath.split("/")[2]
+            req = next((r for r in db.setdefault("pto_requests", []) if r.get("id") == req_id), None)
+            if not req:
+                return _hr_json_response(404, {"error": "not_found"})
+            import datetime as _dt7
+            # If this was approved before, take its days back off the attendance calendar
+            if req.get("status") == "approved":
+                _s7 = str(req.get("start_date", "")); _e7 = str(req.get("end_date", _s7)); _t7 = str(req.get("type", "PTO"))
+                db["attendance"] = [a for a in db.setdefault("attendance", []) if not (
+                    a.get("employee_id") == req.get("employee_id") and a.get("status") == "pto"
+                    and _s7 <= str(a.get("date", "")) <= _e7 and str(a.get("note", "")).startswith(_t7))]
+            req["status"] = "denied"
+            req["decided_at"] = _dt7.datetime.utcnow().isoformat() + "Z"
+            req["decided_by"] = (body or {}).get("decided_by", "admin")
+            req["decision_note"] = (body or {}).get("note", "")
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "request": req})
+
+        # ── /pto/<id>/delete — remove a time-off request ──
+        #   Employee (own requests only): pending or denied → delete anytime;
+        #     approved → only if it hasn't started yet (cancels it). Approved
+        #     time off already taken can't be deleted by the employee, so used
+        #     PTO can't be erased from the record.
+        #   Admin: may delete any request.
+        #   Deleting an approved request also removes the attendance "pto"
+        #   rows that /approve mirrored, so calendars and stats stay in sync.
+        if subpath.startswith("/pto/") and subpath.endswith("/delete") and method == "POST":
+            if role not in ("employee", "admin"):
+                return _hr_json_response(403, {"error": "forbidden"})
+            import datetime as _dt8
+            req_id = subpath.split("/")[2]
+            reqs = db.setdefault("pto_requests", [])
+            req = next((r for r in reqs if r.get("id") == req_id), None)
+            if not req:
+                return _hr_json_response(404, {"error": "not_found"})
+            if role == "employee":
+                if req.get("employee_id") != auth.get("employee_id"):
+                    return _hr_json_response(403, {"error": "not_your_request"})
+                # Employee "delete" only removes the request from the employee's OWN view.
+                # Nothing is ever deleted from HR Admin: the request, attendance and PTO
+                # history all stay exactly as they are.
+                req["hidden_by_employee"] = True
+                req["hidden_at"] = _dt8.datetime.utcnow().isoformat() + "Z"
+                _hr_save_db(db)
+                return _hr_json_response(200, {"ok": True, "hidden": req_id})
+            if req.get("status") == "approved":
+                try:
+                    s = str(req.get("start_date", "")); e = str(req.get("end_date", s))
+                    typ = str(req.get("type", "PTO"))
+                    db["attendance"] = [a for a in db.setdefault("attendance", []) if not (
+                        a.get("employee_id") == req.get("employee_id") and a.get("status") == "pto"
+                        and s <= str(a.get("date", "")) <= e and str(a.get("note", "")).startswith(typ))]
+                except Exception:
+                    pass
+            db["pto_requests"] = [r for r in reqs if r.get("id") != req_id]
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "deleted": req_id})
+
+        # ── /schedule-change — employee-submitted shift-change/swap requests ──
+        # Records live in db["schedule_change_requests"]. Each record: {id,
+        #   employee_id, employee_name, request_type (swap|change|other),
+        #   current_shift, requested_change, reason, status
+        #   (pending|approved|denied), created_at, decided_at, decided_by,
+        #   decision_note}. Shared source of truth between the HR Portal
+        #   (employee submit + own status) and HR Admin (approval queue).
+
+        # ── /swaps — coworker-to-coworker shift swap requests (Jamie, Oct 1) ──
+        # An employee clicks a coworker's name and sends a short swap message; the
+        # coworker Approves or Denies it in their own Portal. No HR step — the
+        # coworker's answer is final (Deny closes it). HR can read them (GET /swaps).
+        def _is_test_acct(e):
+            em = ((e.get("personal_email") or "") + " " + (e.get("work_email") or "")).lower()
+            return "+hrtest@" in em or "+zz-" in em or str(e.get("first_name", "")).startswith("ZZTEST")
+
+        if subpath == "/swaps/coworkers" and method == "GET":
+            if role != "employee":
+                return _hr_json_response(403, {"error": "employee_only"})
+            me_id = auth.get("employee_id")
+            me = next((e for e in db.get("employees", []) if e.get("id") == me_id), {}) or {}
+            me_test = _is_test_acct(me)
+            people = [{"id": e["id"], "name": f"{e.get('first_name','')} {e.get('last_name','')}".strip(),
+                       "title": e.get("title", "")}
+                      for e in db.get("employees", [])
+                      if e.get("id") != me_id
+                      and str(e.get("status", "")).lower() != "terminated"
+                      and _is_test_acct(e) == me_test]      # test accounts never see / are never seen by real staff
+            people.sort(key=lambda p: p["name"].lower())
+            return _hr_json_response(200, {"coworkers": people})
+
+        if subpath == "/swaps" and method == "POST":
+            if role != "employee":
+                return _hr_json_response(403, {"error": "employee_only"})
+            body = body or {}
+            me_id = auth.get("employee_id")
+            to_id = str(body.get("to_employee_id") or "").strip()
+            msg = str(body.get("message") or "").strip()[:300]
+            emps = db.get("employees", [])
+            me = next((e for e in emps if e.get("id") == me_id), None)
+            to = next((e for e in emps if e.get("id") == to_id), None)
+            if not me or not to or to_id == me_id or str(to.get("status", "")).lower() == "terminated":
+                return _hr_json_response(400, {"error": "choose a coworker"})
+            if _is_test_acct(me) != _is_test_acct(to):
+                return _hr_json_response(400, {"error": "choose a coworker"})
+            if not msg:
+                return _hr_json_response(400, {"error": "add a short message about the swap"})
+            import datetime as _sw_dt
+            swaps = db.setdefault("shift_swaps", [])
+            rec = {
+                "id": _hr_next_id(swaps, "SWP"),
+                "from_employee_id": me_id, "from_name": f"{me.get('first_name','')} {me.get('last_name','')}".strip(),
+                "to_employee_id": to_id, "to_name": f"{to.get('first_name','')} {to.get('last_name','')}".strip(),
+                "message": msg, "status": "pending",
+                "created_at": _sw_dt.datetime.utcnow().isoformat() + "Z", "responded_at": None,
+            }
+            swaps.append(rec)
+            _hr_save_db(db)
+            return _hr_json_response(201, {"ok": True, "swap": rec})
+
+        if subpath == "/swaps/mine" and method == "GET":
+            if role != "employee":
+                return _hr_json_response(403, {"error": "employee_only"})
+            me_id = auth.get("employee_id")
+            swaps = db.get("shift_swaps", [])
+            newest = lambda lst: sorted(lst, key=lambda s: s.get("created_at", ""), reverse=True)
+            return _hr_json_response(200, {
+                "received": newest([s for s in swaps if s.get("to_employee_id") == me_id]),
+                "sent":     newest([s for s in swaps if s.get("from_employee_id") == me_id]),
+            })
+
+        if subpath.startswith("/swaps/") and subpath.endswith("/respond") and method == "POST":
+            if role != "employee":
+                return _hr_json_response(403, {"error": "employee_only"})
+            sw_id = subpath.split("/")[2]
+            sw = next((s for s in db.get("shift_swaps", []) if s.get("id") == sw_id), None)
+            if not sw:
+                return _hr_json_response(404, {"error": "not_found"})
+            if sw.get("to_employee_id") != auth.get("employee_id"):
+                return _hr_json_response(403, {"error": "only the coworker it was sent to can answer"})
+            if sw.get("status") != "pending":
+                return _hr_json_response(409, {"error": "already answered", "status": sw.get("status")})
+            decision = str((body or {}).get("decision") or "").lower()
+            if decision not in ("approved", "denied"):
+                return _hr_json_response(400, {"error": "decision must be approved or denied"})
+            import datetime as _sw_dt2
+            sw["status"] = decision
+            sw["responded_at"] = _sw_dt2.datetime.utcnow().isoformat() + "Z"
+            # (2026-10-01, Jamie) When a coworker APPROVES a swap, notify HR in HR Admin → Messages.
+            # Created by the server, so it can't be skipped. Denied swaps don't notify HR.
+            if decision == "approved":
+                import uuid as _sw_uuid
+                _emps = db.get("employees", [])
+                _frm = next((e for e in _emps if e.get("id") == sw.get("from_employee_id")), {}) or {}
+                _to  = next((e for e in _emps if e.get("id") == sw.get("to_employee_id")), {}) or {}
+                _test = _is_test_acct(_frm) or _is_test_acct(_to)   # test-run notices are tagged so cleanup finds them
+                _when = _sw_dt2.datetime.now().strftime("%b %d, %I:%M %p").replace(" 0", " ")
+                db.setdefault("messages", []).append({
+                    "id": "MSG-" + str(_sw_uuid.uuid4())[:8].upper(),
+                    "sent_at": _sw_dt2.datetime.now().isoformat(timespec="seconds"),
+                    "read": False, "reply": None,
+                    "message_type": "shift_swap", "swap_id": sw.get("id"),
+                    "employee_id": sw.get("from_employee_id"),
+                    "sender_name": "🔁 Shift Swaps",
+                    "subject": (("ZZTEST " if _test else "") +
+                                f"🔁 Shift swap approved: {sw.get('from_name')} ↔ {sw.get('to_name')}"),
+                    "body": (f"{sw.get('from_name')} asked {sw.get('to_name')}:\n\"{sw.get('message')}\"\n\n"
+                             f"{sw.get('to_name')} approved it on {_when}."),
+                })
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "swap": sw})
+
+        if subpath == "/swaps" and method == "GET":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            return _hr_json_response(200, {"swaps": db.get("shift_swaps", [])})
+
+        if subpath == "/schedule-change/mine" and method == "GET":
+            if role != "employee":
+                return _hr_json_response(403, {"error": "employee_only"})
+            emp_id = auth.get("employee_id")
+            records = [r for r in db.setdefault("schedule_change_requests", []) if r.get("employee_id") == emp_id]
+            records = sorted(records, key=lambda r: r.get("created_at", ""), reverse=True)
+            return _hr_json_response(200, {"requests": records})
+
+        if subpath == "/schedule-change/request" and method == "POST":
+            if role != "employee":
+                return _hr_json_response(403, {"error": "employee_only"})
+            body = body or {}
+            if not body.get("current_shift") or not body.get("requested_change"):
+                return _hr_json_response(400, {"error": "current_shift and requested_change required"})
+            import datetime as _dt8
+            emp_id = auth.get("employee_id")
+            emp8 = next((e for e in db["employees"] if e["id"] == emp_id), {})
+            record = {
+                "id": _hr_next_id(db.setdefault("schedule_change_requests", []), "SCHREQ"),
+                "employee_id": emp_id,
+                "employee_name": f"{emp8.get('first_name','')} {emp8.get('last_name','')}".strip(),
+                "request_type": body.get("request_type", "swap"),
+                "current_shift": body["current_shift"],
+                "requested_change": body["requested_change"],
+                "reason": body.get("reason", ""),
+                "status": "pending",
+                "created_at": _dt8.datetime.utcnow().isoformat() + "Z",
+                "decided_at": None,
+                "decided_by": None,
+                "decision_note": "",
+            }
+            db.setdefault("schedule_change_requests", []).append(record)
+            _hr_save_db(db)
+            return _hr_json_response(201, {"ok": True, "request": record})
+
+        if subpath == "/schedule-change" and method == "GET":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            records = db.setdefault("schedule_change_requests", [])
+            status_filter = (query or {}).get("status")
+            if isinstance(status_filter, list):
+                status_filter = status_filter[0] if status_filter else None
+            if status_filter:
+                records = [r for r in records if r.get("status") == status_filter]
+            records = sorted(records, key=lambda r: r.get("created_at", ""), reverse=True)
+            return _hr_json_response(200, {"requests": records})
+
+        if subpath.startswith("/schedule-change/") and subpath.endswith("/approve") and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            req_id = subpath.split("/")[2]
+            req = next((r for r in db.setdefault("schedule_change_requests", []) if r.get("id") == req_id), None)
+            if not req:
+                return _hr_json_response(404, {"error": "not_found"})
+            import datetime as _dt9
+            req["status"] = "approved"
+            req["decided_at"] = _dt9.datetime.utcnow().isoformat() + "Z"
+            req["decided_by"] = (body or {}).get("decided_by", "admin")
+            req["decision_note"] = (body or {}).get("note", "")
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "request": req})
+
+        if subpath.startswith("/schedule-change/") and subpath.endswith("/deny") and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            req_id = subpath.split("/")[2]
+            req = next((r for r in db.setdefault("schedule_change_requests", []) if r.get("id") == req_id), None)
+            if not req:
+                return _hr_json_response(404, {"error": "not_found"})
+            import datetime as _dt10
+            req["status"] = "denied"
+            req["decided_at"] = _dt10.datetime.utcnow().isoformat() + "Z"
+            req["decided_by"] = (body or {}).get("decided_by", "admin")
+            req["decision_note"] = (body or {}).get("note", "")
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "request": req})
+
+        # ── /timeclock — real employee clock-in/out, visible to HR Admin ─────
+        # Records live in db["time_entries"]. Each record: {id, employee_id,
+        #   employee_name, date, clock_in (ISO), clock_out (ISO or None),
+        #   duration_minutes}. One "open" entry (clock_out None) per employee
+        #   at a time. This is the shared source of truth between the HR
+        #   Portal (employee clock button) and HR Admin (who's clocked in).
+
+        if subpath == "/timeclock/status" and method == "GET":
+            if role != "employee":
+                return _hr_json_response(403, {"error": "employee_only"})
+            emp_id = auth.get("employee_id")
+            open_entry = next((t for t in db.setdefault("time_entries", [])
+                                if t.get("employee_id") == emp_id and t.get("clock_out") is None), None)
+            return _hr_json_response(200, {"clocked_in": open_entry is not None, "entry": open_entry})
+
+        if subpath == "/timeclock/mine" and method == "GET":
+            if role != "employee":
+                return _hr_json_response(403, {"error": "employee_only"})
+            emp_id = auth.get("employee_id")
+            records = [t for t in db.setdefault("time_entries", []) if t.get("employee_id") == emp_id and t.get("clock_out")]
+            records = sorted(records, key=lambda r: r.get("clock_in", ""), reverse=True)[:10]
+            return _hr_json_response(200, {"entries": records})
+
+        # ── /test/cleanup + /test/leftovers — E2E test support (admin only) ──
+        # Used by tests\hr_e2e to remove records that have no delete button
+        # (clock-ins, attendance days, shift-swap requests). SAFETY: can only
+        # ever touch the dedicated QA account — the employee whose email
+        # contains "+hrtest@" (Test Tester). Real employees are never matched.
+        if subpath in ("/test/cleanup", "/test/leftovers"):
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            tt_ids = {e.get("id") for e in db.get("employees", [])
+                      if "+hrtest@" in (e.get("personal_email") or "").lower()
+                      or "+hrtest@" in (e.get("work_email") or "").lower()}
+            areas = ("time_entries", "attendance", "schedule_change_requests")
+            counts = {a: sum(1 for r in db.get(a, []) if r.get("employee_id") in tt_ids) for a in areas}
+            # Shift swaps sent by or to the QA account (added Oct 1)
+            counts["shift_swaps"] = sum(1 for s in db.get("shift_swaps", [])
+                                        if s.get("from_employee_id") in tt_ids or s.get("to_employee_id") in tt_ids)
+            if subpath == "/test/leftovers" and method == "GET":
+                return _hr_json_response(200, {"test_employee_ids": sorted(tt_ids), "leftovers": counts})
+            if subpath == "/test/cleanup" and method == "POST":
+                if not tt_ids:
+                    return _hr_json_response(200, {"ok": True, "deleted": {a: 0 for a in counts}})
+                for a in areas:
+                    if a in db:
+                        db[a] = [r for r in db[a] if r.get("employee_id") not in tt_ids]
+                if "shift_swaps" in db:
+                    db["shift_swaps"] = [s for s in db["shift_swaps"]
+                                         if s.get("from_employee_id") not in tt_ids and s.get("to_employee_id") not in tt_ids]
+                _hr_save_db(db)
+                print(f"[HR] E2E test cleanup removed {counts} for {sorted(tt_ids)}")
+                return _hr_json_response(200, {"ok": True, "deleted": counts})
+
+        if subpath == "/timeclock/summary" and method == "GET":
+            # Exact counts for the Portfolio "Days Clocked" tile — counts ALL entries, not just the last 10
+            if role != "employee":
+                return _hr_json_response(403, {"error": "employee_only"})
+            emp_id = auth.get("employee_id")
+            mine = [t for t in db.setdefault("time_entries", []) if t.get("employee_id") == emp_id]
+            clock_ins  = sum(1 for t in mine if t.get("clock_in"))
+            clock_outs = sum(1 for t in mine if t.get("clock_out"))
+            days = {str(t.get("clock_in"))[:10] for t in mine if t.get("clock_in")}
+            return _hr_json_response(200, {
+                "clock_ins": clock_ins,
+                "clock_outs": clock_outs,
+                "days_clocked": len(days),
+            })
+
+        if subpath == "/timeclock/in" and method == "POST":
+            if role != "employee":
+                return _hr_json_response(403, {"error": "employee_only"})
+            import datetime as _dt11
+            emp_id = auth.get("employee_id")
+            already_open = next((t for t in db.setdefault("time_entries", [])
+                                  if t.get("employee_id") == emp_id and t.get("clock_out") is None), None)
+            if already_open:
+                return _hr_json_response(400, {"error": "already_clocked_in", "entry": already_open})
+            emp11 = next((e for e in db["employees"] if e["id"] == emp_id), {})
+            now11 = _dt11.datetime.now()
+            lat11 = body.get("lat")
+            lng11 = body.get("lng")
+            accuracy11 = body.get("accuracy")
+            maps_url11 = None
+            if lat11 is not None and lng11 is not None:
+                maps_url11 = f"https://www.google.com/maps?q={lat11},{lng11}"
+            record = {
+                "id": _hr_next_id(db.setdefault("time_entries", []), "TIME"),
+                "employee_id": emp_id,
+                "employee_name": f"{emp11.get('first_name','')} {emp11.get('last_name','')}".strip(),
+                "date": now11.date().isoformat(),
+                "clock_in": now11.isoformat(),
+                "clock_out": None,
+                "duration_minutes": None,
+                "clock_in_lat": lat11,
+                "clock_in_lng": lng11,
+                "clock_in_accuracy_m": accuracy11,
+                "clock_in_maps_url": maps_url11,
+            }
+            db.setdefault("time_entries", []).append(record)
+            _hr_save_db(db)
+            return _hr_json_response(201, {"ok": True, "entry": record})
+
+        if subpath == "/timeclock/out" and method == "POST":
+            if role != "employee":
+                return _hr_json_response(403, {"error": "employee_only"})
+            import datetime as _dt12
+            emp_id = auth.get("employee_id")
+            open_entry = next((t for t in db.setdefault("time_entries", [])
+                                if t.get("employee_id") == emp_id and t.get("clock_out") is None), None)
+            if not open_entry:
+                return _hr_json_response(400, {"error": "not_clocked_in"})
+            now12 = _dt12.datetime.now()
+            clock_in_dt = _dt12.datetime.fromisoformat(open_entry["clock_in"].rstrip("Z"))
+            duration = int((now12 - clock_in_dt).total_seconds() // 60)
+            open_entry["clock_out"] = now12.isoformat()
+            open_entry["duration_minutes"] = duration
+            # Save clock-out GPS if provided
+            lat12 = (body or {}).get("lat")
+            lng12 = (body or {}).get("lng")
+            if lat12 is not None and lng12 is not None:
+                open_entry["clock_out_lat"] = lat12
+                open_entry["clock_out_lng"] = lng12
+                open_entry["clock_out_maps_url"] = f"https://www.google.com/maps?q={lat12},{lng12}"
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "entry": open_entry})
+
+        if subpath == "/timeclock/today" and method == "GET":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            import datetime as _dt13
+            today13 = _dt13.date.today().isoformat()
+            records = [t for t in db.setdefault("time_entries", []) if t.get("date") == today13]
+            records = sorted(records, key=lambda r: r.get("clock_in", ""), reverse=True)
+            return _hr_json_response(200, {"entries": records})
+
+        # ── /timeclock/entries — period-filtered clock-in/out log with GPS,
+        #    for HR Admin's Time & Attendance view. Admin only.
+        if subpath == "/timeclock/entries" and method == "GET":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            import datetime as _dt14
+            records = db.setdefault("time_entries", [])
+            period = (query or {}).get("period", ["week"])
+            period = period[0] if isinstance(period, list) else period
+            today14 = _dt14.date.today()
+            if period == "week":
+                cutoff14 = (today14 - _dt14.timedelta(days=today14.weekday())).isoformat()
+                records = [r for r in records if r.get("date", "") >= cutoff14]
+            elif period == "month":
+                cutoff14 = today14.replace(day=1).isoformat()
+                records = [r for r in records if r.get("date", "") >= cutoff14]
+            records = sorted(records, key=lambda r: r.get("clock_in", ""), reverse=True)
+            return _hr_json_response(200, {"entries": records})
+
+        # ── /timeclock/entries/<id> DELETE — remove a bad/duplicate clock
+        # entry from HR Admin's Clock In/Out Log. Admin only.
+        # (Restored 2026-09-23: lost in the 09-19 rollback, see QA report.)
+        if subpath.startswith("/timeclock/entries/") and subpath.count("/") == 3 and method == "DELETE":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            entry_id = subpath.split("/")[3]
+            before = len(db.get("time_entries", []))
+            db["time_entries"] = [t for t in db.get("time_entries", []) if t.get("id") != entry_id]
+            if len(db["time_entries"]) == before:
+                return _hr_json_response(404, {"error": "not_found"})
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True})
+
+        # ══ JOB SITE LOCATIONS (restored 2026-09-23) ═════════════════════════
+
+        # GET /locations — list all job sites
+        if subpath == "/locations" and method == "GET":
+            return _hr_json_response(200, {"locations": db.get("locations", [])})
+
+        # POST /locations — create a job site
+        if subpath == "/locations" and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            import uuid as _luuid, datetime as _ldt
+            loc = {
+                "id":       "LOC-" + str(_luuid.uuid4())[:8].upper(),
+                "name":     (body.get("name") or "").strip(),
+                "address":  (body.get("address") or "").strip(),
+                "lat":      body.get("lat"),
+                "lng":      body.get("lng"),
+                "radius_m": int(body.get("radius_m") or 200),
+                "notes":    (body.get("notes") or "").strip(),
+                "employee_ids": [],
+                "created_at": _ldt.datetime.utcnow().isoformat() + "Z",
+            }
+            if not loc["name"]:
+                return _hr_json_response(400, {"error": "name_required"})
+            db.setdefault("locations", []).append(loc)
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "location": loc})
+
+        # GET /locations/my — employee gets their assigned job site
+        if subpath == "/locations/my" and method == "GET":
+            if role != "employee":
+                return _hr_json_response(403, {"error": "employee_only"})
+            emp_id = auth.get("employee_id")
+            my_loc = next((l for l in db.get("locations", []) if emp_id in (l.get("employee_ids") or [])), None)
+            return _hr_json_response(200, {"location": my_loc})
+
+        # POST /locations/:id/assign — assign employees to a job site
+        if subpath.startswith("/locations/") and subpath.endswith("/assign") and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            loc_id = subpath.split("/")[2]
+            loc = next((l for l in db.get("locations", []) if l["id"] == loc_id), None)
+            if not loc:
+                return _hr_json_response(404, {"error": "location_not_found"})
+            loc["employee_ids"] = body.get("employee_ids", [])
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "location": loc})
+
+        # PATCH /locations/:id — update a job site
+        if subpath.startswith("/locations/") and subpath.count("/") == 2 and method == "PATCH":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            loc_id = subpath.split("/")[2]
+            loc = next((l for l in db.get("locations", []) if l["id"] == loc_id), None)
+            if not loc:
+                return _hr_json_response(404, {"error": "location_not_found"})
+            for field in ("name", "address", "notes"):
+                if field in body:
+                    loc[field] = (body[field] or "").strip()
+            for field in ("lat", "lng", "radius_m"):
+                if field in body:
+                    loc[field] = body[field]
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "location": loc})
+
+        # DELETE /locations/:id — delete a job site
+        if subpath.startswith("/locations/") and subpath.count("/") == 2 and method == "DELETE":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            loc_id = subpath.split("/")[2]
+            before = len(db.get("locations", []))
+            db["locations"] = [l for l in db.get("locations", []) if l["id"] != loc_id]
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "deleted": before - len(db["locations"])})
+
+        # ── /documents/<id>/download ─────────────────────────────────────
+        if subpath.startswith("/documents/") and subpath.endswith("/download") and method == "GET":
+            doc_id = subpath.split("/")[2]
+            doc = next((d for d in db.get("documents", []) if d.get("id") == doc_id), None)
+            if not doc:
+                return _hr_json_response(404, {"error": "not_found"})
+            file_path = doc.get("file_path", "")
+            if not file_path or not _hros.path.isfile(file_path):
+                return _hr_json_response(404, {"error": "file_not_found"})
+            import mimetypes as _mt, base64 as _b64
+            mime, _ = _mt.guess_type(file_path)
+            mime = mime or "application/octet-stream"
+            filename = _hros.path.basename(file_path)
+            with open(file_path, "rb") as fh:
+                file_bytes = fh.read()
+            encoded = _b64.b64encode(file_bytes).decode("ascii")
+            return _hr_json_response(200, {"filename": filename, "mime_type": mime, "data_b64": encoded})
+
+        # ── /documents/<id> DELETE ────────────────────────────────────────
+        if subpath.startswith("/documents/") and subpath.count("/") == 2 and method == "DELETE":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            doc_id = subpath.split("/")[2]
+            before = len(db.get("documents", []))
+            doc = next((d for d in db.get("documents", []) if d.get("id") == doc_id), None)
+            if doc and doc.get("file_path") and _hros.path.isfile(doc["file_path"]):
+                try:
+                    _hros.remove(doc["file_path"])
+                except Exception:
+                    pass
+            db["documents"] = [d for d in db.get("documents", []) if d.get("id") != doc_id]
+            if len(db["documents"]) == before:
+                return _hr_json_response(404, {"error": "not_found"})
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True})
+
+        # ── POST /tasks — manual task creation ───────────────────────────
+        if subpath == "/tasks" and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            emp_id = (body.get("employee_id") or "").strip()
+            name = (body.get("name") or "").strip()
+            if not emp_id or not name:
+                return _hr_json_response(400, {"error": "employee_id_and_name_required"})
+            emp = next((e for e in db["employees"] if e["id"] == emp_id), None)
+            if not emp:
+                return _hr_json_response(404, {"error": "employee_not_found"})
+            task = {
+                "id": _hr_next_id(db["tasks"], "TASK"),
+                "employee_id": emp_id, "template_id": None,
+                "phase": body.get("phase", "Active"), "name": name,
+                "priority": body.get("priority", "MEDIUM"),
+                "assigned_to_role": body.get("assigned_to_role", "HR"),
+                "assigned_to_id": body.get("assigned_to_id", None),
+                "due_date": body.get("due_date") or None,
+                "status": "Not Started", "federal_required": False, "state_specific": False,
+                "instructions": body.get("notes", ""), "form_ref": None, "portal_url": "",
+                "penalty": "", "escalation_hours": None, "upload_required": False, "upload_folder": None,
+                "completed_at": None, "completed_by": None, "completion_notes": None,
+                "waived_at": None, "waived_by": None, "waive_reason": None,
+                "escalated": False, "escalation_sent_at": None, "last_reminder_sent_at": None,
+                "reassignments": [], "created_at": _hrdt.datetime.utcnow().isoformat() + "Z",
+            }
+            db["tasks"].append(task)
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "task": task})
+
+        # ── PATCH /tasks/:id ─────────────────────────────────────────────
+        if subpath.startswith("/tasks/") and subpath.count("/") == 2 and method == "PATCH":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            task_id = subpath.split("/")[2]
+            task = next((t for t in db["tasks"] if t["id"] == task_id), None)
+            if not task:
+                return _hr_json_response(404, {"error": "not_found"})
+            PATCHABLE = {"status", "priority", "due_date", "assigned_to_role",
+                         "assigned_to_id", "employee_id", "instructions", "phase"}
+            changed = [k for k, v in body.items() if k in PATCHABLE and task.get(k) != v]
+            for k in changed:
+                task[k] = body[k]
+            if changed:
+                _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "task": task, "changed": changed})
+
+        # ── PATCH /employees/:id ─────────────────────────────────────────
+        if subpath.startswith("/employees/") and subpath.count("/") == 2 and method == "PATCH":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            emp_id = subpath.split("/")[2]
+            emp = next((e for e in db["employees"] if e["id"] == emp_id), None)
+            if not emp:
+                return _hr_json_response(404, {"error": "not_found"})
+            # Sign-in credentials only change through /portal/set-pin, never a plain record edit
+            BLOCKED = {"id", "pin_hash", "portal_token_hash", "created_at"}
+            body = body or {}
+            # (2026-09-30, E2E bug #19) Bank "last 4" fields: keep only the last 4 digits, whatever is sent
+            for _lk in ("account_last4", "routing_last4"):
+                if _lk in body:
+                    body[_lk] = "".join(ch for ch in str(body[_lk] or "") if ch.isdigit())[-4:]
+            changed = [k for k, v in body.items() if k not in BLOCKED and emp.get(k) != v]
+            for k in changed:
+                emp[k] = body[k]
+            if changed:
+                db.setdefault("audit_log", []).append({
+                    "at": _hrdt.datetime.utcnow().isoformat() + "Z",
+                    "action": "employee_updated_via_http",
+                    "employee_id": emp_id, "changed_fields": changed,
+                })
+                _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "employee": emp, "changed": changed})
+
+        # ── DELETE /employees/:id — hard delete an employee record ──────────
+        if subpath.startswith("/employees/") and subpath.count("/") == 2 and method == "DELETE":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            emp_id = subpath.split("/")[2]
+            before = len(db["employees"])
+            emp = next((e for e in db["employees"] if e["id"] == emp_id), None)
+            if not emp:
+                return _hr_json_response(404, {"error": "not_found"})
+            # Remove employee and all their tasks/documents from the database
+            db["employees"] = [e for e in db["employees"] if e["id"] != emp_id]
+            db["tasks"]     = [t for t in db.get("tasks", []) if t.get("employee_id") != emp_id]
+            db["documents"] = [d for d in db.get("documents", []) if d.get("employee_id") != emp_id]
+            db["attendance"]= [a for a in db.get("attendance", []) if a.get("employee_id") != emp_id]
+            db.setdefault("audit_log", []).append({
+                "at": _hrdt.datetime.utcnow().isoformat() + "Z",
+                "action": "employee_deleted", "employee_id": emp_id,
+                "name": f"{emp.get('first_name','')} {emp.get('last_name','')}".strip(),
+            })
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "deleted_id": emp_id})
+
+        # ── /timeoff/approve-direct — HR Admin adds already-approved time off
+        # on an employee's behalf (Time Off > "+ Add Request"). Restored
+        # 2026-09-23 and rewritten for the current pto_requests model so it
+        # shows up in the same list/calendar as employee-submitted requests.
+        if subpath == "/timeoff/approve-direct" and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            import datetime as _dtad
+            body = body or {}
+            emp_idad = (body.get("employee_id") or "").strip()
+            start_ad = (body.get("start_date") or "").strip()
+            end_ad   = (body.get("end_date") or start_ad).strip()
+            if not emp_idad or not start_ad:
+                return _hr_json_response(400, {"error": "employee_id and start_date required"})
+            emp_ad = next((e for e in db["employees"] if e["id"] == emp_idad), None)
+            if not emp_ad:
+                return _hr_json_response(404, {"error": "employee_not_found"})
+            try:
+                d_ad = _dtad.date.fromisoformat(start_ad)
+                e_ad = _dtad.date.fromisoformat(end_ad)
+            except ValueError:
+                return _hr_json_response(400, {"error": "invalid_date"})
+            if e_ad < d_ad:
+                return _hr_json_response(400, {"error": "end_before_start"})
+            now_ad = _dtad.datetime.utcnow().isoformat() + "Z"
+            name_ad = f"{emp_ad.get('first_name','')} {emp_ad.get('last_name','')}".strip()
+            type_ad = body.get("type") or "PTO (Vacation)"
+            notes_ad = (body.get("notes") or "").strip()
+            record_ad = {
+                "id": _hr_next_id(db.setdefault("pto_requests", []), "PTOREQ"),
+                "employee_id": emp_idad, "employee_name": name_ad,
+                "type": type_ad, "start_date": start_ad, "end_date": end_ad,
+                "half_day": False, "half_day_period": None, "notes": notes_ad,
+                "status": "approved", "created_at": now_ad,
+                "decided_at": now_ad, "decided_by": "HR Admin (added directly)",
+                "decision_note": "",
+            }
+            db.setdefault("pto_requests", []).append(record_ad)
+            while d_ad <= e_ad:
+                db.setdefault("attendance", []).append({
+                    "id": _hr_next_id(db.setdefault("attendance", []), "ATT"),
+                    "employee_id": emp_idad, "employee_name": name_ad,
+                    "date": d_ad.isoformat(), "status": "pto",
+                    "note": f"{type_ad} — {notes_ad}".strip(" —"),
+                    "created_at": now_ad,
+                })
+                d_ad += _dtad.timedelta(days=1)
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "request": record_ad})
+
+        # ── /portal/new-token — admin makes a NEW AI-Prowler access token for an employee ──
+        # (2026-10-01, Jamie chose Option B) Each employee signs in with THEIR OWN AI-Prowler
+        # bearer token. Tokens are stored only as a hash, so they can't be looked up later —
+        # this returns the new token ONCE for HR to copy and give to the employee. The old
+        # token stops working immediately.
+        # POST { "employee_id": "EMP-00001" }  ->  { "ok": true, "portal_token": "..." }
+        if subpath == "/portal/new-token" and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            emp_id = ((body or {}).get("employee_id") or "").strip()
+            emp = next((e for e in db["employees"] if e["id"] == emp_id), None)
+            if not emp:
+                return _hr_json_response(404, {"error": "employee_not_found"})
+            new_tok = _hrsecrets.token_urlsafe(24)
+            emp["portal_token_hash"] = _hr_pin_hash(new_tok, emp_id)
+            import datetime as _nt_dt
+            emp["portal_token_set_at"] = _nt_dt.datetime.utcnow().isoformat() + "Z"
+            db.setdefault("audit_log", []).append({
+                "at": emp["portal_token_set_at"], "action": "portal_token_regenerated", "employee_id": emp_id,
+            })
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "employee_id": emp_id, "portal_token": new_tok})
+
+        # ── /portal/set-pin — admin sets an employee's portal PIN ───────────
+        # POST { "employee_id": "EMP-00001", "pin": "1234" }
+        if subpath == "/portal/set-pin" and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            emp_id = (body.get("employee_id") or "").strip()
+            pin    = (body.get("pin") or "").strip()
+            if not emp_id or not pin:
+                return _hr_json_response(400, {"error": "employee_id_and_pin_required"})
+            if not pin.isdigit() or len(pin) < 4:
+                return _hr_json_response(400, {"error": "pin_must_be_4_or_more_digits"})
+            emp = next((e for e in db["employees"] if e["id"] == emp_id), None)
+            if not emp:
+                return _hr_json_response(404, {"error": "employee_not_found"})
+            emp["pin_hash"] = _hr_pin_hash(pin, emp_id)
+            emp["portal_pin_set"] = True
+            emp["portal_pin_set_at"] = _hrdt.datetime.utcnow().isoformat() + "Z"
+            db.setdefault("audit_log", []).append({
+                "at": _hrdt.datetime.utcnow().isoformat() + "Z",
+                "action": "portal_pin_set_by_admin", "employee_id": emp_id,
+            })
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "employee_id": emp_id})
+
+        # ── /portal/regenerate-token — admin (re)issues an employee's own ────
+        # long portal bearer token. POST { "employee_id": "EMP-00001" }
+        # Returns the plaintext token ONCE — only its hash is stored. Give it
+        # to the employee directly (Slack DM, printed onboarding sheet, etc.),
+        # never over an insecure channel. Calling this again invalidates the
+        # employee's previous token immediately.
+        if subpath == "/portal/regenerate-token" and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            emp_id = (body.get("employee_id") or "").strip()
+            if not emp_id:
+                return _hr_json_response(400, {"error": "employee_id_required"})
+            emp = next((e for e in db["employees"] if e["id"] == emp_id), None)
+            if not emp:
+                return _hr_json_response(404, {"error": "employee_not_found"})
+            new_token = _hrsecrets.token_urlsafe(24)
+            emp["portal_token_hash"] = _hr_pin_hash(new_token, emp_id)
+            emp["portal_token_set"] = True
+            emp["portal_token_set_at"] = _hrdt.datetime.utcnow().isoformat() + "Z"
+            db.setdefault("audit_log", []).append({
+                "at": _hrdt.datetime.utcnow().isoformat() + "Z",
+                "action": "portal_token_regenerated_by_admin", "employee_id": emp_id,
+            })
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "employee_id": emp_id, "token": new_token})
+
+        # ── /portal/change-pin — employee changes their own PIN ──────────────
+        # POST { "current_pin": "1234", "new_pin": "5678" }  (employee auth)
+        if subpath == "/portal/change-pin" and method == "POST":
+            if role != "employee":
+                return _hr_json_response(403, {"error": "employee_only"})
+            emp_id = auth.get("employee_id")
+            emp = next((e for e in db["employees"] if e["id"] == emp_id), None)
+            if not emp:
+                return _hr_json_response(404, {"error": "not_found"})
+            current = (body.get("current_pin") or "").strip()
+            new_pin = (body.get("new_pin") or "").strip()
+            if emp.get("pin_hash") != _hr_pin_hash(current, emp_id):
+                return _hr_json_response(401, {"error": "wrong_current_pin"})
+            if not new_pin.isdigit() or len(new_pin) < 4:
+                return _hr_json_response(400, {"error": "new_pin_must_be_4_or_more_digits"})
+            emp["pin_hash"] = _hr_pin_hash(new_pin, emp_id)
+            emp["portal_pin_set"] = True
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True})
+
+        # ── /portal/me — employee self-service profile ───────────────────────
+        # Returns employee's own record + their manager info + direct reports
+        if subpath == "/portal/me" and method == "GET":
+            if role != "employee":
+                return _hr_json_response(403, {"error": "employee_only"})
+            emp_id = auth.get("employee_id")
+            emp = next((e for e in db["employees"] if e["id"] == emp_id), None)
+            if not emp:
+                return _hr_json_response(404, {"error": "not_found"})
+            # Strip sensitive fields before returning
+            safe_emp = {k: v for k, v in emp.items()
+                        if k not in ("pin_hash", "_session_secret")}
+            # Find manager — look for any employee whose manager_name matches
+            # this employee's name, OR whose direct_reports list includes this emp_id
+            manager_info = None
+            emp_full_name = f"{emp.get('first_name','')} {emp.get('last_name','')}".strip()
+            for other in db["employees"]:
+                direct = other.get("direct_reports", [])
+                if emp_id in direct:
+                    manager_info = {
+                        "id": other["id"],
+                        "name": f"{other.get('first_name','')} {other.get('last_name','')}".strip(),
+                        "title": other.get("title", ""),
+                        "department": other.get("department", ""),
+                        "email": other.get("work_email") or other.get("personal_email", ""),
+                        "photo_url": other.get("photo_url", ""),
+                    }
+                    break
+            # Build direct reports list from this manager's direct_reports IDs
+            my_reports = emp.get("direct_reports", [])
+            direct_reports = []
+            for other in db["employees"]:
+                if other["id"] in my_reports:
+                    # Include time-off records for the vacation calendar
+                    emp_timeoff = [
+                        {
+                            "start": t.get("start_date") or t.get("date", ""),
+                            "end":   t.get("end_date")   or t.get("date", ""),
+                            "label": t.get("status", "Time Off"),
+                        }
+                        for t in db.get("attendance", [])
+                        if t.get("employee_id") == other["id"]
+                        and t.get("status") in ("pto", "absent")
+                    ]
+                    direct_reports.append({
+                        "id":                other["id"],
+                        "name":              f"{other.get('first_name','')} {other.get('last_name','')}".strip(),
+                        "title":             other.get("title", ""),
+                        "department":        other.get("department", ""),
+                        "email":             other.get("work_email") or other.get("personal_email", ""),
+                        "phone":             other.get("phone", ""),
+                        "emergency_contact": other.get("emergency_contact"),
+                        "photo_url":         other.get("photo_url", ""),
+                        "timeoff":           emp_timeoff,
+                    })
+            return _hr_json_response(200, {
+                "employee": safe_emp,
+                "manager": manager_info,
+                "direct_reports": direct_reports,
+                "is_manager": len(my_reports) > 0,
+            })
+
+        # ── /portal/report — manager views one direct report's fuller record ─
+        # GET /portal/report?employee_id=EMP-00002
+        # Scoped strictly to the caller's ACTUAL direct_reports, re-checked
+        # server-side on every call (never trusted from the client). Excludes
+        # compensation/pay fields as well as pin_hash/_session_secret -- pay
+        # visibility for managers is a separate policy decision, so it stays
+        # HR-Admin-only for now (see _hr_api_route's own note above on why
+        # manager_info/direct_reports already leave pay out).
+        if subpath == "/portal/report" and method == "GET":
+            if role != "employee":
+                return _hr_json_response(403, {"error": "employee_only"})
+            caller_id = auth.get("employee_id")
+            caller = next((e for e in db["employees"] if e["id"] == caller_id), None)
+            if not caller:
+                return _hr_json_response(404, {"error": "not_found"})
+            target_id = (query.get("employee_id") or "").strip()
+            if not target_id or target_id not in (caller.get("direct_reports") or []):
+                return _hr_json_response(403, {"error": "not_your_direct_report"})
+            target = next((e for e in db["employees"] if e["id"] == target_id), None)
+            if not target:
+                return _hr_json_response(404, {"error": "employee_not_found"})
+            _MANAGER_VIEW_EXCLUDE = ("pin_hash", "_session_secret", "pay_rate",
+                                      "pay_type", "pay_frequency", "payroll_platform")
+            safe_target = {k: v for k, v in target.items() if k not in _MANAGER_VIEW_EXCLUDE}
+            return _hr_json_response(200, {"employee": safe_target})
+
+        # ── /portal/me — employee self-service profile update ────────────────
+        # PATCH lets an employee edit their own limited, non-sensitive fields
+        # (bio/about-me info shown on their Portfolio, plus contact details
+        # that used to be display-only). HR-managed fields (pay, title, etc.)
+        # are intentionally excluded — those still require HR Admin.
+        if subpath == "/portal/me" and method == "PATCH":
+            if role != "employee":
+                return _hr_json_response(403, {"error": "employee_only"})
+            emp_id = auth.get("employee_id")
+            emp = next((e for e in db["employees"] if e["id"] == emp_id), None)
+            if not emp:
+                return _hr_json_response(404, {"error": "not_found"})
+            SELF_EDITABLE = {
+                "nickname", "pronouns", "bio", "fun_fact",
+                "phone", "address", "emergency_contact", "date_of_birth",
+                "bank_name", "account_type", "account_last4", "routing_last4",
+                "about_fun", "work_style",   # About Me page sections (small dicts of text)
+            }
+            body = body or {}
+            # (2026-09-30, E2E bug #19) Bank "last 4" fields: never trust the page. A tampered
+            # request could store a FULL account/routing number here. Keep only the last 4 digits.
+            for _lk in ("account_last4", "routing_last4"):
+                if _lk in body:
+                    body[_lk] = "".join(ch for ch in str(body[_lk] or "") if ch.isdigit())[-4:]
+            # About Me sections arrive as small {field: text} objects — keep only short text values
+            for _dk in ("about_fun", "work_style", "emergency_contact"):
+                if _dk in body and isinstance(body[_dk], dict):
+                    body[_dk] = {str(k)[:40]: str(v)[:1000] for k, v in list(body[_dk].items())[:30]
+                                 if isinstance(v, (str, int, float))}
+            changed = [k for k in body.keys() if k in SELF_EDITABLE]
+            for k in changed:
+                emp[k] = body[k]
+            if changed:
+                _hr_save_db(db)
+            safe_emp = {k: v for k, v in emp.items() if k not in ("pin_hash", "_session_secret")}
+            return _hr_json_response(200, {"ok": True, "employee": safe_emp, "changed": changed})
+
+        # ── /portal/assign-reports — admin assigns direct reports ────────────
+        # POST { "manager_id": "EMP-00001", "direct_report_ids": ["EMP-00002"] }
+        if subpath == "/portal/assign-reports" and method == "POST":
+            if role != "admin":
+                return _hr_json_response(403, {"error": "admin_only"})
+            manager_id = (body.get("manager_id") or "").strip()
+            report_ids = body.get("direct_report_ids", [])
+            mgr = next((e for e in db["employees"] if e["id"] == manager_id), None)
+            if not mgr:
+                return _hr_json_response(404, {"error": "manager_not_found"})
+            mgr["direct_reports"] = list(report_ids)
+            mgr["is_manager"] = len(report_ids) > 0
+            db.setdefault("audit_log", []).append({
+                "at": _hrdt.datetime.utcnow().isoformat() + "Z",
+                "action": "direct_reports_assigned", "manager_id": manager_id,
+                "direct_report_ids": report_ids,
+            })
+            _hr_save_db(db)
+            return _hr_json_response(200, {"ok": True, "manager_id": manager_id,
+                                           "direct_reports": report_ids})
+
+        return _hr_json_response(404, {"error": "no_such_hr_api_route"})
+
+
 def _get_personal_owner_address() -> dict:
     """Return the owner's home address (Street/City/State/ZIP) as a dict,
     for personal-mode Proactive Alerts (Morning Briefing fallback, Weekly
@@ -966,6 +3868,728 @@ def _db_write(fn, *args, timeout: float = 900.0, **kwargs):
 # Even when instructions= IS supported, this tool gives Claude an on-demand
 # reference it can re-read during any conversation.
 # ══════════════════════════════════════════════════════════════════════════════
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HR MODULE — MCP TOOLS  (registered as a plugin-style group; see spec §9)
+# ══════════════════════════════════════════════════════════════════════════════
+# All 15 tools from the Implementation Plan v2.1 §9 table. Every tool reads/
+# writes the same hr_db.json the /hr-api/* HTTP routes use (via the _hr_*
+# helpers defined above), so the PWA and Claude are always looking at the
+# same data — no separate code path, no drift.
+
+@mcp.tool()
+def hr_get_employee(id_or_name: str, ctx: "Context | None" = None) -> str:
+    """
+    Look up one HR employee record by Employee ID (EMP-00001) or by name
+    (first, last, or "first last" — case-insensitive substring match).
+
+    Args:
+        id_or_name: Employee ID or any part of their name.
+
+    Returns:
+        The employee's full record (personal, employment, compensation) as
+        formatted text, or a not-found message. If more than one name match
+        is found, lists all matches and asks for the Employee ID instead.
+    """
+    with _hr_db_lock:
+        db = _hr_load_db()
+    q = id_or_name.strip().lower()
+    if q.upper().startswith("EMP-"):
+        emp = next((e for e in db["employees"] if e["id"].upper() == q.upper()), None)
+        matches = [emp] if emp else []
+    else:
+        matches = [e for e in db["employees"]
+                   if q in f"{e.get('first_name','')} {e.get('last_name','')}".lower()]
+    if not matches:
+        return f"No employee found matching '{id_or_name}'."
+    if len(matches) > 1:
+        lines = [f"  • {e['id']} — {e.get('first_name')} {e.get('last_name')} ({e.get('status')})"
+                 for e in matches]
+        return "Multiple employees match — use the Employee ID instead:\n" + "\n".join(lines)
+    e = matches[0]
+    stats = _hr_employee_task_stats(e["id"], db["tasks"])
+    return (
+        f"{e['id']} — {e.get('first_name')} {e.get('last_name')}\n"
+        f"Status: {e.get('status')} | Title: {e.get('title') or '—'} | Dept: {e.get('department') or '—'}\n"
+        f"Manager: {e.get('manager_name') or '—'} | Work state: {e.get('work_state') or '—'} | "
+        f"Type: {e.get('employment_type')} | Location: {e.get('remote_status')}\n"
+        f"Start date: {e.get('start_date') or '—'} | FLSA: {e.get('flsa_classification') or 'Not set'}\n"
+        f"Personal email: {e.get('personal_email') or '—'} | Phone: {e.get('phone') or '—'}\n"
+        f"Onboarding progress: {stats['task_completion_pct']}%"
+        + (" — ⚠ has an overdue CRITICAL/HIGH task" if stats["has_critical_overdue"] else "")
+    )
+
+
+@mcp.tool()
+def hr_list_employees(status: str = "", dept: str = "", search: str = "",
+                       ctx: "Context | None" = None) -> str:
+    """
+    List HR employees with optional filters.
+
+    Args:
+        status: Filter by status (Pre-Start, Onboarding, Active, On Leave,
+                Offboarding, Terminated). Empty = all.
+        dept:   Filter by department (substring, case-insensitive). Empty = all.
+        search: Filter by name (substring, case-insensitive). Empty = all.
+    """
+    with _hr_db_lock:
+        db = _hr_load_db()
+        _hr_sweep_overdue(db)
+    emps = db["employees"]
+    if status:
+        emps = [e for e in emps if e.get("status", "").lower() == status.lower()]
+    if dept:
+        emps = [e for e in emps if dept.lower() in e.get("department", "").lower()]
+    if search:
+        emps = [e for e in emps if search.lower() in
+                f"{e.get('first_name','')} {e.get('last_name','')}".lower()]
+    if not emps:
+        return "No employees match those filters."
+    lines = []
+    for e in emps:
+        stats = _hr_employee_task_stats(e["id"], db["tasks"])
+        flag = " ⚠" if stats["has_critical_overdue"] else ""
+        lines.append(f"  • {e['id']} — {e.get('first_name')} {e.get('last_name')} "
+                     f"({e.get('status')}, {e.get('department') or 'no dept'}) "
+                     f"— {stats['task_completion_pct']}% onboarded{flag}")
+    return f"{len(emps)} employee(s):\n" + "\n".join(lines)
+
+
+@mcp.tool()
+def hr_create_employee(personal: dict, employment: dict, compensation: dict = None,
+                        ctx: "Context | None" = None) -> str:
+    """
+    Create a new HR employee record. Auto-generates the full onboarding task
+    set from hr_task_templates.json (with state-specific rules applied for
+    their work_state) and creates their document folder tree.
+
+    Args:
+        personal:     {first_name, last_name, personal_email, phone, address}
+        employment:   {title, department, start_date (YYYY-MM-DD), work_state
+                       (2-letter code — CA/TX/NY/FL/IL/WA/CO/MA), employment_type
+                       (Full-time/Part-time/Contract/Intern), remote_status
+                       (On-site/Remote/Hybrid), manager_name}
+        compensation: {pay_type (salary/hourly), pay_rate, pay_frequency} — optional
+
+    Returns:
+        Confirmation with the new Employee ID, task count generated, and the
+        temporary 4-digit self-service PIN to give the new hire (paired with
+        their personal email, for the /hr/ employee self-service login).
+    """
+    with _hr_db_lock:
+        db = _hr_load_db()
+        resp = _hr_create_employee_impl(personal, employment, compensation, db)
+        _hr_save_db(db)
+    return (f"✅ Created {resp['id']} — {resp['first_name']} {resp['last_name']}. "
+            f"{resp['tasks_generated']} onboarding tasks generated. "
+            f"Self-service login: {resp['personal_email'] or '(no personal email on file)'} "
+            f"— Bearer Token: {resp['portal_token']}  (or short PIN {resp['temp_pin']}). "
+            f"Give the employee their email + ONE of these two credentials; "
+            f"either works to sign in at the employee portal.")
+
+
+@mcp.tool()
+def hr_update_employee(id: str, fields: dict, ctx: "Context | None" = None) -> str:
+    """
+    Update fields on an existing employee record. Logs each changed field to
+    the audit trail (old value, new value, timestamp) — audit entries are
+    append-only and never deleted.
+
+    Args:
+        id:     Employee ID (EMP-00001).
+        fields: Dict of {field_name: new_value} to update — any top-level
+                employee field (title, department, work_state, manager_name,
+                flsa_classification, pay_rate, status, etc.).
+    """
+    with _hr_db_lock:
+        db = _hr_load_db()
+        emp = next((e for e in db["employees"] if e["id"] == id), None)
+        if not emp:
+            return f"No employee found with ID {id}."
+        changed = []
+        for k, v in fields.items():
+            old = emp.get(k)
+            if old != v:
+                emp[k] = v
+                changed.append((k, old, v))
+        if changed:
+            db.setdefault("audit_log", []).append({
+                "at": _hrdt.datetime.utcnow().isoformat() + "Z", "action": "employee_updated",
+                "employee_id": id,
+                "changes": [{"field": k, "old": o, "new": n} for k, o, n in changed],
+            })
+            _hr_save_db(db)
+    if not changed:
+        return f"No changes — all given fields already match {id}'s current record."
+    lines = [f"  • {k}: {o!r} → {n!r}" for k, o, n in changed]
+    return f"Updated {id}:\n" + "\n".join(lines)
+
+
+@mcp.tool()
+def hr_list_tasks(employee_id: str = "", status: str = "", phase: str = "",
+                   priority: str = "", assigned_to: str = "", overdue: bool = False,
+                   ctx: "Context | None" = None) -> str:
+    """
+    List HR tasks with optional filters — the same engine backing the Tasks
+    tab in the /hr/ PWA.
+
+    Args:
+        employee_id: Filter to one employee's tasks (EMP-00001). Empty = all.
+        status:      Not Started / In Progress / Awaiting Document / Completed
+                     / Waived / Overdue / Escalated / Blocked. Empty = all.
+        phase:       Hiring / Pre-Arrival / Day 1 / Week 1 / 30-Day / 90-Day /
+                     Termination / Annual. Empty = all.
+        priority:    CRITICAL / HIGH / MEDIUM / LOW. Empty = all.
+        assigned_to: Filter by assigned_to_role (HR/Manager/Employee/IT/Payroll/Owner).
+        overdue:     If True, only currently-overdue tasks (recomputed live).
+    """
+    with _hr_db_lock:
+        db = _hr_load_db()
+        if _hr_sweep_overdue(db):
+            _hr_save_db(db)
+    tasks = db["tasks"]
+    if employee_id:
+        tasks = [t for t in tasks if t.get("employee_id") == employee_id]
+    if status:
+        tasks = [t for t in tasks if t.get("status") == status]
+    if phase:
+        tasks = [t for t in tasks if t.get("phase") == phase]
+    if priority:
+        tasks = [t for t in tasks if t.get("priority") == priority]
+    if assigned_to:
+        tasks = [t for t in tasks if t.get("assigned_to_role", "").lower() == assigned_to.lower()]
+    if overdue:
+        tasks = [t for t in tasks if t.get("status") == "Overdue"]
+    if not tasks:
+        return "No tasks match those filters."
+    emp_by_id = {e["id"]: e for e in db["employees"]}
+    lines = []
+    for t in tasks:
+        e = emp_by_id.get(t.get("employee_id"))
+        who = f"{e.get('first_name')} {e.get('last_name')}" if e else t.get("employee_id", "—")
+        lines.append(f"  • [{t.get('priority')}] {t.get('id')} — {t.get('name')} — {who} — "
+                     f"due {t.get('due_date')} — {t.get('status')}")
+    return f"{len(tasks)} task(s):\n" + "\n".join(lines)
+
+
+@mcp.tool()
+def hr_complete_task(task_id: str, notes: str = "", ctx: "Context | None" = None) -> str:
+    """
+    Mark an HR task complete. Records who completed it (Claude, on the HR
+    Admin's behalf) and when — visible in the employee's Timeline tab forever.
+
+    Args:
+        task_id: Task ID (TASK-00001).
+        notes:   Optional completion notes.
+    """
+    with _hr_db_lock:
+        db = _hr_load_db()
+        task = next((t for t in db["tasks"] if t["id"] == task_id), None)
+        if not task:
+            return f"No task found with ID {task_id}."
+        task["status"] = "Completed"
+        task["completed_at"] = _hrdt.datetime.utcnow().isoformat() + "Z"
+        task["completed_by"] = "Claude (via HR Admin)"
+        task["completion_notes"] = notes
+        _hr_save_db(db)
+    return f"✅ Marked {task_id} ({task['name']}) complete."
+
+
+@mcp.tool()
+def hr_get_task_digest(ctx: "Context | None" = None) -> str:
+    """
+    Get the current overdue / due-today / due-this-week task summary — the
+    same data the Daily Digest email would contain. Use this to answer
+    "what's overdue in HR" or "what needs attention today" style questions.
+    """
+    with _hr_db_lock:
+        db = _hr_load_db()
+        if _hr_sweep_overdue(db):
+            _hr_save_db(db)
+    today = _hrdt.date.today()
+    emp_by_id = {e["id"]: e for e in db["employees"]}
+
+    def _who(t):
+        e = emp_by_id.get(t.get("employee_id"))
+        return f"{e.get('first_name')} {e.get('last_name')}" if e else t.get("employee_id", "—")
+
+    overdue = [t for t in db["tasks"] if t.get("status") == "Overdue"]
+    due_today = [t for t in db["tasks"]
+                 if t.get("status") not in ("Completed", "Waived", "Overdue")
+                 and t.get("due_date") == today.isoformat()]
+    due_week = [t for t in db["tasks"]
+                if t.get("status") not in ("Completed", "Waived", "Overdue")
+                and t.get("due_date") and today.isoformat() < t["due_date"] <= (today + _hrdt.timedelta(days=7)).isoformat()]
+    if not overdue and not due_today:
+        return "All clear — nothing overdue and nothing due today."
+    lines = [f"HR Task Digest — {len(overdue)} overdue, {len(due_today)} due today, {len(due_week)} due this week"]
+    if overdue:
+        lines.append("\nOVERDUE:")
+        lines += [f"  • [{t['priority']}] {t['name']} — {_who(t)} — was due {t['due_date']}"
+                  + (f" — penalty: {t['penalty']}" if t.get("penalty") and t["priority"] == "CRITICAL" else "")
+                  for t in overdue]
+    if due_today:
+        lines.append("\nDUE TODAY:")
+        lines += [f"  • [{t['priority']}] {t['name']} — {_who(t)}" for t in due_today]
+    if due_week:
+        lines.append(f"\n+ {len(due_week)} more due within 7 days.")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def hr_list_documents(employee_id: str, type: str = "", ctx: "Context | None" = None) -> str:
+    """
+    List documents on file for one employee.
+
+    Args:
+        employee_id: Employee ID (EMP-00001).
+        type:        Optional folder filter (hiring/onboarding/active/termination/general).
+    """
+    with _hr_db_lock:
+        db = _hr_load_db()
+    docs = [d for d in db.get("documents", []) if d.get("employee_id") == employee_id]
+    if type:
+        docs = [d for d in docs if d.get("folder") == type]
+    if not docs:
+        return f"No documents on file for {employee_id}" + (f" in {type}/" if type else "") + "."
+    lines = [f"  • {d.get('name')} ({d.get('folder')}) — {d.get('status')} — "
+             f"uploaded {d.get('uploaded_at') or 'pending'}" for d in docs]
+    return f"{len(docs)} document(s) for {employee_id}:\n" + "\n".join(lines)
+
+
+@mcp.tool()
+def hr_verify_document(doc_id: str, notes: str = "", ctx: "Context | None" = None) -> str:
+    """
+    Mark a document verified (e.g. after physically examining I-9 documents).
+
+    Args:
+        doc_id: Document ID.
+        notes:  Optional verification notes.
+    """
+    with _hr_db_lock:
+        db = _hr_load_db()
+        doc = next((d for d in db.get("documents", []) if d.get("id") == doc_id), None)
+        if not doc:
+            return f"No document found with ID {doc_id}."
+        doc["status"] = "Verified"
+        doc["verified_at"] = _hrdt.datetime.utcnow().isoformat() + "Z"
+        doc["verified_by"] = "Claude (via HR Admin)"
+        doc["verification_notes"] = notes
+        _hr_save_db(db)
+    return f"✅ Marked {doc.get('name', doc_id)} verified."
+
+
+@mcp.tool()
+def hr_get_backup_settings(ctx: "Context | None" = None) -> str:
+    """
+    Show the current employee backup configuration (destination directory,
+    schedule, time of day, and retention count).
+    """
+    with _hr_db_lock:
+        db = _hr_load_db()
+    cfg = (db.get("config", {}) or {}).get("employee_backup", {}) or {}
+    return _hr_describe_backup_settings(cfg)
+
+
+@mcp.tool()
+def hr_set_backup_settings(enabled: bool = None, backup_dir: str = None,
+                            schedule: str = None, weekday: int = None,
+                            day_of_month: int = None, hour: int = None,
+                            minute: int = None, retention_count: int = None,
+                            ctx: "Context | None" = None) -> str:
+    """
+    Configure the recurring employee backup job. Only the arguments you pass
+    are changed; everything else keeps its current value. Covers actively-
+    employed employees only (Pre-Start/Onboarding/Active/On Leave) -- a
+    terminated/offboarded employee's most recent backup snapshot stays on
+    disk, it just stops being refreshed.
+
+    Args:
+        enabled:         True to turn the recurring backup on, False to pause it.
+        backup_dir:      Destination folder for backups. Ideally on a
+                          different drive/device than the live AI-Prowler
+                          install, so a computer failure doesn't take out
+                          both the live data and the backups.
+        schedule:         "weekly" or "monthly".
+        weekday:          0=Monday .. 6=Sunday (used when schedule="weekly").
+        day_of_month:     1-28 (used when schedule="monthly"; capped at 28
+                           so the chosen day always exists in every month).
+        hour:             0-23, UTC.
+        minute:           0-59.
+        retention_count:  How many of the most recent backups to keep per
+                           employee -- older ones are deleted automatically.
+                           Default 3.
+    """
+    with _hr_db_lock:
+        db = _hr_load_db()
+        cfg = db.setdefault("config", {}).setdefault("employee_backup", {})
+        cfg.setdefault("enabled", False)
+        cfg.setdefault("backup_dir", "")
+        cfg.setdefault("schedule", "weekly")
+        cfg.setdefault("weekday", 6)
+        cfg.setdefault("day_of_month", 1)
+        cfg.setdefault("hour", 2)
+        cfg.setdefault("minute", 0)
+        cfg.setdefault("retention_count", 3)
+        if enabled is not None:
+            cfg["enabled"] = bool(enabled)
+        if backup_dir is not None:
+            cfg["backup_dir"] = backup_dir.strip()
+        if schedule is not None:
+            if schedule not in ("weekly", "monthly"):
+                return "❌ schedule must be 'weekly' or 'monthly'."
+            cfg["schedule"] = schedule
+        if weekday is not None:
+            cfg["weekday"] = max(0, min(6, int(weekday)))
+        if day_of_month is not None:
+            cfg["day_of_month"] = max(1, min(28, int(day_of_month)))
+        if hour is not None:
+            cfg["hour"] = max(0, min(23, int(hour)))
+        if minute is not None:
+            cfg["minute"] = max(0, min(59, int(minute)))
+        if retention_count is not None:
+            cfg["retention_count"] = max(1, int(retention_count))
+        _hr_save_db(db)
+        description = _hr_describe_backup_settings(cfg)
+    return "✅ Updated.\n\n" + description
+
+
+@mcp.tool()
+def hr_backup_now(ctx: "Context | None" = None) -> str:
+    """
+    Run the employee backup immediately, without waiting for the scheduled
+    time. Backs up every actively-employed employee's record.json plus all
+    of their uploaded documents to the configured backup directory, then
+    prunes old snapshots beyond the configured retention count.
+    """
+    with _hr_db_lock:
+        db = _hr_load_db()
+    result = _hr_run_employee_backup(db)
+    if not result["backup_dir"]:
+        return "❌ " + (result["errors"][0] if result["errors"] else "Backup failed.")
+    lines = [f"Backed up {result['backed_up']} employee(s) to {result['backup_dir']}."]
+    if result["skipped"]:
+        lines.append(f"{result['skipped']} employee(s) skipped (no document folder yet).")
+    if result["errors"]:
+        lines.append(f"{len(result['errors'])} error(s):")
+        lines.extend(f"  • {e}" for e in result["errors"][:5])
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def hr_list_backups(employee_id: str = "", ctx: "Context | None" = None) -> str:
+    """
+    List available backup snapshots.
+
+    Args:
+        employee_id: Optional Employee ID (EMP-00001) to filter to one
+                     employee. Empty = list every employee that has backups.
+    """
+    with _hr_db_lock:
+        db = _hr_load_db()
+    cfg = (db.get("config", {}) or {}).get("employee_backup", {}) or {}
+    backup_dir = (cfg.get("backup_dir") or "").strip()
+    if not backup_dir or not _hros.path.isdir(backup_dir):
+        return "No backup directory configured, or it doesn't exist yet."
+    try:
+        folder_names = sorted(_hros.listdir(backup_dir))
+    except Exception as exc:
+        return f"❌ Could not read backup directory: {exc}"
+    lines = []
+    for folder_name in folder_names:
+        root = _hros.path.join(backup_dir, folder_name)
+        if not _hros.path.isdir(root):
+            continue
+        emp = next((e for e in db.get("employees", [])
+                    if (e.get("doc_folder") or e.get("id")) == folder_name), None)
+        if employee_id and (not emp or emp.get("id") != employee_id):
+            continue
+        try:
+            snaps = sorted((d for d in _hros.listdir(root) if _hros.path.isdir(_hros.path.join(root, d))),
+                           reverse=True)
+        except Exception:
+            snaps = []
+        if not snaps:
+            continue
+        label = f"{emp.get('id')} — {emp.get('first_name')} {emp.get('last_name')}" if emp else folder_name
+        lines.append(f"  • {label}: {len(snaps)} snapshot(s) — most recent {snaps[0]}")
+    if not lines:
+        return f"No backups found under {backup_dir}" + (f" for {employee_id}" if employee_id else "") + "."
+    return f"Backups under {backup_dir}:\n" + "\n".join(lines)
+
+
+@mcp.tool()
+def hr_restore_employee(employee_id: str, timestamp: str = "", ctx: "Context | None" = None) -> str:
+    """
+    Restore one employee's full record and documents from a backup snapshot
+    -- for recovering from a computer failure or accidental deletion. This
+    OVERWRITES that employee's current live document folder and upserts
+    their profile/tasks/documents/audit entries in hr_db.json from the
+    snapshot's record.json. Always confirm with the user before running this
+    on a live system, since it replaces current data with the snapshot.
+
+    Args:
+        employee_id: Employee ID (EMP-00001).
+        timestamp:   Which snapshot to restore, exactly as shown by
+                     hr_list_backups (e.g. 20260916T020000Z). Empty = use
+                     the most recent snapshot for this employee.
+    """
+    import shutil as _hr_shutil
+    with _hr_db_lock:
+        db = _hr_load_db()
+        cfg = (db.get("config", {}) or {}).get("employee_backup", {}) or {}
+        backup_dir = (cfg.get("backup_dir") or "").strip()
+        if not backup_dir:
+            return "❌ No backup directory configured."
+        emp = next((e for e in db["employees"] if e["id"] == employee_id), None)
+        folder_name = (emp.get("doc_folder") if emp else None) or employee_id
+        emp_backup_root = _hros.path.join(backup_dir, folder_name)
+        if not _hros.path.isdir(emp_backup_root):
+            return f"❌ No backups found for {employee_id} under {backup_dir}."
+        try:
+            snaps = sorted(d for d in _hros.listdir(emp_backup_root)
+                            if _hros.path.isdir(_hros.path.join(emp_backup_root, d)))
+        except Exception as exc:
+            return f"❌ Could not read backup folder: {exc}"
+        if not snaps:
+            return f"❌ No snapshots found for {employee_id}."
+        if timestamp:
+            if timestamp not in snaps:
+                return f"❌ Snapshot '{timestamp}' not found. Available: {', '.join(snaps)}"
+            snap = timestamp
+        else:
+            snap = snaps[-1]  # sorted ascending by timestamp string, so most recent is last
+        snap_dir = _hros.path.join(emp_backup_root, snap)
+        record = _hr_read_json(_hros.path.join(snap_dir, "record.json"), None)
+        if record is None:
+            return f"❌ Snapshot {snap} has no readable record.json."
+
+        doc_root = db.get("config", {}).get("doc_root", "./hr_documents")
+        base = doc_root if _hros.path.isabs(doc_root) else _hros.path.join(_HR_STATE_DIR, doc_root)
+        live_dir = _hros.path.join(base, folder_name)
+        try:
+            if _hros.path.isdir(live_dir):
+                _hr_shutil.rmtree(live_dir)
+            _hr_shutil.copytree(snap_dir, live_dir)
+        except Exception as exc:
+            return f"❌ Failed to restore documents: {exc}"
+
+        restored_emp = record.get("employee")
+        if restored_emp:
+            db["employees"] = [e for e in db["employees"] if e["id"] != employee_id] + [restored_emp]
+        db["tasks"] = [t for t in db.get("tasks", []) if t.get("employee_id") != employee_id] \
+            + record.get("tasks", [])
+        db["documents"] = [d for d in db.get("documents", []) if d.get("employee_id") != employee_id] \
+            + record.get("documents", [])
+        existing_audit_keys = {(a.get("at"), a.get("action")) for a in db.get("audit_log", [])
+                                if a.get("employee_id") == employee_id}
+        for a in record.get("audit_log", []):
+            if (a.get("at"), a.get("action")) not in existing_audit_keys:
+                db.setdefault("audit_log", []).append(a)
+        db.setdefault("audit_log", []).append({
+            "at": _hrdt.datetime.utcnow().isoformat() + "Z", "action": "employee_restored_from_backup",
+            "employee_id": employee_id, "snapshot": snap,
+        })
+        _hr_save_db(db)
+    return f"✅ Restored {employee_id} from snapshot {snap} (documents + record) into hr_db.json."
+
+
+@mcp.tool()
+def hr_get_report(report_name: str, ctx: "Context | None" = None) -> str:
+    """
+    Generate a named HR report (onboarding, headcount, retention, or
+    compliance summary — see Onboarding Spec v1.1 §8).
+
+    Args:
+        report_name: One of: onboarding_completion, headcount_by_department,
+                     headcount_by_status, overdue_tasks, i9_compliance,
+                     document_expiration.
+    """
+    with _hr_db_lock:
+        db = _hr_load_db()
+        if _hr_sweep_overdue(db):
+            _hr_save_db(db)
+    emps, tasks = db["employees"], db["tasks"]
+    key = report_name.strip().lower()
+
+    if key == "headcount_by_department":
+        from collections import Counter as _hr_Counter
+        counts = _hr_Counter(e.get("department") or "Unassigned" for e in emps if e.get("status") != "Terminated")
+        return "Headcount by department:\n" + "\n".join(f"  • {d}: {n}" for d, n in counts.most_common())
+
+    if key == "headcount_by_status":
+        from collections import Counter as _hr_Counter
+        counts = _hr_Counter(e.get("status", "Unknown") for e in emps)
+        return "Headcount by status:\n" + "\n".join(f"  • {s}: {n}" for s, n in counts.most_common())
+
+    if key == "onboarding_completion":
+        onboarding = [e for e in emps if e.get("status") in ("Pre-Start", "Onboarding")]
+        if not onboarding:
+            return "No employees currently in onboarding."
+        lines = []
+        for e in onboarding:
+            stats = _hr_employee_task_stats(e["id"], tasks)
+            lines.append(f"  • {e['id']} {e.get('first_name')} {e.get('last_name')} — {stats['task_completion_pct']}%")
+        return "Onboarding completion:\n" + "\n".join(lines)
+
+    if key == "overdue_tasks":
+        overdue = [t for t in tasks if t.get("status") == "Overdue"]
+        if not overdue:
+            return "No overdue tasks."
+        return f"{len(overdue)} overdue task(s):\n" + "\n".join(
+            f"  • [{t['priority']}] {t['name']} — {t.get('employee_id')} — was due {t['due_date']}" for t in overdue)
+
+    if key == "i9_compliance":
+        i9_tasks = [t for t in tasks if "I-9" in (t.get("name") or "") and t.get("status") not in ("Completed", "Waived")]
+        if not i9_tasks:
+            return "All I-9 tasks are complete or waived."
+        return f"{len(i9_tasks)} outstanding I-9 task(s):\n" + "\n".join(
+            f"  • {t['name']} — {t.get('employee_id')} — {t.get('status')} — due {t['due_date']}" for t in i9_tasks)
+
+    if key == "document_expiration":
+        soon = (_hrdt.date.today() + _hrdt.timedelta(days=30)).isoformat()
+        expiring = [d for d in db.get("documents", [])
+                    if d.get("expiration_date") and d["expiration_date"] <= soon]
+        if not expiring:
+            return "No documents expiring within 30 days."
+        return f"{len(expiring)} document(s) expiring within 30 days:\n" + "\n".join(
+            f"  • {d.get('name')} — {d.get('employee_id')} — expires {d['expiration_date']}" for d in expiring)
+
+    return (f"Unknown report '{report_name}'. Available reports: onboarding_completion, "
+            f"headcount_by_department, headcount_by_status, overdue_tasks, i9_compliance, "
+            f"document_expiration.")
+
+
+@mcp.tool()
+def hr_get_state_rules(state_code: str, ctx: "Context | None" = None) -> str:
+    """
+    Get HR compliance rules for a state (withholding form, SUI/SDI/PFML,
+    workers comp, new-hire reporting deadline, minimum wage, non-compete
+    status, final-pay deadlines).
+
+    Args:
+        state_code: Two-letter state code — CA, TX, NY, FL, IL, WA, CO, or MA.
+    """
+    rules = _hr_load_state_rules()
+    state = rules.get("states", {}).get(state_code.strip().upper())
+    if not state:
+        supported = rules.get("_meta", {}).get("supported_states", [])
+        return f"No rules for '{state_code}'. Supported states: {', '.join(supported)}."
+    lines = [f"{state.get('name', state_code)} ({state_code.upper()}) HR compliance rules:",
+             f"  Income tax withholding: {'Yes — ' + state['state_tax_form'] if state.get('has_state_income_tax') else 'No state income tax'}",
+             f"  Minimum wage: ${state.get('min_wage')}/hr",
+             f"  New hire reporting: within {state.get('new_hire_reporting_days')} days",
+             f"  Workers comp required: {'Yes' if state.get('wc_required') else 'No'}",
+             f"  Non-compete: {'VOID — do not enforce' if state.get('non_compete_void') else 'Enforceable'}",
+             f"  Final pay: {state.get('final_pay_note', '—')}"]
+    if state.get("state_specific_tasks"):
+        lines.append("  Additional state-specific tasks: " + "; ".join(state["state_specific_tasks"]))
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def hr_get_form(form_key: str, ctx: "Context | None" = None) -> str:
+    """
+    Get details and official links for one HR form from the forms library
+    (e.g. W-4, I-9, CA-DE4, NY-IT2104).
+
+    Args:
+        form_key: Form key as used in hr_forms_library.json (e.g. "W-4", "I-9").
+    """
+    forms = _hr_load_forms()
+    form = forms.get(form_key.strip().upper()) or forms.get(form_key.strip())
+    if not form:
+        keys = [k for k in forms.keys() if not k.startswith("_")]
+        return f"No form found for '{form_key}'. Known forms: {', '.join(sorted(keys))}"
+    lines = [f"{form.get('name')} ({form_key}) — {form.get('agency')}",
+             f"  {form.get('description', '')}",
+             f"  Deadline: {form.get('deadline', '—')}",
+             f"  PDF: {form.get('pdf_url', '—')}"]
+    if form.get("penalty_if_missing") or form.get("penalty_section2"):
+        lines.append(f"  Penalty if missed: {form.get('penalty_if_missing') or form.get('penalty_section2')}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def hr_send_notification(to: str, subject: str, body: str, ctx: "Context | None" = None) -> str:
+    """
+    Send an HR notification email via the same AI-Prowler SMTP configuration
+    used elsewhere (thin wrapper around send_email(), grouped here for
+    discoverability alongside the other hr_* tools).
+
+    Args:
+        to:      Recipient email address.
+        subject: Email subject line.
+        body:    Email body (plain text).
+    """
+    return send_email(to=to, subject=subject, body=body)
+
+
+@mcp.tool()
+def hr_initiate_termination(employee_id: str, type: str, effective_date: str,
+                             reason: str = "", ctx: "Context | None" = None) -> str:
+    """
+    Begin the termination/offboarding workflow for an employee. Auto-generates
+    the full offboarding task set (IT access revocation, state-specific final
+    pay deadline, COBRA notice, equipment return, non-compete validity check,
+    etc.) anchored to the termination effective date.
+
+    Args:
+        employee_id:    Employee ID (EMP-00001).
+        type:           Voluntary / Involuntary / Layoff / Retirement / Contract End.
+        effective_date: Termination effective date (YYYY-MM-DD).
+        reason:         Optional reason code / note.
+    """
+    with _hr_db_lock:
+        db = _hr_load_db()
+        emp = next((e for e in db["employees"] if e["id"] == employee_id), None)
+        if not emp:
+            return f"No employee found with ID {employee_id}."
+        emp["status"] = "Offboarding"
+        emp["termination_type"] = type
+        emp["end_date"] = effective_date
+        emp["termination_reason"] = reason
+        new_tasks = _hr_generate_offboarding_tasks(emp, db, effective_date)
+        db["tasks"].extend(new_tasks)
+        db.setdefault("audit_log", []).append({
+            "at": _hrdt.datetime.utcnow().isoformat() + "Z", "action": "termination_initiated",
+            "employee_id": employee_id, "type": type, "effective_date": effective_date,
+            "task_count": len(new_tasks),
+        })
+        _hr_save_db(db)
+    critical = [t for t in new_tasks if t["priority"] == "CRITICAL"]
+    return (f"✅ Termination initiated for {employee_id} ({emp.get('first_name')} {emp.get('last_name')}) — "
+            f"{type}, effective {effective_date}. {len(new_tasks)} offboarding tasks generated "
+            f"({len(critical)} CRITICAL, including state-specific final-pay deadline for "
+            f"{emp.get('work_state', 'their work state')}).")
+
+
+@mcp.tool()
+def hr_get_setup_status(ctx: "Context | None" = None) -> str:
+    """
+    Check the HR module's employer setup wizard completion status (EIN,
+    EFTPS, state registrations, workers comp, payroll platform, document root).
+    """
+    with _hr_db_lock:
+        db = _hr_load_db()
+    cfg = db.get("config", {})
+    if cfg.get("setup_complete"):
+        return (f"HR setup is complete. Company: {cfg.get('company_name') or '—'} | "
+                f"EIN: {cfg.get('ein') or '—'} | Payroll: {cfg.get('payroll_platform') or '—'} | "
+                f"Work states: {', '.join(cfg.get('work_states', [])) or '—'} | "
+                f"Doc root: {cfg.get('doc_root')}")
+    missing = []
+    if not cfg.get("ein"):
+        missing.append("EIN")
+    if not cfg.get("eftps_enrolled"):
+        missing.append("EFTPS enrollment")
+    if not cfg.get("work_states"):
+        missing.append("work states")
+    if not cfg.get("payroll_platform"):
+        missing.append("payroll platform")
+    return ("HR setup is NOT complete yet — the setup wizard will run on next admin login. "
+            f"Missing: {', '.join(missing) if missing else 'setup_complete flag not yet set'}.")
+
 
 @mcp.tool()
 def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
@@ -16824,20 +20448,34 @@ _ROLE_CAPS = {
     # owner — unrestricted: full DB management, reads all scopes, admin rights
     "owner":      {"read_all_role_scopes": True,  "read_others_private": True,
                    "can_write": True,  "can_write_shared": True,  "is_admin": True,
-                   "manage_db": "full",    "can_send_email": True,  "can_send_sms": True},
+                   "manage_db": "full",    "can_send_email": True,  "can_send_sms": True,
+                   "can_manage_hr": True},
     # manager — full DB management within their assigned scopes + shared
     "manager":    {"read_all_role_scopes": False, "read_others_private": False,
                    "can_write": True,  "can_write_shared": True,  "is_admin": False,
-                   "manage_db": "full",    "can_send_email": True,  "can_send_sms": True},
+                   "manage_db": "full",    "can_send_email": True,  "can_send_sms": True,
+                   "can_manage_hr": True},
     # staff — limited DB: may index own private + assigned scopes; NOT shared or destructive ops
     "staff":      {"read_all_role_scopes": False, "read_others_private": False,
                    "can_write": True,  "can_write_shared": False, "is_admin": False,
-                   "manage_db": "limited", "can_send_email": True,  "can_send_sms": True},
+                   "manage_db": "limited", "can_send_email": True,  "can_send_sms": True,
+                   "can_manage_hr": False},
     # field_crew — no DB management; may send email and SMS (no personal AI-Prowler install)
     "field_crew": {"read_all_role_scopes": False, "read_others_private": False,
                    "can_write": False, "can_write_shared": False, "is_admin": False,
-                   "manage_db": "none",    "can_send_email": True,  "can_send_sms": True},
+                   "manage_db": "none",    "can_send_email": True,  "can_send_sms": True,
+                   "can_manage_hr": False},
 }
+#   can_manage_hr        : may act as HR Admin over /hr-api/* and the HR PWA
+#                          in server mode — owner and manager only (v2.1
+#                          Implementation Plan real-role-gating milestone,
+#                          replacing the earlier MVP simplification that
+#                          granted HR admin to ANY recognized server-mode
+#                          token regardless of role). staff/field_crew get
+#                          no HR admin rights; they can still use the HR PWA
+#                          only as a named HR *employee* record via the
+#                          separate email+PIN /auth/employee flow, exactly
+#                          like any other employee.
 
 _SHARED_COLLECTION = "shared"
 
@@ -18045,6 +21683,140 @@ def _run_server_mode(port: int, token: str,
                                         [b"cache-control", b"no-cache"]]})
                 await send({"type": "http.response.body", "body": _srv_body})
                 return
+
+            # ── HR Admin PWA — static file server, no auth required ──────────────
+            if path.startswith("/hr_admin") and not path.startswith("/hr-api"):
+                import mimetypes as _hrsrv_mt, os as _hrsrv_os
+                _hrsrv_pwa_root = _hrsrv_os.path.join(
+                    _hrsrv_os.path.dirname(_hrsrv_os.path.abspath(__file__)), "hr_admin")
+                _hrsrv_rel = path[len("/hr_admin"):].lstrip("/") or "index.html"
+                _hrsrv_file_path = _hrsrv_os.path.join(_hrsrv_pwa_root, _hrsrv_rel)
+                if not _hrsrv_os.path.abspath(_hrsrv_file_path).startswith(
+                        _hrsrv_os.path.abspath(_hrsrv_pwa_root)):
+                    await _send_text(send, 403, "Forbidden")
+                    return
+                if not _hrsrv_os.path.isfile(_hrsrv_file_path):
+                    _hrsrv_file_path = _hrsrv_os.path.join(_hrsrv_pwa_root, "index.html")
+                    if not _hrsrv_os.path.isfile(_hrsrv_file_path):
+                        await _send_text(send, 404, "Not Found")
+                        return
+                try:
+                    with open(_hrsrv_file_path, "rb") as _hrsrv_f:
+                        _hrsrv_body = _hrsrv_f.read()
+                except Exception as _hrsrv_fe:
+                    _log.error("HR Admin PWA (server): file read error for %s — %s",
+                               _hrsrv_file_path, _hrsrv_fe)
+                    await _send_text(send, 500, "Internal Server Error")
+                    return
+                _hrsrv_ctype = (_hrsrv_mt.guess_type(_hrsrv_file_path)[0]
+                                or "application/octet-stream").encode()
+                _hrsrv_body = _patch_sw_cache_version(_hrsrv_rel, _hrsrv_pwa_root, _hrsrv_body)
+                await send({"type": "http.response.start", "status": 200,
+                            "headers": [[b"content-type", _hrsrv_ctype],
+                                        [b"content-length", str(len(_hrsrv_body)).encode()],
+                                        [b"cache-control", b"no-cache"]]})
+                await send({"type": "http.response.body", "body": _hrsrv_body})
+                return
+            # ── end HR Admin PWA static server ───────────────────────────────────
+
+            # ── HR Portal PWA — static file server, no auth required ─────────────
+            if path.startswith("/hr_portal") and not path.startswith("/hr-api"):
+                import mimetypes as _hrpsrv_mt, os as _hrpsrv_os
+                _hrpsrv_pwa_root = _hrpsrv_os.path.join(
+                    _hrpsrv_os.path.dirname(_hrpsrv_os.path.abspath(__file__)), "hr_portal")
+                _hrpsrv_rel = path[len("/hr_portal"):].lstrip("/") or "index.html"
+                _hrpsrv_file_path = _hrpsrv_os.path.join(_hrpsrv_pwa_root, _hrpsrv_rel)
+                if not _hrpsrv_os.path.abspath(_hrpsrv_file_path).startswith(
+                        _hrpsrv_os.path.abspath(_hrpsrv_pwa_root)):
+                    await _send_text(send, 403, "Forbidden")
+                    return
+                if not _hrpsrv_os.path.isfile(_hrpsrv_file_path):
+                    _hrpsrv_file_path = _hrpsrv_os.path.join(_hrpsrv_pwa_root, "index.html")
+                    if not _hrpsrv_os.path.isfile(_hrpsrv_file_path):
+                        await _send_text(send, 404, "Not Found")
+                        return
+                try:
+                    with open(_hrpsrv_file_path, "rb") as _hrpsrv_f:
+                        _hrpsrv_body = _hrpsrv_f.read()
+                except Exception as _hrpsrv_fe:
+                    _log.error("HR Portal PWA (server): file read error for %s — %s",
+                               _hrpsrv_file_path, _hrpsrv_fe)
+                    await _send_text(send, 500, "Internal Server Error")
+                    return
+                _hrpsrv_ctype = (_hrpsrv_mt.guess_type(_hrpsrv_file_path)[0]
+                                 or "application/octet-stream").encode()
+                _hrpsrv_body = _patch_sw_cache_version(_hrpsrv_rel, _hrpsrv_pwa_root, _hrpsrv_body)
+                await send({"type": "http.response.start", "status": 200,
+                            "headers": [[b"content-type", _hrpsrv_ctype],
+                                        [b"content-length", str(len(_hrpsrv_body)).encode()],
+                                        [b"cache-control", b"no-store, must-revalidate"],
+                                        [b"pragma", b"no-cache"],
+                                        [b"expires", b"0"]]})
+                await send({"type": "http.response.body", "body": _hrpsrv_body})
+                return
+
+            # ── end HR Portal PWA static server ──────────────────────────────────
+
+            # ── HR REST API — /hr-api/* (see _hr_api_route in the HR Backend
+            #    Engine section near the top of this file for all business
+            #    logic; this block only resolves auth and marshals bytes) ────
+            if path.startswith("/hr-api"):
+                import urllib.parse as _hrsrv_up
+                _hrsrv_subpath = path[len("/hr-api"):] or "/"
+                _hrsrv_qs = dict(_hrsrv_up.parse_qsl(scope.get("query_string", b"").decode()))
+                _hrsrv_body_bytes = await _read_body(receive)
+                try:
+                    import json as _hrsrv_json
+                    _hrsrv_body_json = _hrsrv_json.loads(_hrsrv_body_bytes) if _hrsrv_body_bytes else {}
+                except Exception:
+                    _hrsrv_body_json = {}
+                _hrsrv_tok = _bearer_from_scope(scope)
+                _hrsrv_auth = {"role": None}
+                _hrsrv_resolved_user = None
+                if _hrsrv_tok and _hrsrv_tok in _srv_access_tokens:
+                    # Real role-based HR admin gate (replaces the earlier MVP
+                    # simplification that granted HR admin to ANY recognized
+                    # server-mode token regardless of role). Resolves the
+                    # actual user the same way the rest of server mode does
+                    # (_srv_access_tokens maps the issued access token back to
+                    # the raw users.json token; _resolve_user looks up that
+                    # user's real role) and gates via the can_manage_hr
+                    # capability in _ROLE_CAPS — owner/manager only, matching
+                    # their "full" manage_db tier elsewhere in server mode.
+                    _hrsrv_raw_tok = _srv_access_tokens.get(_hrsrv_tok, _hrsrv_tok)
+                    _hrsrv_resolved_user = _resolve_user(_load_users(), _hrsrv_raw_tok)
+                if _hrsrv_resolved_user and _role_caps(_hrsrv_resolved_user.get("role")).get("can_manage_hr"):
+                    _hrsrv_auth = {"role": "admin"}
+                else:
+                    _hrsrv_emp_sess_hdr = ""
+                    for _hrsrv_hk, _hrsrv_hv in scope.get("headers", []):
+                        if _hrsrv_hk.lower() == b"x-employee-session":
+                            _hrsrv_emp_sess_hdr = _hrsrv_hv.decode("utf-8", "replace")
+                            break
+                    if _hrsrv_emp_sess_hdr:
+                        _hrsrv_db_peek = _hr_load_db()
+                        _hrsrv_emp_id = _hr_verify_employee_session(_hrsrv_emp_sess_hdr, _hrsrv_db_peek)
+                        if _hrsrv_emp_id:
+                            _hrsrv_auth = {"role": "employee", "employee_id": _hrsrv_emp_id}
+                # documents/upload -- multipart, bypasses the JSON dispatcher
+                if _hrsrv_subpath == "/documents/upload" and method == "POST":
+                    _hrsrv_ctype_hdr = ""
+                    for _hrsrv_hk2, _hrsrv_hv2 in scope.get("headers", []):
+                        if _hrsrv_hk2.lower() == b"content-type":
+                            _hrsrv_ctype_hdr = _hrsrv_hv2.decode(errors="replace")
+                            break
+                    _hrsrv_status, _hrsrv_ctype2, _hrsrv_resp_body = _hr_handle_document_upload(
+                        _hrsrv_body_bytes, _hrsrv_ctype_hdr, _hrsrv_auth)
+                else:
+                    _hrsrv_status, _hrsrv_ctype2, _hrsrv_resp_body = _hr_api_route(
+                        method, _hrsrv_subpath, _hrsrv_qs, _hrsrv_body_json, _hrsrv_auth)
+                await send({"type": "http.response.start", "status": _hrsrv_status,
+                            "headers": [[b"content-type", _hrsrv_ctype2],
+                                        [b"content-length", str(len(_hrsrv_resp_body)).encode()],
+                                        [b"cache-control", b"no-store"]]})
+                await send({"type": "http.response.body", "body": _hrsrv_resp_body})
+                return
+            # ── end HR REST API ───────────────────────────────────────────────
 
             # ── Jobs PWA mode signal (server mode) ──────────────────────────────
             # Server-mode equivalent of personal mode's /pwa-token. The ONLY
@@ -19919,6 +23691,137 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
             # ── end PWA static server ─────────────────────────────────────
 
 
+            # ── HR Admin PWA — static file server, no auth required ──────────
+            if path.startswith("/hr_admin") and not path.startswith("/hr-api"):
+                import mimetypes as _hrp_mt, os as _hrp_os
+                _hrp_pwa_root = _hrp_os.path.join(
+                    _hrp_os.path.dirname(_hrp_os.path.abspath(__file__)), "hr_admin")
+                _hrp_rel = path[len("/hr_admin"):].lstrip("/") or "index.html"
+                _hrp_file_path = _hrp_os.path.join(_hrp_pwa_root, _hrp_rel)
+                if not _hrp_os.path.abspath(_hrp_file_path).startswith(
+                        _hrp_os.path.abspath(_hrp_pwa_root)):
+                    await send({"type": "http.response.start", "status": 403,
+                                "headers": [[b"content-type", b"text/plain"]]})
+                    await send({"type": "http.response.body",
+                                "body": b"Forbidden", "more_body": False})
+                    return
+                if _hrp_os.path.isfile(_hrp_file_path):
+                    _hrp_mime, _ = _hrp_mt.guess_type(_hrp_file_path)
+                    _hrp_mime_b = (_hrp_mime or "application/octet-stream").encode()
+                    with open(_hrp_file_path, "rb") as _hrp_f:
+                        _hrp_body = _hrp_f.read()
+                    _hrp_body = _patch_sw_cache_version(_hrp_rel, _hrp_pwa_root, _hrp_body)
+                    await send({"type": "http.response.start", "status": 200,
+                                "headers": [
+                                    [b"content-type",   _hrp_mime_b],
+                                    [b"content-length", str(len(_hrp_body)).encode()],
+                                    [b"cache-control",  b"no-cache"],
+                                ]})
+                    await send({"type": "http.response.body", "body": _hrp_body,
+                                "more_body": False})
+                else:
+                    await send({"type": "http.response.start", "status": 404,
+                                "headers": [[b"content-type", b"text/plain"]]})
+                    await send({"type": "http.response.body",
+                                "body": b"HR Admin PWA file not found",
+                                "more_body": False})
+                return
+            # ── end HR Admin PWA static server ────────────────────────────────
+
+            # ── HR Portal PWA — static file server, no auth required ──────────
+            if path.startswith("/hr_portal") and not path.startswith("/hr-api"):
+                import mimetypes as _hrpp_mt, os as _hrpp_os
+                _hrpp_pwa_root = _hrpp_os.path.join(
+                    _hrpp_os.path.dirname(_hrpp_os.path.abspath(__file__)), "hr_portal")
+                _hrpp_rel = path[len("/hr_portal"):].lstrip("/") or "index.html"
+                _hrpp_file_path = _hrpp_os.path.join(_hrpp_pwa_root, _hrpp_rel)
+                if not _hrpp_os.path.abspath(_hrpp_file_path).startswith(
+                        _hrpp_os.path.abspath(_hrpp_pwa_root)):
+                    await send({"type": "http.response.start", "status": 403,
+                                "headers": [[b"content-type", b"text/plain"]]})
+                    await send({"type": "http.response.body",
+                                "body": b"Forbidden", "more_body": False})
+                    return
+                if _hrpp_os.path.isfile(_hrpp_file_path):
+                    _hrpp_mime, _ = _hrpp_mt.guess_type(_hrpp_file_path)
+                    _hrpp_mime_b = (_hrpp_mime or "application/octet-stream").encode()
+                    with open(_hrpp_file_path, "rb") as _hrpp_f:
+                        _hrpp_body = _hrpp_f.read()
+                    _hrpp_body = _patch_sw_cache_version(_hrpp_rel, _hrpp_pwa_root, _hrpp_body)
+                    await send({"type": "http.response.start", "status": 200,
+                                "headers": [
+                                    [b"content-type",   _hrpp_mime_b],
+                                    [b"content-length", str(len(_hrpp_body)).encode()],
+                                    [b"cache-control",  b"no-cache"],
+                                ]})
+                    await send({"type": "http.response.body", "body": _hrpp_body,
+                                "more_body": False})
+                else:
+                    await send({"type": "http.response.start", "status": 404,
+                                "headers": [[b"content-type", b"text/plain"]]})
+                    await send({"type": "http.response.body",
+                                "body": b"HR Portal PWA file not found",
+                                "more_body": False})
+                return
+            # ── end HR Portal PWA static server ───────────────────────────────
+
+            # ── HR REST API — /hr-api/* (business logic lives in _hr_api_route,
+            #    HR Backend Engine section near the top of this file; this block
+            #    only resolves auth and marshals bytes over ASGI) ───────────────
+            if path.startswith("/hr-api"):
+                import urllib.parse as _hrp_up, json as _hrp_json
+                _hrp_subpath = path[len("/hr-api"):] or "/"
+                _hrp_qs = dict(_hrp_up.parse_qsl(scope.get("query_string", b"").decode()))
+                _hrp_chunks = []
+                while True:
+                    _hrp_msg = await receive()
+                    _hrp_chunks.append(_hrp_msg.get("body", b""))
+                    if not _hrp_msg.get("more_body"):
+                        break
+                _hrp_body_bytes = b"".join(_hrp_chunks)
+                try:
+                    _hrp_body_json = _hrp_json.loads(_hrp_body_bytes) if _hrp_body_bytes else {}
+                except Exception:
+                    _hrp_body_json = {}
+                _hrp_tok = ""
+                _hrp_emp_sess_hdr = ""
+                for _hrp_hk, _hrp_hv in scope.get("headers", []):
+                    if _hrp_hk.lower() == b"authorization":
+                        _hrp_v = _hrp_hv.decode("utf-8", "replace")
+                        if _hrp_v.lower().startswith("bearer "):
+                            _hrp_tok = _hrp_v[7:].strip()
+                    elif _hrp_hk.lower() == b"x-employee-session":
+                        _hrp_emp_sess_hdr = _hrp_hv.decode("utf-8", "replace")
+                _hrp_auth = {"role": None}
+                if _hrp_tok and _hrp_tok in _access_tokens:
+                    _hrp_auth = {"role": "admin"}
+                elif _hrp_emp_sess_hdr:
+                    _hrp_db_peek = _hr_load_db()
+                    _hrp_emp_id = _hr_verify_employee_session(_hrp_emp_sess_hdr, _hrp_db_peek)
+                    if _hrp_emp_id:
+                        _hrp_auth = {"role": "employee", "employee_id": _hrp_emp_id}
+                # documents/upload -- multipart, bypasses the JSON dispatcher
+                if _hrp_subpath == "/documents/upload" and method == "POST":
+                    _hrp_ctype_hdr = ""
+                    for _hrp_hk2, _hrp_hv2 in scope.get("headers", []):
+                        if _hrp_hk2.lower() == b"content-type":
+                            _hrp_ctype_hdr = _hrp_hv2.decode(errors="replace")
+                            break
+                    _hrp_status, _hrp_ctype, _hrp_resp_body = _hr_handle_document_upload(
+                        _hrp_body_bytes, _hrp_ctype_hdr, _hrp_auth)
+                else:
+                    _hrp_status, _hrp_ctype, _hrp_resp_body = _hr_api_route(
+                        method, _hrp_subpath, _hrp_qs, _hrp_body_json, _hrp_auth)
+                await send({"type": "http.response.start", "status": _hrp_status,
+                            "headers": [[b"content-type", _hrp_ctype],
+                                        [b"content-length", str(len(_hrp_resp_body)).encode()],
+                                        [b"cache-control", b"no-store"]]})
+                await send({"type": "http.response.body", "body": _hrp_resp_body,
+                            "more_body": False})
+                return
+            # ── end HR REST API ────────────────────────────────────────────────
+
+
             # ── /remote/ static file server ─────────────────────────────────
             # Owner-facing Remote Control PWA. Personal mode only.
             # Serves files from the remote/ folder next to this script.
@@ -20604,6 +24507,22 @@ if __name__ == "__main__":
 
     _log.info("Entry point: transport=%s port=%s public_base=%s",
               args.transport, args.port, resolved_public_base)
+
+    # ── HR SCHEDULER ───────────────────────────────────────────────────────
+    # Starts unconditionally, before the stdio/http/server-mode branch split,
+    # so all three launch paths get it. Deliberately NOT gated by
+    # _IS_SERVER_MODE (unlike scheduler_engine.py's Proactive Alerts, which
+    # are personal-mode only and started by rag_gui.py, not here) — HR
+    # compliance deadlines apply the same way in every mode. Import is local
+    # (not at module top) so a missing/broken hr_scheduler.py can never
+    # prevent ai_prowler_mcp.py itself from starting.
+    try:
+        import hr_scheduler as _hr_sched
+        _hr_sched.start()
+        _log.info("HR background scheduler started (10 compliance jobs, see "
+                   "Implementation Plan v2.1 Section 11)")
+    except Exception as _hr_sched_exc:
+        _log.warning("HR background scheduler failed to start: %s", _hr_sched_exc)
 
     if args.transport == 'http':
         # ── Server mode dispatch (v7.0.0 Phase B) ─────────────────────────────

@@ -1,0 +1,6 @@
+# HR E2E tests — keep secrets and bulky run output out of GitHub
+test_config.json
+logs/
+node_modules/
+test-results/
+playwright-report/
