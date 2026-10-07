@@ -116,7 +116,7 @@ class TestWizardDataAccumulatorStructure:
         assert "let wizardData = {}" in hr_index_text
 
     def test_wizard_next_captures_current_step_before_advancing_or_submitting(self, wizard_source):
-        capture_idx = wizard_source.index("currentStep.fields.forEach")
+        capture_idx = wizard_source.index("fields.forEach")
         advance_idx = wizard_source.index("renderWizardStep(wizardStep + 1)")
         submit_idx = wizard_source.index("apiPost('/setup/complete'")
         assert capture_idx < advance_idx, (

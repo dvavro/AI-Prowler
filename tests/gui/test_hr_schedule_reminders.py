@@ -252,6 +252,7 @@ process.exit(results.every(function(r) { return r[1]; }) ? 0 : 1);
 
 class TestMonthGridAndDayDetailBehavior:
     def test_month_grid_and_day_detail_render_correctly(self, node_available, hr_index_text, tmp_path):
+        fix_encoding_src = _extract_source_range(hr_index_text, "function fixEncoding", "function fixEncoding")
         escape_html_src = _extract_source_range(hr_index_text, "function escapeHtml", "function escapeHtml")
         render_empty_src = _extract_source_range(hr_index_text, "function renderEmpty", "function renderEmpty")
         month_view_src = _extract_source_range(
@@ -259,7 +260,7 @@ class TestMonthGridAndDayDetailBehavior:
         )
         day_detail_src = _extract_source_range(hr_index_text, "function openDayDetail", "function openDayDetail")
 
-        extracted = "\n\n".join([escape_html_src, render_empty_src, month_view_src, day_detail_src])
+        extracted = "\n\n".join([fix_encoding_src, escape_html_src, render_empty_src, month_view_src, day_detail_src])
         script = _HARNESS_TEMPLATE.replace("__EXTRACTED_LOGIC__", extracted)
         script_path = tmp_path / "hr_schedule_reminders.js"
         script_path.write_text(script, encoding="utf-8")

@@ -12559,7 +12559,12 @@ async function wizardNext() {
   // step's fields were still in the DOM. wizardData persists across steps.
   WIZARD_STEPS[wizardStep].fields.forEach(f => {
     const el = document.getElementById(f.id);
-    if (el) wizardData[f.key] = el.value;
+    if (!el) return;
+    if (f.type === 'multiselect') {
+      wizardData[f.key] = Array.from(el.querySelectorAll('input[type="checkbox"]:checked')).map(cb => cb.value);
+    } else {
+      wizardData[f.key] = el.value;
+    }
   });
 
   if (wizardStep < WIZARD_STEPS.length - 1) {

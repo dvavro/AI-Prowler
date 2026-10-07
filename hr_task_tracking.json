@@ -15,7 +15,8 @@
     "last_benefits_warning_check": null,
     "last_doc_expiration_check": null,
     "last_weekly_owner_summary": null,
-    "last_reminder_email_check": null
+    "last_reminder_email_check": null,
+      "last_employee_backup": null
   },
   "digest_state": {
     "last_digest_at": null,
