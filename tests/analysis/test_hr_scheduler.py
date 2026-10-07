@@ -343,8 +343,8 @@ class TestJobRegistryStructure:
         registry_block = hr_scheduler_source.split("JOB_REGISTRY = {", 1)[1]
         registry_block = registry_block.split("\ndef _is_due", 1)[0]
         keys = re.findall(r'"tracking_key":\s*"([^"]+)"', registry_block)
-        assert len(keys) == 11
-        assert len(set(keys)) == 11, f"duplicate tracking_key(s) found: {keys}"
+        assert len(keys) == 12
+        assert len(set(keys)) == 12, f"duplicate tracking_key(s) found: {keys}"
 
     def test_cadences_match_implementation_plan_section_11(self, hr_scheduler_source):
         expected_cadences = {
@@ -388,7 +388,7 @@ class TestTrackingSchemaAlignment:
         registry_block = hr_scheduler_source.split("JOB_REGISTRY = {", 1)[1]
         registry_block = registry_block.split("\ndef _is_due", 1)[0]
         tracking_keys = re.findall(r'"tracking_key":\s*"([^"]+)"', registry_block)
-        assert len(tracking_keys) == 11
+        assert len(tracking_keys) == 12
         for key in tracking_keys:
             assert key in scheduler_section, (
                 f"tracking_key '{key}' used by JOB_REGISTRY is missing from "
