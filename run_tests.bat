@@ -1,4 +1,5 @@
 @echo off
+if not defined AIPROWLER_JOBS_TOKEN for /f "delims=" %%T in ('powershell -NoProfile -Command "(Get-Content $env:USERPROFILE\.ai-prowler\config.json | ConvertFrom-Json).remote_token"') do set AIPROWLER_JOBS_TOKEN=%%T
 REM Load AIPROWLER_JOBS_TOKEN from config.json if not set
 if not defined AIPROWLER_JOBS_TOKEN (
     for /f "delims=" %%T in ('powershell -NoProfile -Command "$p=$env:APPDATA+'\AI-Prowler\config.json'; (Get-Content $p | ConvertFrom-Json).bearer_token"') do set AIPROWLER_JOBS_TOKEN=%%T
