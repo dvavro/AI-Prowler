@@ -27208,6 +27208,18 @@ def _run_server_mode(port: int, token: str,
                 return
 
             # ── HR Admin PWA — static file server, no auth required ──────────────
+            if path.startswith("/hr") and not path.startswith("/hr-api") and not path.startswith("/hr_admin") and not path.startswith("/hr_portal"):
+                import mimetypes as _hr_mt, os as _hr_os
+                _hr_root = _hr_os.path.join(_hr_os.path.dirname(_hr_os.path.abspath(__file__)), "hr")
+                _hr_rel = path[len("/hr"):].lstrip("/") or "index.html"
+                _hr_fp = _hr_os.path.join(_hr_root, _hr_rel)
+                if not _hr_os.path.isfile(_hr_fp):
+                    _hr_fp = _hr_os.path.join(_hr_root, "index.html")
+                _hr_body = open(_hr_fp, "rb").read()
+                _hr_ct = (_hr_mt.guess_type(_hr_fp)[0] or "application/octet-stream").encode()
+                await send({"type": "http.response.start", "status": 200, "headers": [[b"content-type", _hr_ct], [b"cache-control", b"no-cache"]]})
+                await send({"type": "http.response.body", "body": _hr_body})
+                return
             if path.startswith("/hr_admin") and not path.startswith("/hr-api"):
                 import mimetypes as _hrsrv_mt, os as _hrsrv_os
                 _hrsrv_pwa_root = _hrsrv_os.path.join(
@@ -29677,6 +29689,18 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
 
 
             # ── HR Admin PWA — static file server, no auth required ──────────
+            if path.startswith("/hr") and not path.startswith("/hr-api") and not path.startswith("/hr_admin") and not path.startswith("/hr_portal"):
+                import mimetypes as _hr_mt, os as _hr_os
+                _hr_root = _hr_os.path.join(_hr_os.path.dirname(_hr_os.path.abspath(__file__)), "hr")
+                _hr_rel = path[len("/hr"):].lstrip("/") or "index.html"
+                _hr_fp = _hr_os.path.join(_hr_root, _hr_rel)
+                if not _hr_os.path.isfile(_hr_fp):
+                    _hr_fp = _hr_os.path.join(_hr_root, "index.html")
+                _hr_body = open(_hr_fp, "rb").read()
+                _hr_ct = (_hr_mt.guess_type(_hr_fp)[0] or "application/octet-stream").encode()
+                await send({"type": "http.response.start", "status": 200, "headers": [[b"content-type", _hr_ct], [b"cache-control", b"no-cache"]]})
+                await send({"type": "http.response.body", "body": _hr_body})
+                return
             if path.startswith("/hr_admin") and not path.startswith("/hr-api"):
                 import mimetypes as _hrp_mt, os as _hrp_os
                 _hrp_pwa_root = _hrp_os.path.join(
