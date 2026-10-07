@@ -1,7 +1,7 @@
 @echo off
 REM Load AIPROWLER_JOBS_TOKEN from config.json if not set
 if not defined AIPROWLER_JOBS_TOKEN (
-    for /f "delims=" %%T in ('powershell -NoProfile -Command "(Get-Content "%APPDATA%\AI-Prowler\config.json" | ConvertFrom-Json).bearer_token"') do set AIPROWLER_JOBS_TOKEN=%%T
+    for /f "delims=" %%T in ('powershell -NoProfile -Command "$p=$env:APPDATA+'\AI-Prowler\config.json'; (Get-Content $p | ConvertFrom-Json).bearer_token"') do set AIPROWLER_JOBS_TOKEN=%%T
 )
 REM =====================================================================
 REM  run_tests.bat — AI-Prowler test runner
