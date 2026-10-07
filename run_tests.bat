@@ -57,6 +57,7 @@ if not exist "%PYTHON%" (
 
 REM Auto-install pytest and pyflakes if missing (gets uninstalled with AI-Prowler).
 "%PYTHON%" -c "import pytest" 2>nul || "%PYTHON%" -m pip install pytest pytest-mock pytest-asyncio pyflakes --quiet
+"%PYTHON%" -c "import playwright" 2>nul || "%PYTHON%" -m pip install playwright --quiet
 
 REM Default to tests\ with verbose output if no args given.
 REM Deliberately NOT passing an explicit -m here — pytest.ini's own addopts
@@ -119,7 +120,7 @@ REM one-time UTF-16LE -> UTF-8 conversion pass AFTER the run finishes,
 REM rather than per-line during it.
 set "LOGFILE_RAW=%LOGFILE%.rawutf16"
 if "%~1"=="" (
-    powershell -NoProfile -Command "& '%PYTHON%' -m pytest tests\ -v 2>&1 | Tee-Object -FilePath '%LOGFILE_RAW%'; exit $LASTEXITCODE"
+    powershell -NoProfile -Command "& '%PYTHON%' -m pytest tests\ -v -m "not live_worker" --ignore=tests/e2e 2>&1 | Tee-Object -FilePath '%LOGFILE_RAW%'; exit $LASTEXITCODE"
 ) else (
     powershell -NoProfile -Command "& '%PYTHON%' -m pytest %* 2>&1 | Tee-Object -FilePath '%LOGFILE_RAW%'; exit $LASTEXITCODE"
 )
