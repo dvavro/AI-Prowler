@@ -1,7 +1,0 @@
-AI-Prowler Jobs app TIME MACHINE (personal mode) — PASS
-Finished: 2026-10-03 09:12:45   (throwaway copy of the app — real data never touched)
-Tests: 7 passed, 0 failed, 4 skipped
-Sandbox: C:\Users\david\AI-Prowler-V910_to_V920_work\AI-Prowler\tests\gui_jobs_timemachine\artifacts\personal\20261003_091140\sandbox_home
-Outbox (caught, never sent): {'email': 20}
-
-Full log: C:\Users\david\AI-Prowler-V910_to_V920_work\AI-Prowler\tests\gui_jobs_timemachine\artifacts\personal\20261003_091140\run.log

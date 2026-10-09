@@ -35,6 +35,15 @@ from __future__ import annotations
 
 import ast
 import asyncio
+
+
+def _fresh_loop_run(coro):
+    """Run a coroutine on a fresh event loop, avoiding conflicts."""
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 import json
 import os
 from pathlib import Path
@@ -192,7 +201,7 @@ _FAKE_TOOLS = {
 class TestPwaApiHandler:
 
     def _run(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+        return _fresh_loop_run(coro)
 
     def test_valid_tool_returns_200(self):
         rec = _Recorder()

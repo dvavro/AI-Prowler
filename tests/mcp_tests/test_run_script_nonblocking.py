@@ -12,6 +12,14 @@ on a worker thread. These tests use a fake run_script that just sleeps, so
 they need no allowlist setup and run no real scripts.
 """
 import asyncio
+
+
+def _fresh_loop_run(coro):
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 import inspect
 import sys
 import time
@@ -78,7 +86,7 @@ def test_async_tools_stay_async_through_the_audit_wrapper(mcp_mod, monkeypatch):
         return x + 1
     mcp_mod._counting_mcp_tool(name="zz_e2e_async_probe")(some_async_tool)
     assert inspect.iscoroutinefunction(seen["fn"])
-    assert asyncio.run(seen["fn"](x=1)) == 2
+    assert _fresh_loop_run(seen["fn"](x=1)) == 2
 
 
 def test_plain_run_script_is_still_callable_directly(mcp_mod):
@@ -107,7 +115,7 @@ def test_the_server_keeps_answering_while_a_script_runs(mcp_mod, monkeypatch):
         other.cancel()
         return result, ticks
 
-    result, ticks = asyncio.run(scenario())
+    result, ticks = _fresh_loop_run(scenario())
     assert result == "✅ rc=0 — fake"
     # 1.5 s at one tick per 50 ms ≈ 30; the old sync tool would give 0.
     assert ticks >= 15, f"event loop was blocked while the script ran (only {ticks} ticks)"

@@ -836,7 +836,7 @@ class TestFeature6_ServerEndpoints:
         assert status == 200
         data = json.loads(body)
         assert "token" in data
-        assert data["token"], "Token is empty"
+        assert not data["token"], "SECURITY: /pwa-token must be empty (2026-09-25 fix)"
 
     @pytest.mark.live_pwa
     def test_6_5_pwa_api_valid_call_200(self, server):

@@ -31,7 +31,7 @@ import tempfile
 import textwrap
 from pathlib import Path
 
-SRC_PATH = Path(r"C:\Users\david\AI-Prowler-V910_to_V920_work\AI-Prowler\ai_prowler_mcp.py")
+SRC_PATH = Path(r"C:\Users\jamie\Documents\AI-Prowler_V910_to_V920\AI-Prowler\ai_prowler_mcp.py")
 CLASS_NAME = "_SafeRotatingFileHandler"
 TIMEOUT_SEC = 8
 

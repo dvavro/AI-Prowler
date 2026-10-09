@@ -273,7 +273,13 @@ class TestPwaAsgiHandler:
     """Simulate ASGI requests to the PWA handler — no live server needed."""
 
     def _run(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+        # Use a fresh event loop to avoid "already running" conflicts
+        # with pytest-asyncio or other tests' loops.
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
 
     def test_index_html_200(self, pwa_dir):
         rec = _Recorder()
