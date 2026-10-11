@@ -57,6 +57,9 @@ if not exist "%PYTHON%" (
 
 REM Auto-install pytest and pyflakes if missing (gets uninstalled with AI-Prowler).
 "%PYTHON%" -c "import pytest" 2>nul || "%PYTHON%" -m pip install pytest pytest-mock pytest-asyncio pyflakes --quiet
+REM Auto-install Playwright for the GUI E2E suites (separate check: pytest may
+REM already be installed while playwright is not). --quiet keeps the log clean.
+"%PYTHON%" -c "import playwright" 2>nul || "%PYTHON%" -m pip install playwright pytest-playwright --quiet
 
 REM Default to tests\ with verbose output if no args given.
 REM Deliberately NOT passing an explicit -m here — pytest.ini's own addopts

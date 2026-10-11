@@ -372,6 +372,24 @@ html,body{height:100%;background:var(--bg);color:var(--text);
         Revoking is instant with no confirmation.
       </div>
       <div id="permList"><div class="spinner"></div></div>
+
+      <!-- Access-Only Folders (2026-10-09, David) — readable by Claude, never
+           indexed. The Remote app is personal-mode only, and so is this feature. -->
+      <div class="card-title" id="aoTitle" style="margin:20px 2px 8px">&#128194; Access-Only Folders</div>
+      <div class="info-banner" style="margin-bottom:10px">
+        Claude can <strong style="color:var(--text)">read</strong> these folders but they are
+        <strong style="color:var(--text)">never indexed</strong>. Folders only — each always
+        includes its sub-folders; a folder already covered by an access-only or indexed folder
+        can't be added. Adding one requires your Bearer token; removing is instant. Write access
+        is a separate switch.
+      </div>
+      <div id="aoList"><div class="spinner"></div></div>
+      <div class="search-bar" style="margin-top:10px">
+        <input type="text" id="aoInput" placeholder="Folder path, e.g. C:\Manuals"
+          autocomplete="off" autocapitalize="off" spellcheck="false"
+          onkeydown="if(event.key==='Enter')aoStartAdd()">
+        <button class="search-btn" id="aoAddBtn" onclick="aoStartAdd()">Add</button>
+      </div>
     </div>
 
     <!-- Learn -->
@@ -394,7 +412,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);
       <!-- Add learning form -->
       <div id="learnForm" style="display:none">
         <div class="card">
-          <div class="card-title">&#43; New Learning</div>
+          <div class="card-title" id="learnFormTitle">&#43; New Learning</div>
           <div style="display:flex;flex-direction:column;gap:10px;">
             <div>
               <div style="font-size:11px;color:var(--dim);margin-bottom:4px">Title <span style="color:var(--red)">*</span></div>
@@ -456,7 +474,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);
                 style="flex:1;background:var(--surface);border:1px solid var(--border);
                 color:var(--text);border-radius:8px;padding:10px;font-size:14px;cursor:pointer;">
                 Cancel</button>
-              <button onclick="submitLearning()"
+              <button onclick="submitLearning()" id="learnFormSubmitBtn"
                 style="flex:2;background:var(--accent);border:none;color:#fff;
                 border-radius:8px;padding:10px;font-size:14px;font-weight:700;cursor:pointer;">
                 &#10003; Save Learning</button>
@@ -688,9 +706,9 @@ html,body{height:100%;background:var(--bg);color:var(--text);
 <!-- Re-auth modal -->
 <div class="modal-overlay" id="reAuthModal">
   <div class="modal">
-    <div class="modal-title">&#128274; Confirm Write Access</div>
+    <div class="modal-title" id="raTitle">&#128274; Confirm Write Access</div>
     <div class="modal-path" id="raPath"></div>
-    <div class="modal-warn">
+    <div class="modal-warn" id="raWarn">
       <strong>Warning:</strong> This allows Claude to modify files in
       this directory. Re-enter your Bearer token to confirm.
     </div>
@@ -730,6 +748,9 @@ let ownerName = '', serverMode = false;
 let dirStack = [];
 let raAttempts = 0, raLockUntil = 0;
 let raDirPath = null, raId = null, raCb = null;
+// What the re-auth popup confirms: 'write' (write-access switch) or
+// 'access' (add an Access-Only Folder) — 2026-10-09.
+let raMode = 'write';
 const TABS = ['Dash','Files','Search','Perms','Learn','Tasks','System'];
 
 // ── Token ─────────────────────────────────────────────────────────────────
@@ -1142,7 +1163,9 @@ async function handleUpload(inp) {
     });
     const data = await r.json().catch(() => ({}));
     if (r.ok && data.ok) {
-      statusEl.textContent = '✅ Uploaded: ' + file.name + ' (' + Math.round((data.size||0)/1024) + ' KB) — indexed into AI-Prowler';
+      // 2026-10-10: an access-only folder's upload is saved but not indexed
+      statusEl.textContent = '✅ Uploaded: ' + file.name + ' (' + Math.round((data.size||0)/1024) + ' KB) — ' +
+        (data.indexed === false ? 'saved (access-only folder — not indexed)' : 'indexed into AI-Prowler');
       statusEl.style.color = 'var(--green)';
       browseDir(dirPath);  // refresh listing
     } else {
@@ -1257,24 +1280,21 @@ async function loadFilesList() {
     ]);
     if (!rTracked.ok) { el.innerHTML = '<div class="empty">Cannot load directories</div>'; return; }
 
-    // Parse writable set — lines containing [W]
-    const wSet = new Set(
-      (rWritable.result||'').split('\n')
-        .filter(l => l.includes('[W]'))
-        .map(l => l.replace(/[^\x20-\x7E]/g,'').replace('[W]','').trim().toLowerCase())
-        .filter(l => l.length > 2)
-    );
+    // R-087 (2026-10-09): the shared parsers — the old inline ones kept the
+    // "[W] " badge on every path (so no folder ever showed Upload) and mixed
+    // in the access-only folders without saying so.
+    const wSet = _parseWritableSet(rWritable.result);
+    // 2026-10-10 (David): two sections — Indexed folders, then Access-Only
+    // folders (readable, never indexed; uploads there are saved, not indexed).
+    const secs = _parseTrackedSections(rTracked.result || '');
 
-    const dirs = (rTracked.result||'').split('\n').map(l => {
-      return l.replace(/[^\x20-\x7E]/g,'').trim().replace(/^\d+\.\s*/, '').trim();
-    }).filter(l => l.length > 3 && /[:\\/]/.test(l));
-
-      if (!dirs.length) { el.innerHTML = '<div class="empty">No tracked directories</div>'; return; }
-
-      el.innerHTML = '<div class="card">' + dirs.map((d, i) => {
-        const isW = wSet.has(d.toLowerCase());
-        const uid = 'upl_' + i;
-        const did = 'dlp_' + i;
+      // kind: 'i' = indexed folder, 'a' = access-only folder
+      const _card = (list, kind) => '<div class="card ' + (kind === 'a' ? 'files-ao' : 'files-idx') + '">' + list.map((d, i) => {
+        // R-088: writable through its own entry OR a writable parent folder
+        // (the server's upload check accepts both)
+        const isW = !!_writableVia(d, wSet);
+        const uid = 'upl_' + kind + i;
+        const did = 'dlp_' + kind + i;
 
         // Detect if this tracked entry is a single file (has extension after last separator)
         const basename = d.split('\\').pop().split('/').pop();
@@ -1287,7 +1307,7 @@ async function loadFilesList() {
             '<input type="file" id="' + uid + '" accept="*/*" ' +
             'style="display:none" ' +
             'data-dir="' + esc(d) + '" ' +
-            'onchange="handleUpload(this)">' +
+            'data-kind="' + kind + '" onchange="handleUpload(this)">' +
             '</label>'
           : (!isSingleFile ? '<span style="font-size:11px;color:var(--dim)">&#128274; Read only</span>' : '');
 
@@ -1317,6 +1337,18 @@ async function loadFilesList() {
           (isSingleFile ? '' : '<div id="' + did + '" style="display:none;padding:4px 0 4px 36px"></div>') +
         '</div>';
       }).join('') + '</div>';
+
+      let filesHtml = '<div class="card-title" id="filesIdxTitle" style="margin:4px 2px 8px">&#128193; Indexed Folders</div>' +
+        (secs.tracked.length ? _card(secs.tracked, 'i')
+                             : '<div class="empty">No tracked directories</div>');
+      if (secs.hasSection && !serverMode) {      // access-only folders: personal mode only
+        filesHtml += '<div class="card-title" id="filesAoTitle" style="margin:20px 2px 8px">&#128194; Access-Only Folders</div>' +
+          '<div class="info-banner" style="margin-bottom:10px">Readable by Claude but <strong style="color:var(--text)">never indexed</strong> — ' +
+          'files you upload here are saved, not added to search. Manage this list on the Perms tab.</div>' +
+          (secs.accessOnly.length ? _card(secs.accessOnly, 'a')
+                                  : '<div class="empty" id="filesAoEmpty">No access-only folders</div>');
+      }
+      el.innerHTML = filesHtml;
 
       // Direct download buttons (single tracked files)
       el.querySelectorAll('.dl-direct-btn').forEach(btn => {
@@ -1384,7 +1416,7 @@ async function loadFilesList() {
     let crumb = dirPath;
     if (dirPath.startsWith(rootPath)) {
       const rel = dirPath.slice(rootPath.length).replace(/^[/\\]+/, '');
-      crumb = rel.length ? rel : '📁 ' + rootPath.split('\\').pop();
+      crumb = rel.length ? rel : '📁 ' + tail(rootPath);   // tail(): access-only roots may use '/'
     }
 
     let html = '';
@@ -1593,25 +1625,23 @@ async function loadPerms() {
     // list_writable_directories format:
     //   "  ✅ [W]  C:\path"  -> after stripping non-ASCII -> "  [W]  C:\path"
     //   "  📖 [R]  C:\path"  -> after stripping non-ASCII -> "  [R]  C:\path"
-    // Extract writable paths (lines containing [W])
-    const wSet = new Set(
-      (writable.result||'').split('\n')
-        .filter(l => l.includes('[W]'))
-        .map(l => l.replace(/[^\x20-\x7E]/g,'')
-                   .replace(/\[W\]/, '').trim().toLowerCase())
-        .filter(l => l.length > 2)
-    );
+    // Extract writable paths (lines containing [W]) — includes('[W]') filter
+    // lives in _parseWritableSet (R-087: shared with the Files tab).
+    const wSet = _parseWritableSet(writable.result);
     // list_tracked_directories format:
     //   "  1. 📁 C:\path"  -> after stripping -> "1. C:\path" -> strip number -> "C:\path"
-    const dirs = (tracked.result||'').split('\n')
-      .map(l => l.replace(/[^\x20-\x7E]/g,'').trim()
-                  .replace(/^\d+\.\s*/, '').trim())
-      .filter(l => l.length > 3 && /[:\\\/]/.test(l));
+    // 2026-10-09: the output has two sections (indexed / access-only) and
+    // each numbered line carries a [W]/[R] badge — split by section and
+    // keep only the numbered path lines (the old one-list parse mixed the
+    // access-only folders in and kept the badge on the path).
+    const secs = _parseTrackedSections(tracked.result || '');
+    const dirs = secs.tracked;
+    renderAccessOnly(secs.accessOnly, wSet, secs.hasSection);
 
     if (!dirs.length) { el.innerHTML = '<div class="empty">No tracked directories</div>'; return; }
     // Event delegation — inline onchange unreliable on iOS Safari
     el.innerHTML = '<div class="card" id="permCard">' + dirs.map((p, i) => {
-      const isW = wSet.has(p.toLowerCase());
+      // R-088: own [W] entry, or writable through a parent folder
       return '<div class="row">' +
         '<div class="ri">&#128193;</div>' +
         '<div class="rm">' +
@@ -1619,12 +1649,7 @@ async function loadPerms() {
           '<div class="rs" style="font-family:monospace;font-size:9px">' + esc(p) + '</div>' +
         '</div>' +
         '<div class="ra" style="display:flex;align-items:center;gap:8px">' +
-          '<span class="badge ' + (isW?'badge-w':'badge-r') + '" id="pb'+i+'">' + (isW?'R+W':'R') + '</span>' +
-          '<label class="perm-toggle" style="cursor:pointer">' +
-            '<input type="checkbox" id="pc'+i+'" ' + (isW?'checked':'') +
-            ' data-path="' + esc(p) + '" data-idx="' + i + '" class="perm-cb">' +
-            '<span class="perm-slider"></span>' +
-          '</label>' +
+          _permToggleHtml(p, i, _writableVia(p, wSet)) +
         '</div></div>';
     }).join('') + '</div>';
     // Delegated listener on the card container
@@ -1635,7 +1660,167 @@ async function loadPerms() {
                ev.target.getAttribute('data-idx'));
       }
     });
-  } catch(e) { el.innerHTML = '<div class="empty">Error loading permissions</div>'; }
+  } catch(e) {
+    el.innerHTML = '<div class="empty">Error loading permissions</div>';
+    const ao = document.getElementById('aoList');
+    if (ao) ao.innerHTML = '<div class="empty">Error loading access-only folders</div>';
+  }
+}
+
+// list_tracked_directories → { tracked: [paths], accessOnly: [paths], hasSection }
+// Lines look like "  1. [W] 📁 C:\path"; section headers are
+// "📁 Indexed directories …" and "📂 Access-only folders …".
+// R-087 (2026-10-09): the ONE parser for this output — Perms, Files and the
+// Tasks scope picker all use it (Files and the scope picker had their own
+// one-list parsers that kept the "[W] " badge on every path and mixed the
+// access-only folders in). Only the badge and the 📁/📄 icon are removed, so
+// accented / non-English characters in folder names survive.
+function _parseTrackedSections(txt) {
+  const out = { tracked: [], accessOnly: [], hasSection: false };
+  let cur = out.tracked;
+  String(txt || '').split('\n').forEach(function(raw) {
+    const l = raw.trim();
+    const head = l.replace(/^[^A-Za-z0-9]+/, '');          // drop a leading emoji
+    if (/^access-only folders/i.test(head)) { cur = out.accessOnly; out.hasSection = true; return; }
+    if (/^indexed directories/i.test(head)) { cur = out.tracked; return; }
+    const m = l.match(/^\d+\.\s*(?:\[(?:W|R|W\*)\]\s*)?(?:[\u2190-\u2BFF\uD800-\uDFFF\uFE0F\u200D]+\s*)?(.+)$/);
+    if (m && /[:\\\/]/.test(m[1])) cur.push(m[1].trim());
+  });
+  return out;
+}
+
+// list_writable_directories → lower-cased writable paths. Lines look like
+// "  ✅ [W]  C:\path" — take what follows "[W]" (no character stripping).
+function _parseWritableSet(txt) {
+  return new Set(String(txt || '').split('\n')
+    .filter(function(l) { return l.indexOf('[W]') !== -1; })
+    .map(function(l) { return l.split('[W]').slice(1).join('[W]').trim().toLowerCase(); })
+    .filter(function(l) { return l.length > 2; }));
+}
+
+// R-088 (2026-10-10): is `path` writable — 'self' (its own [W] entry),
+// 'parent' (inside a writable folder: the server allows writes there too), or
+// ''. The screens used to check only the folder's own entry, so a folder
+// writable through its parent showed "Read only" and no Upload.
+function _writableVia(path, wSet) {
+  const norm = function(s) { return String(s || '').toLowerCase().replace(/\//g, '\\').replace(/\\+$/, ''); };
+  const p = norm(path);
+  let via = '';
+  wSet.forEach(function(w) {
+    const n = norm(w);
+    if (!n || via === 'self') return;
+    if (p === n) via = 'self';
+    else if (p.indexOf(n + '\\') === 0) via = 'parent';
+  });
+  return via;
+}
+
+// The write switch for one row (Perms: indexed and access-only rows). A
+// folder writable through its parent shows R+W with the switch locked on —
+// switching it off here can't work (the access belongs to the parent).
+function _permToggleHtml(p, id, via) {
+  if (via === 'parent') {
+    return '<span class="badge badge-w" id="pb' + id + '" title="Writable through a parent folder">R+W</span>' +
+      '<label class="perm-toggle" style="opacity:.45;cursor:not-allowed" title="Writable through a parent folder">' +
+        '<input type="checkbox" id="pc' + id + '" checked disabled data-inherited="1"' +
+        ' data-path="' + esc(p) + '" data-idx="' + id + '" class="perm-cb">' +
+        '<span class="perm-slider"></span>' +
+      '</label>';
+  }
+  const isW = via === 'self';
+  return '<span class="badge ' + (isW ? 'badge-w' : 'badge-r') + '" id="pb' + id + '">' + (isW ? 'R+W' : 'R') + '</span>' +
+    '<label class="perm-toggle" style="cursor:pointer">' +
+      '<input type="checkbox" id="pc' + id + '" ' + (isW ? 'checked' : '') +
+      ' data-path="' + esc(p) + '" data-idx="' + id + '" class="perm-cb">' +
+      '<span class="perm-slider"></span>' +
+    '</label>';
+}
+
+// ── Access-Only Folders (2026-10-09) ──────────────────────────────────────
+// Readable by Claude, never indexed. Each row: the same write switch as the
+// tracked folders (grant_write_access accepts access-only folders) plus a
+// Remove button (revoke_access). Add = grant_access, behind the token check.
+function renderAccessOnly(paths, wSet, hasSection) {
+  const el = document.getElementById('aoList');
+  if (!el) return;
+  if (!hasSection || serverMode) {        // a server never offers access-only folders
+    ['aoTitle', 'aoList', 'aoInput', 'aoAddBtn'].forEach(function(id) {
+      const n = document.getElementById(id);
+      const box = n && (id === 'aoInput' || id === 'aoAddBtn') ? n.parentElement : n;
+      if (box) box.style.display = 'none';
+    });
+    const banner = document.getElementById('aoTitle') && document.getElementById('aoTitle').nextElementSibling;
+    if (banner) banner.style.display = 'none';
+    return;
+  }
+  if (!paths.length) {
+    el.innerHTML = '<div class="empty" id="aoEmpty">No access-only folders yet</div>';
+    return;
+  }
+  el.innerHTML = '<div class="card" id="aoCard">' + paths.map(function(p, i) {
+    const id = 'a' + i;
+    return '<div class="row ao-row" data-path="' + esc(p) + '">' +
+      '<div class="ri">&#128194;</div>' +
+      '<div class="rm">' +
+        '<div class="rn">' + esc(tail(p)) + '</div>' +
+        '<div class="rs" style="font-family:monospace;font-size:9px">' + esc(p) + '</div>' +
+      '</div>' +
+      '<div class="ra" style="display:flex;align-items:center;gap:8px">' +
+        _permToggleHtml(p, id, _writableVia(p, wSet)) +       // R-088
+        '<button class="ao-remove" data-path="' + esc(p) + '" title="Remove access" ' +
+          'style="background:none;border:1px solid var(--border);color:var(--dim);border-radius:8px;' +
+          'padding:4px 8px;font-size:13px;cursor:pointer">&#128465;</button>' +
+      '</div></div>';
+  }).join('') + '</div>';
+  document.getElementById('aoCard').addEventListener('change', function(ev) {
+    if (ev.target && ev.target.classList.contains('perm-cb')) {
+      onPerm(ev.target, ev.target.getAttribute('data-path'), ev.target.getAttribute('data-idx'));
+    }
+  });
+  document.getElementById('aoCard').addEventListener('click', function(ev) {
+    const b = ev.target && ev.target.closest ? ev.target.closest('.ao-remove') : null;
+    if (b) aoRemove(b, b.getAttribute('data-path'));
+  });
+}
+
+async function aoRemove(btn, path) {
+  btn.disabled = true;
+  try {
+    const r = await api('revoke_access', { directory: path });
+    const refused = r.ok && String(r.result || '').trim().startsWith('\u274C');
+    if (r.ok && !refused) {
+      toast('🔒 Access removed');
+      loadPerms();
+      return;
+    }
+    toast('❌ ' + esc(refused ? String(r.result).trim().slice(1).trim() : (r.error || 'Failed to remove')));
+  } catch(e) { toast('❌ Network error'); }
+  btn.disabled = false;
+}
+
+function aoStartAdd() {
+  const inp = document.getElementById('aoInput');
+  const path = (inp.value || '').trim();
+  if (!path) { toast('Type a folder path first'); inp.focus(); return; }
+  raMode = 'access';
+  raDirPath = path; raId = null; raCb = null;
+  document.getElementById('raTitle').innerHTML = '&#128194; Add Access-Only Folder';
+  document.getElementById('raWarn').innerHTML =
+    '<strong>Note:</strong> Claude will be able to READ files in this folder ' +
+    '(never indexed, no write access). Re-enter your Bearer token to confirm.';
+  document.getElementById('raConfirm').textContent = 'Add Folder';
+  _openReAuth(path);
+}
+
+function _openReAuth(path) {
+  document.getElementById('raPath').textContent = path;
+  document.getElementById('raInput').value = '';
+  document.getElementById('raErr').style.display = 'none';
+  document.getElementById('raLocked').style.display = 'none';
+  document.getElementById('raConfirm').disabled = false;
+  raAttempts = 0;
+  document.getElementById('reAuthModal').classList.add('show');
+  setTimeout(() => document.getElementById('raInput').focus(), 120);
 }
 
 async function onPerm(cb, path, id) {
@@ -1649,24 +1834,23 @@ async function onPerm(cb, path, id) {
       if (r.ok && !refused) {
         document.getElementById('pb'+id).className = 'badge badge-r';
         document.getElementById('pb'+id).textContent = 'R';
-        toast('&#128274; Write access revoked');
+        toast('🔒 Write access revoked');
       } else {
         cb.checked = true;
-        toast('&#10060; ' + esc(refused ? String(r.result).trim().slice(1).trim() : (r.error || 'Failed to revoke')));
+        toast('❌ ' + esc(refused ? String(r.result).trim().slice(1).trim() : (r.error || 'Failed to revoke')));
       }
     } catch(e) { cb.checked = true; }
     cb.disabled = false;
   } else {
     cb.checked = false;
+    raMode = 'write';
     raDirPath = path; raId = id; raCb = cb;
-    document.getElementById('raPath').textContent = path;
-    document.getElementById('raInput').value = '';
-    document.getElementById('raErr').style.display = 'none';
-    document.getElementById('raLocked').style.display = 'none';
-    document.getElementById('raConfirm').disabled = false;
-    raAttempts = 0;
-    document.getElementById('reAuthModal').classList.add('show');
-    setTimeout(() => document.getElementById('raInput').focus(), 120);
+    document.getElementById('raTitle').innerHTML = '&#128274; Confirm Write Access';
+    document.getElementById('raWarn').innerHTML =
+      '<strong>Warning:</strong> This allows Claude to modify files in ' +
+      'this directory. Re-enter your Bearer token to confirm.';
+    document.getElementById('raConfirm').textContent = 'Grant Access';
+    _openReAuth(path);
   }
 }
 
@@ -1709,6 +1893,32 @@ async function confirmGrant() {
     return;
   }
   document.getElementById('raConfirm').disabled = true;
+  if (raMode === 'access') {                       // Add Access-Only Folder (2026-10-09)
+    try {
+      const r = await api('grant_access', { directory: raDirPath });
+      const txt = String(r.result || '').trim();
+      const refused = r.ok && txt.startsWith('\u274C');
+      if (r.ok && !refused) {
+        // 2026-10-10: a duplicate / covered folder is now refused (❌ → shown in
+        // the popup below); a folder that contained access-only folders folds them in
+        const folded = txt.indexOf('Folded in') !== -1;
+        toast(folded ? '✅ Added — folders inside it were folded in'
+                     : '&#9989; Access-only folder added', folded ? 4500 : undefined);
+        document.getElementById('aoInput').value = '';
+        closeReAuth();
+        loadPerms();
+      } else {
+        document.getElementById('raErr').textContent = refused ? txt.slice(1).trim() : (r.error || 'Failed');
+        document.getElementById('raErr').style.display = 'block';
+        document.getElementById('raConfirm').disabled = false;
+      }
+    } catch(e) {
+      document.getElementById('raErr').textContent = 'Network error';
+      document.getElementById('raErr').style.display = 'block';
+      document.getElementById('raConfirm').disabled = false;
+    }
+    return;
+  }
   try {
     const r = await api('grant_write_access', { directory: raDirPath });
     // RM-R-007: a ❌ answer (ok:true) is a refusal — e.g. a blocked system folder.
@@ -1719,7 +1929,7 @@ async function confirmGrant() {
         document.getElementById('pb'+raId).className = 'badge badge-w';
         document.getElementById('pb'+raId).textContent = 'R+W';
       }
-      toast('&#9989; Write access granted');
+      toast('✅ Write access granted');
       closeReAuth();
     } else {
       document.getElementById('raErr').textContent =
@@ -2118,12 +2328,10 @@ async function _loadScopeDirCheckboxes(preChecked) {
   try {
     const r = await api('list_tracked_directories');
     if (!r.ok) { el.innerHTML = '<div style="color:var(--dim);padding:6px">Could not load directories</div>'; return; }
-    const lines = (r.result || '').split('\n');
-    const paths = [];
-    lines.forEach(function(line) {
-      const m = /^\s*\d+\.\s*[^\sA-Za-z0-9]*\s*(.+)$/.exec(line);
-      if (m) paths.push(m[1].trim());
-    });
+    // R-087 (2026-10-09): the shared parser — the old regex captured
+    // "W] 📁 C:\…" as the path once lines gained the [W]/[R] badge, and
+    // listed access-only folders (never indexed, so useless as a search scope).
+    const paths = _parseTrackedSections(r.result || '').tracked;
     if (!paths.length) { el.innerHTML = '<div style="color:var(--dim);padding:6px">No tracked directories</div>'; return; }
     el.innerHTML = paths.map(function(p) {
       const checked = preChecked.indexOf(p) !== -1 ? ' checked' : '';
@@ -2200,9 +2408,24 @@ async function submitNewTask() {
     label, prompt, schedule,
     output_learnings: learnings, output_report: report, output_email: email,
   };
-  if (firstDue) args.first_due = firstDue;
-  if (reportFolder) args.report_folder = reportFolder;
-  if (scopeDirs.length) args.scope_dirs = scopeDirs;
+  if (_editingTaskId) {
+    // R-089 (2026-10-11): an edit ALWAYS sends these — update_analysis_task
+    // only changes the fields it's given, so leaving them out when empty
+    // meant a cleared Report folder / un-ticked scope folders / cleared due
+    // date silently kept their old values. Empty = clear.
+    if (schedule !== 'none' && !firstDue) {
+      errEl.textContent = 'A scheduled task needs a first due date — pick one, or set Schedule to Run once.';
+      errEl.style.display = 'block';
+      return;
+    }
+    args.first_due = firstDue;          // '' clears it (Run once only, see above)
+    args.report_folder = reportFolder;  // '' clears it
+    args.scope_dirs = scopeDirs;        // [] clears them
+  } else {
+    if (firstDue) args.first_due = firstDue;
+    if (reportFolder) args.report_folder = reportFolder;
+    if (scopeDirs.length) args.scope_dirs = scopeDirs;
+  }
   if (schedule === 'weekly' || schedule === 'biweekly' || schedule === 'monthly') {
     // "" (Not pinned) -> None/unpinned; a digit string -> that weekday.
     args.schedule_day_of_week = dayOfWeek === '' ? null : parseInt(dayOfWeek, 10);
@@ -2299,10 +2522,16 @@ async function searchLearnings() {
             (id ? '<span style="font-size:9px;font-family:monospace;color:var(--dim2)">' + esc(id.slice(0,8)) + '\u2026</span>' : '') +
           '</div>' +
         '</div>' +
-        (id ? '<button data-action="delete-learning" data-id="' + esc(id) + '" data-title="' + esc(title) + '" ' +
+        (id ? '<div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">' +
+          // 2026-10-11 (David): learnings can be edited on the phone too
+          '<button data-action="edit-learning" data-id="' + esc(id) + '" data-title="' + esc(title) + '" ' +
+          'style="background:none;border:1px solid var(--accent);color:var(--accent);border-radius:6px;' +
+          'padding:3px 8px;font-size:11px;cursor:pointer">' +
+          '&#9998; Edit</button>' +
+          '<button data-action="delete-learning" data-id="' + esc(id) + '" data-title="' + esc(title) + '" ' +
           'style="background:none;border:1px solid var(--red);color:var(--red);border-radius:6px;' +
-          'padding:3px 8px;font-size:11px;cursor:pointer;flex-shrink:0">' +
-          '&#128465; Delete</button>' : '') +
+          'padding:3px 8px;font-size:11px;cursor:pointer">' +
+          '&#128465; Delete</button></div>' : '') +
       '</div>' +
     '</div>';
   }).filter(function(s){ return s.length > 0; }).join('');
@@ -2316,8 +2545,21 @@ async function deleteLearning(id, title) {
   } catch(e) { toast('❌ Error: ' + String(e)); }
 }
 
+// 2026-10-11 (David): the Learn form doubles as an Edit form. _editingLearningId
+// is null for "+ New Learning"; set to the learning's ID while editing one.
+let _editingLearningId = null;
+
+function _setLearnFormMode(editing) {
+  _editingLearningId = editing || null;
+  document.getElementById('learnFormTitle').textContent = editing ? '✎ Edit Learning' : '+ New Learning';
+  document.getElementById('learnFormSubmitBtn').textContent = editing ? '✓ Save Changes' : '✓ Save Learning';
+}
+
 function toggleLearnForm() {
   const el = document.getElementById('learnForm');
+  if (_editingLearningId) {            // "+ Add Learning" while editing → a fresh, empty form
+    cancelLearnForm();
+  }
   el.style.display = el.style.display === 'none' ? 'block' : 'none';
   if (el.style.display === 'block') document.getElementById('lnTitle').focus();
 }
@@ -2328,6 +2570,33 @@ function cancelLearnForm() {
   document.getElementById('lnCategory').value = 'general';
   document.getElementById('lnOutcome').value = 'unknown';
   document.getElementById('lnError').style.display = 'none';
+  _setLearnFormMode(null);
+}
+
+async function editLearning(id) {
+  toast('⏳ Loading learning…');
+  try {
+    const r = await api('get_learning', { learning_id: id });
+    const txt = String((r && r.result) || '').trim();
+    if (!r.ok || txt.startsWith('❌')) { toast('❌ ' + (r.error || txt.replace(/^❌\s*/, '') || 'Could not load learning')); return; }
+    let l;
+    try { l = JSON.parse(txt); } catch(e) { toast('❌ Could not read the learning'); return; }
+    cancelLearnForm();
+    _setLearnFormMode(id);
+    document.getElementById('lnTitle').value   = l.title   || '';
+    document.getElementById('lnContent').value = l.content || '';
+    const cat = document.getElementById('lnCategory');
+    cat.value = l.category || 'general';
+    if (cat.value !== (l.category || 'general')) cat.value = 'general';   // unknown category
+    const out = document.getElementById('lnOutcome');
+    out.value = l.outcome || 'unknown';
+    if (out.value !== (l.outcome || 'unknown')) out.value = 'unknown';
+    document.getElementById('lnTags').value    = (Array.isArray(l.tags) ? l.tags : []).join(', ');
+    document.getElementById('lnContext').value = l.context || '';
+    const form = document.getElementById('learnForm');
+    form.style.display = 'block';
+    form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch(e) { toast('❌ Error: ' + String(e)); }
 }
 
 async function submitLearning() {
@@ -2345,14 +2614,34 @@ async function submitLearning() {
     context:  document.getElementById('lnContext').value.trim(),
   };
   try {
-    const r = await api('record_learning', args);
-    if (r.ok) { toast('✅ Learning saved: ' + title); cancelLearnForm(); await loadLearnings(); }
-    else { errEl.textContent = r.error || 'Failed'; errEl.style.display = 'block'; }
+    let r;
+    if (_editingLearningId) {
+      // update_learning takes the fields as an "updates" dict, tags as a list;
+      // every field is sent, so emptying Tags / Context clears them.
+      const updates = Object.assign({}, args, {
+        tags: args.tags ? args.tags.split(',').map(function(s){ return s.trim(); }).filter(Boolean) : [],
+      });
+      r = await api('update_learning', { learning_id: _editingLearningId, updates: updates });
+    } else {
+      r = await api('record_learning', args);
+    }
+    const txt = String((r && r.result) || '').trim();
+    const refused = r.ok && (txt.startsWith('❌') || txt.startsWith('⛔'));
+    if (r.ok && !refused) {
+      toast('✅ Learning ' + (_editingLearningId ? 'updated' : 'saved') + ': ' + title);
+      cancelLearnForm();
+      await loadLearnings();
+    } else {
+      errEl.textContent = refused ? txt.replace(/^[❌⛔]\s*/, '') : (r.error || 'Failed');
+      errEl.style.display = 'block';
+    }
   } catch(e) { errEl.textContent = 'Error: ' + String(e); errEl.style.display = 'block'; }
 }
 
 // ── Global click handler for Learn tab (delete-learning) ──────────────────
 document.addEventListener('click', function(e) {
+  const ed = e.target.closest('button[data-action="edit-learning"]');
+  if (ed) { editLearning(ed.getAttribute('data-id')); return; }
   const btn = e.target.closest('button[data-action="delete-learning"]');
   if (!btn) return;
   const id    = btn.getAttribute('data-id');

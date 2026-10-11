@@ -198,21 +198,46 @@ def test_blank_server_build_puts_shared_job_on_both_routes(db, osrm):
 
 
 def test_approve_matches_route_name_case_insensitively(db):
+    # 2026-10-05 rewrite: approval is a pure flag (email + link viewing).
+    # It NEVER writes to the job's Start/End Time (David's rule) - the routed
+    # arrival lives in route_stops only.
     jid = _job(db, VICKI, "20 Canal St", start="08:00")
     ro.db_write_route_stops(db, DAY, [_stop(db, jid, VICKI, "10:15")], actor="t")
     out = ro.db_approve_route_schedule(db, DAY, "vicki vavro", actor="t")
-    assert "Approved 1 job" in out
-    assert _job_row(db, jid)["start_time"] == "10:15"
+    assert "Route approved" in out
+    assert ro.db_is_route_approved(db, DAY, VICKI)
+    assert _job_row(db, jid)["start_time"] == "08:00"   # untouched by approve
 
 
 def test_unapprove_reaches_shared_job(db):
+    # 2026-10-05 rewrite: un-approve is approve's exact inverse - it deletes
+    # the approval row and unpublishes the links, but NEVER writes to a job's
+    # Start/End Time (approve never changed them, so there is nothing to
+    # restore). The R-056 point that remains: un-approving one person's route
+    # must still REACH a job shared with someone else (crew membership match)
+    # and unpublish its link, leaving nothing approved-only behind.
     jid = _job(db, SHARED, "10 Flagler Ave", start="10:15", orig="08:00")
-    ro.db_unapprove_route_schedule(db, DAY, VICKI, actor="t")
-    assert _job_row(db, jid)["start_time"] == "08:00"
+    ro.db_write_route_stops(db, DAY, [_stop(db, jid, VICKI, "10:15")], actor="t")
+    assert "Route approved" in ro.db_approve_route_schedule(db, DAY, "vicki vavro", actor="t")
+    c = sqlite3.connect(db)
+    c.execute("UPDATE jobs SET route_map_url = 'https://x' WHERE job_id = ?", (jid,))
+    c.commit()
+    c.close()
+    out = ro.db_unapprove_route_schedule(db, DAY, VICKI, actor="t")
+    assert "un-approved" in out
+    assert not ro.db_is_route_approved(db, DAY, VICKI)
+    row = _job_row(db, jid)
+    assert row["route_map_url"] == ""        # link unpublished - reached the shared job
+    assert row["start_time"] == "10:15"      # never touched by approve/un-approve
 
 
 def test_prescreen_checks_shared_job_on_each_route(db):
     shared = _job(db, SHARED, "10 Flagler Ave", lat=None)      # not geocoded -> an error
+    # db_create_job auto-geocodes; clear coords to test the NOT_GEOCODED path
+    _c = sqlite3.connect(db)
+    _c.execute("UPDATE jobs SET latitude = NULL, longitude = NULL WHERE job_id = ?", (shared,))
+    _c.commit()
+    _c.close()
     for crew in (VICKI, SAM):
         issues = ro.db_prescreen_route_jobs(db, DAY, crew)
         hit = [i for i in issues if i["code"] == "NOT_GEOCODED"]

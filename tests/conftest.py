@@ -105,6 +105,47 @@ if sys.platform == "win32":
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Installed-files guard (2026-10-09). No test may change David's installed
+# ~/.ai-prowler/config.json (or users.json, email_config.json,
+# remote_access.json, license_seats.json): a test-run left his personal
+# install's config.json reduced to a server-mode stub. Installed here, at
+# import, before any test module or product module loads. See
+# tests/installed_files_guard.py for how it works.
+# ──────────────────────────────────────────────────────────────────────────────
+import importlib.util as _ilu_guard
+if "installed_files_guard" not in sys.modules:
+    _spec_guard = _ilu_guard.spec_from_file_location(
+        "installed_files_guard", os.path.join(os.path.dirname(__file__), "installed_files_guard.py"))
+    _guard_mod = _ilu_guard.module_from_spec(_spec_guard)
+    sys.modules["installed_files_guard"] = _guard_mod
+    _spec_guard.loader.exec_module(_guard_mod)
+import installed_files_guard  # noqa: E402
+installed_files_guard.install()
+
+
+@pytest.fixture(autouse=True)
+def _installed_files_guard(request):
+    """Fails any test that tried to change an installed AI-Prowler file, and
+    puts back any that a subprocess changed."""
+    installed_files_guard.set_current_test(request.node.nodeid)
+    installed_files_guard.take_violations()      # start clean
+    yield
+    installed_files_guard.clear_all_redirects()
+    refused = installed_files_guard.take_violations()
+    restored = installed_files_guard.check_and_restore()
+    if refused or restored:
+        pytest.fail("INSTALLED FILES GUARD — this test tried to change your installed "
+                    "AI-Prowler files:\n  " + "\n  ".join(refused + restored), pytrace=False)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Last line of defence: anything still changed at the end is put back."""
+    installed_files_guard.set_current_test("(end of run)")
+    for msg in installed_files_guard.check_and_restore():
+        print(f"\n[installed-files guard] {msg}", flush=True)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Module import — done lazily inside a fixture so that ANY pytest collection
 # error (e.g. missing chromadb) shows up as a fixture failure for one test
 # rather than a collection failure for the whole suite.

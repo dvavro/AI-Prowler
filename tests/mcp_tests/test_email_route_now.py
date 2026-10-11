@@ -1,12 +1,14 @@
-"""
-tests/mcp_tests/test_email_route_now.py
+"""tests/mcp_tests/test_email_route_now.py
 ===================================
 "📧 Email Approved Route Now" (2026-09-21): the manual counterpart to Settings
--> "Email Route On Build". Sends the CURRENTLY SAVED route (results + link)
-right now, on request — REGARDLESS of the setting's value (the button that
-calls it is only shown/enabled client-side when the setting is Disabled; the
-tool itself doesn't re-check it, since a manual send is the person's own
-explicit choice, not the automatic one the setting governs).
+-> "Email Route On Approve". Sends the CURRENTLY SAVED route (results + link)
+right now, on request — REGARDLESS of the setting's value (a manual send is
+the person's own explicit choice, not the automatic one the setting governs).
+
+2026-10-05: sending is gated on APPROVAL (David's rule) — an unapproved
+route gets the explicit warning "Email is only allowed for approved routes
+— approve the route first." and nothing is sent. The Jobs-page copy of the
+button was removed the same day; it lives on the Route page only.
 """
 import sqlite3
 import sys
@@ -17,6 +19,8 @@ import pytest
 _SRC = Path(__file__).resolve().parent.parent.parent
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
+
+from db_route_ops import db_approve_route_schedule
 
 DATE = "2026-09-22"
 HOME = {"street": "1500 Shadow Pines Dr", "city": "New Smyrna Beach", "state": "FL", "zip": "32168"}
@@ -71,19 +75,24 @@ def _stop(job_id, address, arrival="07:15"):
             "leg_drive_min": 5, "leg_drive_miles": 1.0, "map_url": None}
 
 
-def _route(mcp_mod, env):
+def _route(mcp_mod, env, approve=True):
     j1 = _make_job(mcp_mod, "Riverside Grill", "300 Riverside Dr", 29.02, -80.92)
     j2 = _make_job(mcp_mod, "Coastal Dental", "421 Faulkner St", 29.03, -80.93)
     from db_route_ops import db_write_route_stops
     db_write_route_stops(str(env), DATE, [_stop(j1, JOB1_ADDR, "07:15"), _stop(j2, JOB2_ADDR, "08:00")],
                          "test", single_crew=True)
     assert mcp_mod._publish_route_links(str(env), DATE, "", None, "test").startswith("📍")
+    if approve:
+        # 2026-10-05: email is only allowed for approved routes.
+        db_approve_route_schedule(str(env), DATE, "", actor="test")
     return j1, j2
 
 
 def _set_email_setting(env, value):
+    # 2026-10-05: renamed from 'Email Route On Build' to 'Email Route On
+    # Approve' (old key auto-migrates on first read; write the current key).
     conn = sqlite3.connect(env)
-    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('Email Route On Build', ?)", (value,))
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('Email Route On Approve', ?)", (value,))
     conn.commit()
     conn.close()
 
@@ -98,7 +107,7 @@ def test_sends_when_setting_is_disabled(mcp_mod, env, sent):
 
 
 def test_sends_when_setting_was_never_touched_at_all(mcp_mod, env, sent):
-    # No 'Email Route On Build' row written at all — the new default (Disabled)
+    # No 'Email Route On Approve' row written at all — the new default (Disabled)
     # applies, and email_route_now still sends (force=True bypasses the gate).
     _route(mcp_mod, env)
     out = mcp_mod.email_route_now(DATE, ctx=None)
@@ -116,8 +125,32 @@ def test_also_sends_when_setting_is_enabled_force_bypasses_the_gate(mcp_mod, env
     assert len(sent) == 1
 
 
-def test_no_saved_route_gives_a_clear_warning_not_an_error(mcp_mod, env, sent):
+def test_unapproved_route_gets_the_approval_warning(mcp_mod, env, sent):
+    """David's rule: the on-demand button on an unapproved route warns
+    instead of sending — even when a route IS saved."""
+    _route(mcp_mod, env, approve=False)
+    out = mcp_mod.email_route_now(DATE, ctx=None)
+    assert "approved routes" in out and "approve the route first" in out
+    assert sent == []
+
+
+def test_no_saved_route_at_all_gets_the_approval_warning(mcp_mod, env, sent):
+    """No route (and therefore no approval) — the approval gate fires first,
+    with a clear warning, not an error and not a send."""
     _make_job(mcp_mod, "Riverside Grill", "300 Riverside Dr", 29.02, -80.92)   # DB exists, no route
+    out = mcp_mod.email_route_now(DATE, ctx=None)
+    assert "approved routes" in out and "approve the route first" in out
+    assert sent == []
+
+
+def test_approved_route_with_no_saved_link_gives_nothing_to_email(mcp_mod, env, sent):
+    """Approved, but the tap-to-navigate link was never published — nothing
+    worth emailing, so the clear 'Nothing to email' warning (not a crash)."""
+    _route(mcp_mod, env)
+    conn = sqlite3.connect(str(env))
+    conn.execute("UPDATE route_stops SET map_url = NULL WHERE route_date = ?", (DATE,))
+    conn.commit()
+    conn.close()
     out = mcp_mod.email_route_now(DATE, ctx=None)
     assert out.startswith("⚠️ Nothing to email") and DATE in out
     assert sent == []
@@ -155,10 +188,13 @@ def test_registered_and_on_both_phone_allow_lists(mcp_mod):
 _HTML = (_SRC / "jobs" / "index.html").read_text(encoding="utf-8")
 
 
-def test_client_has_the_button_on_both_pages():
-    assert 'id="jobsEmailRouteBtn"' in _HTML and 'onclick="emailRouteNow(true)"' in _HTML
+def test_client_has_the_button_on_the_route_page_only():
+    # 2026-10-05: the Jobs-page copy was deliberately removed ("Email
+    # Approved Route Now — Route page only"); the button lives on the Route
+    # page, emailing the date/crew picked there.
     assert 'id="routeEmailRouteBtn"' in _HTML and 'onclick="emailRouteNow(false)"' in _HTML
-    assert _HTML.count('class="btn btn-ghost email-route-btn"') == 2
+    assert 'id="jobsEmailRouteBtn"' not in _HTML
+    assert _HTML.count('class="btn btn-ghost email-route-btn"') == 1
 
 
 def test_client_button_is_always_active_no_setting_based_gating():

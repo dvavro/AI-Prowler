@@ -33,6 +33,7 @@ have — see that test's own docstring.
 Run with:
     run_tests.bat tests\\mcp\\test_fk_blank_coercion_bugfix.py -v
 """
+import re
 import sqlite3
 
 import pytest
@@ -48,14 +49,31 @@ def db_path(tmp_path):
     return path
 
 
+def _new_customer_and_job(db_path):
+    """Create customer 'A' plus one job for it; return (customer_id, job_id).
+
+    Customer IDs follow the CUST-YYYY-N year scheme, so tests must use the
+    IDs db_create_customer/db_create_job actually return rather than
+    hardcoding them (the old CUST-0001 assumption broke when the year
+    scheme landed).
+    """
+    cust_result = db_create_customer(db_path, {"Company Name": "A"}, actor="dave")
+    assert cust_result.startswith("✅"), cust_result
+    customer_id = re.search(r"NEW_CUST_ID=(\S+)", cust_result).group(1)
+    job_result = db_create_job(db_path, {"CustomerID (Customers!A)": customer_id,
+                                          "Customer Name / Company": "A"},
+                               actor="dave")
+    assert job_result.startswith("✅"), job_result
+    job_id = re.search(r"NEW_JOB_ID=(\S+)", job_result).group(1)
+    return customer_id, job_id
+
+
 def test_blank_invoice_id_on_update_no_longer_crashes(db_path):
     """The exact live-repro scenario: edit a job that has no invoice yet,
     saving the full edit-modal-shaped updates dict including a blank
     InvoiceID field."""
-    db_create_customer(db_path, {"Company Name": "A"}, actor="dave")
-    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-0001",
-                             "Customer Name / Company": "A"}, actor="dave")
-    result = db_update_job(db_path, "JOB-0001", {
+    _customer_id, job_id = _new_customer_and_job(db_path)
+    result = db_update_job(db_path, job_id, {
         "Job Status": "In Progress",
         "Payment Status": "",
         "Recurrence": "One-time",
@@ -67,7 +85,7 @@ def test_blank_invoice_id_on_update_no_longer_crashes(db_path):
     assert result.startswith("✅"), result
 
     conn = sqlite3.connect(db_path)
-    row = conn.execute("SELECT invoice_id, job_status FROM jobs WHERE job_id = 'JOB-0001'").fetchone()
+    row = conn.execute("SELECT invoice_id, job_status FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
     conn.close()
     assert row == (None, "In Progress")  # NULL, not the empty string
 
@@ -86,7 +104,7 @@ def test_blank_customer_id_on_create_no_longer_crashes(db_path):
         "CustomerID (Customers!A)": "",
     }, actor="dave")
     assert result.startswith("❌"), result
-    assert "customer_id is required" in result
+    assert "CustomerID is required" in result
 
     conn = sqlite3.connect(db_path)
     row = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()
@@ -98,19 +116,17 @@ def test_real_invoice_id_still_writes_correctly(db_path):
     """The fix must only touch BLANK values — a real, valid FK value
     still needs to actually write and still needs to be validated (a
     bogus non-blank InvoiceID should still fail)."""
-    db_create_customer(db_path, {"Company Name": "A"}, actor="dave")
-    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-0001",
-                             "Customer Name / Company": "A",
-                             "Quote Amount ($)": 100}, actor="dave")
+    _customer_id, job_id = _new_customer_and_job(db_path)
+    db_update_job(db_path, job_id, {"Quote Amount ($)": 100}, actor="dave")
 
     from db_write_ops import db_create_invoice
-    inv_result = db_create_invoice(db_path, "JOB-0001", actor="dave")
+    inv_result = db_create_invoice(db_path, job_id, actor="dave")
     assert inv_result.startswith("✅"), inv_result
 
-    result = db_update_job(db_path, "JOB-0001", {"InvoiceID (INV-####)": "INV-0001"}, actor="dave")
+    result = db_update_job(db_path, job_id, {"InvoiceID (INV-####)": "INV-0001"}, actor="dave")
     assert result.startswith("✅"), result
     conn = sqlite3.connect(db_path)
-    row = conn.execute("SELECT invoice_id FROM jobs WHERE job_id = 'JOB-0001'").fetchone()
+    row = conn.execute("SELECT invoice_id FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
     conn.close()
     assert row == ("INV-0001",)
 
@@ -119,11 +135,9 @@ def test_bogus_nonblank_invoice_id_still_rejected(db_path):
     """A non-blank value that doesn't correspond to a real invoice must
     still hit the FK constraint — the fix narrowly targets BLANK values,
     it doesn't disable FK enforcement."""
-    db_create_customer(db_path, {"Company Name": "A"}, actor="dave")
-    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-0001",
-                             "Customer Name / Company": "A"}, actor="dave")
+    _customer_id, job_id = _new_customer_and_job(db_path)
     with pytest.raises(sqlite3.IntegrityError):
-        db_update_job(db_path, "JOB-0001", {"InvoiceID (INV-####)": "INV-9999"}, actor="dave")
+        db_update_job(db_path, job_id, {"InvoiceID (INV-####)": "INV-9999"}, actor="dave")
 
 
 def test_blank_customer_id_on_customer_create_unaffected(db_path):

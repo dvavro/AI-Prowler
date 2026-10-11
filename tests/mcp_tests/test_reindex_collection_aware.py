@@ -26,6 +26,7 @@ place, so any authenticated (or personal-mode) caller may trigger it.
 Personal mode remains completely unaffected either way.
 """
 
+import asyncio
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -86,7 +87,7 @@ class TestReindexFileSingleCollection:
         monkeypatch.setattr(rag_preprocessor, "index_file_list",
                             lambda paths, **kw: {"chunks": 1})
 
-        mcp_mod.reindex_file(filepath=str(target), ctx=_make_ctx(user))
+        asyncio.run(mcp_mod.reindex_file(filepath=str(target), ctx=_make_ctx(user)))
 
         fake_client.get_or_create_collection.assert_called_once()
         fake_coll.delete.assert_called_once()
@@ -114,7 +115,7 @@ class TestReindexFileSingleCollection:
         monkeypatch.setattr(rag_preprocessor, "COLLECTION_NAME", "documents")
         monkeypatch.setattr(rag_preprocessor, "index_file_list", _fake_index_file_list)
 
-        mcp_mod.reindex_file(filepath=str(target), ctx=_make_ctx(user))
+        asyncio.run(mcp_mod.reindex_file(filepath=str(target), ctx=_make_ctx(user)))
 
         assert "collection_resolver" not in captured["kwargs"]
         assert captured["kwargs"].get("indexer_user") == user
@@ -139,7 +140,7 @@ class TestReindexFileSingleCollection:
         monkeypatch.setattr(rag_preprocessor, "COLLECTION_NAME", "documents")
         monkeypatch.setattr(rag_preprocessor, "index_file_list", _fake_index_file_list)
 
-        mcp_mod.reindex_file(filepath=str(target), ctx=None)
+        asyncio.run(mcp_mod.reindex_file(filepath=str(target), ctx=None))
 
         assert "collection_resolver" not in captured["kwargs"]
         assert captured["kwargs"].get("indexer_user") is None
@@ -163,7 +164,7 @@ class TestReindexFileSingleCollection:
         monkeypatch.setattr(rag_preprocessor, "index_file_list",
                             lambda paths, **kw: {"chunks": 1})
 
-        result = mcp_mod.reindex_file(filepath=str(target), ctx=_make_ctx(user))
+        result = asyncio.run(mcp_mod.reindex_file(filepath=str(target), ctx=_make_ctx(user)))
         assert "⛔" not in result
 
     def test_role_gate_removed_field_crew_can_reindex(self, mcp_mod, monkeypatch, tmp_path):
@@ -183,7 +184,7 @@ class TestReindexFileSingleCollection:
         monkeypatch.setattr(rag_preprocessor, "index_file_list",
                             lambda paths, **kw: {"chunks": 1})
 
-        result = mcp_mod.reindex_file(filepath=str(target), ctx=_make_ctx(user))
+        result = asyncio.run(mcp_mod.reindex_file(filepath=str(target), ctx=_make_ctx(user)))
         assert "⛔" not in result
 
 

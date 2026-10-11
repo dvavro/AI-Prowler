@@ -26,6 +26,7 @@ drop each other's changes.
 import sys
 import threading
 import time
+import re
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -143,13 +144,19 @@ class TestUpdateJobSpreadsheetIntegration:
 
         db_path = tmp_path / "ai_prowler_jobs.db"
         init_db(str(db_path))
-        db_create_customer(str(db_path), {"Company Name": "Crabby's Daytona"}, actor="test")
-        db_create_job(str(db_path), {
-            "CustomerID (Customers!A)": "CUST-0001",
+        cust_result = db_create_customer(str(db_path), {"Company Name": "Crabby's Daytona"}, actor="test")
+        assert cust_result.startswith("✅"), cust_result
+        # CUST-YYYY-N scheme: use the real ID the create returned. The old
+        # hardcoded CUST-0001 no longer exists, so the section-5.1
+        # customer-exists pre-check rejects the job link and no row is created.
+        cust_id = re.search(r"NEW_CUST_ID=(\S+)", cust_result).group(1)
+        job_result = db_create_job(str(db_path), {
+            "CustomerID (Customers!A)": cust_id,
             "Customer Name / Company": "Crabby's Daytona",
             "Job Status": "Scheduled",
             "Service Type": "Window Washing",
         }, actor="test")
+        assert job_result.startswith("✅"), job_result
 
         decoy = tmp_path / "decoy_target.xlsx"
         decoy.write_text("should never be touched")

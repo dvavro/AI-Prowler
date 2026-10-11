@@ -114,7 +114,8 @@ def test_create_customer_wired_to_db(tmp_path, db_path):
     ))
     assert result.startswith("✅"), result
     cust_id = _marker(result, "NEW_CUST_ID")
-    assert cust_id == "CUST-0001"
+    # CUST-2026-N scheme since 2026-10-04 (R-044: never reuse a number).
+    assert cust_id == "CUST-2026-1"
 
     conn = sqlite3.connect(db_path)
     row = conn.execute("SELECT company_name, phone FROM customers WHERE customer_id = ?",

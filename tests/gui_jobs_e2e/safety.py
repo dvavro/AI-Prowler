@@ -70,6 +70,8 @@ READ = {
     "find_stale_customers", "get_ar_aging_report", "get_home_address", "get_route_drive_matrix",
     "get_daily_mileage", "get_file_download_url", "get_file_upload_url", "list_sms_consents",
     "list_sms_contacts_with_replies", "get_sms_thread", "whoami", "geocode_address",
+    # 2026-10-06: Jobs/Board cards read the approved schedule (read-only tool)
+    "get_approved_route_stops",
 }
 CREATE = {"create_job", "create_customer", "create_quote", "create_service_pricing", "create_setting",
           "create_invoice"}
@@ -78,6 +80,14 @@ SCOPED = {
     "delete_route", "delete_service_pricing", "reorder_route_stop", "replan_route_day",
     "suggest_route_schedule", "build_daily_route", "approve_route_schedule",
     "unapprove_route_schedule", "apply_route_order", "log_time_entry", "backup_job_database",
+    # 2026-10-08: tools added to the Jobs app after the guard was last updated —
+    # pause_job (⏸️, job_id), pin_route_stop (route_date), rename_customer
+    # (CUST-YEAR-N number editor, customer_id). Each is allowed only on test data.
+    "pause_job", "pin_route_stop", "rename_customer",
+    # 2026-10-09 (David: tests must NOT avoid recurring jobs): "schedule next
+    # visit" on a test job (job_identifier) creates the follow-up for the same
+    # ZTEST customer — cleanup removes it with the customer.
+    "schedule_next_recurring_job",
 }
 OUTBOUND = {
     "email_route_now", "send_email", "send_alert", "send_sms", "send_whatsapp", "email_invoice",
@@ -99,11 +109,18 @@ ROUTE_EMAILED_MARK = "Route link and results emailed to"
 # 2026-09-27 by SRV-SCR-08.)
 MARKS_READ = {"check_sms_replies", "check_whatsapp_replies"}
 NEVER = {"restore_job_database", "record_learning", "update_learning", "delete_learning",
-         "schedule_next_recurring_job", "delete_sms_consent", "configure_email"}
+         "delete_sms_consent", "configure_email"}
 
 # create_quote says NEW_QTE_ID=… (found 2026-09-26, DB-08: a quote the test
 # made through the UI wasn't registered, so its Delete was — correctly — blocked).
-_ID_RE = re.compile(r"NEW_(?:JOB|CUST|QUOTE|QTE|INVOICE|INV)_ID=([A-Z]+-\d+)")
+#
+# 2026-10-08: customer ids are now CUST-<year>-<n> (CUST-YEAR-N scheme,
+# 2026-10-04). The old pattern [A-Z]+-\d+ stopped at the second hyphen and
+# registered "CUST-2026" for EVERY new customer — the wrong id, so writes to
+# the test's own customers were blocked. The optional -\d+ group takes the
+# number too; legacy JOB-#### / CUST-#### still match. NEW_CUSTOMER_ID is
+# what rename_customer reports for the renumbered customer.
+_ID_RE = re.compile(r"NEW_(?:JOB|CUST|CUSTOMER|QUOTE|QTE|INVOICE|INV)_ID=([A-Z]+-\d+(?:-\d+)?)")
 
 
 class GuardViolation(Exception):
@@ -213,6 +230,14 @@ class Guard:
                                             "reason": "server sent a route email the guard had switched off"})
             self.log(f"guard: route email reported by {tool}"
                      + (" — NOT one the guard allowed!" if over else " (the allowed one)"))
+        # rename_customer (2026-10-08): the guard only lets it run on a customer
+        # this run created, so the renumbered id (NEW_CUSTOMER_ID=…) is test data
+        # too — register it so later writes/cleanup on the new id are allowed.
+        if tool == "rename_customer" and result_text and str(result_text).startswith("✅"):
+            for i in _ID_RE.findall(result_text):
+                with self._lock:
+                    self.created.add(i)
+                self.log(f"guard: registered {i} (renamed by rename_customer)")
         if tool in CREATE and result_text:
             for i in _ID_RE.findall(result_text):
                 with self._lock:
@@ -261,7 +286,8 @@ class Guard:
             return (False, f"stop_id={sid} (route {rd or 'unknown'})")
         sheet = str(a.get("sheet_name", "") or "")
         ident = str(a.get("job_identifier", a.get("customer_identifier", a.get("quote_identifier",
-                    a.get("service_code", "")))) or "")
+                    a.get("service_code", a.get("job_id", a.get("customer_id", "")))))) or "")
+        # job_id: pause_job; customer_id: rename_customer (2026-10-08)
         if sheet.lower() == "settings":
             if tool != "update_job_spreadsheet":
                 return False, "Settings"

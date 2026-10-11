@@ -28,6 +28,7 @@ test_status_chunk_count.py / test_database_stats_collections.py all call
 with no ctx at all and remain green (verified separately).
 """
 
+import asyncio
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -83,7 +84,7 @@ class TestChunkCountAlwaysShown:
         monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: user)
         _wire_chroma_mocks(mcp_mod, monkeypatch)
 
-        result = mcp_mod.check_ai_prowler_status(ctx=_make_ctx(user))
+        result = asyncio.run(mcp_mod.check_ai_prowler_status(ctx=_make_ctx(user)))
         assert "Chunks" in result
         assert "ChromaDB" in result
 
@@ -94,7 +95,7 @@ class TestTrackedPathsGate:
         monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: None)
         _wire_chroma_mocks(mcp_mod, monkeypatch)
 
-        result = mcp_mod.check_ai_prowler_status(ctx=None)
+        result = asyncio.run(mcp_mod.check_ai_prowler_status(ctx=None))
         assert "Tracked paths" in result
         assert "private-folder" in result
 
@@ -103,7 +104,7 @@ class TestTrackedPathsGate:
         monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: user)
         _wire_chroma_mocks(mcp_mod, monkeypatch)
 
-        result = mcp_mod.check_ai_prowler_status(ctx=_make_ctx(user))
+        result = asyncio.run(mcp_mod.check_ai_prowler_status(ctx=_make_ctx(user)))
         assert "Tracked paths" in result
         assert "private-folder" in result
 
@@ -112,7 +113,7 @@ class TestTrackedPathsGate:
         monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: user)
         _wire_chroma_mocks(mcp_mod, monkeypatch)
 
-        result = mcp_mod.check_ai_prowler_status(ctx=_make_ctx(user))
+        result = asyncio.run(mcp_mod.check_ai_prowler_status(ctx=_make_ctx(user)))
         assert "Tracked paths" in result
 
     def test_staff_does_not_see_tracked_paths(self, mcp_mod, monkeypatch):
@@ -121,7 +122,7 @@ class TestTrackedPathsGate:
         monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: user)
         _wire_chroma_mocks(mcp_mod, monkeypatch)
 
-        result = mcp_mod.check_ai_prowler_status(ctx=_make_ctx(user))
+        result = asyncio.run(mcp_mod.check_ai_prowler_status(ctx=_make_ctx(user)))
         assert "Tracked paths" not in result
         assert "private-folder" not in result
         assert "secret-project" not in result
@@ -133,7 +134,7 @@ class TestTrackedPathsGate:
         monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: user)
         _wire_chroma_mocks(mcp_mod, monkeypatch)
 
-        result = mcp_mod.check_ai_prowler_status(ctx=_make_ctx(user))
+        result = asyncio.run(mcp_mod.check_ai_prowler_status(ctx=_make_ctx(user)))
         assert "Tracked paths" not in result
         assert "private-folder" not in result
         assert "Chunks" in result
@@ -148,5 +149,5 @@ class TestTrackedPathsGate:
         expected_ok, _ = mcp_mod._check_db_cap(user, "full")
         assert expected_ok is False
 
-        result = mcp_mod.check_ai_prowler_status(ctx=_make_ctx(user))
+        result = asyncio.run(mcp_mod.check_ai_prowler_status(ctx=_make_ctx(user)))
         assert "Tracked paths" not in result

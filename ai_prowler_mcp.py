@@ -961,6 +961,11 @@ _TIER_A_SUPPRESSED: frozenset = frozenset({
     # have one configured. See that function's docstring for details.
     "copy_to_backup", "restore_backup", "list_backups", "list_directory",
     "reset_write_counter", "grant_write_access", "revoke_write_access",
+    # Access-only folders (R-071) — personal mode only (David 2026-10-09).
+    # Three layers, like the file-transfer tools below: hidden here, the tool
+    # bodies refuse on a server, and access_allowlist_load() returns [] in
+    # server mode so a stray ~/.rag_access_only_dirs.json can't widen reads.
+    "grant_access", "revoke_access",
     # Backup cleanup — deletes files on the host, operator/dev action only
     "cleanup_backups",
     # Job-log cleanup — same reasoning as cleanup_backups: deletes files on
@@ -1425,6 +1430,10 @@ def _db_write(fn, *args, timeout: float = 900.0, **kwargs):
     done = threading.Event()
     _db_write_queue.put((fn, args, kwargs, result_box, done))
     if not done.wait(timeout=timeout):
+        # R-069: a timed-out DB write may leave its worker orphaned on the
+        # db-writer thread -- set the stop event so any indexing loop it is
+        # running winds down instead of completing unobserved.
+        _index_stop_event.set()
         raise TimeoutError(
             f"DB write did not complete within {timeout:.0f}s "
             f"(job still running on db-writer thread)")
@@ -1441,6 +1450,39 @@ def _db_write(fn, *args, timeout: float = 900.0, **kwargs):
 # Even when instructions= IS supported, this tool gives Claude an on-demand
 # reference it can re-read during any conversation.
 # ══════════════════════════════════════════════════════════════════════════════
+
+# Access-only folders section of how_to_use_ai_prowler (the feature is personal
+# mode only; the guide text is the same on every connector — see the docstring).
+_ACCESS_ONLY_GUIDE = (
+    "  • Access-only folders (personal mode only — Tier A suppressed in server\n"
+    "    mode, refused if called there, and list_tracked_directories shows no\n"
+    "    access-only section on a server):\n"
+    "      DECISION RULE — decide by the connector's TOOLS, not by this text:\n"
+    "        Access-only folders exist only on a PERSONAL AI-Prowler. Use\n"
+    "        grant_access / revoke_access only on a connector that actually\n"
+    "        lists them. If the connector you're working with doesn't have them,\n"
+    "        it's an AI-Prowler SERVER: tell the user access-only folders aren't\n"
+    "        available there, and offer to index the folder instead (index_path)\n"
+    "        so the team can use it. With BOTH a personal and a server connector\n"
+    "        attached, an access-only request always goes to the personal one —\n"
+    "        never report it unavailable just because the server lacks it.\n"
+    "      grant_access(directory) — lets Claude READ a folder WITHOUT indexing\n"
+    "        it: read_file_lines / grep_documents / list_directory / send_file\n"
+    "        work on its files, but nothing goes into ChromaDB and it never shows\n"
+    "        in search_documents. Read only — add write with grant_write_access.\n"
+    "        Rules (2026-10-10): Folders only — always including sub-folders,\n"
+    "        never a single file; no duplicate entries; a folder already covered\n"
+    "        by an access-only folder or inside an indexed folder is refused\n"
+    "        ('already covered' / 'already readable'); adding a folder that\n"
+    "        CONTAINS access-only folders is allowed — those are folded in\n"
+    "        (removed from the list, now covered). Relay a refusal as given.\n"
+    "      revoke_access(directory) — takes a folder off that list.\n"
+    "      They appear in list_tracked_directories under '📂 Access-only folders'.\n"
+    "      Use when the user says e.g. 'let Claude read C:\\Manuals but don't\n"
+    "      index it'. The user can also manage them in the GUI (Update Index tab)\n"
+    "      and the Remote Control app (Perms tab).\n\n"
+)
+
 
 @mcp.tool()
 def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
@@ -1510,7 +1552,7 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "      grep_documents, read_file_lines\n\n"
 
         "  • Self-learning memory (corrections, post-mortems, preferences):\n"
-        "      search_learnings, record_learning, list_learnings,\n"
+        "      search_learnings, record_learning, list_learnings, get_learning,\n"
         "      update_learning, delete_learning, get_learning_stats,\n"
         "      get_learnings_report, export_learnings_file,\n"
         "      send_learnings_report, rebuild_learnings_index\n\n"
@@ -1550,20 +1592,37 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "    view, never a history). It may return a pre-flight SAVINGS ALERT\n"
         "    instead of building the route, if a different visit order would\n"
         "    save 10+ minutes over the jobs' currently recorded Start Times —\n"
-        "    call it again with accept_reorder=True to proceed anyway. On a\n"
-        "    successful build it emails the route link BY DEFAULT\n"
-        "    (email_link=True) — set email_link=False to skip. If email isn't\n"
+        "    call it again with accept_reorder=True to proceed anyway. A\n"
+        "    just-built route is NEVER emailed - only an APPROVED route may\n"
+        "    ever be emailed. If Settings -> \"Email Route On Approve\" is\n"
+        "    Enabled, approving the route emails it automatically; the\n"
+        "    \"Email Approved Route Now\" button (email_route_now) sends any\n"
+        "    approved route on demand. An unapproved route reports \"approve\n"
+        "    the route first\" instead of sending. If email isn't\n"
         "    configured, sending is skipped with a clear note pointing to the\n"
-        "    Route_Planner tab instead — the route still builds either way.\n"
+        "    Route_Planner tab instead - the route still builds either way.\n"
         "    The Waypoint Map URL is written as a REAL clickable hyperlink in\n"
         "    both the spreadsheet cell (blue/underlined, tap-to-navigate) and\n"
-        "    the Jobs PWA — not just a plain-text URL string. It's ALSO\n"
-        "    persisted onto each matched job's own Jobs_Schedule row (that\n"
-        "    sheet's existing 'Route Map URL' column) — unlike\n"
-        "    Route_Planner (single-day view, overwritten by the next build),\n"
-        "    this per-job copy survives building routes for OTHER dates, so\n"
-        "    routes can be built for several future/past dates in advance and\n"
-        "    each day's jobs keep their own link.\n\n"
+        "    the Jobs PWA - not just a plain-text URL string. It is pinned\n"
+        "    ONLY for an APPROVED route (approve_route_schedule) - an\n"
+        "    unapproved/experimental route shows no link on Jobs/Calendar\n"
+        "    and cannot be emailed. Approval also persists the link onto\n"
+        "    each routed job's own Jobs_Schedule row (that sheet's existing\n"
+        "    'Route Map URL' column) - unlike Route_Planner (single-day\n"
+        "    view, overwritten by the next build), this per-job copy survives\n"
+        "    building routes for OTHER dates. Un-approving\n"
+        "    (unapprove_route_schedule) unpins the links again, and rebuilding\n"
+        "    a route clears its approval - a rebuilt route is experimental\n"
+        "    until re-approved.\n"
+        "    NOTE - approval is a pure flag (2026-10-05 rewrite): it NEVER\n"
+        "    writes to any job's Start Time / End Time - a job's window always\n"
+        "    reflects the customer settings. What approval grants is email\n"
+        "    eligibility and the pinned link, nothing else.\n"
+        "    NOTE - pin_route_stop fixes one stop at its position (the Route\n"
+        "    tab's \"Fix stop #\" pin): a pinned stop keeps its number across\n"
+        "    every rebuild while unpinned stops are re-optimized around it.\n"
+        "    Moving a pinned stop moves its pin with it. AI routing receives\n"
+        "    the pins as hard constraints.\n\n"
 
         "  • Contractor / business workflow:\n"
         "      email_invoice, text_invoice, email_receipt, text_receipt,\n"
@@ -1623,6 +1682,13 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         "      untrack_directory, get_database_stats, check_ai_prowler_status,\n"
         "      reindex_file, reindex_directory, reindex_all,\n"
         "      list_writable_directories, grant_write_access, revoke_write_access\n\n"
+
+        # The guide stays IDENTICAL on both connectors (see the docstring:
+        # with a personal AND a server connector attached, a guide that varies
+        # per connector made Claude confuse "not on this connector" with "doesn't
+        # exist"). The section itself says personal-only; a server offers no
+        # access-only tool, and its THIS CONNECTION footer says so.
+        + _ACCESS_ONLY_GUIDE +
 
         "  • File transfer (personal mode only — Tier A suppressed in server mode):\n"
         "      CONVENTION: download = file flows OUT of AI-Prowler to phone/browser;\n"
@@ -2114,6 +2180,15 @@ def how_to_use_ai_prowler(ctx: "Context | None" = None) -> str:
         footer_lines.append("     The write boundary in server mode is each user's own personal")
         footer_lines.append("     directory (see File editing below), not an arbitrary write-zone list.")
 
+        # 2026-10-09 (David): access-only folders are personal-mode only too.
+        footer_lines.append("")
+        footer_lines.append("Access-only folders (grant_access, revoke_access):")
+        footer_lines.append("  ⛔ Not available on THIS connector (an AI-Prowler server), to any")
+        footer_lines.append("     role — access-only folders exist only on a personal install.")
+        footer_lines.append("     Offer instead: index the folder (index_path) so the team can use it.")
+        footer_lines.append("     If a PERSONAL AI-Prowler connector is also attached, use its")
+        footer_lines.append("     grant_access for an access-only request — don't call it unavailable.")
+
         footer_lines.append("")
         footer_lines.append("File editing (create_file, write_file, str_replace_in_file,")
         footer_lines.append("line_replace_in_file, create_directory):")
@@ -2373,12 +2448,37 @@ def index_path(
 
     is_file = target.is_file()
 
-    with _capture_stdout() as buf:
+    # R-086 (2026-10-09): decide "already tracked?" and the R-070 overlap
+    # warning BEFORE indexing — index_directory adds the path to the tracked
+    # list itself, so asking afterwards always looked like "already tracked"
+    # and the warning ("inside / contains already-indexed …") was lost. Same
+    # in personal and server mode (there's no desktop popup on a server, so
+    # this reply is the only place the warning can show).
+    _pre_tracked = False
+    _overlap_warning = None
+    if track:
         try:
+            from rag_preprocessor import tracked_path_overlap, path_equals as _peq
+            _resolved_norm = normalise_path(str(target.resolve()))
+            _pre_tracked = any(_peq(d, _resolved_norm) for d in (load_auto_update_list() or []))
+            if not _pre_tracked:
+                _overlap_warning = tracked_path_overlap(_resolved_norm)
+        except Exception as exc:
+            _log.warning("index_path: overlap check failed: %s", exc)
+
+
+    # R-069: fresh run -- clear any previous stop request, mark progress.
+    # The indexing itself runs on the dedicated db-writer thread (R-053:
+    # ChromaDB writes must never touch the rotating pool).
+    _index_progress_begin("indexing")
+
+    def _index_path_job():
+        with _capture_stdout() as buf:
             if is_file:
-                # Single-file path — bypass SKIP_EXTENSIONS smart-scan filter
+                # Single-file path -- bypass SKIP_EXTENSIONS smart-scan filter
                 from rag_preprocessor import index_file_list, normalise_path
                 fp = normalise_path(str(target.resolve()))
+                _index_progress.update({"current_file": fp, "files_total": 1})
                 stats = index_file_list(
                     [fp],
                     label="1/1",
@@ -2386,7 +2486,9 @@ def index_path(
                     collection_resolver=_resolver,
                     indexer_user=_indexer_user,
                     purge_gate=_purge_gate,
+                    stop_event=_index_stop_event,
                 )
+                _index_progress.update({"files_done": 1})
                 chunks = stats.get('chunks', 0) if stats else 0
                 print(f"✅ Indexed file: {target.name} — {chunks} chunk(s)")
             else:
@@ -2394,24 +2496,43 @@ def index_path(
                                 collection_resolver=_resolver,
                                 indexer_user=_indexer_user,
                                 purge_gate=_purge_gate,
-                                track=track)
-        except Exception as exc:
-            return f"❌ Indexing failed: {exc}"
+                                track=track,
+                                stop_event=_index_stop_event,
+                                progress_callback=_index_progress_file)
+        return buf.getvalue()
 
-    output = buf.getvalue().strip()
+    try:
+        output = _db_write(_index_path_job, timeout=1800.0)
+    except TimeoutError as exc:
+        return f"⏱️  Indexing timed out: {exc}"
+    except Exception as exc:
+        return f"❌ Indexing failed: {exc}"
+    finally:
+        _index_progress_end()
+
+    output = (output or "").strip()
+    if _index_stop_event.is_set():
+        output += "\n⏹  Stopped by user \u2014 files indexed so far are kept."
 
     if track:
         try:
             # For directories, index_directory already adds to the auto-update
             # list via add_to_auto_update_list(). Calling it again is a no-op
             # (returns False) but ensures file targets are added too.
-            added = add_to_auto_update_list(str(target.resolve()))
+            add_to_auto_update_list(str(target.resolve()))
             kind = "File" if is_file else "Directory"
+            # R-086: report from what was true BEFORE indexing (see above).
             note = (
-                f"\n✅ {kind} added to auto-update tracking."
-                if added
-                else f"\nℹ️  {kind} was already in the tracking list."
+                f"\nℹ️  {kind} was already in the tracking list."
+                if _pre_tracked
+                else f"\n✅ {kind} added to auto-update tracking."
             )
+            if _overlap_warning:
+                # index_directory's own output may already carry the line.
+                if _overlap_warning not in output:
+                    note += f"\n⚠️  {_overlap_warning}."
+                note += ("\n   Tracked folders are scanned recursively, so consider "
+                         "removing one of the two (untrack_directory).")
             output += note
         except Exception as exc:
             output += f"\n⚠️  Could not add to tracking list: {exc}"
@@ -2595,14 +2716,37 @@ def get_database_stats(ctx: Context = None) -> str:
 # TOOL 5 — list_tracked_directories
 # ══════════════════════════════════════════════════════════════════════════════
 
-@mcp.tool()
+# 2026-10-10 (David): a server offers nothing access-only — not even in a tool
+# description. On a server this tool registers with this text instead of the
+# docstring below (which describes the personal-mode access-only section).
+_LTD_SERVER_DESCRIPTION = (
+    "List the paths (directories AND individually-tracked files) registered for "
+    "auto-update tracking — the indexed folders in the knowledge base.\n\n"
+    "Each entry is annotated with its type — 📁 directory, 📄 file — and its write "
+    "status ([W] writable, [R] read-only).\n\n"
+    "Gated by SCOPE, not role: any role may call it, and the list is filtered to "
+    "the paths whose scope this caller may already search (their own private scope "
+    "+ assigned scopes + shared).\n\n"
+    "Returns: a formatted list of tracked paths, or a message if none are registered."
+)
+
+
+@mcp.tool(description=_LTD_SERVER_DESCRIPTION if _IS_SERVER_MODE else None)
 def list_tracked_directories(ctx: "Context | None" = None) -> str:
     """
     List all paths (directories AND individually-tracked files) currently
-    registered for auto-update tracking.
+    registered for auto-update tracking, PLUS the access-only folders
+    (readable but never indexed into ChromaDB).
+
+    Two sections are shown:
+      📁 Indexed directories (in ChromaDB) — the tracked/indexed paths
+      📂 Access-only folders (readable, not indexed) — from
+         ~/.rag_access_only_dirs.json, readable via the file tools but
+         never indexed
 
     Each entry is annotated with its type — 📁 for directories, 📄 for files —
-    so it's clear which entries are watched as folders vs. as single files.
+    and its write status ([W] writable, [R] read-only), so it's clear
+    which entries are watched as folders vs. as single files.
 
     Server mode (v8.1.5 fix): gated by SCOPE, not role — any role may call
     this, and the returned list is filtered to only the paths whose assigned
@@ -2625,11 +2769,9 @@ def list_tracked_directories(ctx: "Context | None" = None) -> str:
         A formatted list of tracked paths, or a message if none are registered.
     """
     dirs = load_auto_update_list()
-    if not dirs:
-        return (
-            "ℹ️  No paths are currently tracked.\n"
-            "Use index_path to index a folder or file and add it to tracking."
-        )
+    # R-072: no early return -- both sections always render, with (none)
+    # placeholders when empty, so the access-only list is never hidden.
+    _ltd_access_only_early = access_allowlist_load() or []
 
     # Server mode: filter to only paths within this caller's accessible
     # scopes (see docstring above). Personal mode (_ltd_user is None): no
@@ -2662,20 +2804,55 @@ def list_tracked_directories(ctx: "Context | None" = None) -> str:
                 d, _ltd_scope_map, privates_root=_ltd_privates_root
             ) in _ltd_allowed
         ]
-        if not dirs:
-            return (
-                "ℹ️  No tracked paths fall within your accessible scopes.\n"
-                "(Paths outside your assigned scopes/private area are omitted, "
-                "not necessarily nonexistent.)"
-            )
+    # Write-status badge helper (mirrors list_writable_directories):
+    # [W] if the path is in the writable allowlist or inside a writable
+    # folder, else [R].
+    _ltd_writable = _writable_allowlist_load()
+    _ltd_wn = [_normalize_path_for_match(w) for w in _ltd_writable]
 
-    lines = ["📁 Tracked paths:"]
-    for i, d in enumerate(dirs, 1):
+    def _ltd_write_badge(p):
+        pn = _normalize_path_for_match(p)
+        for wn in _ltd_wn:
+            if pn == wn or pn.startswith(wn + "/"):
+                return "[W]"
+        return "[R]"
+
+    def _ltd_icon(p):
         try:
-            icon = "📄" if Path(d).is_file() else ("📁" if Path(d).exists() else "❓")
+            return "📄" if Path(p).is_file() else ("📁" if Path(p).exists() else "❓")
         except Exception:
-            icon = "❓"
-        lines.append(f"  {i}. {icon} {d}")
+            return "❓"
+
+    # Access-only folders (readable, never indexed). Same server-mode scope
+    # filtering as the tracked list above.
+    access_only = _ltd_access_only_early
+    if _IS_SERVER_MODE and _ltd_user:
+        access_only = [
+            d for d in access_only
+            if _sl_ltd.resolve_scope_for_path(
+                d, _ltd_scope_map, privates_root=_ltd_privates_root
+            ) in _ltd_allowed
+        ]
+
+    lines = ["📁 Indexed directories (in ChromaDB):"]
+    for i, d in enumerate(dirs, 1):
+        lines.append(f"  {i}. {_ltd_write_badge(d)} {_ltd_icon(d)} {d}")
+    if not dirs:
+        lines.append("  (none)")
+
+    # Access-only folders are personal-mode only (2026-10-09): no section at
+    # all on a server.
+    if not _IS_SERVER_MODE:
+        lines += ["", "📂 Access-only folders (readable, not indexed):"]
+        for i, d in enumerate(access_only, 1):
+            lines.append(f"  {i}. {_ltd_write_badge(d)} {_ltd_icon(d)} {d}")
+        if not access_only:
+            lines.append("  (none — use grant_access() to add a folder)")
+
+    lines += [
+        "",
+        "Legend: [W] = writable  [R] = read-only",
+    ]
     return "\n".join(lines)
 
 
@@ -2760,7 +2937,7 @@ def untrack_directory(directory: str, ctx: Context = None) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
-def check_ai_prowler_status(ctx: "Context | None" = None) -> str:
+async def check_ai_prowler_status(ctx: "Context | None" = None) -> str:
     """
     Check AI-Prowler's health: ChromaDB connectivity, embedding model status,
     document count, and database path. No Ollama or local LLM involved.
@@ -2791,7 +2968,7 @@ def check_ai_prowler_status(ctx: "Context | None" = None) -> str:
         )
     _log.info("check_status: prewarm ready, executing")
 
-    from rag_preprocessor import get_chroma_client, CHROMA_DB_PATH
+    from rag_preprocessor import get_chroma_client, CHROMA_DB_PATH, IndexCorruptError
 
     lines = ["🔍 AI-Prowler Status Check", "─" * 40]
 
@@ -2799,7 +2976,10 @@ def check_ai_prowler_status(ctx: "Context | None" = None) -> str:
     with _capture_stdout() as buf:
         try:
             # Trigger embedding model load for the output capture
-            client, embedding_func = get_chroma_client()
+            # R-055: run in thread so the 10-30s SentenceTransformer load
+            # doesn't block the event loop (was wedging /health -> "Stopped").
+            import asyncio as _asyncio_r055
+            client, embedding_func = await _asyncio_r055.to_thread(get_chroma_client)
             # Fix v7.0.1: count chunks across ALL collections in the database
             # rather than calling get_or_create_collection() (which returns only
             # the default 'documents' collection and ignores scoped collections
@@ -2820,10 +3000,19 @@ def check_ai_prowler_status(ctx: "Context | None" = None) -> str:
             except Exception:
                 chunk_count = 0
             db_ok = True
+        except IndexCorruptError as _ice:
+            # R-056: the on-disk index is damaged — report the specific
+            # recovery path, not a generic "not reachable".
+            db_ok = False
+            chunk_count = 0
+            _corrupt_hint = ("index corrupted — run reindex_all(purge_first=True) "
+                             "to rebuild it from source files")
+            db_error = f"{_corrupt_hint}: {_ice}"
         except Exception as exc:
             db_ok = False
             chunk_count = 0
             db_error = str(exc)
+
 
     init_output = buf.getvalue().strip()
 
@@ -2835,6 +3024,21 @@ def check_ai_prowler_status(ctx: "Context | None" = None) -> str:
         lines.append("❌ ChromaDB  : not reachable")
         lines.append(f"   Error     : {db_error}")
         lines.append("   Try re-indexing with index_path.")
+
+    # ── Interrupted-reindex marker (R-056) ──────────────────────────────────
+    # A leftover .reindex_in_progress.json means a previous reindex_directory /
+    # reindex_all was killed mid-run. Warn — never fail the status check.
+    try:
+        from rag_preprocessor import read_reindex_marker as _read_marker_cas
+        _cas_marker = _read_marker_cas()
+    except Exception:
+        _cas_marker = None
+    if _cas_marker:
+        lines.append("")
+        lines.append(
+            f"⚠️  Previous reindex interrupted at {_cas_marker.get('started_at', '?')} — "
+            "the index may be incomplete. Re-run reindex_all() to rebuild it cleanly.")
+
 
     # ── Embedding model info (parsed from init output) ────────────────────────
     # Bug fix v7.0.0: filter the captured stdout to ONLY surface the clean
@@ -4752,27 +4956,36 @@ def _email_route_results(db_path: str, route_date: str, crew: str, caller_email:
                          results_text: str, include_stops: bool = False,
                          force: bool = False) -> str:
     """Emails the day's route — the results text plus the saved tap-to-navigate
-    link — when Settings -> "Email Route On Build" is Enabled (the same setting
-    build_daily_route already used; now it covers Route Today and Run AI Route
-    too). Returns a one-line note to append to the tool's response ('' when the
-    setting is off or there is nothing saved to send). Never raises: a missing
+    link — when Settings -> "Email Route On Approve" is Enabled. Returns a
+    one-line note to append to the tool's response ('' when the setting is
+    off or there is nothing saved to send). Never raises: a missing
     email setup or a failed send is reported in the note, and the route itself
     is already saved either way.
 
     force=True (2026-09-21, the "Email Approved Route Now" button) skips the
-    Enabled/Disabled check — the setting only governs the AUTOMATIC send after a
-    route is built; a manual on-demand send is the person's own explicit choice
-    and isn't gated by it. The button itself only appears (and is only
-    clickable) when the setting is Disabled, so this can't double-send.
+    Enabled/Disabled check — the setting only governs the AUTOMATIC send at
+    approve time; a manual on-demand send is the person's own explicit choice
+    and isn't gated by it.
 
     Recipient, in order: the calling user's own address (server mode) -> the SMTP
     config's default_to -> its username.
     include_stops adds the stop list with arrival times (the AI run's text is a
     short summary; the free engine's result text already lists every stop)."""
+
     try:
-        from db_write_ops import db_read_email_route_on_build
-        if not force and not db_read_email_route_on_build(db_path):
+        # 2026-10-05: email is only allowed for APPROVED routes (David's rule).
+        # A manual/on-demand send (force=True — the "Email Approved Route Now"
+        # button) gets the explicit warning; an automatic send just stays silent.
+        from db_route_ops import db_is_route_approved as _db_is_route_approved
+        if not _db_is_route_approved(db_path, route_date, crew):
+            if force:
+                return ("⚠️ Email is only allowed for approved routes — "
+                        "approve the route first.")
             return ""
+        from db_write_ops import db_read_email_route_on_approve
+        if not force and not db_read_email_route_on_approve(db_path):
+            return ""
+
         from db_access import get_connection
         conn = get_connection(db_path)
         try:
@@ -4838,19 +5051,22 @@ def _with_route_link(result, db_path: str, route_date: str, crew: str, ctx, acto
     """Appends the phone-link note to a successful route result (starts with ✅);
     anything else (❌ etc.) passes through untouched. email=True (the free engine)
     also sends the results + link by email when the setting allows — the AI engine
-    leaves that to its worker so one run sends one email."""
+    leaves that to its worker so one run sends one email.
+
+    2026-10-05: the tap-to-navigate link is NO LONGER published here. Only an
+    APPROVED route gets its link pinned (see approve_route_schedule) — this
+    just handles the optional email, which itself is gated on approval inside
+    _email_route_results."""
     if isinstance(result, str) and result.lstrip().startswith("✅"):
-        note = _publish_route_links(db_path, route_date, crew, ctx, actor)
-        if note:
-            out = result + "\n\n" + note
-            if email:
-                _caller = _current_user(ctx)
-                _caller_email = (_caller.get("email") or "").strip() if _caller else ""
-                email_note = _email_route_results(db_path, route_date, crew, _caller_email,
-                                                  result, include_stops=False)
-                if email_note:
-                    out += "\n\n" + email_note
-            return out
+        out = result
+        if email:
+            _caller = _current_user(ctx)
+            _caller_email = (_caller.get("email") or "").strip() if _caller else ""
+            email_note = _email_route_results(db_path, route_date, crew, _caller_email,
+                                              result, include_stops=False)
+            if email_note:
+                out += "\n\n" + email_note
+        return out
     return result
 
 
@@ -6426,15 +6642,16 @@ def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_h
     if _crew_err:
         return _crew_err
 
-    # An explicit email_link=True/False on THIS call always wins. Left
-    # unspecified (None, the default), it follows the persisted
-    # "Email Route On Build" Settings toggle instead of a hardcoded
-    # constant — see db_read_email_route_on_build() for the recipient-
-    # resolution notes (server mode: calling user's own email from Admin
-    # -> Users; personal mode: the SMTP config's default_to/username).
+    # 2026-10-05: the "Email Route On Approve" setting no longer fires at build
+    # time. A just-built route is never approved, and only approved routes may
+    # ever be emailed (David's rule) — the approval gate below already reports
+    # instead of sending. Auto-email now happens at approve time (see
+    # approve_route_schedule). An explicit email_link=True on THIS call is
+    # still honored (subject to the same approval gate); the default (None)
+    # means no build-time email.
     if email_link is None:
-        from db_write_ops import db_read_email_route_on_build
-        email_link = db_read_email_route_on_build(db_path)
+        email_link = False
+
 
     try:
         target_date = _bdt.datetime.strptime(route_date.strip(), "%Y-%m-%d").date()
@@ -6964,7 +7181,7 @@ def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_h
                 "arrival": s["arrival"].strftime("%H:%M"),
                 "leg_drive_min": s.get("drive_from_prev"),
                 "leg_drive_miles": s.get("drive_miles_from_prev"),
-                "map_url": url_line or None,
+                  "map_url": None,  # 2026-10-05: pinned only on approve, never at build
             })
         else:
             # Synthetic return-to-origin leg (Company Location round-trip
@@ -6979,7 +7196,7 @@ def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_h
                 "arrival": s["arrival"].strftime("%H:%M"),
                 "leg_drive_min": s.get("drive_from_prev"),
                 "leg_drive_miles": s.get("drive_miles_from_prev"),
-                "map_url": url_line or None,
+                  "map_url": None,  # 2026-10-05: pinned only on approve, never at build
             })
     # spec §6.3: a personal install is a one-crew show even if different
     # employee names get typed into individual jobs' Crew / Technician
@@ -6990,17 +7207,10 @@ def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_h
     existing_data_rows = db_write_route_stops(db_path, target_date.isoformat(), route_rows, actor,
                                                single_crew=(not _IS_SERVER_MODE))
 
-    # Also persist this same URL onto each job's own row (the "Route Map
-    # URL" column) — route_stops only ever reflects the LAST date a route
-    # was built for any given crew, so without this a route built for a
-    # future/past date would have its link disappear the moment a
-    # different day's route gets built for that crew. Storing it per-job
-    # here means each job carries its own persistent link regardless of
-    # what's currently in route_stops.
-    if url_line:
-        for s in stops_out:
-            if s.get("job") is not None:
-                db_update_job_route_url(db_path, s["job"]["job_id"], url_line, actor)
+    # 2026-10-05: the tap-to-navigate link is NO LONGER pinned at build time.
+    # Only an APPROVED route gets its link pinned (see approve_route_schedule)
+    # — an unapproved/experimental route shows no link on Jobs/Calendar and
+    # cannot be emailed.
 
     lines = [
         f"🗺️  Route built for {target_date.isoformat()}"
@@ -7074,6 +7284,16 @@ def _build_daily_route_impl(route_date: str, crew: str, origin: str, departure_h
     # automatically. A send failure or missing config never turns an
     # otherwise-successful route build into an error — it's reported as
     # a plain informational note appended to the same response.
+    # 2026-10-05: email is only allowed for APPROVED routes (David's rule).
+    # A just-built route is never approved — report instead of sending.
+    if email_link:
+        from db_route_ops import db_is_route_approved as _db_is_route_approved_b
+        if not _db_is_route_approved_b(db_path, target_date.isoformat(), crew):
+            lines.append(
+                "\nℹ️  Email not sent — the route is not approved. Approve it "
+                "first, then use 📧 Email Approved Route Now."
+            )
+            email_link = False
     if email_link:
         cfg = _email_config_load()
         if not cfg:
@@ -7842,9 +8062,15 @@ def check_tools_status(ctx: "Context | None" = None) -> str:
     except ImportError:
         opx_ok = False
 
-    default_xl = _get_default_spreadsheet_path()
-    db_status  = (f"✅ Job data folder: {os.path.dirname(default_xl) or default_xl}"
-                  if default_xl else "⚠️  No default path set (falls back to ~/.ai-prowler/)")
+    # 2026-10-09: report the live SQLite database (the job data really lives
+    # there) — not the retired default_spreadsheet_path, which is no longer
+    # written to config.json and whose Settings box no longer exists.
+    try:
+        _live_db = _resolve_job_db_path(None, "")
+    except Exception:
+        _live_db = ""
+    db_status = (f"✅ Job database: {_live_db}" if _live_db
+                 else "⚠️  Job database location could not be resolved")
 
     lines += [
         f"  ✅ read_job_spreadsheet(filepath?, sheet?, date?, max_rows?)",
@@ -7861,13 +8087,11 @@ def check_tools_status(ctx: "Context | None" = None) -> str:
         "        tools. The Customers sheet is also the FIRST place send_email",
         "        and send_sms look up a recipient by name/company/ID.",
         "",
-        "     💡 Set a default path once in Settings → Small Business → Default",
-        "        Spreadsheet Path so you never need to specify it in conversation.",
-        "",
+
         "─" * 50,
         "",
         "All FREE tools work immediately with no configuration.",
-        "Spreadsheet tools use the default path from Settings if filepath is omitted.",
+        "Job tools use AI-Prowler's own job database if filepath is omitted.",
     ]
 
     # ── SMS — provider-agnostic (Twilio / SignalWire / Vonage) ──────────────────
@@ -8587,6 +8811,34 @@ def _lookup_invoice_customer_email(db_path: str, cust_id: str, cust_name: str) -
     return ""
 
 
+def _stamp_job_send_date(db_path: str, job_id: str, column: str) -> None:
+    """(2026-10-06) Stamp jobs.invoice_sent_date / jobs.receipt_sent_date with
+    today (YYYY-MM-DD) after a successful invoice/receipt send. Best-effort:
+    a stamp failure must NEVER break the send result already in flight, so all
+    errors are swallowed. The column name is whitelisted -- never interpolated
+    from user input."""
+    try:
+        if not db_path or not job_id or str(job_id).strip() in ("", "\u2014"):
+            return
+        if column not in ("invoice_sent_date", "receipt_sent_date"):
+            return
+        import datetime as _dt_stamp
+        from db_schema import _ensure_column
+        from db_route_ops import get_connection
+        _conn = get_connection(db_path)
+        try:
+            _ensure_column(_conn, "jobs", column, "TEXT")
+            _conn.execute(
+                f"UPDATE jobs SET {column} = ? WHERE job_id = ?",
+                (_dt_stamp.date.today().isoformat(), str(job_id).strip()),
+            )
+            _conn.commit()
+        finally:
+            _conn.close()
+    except Exception:
+        pass
+
+
 @mcp.tool()
 def email_invoice(
     invoice_identifier: str,
@@ -8894,6 +9146,10 @@ def email_invoice(
             except Exception as _sms_exc:
                 _email_result_msg += f"\n   SMS:       not sent ({_sms_exc})"
 
+    # (2026-10-06) Invoice went out -- stamp the sent date for the Jobs-page
+    # Billing mode "Invoice not sent" bucket. Best-effort; never breaks the send.
+    _stamp_job_send_date(db_path, job_id, "invoice_sent_date")
+
     return _email_result_msg
 
 
@@ -8995,6 +9251,9 @@ def text_invoice(
     _ti_result = send_sms(to=cust_name, message=_ti_msg, ctx=ctx)
     if _ti_result.startswith("❌"):
         return _ti_result
+    # (2026-10-06) Invoice went out -- stamp the sent date for the Jobs-page
+    # Billing mode "Invoice not sent" bucket. Best-effort; never breaks the send.
+    _stamp_job_send_date(_ti_lookup["db_path"], job_id, "invoice_sent_date")
     return (
         f"✅ Invoice texted\n"
         f"   Invoice:   {inv_id}  ({job_id})\n"
@@ -9195,6 +9454,10 @@ def email_receipt(
     if not _er_ok:
         return f"❌ Email send failed: {_er_msg}"
 
+    # (2026-10-06) Receipt went out -- stamp the sent date for the Jobs-page
+    # Billing mode "Paid, no receipt" bucket. Best-effort; never breaks the send.
+    _stamp_job_send_date(db_path, job_id, "receipt_sent_date")
+
     return (
         f"✅ Receipt emailed\n"
         f"   Invoice:   {inv_id}  ({job_id})\n"
@@ -9257,6 +9520,9 @@ def text_receipt(
     _tr_result = send_sms(to=cust_name, message=_tr_msg, ctx=ctx)
     if _tr_result.startswith("❌"):
         return _tr_result
+    # (2026-10-06) Receipt went out -- stamp the sent date for the Jobs-page
+    # Billing mode "Paid, no receipt" bucket. Best-effort; never breaks the send.
+    _stamp_job_send_date(_tr_lookup["db_path"], job_id, "receipt_sent_date")
     return (
         f"✅ Receipt texted\n"
         f"   Invoice:   {inv_id}  ({job_id})\n"
@@ -11300,6 +11566,78 @@ def delete_customer(
     return _db_delete_customer(db_path, customer_identifier, confirm=confirm)
 
 
+# TOOL — rename_customer
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def rename_customer(
+    customer_id: str,
+    new_number: int,
+    filepath: str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Change a customer's number, keeping the year: CUST-2026-5 becomes
+    CUST-2026-9. The year part of a customer ID is never editable — only
+    the trailing number. Added 2026-10-04 alongside the CUST-YEAR-N
+    scheme (new customer IDs read CUST-2026-1, CUST-2026-2, ...; the
+    number restarts at 1 every January and is never reused within a
+    year, R-044).
+
+    A legacy CUST-#### ID without a year adopts the current year, which
+    is the migration path onto the new scheme.
+
+    Validation — nothing changes on any error:
+      - customer_id must match an existing customer exactly;
+      - new_number must be a positive whole number;
+      - CUST-{year}-{new_number} must not already belong to a different
+        customer — the conflicting ID is named in the error.
+
+    On success the Customers row and every referencing row (Jobs,
+    Invoices, Quotes, route stops) are repointed in a single
+    transaction, and the year's number counter is raised past the new
+    number so it can never be reissued.
+
+    Server mode: staff/manager/owner only — field crew cannot rename
+    customer records (structural change, same posture as
+    delete_customer). Unrestricted in personal mode.
+
+    Args:
+        customer_id: Exact CustomerID of the customer to rename
+                     (e.g. "CUST-2026-5").
+        new_number:  The new trailing number (positive integer).
+        filepath:    Path to the SQLite job database. Uses the default
+                     from Settings if omitted. In server mode this
+                     argument is ignored.
+        ctx:         MCP context (injected automatically).
+
+    Returns:
+        A ✅ report ending with NEW_CUSTOMER_ID=<new id>, or a ❌
+        error with nothing changed.
+
+    Voice examples:
+        "Renumber CUST-2026-5 to number 12"
+        "Change customer CUST-2026-3's number to 40"
+    """
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return (
+            "❌ No database path provided and no default path configured.\n"
+            "Pass the full filepath argument explicitly, or check that AI-Prowler has write access to its own state folder."
+        )
+
+    restrict, crew_name = _job_crew_scope(ctx, db_path)
+    if restrict:
+        return "❌ Renaming a customer ID requires staff/manager/owner access. Field crew cannot rename customer records."
+
+    from db_write_ops import db_rename_customer_number as _db_rename_customer_number
+    # R-076 (2026-10-08): stamp the real person. crew_name is the crew-scope
+    # name, blank for owner/manager/staff — every rename by them was audited
+    # as "system" (E2E SRV-CUST-01: "CUST-2026-1 was updated by system").
+    return _db_rename_customer_number(db_path, customer_id, new_number,
+                                      actor=_actor_display_name(ctx) or crew_name or "")
+
+
 @mcp.tool()
 def delete_service_pricing(
     service_code: str,
@@ -11584,7 +11922,13 @@ def delete_route_stop(
     uses for editing Route_Planner rows). Restricting delete to staff+
     here would be a tighter gate than editing the same row already has,
     which route stops don't warrant the way customer/quote/pricing data
-    does. owner/manager/staff unrestricted.
+     does. owner/manager/staff unrestricted.
+
+     2026-10-05 (revised): the Route tab trash can calls this — removing a
+     stop now clears the job’s Service Date AND End Date (the whole span,
+     single- or multi-day). The job is kept, not deleted, and a later
+     re-route will not put it back; the user re-enters dates later based
+     on the duration when ready to start.
 
     Args:
         stop_id:  The route stop's own integer ID (the "ID" column —
@@ -11620,13 +11964,13 @@ def delete_route_stop(
     # changes the day, so re-plan what's left and refresh the phone link — the
     # same thing ▲▼ / drag already do. Before this, the times after the removed
     # stop and the saved link (which still included it) went stale.
-    _rd, _rc, _rc_raw = "", "", ""
+    _rd, _rc, _rc_raw, _jid = "", "", "", ""
     if confirm:
         try:
             from db_access import get_connection as _get_conn
             _c = _get_conn(db_path)
             try:
-                _row = _c.execute("SELECT route_date, crew_id FROM route_stops WHERE id = ?",
+                 _row = _c.execute("SELECT route_date, crew_id, job_id FROM route_stops WHERE id = ?",
                                   (str(stop_id or "").strip(),)).fetchone()
             finally:
                 _c.close()
@@ -11634,40 +11978,61 @@ def delete_route_stop(
                 _rd = _row["route_date"] or ""
                 _rc_raw = _row["crew_id"] or ""            # exactly as stored, for the count below
                 _rc = "" if _rc_raw == "(unassigned)" else _rc_raw
+                _jid = _row["job_id"] or ""
         except Exception:
             pass
 
     from db_write_ops import db_delete_route_stop as _db_delete_route_stop
     result = _db_delete_route_stop(db_path, stop_id, confirm=confirm, restrict=restrict, crew_name=crew_name)
     if confirm and _rd and isinstance(result, str) and result.lstrip().startswith("✅"):
-        # Was that the last job on this route? Then there's nothing to re-plan
-        # (and its Start/End rows were already removed with it) — say so plainly
-        # instead of "re-planned; phone link updated" (R-014, 2026-09-25).
-        _left = 1
-        try:
-            from db_access import get_connection as _get_conn2
-            _c2 = _get_conn2(db_path)
-            try:
-                _left = _c2.execute(
-                    "SELECT COUNT(*) AS n FROM route_stops WHERE route_date = ? "
-                    "AND COALESCE(crew_id, '') = COALESCE(?, '') AND COALESCE(job_id, '') <> ''",
-                    (_rd, _rc_raw),
-                ).fetchone()["n"]
-            finally:
-                _c2.close()
-        except Exception:
-            _left = 1
-        if not _left:
-            return result + f"\nℹ️ That was the last job on this route — the route for {_rd} is now empty."
-        try:
+          # 2026-10-05 (revised, David): the Route tab trash can clears the
+          # job's Service Date AND End Date (the whole span), single- or
+          # multi-day. The job is kept, never deleted; the user re-enters
+          # dates later based on the duration when ready to start.
+          _unassign_note = ""
+          if _jid:
+              try:
+                  from db_access import get_connection as _get_conn4, transaction as _txn4
+                  _c4 = _get_conn4(db_path)
+                  try:
+                      _jr = _c4.execute("SELECT service_date, end_date FROM jobs WHERE job_id = ?", (_jid,)).fetchone()
+                  finally:
+                      _c4.close()
+                  if _jr is not None:
+                      _sd = (_jr["service_date"] or "").strip()
+                      _ed = (_jr["end_date"] or "").strip()
+                      if _sd:
+                          with _txn4(db_path) as _cx:
+                              _cx.execute("UPDATE jobs SET service_date = '', end_date = '', version = version + 1, last_edited_by = ?, last_edited_at = datetime('now') WHERE job_id = ?", ("route_trash", _jid))
+                          _span = _sd + "–" + _ed if (_ed and _ed != _sd) else _sd
+                          _unassign_note = ("\n📅 " + _jid + "’s Service Date and End Date were cleared (span " + _span + ") — the job is kept but no "
+                                            "longer assigned to any date, so re-routing will not bring it back.")
+              except Exception:
+                  pass
+          try:
+              from db_access import get_connection as _get_conn2
+              _c2 = _get_conn2(db_path)
+              try:
+                  _left = _c2.execute(
+                      "SELECT COUNT(*) AS n FROM route_stops WHERE route_date = ? "
+                      "AND COALESCE(crew_id, '') = COALESCE(?, '') AND COALESCE(job_id, '') <> ''",
+                      (_rd, _rc_raw),
+                  ).fetchone()["n"]
+              finally:
+                  _c2.close()
+          except Exception:
+              _left = 1
+          if not _left:
+              return result + f"\nℹ️ That was the last job on this route — the route for {_rd} is now empty."
+          try:
             rp = replan_route_day(_rd, crew=_rc, filepath=filepath, ctx=ctx)
             if isinstance(rp, str) and rp.lstrip().startswith("✅"):
                 extra = [l for l in rp.splitlines() if l.strip().startswith(("⚠️", "ℹ️"))]
                 result += "\n🔄 Route re-planned without it; phone link updated."
                 if extra:
                     result += "\n" + "\n".join(extra)
-        except Exception:
-            pass     # the delete itself succeeded; never fail it over the re-plan
+          except Exception:
+              pass     # the delete itself succeeded; never fail it over the re-plan
     return result
 
 
@@ -11759,8 +12124,9 @@ def reorder_route_stop(
     result = _db_reorder_and_replan(db_path, stop_id, new_position, actor,
                                     restrict=restrict, crew_name=crew_name,
                                     is_server_mode=_IS_SERVER_MODE)
-    # A real move (not the "already there" no-op) changed the order: refresh the
-    # phone link saved on the jobs. No email here — that would fire on every drag.
+    # A real move (not the "already there" no-op) changed the order.
+    # 2026-10-05: the phone link is no longer refreshed here — only an
+    # approved route has a pinned link. No email here — that would fire on every drag.
     if _rd and result.lstrip().startswith("✅") and "nothing to change" not in result:
         result = _with_route_link(result, db_path, _rd, _rc, ctx, actor)
     return result
@@ -11823,7 +12189,7 @@ def replan_route_day(
                                       is_server_mode=_IS_SERVER_MODE,
                                       restrict=restrict, crew_name=crew_name)
     if result.lstrip().startswith("✅"):
-        result = _with_route_link(result, db_path, route_date, crew, ctx, actor)   # link follows the new plan
+        result = _with_route_link(result, db_path, route_date, crew, ctx, actor)
     return result
 
 
@@ -11841,15 +12207,19 @@ def email_route_now(
     stored on the jobs, whatever last saved them (Route Today, Run AI Route, a
     manual reorder/edit) — right now, on request.
 
-    This is the manual counterpart to Settings -> "Email Route On Build":
+    This is the manual counterpart to Settings -> "Email Route On Approve":
     that setting controls whether a route is emailed AUTOMATICALLY the moment
-    it's built (default, as of 2026-09-21: Disabled). This tool always sends
+    it's approved (default: Disabled). This tool always sends
     when there's a saved route to send, REGARDLESS of that setting's value —
     in EITHER direction. It works exactly the same when auto-email is
     Disabled, Enabled, or was never Enabled but the person who needs the
-    route wasn't the one it went to. That's deliberate: the two are different
-    things (automatic vs. on-demand) rather than one superseding the other,
-    and the button in the app that calls this is always shown and active for
+    route wasn't the one it went to.
+
+
+    2026-10-05: sending is gated on APPROVAL (David's rule) — if the route
+    for route_date/crew is not approved, this returns a warning ("Email is
+    only allowed for approved routes — approve the route first.") and sends
+    nothing. Only an approved route's link is emailed.
     the same reason — most usefully in server mode, where a crew member who
     didn't receive an admin-approved route (wrong recipient, auto-email off,
     it changed after the fact) can self-serve their own copy instead of
@@ -11912,37 +12282,31 @@ def approve_route_schedule(
     ctx: "Context | None" = None,
 ) -> str:
     """
-    The Route tab's "Approve" button — pushes each routed non-hard job's
-    own computed arrival time (Route_Planner's ETA) into its Start Time,
-    with an End Time derived from its own Est. Duration. Hard jobs are
-    skipped entirely: their Start Time is already a real commitment a
-    route respects, never something approving a route changes.
+    The Route tab's "Approve" button (2026-10-05 rewrite) — records the
+    route for route_date/crew as APPROVED. Approval is a pure flag: it
+    grants email eligibility and pins the tap-to-navigate link (viewable
+    on the Jobs and Calendar pages). It NEVER writes to a job's Start
+    Time / End Time — a job's window always reflects the customer
+    settings (David's rule).
 
-    Mileage/routing follow-up (2026-09-20): this deliberately NEVER
-    touches a job's Original Start Time/Original End Time — those change
-    only through a genuine manual edit (via update_job_spreadsheet, same
-    as any other field) or an explicit instruction to update them, never
-    as a side effect of approving a route. That's what makes it safe to
-    try a route, approve it, decide it's wrong, and call
-    unapprove_route_schedule to get back to the customer's actually-
-    agreed schedule — any number of times, in either order — without
-    ever losing track of what that schedule was.
+    Un-approving (unapprove_route_schedule) is the exact inverse: it
+    clears the approval, revokes email eligibility, and unpublishes the
+    links. Rebuilding the route also clears the approval — a rebuilt
+    route is experimental until re-approved.
 
     Args:
-        route_date: YYYY-MM-DD. Every routed job on this date (for the
-                    given crew, or every crew if left blank) is approved.
+        route_date: YYYY-MM-DD. The routed jobs on this date (for the
+                    given crew, or every crew if left blank) are approved.
         crew:       Crew/Technician name to scope to. Left blank, every
-                    crew's routed jobs on this date are approved.
+                    crew's route on this date is approved.
         filepath:   Path to the SQLite job database. Uses the default
                     from Settings if omitted. In server mode this
                     argument is ignored.
         ctx:        MCP context (injected automatically).
 
     Returns:
-        A ✅ summary of the jobs approved (JobID, customer, new Start–End
-        Time), a note on how many hard jobs were left untouched, and a
-        reminder that unapprove_route_schedule can revert this — or a ✅
-        "nothing to approve" message if route_date has no routed jobs.
+        A ✅ approval confirmation — or a ✅ "nothing to approve" message
+        if route_date has no routed jobs.
 
     Voice examples:
         "Approve today's route"
@@ -11961,7 +12325,26 @@ def approve_route_schedule(
     if _crew_err:
         return _crew_err
     from db_route_ops import db_approve_route_schedule as _db_approve_route_schedule
-    return _db_approve_route_schedule(db_path, route_date, crew, actor)
+    result = _db_approve_route_schedule(db_path, route_date, crew, actor)
+    # 2026-10-05: only an APPROVED route gets its tap-to-navigate link pinned
+    # (on the jobs + route_stops) — unapproved/experimental routes show no link.
+    if result.lstrip().startswith("✅") and "nothing to approve" not in result:
+        note = _publish_route_links(db_path, route_date, crew, ctx, actor)
+        if note:
+            result = result + "\n\n" + note
+        # 2026-10-05: "Email Route On Approve" — when Enabled, approving
+        # automatically emails the route via _email_route_results. When
+        # Disabled (default), approving never emails; the manual
+        # "📧 Email Approved Route Now" button still sends on demand.
+        from db_write_ops import db_read_email_route_on_approve
+        if db_read_email_route_on_approve(db_path):
+            caller = _current_user(ctx)
+            caller_email = (caller.get("email") or "").strip() if caller else ""
+            email_note = _email_route_results(db_path, route_date, crew, caller_email, "",
+                                              include_stops=True, force=True)
+            if email_note:
+                result = result + "\n\n" + email_note
+    return result
 
 
 @mcp.tool()
@@ -11972,42 +12355,30 @@ def unapprove_route_schedule(
     ctx: "Context | None" = None,
 ) -> str:
     """
-    The Route tab's "Un-approve" button and the direct inverse of
-    approve_route_schedule above: copies each non-hard job's Original
-    Start Time/Original End Time back into Start Time/End Time — the
-    customer's actually-agreed schedule, restored exactly as it was
-    before any amount of trial-and-error route approving touched it.
+    The Route tab's "Un-approve" button and the exact inverse of
+    approve_route_schedule above (2026-10-05 rewrite): deletes the
+    approval for route_date/crew — revoking email eligibility — and
+    unpublishes the route's tap-to-navigate links (cleared from the
+    jobs and route_stops) so nothing approved-only remains viewable on
+    the Jobs or Calendar pages. After this, the route behaves exactly
+    as if it had never been approved.
 
-    Operates on every job scheduled on route_date (not just ones
-    currently in Route_Planner), so this still works even if the route
-    itself was rebuilt or deleted since — as long as the job's own
-    Original Start Time was ever recorded. Hard jobs are skipped (their
-    Start Time was never changed by approving in the first place, so
-    there's nothing to revert). A job with no recorded Original Start
-    Time is left untouched and called out by name, never silently
-    blanked.
+    It NEVER writes to a job's Start Time / End Time — approve never
+    changed them, so there is nothing to restore.
 
     Args:
-        route_date: YYYY-MM-DD. Every non-hard job scheduled on this date
-                    (for the given crew, or every crew if left blank) is
-                    reverted.
+        route_date: YYYY-MM-DD. The route on this date (for the given
+                    crew, or every crew if left blank) is un-approved.
         crew:       Crew/Technician name to scope to. Left blank, every
-                    crew's jobs on this date are reverted.
+                    crew's route on this date is un-approved.
         filepath:   Path to the SQLite job database. Uses the default
                     from Settings if omitted. In server mode this
                     argument is ignored.
         ctx:        MCP context (injected automatically).
 
     Returns:
-        A ✅/↩️ summary of the jobs reverted (JobID, customer, restored
-        Start–End Time), a note on how many hard jobs were left
-        untouched, and a warning naming any job with no recorded
-        Original Start Time — or a ✅ "nothing to un-approve" message if
-        route_date has no jobs at all.
-
-    Voice examples:
-        "Un-approve today's route"
-        "Revert tomorrow's schedule back to the original"
+        A ↩️ confirmation — or a ✅ "nothing to un-approve" message if
+        route_date has no approved route.
     """
     db_path = _resolve_job_db_path(ctx, filepath)
     if not db_path:
@@ -12379,10 +12750,302 @@ def apply_route_order(
     _res = _db_apply_route_order(db_path, route_date, stop_order, crew, actor,
                                   single_crew=(not _IS_SERVER_MODE),
                                   origin_lat=_olat, origin_lon=_olon)
-    # Route engine #2 (AI Routing) commits here — also publishes the phone link.
-    # No email from here on purpose: the AI may call this twice in one run (a
-    # revised order), so _ai_routing_worker emails ONCE when the whole run ends.
+    # Route engine #2 (AI Routing) commits here.
+    # 2026-10-05: the phone link is no longer published here — only an
+    # approved route gets a pinned link. No email from here on purpose: the AI
+    # may call this twice in one run (a revised order), so _ai_routing_worker
+    # emails ONCE when the whole run ends.
     return _with_route_link(_res, db_path, route_date, crew, ctx, actor)
+@mcp.tool()
+def pin_route_stop(
+    route_date: str,
+    job_id: str,
+    position: int,
+    crew: str = "",
+    filepath: str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Pins ("Fix stop #") a job to a fixed stop position on a route date — the
+    Route tab's pin toggle. A pinned job is ALWAYS that stop number in every
+    future route build (Non-AI Route, AI Route, manual reorder) until unpinned;
+    unfixed jobs are ordered by the router as usual. Pins survive route
+    rebuilds (unlike approval, which a rebuild clears).
+
+    Args:
+        route_date: YYYY-MM-DD the route belongs to.
+        job_id:     JobID (JOB-####) to pin. Must already be a stop on that
+                    date's route.
+        position:   1-based stop number among the day's JOB stops (bookend
+                    start/end rows don't count). Pass 0 to UNPIN the job.
+        crew:       Crew/Technician scope, same meaning as apply_route_order.
+        filepath:   Path to the SQLite job database. Uses the default from
+                    Settings if omitted. In server mode this is ignored.
+        ctx:        MCP context (injected automatically).
+
+    Returns:
+        A ✅ confirming the pin (or unpin), or a ❌ explaining why it was
+        rejected (job not on the route, bad position, position already
+        pinned to another job).
+
+    Voice examples: (not applicable — PWA-button-only tool)
+    """
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return (
+            "❌ No database path provided and no default path configured.\n"
+            "Pass the full filepath argument explicitly, or check that "
+            "AI-Prowler has write access to its own state folder."
+        )
+    actor = _actor_display_name(ctx)
+    crew, _crew_err = _route_crew_for_caller(ctx, db_path, crew)
+    if _crew_err:
+        return _crew_err
+    try:
+        position = int(position)
+    except (TypeError, ValueError):
+        return "❌ position must be a whole number (the 1-based stop number, or 0 to unpin)."
+    if position < 0:
+        return "❌ position must be 0 (unpin) or a positive stop number."
+    from db_route_ops import _ensure_fixed_position_column, get_connection
+    conn = get_connection(db_path)
+    try:
+        _ensure_fixed_position_column(conn)
+        rows = conn.execute(
+            "SELECT id, job_id, fixed_position FROM route_stops "
+            "WHERE route_date = ? AND job_id IS NOT NULL ORDER BY stop_number",
+            (route_date,),
+        ).fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        return f"❌ No route is stored for {route_date} — build the route first, then pin a stop."
+    by_job = {r["job_id"]: r for r in rows}
+    target = by_job.get((job_id or "").strip())
+    if target is None:
+        return f"❌ {job_id} is not a stop on the {route_date} route — only a routed stop can be pinned."
+    n_jobs = len(rows)
+    if position > n_jobs:
+        return (f"❌ position {position} is beyond this route's {n_jobs} job stop(s) — "
+                f"pin to a stop number between 1 and {n_jobs}, or 0 to unpin.")
+    if position > 0:
+        clash = [r["job_id"] for r in rows
+                 if r["fixed_position"] == position and r["job_id"] != target["job_id"]]
+        if clash:
+            return (f"❌ Stop #{position} is already pinned to {clash[0]} — "
+                    f"unpin it first, then pin {target['job_id']} there.")
+    conn = get_connection(db_path)
+    try:
+        conn.execute(
+            "UPDATE route_stops SET fixed_position = ?, last_edited_by = ?, "
+            "last_edited_at = datetime('now') WHERE route_date = ? AND job_id = ?",
+            (position if position > 0 else None, actor, route_date, target["job_id"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    if position == 0:
+        return (f"✅ Unpinned {target['job_id']} on {route_date} — the router is "
+                f"free to place it again.")
+    return (f"✅ Pinned {target['job_id']} as stop #{position} on {route_date} — "
+            f"it will stay stop #{position} through every future route build "
+            f"until unpinned. Re-run Route for the change to take effect.")
+
+# ── pause_job — pause/resume a job so it is never routed while paused ───────
+@mcp.tool()
+def pause_job(
+    job_id: str,
+    paused: bool = True,
+    reason: str = "",
+    filepath: str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Pauses or resumes a job -- the Route tab's ⏸️ toggle. A paused job is
+    NEVER routed (excluded from every route build, for every day) until it
+    is resumed. The pause stays on until the user deactivates it. Pausing
+    a dated job stashes its Service/End Date into paused_service_date /
+    paused_end_date and clears the live dates, so the paused job sits on
+    the Unscheduled board; resuming restores the stashed dates. The
+    free-text pause reason is stored in pause_comment and shown wherever
+    the paused state appears (re-pausing an already-paused job updates
+    only the comment). Trash on a paused job still clears its Service/End
+    Date as usual.
+
+    Args:
+        job_id:   JobID (JOB-####) to pause or resume.
+        paused:   True (default) to pause the job; False to resume it.
+        reason:   Free-text reason for the pause, stored in pause_comment
+                  (may be blank). Re-pausing updates only this. Ignored on
+                  resume.
+        filepath: Path to the SQLite job database. Uses the default from
+                  Settings if omitted. In server mode this is ignored.
+        ctx:      MCP context (injected automatically).
+
+      Returns:
+          A ✅ confirming the pause (or resume), or a ❌ explaining why it was
+          rejected (job not found, or job already complete/cancelled — those can
+          never be paused).
+
+    Voice examples: (not applicable — PWA-button-only tool)
+    """
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return (
+            "❌ No database path provided and no default path configured.\n"
+            "Pass the full filepath argument explicitly, or check that "
+            "AI-Prowler has write access to its own state folder."
+        )
+    actor = _actor_display_name(ctx)
+    job_id = (job_id or "").strip()
+    if not job_id:
+        return "❌ job_id is required (JOB-####)."
+    if isinstance(paused, str):
+        paused = paused.strip().lower() in ("1", "true", "yes")
+    else:
+        paused = bool(paused)
+    from db_schema import _ensure_column
+    from db_route_ops import get_connection
+    conn = get_connection(db_path)
+    try:
+        _ensure_column(conn, "jobs", "paused", "INTEGER DEFAULT 0")
+        _ensure_column(conn, "jobs", "paused_service_date", "TEXT")
+        _ensure_column(conn, "jobs", "paused_end_date", "TEXT")
+        _ensure_column(conn, "jobs", "pause_comment", "TEXT")
+        rows = conn.execute(
+            "SELECT job_id, customer_name, paused, job_status, service_date, end_date, "
+            "paused_service_date, paused_end_date, pause_comment, crew FROM jobs WHERE job_id = ?",
+            (job_id,),
+        ).fetchall()
+        if not rows:
+            return f"❌ Job {job_id} not found."
+        # R-075 (2026-10-08, found by the server E2E review): server-mode field
+        # crew may pause/resume ONLY jobs assigned to them — same rule as
+        # update_job_spreadsheet. Before this, any signed-in user could pause
+        # another crew's (or the owner's) job, which also clears its dates and
+        # drops it off that person's route. owner/manager/staff and personal
+        # mode are unchanged. Refused before anything is written.
+        _restrict, _crew_name = _job_crew_scope(ctx, db_path)
+        if _restrict and not _crew_name_in_cell(
+                str(rows[0]["crew"] or "").strip().lower(), _crew_name):
+            return (f"❌ {job_id} isn't assigned to you — field crew can only pause or "
+                    f"resume their own jobs. Nothing was changed.")
+        # (2026-10-05) Completed/cancelled jobs can never be paused — pausing
+        # is meaningless for them (they are never routed anyway). Resuming is
+        # still allowed so a stale pause flag can be cleared.
+        _status = str(rows[0]["job_status"] or "").strip().lower()
+        if paused and _status in ("complete", "cancelled", "canceled"):
+            return (f"❌ Cannot pause {job_id} — it is already {_status}. "
+                    "Completed/cancelled jobs are never routed, so pausing is unnecessary.")
+        # (2026-10-06) Pause stash: pausing a dated job copies its live
+        # Service/End Date into paused_service_date/paused_end_date and
+        # clears the live dates ("" is this DB's blank representation --
+        # verified against the live DB), so the paused job sits on the
+        # Unscheduled board. Resuming restores the stash; an empty stash
+        # leaves the live dates untouched. Re-pause updates only the comment.
+        _name = rows[0]["customer_name"] or job_id
+        _comment = reason if isinstance(reason, str) else ""
+        if paused:
+            if rows[0]["paused"]:
+                # Already paused: the reason dialog saves via re-pause --
+                # update ONLY the comment; never touch stash or live dates.
+                conn.execute(
+                    "UPDATE jobs SET pause_comment = ? WHERE job_id = ?",
+                    (_comment, job_id),
+                )
+                conn.commit()
+                return f"✅ Pause reason updated for {job_id}."
+            _sd = rows[0]["service_date"] or ""
+            _ed = rows[0]["end_date"] or ""
+            conn.execute(
+                "UPDATE jobs SET paused = 1, paused_service_date = ?, "
+                "paused_end_date = ?, service_date = ?, end_date = ?, "
+                "pause_comment = ? WHERE job_id = ?",
+                (_sd, _ed, "", "", _comment, job_id),
+            )
+            conn.commit()
+            if _sd:
+                return (f"✅ Paused {job_id} ({_name}) — moved to Unscheduled; "
+                        f"service date {_sd} stashed. Unpause from the Board or Jobs page to restore it.")
+            return f"✅ Paused {job_id} ({_name}) — moved to Unscheduled."
+        _stash_sd = rows[0]["paused_service_date"] or ""
+        _stash_ed = rows[0]["paused_end_date"] or ""
+        if _stash_sd:
+            conn.execute(
+                "UPDATE jobs SET paused = 0, service_date = ?, end_date = ?, "
+                "paused_service_date = ?, paused_end_date = ?, pause_comment = ? "
+                "WHERE job_id = ?",
+                (_stash_sd, _stash_ed, "", "", "", job_id),
+            )
+            conn.commit()
+            return (f"✅ Resumed {job_id} ({_name}) — service date {_stash_sd} restored. "
+                    f"It is routable again.")
+        conn.execute(
+            "UPDATE jobs SET paused = 0, pause_comment = ? WHERE job_id = ?",
+            ("", job_id),
+        )
+        conn.commit()
+        return (f"✅ Resumed {job_id} ({_name}) — it is routable again. "
+                f"(No stashed date; dates left untouched.)")
+    finally:
+        conn.close()
+
+# -- get_approved_route_stops -- approved schedule info for the Jobs/Board pages --
+@mcp.tool()
+def get_approved_route_stops(
+    start_date: str,
+    end_date: str = "",
+    crew: str = "",
+    filepath: str = "",
+    ctx: "Context | None" = None,
+) -> str:
+    """
+    Backs the Jobs page ("Today's Jobs") and Board page job cards (2026-10-06):
+    returns the APPROVED route's per-job schedule info for each date in
+    [start_date, end_date], so a card can show the approved scheduled time
+    and the drive miles/time to get there -- the same numbers the Route
+    page's stop cards show.
+
+    Read-only -- never writes anything. "Approved" is read from the
+    route_approvals table (the same source the email gate uses). Dates with
+    no approved route return approved=false and no stops, so callers render
+    those jobs exactly as they do today.
+
+    Args:
+        start_date: First date, YYYY-MM-DD.
+        end_date:   Last date, YYYY-MM-DD (defaults to start_date).
+        crew:       Crew/Technician name to scope to (server mode). Blank
+                    means the caller's own route (R-055); personal mode
+                    reads the single route for the date.
+        filepath:   Path to the SQLite job database. Uses the default
+                    from Settings if omitted. In server mode this
+                    argument is ignored.
+        ctx:        MCP context (injected automatically).
+
+    Returns:
+        A JSON string: {"YYYY-MM-DD": {"approved": bool, "stops":
+        [{"job_id": "JOB-####", "stop_number": 1, "eta": "HH:MM",
+          "drove_min": 19.0, "drove_miles": 8.6}]}}. eta is the routed
+        arrival; drove_min/drove_miles are the leg from the previous stop
+        to this one. Unapproved dates carry "approved": false and no stops.
+
+    Voice examples: (not applicable -- PWA-only tool)
+    """
+    db_path = _resolve_job_db_path(ctx, filepath)
+    if not db_path:
+        return "ERROR: No database path provided and no default path configured."
+    crew, _crew_err = _route_crew_for_caller(ctx, db_path, crew or "")
+    if _crew_err:
+        return "ERROR: " + _crew_err
+    start_date = (start_date or "").strip()
+    end_date = (end_date or "").strip() or start_date
+    from db_route_ops import db_get_approved_route_stops as _db_get_approved_route_stops
+    import json as _json
+    try:
+        data = _db_get_approved_route_stops(db_path, start_date, end_date, crew)
+    except Exception as e:
+        return "ERROR: " + str(e)
+    return _json.dumps(data)
 
 
 # ── run_ai_routing — the Jobs PWA's "Run AI Routing (uses Credits)" button
@@ -12446,7 +13109,9 @@ _RUN_AI_ROUTING_PROMPT_TEMPLATE = (
     "5. Once you have a final visit order, call "
     "apply_route_order(route_date=\"{route_date}\", "
     "stop_order=\"JOB-####,JOB-####,...\"{crew_arg}{origin_arg}) with every geocoded "
-    "job for that date included exactly once, in your reasoned order.\n"
+      "job for that date included exactly once, in your reasoned order.\n"
+      "{pin_clause}"
+
     "6. Read back the tool's own response -- it repeats any HARD TIME "
     "VIOLATION / SOFT WINDOW VIOLATION / DRIVE TIME UNKNOWN / DAY DOES NOT "
     "FIT warnings using the same real timeline engine \"Get AI Suggestion\" "
@@ -13285,6 +13950,30 @@ def start_ai_routing(
                     f"the on-demand runner handles one at a time. Try again in a few "
                     f"minutes. Nothing was started."
                 )
+    # 2026-10-05 "Fix stop #" pins: passed to the AI as hard constraints, and
+    # db_apply_route_order re-enforces them server-side even if the AI ignores
+    # this instruction. Empty string when nothing is pinned (the template's
+    # {pin_clause} then vanishes).
+    _pin_clause = ""
+    try:
+        from db_route_ops import _read_route_pins as _pins_for_ai
+        _ai_db_path = _resolve_job_db_path(ctx, "")
+        if _ai_db_path:
+            _ai_pins = _pins_for_ai(_ai_db_path, route_date, None)
+            if _ai_pins:
+                _pin_lines = [
+                    f"   - {jid} MUST be stop #{pos} (owner-pinned -- do not move it)"
+                    for jid, pos in sorted(_ai_pins.items(), key=lambda kv: kv[1])
+                ]
+                _pin_clause = (
+                    "\nFIXED STOP CONSTRAINTS (owner-pinned, non-negotiable):\n"
+                    + "\n".join(_pin_lines) + "\n"
+                    + "Every pinned job above MUST appear at exactly its pinned stop number "
+                    + "in the stop_order you pass to apply_route_order. Plan the unfixed "
+                    + "jobs around them.\n"
+                )
+    except Exception:
+        pass
 
     prompt = _RUN_AI_ROUTING_PROMPT_TEMPLATE.format(
         route_date=route_date,
@@ -13292,7 +13981,9 @@ def start_ai_routing(
         crew_arg=f", crew=\"{crew}\"" if crew else "",
         origin_arg=(f", origin_lat=\"{origin_lat}\", origin_lon=\"{origin_lon}\""
                     if str(origin_lat).strip() and str(origin_lon).strip() else ""),
+        pin_clause=_pin_clause,
     )
+
 
     import uuid, time
     job_id = uuid.uuid4().hex[:12]
@@ -14006,6 +14697,45 @@ def update_learning(
     return "\n".join(lines)
 
 
+@mcp.tool()
+def get_learning(learning_id: str, ctx: Context = None) -> str:
+    """
+    Return ONE learning's full record as JSON — every editable field, not the
+    shortened preview list_learnings shows. Read-only.
+
+    Used by the Remote Control PWA's Learn tab to fill its Edit form
+    (2026-10-11, David: "be able to edit the learnings"), then saved with
+    update_learning. Learnings are company-wide (anyone may read them), so
+    reading has no ownership gate; update_learning still enforces who may
+    CHANGE one.
+
+    Args:
+        learning_id: The learning's ID (from list_learnings / search_learnings).
+
+    Returns:
+        JSON {"id", "title", "content", "context", "category", "outcome",
+        "tags" (list), "confidence", "status", "created_at", "updated_at"} —
+        or an ❌ message if it isn't found.
+    """
+    _telemetry_increment_tool_count("get_learning")
+    if not _SELF_LEARNING_AVAILABLE:
+        return "❌ Self-Learning module not available."
+    lid = (learning_id or "").strip()
+    if not lid:
+        return "❌ learning_id is required."
+    rec = _sl.get_learning_by_id(lid)
+    if rec is None:
+        return f"❌ Learning not found: {lid}"
+    tags = rec.get("tags") or []
+    if isinstance(tags, str):
+        tags = [t.strip() for t in tags.split(",") if t.strip()]
+    keep = ("id", "title", "content", "context", "category", "outcome",
+            "confidence", "status", "created_at", "updated_at")
+    out = {k: rec.get(k) for k in keep}
+    out["tags"] = tags
+    return json.dumps(out, ensure_ascii=False)
+
+
 def _can_modify_learning(actor: "dict | None", learning: "dict | None",
                          owner_id: "str | None") -> tuple:
     """Decide whether `actor` may DELETE or UPDATE `learning`. PURE.
@@ -14257,6 +14987,10 @@ def _is_path_under_tracked_roots(target_path: str) -> tuple[bool, str]:
     in ~/.rag_auto_update_dirs.json. Tracked entries may be directories or
     single files. Returns (allowed, resolved_path_or_reason).
 
+    R-071 (2026-10-08): also allows paths under an access-only directory
+    (~/.rag_access_only_dirs.json) — readable without being indexed. The
+    hard blocklist (_is_blocked_path) still wins over access-only.
+
     On allow: returns (True, resolved_absolute_path_as_string).
     On deny: returns (False, short_human_reason).
     """
@@ -14275,7 +15009,10 @@ def _is_path_under_tracked_roots(target_path: str) -> tuple[bool, str]:
         return (False, "path contains '..' after resolution")
 
     entries = load_auto_update_list() or []
-    if not entries:
+    # R-071: the access-only list is consulted below, so the early exit
+    # only applies when BOTH lists are empty.
+    ao_entries = access_allowlist_load() or []
+    if not entries and not ao_entries:
         return (False, "tracked-paths allowlist is empty")
 
     resolved_str = normalise_path(str(resolved))
@@ -14301,7 +15038,28 @@ def _is_path_under_tracked_roots(target_path: str) -> tuple[bool, str]:
         except ValueError:
             continue
 
-    return (False, "not under any tracked root")
+    # R-071 (2026-10-08) — access-only folders: readable WITHOUT being
+    # indexed. The tracked-roots loop above found nothing, so consult the
+    # access-only list (~/.rag_access_only_dirs.json). Entries are
+    # directories; a path is allowed if it equals or is a descendant of an
+    # entry (relative_to covers the exact-match case too). The hard
+    # blocklist still wins: a blocklisted path is denied even when it sits
+    # under an access-only directory.
+    for entry in ao_entries:
+        try:
+            _ao = Path(entry).resolve(strict=False)
+        except Exception:
+            continue
+        try:
+            resolved.relative_to(_ao)
+        except ValueError:
+            continue
+        _blocked, _block_reason = _is_blocked_path(resolved_str)
+        if _blocked:
+            return (False, f"hard blocklist: {_block_reason}")
+        return (True, resolved_str)
+
+    return (False, "not under any tracked root or access-only folder")
 
 
 def _resolve_allowlisted_path(filepath: str) -> tuple[Optional[str], Optional[str]]:
@@ -14325,7 +15083,8 @@ def _resolve_allowlisted_path(filepath: str) -> tuple[Optional[str], Optional[st
         f"🚫 Access denied — '{filepath}'",
         f"Reason: {info}",
         "",
-        "Only paths under the tracked allowlist may be read.",
+        "Only paths under the tracked allowlist or an access-only folder "
+        "may be read.",
     ]
     if entries:
         lines.append("Currently tracked:")
@@ -14334,9 +15093,22 @@ def _resolve_allowlisted_path(filepath: str) -> tuple[Optional[str], Optional[st
         if len(entries) > 10:
             lines.append(f"  ... and {len(entries) - 10} more")
         lines.append("")
+    # R-071 (2026-10-08): show access-only folders too, so the agent knows
+    # what IS readable without indexing.
+    _ao_entries = access_allowlist_load()
+    if _ao_entries:
+        lines.append("Access-only folders (readable, not indexed):")
+        for e in _ao_entries[:10]:
+            lines.append(f"  - {e}")
+        if len(_ao_entries) > 10:
+            lines.append(f"  ... and {len(_ao_entries) - 10} more")
+        lines.append("")
+    if entries or _ao_entries:
         lines.append(
             "If the file you want is outside these, ask the user to run "
-            "index_path() on its parent folder first."
+            "index_path() on its parent folder first"
+            + ("." if _IS_SERVER_MODE else
+               " (or grant_access() for read-only access without indexing).")
         )
     else:
         lines.append("No directories are tracked yet. "
@@ -14365,7 +15137,36 @@ def _iter_allowlisted_files(filter_ext: Optional[str] = None,
         _log.error("iter_allowlisted_files: import failure: %s", _exc)
         return
 
-    entries = load_auto_update_list() or []
+    entries = list(load_auto_update_list() or [])
+    # R-071 (2026-10-08): access-only folders (~/.rag_access_only_dirs.json)
+    # are readable but never indexed. grep_documents is the locate half of
+    # the locate-then-read workflow, so their files must be enumerable here
+    # (the sweep still never reads this file — see
+    # update_tracked_directories and command_auto_update). The hard
+    # blocklist wins over access-only: a blocklisted entry is skipped
+    # outright, and files under an access-only entry that match the
+    # blocklist are skipped per-file below. Tracked entries keep their
+    # existing behavior.
+    _ao_entry_norms = set()
+    _tracked_norms = set()
+    for _t in entries:
+        try:
+            _tracked_norms.add(normalise_path(str(Path(_t).resolve(strict=False))))
+        except Exception:
+            _tracked_norms.add(normalise_path(str(_t)))
+    for _ao in access_allowlist_load() or []:
+        try:
+            _ao_p = Path(_ao).resolve(strict=False)
+        except Exception:
+            continue
+        _ao_norm = normalise_path(str(_ao_p))
+        if _ao_norm in _tracked_norms:
+            continue  # already enumerated as a tracked entry
+        if _is_blocked_path(_ao_norm)[0]:
+            continue
+        _tracked_norms.add(_ao_norm)
+        _ao_entry_norms.add(_ao_norm)
+        entries.append(_ao)
     if not entries:
         return
 
@@ -14385,6 +15186,9 @@ def _iter_allowlisted_files(filter_ext: Optional[str] = None,
             continue
         if not ep.exists():
             continue
+        # R-071: this entry came from the access-only list — its files get
+        # per-file hard-blocklist enforcement below.
+        _entry_is_access_only = normalise_path(str(ep)) in _ao_entry_norms
 
         if ep.is_file():
             candidates = [ep]
@@ -14420,6 +15224,10 @@ def _iter_allowlisted_files(filter_ext: Optional[str] = None,
             if norm_ext_filter and ext != norm_ext_filter:
                 continue
             resolved_str = normalise_path(str(fp))
+            # R-071: hard blocklist wins over access-only (tracked entries
+            # keep their existing behavior).
+            if _entry_is_access_only and _is_blocked_path(resolved_str)[0]:
+                continue
             if filter_path_lower and filter_path_lower not in resolved_str.lower():
                 continue
             if resolved_str in seen:
@@ -14868,6 +15676,71 @@ def _writable_allowlist_save(entries: list) -> bool:
         return True
     except Exception as exc:
         _log.error("writable allowlist write failed: %s", exc)
+        return False
+
+
+# ── Access-only folder persistence (R-071, 2026-10-08) ─────────────────────
+# Folders listed here are READABLE but never indexed: read tools
+# (read_file_lines, grep_documents, list_directory, send_file, ...) work on
+# files under them without the folder being tracked or its contents indexed
+# into ChromaDB. The scheduled auto-update sweep never reads this file, so
+# access-only folders are never indexed by the sweep.
+# Access-only does NOT grant write access — writes stay gated by the
+# writable allowlist (~/.rag_writable_dirs.json).
+_ACCESS_ONLY_DIRS_FILE = Path.home() / ".rag_access_only_dirs.json"
+
+
+def _upload_should_index(dir_abs: str) -> bool:
+    """/remote/upload (2026-10-10, David): should a file uploaded into `dir_abs`
+    be indexed? Yes when the folder is inside an indexed (tracked) folder — or
+    is neither tracked nor access-only (the old behaviour). No when it's inside
+    an ACCESS-ONLY folder and not inside any tracked folder: those are readable
+    but never indexed, and indexing would also have started tracking it."""
+    try:
+        tracked = list(load_auto_update_list() or [])
+    except Exception:
+        tracked = []
+    if any(_path_is_inside(dir_abs, str(t)) for t in tracked):
+        return True
+    try:
+        ao = access_allowlist_load() or []
+    except Exception:
+        ao = []
+    return not any(_path_is_inside(dir_abs, str(a)) for a in ao)
+
+
+def access_allowlist_load() -> list:
+    """Read the access-only folder list from disk. Returns [] if missing/invalid.
+
+    Server mode: always [] (2026-10-09, David — access-only folders are a
+    personal-mode feature). Every reader goes through here (the read gate
+    _is_path_under_tracked_roots, list_tracked_directories, the denial
+    message, grant_write_access's read check), so a ~/.rag_access_only_dirs.json
+    left on a server install can never make anything readable."""
+    if _IS_SERVER_MODE:
+        return []
+    try:
+        if not _ACCESS_ONLY_DIRS_FILE.exists():
+            return []
+        with open(_ACCESS_ONLY_DIRS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return [str(p) for p in data if isinstance(p, str)]
+        return []
+    except Exception as exc:
+        _log.warning("access-only allowlist read failed: %s", exc)
+        return []
+
+
+def access_allowlist_save(dirs: list) -> bool:
+    """Write the access-only folder list to disk. Returns True on success."""
+    try:
+        _ACCESS_ONLY_DIRS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(_ACCESS_ONLY_DIRS_FILE, "w", encoding="utf-8") as f:
+            json.dump(sorted(set(dirs)), f, indent=2)
+        return True
+    except Exception as exc:
+        _log.error("access-only allowlist write failed: %s", exc)
         return False
 
 
@@ -17914,11 +18787,11 @@ def run_script_start(script_path: str, args: str = "",
     log_path  = str(_job_log_path(job_id))
     mani_path = str(_job_manifest_path(job_id))
 
-    # v9.0.0: purge job files older than 3 days so the jobs dir never
+    # v9.0.0: purge job files older than 2 days so the jobs dir never
     # accumulates indefinitely. Best-effort — failure never blocks the launch.
     try:
         from task_queue_automation import purge_old_jobs as _purge_jobs
-        _purge_jobs(max_age_days=3)
+        _purge_jobs(max_age_days=2)
     except Exception:
         pass
 
@@ -21175,8 +22048,8 @@ def list_writable_directories(ctx: Context = None) -> str:
 def grant_write_access(directory: str, ctx: Context = None) -> str:
     """
     Add a directory to the write-zone allowlist, giving Claude permission to
-    create and edit files there. The directory must already be in the tracked
-    read allowlist.
+    create and edit files there. The directory must already be in the read
+    allowlist — either tracked (index_path) or access-only (grant_access).
 
     In server mode, managers may only grant write access to directories within
     their assigned scopes. The owner may grant any directory.
@@ -21184,7 +22057,7 @@ def grant_write_access(directory: str, ctx: Context = None) -> str:
 
     Args:
         directory: Absolute path to the directory to make writable.
-                   Must be in the tracked read allowlist.
+                   Must be in the read allowlist (tracked or access-only).
         ctx:       MCP context (injected automatically)
 
     Returns:
@@ -21214,8 +22087,10 @@ def grant_write_access(directory: str, ctx: Context = None) -> str:
     if not allowed:
         return f"❌ {why}"
 
-    # Must be in the read allowlist
-    read_dirs = load_auto_update_list() or []
+    # Must be in the read allowlist — tracked paths OR access-only folders
+    # (R-071, 2026-10-08: an access-only folder can be widened to writable
+    # explicitly via this tool; access-only alone never grants write).
+    read_dirs = (load_auto_update_list() or []) + (access_allowlist_load() or [])
     read_norm = [_normalize_path_for_match(r) for r in read_dirs]
     dir_norm  = _normalize_path_for_match(resolved)
 
@@ -21225,7 +22100,8 @@ def grant_write_access(directory: str, ctx: Context = None) -> str:
     )
     if not in_read:
         return (f"❌ '{resolved}' is not in the read allowlist.\n"
-                f"Add it first with index_path(), then grant write access.")
+                f"Add it first with index_path() (indexed) or grant_access() "
+                f"(readable, not indexed), then grant write access.")
 
     # Check if already writable
     writable = _writable_allowlist_load()
@@ -21315,12 +22191,165 @@ def revoke_write_access(directory: str, ctx: Context = None) -> str:
             f"Claude can still READ files there but can no longer write or edit them.")
 
 
+@mcp.tool()
+def grant_access(directory: str, ctx: Context = None) -> str:
+    """
+    Add a directory to the access-only folder list (~/.rag_access_only_dirs.json).
+
+    Access-only folders are READABLE but never indexed: read tools
+    (read_file_lines, grep_documents, list_directory, send_file, ...) work on
+    files under them without the folder being tracked or its contents indexed
+    into ChromaDB. The scheduled auto-update sweep never touches access-only
+    folders.
+
+    Access-only does NOT grant write access — writes stay gated by the
+    writable allowlist (use grant_write_access() for that, which also accepts
+    access-only paths).
+
+    Rules (2026-10-10, David — same check as the desktop panel and the Remote
+    app, rag_preprocessor.access_only_add_check):
+      • Folders only — always including every sub-folder; a file is refused.
+      • No duplicates — an existing access-only folder is refused.
+      • A folder already covered by an access-only folder, or inside (or equal
+        to) an indexed folder, is refused: it's already readable.
+      • A folder that CONTAINS access-only folders is accepted and folds them
+        in — they're removed from the list (their write switches are untouched).
+    The hard blocklist still wins: a blocklisted path stays unreadable even
+    when listed here.
+
+    Personal mode only (2026-10-09): hidden on an AI-Prowler server and
+    refused there if called.
+
+    Args:
+        directory: Absolute path to the directory to make readable
+                   (read-only, never indexed).
+        ctx:       MCP context (injected automatically)
+
+    Returns:
+        Confirmation string or error.
+
+    Voice examples:
+        "Let Claude read my reference folder without indexing it"
+        "Give Claude access to C:/Manuals but don't index it"
+    """
+    _telemetry_increment_tool_count("grant_access")
+    if _IS_SERVER_MODE:
+        return ("❌ Access-only folders are a personal-mode feature — not available on "
+                "an AI-Prowler server. Use index_path() to share a folder with the team.")
+
+    directory = directory.strip()
+    if not directory:
+        return "❌ directory is required."
+
+    # 2026-10-10 (David): the shared add rules — folders only (always
+    # recursive), no duplicates, nothing already covered by an access-only or
+    # an indexed folder; a folder that CONTAINS access-only folders replaces
+    # them (they're folded in). Same check as the desktop's Access-Only panel.
+    from rag_preprocessor import access_only_add_check
+    existing = access_allowlist_load()
+    chk = access_only_add_check(directory, existing)
+    resolved = chk["path"]
+    if not chk["ok"]:
+        return f"❌ {chk['error']}"
+
+    # Server-mode scope check (same gate as grant_write_access)
+    user = _current_user(ctx)
+    users_data = _load_users() if user else None
+    allowed, why = _write_zone_allowed_for_user(user, resolved, users_data)
+    if not allowed:
+        return f"❌ {why}"
+
+    folded = chk["folded"]
+    new_list = [e for e in existing if e not in folded] + [resolved]
+    if not access_allowlist_save(new_list):
+        return "❌ Could not save access-only list. Check disk permissions."
+
+    who = f" (granted by {user.get('name','?')})" if user else ""
+    _log.info("grant_access: %s%s (folded in: %s)", resolved, who, folded)
+    lines = [
+        f"✅ Access granted: '{resolved}'",
+        "Claude can now READ files in this folder and all its sub-folders "
+        "(read_file_lines, grep_documents, list_directory, ...).",
+        "It will NOT be indexed, and the auto-update sweep will never touch it.",
+        "Use revoke_access() to remove this permission.",
+    ]
+    if folded:
+        lines.append("Folded in (now covered by this folder, removed from the list): "
+                     + ", ".join(f"'{f}'" for f in folded))
+    _blocked, _block_reason = _is_blocked_path(resolved)
+    if _blocked:
+        lines.append(
+            f"⚠️  Note: this path is on the hard blocklist ({_block_reason}) "
+            f"— reads will still be denied."
+        )
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def revoke_access(directory: str, ctx: Context = None) -> str:
+    """
+    Remove a directory from the access-only folder list
+    (~/.rag_access_only_dirs.json). Claude will no longer be able to read
+    files there via the access-only list (read access through the tracked
+    allowlist, if the path is also tracked, is unaffected).
+
+    In server mode, the same scope restrictions as grant_write_access apply.
+    In personal mode there are no restrictions.
+
+    Args:
+        directory: Path to remove from the access-only list.
+        ctx:       MCP context (injected automatically)
+
+    Returns:
+        Confirmation string or error.
+
+    Voice examples:
+        "Remove Claude's access to the manuals folder"
+        "Stop letting Claude read C:/OldReference without indexing"
+    """
+    _telemetry_increment_tool_count("revoke_access")
+    if _IS_SERVER_MODE:
+        return ("❌ Access-only folders are a personal-mode feature — not available on "
+                "an AI-Prowler server.")
+
+    directory = directory.strip()
+    if not directory:
+        return "❌ directory is required."
+
+    try:
+        resolved = str(Path(directory).resolve())
+    except Exception:
+        resolved = directory
+
+    # Server-mode scope check (same gate as grant_write_access)
+    user = _current_user(ctx)
+    users_data = _load_users() if user else None
+    allowed, why = _write_zone_allowed_for_user(user, resolved, users_data)
+    if not allowed:
+        return f"❌ {why}"
+
+    existing = access_allowlist_load()
+    dir_norm = _normalize_path_for_match(resolved)
+    to_remove = [e for e in existing if _normalize_path_for_match(e) == dir_norm]
+    if not to_remove:
+        return f"ℹ️  '{resolved}' is not in the access-only list — nothing to revoke."
+
+    new_list = [e for e in existing if e not in to_remove]
+    if not access_allowlist_save(new_list):
+        return "❌ Could not save access-only list. Check disk permissions."
+
+    who = f" (revoked by {user.get('name','?')})" if user else ""
+    _log.info("revoke_access: removed %s%s", ", ".join(to_remove), who)
+    return (f"✅ Access revoked: '{resolved}'\n"
+            f"Claude can no longer read files there via the access-only list.")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # REINDEX TOOLS  (v7.1.0)
 # ══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
-def reindex_file(filepath: str, ctx: Context = None) -> str:
+async def reindex_file(filepath: str, ctx: Context = None) -> str:
     """
     Re-index a SINGLE file in ChromaDB to match its current on-disk content.
 
@@ -21377,6 +22406,11 @@ def reindex_file(filepath: str, ctx: Context = None) -> str:
     # All ChromaDB writes run on the single dedicated db-writer thread to avoid
     # the HNSW cross-thread EDEADLK ("resource deadlock would occur") that wedges
     # the HTTP server. purge + re-index happen together inside one job.
+
+    # R-069: fresh run -- clear any previous stop request, mark progress.
+    _index_progress_begin("rebuilding")
+    _index_progress.update({"current_file": resolved, "files_total": 1})
+
     def _job():
         try:
             client, embedding_func = get_chroma_client()
@@ -21388,17 +22422,36 @@ def reindex_file(filepath: str, ctx: Context = None) -> str:
         except Exception as exc:
             _log.warning("reindex_file: purge failed for %s: %s", resolved, exc)
             # continue — index_file_list still adds fresh chunks
-        return index_file_list([resolved], label="reindex_file",
-                               root_directory=str(Path(resolved).parent),
-                               indexer_user=_indexer_user_rf,
-                               force=True)  # bypass mtime skip — explicit reindex must always run
+        # R-069: stop between the purge and rebuild phases.
+        if _index_stop_event.is_set():
+            return {"stopped": True}
+        stats = index_file_list([resolved], label="reindex_file",
+                                    root_directory=str(Path(resolved).parent),
+                                    indexer_user=_indexer_user_rf,
+                                    force=True,  # bypass mtime skip -- explicit reindex must always run
+                                    stop_event=_index_stop_event)
+        if isinstance(stats, dict):
+            stats["stopped"] = bool(_index_stop_event.is_set())
+        _index_progress.update({"files_done": 1})
+        return stats
 
+    # R-053: run the blocking DB-writer handoff off the event loop so
+    # /health stays responsive while the embedding model loads.
+    import asyncio as _asyncio_r053
     try:
-        stats = _db_write(_job, timeout=900.0)
+        stats = await _asyncio_r053.to_thread(_db_write, _job, timeout=900.0)
     except TimeoutError as exc:
         return f"⏱️  reindex_file timed out for {resolved}: {exc}"
     except Exception as exc:
         return f"❌ reindex_file failed for {resolved}: {exc}"
+    finally:
+        _index_progress_end()
+
+    if isinstance(stats, dict) and stats.get("stopped"):
+        return (f"⏹  Re-indexing stopped by user for {resolved}\n"
+                f"   The file's old chunks were purged but not rebuilt \u2014 "
+                f"run reindex_file again to restore it.")
+
 
     chunks = 0
     try:
@@ -21408,6 +22461,98 @@ def reindex_file(filepath: str, ctx: Context = None) -> str:
 
     return (f"✅ Re-indexed {resolved}\n"
             f"   {chunks:,} chunk(s) now in ChromaDB for this file.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# R-056 (2026-10-08): index corruption protection — crash markers for
+# reindex_directory / reindex_all. (Backup-before-write was removed 2026-10-08:
+# the index is disposable and reindexable; disk space is not.)
+#
+# Every reindex writes <db>/.reindex_in_progress.json {"started_at", "dirs"} at
+# start and deletes it on success — a leftover marker means the run was
+# interrupted (crash/kill); check_ai_prowler_status reports it as a warning.
+#
+# reindex_all writes ONE marker for its whole run; the nested
+# reindex_directory calls it makes see _reindex_all_in_progress and reuse the
+# run-level marker dirs.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Set while reindex_all's directory loop runs.
+_reindex_all_in_progress = False
+# Dirs covered by the active reindex_all run (for the crash marker).
+_reindex_run_dirs = []
+
+
+# ==============================================================================
+# R-069 (2026-10-08): cooperative stop for indexing runs + progress reporting.
+#
+# _index_stop_event -- threading.Event. When set, index_path / reindex_file /
+#   reindex_directory / reindex_all finish the current file and then stop.
+#   Set by the cancel_indexing MCP tool, and on _db_write timeout (so an
+#   orphaned worker winds down instead of running unobserved). Every
+#   indexing run clears it at start.
+# _index_progress -- dict with keys running / current_file / files_done /
+#   files_total / phase, surfaced by the indexing_status MCP tool.
+# ==============================================================================
+_index_stop_event = threading.Event()
+_index_progress = {
+    "running": False,
+    "current_file": "",
+    "files_done": 0,
+    "files_total": 0,
+    "phase": "idle",
+}
+
+
+def _index_progress_begin(phase):
+    """R-069: mark a new indexing run started (clears any previous stop)."""
+    _index_stop_event.clear()
+    _index_progress.update({
+        "running": True, "current_file": "", "files_done": 0,
+        "files_total": 0, "phase": phase,
+    })
+
+
+def _index_progress_end():
+    """R-069: mark the indexing run finished."""
+    _index_progress.update({"running": False, "phase": "idle"})
+
+
+def _index_progress_file(i, total, filepath):
+    """R-069: progress_callback for index_directory per-file updates."""
+    _index_progress.update({
+        "files_done": i, "files_total": total,
+        "current_file": str(filepath or ""),
+    })
+
+
+def _purge_directory_chunks(resolved):
+    """R-056: purge one directory's chunks from the single index.
+
+    Extracted from reindex_directory's db-writer job so the job frame never
+    holds the ChromaDB client in a local.
+
+    """
+    client, embedding_func = _engine.get_chroma_client()
+    norm_dir = _normalize_path_for_match(resolved)
+    # Single physical collection now -- purge just this one,
+    # not a sweep across every collection.
+    coll = client.get_or_create_collection(
+        name=_engine.COLLECTION_NAME, embedding_function=embedding_func)
+    existing = coll.get(where={"source": {"$regex": ".*"}},
+                        include=["metadatas"])
+    ids_to_del = [
+        existing["ids"][i]
+        for i, meta in enumerate(existing.get("metadatas") or [])
+        if _normalize_path_for_match(
+            str(meta.get("source", ""))).startswith(norm_dir)
+    ]
+    if ids_to_del:
+        coll.delete(ids=ids_to_del)
+        _log.info("reindex_directory: purged %d chunks for %s",
+                  len(ids_to_del), resolved)
+    return len(ids_to_del)
+
 
 
 @mcp.tool()
@@ -21463,6 +22608,15 @@ def reindex_directory(directory: str, purge_first: bool = True,
     # "scope" chunk-metadata tag (wired into index_directory already).
     _indexer_user_rd = _user_rd
 
+
+    # R-069: a nested call from reindex_all must NOT clear a stop the
+    # user may have requested mid-run -- only a top-level call starts
+    # a fresh run.
+    _rd_nested = _reindex_all_in_progress
+    if not _rd_nested:
+        _index_progress_begin("rebuilding")
+    _index_progress.update({"current_file": resolved, "phase": "rebuilding"})
+
     try:
         import datetime as _dt6
         start = _dt6.datetime.now()
@@ -21470,38 +22624,55 @@ def reindex_directory(directory: str, purge_first: bool = True,
         # purge + re-index run together on the dedicated db-writer thread to
         # avoid the HNSW cross-thread EDEADLK that wedges the HTTP server.
         def _job():
-            if purge_first:
+              # R-056: crash marker on the db-writer thread while the index
+              # write lock is held. (Backup-before-write was removed 2026-10-08:
+              # the index is disposable and reindexable; disk space is not.)
+              _nested = _reindex_all_in_progress
+              _marker_dirs = list(_reindex_run_dirs) if _nested else [resolved]
+              with _engine._index_write_lock:
+                _engine.write_reindex_marker(_marker_dirs)
                 try:
-                    client, embedding_func = _engine.get_chroma_client()
-                    norm_dir = _normalize_path_for_match(resolved)
-                    # Single physical collection now -- purge just this one,
-                    # not a sweep across every collection.
-                    coll = client.get_or_create_collection(
-                        name=_engine.COLLECTION_NAME, embedding_function=embedding_func)
-                    existing = coll.get(where={"source": {"$regex": ".*"}},
-                                        include=["metadatas"])
-                    ids_to_del = [
-                        existing["ids"][i]
-                        for i, meta in enumerate(existing.get("metadatas") or [])
-                        if _normalize_path_for_match(
-                               str(meta.get("source",""))).startswith(norm_dir)
-                    ]
-                    if ids_to_del:
-                        coll.delete(ids=ids_to_del)
-                        _log.info(
-                            "reindex_directory: purged %d chunks for %s",
-                            len(ids_to_del), resolved)
-                except Exception as _pe:
-                    _log.warning("reindex_directory: purge step warning: %s", _pe)
-            with _capture_stdout() as buf:
-                _r = index_directory(resolved, indexer_user=_indexer_user_rd)
-            return _r, buf.getvalue()
+                    if purge_first:
+                        try:
+                            _purge_directory_chunks(resolved)
+                        except Exception as _pe:
+                            _log.warning("reindex_directory: purge step warning: %s", _pe)
+                    # R-069: stop between the purge and rebuild phases. The
+                    # R-056 crash marker stays, so the interrupted run is
+                    # reported until a reindex completes.
+                    if _index_stop_event.is_set():
+                        print("⏹  Stopped by user after purge — rebuild skipped.")
+                        return {"stopped": True}, ""
+                    with _capture_stdout() as buf:
+                        _r = index_directory(resolved, indexer_user=_indexer_user_rd,
+                                             stop_event=_index_stop_event,
+                                             progress_callback=_index_progress_file)
+                except Exception:
+                    # Rebuild failed — the index may be half-empty. The crash
+                    # marker stays (rewritten below) so the interrupted run is
+                    # reported until a reindex completes.
+                    _log.exception(
+                        "reindex_directory: rebuild failed for %s", resolved)
+                    _engine.write_reindex_marker(_marker_dirs)
+                    raise
+                if not _nested:
+                    _engine.clear_reindex_marker()
+                return _r, buf.getvalue()
 
         result, _out = _db_write(_job, timeout=1800.0)
         buf_value = _out
         elapsed = (_dt6.datetime.now() - start).total_seconds()
 
         output = (buf_value or "").strip()
+        # R-069: report a mid-run stop instead of a success message.
+        if isinstance(result, dict) and result.get("stopped"):
+            return (f"⏹  Reindex stopped by user for: {resolved}\n"
+                    f"   Chunks were purged but not rebuilt — run "
+                    f"reindex_directory again to rebuild the index.")
+        if _index_stop_event.is_set():
+            return (f"⏹  Reindex stopped by user for: {resolved}\n"
+                    f"   Files indexed before the stop are kept — run "
+                    f"reindex_directory again to finish.")
         if isinstance(result, dict):
             files   = result.get("files_indexed", "?")
             chunks  = result.get("chunks_added", "?")
@@ -21518,6 +22689,10 @@ def reindex_directory(directory: str, purge_first: bool = True,
     except Exception as _e:
         _log.error("reindex_directory error: %s", _e)
         return f"❌ Reindex failed: {_e}"
+    finally:
+        # R-069: nested calls leave progress to the outer reindex_all run.
+        if not _rd_nested:
+            _index_progress_end()
 
 
 @mcp.tool()
@@ -21564,28 +22739,67 @@ def reindex_all(purge_first: bool = True, ctx: Context = None) -> str:
     total_chunks = 0
     errors = []
 
-    for d in read_dirs:
-        try:
-            dir_result = reindex_directory(d, purge_first=purge_first, ctx=ctx)
-            results.append(f"  ✅ {d}")
-            # Parse counts from the returned string if available
-            for line in dir_result.splitlines():
-                if "Files indexed" in line:
-                    try:
-                        total_files += int(line.split(":")[-1].strip())
-                    except Exception:
-                        pass
-                if "Chunks created" in line:
-                    try:
-                        total_chunks += int(line.split(":")[-1].strip())
-                    except Exception:
-                        pass
-        except Exception as _e:
-            errors.append(f"  ❌ {d}: {_e}")
+    # R-056: one crash marker for the whole run, written on the db-writer
+    # thread while the index write lock is held (before any purge).
+    # (Backup-before-write was removed 2026-10-08.)
+    global _reindex_all_in_progress, _reindex_run_dirs
+    _reindex_all_in_progress = True
+    _reindex_run_dirs = list(read_dirs)
+
+    # R-069: fresh run -- clear any previous stop request, mark progress.
+    _index_progress_begin("rebuilding")
+
+    def _run_setup_job():
+        with _engine._index_write_lock:
+            _engine.write_reindex_marker(list(read_dirs))
+
+    try:
+        _db_write(_run_setup_job, timeout=600.0)
+        for d in read_dirs:
+            # R-069: stop between directories -- the current directory
+            # always finishes first.
+            if _index_stop_event.is_set():
+                results.append(f"  ⏹  {d} — skipped (stopped by user)")
+                break
+            try:
+                dir_result = reindex_directory(d, purge_first=purge_first, ctx=ctx)
+                results.append(f"  ✅ {d}")
+                # Parse counts from the returned string if available
+                for line in dir_result.splitlines():
+                    if "Files indexed" in line:
+                        try:
+                            total_files += int(line.split(":")[-1].strip())
+                        except Exception:
+                            pass
+                    if "Chunks created" in line:
+                        try:
+                            total_chunks += int(line.split(":")[-1].strip())
+                        except Exception:
+                            pass
+            except Exception as _e:
+                errors.append(f"  ❌ {d}: {_e}")
+        # The run completed (per-dir failures are collected in errors above) —
+        # remove the crash marker.
+        _engine.clear_reindex_marker()
+    except Exception as _run_e:
+        # The run itself aborted — the index may be half-empty. The crash
+        # marker stays so the interrupted run is reported.
+        _log.exception("reindex_all: run aborted")
+        errors.append(f"  ❌ run aborted: {_run_e} — index may be incomplete, re-run to rebuild")
+    finally:
+        _reindex_all_in_progress = False
+        _reindex_run_dirs = []
+
+    _index_progress_end()
+    _ra_stopped = _index_stop_event.is_set()
 
     elapsed = (_dt7.datetime.now() - start).total_seconds()
     lines = [
-        f"✅ Full reindex complete — {len(read_dirs)} director{'y' if len(read_dirs)==1 else 'ies'}",
+        (f"⏹  Full reindex stopped by user — "
+         f"{sum(1 for r in results if r.startswith('  ✅'))} of {len(read_dirs)} "
+         f"director{'y' if len(read_dirs)==1 else 'ies'} processed"
+         if _ra_stopped else
+         f"✅ Full reindex complete — {len(read_dirs)} director{'y' if len(read_dirs)==1 else 'ies'}"),
         f"   Total files  : {total_files}",
         f"   Total chunks : {total_chunks}",
         f"   Time         : {elapsed:.1f}s",
@@ -21597,6 +22811,61 @@ def reindex_all(purge_first: bool = True, ctx: Context = None) -> str:
         lines += ["", "Errors:"] + errors
 
     return "\n".join(lines)
+
+
+
+
+# ==============================================================================
+# R-069 (2026-10-08) -- indexing stop / status tools
+# ==============================================================================
+
+@mcp.tool()
+def cancel_indexing(ctx: Context = None) -> str:
+    """
+    Request a running index/reindex operation to stop gracefully.
+
+    Sets the shared stop flag -- the active run finishes the current file
+    and then stops (index_path, reindex_file, reindex_directory and
+    reindex_all all honour it). Safe to call when nothing is running.
+
+    Voice examples:
+        "Stop indexing"
+        "Cancel the reindex"
+    """
+    _telemetry_increment_tool_count("cancel_indexing")
+    _index_stop_event.set()
+    p = _index_progress
+    if p.get("running"):
+        cur = p.get("current_file") or "?"
+        total = p.get("files_total") or 0
+        done = p.get("files_done") or 0
+        return (f"⏹  Stop requested — the run will finish the current file and stop.\n"
+                f"   Phase: {p.get('phase')} | Current file: {cur} "
+                f"({done}/{total if total else '?'})")
+    return "⏹  Stop requested — no indexing run is currently active."
+
+
+@mcp.tool()
+def indexing_status(ctx: Context = None) -> str:
+    """
+    Report whether an index/reindex operation is currently running and how
+    far along it is.
+
+    Voice examples:
+        "Is the indexing still running?"
+        "How far along is the reindex?"
+    """
+    _telemetry_increment_tool_count("indexing_status")
+    p = _index_progress
+    if not p.get("running"):
+        return "💤 Indexing is idle — no index/reindex operation is running."
+    total = p.get("files_total") or 0
+    done = p.get("files_done") or 0
+    pct = f" ({100 * done // total}%)" if total else ""
+    return (f"🔄 Indexing is RUNNING\n"
+            f"   Phase       : {p.get('phase')}\n"
+            f"   Current file: {p.get('current_file') or '—'}\n"
+            f"   Files       : {done}/{total if total else '?'}{pct}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -23786,6 +25055,14 @@ def _run_server_mode(port: int, token: str,
                         # @mcp.tool(), or its drag handler would get
                         # "Unknown tool" the first time anyone tried it.
                         "reorder_route_stop",
+                        # pin_route_stop (2026-10-05) — Route tab "Fix stop #"
+                        # pin toggle calls this via pwa-api; must be in this
+                        # allow-list, not just exist as @mcp.tool().
+                          "pin_route_stop",
+                          # pause_job (2026-10-05) — the Route tab ⏸️ toggle
+                          # calls this via pwa-api; must be in this
+                          # allow-list, not just exist as @mcp.tool().
+                          "pause_job",
                         # replan_route_day (2026-09-21) — the Route tab re-plans the
                         # day (same order, fresh times) after a job's schedule is
                         # edited from that page. Same gate-is-separate-from-tool-
@@ -23851,7 +25128,11 @@ def _run_server_mode(port: int, token: str,
                         # get_route_start_options only ever returns another
                         # user's home address to owner/manager/staff callers.
                         "start_ai_routing", "poll_ai_routing",
-                        "get_route_start_options",
+                          "get_route_start_options",
+                          # get_approved_route_stops (2026-10-06) -- Jobs/Board
+                          # job cards show the approved scheduled time +
+                          # drive info from this read-only tool via pwa-api.
+                          "get_approved_route_stops",
                         # Working Days setting (2026-10-02): read-only, every
                         # role — field crew can't read Settings, but their
                         # Calendar must use the same working days.
@@ -23863,6 +25144,20 @@ def _run_server_mode(port: int, token: str,
                         # all four refuse in personal mode.
                         "start_cli_signin", "submit_cli_signin_code",
                         "cancel_cli_signin", "save_my_cli_token",
+                        # cancel_indexing / indexing_status (R-069, 2026-10-08) -- the
+                        # Jobs app's Reindex screen Stop button and its progress readout
+                        # call these via pwa-api; must be in this allow-list, not just
+                        # exist as @mcp.tool().
+                        "cancel_indexing", "indexing_status",
+                        # grant_access / revoke_access were here (R-071) and are
+                        # deliberately REMOVED (2026-10-09, David): access-only
+                        # folders are personal-mode only. Nothing in the Jobs app
+                        # called them.
+                        # rename_customer (2026-10-08) -- Jobs PWA calls via pwa-api
+                        # (jobs/index.html:8418); registered @mcp.tool() but was missing
+                        # from this allow-list: 400 "Unknown tool". Same gap class as
+                        # delete_customer (R-049).
+                        "rename_customer",
                     }
 
                     _srv_pa_g = globals()
@@ -25612,6 +26907,14 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                         # reorder_route_stop (2026-09-16) — see the
                         # matching comment on _srv_pa_allowed above.
                         "reorder_route_stop",
+                        # pin_route_stop (2026-10-05) — Route tab "Fix stop #"
+                        # pin toggle calls this via pwa-api; must be in this
+                        # allow-list, not just exist as @mcp.tool().
+                          "pin_route_stop",
+                          # pause_job (2026-10-05) — the Route tab ⏸️ toggle
+                          # calls this via pwa-api; must be in this
+                          # allow-list, not just exist as @mcp.tool().
+                          "pause_job",
                         # replan_route_day (2026-09-21) — the Route tab re-plans the
                         # day (same order, fresh times) after a job's schedule is
                         # edited from that page. Same gate-is-separate-from-tool-
@@ -25661,7 +26964,11 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                         # Personal-mode only by design, same as every other
                         # agentic-task-queue tool (create_analysis_task
                         # etc.) — this IS the personal-mode allowlist, so
-                        # it's simply added here directly.
+                          "get_route_start_options",
+                          # get_approved_route_stops (2026-10-06) -- Jobs/Board
+                          # job cards show the approved scheduled time +
+                          # drive info from this read-only tool via pwa-api.
+                          "get_approved_route_stops",
                         "start_ai_routing", "poll_ai_routing",
                         # get_route_start_options (2026-09-19) — feeds the AI
                         # Route start/end picker's "home address" option.
@@ -25669,6 +26976,17 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                         # Working Days setting (2026-10-02) — the Calendar's
                         # working days (multi-day jobs, overrun carry-over).
                         "get_working_days",
+                        # cancel_indexing / indexing_status (R-069, 2026-10-08) -- see
+                        # the matching comment on _srv_pa_allowed above.
+                        "cancel_indexing", "indexing_status",
+                        # grant_access / revoke_access removed (2026-10-09): the
+                        # Jobs app never called them; the Remote Control PWA
+                        # uses them through /remote-api instead.
+                        # rename_customer (2026-10-08) -- Jobs PWA calls via pwa-api
+                        # (jobs/index.html:8418); registered @mcp.tool() but was missing
+                        # from this allow-list: 400 "Unknown tool". Same gap class as
+                        # delete_customer (R-049).
+                        "rename_customer",
                     }
 
                     _g = globals()
@@ -25999,16 +27317,24 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                             _log.info("REMOTE: return (no response sent) at line %d", 20363)
                             return
 
-                        # Path must be inside a tracked readable directory
+                        # Path must be inside a tracked readable directory — or,
+                        # 2026-10-10 (David), an access-only folder (the Remote
+                        # Files tab lists them too). access_allowlist_load() is
+                        # [] on a server, and /remote/ is personal-only anyway.
+                        # Folder-boundary check (was a text prefix: ...\proj
+                        # matched ...\project2).
                         _abs_dl = _os5.path.abspath(_dl_path)
                         try:
                             from rag_preprocessor import load_auto_update_list as _lau5
-                            _readable = _lau5() or []
+                            _readable = list(_lau5() or [])
                         except Exception:
                             _readable = []
+                        try:
+                            _readable += list(access_allowlist_load() or [])
+                        except Exception:
+                            pass
                         _in_tracked = any(
-                            _abs_dl.startswith(_os5.path.abspath(str(d)))
-                            for d in _readable
+                            _path_is_inside(_abs_dl, str(d)) for d in _readable
                         )
                         if not _in_tracked:
                             await send({"type": "http.response.start", "status": 403,
@@ -26131,6 +27457,8 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                                 "record_learning",
                                 "update_learning",
                                 "delete_learning",
+                                # 2026-10-11: Learn tab's Edit form fills from it
+                                "get_learning",
                                 "get_learning_stats",
                                 "get_database_stats",
                                 # Permissions management
@@ -26138,6 +27466,11 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                                 "list_writable_directories",
                                 "grant_write_access",
                                 "revoke_write_access",
+                                # Access-only folders (2026-10-09) — Permissions
+                                # screen's Access-Only Folders section. The Remote
+                                # app is personal-mode only, and so are these.
+                                "grant_access",
+                                "revoke_access",
                                 # Task queue management
                                 "list_analysis_tasks",
                                 "get_pending_analysis_tasks",
@@ -26279,11 +27612,18 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                             # Save file + index in thread executor (blocking ops)
                             _safe_name = _os7.path.basename(_up_fname) or "upload"
                             _dest5 = _os7.path.join(_up_dir_abs, _safe_name)
+                            # 2026-10-10 (David): uploads into an ACCESS-ONLY
+                            # folder (not inside any tracked folder) are saved but
+                            # never indexed — indexing would also have started
+                            # tracking that folder, the opposite of access-only.
+                            _up_index = _upload_should_index(_up_dir_abs)
                             import asyncio as _aio7, functools as _ft7
                             def _do_save_and_index():
                                 _os7.makedirs(_up_dir_abs, exist_ok=True)
                                 with open(_dest5, "wb") as _fout5:
                                     _fout5.write(_up_file_data)
+                                if not _up_index:
+                                    return
                                 try:
                                     index_path(directory=_up_dir_abs, recursive=False)
                                 except Exception:
@@ -26291,7 +27631,8 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                             _loop7 = _aio7.get_event_loop()
                             await _loop7.run_in_executor(None, _do_save_and_index)
                             _ub = _jup5.dumps({"ok": True, "filename": _safe_name,
-                                               "size": len(_up_file_data)}).encode()
+                                               "size": len(_up_file_data),
+                                               "indexed": bool(_up_index)}).encode()
                             await send({"type":"http.response.start","status":200,
                                         "headers":[[b"content-type",b"application/json"],
                                                    [b"content-length",str(len(_ub)).encode()]]})
@@ -26360,6 +27701,18 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
                     except Exception:
                         pass
                     return
+            # ── /health — unauthenticated liveness probe (R-054) ──────────
+            # The GUI's _http_health_check() polls GET /health with NO
+            # Authorization header. Health checks must never require auth
+            # (standard pattern). This bypass MUST come before the Bearer
+            # check below, or the 401 makes the GUI LED falsely show "Stopped".
+            if path == "/health" or path == "/health/":
+                _hb = b'{"status":"ok"}'
+                await send({"type": "http.response.start", "status": 200,
+                            "headers": [[b"content-type", b"application/json"],
+                                        [b"content-length", str(len(_hb)).encode()]]})
+                await send({"type": "http.response.body", "body": _hb, "more_body": False})
+                return
             headers = {k.lower(): v for k, v in scope.get("headers", [])}
             auth_raw = headers.get(b"authorization", b"")
             auth = auth_raw.decode("utf-8", errors="ignore")
@@ -26518,6 +27871,17 @@ def _run_http(port: int, token: str, public_base: str = "https://mobile.dvavro-a
             _uv_lg.setLevel(logging.DEBUG)
             _uv_lg.propagate = True   # propagate → root → our FileHandler
     _log.info("Uvicorn loggers wired to our file handler — debug logging active during requests")
+
+    # Startup cleanup (2026-10-08): purge background-job spool files older
+    # than 2 days (David: no legitimate script run takes 2 days).
+    # Best-effort - failure must NEVER block server startup.
+    try:
+        from task_queue_automation import purge_old_jobs as _startup_purge_jobs
+        _n_purged = _startup_purge_jobs(max_age_days=2)
+        if _n_purged:
+            _log.info("Startup job cleanup: removed %d old background job(s)", _n_purged)
+    except Exception as _purge_exc:
+        _log.warning("Startup job cleanup failed (non-fatal): %s", _purge_exc)
 
     uvicorn.run(app, host='127.0.0.1', port=port,
                 proxy_headers=True,

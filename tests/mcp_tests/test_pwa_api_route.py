@@ -192,7 +192,10 @@ _FAKE_TOOLS = {
 class TestPwaApiHandler:
 
     def _run(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+        # asyncio.run() — get_event_loop().run_until_complete() raises
+        # RuntimeError on Python 3.12+ when no loop is running in this
+        # thread (deprecated since 3.10). asyncio.run() works everywhere.
+        return asyncio.run(coro)
 
     def test_valid_tool_returns_200(self):
         rec = _Recorder()

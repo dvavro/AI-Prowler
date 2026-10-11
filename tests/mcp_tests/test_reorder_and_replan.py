@@ -272,7 +272,9 @@ def test_the_tool_uses_the_replan_and_refreshes_the_saved_phone_link(tmp_path, m
 
     out = mcp_mod.reorder_route_stop(str(_stop_id(db, c)), 1, ctx=None)
     assert out.startswith("✅ Moved stop and re-planned"), out
-    assert "📍 Phone route link saved" in out
+    # Route links are NOT published on reorder - only on approval (David's rule).
+    # The replan clears any stale URLs via db_write_route_stops.
+    assert "📍 Phone route link saved" not in out
     after = sqlite3.connect(db).execute("SELECT route_map_url FROM jobs WHERE job_id = ?", (a,)).fetchone()[0]
-    assert after and after != before                        # the link follows the new order
+    assert not after  # URL cleared, not refreshed, until approval
     assert _order(db) == [c, a, b]

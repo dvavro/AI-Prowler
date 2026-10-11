@@ -1597,52 +1597,100 @@ def rotate_audit_log(max_backups: int = 2) -> None:
 
 # ── Jobs directory purge (v9.0.0) ───────────────────────────────────────────
 
-def purge_old_jobs(max_age_days: int = 3) -> None:
+def purge_old_jobs(max_age_days: int = 2) -> int:
     """Delete job files from ~/.ai-prowler/jobs/ older than max_age_days.
 
-    Each job produces two files: <job_id>.json (manifest) and <job_id>.log
-    (stdout/stderr). Both are removed together whenever the manifest is older
-    than the retention window. Only completed/failed/timed-out jobs are
-    purged — any manifest whose status is still "running" is left alone so a
-    slow in-progress job is never interrupted by cleanup.
+    Each job produces three files: <job_id>.json (manifest), <job_id>.log
+    (stdout/stderr), and <job_id>_wrapper.py (launcher). All three are removed
+    together whenever the job is older than the retention window.
 
-    Called from run_script_start() so cleanup happens automatically on each
-    new job launch. Best-effort — never raises, never blocks.
+    Retention rule (2026-10-08 policy — David: no legitimate script run takes
+    2 days; anything older than 2 days gets deleted, no exceptions):
+      - Jobs older than `max_age_days` (default 2, by manifest started_at
+        falling back to file mtime) are deleted.
+      - A job whose manifest still says "running" gets a PID liveness check:
+        PID dead/missing → treated as finished, deleted. PID alive → killed
+        via taskkill /F /T (whole process tree), manifest marked "killed",
+        then deleted.
+
+    Returns the number of jobs deleted. Never raises.
+
+    Called from run_script_start() on every new job launch AND from the MCP
+    server startup path, so cleanup happens automatically.
     """
+    deleted = 0
     try:
         import time as _time
+        import subprocess as _sp
         jobs_dir = AI_PROWLER_HOME / "jobs"
         if not jobs_dir.exists():
-            return
+            return 0
         cutoff = _time.time() - (max_age_days * 86400)
         import json as _j
-        for mani_path in jobs_dir.glob("*.json"):
+
+        def _pid_alive_win(pid):
+            """True if a process with this PID exists (Windows, no psutil)."""
+            try:
+                out = _sp.run(
+                    ["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+                    capture_output=True, text=True, timeout=10,
+                    creationflags=0x08000000).stdout
+                return f"\"{pid}\"" in out
+            except Exception:
+                return False
+
+        def _kill_tree_win(pid):
+            """Kill a process and its whole tree on Windows."""
+            try:
+                _sp.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                        capture_output=True, text=True, timeout=30,
+                        creationflags=0x08000000)
+            except Exception:
+                pass
+
+        def _delete_triplet(mani_path):
+            """Delete manifest + log + wrapper. Returns True on success."""
+            ok = True
+            for p in (mani_path,
+                      mani_path.with_suffix(".log"),
+                      mani_path.with_name(mani_path.stem + "_wrapper.py")):
+                try:
+                    p.unlink(missing_ok=True)
+                except Exception:
+                    ok = False
+            return ok
+
+        for mani_path in jobs_dir.glob("job_*.json"):
             try:
                 if mani_path.stat().st_mtime >= cutoff:
                     continue  # Recent enough — keep it
-                # Leave running jobs alone
+                # Check running status with PID liveness
+                is_running = False
+                pid = None
                 try:
                     mani = _j.loads(mani_path.read_text(encoding="utf-8"))
-                    if mani.get("status") == "running":
-                        continue
+                    is_running = (mani.get("status") == "running")
+                    pid = mani.get("pid")
                 except Exception:
                     pass  # Unreadable manifest — purge it anyway
-                # Remove manifest, matching log, AND matching wrapper script
-                # together. Found 2026-08-23: this only ever deleted the
-                # .json/.log pair — the third file every job produces
-                # (<job_id>_wrapper.py, same naming convention
-                # cleanup_job_logs() and run_script_start() both already
-                # use) was never touched, so it accumulated forever even
-                # though this function has been running successfully the
-                # whole time. Confirmed from the real jobs directory: every
-                # job older than a few days had already lost its .json/.log
-                # pair here, while its _wrapper.py sat untouched back to
-                # the earliest days AI-Prowler had been running.
-                mani_path.unlink(missing_ok=True)
-                log_path = mani_path.with_suffix(".log")
-                log_path.unlink(missing_ok=True)
-                wrapper_path = mani_path.with_name(mani_path.stem + "_wrapper.py")
-                wrapper_path.unlink(missing_ok=True)
+                if is_running:
+                    alive = _pid_alive_win(pid) if pid else False
+                    if alive:
+                        # Kill it — no legitimate run takes 2 days. Mark
+                        # killed in manifest before deleting (best-effort).
+                        _kill_tree_win(pid)
+                        try:
+                            m = _j.loads(mani_path.read_text(encoding="utf-8"))
+                            m["status"] = "killed"
+                            from datetime import datetime as _dtm
+                            m["finished_at"] = _dtm.now().isoformat()
+                            mani_path.write_text(_j.dumps(m, indent=2),
+                                                 encoding="utf-8")
+                        except Exception:
+                            pass
+                    # Dead or just killed — safe to delete
+                if _delete_triplet(mani_path):
+                    deleted += 1
             except Exception:
                 pass
 
@@ -1670,6 +1718,7 @@ def purge_old_jobs(max_age_days: int = 3) -> None:
                 pass
     except Exception:
         pass
+    return deleted
 
 
 def run_queue_now(mcp_config_path: str, allowed_tools: str,

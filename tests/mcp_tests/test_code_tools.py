@@ -164,12 +164,38 @@ def code_tree(isolated_env):
 
 
 @pytest.fixture
-def empty_allowlist(isolated_env):
-    """Yield an `isolated_env` whose allowlist has been cleared on disk."""
+def empty_allowlist(isolated_env, mcp_mod, monkeypatch):
+    """Yield an `isolated_env` whose allowlist has been cleared on disk.
+
+    R-071 (2026-10-08): _is_path_under_tracked_roots also consults the
+    access-only allowlist (~/.rag_access_only_dirs.json), which isolated_env
+    does NOT redirect — on the developer machine it holds real entries and
+    would keep the "empty" branch unreachable. Point it at an empty temp
+    list so this fixture really means "nothing is allowlisted anywhere".
+    """
     isolated_env.auto_update.write_text(
         json.dumps({"directories": []}), encoding="utf-8"
     )
+    empty_access_only = isolated_env.tmp_path / "access_only.json"
+    empty_access_only.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(mcp_mod, "_ACCESS_ONLY_DIRS_FILE", empty_access_only)
     return isolated_env
+
+
+@pytest.fixture(autouse=True)
+def _no_real_access_only_dirs(isolated_env, mcp_mod, monkeypatch):
+    """Neutralize the real access-only allowlist for every test in this file.
+
+    R-071 (2026-10-08): grep_documents / _is_path_under_tracked_roots also
+    consult the real ~/.rag_access_only_dirs.json, which on the developer
+    machine contains the repo itself - this very test file would otherwise
+    leak into grep results (e.g. "README.md", "secret.py" as false hits).
+    These tests exercise the tracked allowlist only, so point the
+    access-only list at an empty temp file.
+    """
+    empty_access_only = isolated_env.tmp_path / "access_only.json"
+    empty_access_only.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(mcp_mod, "_ACCESS_ONLY_DIRS_FILE", empty_access_only)
 
 
 # ╔════════════════════════════════════════════════════════════════════════════╗

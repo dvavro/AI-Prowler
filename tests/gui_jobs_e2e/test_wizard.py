@@ -10,7 +10,10 @@ from playwright.sync_api import expect
 
 from app_wizard import Wizard
 
-DAY_FLOW = ["Add a customer", "Record a quote", "Add a job", "Build the route",
+# Step 1 of the Getting-started wizard (WIZ_STEPS[0].list in jobs/index.html,
+# 2026-10-08: QuickBooks import added as the first bullet).
+DAY_FLOW = ["Import from QuickBooks (fastest start)", "Add a customer",
+            "Record a quote", "Add a job", "Build the route",
             "Clock in & out", "Add photos", "Invoice", "Send the receipt"]
 
 

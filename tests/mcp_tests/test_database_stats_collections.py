@@ -28,6 +28,7 @@ Test IDs
 """
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
 
@@ -93,7 +94,7 @@ def test_ds02_stats_and_status_agree(mcp_env):
     mcp_env.mcp.index_path(directory=str(mcp_env.sample_root))
 
     stats  = mcp_env.mcp.get_database_stats()
-    status = mcp_env.mcp.check_ai_prowler_status()
+    status = asyncio.run(mcp_env.mcp.check_ai_prowler_status())
 
     stats_count  = _total_chunks_from_stats(stats)
     status_count = _chunk_count_from_status(status)

@@ -25,7 +25,8 @@ for p in (str(SHARED), str(HERE)):
 
 from api import get_app_url, get_token, http, local_api_origin, origin_of   # noqa: E402
 from remote_safety import (RemoteGuard, SANDBOX, ZTEST, ZTEST_FILE_PREFIX,  # noqa: E402
-                           canned_reply, is_sandbox)
+                           canned_reply, is_sandbox, AO_SANDBOX, is_ao_sandbox,
+                           is_ao_rules_path, parse_tracked_sections)
 
 RUN_DIR = Path(os.environ.get("E2E_RUN_DIR") or
                HERE / "artifacts" / _dt.datetime.now().strftime("%Y%m%d_%H%M%S"))
@@ -162,6 +163,47 @@ def sweep(api: RemoteApi, why: str) -> dict:
     return n
 
 
+def tracked_paths(api: RemoteApi) -> list[str]:
+    """The INDEXED (tracked) folders — not the access-only section."""
+    return parse_tracked_sections(api.text("list_tracked_directories"))["tracked"]
+
+
+def access_only_paths(api: RemoteApi) -> list[str]:
+    return parse_tracked_sections(api.text("list_tracked_directories"))["access_only"]
+
+
+def ao_writable(api: RemoteApi) -> bool:
+    """Is the access-only test folder itself on the writable list ([W] line)?"""
+    for line in api.text("list_writable_directories").splitlines():
+        if "[W]" in line and is_ao_sandbox(line.split("[W]", 1)[1].strip()):
+            return True
+    return False
+
+
+def ao_cleanup(api: RemoteApi) -> str:
+    """Take the access-only test folder off the list and delete it (its only
+    files are ZTEST_E2E_*). Returns 'clean' or what was left."""
+    # the test folder, anything inside it, and any ZTEST path in the sandbox
+    for p in access_only_paths(api):
+        if is_ao_rules_path(p):
+            api.call("revoke_access", {"directory": p}, source="cleanup")
+    if ao_writable(api):
+        api.call("revoke_write_access", {"directory": str(AO_SANDBOX)}, source="cleanup")
+    if AO_SANDBOX.exists():
+        import shutil
+        for f in AO_SANDBOX.iterdir():
+            if f.name.startswith(ZTEST_FILE_PREFIX):
+                shutil.rmtree(f) if f.is_dir() else f.unlink()
+        try:
+            AO_SANDBOX.rmdir()
+        except OSError:
+            pass
+    left = [p for p in access_only_paths(api) if is_ao_rules_path(p)]
+    if ao_writable(api):
+        left.append("(still writable)")
+    return "clean" if not left and not AO_SANDBOX.exists() else f"LEFT: {left or AO_SANDBOX}"
+
+
 def leftovers(api: RemoteApi) -> list[str]:
     left = [f"learning {i}" for i in _ztest_learning_ids(api)]
     left += [f"task {i}" for i in _ztest_task_ids(api)]
@@ -252,10 +294,10 @@ def _session_preflight_and_cleanup(rapi, token, remote_url):
     if st != 200:
         pytest.exit(f"The personal Bearer Token isn't accepted (/pwa-verify HTTP {st}).", returncode=4)
     SANDBOX.mkdir(parents=True, exist_ok=True)
-    tracked = rapi.text("list_tracked_directories").lower()
     sb = str(SANDBOX).lower()
-    if not any(sb.startswith(line.strip(" 📁📄0123456789.").strip().lower())
-               for line in tracked.splitlines() if ":\\" in line):
+    # 2026-10-09: lines carry a [W]/[R] badge since R-071 ("1. [W] 📁 C:\…"),
+    # and access-only folders follow in their own section — use indexed paths only.
+    if not any(sb.startswith(p.lower()) for p in tracked_paths(rapi)):
         pytest.exit(f"The sandbox {SANDBOX} isn't inside a tracked folder, so the Remote PWA can't "
                     "show it. Track its parent folder first.", returncode=4)
     STATE["sandbox_was_writable"] = rapi.sandbox_writable()
@@ -274,6 +316,12 @@ def _session_preflight_and_cleanup(rapi, token, remote_url):
                       {"directory": str(SANDBOX)}, source="cleanup")
     except Exception as e:
         _log(f"could not restore sandbox write setting: {e}")
+    # the access-only test folder must not stay on the list (2026-10-09)
+    try:
+        STATE["ao_left"] = ao_cleanup(rapi)
+    except Exception as e:
+        STATE["ao_left"] = f"could not verify: {e}"
+        _log(f"access-only cleanup failed: {e}")
     if KEEP_DATA:
         STATE["cleanup"], STATE["left"] = "SKIPPED (--keep-data)", leftovers(rapi)
         return
@@ -405,7 +453,10 @@ def pytest_sessionfinish(session, exitstatus):
              f"Tests: {passed} passed, {len(failed)} failed, {skipped} skipped",
              f"Cleanup: {STATE['cleanup']}",
              "" if left is None else ("Cleanup: 0 ZTEST items left ✅" if left == [] else
-                                      f"Cleanup: {len(left)} ZTEST item(s) LEFT ❌: " + "; ".join(left))]
+                                      f"Cleanup: {len(left)} ZTEST item(s) LEFT ❌: " + "; ".join(left)),
+             "" if STATE.get("ao_left") is None else
+             (f"Access-only test folder: {STATE['ao_left']} "
+              + ("✅" if STATE["ao_left"] == "clean" else "❌"))]
     if STATE["preflight"] != "ok":
         lines.insert(2, f"NO TESTS RAN (pytest exit code {int(exitstatus)}) — see pytest_output.txt")
     if failed:

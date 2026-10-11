@@ -164,11 +164,12 @@ def test_personal_mode_builds_route_and_persists_stops(personal_env, monkeypatch
     assert len(rows) == 2
     assert {r["job_id"] for r in rows} == {j1, j2}
 
-    # Route URL persisted back onto each job row too.
+    # Route URLs are NOT published on build - only on approval (David's rule).
+    # build_daily_route clears any stale URLs via db_write_route_stops.
     conn = sqlite3.connect(personal_env)
     urls = conn.execute("SELECT route_map_url FROM jobs WHERE job_id IN (?, ?)", (j1, j2)).fetchall()
     conn.close()
-    assert all(u[0] for u in urls)
+    assert all(not u[0] for u in urls)
 
 
 def test_personal_mode_crew_filter_only_includes_matching_jobs(personal_env, monkeypatch, mcp_mod):

@@ -3512,7 +3512,120 @@ def build_scope_resolver(users_json_path: str = None) -> "callable | None":
         return None
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# R-056 (2026-10-08): index corruption protection.
+#
+# On 2026-10-08 David's ChromaDB index was found corrupted, which killed the
+# MCP server outright. These primitives are the preventive layer:
+#   • IndexCorruptError — dedicated exception for a damaged on-disk index.
+#   • check_chroma_db_integrity() — read-only PRAGMA quick_check gate called
+#     from get_chroma_client() once per process, right after the client is
+#     constructed. Raises IndexCorruptError instead of handing out a client
+#     backed by a corrupt SQLite store.
+#   • reindex crash-marker helpers — reindex_directory / reindex_all record
+#     {"started_at", "dirs"} in <db>/.reindex_in_progress.json while they run
+#     and delete it on success, so an interrupted run is detectable later.
+# ══════════════════════════════════════════════════════════════════════════════
+
+class IndexCorruptError(Exception):
+    """The ChromaDB SQLite store failed its integrity check.
+
+    The on-disk index is damaged (the 2026-10-08 incident crashed the whole
+    MCP server this way). Callers must let this propagate — never swallow it
+    into a generic error — so check_ai_prowler_status can report the specific
+      recovery path (reindex_all).
+    """
+
+
+# Explicit once-per-process guard for the integrity gate. get_chroma_client()
+# is cached so the check naturally runs once, but the flag keeps that true
+# even if the cache is invalidated and rebuilt later in the same process, and
+# lets tests force a re-check.
+_chroma_integrity_check_done = False
+
+
+def sqlite_quick_check_ok(sqlite_path):
+    """Run PRAGMA quick_check on a SQLite file, read-only. Never raises.
+
+    Returns True when the file is healthy — or when it doesn't exist (fresh
+    install: nothing to check). Returns False on any failure.
+    """
+    try:
+        if not os.path.exists(sqlite_path):
+            return True
+        import sqlite3 as _sqlite3_qc
+        # Forward slashes: the URI form needs them on Windows ("C:/...").
+        uri = "file:" + str(sqlite_path).replace("\\", "/") + "?mode=ro"
+        conn = _sqlite3_qc.connect(uri, uri=True, timeout=5.0)
+        try:
+            row = conn.execute("PRAGMA quick_check").fetchone()
+        finally:
+            conn.close()
+        return bool(row) and str(row[0]).strip().lower() == "ok"
+    except Exception:
+        return False
+
+
+def check_chroma_db_integrity(db_path=None):
+    """R-056 startup integrity gate — raises IndexCorruptError on corruption.
+
+    Opens <db_path>/chroma.sqlite3 read-only (stdlib sqlite3,
+    file:<path>?mode=ro) and runs PRAGMA quick_check. Fast (<1s) and once per
+    process. A missing chroma.sqlite3 (fresh install) passes silently.
+    """
+    global _chroma_integrity_check_done
+    if _chroma_integrity_check_done:
+        return
+    sqlite_file = os.path.join(db_path or CHROMA_DB_PATH, "chroma.sqlite3")
+    if not os.path.exists(sqlite_file):
+        _chroma_integrity_check_done = True
+        return
+    if not sqlite_quick_check_ok(sqlite_file):
+        raise IndexCorruptError(
+            "ChromaDB SQLite store failed PRAGMA quick_check: "
+            f"{sqlite_file}. The on-disk index is damaged. Rebuild it with "
+            "reindex_all(purge_first=True).")
+    _chroma_integrity_check_done = True
+
+
+def reindex_marker_path(db_path=None):
+    """R-056: path of the crash-marker file inside the index directory."""
+    return os.path.join(db_path or CHROMA_DB_PATH, ".reindex_in_progress.json")
+
+
+def read_reindex_marker(db_path=None):
+    """R-056: return the crash-marker dict, or None when no marker exists."""
+    try:
+        with open(reindex_marker_path(db_path), "r", encoding="utf-8") as _fh:
+            _data = json.load(_fh)
+        return _data if isinstance(_data, dict) else None
+    except Exception:
+        return None
+
+
+def write_reindex_marker(dirs, db_path=None):
+    """R-056: record that a reindex started. Best-effort — never raises."""
+    try:
+        _payload = {
+            "started_at": datetime.now().isoformat(timespec="seconds"),
+            "dirs": list(dirs or []),
+        }
+        with open(reindex_marker_path(db_path), "w", encoding="utf-8") as _fh:
+            json.dump(_payload, _fh)
+    except Exception:
+        pass
+
+
+def clear_reindex_marker(db_path=None):
+    """R-056: remove the crash marker after a successful reindex. Best-effort."""
+    try:
+        os.remove(reindex_marker_path(db_path))
+    except Exception:
+        pass
+
+
 def get_chroma_client():
+
     """
     Initialize ChromaDB client with the sentence-transformer embedding model.
 
@@ -3569,6 +3682,12 @@ def get_chroma_client():
         print(f"🔧 Initializing ChromaDB at {CHROMA_DB_PATH}...")
 
     client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
+
+    # R-056: integrity gate — refuse to serve a client backed by a corrupt
+    # SQLite store. Raises IndexCorruptError (never swallowed here — see
+    # check_ai_prowler_status's dedicated handler). Once per process.
+    check_chroma_db_integrity()
+
 
     device = get_best_embedding_device()
 
@@ -4285,7 +4404,7 @@ def index_email_archive(filepath: str,
 
 def index_directory(directory: str, recursive: bool = True, quiet: bool = False,
                     collection_resolver=None, indexer_user=None, purge_gate=None,
-                    track: bool = True):
+                    track: bool = True, stop_event=None, progress_callback=None):
     """
     Index all files in a directory
 
@@ -4299,6 +4418,12 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False,
         indexer_user: Optional user dict for ownership stamping (v7.0.0).
         purge_gate: Optional callable(existing_metas)->bool to gate chunk purges
             by ownership (v7.0.0). None = purge all stale chunks freely.
+        stop_event: Optional threading.Event — when set, finish the current
+            file, then stop (checked at the top of the per-file loop and
+            inside the per-file batch-add loop). R-069.
+        progress_callback: Optional callable(i, total, filepath) invoked per
+            file before it is processed (lets callers surface live progress).
+            R-069.
     """
     if not quiet:
         print(f"\n{'='*60}")
@@ -4385,7 +4510,22 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False,
     skipped_files = 0
     total_words = 0
     
+    _stopped_d = False
     for i, filepath in enumerate(all_files, 1):
+        # R-069: cooperative stop — finish the current file, then stop.
+        # Checked at the top of the per-file loop so the in-progress file
+        # always completes.
+        if stop_event and stop_event.is_set():
+            _stopped_d = True
+            print(f"\n⏹  Stopped by user at file {i}/{len(all_files)} — "
+                  f"{processed_files} file(s) indexed, "
+                  f"{skipped_files} skipped.\n")
+            break
+        if progress_callback:
+            try:
+                progress_callback(i, len(all_files), filepath)
+            except Exception:
+                pass
         # Progress indicator
         progress = f"[{i}/{len(all_files)}]"
         
@@ -4453,6 +4593,13 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False,
             _CHROMA_BATCH_D = 166
             _chunks_added_d = 0
             for _bd_start in range(0, len(chunks), _CHROMA_BATCH_D):
+                # R-069: also check inside the batch-add loop so a huge
+                # file stops adding batches promptly; the file is then
+                # treated as finished and the per-file loop exits.
+                if stop_event and stop_event.is_set():
+                    _stopped_d = True
+                    print(f"         \u23f9  Stop requested \u2014 finishing current file, then stopping")
+                    break
                 _bd_ids  = ids[_bd_start:_bd_start + _CHROMA_BATCH_D]
                 _bd_docs = chunks[_bd_start:_bd_start + _CHROMA_BATCH_D]
                 _bd_meta = metadatas[_bd_start:_bd_start + _CHROMA_BATCH_D]
@@ -4468,7 +4615,12 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False,
         except Exception as e:
             print(f"         ❌ Error adding to database: {e}\n")
             skipped_files += 1
-    
+
+        # R-069: batch-add loop asked to stop -- the current file is
+        # finished; don't start the next one.
+        if _stopped_d:
+            break
+
     # Summary
     if not quiet:
         print(f"\n{'='*60}")
@@ -4512,6 +4664,11 @@ def index_directory(directory: str, recursive: bool = True, quiet: bool = False,
                 if track:
                     is_new = add_to_auto_update_list(directory)
 
+                # R-086 (2026-10-09): a str is a WARNING (R-070 overlap or a
+                # case-variant replaced) — it used to be treated as plain
+                # success and the text was never shown.
+                if isinstance(is_new, str):
+                    print(f"⚠️  {is_new}")
                 if is_new and not quiet:
                     print(f"✅ Added to auto-update list")
 
@@ -6171,7 +6328,8 @@ def _resolve_unattended_directory_scope(directory: str):
 
 
 def command_update(directory, recursive=True, auto_confirm=False,
-                   collection_resolver=None, indexer_user=None, purge_gate=None):
+                   collection_resolver=None, indexer_user=None, purge_gate=None,
+                   stop_event=None):
     """Check for changes and update index with new/modified files, and
     automatically purge deleted files from ChromaDB.
 
@@ -6214,6 +6372,10 @@ def command_update(directory, recursive=True, auto_confirm=False,
       • MCP  -> update_tracked_directories tool
       • BAT  -> rag_auto_update.bat scheduled task
     Fixing it here covers all four entry-points simultaneously.
+
+      stop_event: Optional threading.Event -- when set, finish the current
+      file, then stop (checked at the top of the purge loop, the update
+      loop, and the per-file batch-add loop). R-069.
     """
     # SCOPE_SIMPLIFICATION_SPEC.md section 3.7 (Phase 7 cutover, 2026-07-16):
     # this used to auto-build a collection_resolver from collection_map for
@@ -6354,6 +6516,10 @@ def command_update(directory, recursive=True, auto_confirm=False,
         print()
 
         for i, file_info in enumerate(results['deleted_files'], 1):
+            # R-069: cooperative stop -- finish the current file, then stop.
+            if stop_event and stop_event.is_set():
+                print(f"\n\u23f9  Stopped by user during purge at file {i}/{deleted}.\n")
+                break
             filepath = normalise_path(file_info['path'])
             filename = Path(filepath).name
             print(f"[{i}/{deleted}] [DELETED] {filename}")
@@ -6398,7 +6564,13 @@ def command_update(directory, recursive=True, auto_confirm=False,
 
         changed_files = results['new_files'] + results['modified_files']
 
+        _stopped_u = False
         for i, file_info in enumerate(changed_files, 1):
+            # R-069: cooperative stop -- finish the current file, then stop.
+            if stop_event and stop_event.is_set():
+                print(f"\n\u23f9  Stopped by user at file {i}/{changes} -- "
+                        f"{updated} file(s) updated.\n")
+                break
             filepath = normalise_path(file_info['path'])
             filename = file_info['name']
             ext      = Path(filepath).suffix.lower()
@@ -6409,6 +6581,7 @@ def command_update(directory, recursive=True, auto_confirm=False,
             # ── Email archive — incremental per-message update ─────────────
             if ext in EMAIL_ARCHIVE_EXTENSIONS:
                 arc_stats = index_email_archive(filepath,
+                                                stop_event=stop_event,
                                                 root_directory=directory)
                 if arc_stats["processed"] > 0 or arc_stats.get("removed", 0) > 0:
                     print(f"  ✅ {arc_stats['processed']} new message(s) indexed, "
@@ -6479,6 +6652,11 @@ def command_update(directory, recursive=True, auto_confirm=False,
                 _CHROMA_BATCH_U = 166
                 _chunks_added_u = 0
                 for _bu_start in range(0, len(chunks), _CHROMA_BATCH_U):
+                    # R-069: check inside the batch-add loop too.
+                    if stop_event and stop_event.is_set():
+                        _stopped_u = True
+                        print(f"  \u23f9  Stop requested -- finishing current file, then stopping")
+                        break
                     _bu_ids  = ids[_bu_start:_bu_start + _CHROMA_BATCH_U]
                     _bu_docs = chunks[_bu_start:_bu_start + _CHROMA_BATCH_U]
                     _bu_meta = metadatas[_bu_start:_bu_start + _CHROMA_BATCH_U]
@@ -6490,6 +6668,10 @@ def command_update(directory, recursive=True, auto_confirm=False,
                 print(f"  ❌ Error: {exc}")
                 failed += 1
             print()
+            print()
+            # R-069: batch-add loop asked to stop -- current file finished.
+            if _stopped_u:
+                break
 
         print(f"{'='*70}")
         print(f"✨ UPDATE COMPLETE: {updated} file(s) indexed, {failed} skipped")
@@ -6594,6 +6776,90 @@ def save_auto_update_list(directories):
         print(f"⚠️  Warning: Could not save auto-update list: {e}")
         return False
 
+def tracked_path_overlap(directory, dirs=None):
+    """R-070 — the overlap warning for adding `directory` to the tracked list,
+    or None. Tracked directories are always scanned recursively by the
+    auto-update sweep, so a path INSIDE a tracked entry, or one that CONTAINS a
+    tracked entry, gets its files indexed twice. An exact (or, on Windows,
+    case-variant) match is not an overlap — that's "already tracked".
+    Case-insensitive on Windows via path_startswith()/path_equals().
+
+    Pure (reads only): add_to_auto_update_list() uses it, and so does the
+    index_path MCP tool BEFORE indexing (R-086, 2026-10-09 — index_directory
+    adds the path itself, so the warning used to be lost by the time
+    index_path asked)."""
+    directory = normalise_path(str(Path(directory).resolve()))
+    for existing in (load_auto_update_list() if dirs is None else dirs):
+        if path_equals(existing, directory):
+            continue
+        if path_startswith(directory, existing):
+            return (f"Warning: '{directory}' is inside already-indexed "
+                    f"'{existing}' — files will be indexed twice")
+        if path_startswith(existing, directory):
+            return (f"Warning: '{directory}' contains already-indexed "
+                    f"'{existing}' — files will be indexed twice")
+    return None
+
+
+def access_only_add_check(directory, access_list, tracked_list=None) -> dict:
+    """The rules for ADDING an access-only folder (David 2026-10-10) — one
+    check shared by the desktop's Access-Only panel, the grant_access MCP tool
+    and (through it) the Remote app's Perms tab. Personal mode only.
+
+      1. Folders only — always recursive, never an individual file.
+      2. No duplicates.
+      3. Not a folder already covered by an access-only folder ("already
+         covered"), nor one already readable through an INDEXED folder.
+      Adding a folder that CONTAINS access-only folders is allowed: those
+      inner entries are now redundant and are returned in "folded" for the
+      caller to drop (David's call — their write switches are left alone).
+
+    Pure: reads the folder from disk and the two lists, writes nothing.
+    Returns {"ok": bool, "path": resolved, "error": str|None, "folded": [..]}.
+    """
+    try:
+        resolved = str(Path(str(directory).strip()).resolve())
+    except Exception:
+        resolved = str(directory).strip()
+    out = {"ok": False, "path": resolved, "error": None, "folded": []}
+    p = Path(resolved)
+    if not str(directory).strip():
+        out["error"] = "A folder path is required."
+        return out
+    if not p.exists():
+        out["error"] = f"'{resolved}' does not exist."
+        return out
+    if not p.is_dir():
+        out["error"] = (f"'{resolved}' is a file. Access-only folders are folders only "
+                        f"(always including their sub-folders) — add the folder that contains it.")
+        return out
+    access_list = [str(a) for a in (access_list or [])]
+    for a in access_list:
+        if path_equals(a, resolved):
+            out["error"] = f"'{resolved}' is already an access-only folder."
+            return out
+    for a in access_list:
+        if path_startswith(resolved, a):
+            out["error"] = (f"'{resolved}' is already covered by access-only folder '{normalise_path(a)}' "
+                            f"(access-only folders always include their sub-folders).")
+            return out
+    tracked = load_auto_update_list() if tracked_list is None else tracked_list
+    for t in (tracked or []):
+        t = str(t)
+        if Path(t).is_file():
+            continue                                   # a tracked single file covers no folder
+        if path_equals(t, resolved):
+            out["error"] = f"'{resolved}' is already an indexed folder — Claude can already read it."
+            return out
+        if path_startswith(resolved, t):
+            out["error"] = (f"'{resolved}' is already readable — it's inside indexed folder "
+                            f"'{normalise_path(t)}'.")
+            return out
+    out["folded"] = [a for a in access_list if path_startswith(a, resolved)]
+    out["ok"] = True
+    return out
+
+
 def add_to_auto_update_list(directory):
     """Add directory to auto-update list and regenerate script.
 
@@ -6603,10 +6869,18 @@ def add_to_auto_update_list(directory):
     case-insensitive so both names point to the same physical folder — only
     one entry should ever exist in the list.
 
+    R-070 — subdirectory/overlap detection: if the new path sits inside an
+    already-tracked entry (tracked directories are always scanned
+    recursively by the auto-update sweep), or contains one, the path is
+    still added but a warning string is returned instead of True so the
+    caller can surface it. Its files would be indexed twice. Explicit
+    per-file opt-in stays legitimate, so this is a warning, never a block.
+
     Returns:
-        True   — new directory added (no prior entry existed)
-        str    — warning message if a case-variant was replaced (caller should
-                 surface this to the user so they know the old entry was removed)
+        True   — new directory added (no prior entry existed, no overlap)
+        str    — warning message: a case-variant was replaced, OR a
+                 subdirectory/parent overlap was detected (caller should
+                 surface this to the user)
         False  — directory already tracked under the exact same casing (no-op)
     """
     import sys as _sys
@@ -6632,11 +6906,16 @@ def add_to_auto_update_list(directory):
                 f"the old entry has been replaced with the new name."
             )
 
+    # R-070 — subdirectory/parent overlap detection (see tracked_path_overlap).
+    # A warning, not a block: the path is still added, but the warning
+    # string is returned instead of True.
+    overlap_msg = tracked_path_overlap(directory, dirs)
+
     # Genuinely new — add it
     dirs.append(directory)
     save_auto_update_list(dirs)
     generate_auto_update_script()
-    return True
+    return overlap_msg if overlap_msg is not None else True
 
 def remove_from_auto_update_list(directory):
     """Remove directory from auto-update list"""

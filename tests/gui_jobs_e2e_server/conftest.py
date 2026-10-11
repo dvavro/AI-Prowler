@@ -80,6 +80,7 @@ def _console_log(line: str):
 
 
 STATE = {"cleanup": None, "leftovers": None, "preflight": "", "outcomes": {}, "users": ""}
+SERVER_USERS = ("David Vavro", "Vicki Vavro", "Samual Cronin")
 
 
 # ── users + tokens ────────────────────────────────────────────────────────────
@@ -120,6 +121,14 @@ def _load_users() -> tuple[str, list[SrvUser]]:
         users.append(SrvUser(u["key"], u["name"], tok))
     if not url:
         pytest.exit("AIPROWLER_SRV_URL is not set (the server's .../jobs/ address).", returncode=3)
+    # 2026-10-09 (David): the server suite runs ONLY on the AI-Prowler Server,
+    # signed in through its Jobs app as these three users — nothing on this PC's
+    # personal install is used. (The srv fixture also stops unless the address
+    # answers as a server: the personal app reports mode "personal".)
+    names = sorted(u.name for u in users)
+    if names != sorted(SERVER_USERS):
+        pytest.exit(f"users.local.json must list exactly the server users {sorted(SERVER_USERS)} "
+                    f"— it lists {names}.", returncode=3)
     return url, users
 
 

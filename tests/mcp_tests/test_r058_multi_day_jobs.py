@@ -136,7 +136,11 @@ def test_ten_day_job_is_routed_every_working_day(db):
             assert not jobs, f"{day} should not have the job"
 
 
-def test_explicit_end_date_job_routed_each_day(db):
+def test_explicit_end_date_job_routed_each_day(db, monkeypatch):
+    # Pin "today" to the last planned day: the overrun rule keys off the real
+    # date, so once the calendar passed the job's End Date this test would see
+    # the (correct) overrun behavior on day 3 instead of the planned span.
+    monkeypatch.setattr(w, "overrun_today", lambda: dt.date.fromisoformat(_day(2)))
     jid = _job(db, 2, "hour", **{"End Date (blank = single-day job)": _day(2)})
     for off, want in [(0, True), (1, True), (2, True), (3, False)]:
         ids = {j["job_id"] for j in ro.db_get_jobs_for_route(db, _day(off), SAM)}

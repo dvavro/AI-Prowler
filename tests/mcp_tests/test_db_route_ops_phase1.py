@@ -40,10 +40,18 @@ def db_path(tmp_path):
     return path
 
 
-def _cust_id(db_path, name="A"):
+def _cust_id(db_path, name="A", **fields):
     """Job Board Architecture Spec §5.1 (2026-09-22): create_job now
-    requires a real, existing CustomerID."""
-    result = db_create_customer(db_path, {"Company Name": name}, actor="dave")
+    requires a real, existing CustomerID.
+
+    Returns the real new customer ID (CUST-2026-N scheme since 2026-10-04 --
+    never hardcode "CUST-0001": create_job rejects unknown customer IDs).
+    Extra field kwargs (e.g. Frequency="Weekly") are merged into the
+    create payload.
+    """
+    payload = {"Company Name": name}
+    payload.update(fields)
+    result = db_create_customer(db_path, payload, actor="dave")
     return result.split("NEW_CUST_ID=")[1].splitlines()[0].strip()
 
 
@@ -299,9 +307,9 @@ def test_blank_crew_falls_back_to_unassigned(db_path):
 # ══════════════════════════════════════════════════════════════════════════
 
 def test_schedule_next_weekly(db_path):
-    db_create_customer(db_path, {"Company Name": "Weekly Co", "Frequency": "Weekly"}, actor="dave")
+    cust_id = _cust_id(db_path, "Weekly Co", Frequency="Weekly")
     db_create_job(db_path, {
-        "CustomerID (Customers!A)": "CUST-0001", "Customer Name / Company": "Weekly Co",
+        "CustomerID (Customers!A)": cust_id, "Customer Name / Company": "Weekly Co",
         "Service Date": "2026-04-05",
     }, actor="dave")
     result = db_schedule_next_recurring_job(db_path, "JOB-0001", actor="dave")
@@ -310,9 +318,9 @@ def test_schedule_next_weekly(db_path):
 
 
 def test_schedule_next_monthly_handles_month_end_overflow(db_path):
-    db_create_customer(db_path, {"Company Name": "Monthly Co", "Frequency": "Monthly"}, actor="dave")
+    cust_id = _cust_id(db_path, "Monthly Co", Frequency="Monthly")
     db_create_job(db_path, {
-        "CustomerID (Customers!A)": "CUST-0001", "Customer Name / Company": "Monthly Co",
+        "CustomerID (Customers!A)": cust_id, "Customer Name / Company": "Monthly Co",
         "Service Date": "2026-01-31",
     }, actor="dave")
     result = db_schedule_next_recurring_job(db_path, "JOB-0001", actor="dave")
@@ -321,9 +329,9 @@ def test_schedule_next_monthly_handles_month_end_overflow(db_path):
 
 
 def test_schedule_next_one_time_customer_no_job_created(db_path):
-    db_create_customer(db_path, {"Company Name": "OneTime Co", "Frequency": "One-time"}, actor="dave")
+    cust_id = _cust_id(db_path, "OneTime Co", Frequency="One-time")
     db_create_job(db_path, {
-        "CustomerID (Customers!A)": "CUST-0001", "Customer Name / Company": "OneTime Co",
+        "CustomerID (Customers!A)": cust_id, "Customer Name / Company": "OneTime Co",
         "Service Date": "2026-04-05",
     }, actor="dave")
     result = db_schedule_next_recurring_job(db_path, "JOB-0001", actor="dave")
@@ -336,17 +344,18 @@ def _legacy_weird_frequency_customer(db_path):
     value on save (and reads "Fortnightly" as Biweekly), so it can only be
     legacy data — written straight into the table."""
     import sqlite3
-    db_create_customer(db_path, {"Company Name": "Weird Co", "Frequency": "Weekly"}, actor="dave")
+    cust_id = _cust_id(db_path, "Weird Co", Frequency="Weekly")
     c = sqlite3.connect(db_path)
-    c.execute("UPDATE customers SET frequency = 'Whenever convenient' WHERE customer_id = 'CUST-0001'")
+    c.execute("UPDATE customers SET frequency = 'Whenever convenient' WHERE customer_id = ?", (cust_id,))
     c.commit()
     c.close()
+    return cust_id
 
 
 def test_schedule_next_unrecognized_frequency_rejected(db_path):
-    _legacy_weird_frequency_customer(db_path)
+    cust_id = _legacy_weird_frequency_customer(db_path)
     db_create_job(db_path, {
-        "CustomerID (Customers!A)": "CUST-0001", "Customer Name / Company": "Weird Co",
+        "CustomerID (Customers!A)": cust_id, "Customer Name / Company": "Weird Co",
         "Service Date": "2026-04-05",
     }, actor="dave")
     result = db_schedule_next_recurring_job(db_path, "JOB-0001", actor="dave")
@@ -355,8 +364,8 @@ def test_schedule_next_unrecognized_frequency_rejected(db_path):
 
 
 def test_schedule_next_no_service_date_rejected(db_path):
-    db_create_customer(db_path, {"Company Name": "X", "Frequency": "Weekly"}, actor="dave")
-    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-0001", "Customer Name / Company": "X"}, actor="dave")
+    cust_id = _cust_id(db_path, "X", Frequency="Weekly")
+    db_create_job(db_path, {"CustomerID (Customers!A)": cust_id, "Customer Name / Company": "X"}, actor="dave")
     result = db_schedule_next_recurring_job(db_path, "JOB-0001", actor="dave")
     assert result.startswith("❌")
     assert "no Service Date" in result or "Service Date" in result
@@ -377,9 +386,9 @@ def test_schedule_next_no_match_rejected(db_path):
 
 
 def test_schedule_next_date_range_restricts_search(db_path):
-    db_create_customer(db_path, {"Company Name": "X", "Frequency": "Weekly"}, actor="dave")
+    cust_id = _cust_id(db_path, "X", Frequency="Weekly")
     db_create_job(db_path, {
-        "CustomerID (Customers!A)": "CUST-0001", "Customer Name / Company": "X",
+        "CustomerID (Customers!A)": cust_id, "Customer Name / Company": "X",
         "Service Date": "2026-04-05",
     }, actor="dave")
     # Range that doesn't include 2026-04-05 -> no match.
@@ -391,9 +400,9 @@ def test_schedule_next_date_range_restricts_search(db_path):
 
 
 def test_schedule_next_field_crew_restricted_to_own_job(db_path):
-    db_create_customer(db_path, {"Company Name": "X", "Frequency": "Weekly"}, actor="dave")
+    cust_id = _cust_id(db_path, "X", Frequency="Weekly")
     db_create_job(db_path, {
-        "CustomerID (Customers!A)": "CUST-0001", "Customer Name / Company": "X",
+        "CustomerID (Customers!A)": cust_id, "Customer Name / Company": "X",
         "Service Date": "2026-04-05", "Crew / Technician": "Someone Else",
     }, actor="dave")
     result = db_schedule_next_recurring_job(
@@ -404,9 +413,9 @@ def test_schedule_next_field_crew_restricted_to_own_job(db_path):
 
 
 def test_schedule_next_new_job_carries_over_fields(db_path):
-    db_create_customer(db_path, {"Company Name": "Carry Co", "Frequency": "Biweekly"}, actor="dave")
+    cust_id = _cust_id(db_path, "Carry Co", Frequency="Biweekly")
     db_create_job(db_path, {
-        "CustomerID (Customers!A)": "CUST-0001", "Customer Name / Company": "Carry Co",
+        "CustomerID (Customers!A)": cust_id, "Customer Name / Company": "Carry Co",
         "Service Date": "2026-04-05", "Crew / Technician": "Jake R",
         "Service Type": "Window", "Street Address": "1 Main St",
     }, actor="dave")
@@ -437,9 +446,9 @@ def test_schedule_next_new_job_carries_over_fields(db_path):
 # to the DB-backed tool.
 
 def test_schedule_next_biweekly_plus_14_days(db_path):
-    db_create_customer(db_path, {"Company Name": "BW Co", "Frequency": "Biweekly"}, actor="dave")
+    cust_id = _cust_id(db_path, "BW Co", Frequency="Biweekly")
     db_create_job(db_path, {
-        "CustomerID (Customers!A)": "CUST-0001", "Customer Name / Company": "BW Co",
+        "CustomerID (Customers!A)": cust_id, "Customer Name / Company": "BW Co",
         "Service Date": "2026-03-16",
     }, actor="dave")
     result = db_schedule_next_recurring_job(db_path, "JOB-0001", actor="dave")
@@ -448,9 +457,9 @@ def test_schedule_next_biweekly_plus_14_days(db_path):
 
 
 def test_schedule_next_bi_monthly_plus_two_months(db_path):
-    db_create_customer(db_path, {"Company Name": "BM Co", "Frequency": "Bi-Monthly"}, actor="dave")
+    cust_id = _cust_id(db_path, "BM Co", Frequency="Bi-Monthly")
     db_create_job(db_path, {
-        "CustomerID (Customers!A)": "CUST-0001", "Customer Name / Company": "BM Co",
+        "CustomerID (Customers!A)": cust_id, "Customer Name / Company": "BM Co",
         "Service Date": "2026-03-01",
     }, actor="dave")
     result = db_schedule_next_recurring_job(db_path, "JOB-0001", actor="dave")
@@ -459,9 +468,9 @@ def test_schedule_next_bi_monthly_plus_two_months(db_path):
 
 
 def test_schedule_next_bi_monthly_short_code_bm_also_works(db_path):
-    db_create_customer(db_path, {"Company Name": "BM2 Co", "Frequency": "BM"}, actor="dave")
+    cust_id = _cust_id(db_path, "BM2 Co", Frequency="BM")
     db_create_job(db_path, {
-        "CustomerID (Customers!A)": "CUST-0001", "Customer Name / Company": "BM2 Co",
+        "CustomerID (Customers!A)": cust_id, "Customer Name / Company": "BM2 Co",
         "Service Date": "2026-03-01",
     }, actor="dave")
     result = db_schedule_next_recurring_job(db_path, "JOB-0001", actor="dave")
@@ -473,9 +482,9 @@ def test_schedule_next_bi_monthly_month_end_overflow_capped(db_path):
     """Same day-overflow protection as monthly, exercised through a
     2-month jump instead of 1 -- Dec 31 2025 + 2 months = Feb 28 2026
     (2026 is not a leap year), not a crash."""
-    db_create_customer(db_path, {"Company Name": "BM3 Co", "Frequency": "Bi-Monthly"}, actor="dave")
+    cust_id = _cust_id(db_path, "BM3 Co", Frequency="Bi-Monthly")
     db_create_job(db_path, {
-        "CustomerID (Customers!A)": "CUST-0001", "Customer Name / Company": "BM3 Co",
+        "CustomerID (Customers!A)": cust_id, "Customer Name / Company": "BM3 Co",
         "Service Date": "2025-12-31",
     }, actor="dave")
     result = db_schedule_next_recurring_job(db_path, "JOB-0001", actor="dave")
@@ -484,9 +493,9 @@ def test_schedule_next_bi_monthly_month_end_overflow_capped(db_path):
 
 
 def test_schedule_next_semi_annually_plus_six_months(db_path):
-    db_create_customer(db_path, {"Company Name": "SA Co", "Frequency": "Semi-Annually"}, actor="dave")
+    cust_id = _cust_id(db_path, "SA Co", Frequency="Semi-Annually")
     db_create_job(db_path, {
-        "CustomerID (Customers!A)": "CUST-0001", "Customer Name / Company": "SA Co",
+        "CustomerID (Customers!A)": cust_id, "Customer Name / Company": "SA Co",
         "Service Date": "2026-01-15",
     }, actor="dave")
     result = db_schedule_next_recurring_job(db_path, "JOB-0001", actor="dave")
@@ -495,9 +504,9 @@ def test_schedule_next_semi_annually_plus_six_months(db_path):
 
 
 def test_schedule_next_annually_plus_twelve_months(db_path):
-    db_create_customer(db_path, {"Company Name": "A Co", "Frequency": "Annually"}, actor="dave")
+    cust_id = _cust_id(db_path, "A Co", Frequency="Annually")
     db_create_job(db_path, {
-        "CustomerID (Customers!A)": "CUST-0001", "Customer Name / Company": "A Co",
+        "CustomerID (Customers!A)": cust_id, "Customer Name / Company": "A Co",
         "Service Date": "2026-06-01",
     }, actor="dave")
     result = db_schedule_next_recurring_job(db_path, "JOB-0001", actor="dave")
@@ -506,9 +515,9 @@ def test_schedule_next_annually_plus_twelve_months(db_path):
 
 
 def test_schedule_next_unrecognized_frequency_lists_full_expanded_set(db_path):
-    _legacy_weird_frequency_customer(db_path)
+    cust_id = _legacy_weird_frequency_customer(db_path)
     db_create_job(db_path, {
-        "CustomerID (Customers!A)": "CUST-0001", "Customer Name / Company": "Weird Co",
+        "CustomerID (Customers!A)": cust_id, "Customer Name / Company": "Weird Co",
         "Service Date": "2026-04-05",
     }, actor="dave")
     result = db_schedule_next_recurring_job(db_path, "JOB-0001", actor="dave")

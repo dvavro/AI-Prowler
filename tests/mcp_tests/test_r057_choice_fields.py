@@ -227,6 +227,8 @@ def test_job_form_dropdowns_match_server_choices():
         block = html[i:html.index("</select>", i)]
         opts = re.findall(r"<option[^>]*>([^<]+)</option>", block)
         vals = re.findall(r'<option value="([^"]+)"', block) or opts
+        # Skip UI placeholder options (em dash = "no selection")
+        vals = [v for v in vals if v.strip() not in ("", "—", "-")]
         assert set(vals) == set(w._CHOICE_FIELDS[key]), (sel, vals)
     i = html.index('id="jfSchedType"')
     assert set(re.findall(r'<option value="([^"]+)"', html[i:html.index("</select>", i)])) == \

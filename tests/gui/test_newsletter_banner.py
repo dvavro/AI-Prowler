@@ -26,6 +26,14 @@ import pytest
 import rag_gui as gui_mod
 
 
+# The newsletter banner is personal-mode only (create_welcome_tab builds the
+# Server Status panel instead in Business Server mode) — pin personal mode so
+# the result doesn't depend on this PC's real config.json (2026-10-08).
+@pytest.fixture(autouse=True)
+def _personal_mode(force_personal_mode):
+    yield
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # NL-01 — pure decision logic, no GUI/display needed at all
 # ─────────────────────────────────────────────────────────────────────────────

@@ -63,14 +63,19 @@ def _inv_id(create_result: str) -> str:
     return create_result.split("NEW_INVOICE_ID=")[1].splitlines()[0].strip()
 
 
+def _cust_id(create_result: str) -> str:
+    return create_result.split("NEW_CUST_ID=")[1].splitlines()[0].strip()
+
+
 def _seed_invoiced_job(mcp_mod, cust_email="karen@sunshine.com", quote_amount=150.0):
     """Quote Amount $150.00 at the default 7% tax rate -> Subtotal 150.00,
     Tax 10.50, TOTAL DUE 160.50 -- used below as the known real amount
     that must reach the checkout-creation call."""
-    mcp_mod.create_customer({"Company Name": "Sunshine Realty", "Email": cust_email},
-                             filepath="", backup=False, ctx=None)
+    cust_result = mcp_mod.create_customer({"Company Name": "Sunshine Realty", "Email": cust_email},
+                                          filepath="", backup=False, ctx=None)
+    cust_id = _cust_id(cust_result)
     job_result = mcp_mod.create_job(
-        {"Customer Name / Company": "Sunshine Realty", "CustomerID (Customers!A)": "CUST-0001",
+        {"Customer Name / Company": "Sunshine Realty", "CustomerID (Customers!A)": cust_id,
          "Quote Amount ($)": quote_amount}, filepath="", backup=False, ctx=None)
     job_id = _job_id(job_result)
     inv_result = mcp_mod.create_invoice(job_id, filepath="", backup=False, ctx=None)

@@ -23,7 +23,10 @@ Covers:
 Also covers purge_old_jobs() (v9.0.0) — the automatic background purge
 called from run_script_start() on every new job launch. Same jobs dir,
 different API surface: no dry-run, no keep_last, always purges files older
-than max_age_days (default 3), skips running jobs, best-effort never raises.
+than max_age_days (default 2, 2026-10-08 policy — David: no legitimate
+run takes 2 days). A "running" manifest gets a PID liveness check:
+dead/missing PID → deleted; a live PID is taskkilled (taskkill /F /T)
+first, then deleted. Best-effort, never raises.
 
 IMPORTANT: ai_prowler_mcp._JOBS_DIR is a MODULE-LEVEL constant computed
 once at import time from Path.home() — the exact same class of bug caught
@@ -244,7 +247,10 @@ class TestCorruptOrMissingManifest:
 # purge_old_jobs() is the lightweight auto-purge called from run_script_start()
 # on every new job launch. Unlike cleanup_job_logs (explicit MCP tool with
 # dry-run / keep_last options), this is fire-and-forget: no UI, no dry-run,
-# just delete .json + .log pairs older than max_age_days that aren't running.
+# just delete .json + .log pairs older than max_age_days. "Running" manifests
+# get a PID liveness check: dead/missing PID -> deleted; live PID -> taskkilled
+# via taskkill /F /T, then deleted. Also called from the MCP server startup
+# path (2026-10-08), not just run_script_start().
 #
 # It reads AI_PROWLER_HOME / "jobs" from task_queue_automation, so we patch
 # tqa.AI_PROWLER_HOME to a tmp_path rather than mcp_mod._JOBS_DIR.
@@ -276,18 +282,19 @@ def _make_purge_job(jobs_dir, job_id, *, status="done", age_days=0):
 
 
 class TestPurgeOldJobs:
-    """Tests for tqa.purge_old_jobs() — the v9.0.0 automatic background purge."""
+    """Tests for tqa.purge_old_jobs() — the automatic background purge
+    (2026-10-08: David's 2-day policy, default max_age_days=2)."""
 
     def test_no_op_when_jobs_dir_missing(self, purge_jobs_dir):
         # Must not raise even when the directory doesn't exist yet.
         assert not purge_jobs_dir.exists()
-        tqa.purge_old_jobs(max_age_days=3)  # must not raise
+        tqa.purge_old_jobs(max_age_days=2)  # must not raise
         assert not purge_jobs_dir.exists()
 
     def test_deletes_old_completed_job(self, purge_jobs_dir):
         json_path, log_path = _make_purge_job(purge_jobs_dir, "job_old",
                                                status="done", age_days=5)
-        tqa.purge_old_jobs(max_age_days=3)
+        tqa.purge_old_jobs(max_age_days=2)
 
         assert not json_path.exists(), "Old completed job manifest must be deleted"
         assert not log_path.exists(),  "Old completed job log must be deleted"
@@ -295,26 +302,47 @@ class TestPurgeOldJobs:
     def test_keeps_recent_job(self, purge_jobs_dir):
         json_path, log_path = _make_purge_job(purge_jobs_dir, "job_recent",
                                                status="done", age_days=1)
-        tqa.purge_old_jobs(max_age_days=3)
+        tqa.purge_old_jobs(max_age_days=2)
 
         assert json_path.exists(), "Recent job (< max_age_days) must not be deleted"
         assert log_path.exists()
 
-    def test_never_deletes_running_job(self, purge_jobs_dir):
-        # A running job must never be deleted, even if its mtime is old.
+    def test_deletes_running_job_with_dead_or_missing_pid(self, purge_jobs_dir):
+        # 2026-10-08 policy: a "running" manifest is NOT protected — it gets a
+        # PID liveness check instead. _make_purge_job writes no "pid" key, so this
+        # job has a missing PID (dead) -> treated as finished -> deleted.
         json_path, log_path = _make_purge_job(purge_jobs_dir, "job_running",
                                                status="running", age_days=10)
-        tqa.purge_old_jobs(max_age_days=3)
+        n = tqa.purge_old_jobs(max_age_days=2)
 
-        assert json_path.exists(), "Running job must never be deleted by purge"
-        assert log_path.exists()
+        assert n == 1, "expected 1 deleted job, got %d" % n
+        assert not json_path.exists(), "Running job with missing PID must be deleted"
+        assert not log_path.exists()
+
+    def test_deletes_running_job_with_explicitly_dead_pid(self, purge_jobs_dir):
+        # Same as above but with an implausible PID (no such process) — the
+        # tasklist liveness check returns False -> deleted.
+        json_path, log_path = _make_purge_job(purge_jobs_dir, "job_deadpid",
+                                               status="running", age_days=10)
+        mani = json.loads(json_path.read_text(encoding="utf-8"))
+        mani["pid"] = 999999
+        json_path.write_text(json.dumps(mani), encoding="utf-8")
+        import os as _os
+        old_time = (datetime.datetime.now() -
+                    datetime.timedelta(days=10)).timestamp()
+        _os.utime(json_path, (old_time, old_time))
+        n = tqa.purge_old_jobs(max_age_days=2)
+
+        assert n == 1, "expected 1 deleted job, got %d" % n
+        assert not json_path.exists()
+        assert not log_path.exists()
 
     def test_deletes_only_old_jobs_not_recent(self, purge_jobs_dir):
         old_json, old_log = _make_purge_job(purge_jobs_dir, "job_old",
                                              status="done", age_days=7)
         new_json, new_log = _make_purge_job(purge_jobs_dir, "job_new",
                                              status="done", age_days=0)
-        tqa.purge_old_jobs(max_age_days=3)
+        tqa.purge_old_jobs(max_age_days=2)
 
         assert not old_json.exists(), "Old job must be deleted"
         assert not old_log.exists()
@@ -324,7 +352,7 @@ class TestPurgeOldJobs:
     def test_deletes_both_json_and_log_together(self, purge_jobs_dir):
         json_path, log_path = _make_purge_job(purge_jobs_dir, "job_pair",
                                                status="failed", age_days=5)
-        tqa.purge_old_jobs(max_age_days=3)
+        tqa.purge_old_jobs(max_age_days=2)
 
         assert not json_path.exists()
         assert not log_path.exists()
@@ -338,7 +366,7 @@ class TestPurgeOldJobs:
         os.utime(bad, (old_time, old_time))
 
         # Must not raise — corrupt manifest is purged anyway (mtime is old)
-        tqa.purge_old_jobs(max_age_days=3)
+        tqa.purge_old_jobs(max_age_days=2)
 
     def test_is_best_effort_never_raises_on_os_error(self, purge_jobs_dir,
                                                        monkeypatch):
@@ -349,4 +377,4 @@ class TestPurgeOldJobs:
             raise OSError("simulated permission denied")
 
         monkeypatch.setattr(Path, "unlink", _boom)
-        tqa.purge_old_jobs(max_age_days=3)  # must not raise
+        tqa.purge_old_jobs(max_age_days=2)  # must not raise

@@ -136,6 +136,28 @@ def db_get_jobs_for_route(db_path: str, route_date: str, crew: str = "",
 
     crew_filter = crew.strip()
     out = []
+    # Customer preferred time windows (2026-10-05, David's rule): the soft
+    # "outside window" check is judged ONLY against the customer's Pref.
+    # Time Start/End — never the job's Start/End Time. Batched into one
+    # query; a customer with no window set contributes ("", "") = no
+    # constraint, so no warning can fire for their jobs.
+    _cust_win = {}
+    try:
+        _cids = list({str(r["customer_id"]).strip() for r, _ in rows if r["customer_id"]})
+        if _cids:
+            _cw_conn = get_connection(db_path)
+            try:
+                _ph = ",".join("?" * len(_cids))
+                for _cr in _cw_conn.execute(
+                    f"SELECT customer_id, preferred_time_start, preferred_time_end "
+                    f"FROM customers WHERE customer_id IN ({_ph})", _cids).fetchall():
+                    _cust_win[str(_cr["customer_id"])] = (
+                        str(_cr["preferred_time_start"] or "").strip(),
+                        str(_cr["preferred_time_end"] or "").strip())
+            finally:
+                _cw_conn.close()
+    except Exception:
+        _cust_win = {}
     for row, day_no in rows:
         job_crew = str(row["crew"] or "").strip()
         if crew_filter and not _crew_match(job_crew, crew_filter):
@@ -144,6 +166,12 @@ def db_get_jobs_for_route(db_path: str, route_date: str, crew: str = "",
         # Route page is one of the ways to try a better day.
         if str(row["job_status"] or "").strip().lower() in ("cancelled", "canceled"):
             continue
+        # Pause (2026-10-05): a paused job is NEVER routed -- excluded for
+        # every day while the pause is on. Resuming the job makes it
+        # routable again.
+        if str(row["paused"] or "").strip().lower() in ("1", "true", "yes"):
+            continue
+
 
         street = str(row["street_address"] or "").strip()
         city = str(row["city"] or "").strip()
@@ -206,7 +234,19 @@ def db_get_jobs_for_route(db_path: str, route_date: str, crew: str = "",
             "duration": _day_dur[0],
             "duration_unit": str(_day_dur[1] or "min").strip().lower(),
             "day_no": day_no,
+            # R-058 (restored 2026-10-08): the job's planned working-day count
+            # (day_no is "day N of job_days"). Was dropped in a later dict
+            # refactor; the comment above still described the pair and the
+            # R-058 tests read it. Purely additive - nothing else reads it.
             "job_days": _job_days,
+            # Preferred-day check (2026-10-04): the job-level Preferred Day(s)
+            # ("Monday/Friday" notation, blank = no constraint). _build_day_timeline
+            # warns when the route_date weekday is not in this list.
+            "preferred_days": row["preferred_days"],
+            # Customer preferred time window (2026-10-05): the ONLY window the
+            # soft "outside window" check is judged against (see _soft_window_strs).
+            "cust_pref_start": _cust_win.get(str(row["customer_id"]).strip(), ("", ""))[0],
+            "cust_pref_end": _cust_win.get(str(row["customer_id"]).strip(), ("", ""))[1],
             # R-058 overrun: worked past its planned End Date (still open)
             "overrun": day_no > _job_days,
             # R-056: the routing person when a crew was asked for (see the
@@ -268,11 +308,12 @@ ROUTE_STOP_STALE_DAYS = 7
 
 
 def _cleanup_stale_route_stops(db_path: str, exclude_date: str = "",
-                                older_than_days: int = ROUTE_STOP_STALE_DAYS) -> int:
+                             older_than_days: int = ROUTE_STOP_STALE_DAYS) -> int:
     import datetime as _dt
     cutoff = (_dt.date.today() - _dt.timedelta(days=older_than_days)).isoformat()
     try:
         with transaction(db_path) as conn:
+            _ensure_route_approvals(conn)
             if exclude_date:
                 # Never sweep the very date this write is about to (re)build —
                 # regardless of how old it looks by wall-clock terms, a route
@@ -294,6 +335,11 @@ def _cleanup_stale_route_stops(db_path: str, exclude_date: str = "",
                         "DELETE FROM route_stops WHERE route_date < ? AND route_date != ?",
                         (cutoff, exclude_date),
                     )
+                    # 2026-10-05: approvals die with their swept routes.
+                    conn.execute(
+                        "DELETE FROM route_approvals WHERE route_date < ? AND route_date != ?",
+                        (cutoff, exclude_date),
+                    )
             else:
                 row = conn.execute(
                     "SELECT COUNT(*) AS n FROM route_stops WHERE route_date < ?", (cutoff,)
@@ -301,9 +347,12 @@ def _cleanup_stale_route_stops(db_path: str, exclude_date: str = "",
                 n = row["n"] if row else 0
                 if n:
                     conn.execute("DELETE FROM route_stops WHERE route_date < ?", (cutoff,))
+                    # 2026-10-05: approvals die with their swept routes.
+                    conn.execute("DELETE FROM route_approvals WHERE route_date < ?", (cutoff,))
             return n
     except Exception:
         return 0
+
 
 
 def db_write_route_stops(db_path: str, route_date: str, stops: list, actor: str,
@@ -373,13 +422,39 @@ def db_write_route_stops(db_path: str, route_date: str, stops: list, actor: str,
     now = utcnow_iso()
     cleared = 0
     with transaction(db_path) as conn:
+        _ensure_route_approvals(conn)
+        _ensure_fixed_position_column(conn)
+        # 2026-10-05: a rewritten route is experimental until re-approved.
+        # Capture the (date, crew) pairs and jobs being cleared so their
+        # approval rows and published links can go with them.
+        cleared_pairs = []      # list of (route_date, crew_id)
+        cleared_job_ids = set()
+        # 2026-10-05 "Fix stop #" pins SURVIVE a rebuild (unlike approval):
+        # capture {job_id: fixed_position} before the DELETEs below, then
+        # re-attach on INSERT by job_id (an explicit fixed_position on the
+        # incoming stop dict wins -- that is how a pin update is written).
+        kept_pins = {}          # job_id -> fixed_position
+
         if single_crew:
             row = conn.execute(
                 "SELECT COUNT(*) AS n FROM route_stops WHERE route_date = ?",
                 (route_date,),
             ).fetchone()
             cleared += row["n"]
+            for r in conn.execute(
+                "SELECT DISTINCT crew_id FROM route_stops WHERE route_date = ?",
+                (route_date,),
+            ).fetchall():
+                cleared_pairs.append((route_date, r["crew_id"]))
+            for r in conn.execute(
+                "SELECT job_id, fixed_position FROM route_stops WHERE route_date = ? AND job_id IS NOT NULL",
+                (route_date,),
+            ).fetchall():
+                cleared_job_ids.add(r["job_id"])
+                if r["fixed_position"] is not None:
+                    kept_pins[r["job_id"]] = r["fixed_position"]
             conn.execute("DELETE FROM route_stops WHERE route_date = ?", (route_date,))
+
         for crew_id, crew_stops in by_crew.items():
             if not single_crew:
                 row = conn.execute(
@@ -387,27 +462,60 @@ def db_write_route_stops(db_path: str, route_date: str, stops: list, actor: str,
                     (route_date, crew_id),
                 ).fetchone()
                 cleared += row["n"]
+                for r in conn.execute(
+                    "SELECT job_id, fixed_position FROM route_stops WHERE route_date = ? AND crew_id = ? "
+                    "AND job_id IS NOT NULL",
+                    (route_date, crew_id),
+                ).fetchall():
+                    cleared_job_ids.add(r["job_id"])
+                    if r["fixed_position"] is not None:
+                        kept_pins[r["job_id"]] = r["fixed_position"]
+
+                cleared_pairs.append((route_date, crew_id))
                 conn.execute(
                     "DELETE FROM route_stops WHERE route_date = ? AND crew_id = ?",
                     (route_date, crew_id),
                 )
+
             for i, s in enumerate(crew_stops, start=1):
+                # 2026-10-05 "Fix stop #" pin: an explicit fixed_position on the
+                # incoming stop wins; otherwise the pin kept from the cleared
+                # rows is re-attached by job_id (pins survive rebuilds).
+                _pin = s.get("fixed_position")
+                if _pin is None and s.get("job_id"):
+                    _pin = kept_pins.get(s.get("job_id"))
                 conn.execute(
                     """INSERT INTO route_stops
-                       (route_date, crew_id, stop_number, job_id, customer_id, address,
+                       (route_date, crew_id, stop_number, fixed_position, job_id, customer_id, address,
                         latitude, longitude, eta, leg_drive_min, leg_drive_miles, map_url,
                         created_by, last_edited_by, last_edited_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (route_date, crew_id, i, s.get("job_id"), s.get("cust_id"), s.get("address"),
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (route_date, crew_id, i, _pin, s.get("job_id"), s.get("cust_id"), s.get("address"),
                      s.get("lat"), s.get("lon"), s.get("arrival"),
                      s.get("leg_drive_min"), s.get("leg_drive_miles"), s.get("map_url"),
                      actor, actor, now),
-                )
+                  )
+
+        # 2026-10-05: the cleared pairs' approval (if any) dies with the
+        # rewrite, and their published links are unpublished — an unapproved
+        # route must not show a link on Jobs/Calendar nor be emailable.
+        for rd, cid in cleared_pairs:
+            conn.execute(
+                "DELETE FROM route_approvals WHERE route_date = ? AND crew_id = ?",
+                (rd, cid),
+            )
+        for jid in sorted(cleared_job_ids):
+            conn.execute(
+                "UPDATE jobs SET route_map_url = '', version = version + 1, "
+                "last_edited_by = ?, last_edited_at = ? WHERE job_id = ?",
+                (actor, now, jid),
+            )
         # The route follows the job (2026-09-25): a job just routed on this
         # date can't still be a stop on another day it no longer belongs to
         # (e.g. moved 9/24 -> 9/25; its old 9/24 stop is stale).
         _drop_stale_job_stops(conn, [s.get("job_id") for s in stops if s.get("job_id")])
     return cleared
+
 
 
 def _drop_stale_job_stops(conn, job_ids) -> int:
@@ -514,128 +622,186 @@ def _add_minutes_hhmm(hhmm: str, minutes) -> str:
     return (dt + _dt.timedelta(minutes=float(minutes))).strftime("%H:%M")
 
 
+# ── Route approval (2026-10-05) ──────────────────────────────────────────
+# Approve / Un-approve are a strict inverse pair gating email + link viewing.
+# Approving a route NEVER writes to a job's Start Time / End Time (David's
+# rule: a job's window always reflects the customer settings — routing must
+# not touch it). Approve only records an approval row; Un-approve deletes
+# that row and unpublishes the links. Any route_stops rewrite for the pair
+# also clears the approval — a rebuilt route is experimental until
+# re-approved.
+_ROUTE_APPROVALS_DDL = """
+CREATE TABLE IF NOT EXISTS route_approvals (
+route_date  TEXT NOT NULL,
+crew_id     TEXT NOT NULL,
+approved_at TEXT NOT NULL,
+approved_by TEXT,
+PRIMARY KEY (route_date, crew_id)
+)
+"""
+
+
+def _ensure_route_approvals(conn) -> None:
+    """Idempotent — safe on databases created before route_approvals existed."""
+    conn.execute(_ROUTE_APPROVALS_DDL)
+
+
+def _ensure_fixed_position_column(conn) -> None:
+    """Idempotent backstop for the 2026-10-05 "Fix stop #" pin column.
+
+    The schema migration in db_schema.apply_schema is the primary path; this
+    keeps write paths safe on databases where it hasn't run yet."""
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(route_stops)").fetchall()]
+    if "fixed_position" not in cols:
+        conn.execute("ALTER TABLE route_stops ADD COLUMN fixed_position INTEGER")
+
+
+
+
+def db_is_route_approved(db_path: str, route_date: str, crew: str) -> bool:
+    """True if (route_date, crew) is approved. A blank crew matches ANY
+    crew's approval for the date (personal mode stores crew_id '')."""
+    conn = get_connection(db_path)
+    try:
+        _ensure_route_approvals(conn)
+        crew = (crew or "").strip()
+        if crew:
+            row = conn.execute(
+                "SELECT 1 FROM route_approvals WHERE route_date = ? "
+                "AND LOWER(TRIM(crew_id)) = LOWER(?)",
+                (route_date, crew),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT 1 FROM route_approvals WHERE route_date = ?",
+                (route_date,),
+            ).fetchone()
+        return bool(row)
+    finally:
+        conn.close()
+
+
 def db_approve_route_schedule(db_path: str, route_date: str, crew: str, actor: str) -> str:
-    """Pushes each non-hard routed job's own computed ETA (route_stops.eta)
-    into its Start Time, with an End Time derived from its own Est.
-    Duration — the Route tab "Approve" button's backend. Hard jobs are
-    skipped entirely: their Start Time is already a real commitment, never
-    something a route proposes changing. A job with no Est. Duration still
-    gets its Start Time approved; only End Time is left blank for it,
-    matching the client's own pre-existing "skip End Time if duration is
-    unknown" behavior.
+    """Approves the route for (route_date, crew) — the Route tab 'Approve'
+    button's backend (2026-10-05 rewrite).
+
+    Approval is a pure flag: it records a row in route_approvals, which
+    grants email eligibility and link pinning/viewing for the route. It
+    NEVER writes to a job's Start Time / End Time / Original Start/End
+    Time (David's rule: a job's window always reflects the customer
+    settings). The routed arrival/departure times live in route_stops,
+    not on the job.
+
+    The link pinning itself happens in the MCP tool wrapper (it needs the
+    caller's context for the home address); this function only records the
+    approval. Un-approving (db_unapprove_route_schedule) is the exact
+    inverse: it deletes the approval row and unpublishes the links.
     """
     conn = get_connection(db_path)
     try:
+        _ensure_route_approvals(conn)
         query = (
-            "SELECT rs.job_id, rs.eta, j.schedule_type, j.est_duration, "
-            "j.est_duration_unit, j.customer_name "
-            "FROM route_stops rs JOIN jobs j ON j.job_id = rs.job_id "
+            "SELECT DISTINCT rs.crew_id FROM route_stops rs "
             "WHERE rs.route_date = ? AND rs.job_id IS NOT NULL"
         )
         params = [route_date]
-        crew_filter = crew.strip()
+        crew_filter = (crew or "").strip()
         if crew_filter:
             # R-056: the person's own route, whatever case their name was typed in.
             query += " AND LOWER(TRIM(rs.crew_id)) = LOWER(?)"
             params.append(crew_filter)
-        rows = conn.execute(query, params).fetchall()
+        crew_rows = conn.execute(query, params).fetchall()
     finally:
         conn.close()
 
-    if not rows:
-        scope = f" for crew '{crew}'" if crew.strip() else ""
+    if not crew_rows:
+        scope = f" for crew '{crew}'" if (crew or "").strip() else ""
         return f"✅ No routed jobs found for {route_date}{scope} — nothing to approve."
 
-    updated = []
-    skipped_hard = []
     now = utcnow_iso()
+    crew_ids = [r["crew_id"] for r in crew_rows]
     with transaction(db_path) as conn:
-        for row in rows:
-            if (row["schedule_type"] or "soft").strip().lower() == "hard":
-                skipped_hard.append(row["job_id"])
-                continue
-            eta = (row["eta"] or "").strip()
-            if not eta:
-                continue
-            end_time = _add_minutes_hhmm(eta, row["est_duration"] * 60
-                                          if str(row["est_duration_unit"] or "").strip().lower().find("hour") != -1
-                                          else row["est_duration"])
+        _ensure_route_approvals(conn)
+        for cid in crew_ids:
             conn.execute(
-                "UPDATE jobs SET start_time = ?, end_time = ?, version = version + 1, "
-                "last_edited_by = ?, last_edited_at = ? WHERE job_id = ?",
-                (eta, end_time or None, actor, now, row["job_id"]),
+                "INSERT OR REPLACE INTO route_approvals "
+                "(route_date, crew_id, approved_at, approved_by) VALUES (?, ?, ?, ?)",
+                (route_date, cid, now, actor),
             )
-            updated.append((row["job_id"], row["customer_name"] or "", eta, end_time))
 
-    lines = [f"✅ Approved {len(updated)} job(s) for {route_date}:"]
-    for job_id, cust, start, end in updated:
-        lines.append(f"  {job_id}  {cust}  {start}" + (f"\u2013{end}" if end else ""))
-    if skipped_hard:
-        lines.append(f"  ({len(skipped_hard)} hard job(s) unaffected — their committed time is never changed)")
-    lines.append(
-        "Original Start/End Time is untouched — call unapprove_route_schedule "
-        "anytime to revert to the customer's actually-agreed schedule."
+    scope = f" ({', '.join(c for c in crew_ids if c.strip())})" if any(
+        c.strip() for c in crew_ids) else ""
+    return (
+        f"✅ Route approved for {route_date}{scope}.\n"
+        f"  Email is now allowed for this route, and its tap-to-navigate link "
+        f"will be pinned and viewable on the Jobs and Calendar pages.\n"
+        f"  No job time windows were changed — approve never touches Start/End Time."
     )
-    return "\n".join(lines)
+
 
 
 def db_unapprove_route_schedule(db_path: str, route_date: str, crew: str, actor: str) -> str:
-    """The inverse of db_approve_route_schedule above: copies each non-hard
-    job's Original Start/End Time back into Start Time/End Time. Operates
-    on every job SCHEDULED on route_date (not just ones currently in
-    route_stops) with a non-blank Original Start Time — so this still
-    works even if the route itself was since rebuilt or deleted, as long
-    as the job's own original schedule was ever recorded. A job whose
-    Original Start Time was never set (e.g. created before this feature,
-    on an install that hasn't run the one-time migration backfill, or one
-    genuinely never scheduled) is left alone and reported separately
-    rather than silently blanking its Start Time.
+    """The exact inverse of db_approve_route_schedule above (2026-10-05
+    rewrite): deletes the approval row(s) for (route_date, crew) — revoking
+    email eligibility — and unpublishes the route links (clears
+    route_stops.map_url and each routed job's Route Map URL) so nothing
+    approved-only remains viewable on the Jobs or Calendar pages. After
+    this, the route behaves exactly as if it had never been approved: no
+    leftover state where an un-approved route still behaves approved.
+
+    It NEVER writes to a job's Start Time / End Time — approve never
+    changed them, so there is nothing to restore.
     """
-    # R-058: includes multi-day jobs worked on this date, not only ones starting on it
-    rows = [r for r, _n in _jobs_worked_on(db_path, route_date)]
-
-    # Real bug caught before this ever shipped: the crew filter needs
-    # crew actually SELECTed above to filter on at all — an earlier draft
-    # of this query didn't select it, silently making the filter a no-op
-    # even when a crew was given.
-    crew_filter = crew.strip().lower()
-    if crew_filter:
-        # R-056: shared jobs ("A, B") belong to each person named.
-        rows = [r for r in rows if _crew_match(r["crew"], crew_filter)]
-
-    if not rows:
-        scope = f" for crew '{crew}'" if crew.strip() else ""
-        return f"✅ No jobs scheduled on {route_date}{scope} — nothing to un-approve."
-
-    reverted = []
-    skipped_hard = []
-    no_original = []
+    crew_filter = (crew or "").strip()
     now = utcnow_iso()
     with transaction(db_path) as conn:
-        for row in rows:
-            if (row["schedule_type"] or "soft").strip().lower() == "hard":
-                skipped_hard.append(row["job_id"])
-                continue
-            orig_start = (row["original_start_time"] or "").strip()
-            if not orig_start:
-                no_original.append(row["job_id"])
-                continue
-            orig_end = (row["original_end_time"] or "").strip() or None
+        _ensure_route_approvals(conn)
+        if crew_filter:
+            # R-056: the person's own route, whatever case their name was typed in.
+            stops_q = ("SELECT job_id FROM route_stops WHERE route_date = ? "
+                       "AND job_id IS NOT NULL AND LOWER(TRIM(crew_id)) = LOWER(?)")
+            stops_params = (route_date, crew_filter)
+            appr_check_q = ("SELECT 1 FROM route_approvals WHERE route_date = ? "
+                            "AND LOWER(TRIM(crew_id)) = LOWER(?)")
+            appr_check_params = (route_date, crew_filter)
+            appr_q = ("DELETE FROM route_approvals WHERE route_date = ? "
+                      "AND LOWER(TRIM(crew_id)) = LOWER(?)")
+            appr_params = (route_date, crew_filter)
+            map_q = ("UPDATE route_stops SET map_url = NULL WHERE route_date = ? "
+                     "AND LOWER(TRIM(crew_id)) = LOWER(?)")
+            map_params = (route_date, crew_filter)
+        else:
+            stops_q = ("SELECT job_id FROM route_stops WHERE route_date = ? "
+                       "AND job_id IS NOT NULL")
+            stops_params = (route_date,)
+            appr_check_q = "SELECT 1 FROM route_approvals WHERE route_date = ?"
+            appr_check_params = (route_date,)
+            appr_q = "DELETE FROM route_approvals WHERE route_date = ?"
+            appr_params = (route_date,)
+            map_q = "UPDATE route_stops SET map_url = NULL WHERE route_date = ?"
+            map_params = (route_date,)
+        job_rows = conn.execute(stops_q, stops_params).fetchall()
+        was_approved = bool(conn.execute(appr_check_q, appr_check_params).fetchone())
+        conn.execute(appr_q, appr_params)
+        conn.execute(map_q, map_params)
+        job_ids = sorted({r["job_id"] for r in job_rows if r["job_id"]})
+        for jid in job_ids:
             conn.execute(
-                "UPDATE jobs SET start_time = ?, end_time = ?, version = version + 1, "
+                "UPDATE jobs SET route_map_url = '', version = version + 1, "
                 "last_edited_by = ?, last_edited_at = ? WHERE job_id = ?",
-                (orig_start, orig_end, actor, now, row["job_id"]),
+                (actor, now, jid),
             )
-            reverted.append((row["job_id"], row["customer_name"] or "", orig_start, orig_end))
 
-    lines = [f"↩️ Reverted {len(reverted)} job(s) for {route_date} to their original schedule:"]
-    for job_id, cust, start, end in reverted:
-        lines.append(f"  {job_id}  {cust}  {start}" + (f"\u2013{end}" if end else ""))
-    if skipped_hard:
-        lines.append(f"  ({len(skipped_hard)} hard job(s) unaffected — their committed time was never changed)")
-    if no_original:
-        lines.append(f"  ⚠️ {len(no_original)} job(s) have no recorded Original Start Time, left as-is: " + ", ".join(no_original))
-    return "\n".join(lines)
+    scope = f" for crew '{crew}'" if crew_filter else ""
+    if not was_approved and not job_ids:
+        return f"✅ No approved route found for {route_date}{scope} — nothing to un-approve."
+    return (
+        f"↩️ Route un-approved for {route_date}{scope}.\n"
+        f"  Email is no longer allowed for this route, and its link was removed "
+        f"from {len(job_ids)} job(s) — it no longer shows on the Jobs or Calendar pages.\n"
+        f"  No job time windows were changed."
+    )
+
 
 
 # ── Route & Schedule Advisor, Mode A — spec §14.4/§14.11 Phase 12 ──────────
@@ -658,6 +824,83 @@ def db_unapprove_route_schedule(db_path: str, route_date: str, crew: str, actor:
 # paid optimizer — not necessarily the shortest possible one. A day that
 # genuinely doesn't fit is flagged (DAY DOES NOT FIT), never silently
 # overpacked or silently dropped.
+
+def db_get_approved_route_stops(db_path: str, start_date: str, end_date: str,
+                                crew: str = "") -> dict:
+    """Read-only: approved-route schedule info for a date range, backing the
+    Jobs page and Board page job cards (2026-10-06 -- David: each card should
+    show the APPROVED scheduled time and drive miles/time, like the Route
+    page's stop cards).
+
+    For each date in [start_date, end_date] (YYYY-MM-DD, inclusive) returns:
+      {"approved": bool, "stops": [{"job_id", "stop_number", "eta",
+                                    "drove_min", "drove_miles"}, ...]}
+
+    - "approved" comes from the route_approvals table (the same source the
+      email gate uses) -- never from map_url presence.
+    - "stops" are the route_stops rows carrying a job_id, in visit order.
+      eta is the routed arrival ("HH:MM"); drove_min/drove_miles are the leg
+      FROM THE PREVIOUS STOP to this one (leg_drive_min/leg_drive_miles).
+    - An unapproved date returns approved=False with no stops, so callers
+      render those jobs exactly as they do today.
+    - Crew scoping mirrors db_is_route_approved: a blank crew matches any
+      crew's approval (personal mode stores crew_id '').
+    """
+    import datetime as _dt
+
+    def _ok(d):
+        try:
+            _dt.date.fromisoformat(d)
+            return True
+        except (ValueError, TypeError):
+            return False
+
+    out = {}
+    if not (_ok(start_date) and _ok(end_date)) or end_date < start_date:
+        return out
+    crew_filter = (crew or "").strip()
+    conn = get_connection(db_path)
+    try:
+        _ensure_route_approvals(conn)
+        d = _dt.date.fromisoformat(start_date)
+        last = _dt.date.fromisoformat(end_date)
+        while d <= last:
+            ds = d.isoformat()
+            if crew_filter:
+                appr = conn.execute(
+                    "SELECT 1 FROM route_approvals WHERE route_date = ? "
+                    "AND LOWER(TRIM(crew_id)) = LOWER(?)",
+                    (ds, crew_filter)).fetchone()
+                stops_q = ("SELECT job_id, stop_number, eta, leg_drive_min, "
+                           "leg_drive_miles FROM route_stops WHERE route_date = ? "
+                           "AND job_id IS NOT NULL AND LOWER(TRIM(crew_id)) = LOWER(?) "
+                           "ORDER BY stop_number")
+                stops_p = (ds, crew_filter)
+            else:
+                appr = conn.execute(
+                    "SELECT 1 FROM route_approvals WHERE route_date = ?",
+                    (ds,)).fetchone()
+                stops_q = ("SELECT job_id, stop_number, eta, leg_drive_min, "
+                           "leg_drive_miles FROM route_stops WHERE route_date = ? "
+                           "AND job_id IS NOT NULL ORDER BY stop_number")
+                stops_p = (ds,)
+            approved = bool(appr)
+            stops = []
+            if approved:
+                for r in conn.execute(stops_q, stops_p).fetchall():
+                    stops.append({
+                        "job_id": r["job_id"],
+                        "stop_number": r["stop_number"],
+                        "eta": r["eta"] or "",
+                        "drove_min": r["leg_drive_min"],
+                        "drove_miles": r["leg_drive_miles"],
+                    })
+            out[ds] = {"approved": approved, "stops": stops}
+            d += _dt.timedelta(days=1)
+    finally:
+        conn.close()
+    return out
+
 
 def _haversine_km(lat1, lon1, lat2, lon2):
     """Straight-line distance — used only to pick a reasonable geographic
@@ -789,24 +1032,379 @@ def _repair_hard_order(order):
         order[pos] = job
     return order
 
+def _job_dur_min(job):
+    """This job's work duration in minutes — the same parse _build_day_timeline
+    uses (hour units x60; unknown/blank falls back to 60 min, never a silent
+    zero). Factored out 2026-10-06 so the anchor/gap scheduler and the
+    timeline can't disagree on how long a job takes."""
+    dur = job.get("duration")
+    dur_unit = (job.get("duration_unit") or "min").lower()
+    try:
+        dur_min = float(dur) * 60 if dur and "hour" in dur_unit else float(dur)
+        if not dur_min:
+            raise ValueError
+    except (TypeError, ValueError):
+        dur_min = 60.0
+    return dur_min
+
+
+def _fmt_hhmm_ampm(dt):
+    """"12:00 PM"-style clock label for a _parse_hhmm datetime."""
+    return dt.strftime("%I:%M %p").lstrip("0")
+
+
+def _resolve_lunch_vs_hard(anchors, lunch_start_str, lunch_dur_min, workday_start_dt, workday_end_dt):
+    """Resolves the lunch block against hard-job anchors (2026-10-06, David's
+    rule: a hard job's window takes priority over the lunch block).
+
+    anchors: list of dicts with job_id, label, ws (datetime), dur (minutes),
+    we (datetime or None = window end). Only each anchor's committed service
+    span [ws, ws+dur] matters here, never a chained arrival.
+
+    Returns (lunch_eff_start_str or None, split_map, notes):
+      - lunch_eff_start_str: "HH:MM" for the (possibly displaced) lunch, or
+        None when lunch was dropped for the day.
+      - split_map: {job_id: (lunch_start_dt, lunch_end_dt)} for anchors whose
+        service span strictly contains lunch ("lunch is in the middle of the
+        job") — the timeline keeps lunch in place and splits the service
+        around it, preserving total work time.
+      - notes: warning strings (e.g. lunch skipped) for the caller to surface.
+
+    A merely overlapping (not strictly containing) lunch is displaced to the
+    nearest free adjacent slot — preferring right after the job, else right
+    before — keeping its duration. If neither adjacent slot fits inside the
+    workday without clashing with another anchor, lunch is dropped for the
+    day with a clear note. Soft jobs never displace lunch; their absorption
+    logic is untouched elsewhere.
+    """
+    try:
+        lunch_dur_min = float(lunch_dur_min or 0)
+    except (TypeError, ValueError):
+        lunch_dur_min = 0.0
+    ls = _parse_hhmm(lunch_start_str)
+    if ls is None or lunch_dur_min <= 0:
+        return (lunch_start_str, {}, [])
+    le = ls + _dt.timedelta(minutes=lunch_dur_min)
+    notes = []
+    split_map = {}
+    cur_ls, cur_le = ls, le
+    dropped = False
+
+    def _svc(a):
+        return (a["ws"], a["ws"] + _dt.timedelta(minutes=a["dur"]))
+
+    # Pass 1 (chronological): displace lunch for partial overlaps. Strict
+    # containments are deferred to pass 2, so displacing for one anchor can't
+    # strand another anchor's split decision.
+    for a in sorted(anchors, key=lambda a: a["ws"]):
+        if dropped:
+            break
+        ws, se = _svc(a)
+        if cur_le <= ws or cur_ls >= se:
+            continue  # no overlap with this anchor's service
+        if ws < cur_ls and cur_le < se:
+            continue  # strictly inside — handled in pass 2
+        placed = False
+        cands = [(se, se + _dt.timedelta(minutes=lunch_dur_min)),
+                 (ws - _dt.timedelta(minutes=lunch_dur_min), ws)]
+        for ns, ne in cands:
+            if ns < workday_start_dt:
+                continue
+            if workday_end_dt is not None and ne > workday_end_dt:
+                continue
+            if any(ns < _svc(b)[1] and ne > _svc(b)[0] for b in anchors if b is not a):
+                continue
+            cur_ls, cur_le = ns, ne
+            placed = True
+            break
+        if not placed:
+            dropped = True
+            notes.append(
+                "\u26a0\ufe0f Lunch skipped \u2014 displaced by hard job %s %s\u2013%s." % (
+                    a.get("label") or a["job_id"],
+                    _fmt_hhmm_ampm(ws), _fmt_hhmm_ampm(se)))
+
+    # Pass 2: lunch strictly inside an anchor's service span stays in place;
+    # the timeline splits that anchor's service around it. (Skipped when lunch
+    # was dropped — no lunch, no split.)
+    if not dropped:
+        for a in anchors:
+            ws, se = _svc(a)
+            if ws < cur_ls and cur_le < se:
+                split_map[a["job_id"]] = (cur_ls, cur_le)
+
+    if dropped:
+        return (None, split_map, notes)
+    return (cur_ls.strftime("%H:%M"), split_map, notes)
+
+
+def _order_with_hard_anchors(jobs, origin, workday_start_min, workday_start_str,
+                             workday_end_str, lunch_start_str, lunch_dur_min,
+                             first_arrival_at_wds):
+    """Anchor-aware visit order for db_suggest_route_schedule (2026-10-06).
+
+    Hard jobs with a parseable start_time are ANCHORS: their service occupies
+    [window start, window start + duration] — never moved, never pushed by
+    lunch (see _resolve_lunch_vs_hard). Soft jobs fill the free gaps (workday
+    start -> first anchor, between anchors, last anchor -> workday end) in
+    proximity order using the same haversine heuristic _nn_order uses, placed
+    only when they fit: arrival + duration + drive to the next anchor must fit
+    inside the gap. A soft job may span the (possibly displaced) lunch block —
+    it then absorbs the pause, mirroring _build_day_timeline's own absorption,
+    and the fit check accounts for it. Soft jobs that fit in no gap are
+    appended after the last gap in nearest-neighbor order — never silently
+    dropped.
+
+    With no anchorable hard jobs this is exactly
+    _repair_hard_order(_nn_order(...)): an anchor-free day behaves identically
+    to before.
+    """
+    anchors = []
+    softs = []
+    for j in jobs:
+        if (str(j.get("schedule_type") or "").lower() == "hard"
+                and _parse_hhmm(j.get("start_time")) is not None):
+            anchors.append(j)
+        else:
+            softs.append(j)
+    if not anchors:
+        return _repair_hard_order(_nn_order(jobs, origin=origin,
+                                            workday_start_min=workday_start_min))
+
+    wds = _parse_hhmm(workday_start_str) or _parse_hhmm("07:00")
+    wde = _parse_hhmm(workday_end_str)
+    ainfo = []
+    for j in anchors:
+        ws = _parse_hhmm(j.get("start_time"))
+        ainfo.append({
+            "job_id": j.get("job_id"),
+            "label": "%s %s" % (j.get("job_id") or "", (j.get("address") or "").strip()),
+            "ws": ws,
+            "dur": _job_dur_min(j),
+            "we": _parse_hhmm(j.get("end_time")) if j.get("end_time") else None,
+            "job": j,
+        })
+    ainfo.sort(key=lambda a: a["ws"])
+
+    # Lunch position after hard-job displacement — for the absorption check
+    # below only (lunch is not a gap block: soft jobs may span it, exactly as
+    # _build_day_timeline lets them). _build_day_timeline runs this same
+    # shared resolution itself and surfaces the notes, so they can't
+    # double-fire.
+    lunch_eff_str, split_map, _ = _resolve_lunch_vs_hard(
+        ainfo, lunch_start_str, lunch_dur_min, wds, wde)
+    try:
+        _ld = float(lunch_dur_min or 0)
+    except (TypeError, ValueError):
+        _ld = 0.0
+    _ls_eff = _parse_hhmm(lunch_eff_str) if lunch_eff_str else None
+    if _ls_eff is None:
+        _ld = 0.0
+    # Lunch already consumed when a split exists (the split anchor absorbs it
+    # in the timeline) — later soft jobs must not re-absorb it.
+    lunch_used = bool(split_map) or _ls_eff is None
+
+    # Occupied blocks: hard anchors only (extended past lunch when split).
+    blocks = []  # (start, end, anchor-info)
+    for a in ainfo:
+        se = a["ws"] + _dt.timedelta(minutes=a["dur"])
+        if a["job_id"] in split_map:
+            sls, sle = split_map[a["job_id"]]
+            first_seg = (sls - a["ws"]).total_seconds() / 60.0
+            se = sle + _dt.timedelta(minutes=(a["dur"] - first_seg))
+        blocks.append((a["ws"], se, a))
+    blocks.sort(key=lambda b: b[0])
+
+    AVG_SPEED_KMH = 40.0  # same rough ranking assumption _nn_order uses
+
+    def _est_min(lat1, lon1, lat2, lon2):
+        try:
+            if None in (lat1, lon1, lat2, lon2):
+                return 0.0
+            return _haversine_km(lat1, lon1, lat2, lon2) / AVG_SPEED_KMH * 60.0
+        except Exception:
+            return 0.0
+
+    # Pair each occupied block with its preceding free gap.
+    segments = []  # (gap_tuple_or_None, block_tuple_or_None)
+    prev_end = wds
+    prev_pos = origin  # (lat, lon) or None
+    for bs, be, a in blocks:
+        gap = None
+        if bs > prev_end:
+            gap = (prev_end, bs, prev_pos, (a["ws"], a["job"]["lat"], a["job"]["lon"]))
+        segments.append((gap, (bs, be, a)))
+        if be > prev_end:
+            prev_end = be
+        prev_pos = (a["job"]["lat"], a["job"]["lon"])
+    if wde is None or prev_end < wde:
+        segments.append(((prev_end, wde, prev_pos, None), None))
+
+    order = []
+    remaining = softs[:]
+    anchor_appended = False
+    for gap, block in segments:
+        if gap is not None:
+            gs, ge, spos, end_anchor = gap
+            t = gs
+            pos = spos
+            while remaining:
+                cands = sorted(
+                    remaining,
+                    key=lambda j: _est_min(pos[0], pos[1], j.get("lat"), j.get("lon")) if pos else 0.0)
+                pick = None
+                pick_end = None
+                pick_absorbed = False
+                for j in cands:
+                    dur = _job_dur_min(j)
+                    if not order and not anchor_appended and first_arrival_at_wds:
+                        # This job will be order[0]: with a soft home bookend
+                        # (or none) its arrival is anchored at Workday Start —
+                        # the drive happened before the workday clock starts
+                        # (same rule _build_day_timeline's _anchor_first
+                        # applies).
+                        arr = wds
+                    elif pos:
+                        arr = t + _dt.timedelta(minutes=_est_min(
+                            pos[0], pos[1], j.get("lat"), j.get("lon")))
+                    else:
+                        arr = t
+                    end = arr + _dt.timedelta(minutes=dur)
+                    # Mirror _build_day_timeline's lunch absorption so the fit
+                    # check sees the same effective times the timeline will.
+                    absorbed = False
+                    if not lunch_used and _ls_eff is not None:
+                        if _ls_eff <= arr:
+                            arr = arr + _dt.timedelta(minutes=_ld)
+                            end = arr + _dt.timedelta(minutes=dur)
+                            absorbed = True
+                        elif _ls_eff < end:
+                            end = end + _dt.timedelta(minutes=_ld)
+                            absorbed = True
+                    if end_anchor is not None:
+                        aws, alat, alon = end_anchor
+                        ok = end + _dt.timedelta(minutes=_est_min(
+                            j.get("lat"), j.get("lon"), alat, alon)) <= aws
+                    else:
+                        ok = ge is None or end <= ge
+                    if ok:
+                        pick, pick_end, pick_absorbed = j, end, absorbed
+                        break
+                if pick is None:
+                    break
+                order.append(pick)
+                remaining.remove(pick)
+                if pick_absorbed:
+                    lunch_used = True
+                pos = (pick.get("lat"), pick.get("lon"))
+                t = pick_end
+        if block is not None:
+            order.append(block[2]["job"])
+            anchor_appended = True
+    if remaining:
+        # Fit nowhere — still routed, after the last gap in proximity order.
+        order.extend(_nn_order(remaining, origin=prev_pos,
+                               workday_start_min=workday_start_min))
+    return order
+def _read_route_pins(db_path: str, route_date: str, crew_id=None) -> dict:
+    """Reads the Route tab's "Fix stop #" pins for a date: {job_id: fixed_position}.
+
+    (2026-10-05, David's rule: a pinned job is ALWAYS that stop number until
+    unpinned -- the router orders only the unfixed jobs.) Pins live on the
+    route_stops rows themselves, so they survive route rebuilds; crew_id=None
+    reads every crew's pins for the date. Returns {} when the column doesn't
+    exist yet (database predates the migration) -- never raises."""
+    try:
+        conn = get_connection(db_path)
+    except Exception:
+        return {}
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(route_stops)").fetchall()]
+        if "fixed_position" not in cols:
+            return {}
+        sql = ("SELECT job_id, fixed_position FROM route_stops WHERE route_date = ? "
+               "AND job_id IS NOT NULL AND fixed_position IS NOT NULL")
+        args = [route_date]
+        if crew_id is not None:
+            sql += " AND crew_id = ?"
+            args.append(crew_id)
+        pins = {}
+        for r in conn.execute(sql, args).fetchall():
+            try:
+                pos = int(r["fixed_position"])
+            except (TypeError, ValueError):
+                continue
+            if pos >= 1 and r["job_id"] not in pins:
+                pins[r["job_id"]] = pos
+        return pins
+    except Exception:
+        return {}
+    finally:
+        conn.close()
+
+
+def _apply_fixed_positions(jobs: list, pins: dict) -> list:
+    """Enforces "Fix stop #" pins on a job order. `jobs` is a list of job
+    dicts (each with job_id); `pins` is {job_id: 1-based position} among the
+    JOB stops (bookends are added later and never counted).
+
+    Pinned jobs are placed at their fixed positions first; every unfixed job
+    keeps its relative order from the incoming list and fills the remaining
+    slots. Guards: a duplicate pin (two jobs pinned to the same number) keeps
+    the one that appears first in the incoming order and treats the other as
+    unfixed; an out-of-range pin clamps to the last position; pins for jobs
+    not in the list are ignored. Pure function -- no DB access."""
+    if not pins or not jobs:
+        return list(jobs)
+    n = len(jobs)
+    by_id = {}
+    for j in jobs:
+        jid = j.get("job_id")
+        if jid and jid not in by_id:
+            by_id[jid] = j
+    # Normalize pins: clamp to [1, n], drop unknown jobs, first-wins on dupes
+    # (in incoming-list order, so the caller's own priority decides).
+    taken = set()
+    fixed = {}  # job_id -> 0-based index
+    for j in jobs:
+        jid = j.get("job_id")
+        if not jid or jid not in pins or jid in fixed:
+            continue
+        pos = max(1, min(int(pins[jid]), n)) - 1
+        if pos in taken:
+            continue  # duplicate pin -- this job stays unfixed
+        taken.add(pos)
+        fixed[jid] = pos
+    unfixed = [j for j in jobs if j.get("job_id") not in fixed]
+    out = [None] * n
+    for jid, pos in fixed.items():
+        out[pos] = by_id[jid]
+    it = iter(unfixed)
+    for i in range(n):
+        if out[i] is None:
+            out[i] = next(it)
+    return out
+
 
 def _soft_window_strs(job):
-    """A soft job's customer-agreed window as ("HH:MM", "HH:MM"), or None when it
-    has none. ONLY the Original Start/End Time, and only when BOTH are set (the
-    customer-agreed schedule, copied from Start/End at creation and never touched
-    by Approve). None means "no window" — the job is treated as having a full-day
-    window, so it can never be flagged as outside it. The job's current Start/End
-    Time is deliberately NOT a fallback: Approve overwrites it with the routed slot,
-    so it says where the route put the job, not what the customer agreed to."""
-    o_start = str(job.get("original_start_time") or "").strip()
-    o_end = str(job.get("original_end_time") or "").strip()
-    if o_start and o_end:
-        return o_start, o_end
+    """A soft job's CUSTOMER preferred window as ("H:MM AM/PM", "H:MM AM/PM"),
+    or None when the customer has none set. (2026-10-05, David's rule: the
+    "outside window" check is judged ONLY against the customer's Pref. Time
+    Start/End — never the job's Start/End Time, which is a scheduled slot,
+    not a constraint.) Either end may be blank (a partial window such as
+    "before 10:00 AM"); both blank = None = no constraint, so the job can
+    never be flagged as outside it."""
+    w_start = str(job.get("cust_pref_start") or "").strip()
+    w_end = str(job.get("cust_pref_end") or "").strip()
+    if w_start or w_end:
+        return w_start, w_end
     return None
 
 
+
 def _build_day_timeline(order, workday_start_str, workday_end_str,
-                         lunch_start_str, lunch_dur_min, tolerance_min):
+                           lunch_start_str, lunch_dur_min, tolerance_min,
+                           route_date=None):
     """Chains real OSRM drive times through `order`, inserting the lunch
     pause exactly once wherever the timeline naturally crosses
     lunch_start (extending whichever job is in progress, or the gap
@@ -816,16 +1414,79 @@ def _build_day_timeline(order, workday_start_str, workday_end_str,
     computed arrival drifts past tolerance, and a day that runs past
     workday_end_str once lunch and drive time are both accounted for.
     Returns (list of (job, eta_str, leg_drive_min, leg_drive_miles) in
-    `order`'s sequence — leg_* is the drive FROM the previous stop TO this
-    one, None for the first stop in the order — , warnings)."""
+    order sequence -- leg_* is the drive FROM the previous stop TO this
+      one, None for the first stop in the order -- , warnings).
+      Also flags a job whose preferred_days (blank = no constraint) does not
+      include route_date weekday -- PREFERRED DAY NOT MET, never blocking.
+        2026-10-06 hard/lunch priority: a hard job's window takes priority
+        over the lunch block — hard jobs never absorb or get pushed by lunch
+        (a merely overlapping lunch is displaced around them; lunch strictly
+        inside a hard service splits the service around the in-place lunch).
+        The pre-pass below resolves this via _resolve_lunch_vs_hard before the
+        timeline runs, and a hard service running past its window end is now
+        flagged too.
+      2026-10-05 anchor: when order opens with a soft home bookend (Jobs Only
+      mode), the first real job arrival is anchored at Workday Start; the
+      crew leave time is (Workday Start minus the first drive), derivable
+        from that job own leg_drive_min."""
     warnings = []
-    cur_dt = _parse_hhmm(workday_start_str) or _parse_hhmm("07:00")
-    lunch_dt = _parse_hhmm(lunch_start_str)
+    workday_start_dt = _parse_hhmm(workday_start_str) or _parse_hhmm("07:00")
+    # 2026-10-06: resolve the lunch block against hard-job anchors BEFORE the
+    # timeline runs (David's rule — a hard job's window takes priority over
+    # lunch). Same shared resolution _order_with_hard_anchors uses for gap
+    # geometry, so both phases agree; notes (e.g. lunch skipped) surface here.
+    _tl_anchors = []
+    for _aj in order:
+        if str(_aj.get("schedule_type") or "").lower() == "hard" and _aj.get("job_id"):
+            _aws = _parse_hhmm(_aj.get("start_time"))
+            if _aws is not None:
+                _tl_anchors.append({
+                    "job_id": _aj.get("job_id"),
+                    "label": "%s %s" % (_aj.get("job_id") or "", (_aj.get("address") or "").strip()),
+                    "ws": _aws, "dur": _job_dur_min(_aj),
+                    "we": _parse_hhmm(_aj.get("end_time")) if _aj.get("end_time") else None,
+                })
+    _tl_wde = _parse_hhmm(workday_end_str)
+    _lunch_eff_str, _split_map, _lunch_notes = _resolve_lunch_vs_hard(
+        _tl_anchors, lunch_start_str, lunch_dur_min, workday_start_dt, _tl_wde)
+    warnings.extend(_lunch_notes)
+    # (2026-10-07) David's rule: an explicit job window takes precedence
+    # over working hours. The day's timeline may start before Workday
+    # Start to honor a hard anchor windowed earlier in the morning —
+    # working hours are a guide, not a hard requirement.
+    _eff_start_dt = workday_start_dt
+    for _ea in _tl_anchors:
+        if _ea["ws"] < _eff_start_dt:
+            _eff_start_dt = _ea["ws"]
+    cur_dt = _eff_start_dt
+    lunch_dt = _parse_hhmm(_lunch_eff_str) if _lunch_eff_str else None
     lunch_applied = False
     prev_lat = prev_lon = None
     results = []
+    # 2026-10-05 anchor (David's rule): when order opens with a soft home
+    # bookend (Jobs Only mode -- job_id None, not hard), it is a DEPARTURE
+    # POINT, not a timed stop. The first real job's arrival is anchored at
+    # Workday Start; the drive happened before the workday, so the leave
+    # time is workday_start minus the first leg (derived wherever it's
+    # displayed from that job's own leg_drive_min). Company Location's hard
+    # bookend keeps the old behavior (clock in at the address at Workday
+    # Start, then drive out).
+    _anchor_first = (
+        len(order) > 1
+        and order[0].get("job_id") is None
+        and str(order[0].get("schedule_type") or "").lower() != "hard"
+    )
 
-    for job in order:
+    # Preferred-day check setup (2026-10-04): route_date's weekday name once.
+    # Unparseable/missing route_date disables the check (never guess a day).
+    _route_wday = None
+    if route_date:
+        try:
+            _route_wday = _dt.datetime.strptime(
+                str(route_date).strip()[:10], "%Y-%m-%d").strftime("%A")
+        except (ValueError, TypeError):
+            _route_wday = None
+    for idx, job in enumerate(order):
         leg_min, leg_miles = None, None
         if prev_lat is not None:
             leg_min, leg_miles = _osrm_leg(prev_lat, prev_lon, job["lat"], job["lon"])
@@ -837,9 +1498,23 @@ def _build_day_timeline(order, workday_start_str, workday_end_str,
                 )
                 leg_min = 0
             cur_dt = cur_dt + _dt.timedelta(minutes=leg_min)
+            if _anchor_first and idx == 1:
+                # First real job after the soft home bookend: anchor its
+                # arrival at Workday Start (2026-10-05, David's rule). The
+                # bookend's placeholder minute and the first drive both
+                # happened before the workday clock starts.
+                # (2026-10-07) Exception: a hard job explicitly windowed
+                # BEFORE Workday Start keeps its own window — its window
+                # takes precedence over working hours, so the drive
+                # happened before that window and we anchor there instead.
+                _early_hard_ws = None
+                if str(job.get("schedule_type") or "").lower() == "hard":
+                    _early_hard_ws = _parse_hhmm(job.get("start_time"))
+                    if _early_hard_ws is not None and _early_hard_ws >= workday_start_dt:
+                        _early_hard_ws = None
+                cur_dt = _early_hard_ws if _early_hard_ws is not None else workday_start_dt
 
         eta_dt = cur_dt
-        # A hard job's committed start is a floor, not a target to race to —
         # arriving ahead of it means WAIT, never start the customer's
         # appointment early. Must run before the lunch check right below,
         # since the wait itself can push the idle gap across the lunch
@@ -848,79 +1523,187 @@ def _build_day_timeline(order, workday_start_str, workday_end_str,
         # earlier than committed once clamped) — it now only ever fires on
         # genuine lateness, which is the only direction a "violation"
         # actually makes sense for a committed appointment.
-        if job.get("schedule_type") == "hard" and job.get("start_time"):
-            committed_floor = _parse_hhmm(job["start_time"])
-            if committed_floor is not None and eta_dt < committed_floor:
-                eta_dt = committed_floor
+        _is_hard = job.get("schedule_type") == "hard" and job.get("start_time")
+        _committed_floor = _parse_hhmm(job["start_time"]) if _is_hard else None
+        if _committed_floor is not None and eta_dt < _committed_floor:
+            eta_dt = _committed_floor
 
-        # Lunch fell in the gap/drive time before this stop's arrival.
-        if not lunch_applied and lunch_dt is not None and lunch_dt <= eta_dt:
-            eta_dt = eta_dt + _dt.timedelta(minutes=lunch_dur_min)
+        # (2026-10-07) David's rule: an explicit SOFT window also takes
+        # precedence over working hours. If the customer's window opens
+        # later than the timeline's arrival, wait for it — mirrors the
+        # hard committed-floor clamp above. Runs before the lunch check,
+        # since the wait itself can push the gap across the lunch
+        # threshold (same reason the hard clamp does).
+        _window_wait = False
+        if not _is_hard:
+            _sw_strs = _soft_window_strs(job)
+            if _sw_strs and _sw_strs[0]:
+                _sws_dt = _parse_hhmm(_sw_strs[0])
+                if _sws_dt is not None and eta_dt < _sws_dt:
+                    eta_dt = _sws_dt
+                    _window_wait = True
+
+        dur_min = _job_dur_min(job)
+
+        # 2026-10-06: a hard job's window takes priority over the lunch
+        # block — lunch never pushes a hard job's anchoring. (The old
+        # `lunch_dt <= eta_dt` gap check fired at exact equality and shoved a
+        # hard job anchored exactly at lunch start a full hour late, tripping
+        # a bogus HARD TIME VIOLATION.) Exception: lunch strictly inside the
+        # hard job's service span ("lunch is in the middle of the job") —
+        # keep lunch in place and split the service around it, preserving
+        # total work time.
+        _split = _split_map.get(job.get("job_id")) if _is_hard else None
+        _did_split = False
+        if _split is not None and eta_dt < _split[1]:
+            _sls, _sle = _split
+            _first_seg = (_sls - eta_dt).total_seconds() / 60.0
+            if _first_seg < 0:
+                _first_seg = 0.0
+            if _first_seg > dur_min:
+                _first_seg = dur_min
+            end_dt = _sle + _dt.timedelta(minutes=(dur_min - _first_seg))
+            # Lunch is consumed by the split — later soft jobs don't re-absorb it.
             lunch_applied = True
+            _did_split = True
+        else:
+            # Lunch fell in the gap/drive time before this stop's arrival.
+            # Soft jobs only — hard jobs ignore lunch for anchoring.
+            # (2026-10-07) A wait FOR an explicit window is not working
+            # time — lunch during that idle wait must not push the job
+            # out of its own window.
+            if not lunch_applied and lunch_dt is not None and lunch_dt <= eta_dt and not _is_hard and not _window_wait:
+                eta_dt = eta_dt + _dt.timedelta(minutes=lunch_dur_min)
+                lunch_applied = True
 
-        dur = job.get("duration")
-        dur_unit = (job.get("duration_unit") or "min").lower()
-        try:
-            dur_min = float(dur) * 60 if dur and "hour" in dur_unit else float(dur)
-            if not dur_min:
-                raise ValueError
-        except (TypeError, ValueError):
-            dur_min = 60.0  # unknown duration — documented default fallback, not a silent zero
-        end_dt = eta_dt + _dt.timedelta(minutes=dur_min)
+            end_dt = eta_dt + _dt.timedelta(minutes=dur_min)
 
-        # Lunch fell DURING this job's own occupied time — the job absorbs
-        # the pause (spec's "extend the interrupted job" model), rather
-        # than being treated as blocked from spanning it.
-        if not lunch_applied and lunch_dt is not None and lunch_dt < end_dt:
-            end_dt = end_dt + _dt.timedelta(minutes=lunch_dur_min)
-            lunch_applied = True
-
-        if job.get("schedule_type") == "hard" and job.get("start_time"):
-            committed = _parse_hhmm(job["start_time"])
-            if committed is not None:
-                # eta_dt can no longer be earlier than committed (clamped
-                # above), so this only ever measures lateness now — abs()
-                # kept only as a defensive no-op against float rounding.
-                drift = abs((eta_dt - committed).total_seconds()) / 60.0
-                if drift > tolerance_min:
-                    warnings.append(
-                        f"⚠️ HARD TIME VIOLATION — job {job.get('job_id') or job.get('address')} committed to "
-                        f"{job['start_time']} but the proposed plan can't get there until "
-                        f"{eta_dt.strftime('%H:%M')} ({round(drift)} min late, "
-                        f"tolerance is {tolerance_min} min)."
-                    )
-
+            # Lunch fell DURING this job's own occupied time — the job absorbs
+            # the pause (spec's "extend the interrupted job" model), rather
+            # than being treated as blocked from spanning it. Soft jobs only;
+            # a hard job either splits (above) or ignores lunch.
+            if not lunch_applied and lunch_dt is not None and lunch_dt < end_dt and not _is_hard and not _window_wait:
+                end_dt = end_dt + _dt.timedelta(minutes=lunch_dur_min)
+                lunch_applied = True
+        if _is_hard and _committed_floor is not None:
+            # eta_dt can no longer be earlier than committed (clamped
+            # above), so this only ever measures lateness now — abs()
+            # kept only as a defensive no-op against float rounding.
+            drift = abs((eta_dt - _committed_floor).total_seconds()) / 60.0
+            if drift > tolerance_min:
+                warnings.append(
+                    f"\u26a0\ufe0f HARD TIME VIOLATION \u2014 job {job.get('job_id') or job.get('address')} committed to "
+                    f"{job['start_time']} but the proposed plan can't get there until "
+                    f"{eta_dt.strftime('%H:%M')} ({round(drift)} min late, "
+                    f"tolerance is {tolerance_min} min)."
+                )
+            # 2026-10-06: a hard job's service must fit INSIDE its window —
+            # arriving on time but running past the window end (e.g. the job
+            # is longer than its window, or a lunch split pushes the resume
+            # past the end) is still a genuine violation, never silently
+            # absorbed.
+            _window_end = _parse_hhmm(job.get("end_time")) if job.get("end_time") else None
+            if _window_end is not None and end_dt > _window_end:
+                _over = round((end_dt - _window_end).total_seconds() / 60.0)
+                warnings.append(
+                    f"\u26a0\ufe0f HARD TIME VIOLATION \u2014 job {job.get('job_id') or job.get('address')} committed to "
+                    f"{job['start_time']}\u2013{job['end_time']} but its service runs to "
+                    f"{end_dt.strftime('%H:%M')} ({_over} min past the window end)."
+                )
         # Soft jobs have no single committed point — the WINDOW they're allowed
-        # to be placed within is the customer-AGREED one: Original Start/End
-        # Time, and ONLY that (2026-09-21). With no Original window set, the job
-        # is treated as having a full-day window, so it can never be "outside" it
-        # — no warning. NOT the current Start/End: Approve overwrites those with
-        # the routed slot, after which "the window" would just be wherever the
-        # route put the job — every later drag would be judged against its own
-        # previous placement instead of what the customer actually agreed to.
+        # to be placed within is the CUSTOMER's preferred time window (Pref.
+        # Time Start/End on the customer record), and ONLY that (2026-10-05,
+        # David's rule). The job's own Start/End Time is a scheduled slot,
+        # not a constraint, and is never consulted here. With no customer
+        # window set, the job has no constraint, so it can never be "outside"
+        # it — no warning. Either end of the customer window may be blank (a
+        # partial window like "before 10:00 AM" constrains only its set end).
         # No tolerance added on top: the window itself already is the slack.
         # (Same rule as the Route tab's yellow highlight.)
         elif job.get("schedule_type") != "hard" and _soft_window_strs(job):
             win_start_s, win_end_s = _soft_window_strs(job)
-            win_start = _parse_hhmm(win_start_s)
-            win_end = _parse_hhmm(win_end_s)
-            if win_start is not None and win_end is not None and not (win_start <= eta_dt <= win_end):
+            win_start = _parse_hhmm(win_start_s) if win_start_s else None
+            win_end = _parse_hhmm(win_end_s) if win_end_s else None
+            _outside = False
+            if win_start is not None and win_end is not None:
+                _outside = not (win_start <= eta_dt <= win_end)
+            elif win_start is not None:
+                _outside = eta_dt < win_start
+            elif win_end is not None:
+                _outside = eta_dt > win_end
+            if _outside:
                 warnings.append(
                     f"⚠️ SOFT WINDOW VIOLATION — job {job.get('job_id') or job.get('address')} is set for "
                     f"{win_start_s}\u2013{win_end_s} but the proposed plan arrives at "
                     f"{eta_dt.strftime('%H:%M')}, outside that window."
                 )
+        # Preferred-day check (2026-10-04): a non-blank preferred_days not
+        # containing route_date's weekday warns — never blocks. Blank means
+        # no constraint (never warn). Full names or 3-letter abbreviations
+        # both accepted; anything unparseable is ignored, not guessed.
+        if _route_wday:
+            _pd_raw = str(job.get("preferred_days") or "").strip()
+            if _pd_raw and job.get("job_id"):
+                _pd_abbr = {"mon": "Monday", "tue": "Tuesday", "wed": "Wednesday",
+                            "thu": "Thursday", "fri": "Friday",
+                            "sat": "Saturday", "sun": "Sunday"}
+                _pd_days = set()
+                for _tok in _pd_raw.replace(",", "/").split("/"):
+                    _t = _tok.strip().lower()
+                    if not _t:
+                        continue
+                    if _t in _pd_abbr:
+                        _pd_days.add(_pd_abbr[_t])
+                    else:
+                        for _full in _pd_abbr.values():
+                            if _t == _full.lower():
+                                _pd_days.add(_full)
+                                break
+                if _pd_days and _route_wday not in _pd_days:
+                    _pd_order = ["Monday", "Tuesday", "Wednesday", "Thursday",
+                                 "Friday", "Saturday", "Sunday"]
+                    warnings.append(
+                        "\u26a0\ufe0f PREFERRED DAY NOT MET \u2014 job "
+                        + str(job.get('job_id')) + " prefers "
+                        + "/".join(sorted(_pd_days, key=_pd_order.index))
+                        + " but is routed for " + _route_wday
+                        + " (" + str(route_date) + ")."
+                    )
 
-        results.append((job, eta_dt.strftime("%H:%M"), leg_min, leg_miles))
         cur_dt = end_dt
         prev_lat, prev_lon = job["lat"], job["lon"]
+        # Collect this stop: the (job, eta, leg) tuple callers iterate to write
+        # route_stops. Without this append the timeline runs (warnings fire)
+        # but zero stops are ever written (found live 2026-10-05).
+        results.append((job, eta_dt.strftime("%H:%M"), leg_min, leg_miles))
 
     workday_end_dt = _parse_hhmm(workday_end_str)
-    if workday_end_dt is not None and cur_dt > workday_end_dt:
-        overflow = round((cur_dt - workday_end_dt).total_seconds() / 60.0)
+    # (2026-10-07) David's rule: explicit job windows take precedence over
+    # working hours, so the "day" extends to cover them — only a genuine
+    # overrun past the latest explicit commitment is flagged, never a plan
+    # that merely runs into explicitly-windowed time.
+    _eff_wde = workday_end_dt
+    _eff_wde_label = workday_end_str
+    for _ej in order:
+        _ej_we = None
+        if str(_ej.get("schedule_type") or "").lower() == "hard":
+            _ej_we = _parse_hhmm(_ej.get("end_time")) if _ej.get("end_time") else None
+            if _ej_we is None:
+                _ej_ws = _parse_hhmm(_ej.get("start_time"))
+                if _ej_ws is not None:
+                    _ej_we = _ej_ws + _dt.timedelta(minutes=_job_dur_min(_ej))
+        else:
+            _ej_sw = _soft_window_strs(_ej)
+            if _ej_sw and _ej_sw[1]:
+                _ej_we = _parse_hhmm(_ej_sw[1])
+        if _ej_we is not None and (_eff_wde is None or _ej_we > _eff_wde):
+            _eff_wde = _ej_we
+            _eff_wde_label = _ej_we.strftime("%H:%M")
+    if _eff_wde is not None and cur_dt > _eff_wde:
+        overflow = round((cur_dt - _eff_wde).total_seconds() / 60.0)
         warnings.append(
             f"⚠️ DAY DOES NOT FIT — the proposed plan runs about {overflow} min past "
-            f"the configured Workday End Time ({workday_end_str})."
+            f"the day's latest committed time ({_eff_wde_label})."
         )
     return results, warnings
 
@@ -1139,7 +1922,26 @@ def db_suggest_route_schedule(db_path: str, route_date: str, crew: str, actor: s
         # _build_day_timeline itself already uses two lines below.
         _wds_dt = _parse_hhmm(workday_start)
         _workday_start_min = (_wds_dt.hour * 60 + _wds_dt.minute) if _wds_dt is not None else 420
-        order = _repair_hard_order(_nn_order(crew_jobs, origin=origin, workday_start_min=_workday_start_min))
+        # 2026-10-06: anchor-aware ordering — hard jobs hold their windows as
+        # fixed anchors and soft jobs fill the gaps around them (and around
+        # the lunch block, which hard jobs may displace). Falls back to the
+        # old _repair_hard_order(_nn_order(...)) when no hard job carries a
+        # committable start time, so anchor-free days behave exactly as before.
+        _first_arrival_at_wds = not (
+            origin_mode == "company location" and db_read_route_address(db_path).strip())
+        order = _order_with_hard_anchors(
+            crew_jobs, origin=origin, workday_start_min=_workday_start_min,
+            workday_start_str=workday_start, workday_end_str=workday_end,
+            lunch_start_str=lunch_start, lunch_dur_min=lunch_dur,
+            first_arrival_at_wds=_first_arrival_at_wds)
+        # 2026-10-05 "Fix stop #" pins (Route tab): pinned jobs hold their
+        # fixed positions; the nearest-neighbor heuristic only orders the
+        # unfixed jobs around them.
+        _pin_crew = None if single_crew else ("" if crew_name == "(unassigned)" else crew_name)
+        _pins = _read_route_pins(db_path, route_date, _pin_crew)
+        if _pins:
+            order = _apply_fixed_positions(order, _pins)
+
         if start_end_template:
             # A fresh dict per crew group — never share/mutate one dict
             # object across groups (server mode can have several).
@@ -1160,7 +1962,8 @@ def db_suggest_route_schedule(db_path: str, route_date: str, crew: str, actor: s
                                start_time=workday_start if is_company_location else None)
             end_copy = dict(start_end_template, schedule_type="soft", start_time=None)
             order = [start_copy] + order + [end_copy]
-        results, warnings = _build_day_timeline(order, workday_start, workday_end, lunch_start, lunch_dur, tolerance)
+        results, warnings = _build_day_timeline(order, workday_start, workday_end, lunch_start, lunch_dur, tolerance,
+                                                route_date=route_date)
         all_warnings.extend(warnings)
         if not single_crew:
             summary_lines.append(f"\n{crew_name} ({len(results)} stop(s)):")
@@ -1383,6 +2186,14 @@ def db_apply_route_order(db_path: str, route_date: str, stop_order: str, crew: s
         lines.append("Fix stop_order and try again — every ID must appear exactly once.")
         return "\n".join(lines)
 
+    # 2026-10-05 "Fix stop #" pins (Route tab): a pinned job holds its fixed
+    # position no matter what order the caller asked for -- pins are re-applied
+    # here as a server-side guard, so even an AI that ignores the prompt
+    # constraint cannot violate them. Unfixed jobs keep the caller order.
+    _ap_pins = _read_route_pins(db_path, route_date, None)
+    if _ap_pins:
+        order = _apply_fixed_positions(order, _ap_pins)
+
     workday_start = db_read_settings_workday_start(db_path)
     workday_end = db_read_settings_workday_end(db_path)
     lunch_start = db_read_settings_lunch_break_start(db_path)
@@ -1459,7 +2270,8 @@ def db_apply_route_order(db_path: str, route_date: str, stop_order: str, crew: s
                          crew=end_crew)
         order = [start_copy] + order + [end_copy]
 
-    results, warnings = _build_day_timeline(order, workday_start, workday_end, lunch_start, lunch_dur, tolerance)
+    results, warnings = _build_day_timeline(order, workday_start, workday_end, lunch_start, lunch_dur, tolerance,
+                                            route_date=route_date)
 
     # Company Location mode + an explicit start/end choice from the caller
     # (the AI Route picker, 2026-09-19): the company Start/End Address stays
@@ -1600,6 +2412,25 @@ def db_reorder_and_replan(db_path: str, stop_id, new_position, actor: str,
     ids.remove(moving["id"])
     ids.insert(new_position - 1, moving["id"])
     job_order = [by_id[i]["job_id"] for i in ids if by_id[i]["job_id"]]
+
+    # 2026-10-05 "Fix stop #" pin follows the stop: if the moved stop was
+    # pinned, its pin moves to the new job-position (1-based among job
+    # stops, bookends excluded) so the pin still describes where the stop
+    # now sits. This UPDATE runs before db_apply_route_order below, whose
+    # pin enforcement then reads the moved pin and keeps the stop there.
+    _was_pinned = "fixed_position" in moving.keys() and moving["fixed_position"] is not None
+    if _was_pinned:
+        _new_pin_pos = job_order.index(moving["job_id"]) + 1
+        _pin_conn = get_connection(db_path)
+        try:
+            _ensure_fixed_position_column(_pin_conn)
+            _pin_conn.execute(
+                "UPDATE route_stops SET fixed_position = ? WHERE route_date = ? AND job_id = ?",
+                (_new_pin_pos, route_date, moving["job_id"]),
+            )
+            _pin_conn.commit()
+        finally:
+            _pin_conn.close()
 
     crew_txt = str(crew_id or "").strip()
     crew_arg = crew_txt if (is_server_mode and crew_txt not in ("", "(unassigned)")) else ""
@@ -1772,6 +2603,8 @@ def db_prescreen_route_jobs(db_path: str, route_date: str, crew: str = "",
             continue
         if str(r["job_status"] or "").strip().lower() in ("cancelled", "canceled"):
             continue            # never routed, so nothing to check (2026-09-25)
+        if str(r["paused"] or "").strip().lower() in ("1", "true", "yes"):
+            continue            # paused: never routed, so nothing to check (2026-10-05)
         street = str(r["street_address"] or "").strip()
         city = str(r["city"] or "").strip()
         state = str(r["state"] or "").strip()

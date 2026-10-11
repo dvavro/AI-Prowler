@@ -170,13 +170,14 @@ class TestJobCardHtmlEndDateBadge:
         assert "j.endDate && j.endDate !== j.date" in nearby
 
     def test_render_jobs_list_uses_shared_card_renderer(self, pwa_source):
-        """Regression guard — Today and Upcoming sections must render
-        cards through the same function, not two copies that could
-        drift out of sync."""
+        """Regression guard -- every card group in renderJobsList
+        must render through the shared jobCardHtml function, not copies
+        that could drift out of sync. Three groups since the 2026-10-06
+        Billing view added the billing-backlog group."""
         idx = pwa_source.index("function renderJobsList()")
         end_idx = pwa_source.index("\n}", idx)
         body = pwa_source[idx:end_idx]
-        assert body.count("jobCardHtml") == 2  # once for each group
+        assert body.count("jobCardHtml") == 3  # Today, Upcoming, billing backlog (Billing view, 2026-10-06)
 
 
 class TestParseJobsIncludesEndDate:

@@ -97,8 +97,10 @@ CREATE TABLE IF NOT EXISTS customers (
     longitude               REAL,
     service_types           TEXT,                 -- Win/Press/Both
     frequency               TEXT,
+    schedule_type           TEXT DEFAULT 'Soft', -- Soft/Hard: default schedule type new jobs inherit (2026-10-04)
     preferred_days          TEXT,
-    preferred_time_window   TEXT,
+    preferred_time_start    TEXT,                 -- preferred window start, H:MM AM/PM or empty
+    preferred_time_end      TEXT,                 -- preferred window end, H:MM AM/PM or empty
     avg_job_duration_min    REAL,
     standard_quote          REAL,
     discount_pct            REAL,
@@ -129,6 +131,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     service_date            TEXT,
     end_date                TEXT,                 -- blank = single-day job
     day_of_week             TEXT,
+    preferred_days          TEXT,                 -- job-level Preferred Day(s) (2026-10-04), Monday/Friday notation, blank = no day constraint
     start_time              TEXT,
     end_time                TEXT,
     service_type            TEXT,
@@ -148,7 +151,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     recurrence              TEXT,
     invoice_id              TEXT REFERENCES invoices(invoice_id),
     invoice_sent_date       TEXT,
-    payment_status          TEXT,
+    receipt_sent_date       TEXT,
+      payment_status          TEXT,
+      no_sales_tax            INTEGER DEFAULT 0, -- 1 = tax-exempt job: invoices compute $0 tax (2026-10-08)
     schedule_type           TEXT DEFAULT 'soft',  -- 'hard'|'soft' (spec §14.2, added 2026-09-16). 'hard': start_time/end_time are a committed appointment the router must honor. 'soft' (default): start_time/end_time are the allowable placement window, defaulting to the workday if blank — today's behavior, made explicit.
     original_start_time    TEXT,  -- mileage/routing follow-up (2026-09-20): the customer's actually-agreed schedule. Deliberately an ORDINARY, independently-editable field (same as any other column) — changed only by a genuine manual edit or an explicit Claude instruction to update it, NEVER by approve_route_schedule/unapprove_route_schedule, which read/write start_time/end_time only. Lets a route be approved and un-approved through any number of trial-and-error passes without ever losing track of what the customer was actually told.
     original_end_time      TEXT,  -- see original_start_time above — same rule, paired field.
@@ -265,7 +270,8 @@ CREATE TABLE IF NOT EXISTS route_stops (
     id                        INTEGER PRIMARY KEY AUTOINCREMENT,
     route_date                TEXT NOT NULL,
     crew_id                   TEXT NOT NULL,       -- users.id, or free-text crew name fallback
-    stop_number               INTEGER NOT NULL,
+      stop_number               INTEGER NOT NULL,
+      fixed_position            INTEGER,
     job_id                    TEXT REFERENCES jobs(job_id),
     customer_id               TEXT REFERENCES customers(customer_id),
     address                   TEXT,
@@ -283,6 +289,19 @@ CREATE TABLE IF NOT EXISTS route_stops (
 );
 CREATE INDEX IF NOT EXISTS idx_route_stops_date_crew ON route_stops(route_date, crew_id);
 CREATE INDEX IF NOT EXISTS idx_route_stops_last_edited_at ON route_stops(last_edited_at);
+
+-- ── route_approvals (2026-10-05, approval-gated email/links) ─────────
+-- One row per approved (route_date, crew_id). Approve sets it; Un-approve
+-- deletes it; any route_stops rewrite for the pair deletes it too (a
+-- rebuilt route is experimental until re-approved). Email and the
+-- Jobs/Calendar route-link views are only served for approved routes.
+CREATE TABLE IF NOT EXISTS route_approvals (
+route_date                TEXT NOT NULL,
+crew_id                   TEXT NOT NULL,
+approved_at               TEXT NOT NULL,
+approved_by               TEXT,
+PRIMARY KEY (route_date, crew_id)
+);
 
 -- ── settings ─────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS settings (
@@ -345,6 +364,58 @@ def _drop_column_if_exists(conn, table: str, column: str) -> None:
     existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
     if column in existing:
         conn.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+
+
+def _migrate_preferred_time_window(conn) -> None:
+    """One-time data migration for the 2026-10-04 split of
+    customers.preferred_time_window into preferred_time_start /
+    preferred_time_end (separate start/end columns in the customer
+    listing, per David).
+
+    Parses the old combined values ("7:00 AM to 10:00 AM", "before
+    10:00 AM", "from 9:00 AM") into the two new columns. Only touches
+    rows whose new columns are BOTH still empty, so re-running never
+    overwrites a value set deliberately after the split. Unparseable
+    old values are left alone (old column keeps them until the DROP
+    below) -- nothing is guessed.
+
+    Idempotent: no-op if the old column is already gone, or if every
+    remaining old value is blank/unparseable.
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(customers)").fetchall()}
+    if "preferred_time_window" not in cols:
+        return  # already migrated (or fresh DB: SCHEMA_SQL has the new columns)
+    if "preferred_time_start" not in cols or "preferred_time_end" not in cols:
+        return  # safety: new columns must exist first
+    import re
+    rows = conn.execute(
+        "SELECT customer_id, preferred_time_window, preferred_time_start, preferred_time_end "
+        "FROM customers WHERE preferred_time_window IS NOT NULL "
+        "AND TRIM(preferred_time_window) != ''"
+    ).fetchall()
+    for cid, old, ns, ne in rows:
+        if (ns or "").strip() or (ne or "").strip():
+            continue  # new-style values already present; never overwrite
+        s = old.strip()
+        start, end, parsed = "", "", False
+        m = re.match(r"(.+?)\s+(?:to|-)\s+(.+)", s, re.IGNORECASE)
+        if m:
+            start, end, parsed = m.group(1).strip(), m.group(2).strip(), True
+        else:
+            m = re.match(r"^before\s+(.+)", s, re.IGNORECASE)
+            if m:
+                end, parsed = m.group(1).strip(), True
+            else:
+                m = re.match(r"^(?:after|from)\s+(.+)", s, re.IGNORECASE)
+                if m:
+                    start, parsed = m.group(1).strip(), True
+        if not parsed:
+            continue  # unparseable: leave for manual handling, don't guess
+        conn.execute(
+            "UPDATE customers SET preferred_time_start = ?, preferred_time_end = ? "
+            "WHERE customer_id = ?",
+            (start, end, cid),
+        )
 
 
 def _fix_time_entries_elapsed_min(conn) -> None:
@@ -629,6 +700,66 @@ def apply_schema(conn):
     # "unknown" and shows a dash rather than a wrong number.
     _ensure_column(conn, "route_stops", "leg_drive_min", "REAL")
     _ensure_column(conn, "route_stops", "leg_drive_miles", "REAL")
+
+    # 2026-10-05: route_stops.fixed_position added ("Fix stop #" pin, Route
+    # tab). 1-based position among the date/crew job stops; NULL = unfixed.
+    # Purely additive — existing rows stay NULL (no constraint invented).
+    _ensure_column(conn, "route_stops", "fixed_position", "INTEGER")
+
+
+    # 2026-10-04: customers.preferred_time_window split into
+    # preferred_time_start / preferred_time_end (separate start/end
+    # columns in the customer listing, per David). Existing databases
+    # get the new columns via _ensure_column; old values migrate once
+    # via _migrate_preferred_time_window above (only where the new
+    # columns are still empty); then the old column is dropped.
+    _ensure_column(conn, "customers", "preferred_time_start", "TEXT")
+    _ensure_column(conn, "customers", "preferred_time_end", "TEXT")
+    _migrate_preferred_time_window(conn)
+    _drop_column_if_exists(conn, "customers", "preferred_time_window")
+
+    # 2026-10-04: customers.schedule_type added — per-customer Soft/Hard
+    # default that new jobs inherit (Part A). Existing databases get the
+    # column via _ensure_column; existing rows take 'Soft' from the
+    # column DEFAULT. Purely additive — no other table or column touched.
+    _ensure_column(conn, "customers", "schedule_type", "TEXT DEFAULT 'Soft'")
+
+    # 2026-10-04: jobs.preferred_days added -- job-level Preferred Day(s)
+    # (Monday/Friday notation, inherited from the customer on new jobs,
+    # editable per job; blank = no day constraint). Existing databases get
+    # the column via _ensure_column; existing rows stay blank (no constraint
+    # -- never invent one). Purely additive.
+    _ensure_column(conn, "jobs", "preferred_days", "TEXT")
+
+    # 2026-10-05: jobs.paused added -- pause/resume for in-progress (esp.
+    # multi-day) jobs. 1 = paused: the job is never routed until resumed.
+    # Existing databases get the column via _ensure_column; existing rows
+    # take 0 from the column DEFAULT (routable -- never invent a pause).
+    # Purely additive.
+    _ensure_column(conn, "jobs", "paused", "INTEGER DEFAULT 0")
+
+    # 2026-10-06: jobs.paused_service_date / jobs.paused_end_date added --
+    # pause stash: pausing a dated job stashes its live Service/End dates here
+    # and clears the live dates (paused jobs sit on the Unscheduled board until
+    # resumed, when the stash is restored). Purely additive; existing rows stay
+    # NULL (no data invented; existing paused-with-date jobs keep their dates
+    # and resume gracefully with an empty stash leaving dates untouched).
+    _ensure_column(conn, "jobs", "paused_service_date", "TEXT")
+    _ensure_column(conn, "jobs", "paused_end_date", "TEXT")
+    # 2026-10-06: jobs.pause_comment added -- free-text reason for the pause,
+    # shown wherever the paused state appears. Purely additive, NULL default.
+    _ensure_column(conn, "jobs", "pause_comment", "TEXT")
+    # 2026-10-06: jobs.receipt_sent_date added -- stamped (YYYY-MM-DD) when a
+    # payment receipt is sent via email_receipt/text_receipt. Purely additive,
+    # NULL default; drives the Jobs-page Billing mode "Paid, no receipt" bucket.
+    _ensure_column(conn, "jobs", "receipt_sent_date", "TEXT")
+    # 2026-10-08: jobs.no_sales_tax added -- per-job tax exemption ("No Sales
+    # Tax" checkbox, see COMPLETE_USER_GUIDE.md Jobs_Schedule columns). 1 =
+    # tax-exempt: invoices compute $0 tax (total = quote - discount only).
+    # Existing databases get the column via _ensure_column; existing rows
+    # take 0 from the column DEFAULT (taxable -- never invent an exemption).
+    # Purely additive.
+    _ensure_column(conn, "jobs", "no_sales_tax", "INTEGER DEFAULT 0")
 
     conn.execute(
         "INSERT INTO schema_meta (key, value) VALUES ('schema_version', ?) "

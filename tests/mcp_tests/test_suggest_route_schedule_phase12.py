@@ -203,45 +203,52 @@ def test_basic_soft_jobs_proposal_writes_route_stops(db_path, monkeypatch):
 
 # ── Hard-time tolerance ───────────────────────────────────────────────────
 
-def test_hard_job_within_tolerance_no_violation_warning(db_path, monkeypatch):
+def test_hard_job_fitting_its_window_no_violation_warning(db_path, monkeypatch):
     _install_osrm_mock(monkeypatch, leg_minutes=10)
-    # Single hard job, no other stops — computed arrival is Workday Start
-    # Time (07:00 default, no preceding drive leg). 5 min off is within
-    # the 10-min default tolerance.
+    # Single hard job whose 60-min service fits exactly inside its window.
+    # Hard jobs anchor AT their window start (2026-10-06/07) — arrival is
+    # the 07:05 commitment itself (drift 0) and the service ends exactly at
+    # the window end, so neither the lateness check nor the window-overrun
+    # check fires.
     _create_job(
         db_path, customer="Hard",
-        **{"Schedule Type (Hard/Soft)": "hard", "Start Time": "07:05", "End Time": "08:00"},
+        **{"Schedule Type (Hard/Soft)": "hard", "Start Time": "07:05", "End Time": "08:05"},
     )
     result = db_suggest_route_schedule(db_path, ROUTE_DATE, "Jake", actor="dave")
     assert result.startswith("✅"), result
     assert "HARD TIME VIOLATION" not in result
+    stops = _route_stops(db_path, crew_id="Jake")
+    assert len(stops) == 1
+    assert stops[0]["eta"] == "07:05"  # anchored at window start, not workday start
 
 
 def test_hard_job_violation_flagged_when_pushed_outside_tolerance(db_path, monkeypatch):
-    """Real test bug found live (2026-09-19): this used to set the hard
-    job's committed Start Time to 08:00 while its actual computed arrival
-    (Workday Start, 07:00, no drive leg) landed an hour EARLY — which is
-    correctly never a violation (see _build_day_timeline's own comment: a
-    hard job's committed time is a floor, arriving ahead of it just means
-    waiting). The test's own old comment even said so ("60 min off... well
-    past tolerance") while accidentally testing the one direction that's
-    supposed to be silent. Flipped here so the committed time is BEFORE
-    the natural arrival — a genuine, real violation."""
+    """Hard jobs anchor AT their window start (2026-10-06/07), so a single
+    hard job can never arrive late on its own — the timeline starts at
+    min(workday start, earliest hard anchor). Genuine lateness only happens
+    when an earlier stop pushes the timeline past the commitment: the first
+    hard job's 60-min service + 10-min drive leg lands the second hard job
+    at 08:10, 40 min past its 07:30 commitment — well past the 10-min
+    default tolerance."""
     _install_osrm_mock(monkeypatch, leg_minutes=10)
-    job_id = _create_job(
-        db_path, customer="Hard",
-        **{"Schedule Type (Hard/Soft)": "hard", "Start Time": "06:00", "End Time": "07:00"},
+    _create_job(
+        db_path, customer="Early Hard",
+        **{"Schedule Type (Hard/Soft)": "hard", "Start Time": "07:00", "End Time": "08:00"},
     )
-    # Actual computed arrival is 07:00 (Workday Start, no drive leg) — 60
-    # min LATE against the 06:00 commitment, well past the 10-min default
-    # tolerance.
+    job_id = _create_job(
+        db_path, customer="Late Hard", address="2 Main St", lat=29.01, lon=-80.9,
+        duration=30,
+        **{"Schedule Type (Hard/Soft)": "hard", "Start Time": "07:30", "End Time": "08:30"},
+    )
     result = db_suggest_route_schedule(db_path, ROUTE_DATE, "Jake", actor="dave")
     assert result.startswith("✅"), result
     assert "HARD TIME VIOLATION" in result
     assert job_id in result
     # Advisory only — the write still goes through despite the warning.
     stops = _route_stops(db_path, crew_id="Jake")
-    assert len(stops) == 1
+    assert len(stops) == 2
+    assert stops[0]["eta"] == "07:00"   # first hard job anchors at its window start
+    assert stops[1]["eta"] == "08:10"   # pushed 40 min past its 07:30 commitment
 
 
 def test_hard_job_early_arrival_never_flagged_as_violation(db_path, monkeypatch):
@@ -279,16 +286,20 @@ def test_capitalized_hard_value_from_real_sheet_data_is_still_treated_as_hard(db
     test uses the exact capitalized value the real sheet produces, so a
     regression here can't hide behind a lowercase-only fixture again."""
     _install_osrm_mock(monkeypatch, leg_minutes=10)
+    _create_job(
+        db_path, customer="Early Hard",
+        **{"Schedule Type (Hard/Soft)": "hard", "Start Time": "07:00", "End Time": "08:00"},
+    )
     job_id = _create_job(
-        db_path, customer="Hard Capitalized",
-        **{"Schedule Type (Hard/Soft)": "Hard", "Start Time": "06:00", "End Time": "07:00"},
+        db_path, customer="Hard Capitalized", address="2 Main St", lat=29.01, lon=-80.9,
+        duration=30,
+        **{"Schedule Type (Hard/Soft)": "Hard", "Start Time": "07:30", "End Time": "08:30"},
     )
     # Same setup as test_hard_job_violation_flagged_when_pushed_outside_tolerance:
-    # actual computed arrival is 07:00 (Workday Start, no drive leg) — 60
-    # min LATE against the 06:00 commitment. If this job were
-    # (incorrectly) treated as soft, it would report "SOFT WINDOW
-    # VIOLATION" instead — the exact live symptom this test guards
-    # against.
+    # the first hard job's service + drive leg pushes this one 40 min past
+    # its 07:30 commitment. If this job were (incorrectly) treated as soft,
+    # it would report "SOFT WINDOW VIOLATION" instead — the exact live
+    # symptom this test guards against.
     result = db_suggest_route_schedule(db_path, ROUTE_DATE, "Jake", actor="dave")
     assert result.startswith("✅"), result
     assert "HARD TIME VIOLATION" in result

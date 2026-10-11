@@ -61,6 +61,10 @@ def _inv_id(create_result: str) -> str:
     return create_result.split("NEW_INVOICE_ID=")[1].splitlines()[0].strip()
 
 
+def _cust_id(create_result: str) -> str:
+    return create_result.split("NEW_CUST_ID=")[1].splitlines()[0].strip()
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Personal mode — _find_invoice_row / _lookup_customer_email direct tests
 # ══════════════════════════════════════════════════════════════════════════
@@ -75,10 +79,11 @@ def personal_env(tmp_path, monkeypatch, mcp_mod):
 
 
 def _seed_invoiced_job(mcp_mod, cust_email="jane@example.com"):
-    mcp_mod.create_customer({"Company Name": "Blue Wave Cafe", "Email": cust_email},
-                             filepath="", backup=False, ctx=None)
+    cust_result = mcp_mod.create_customer({"Company Name": "Blue Wave Cafe", "Email": cust_email},
+                                          filepath="", backup=False, ctx=None)
+    cust_id = _cust_id(cust_result)
     job_result = mcp_mod.create_job(
-        {"Customer Name / Company": "Blue Wave Cafe", "CustomerID (Customers!A)": "CUST-0001",
+        {"Customer Name / Company": "Blue Wave Cafe", "CustomerID (Customers!A)": cust_id,
          "Quote Amount ($)": 150.0}, filepath="", backup=False, ctx=None)
     job_id = _job_id(job_result)
     inv_result = mcp_mod.create_invoice(job_id, filepath="", backup=False, ctx=None)
@@ -127,8 +132,11 @@ def test_find_invoice_row_not_found_rejected_cleanly(personal_env, mcp_mod):
 
 
 def test_lookup_customer_email_by_customer_id(personal_env, mcp_mod):
-    _seed_invoiced_job(mcp_mod, cust_email="jane@example.com")
-    email = mcp_mod._lookup_invoice_customer_email(str(personal_env), "CUST-0001", "")
+    cust_result = mcp_mod.create_customer(
+        {"Company Name": "Lookup Co", "Email": "jane@example.com"},
+        filepath="", backup=False, ctx=None)
+    cust_id = _cust_id(cust_result)
+    email = mcp_mod._lookup_invoice_customer_email(str(personal_env), cust_id, "")
     assert email == "jane@example.com"
 
 
@@ -168,9 +176,10 @@ def test_email_invoice_end_to_end_auto_resolves_recipient(personal_env, mcp_mod,
 
 
 def test_email_invoice_no_recipient_found_fails_cleanly(personal_env, mcp_mod, monkeypatch):
-    mcp_mod.create_customer({"Company Name": "No Email Co"}, filepath="", backup=False, ctx=None)
+    cust_result = mcp_mod.create_customer({"Company Name": "No Email Co"}, filepath="", backup=False, ctx=None)
+    cust_id = _cust_id(cust_result)
     job_result = mcp_mod.create_job(
-        {"Customer Name / Company": "No Email Co", "CustomerID (Customers!A)": "CUST-0001",
+        {"Customer Name / Company": "No Email Co", "CustomerID (Customers!A)": cust_id,
          "Quote Amount ($)": 100.0}, filepath="", backup=False, ctx=None)
     inv_result = mcp_mod.create_invoice(_job_id(job_result), filepath="", backup=False, ctx=None)
     inv_id = _inv_id(inv_result)
@@ -237,9 +246,10 @@ def server_env(tmp_path, monkeypatch, mcp_mod):
 def test_server_mode_field_crew_denied_for_unassigned_jobs_invoice(server_env, monkeypatch, mcp_mod):
     owner = _owner()
     monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: owner)
-    mcp_mod.create_customer({"Company Name": "X"}, filepath="", backup=False, ctx=_make_ctx(owner))
+    cust_result = mcp_mod.create_customer({"Company Name": "X"}, filepath="", backup=False, ctx=_make_ctx(owner))
+    cust_id = _cust_id(cust_result)
     job_result = mcp_mod.create_job(
-        {"Customer Name / Company": "X", "CustomerID (Customers!A)": "CUST-0001",
+        {"Customer Name / Company": "X", "CustomerID (Customers!A)": cust_id,
          "Crew / Technician": "Someone Else", "Quote Amount ($)": 100.0},
         filepath="", backup=False, ctx=_make_ctx(owner))
     inv_result = mcp_mod.create_invoice(_job_id(job_result), filepath="", backup=False, ctx=_make_ctx(owner))
@@ -256,9 +266,10 @@ def test_server_mode_field_crew_allowed_for_own_jobs_invoice(server_env, monkeyp
     owner = _owner()
     crew = _field_crew()
     monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: owner)
-    mcp_mod.create_customer({"Company Name": "X"}, filepath="", backup=False, ctx=_make_ctx(owner))
+    cust_result = mcp_mod.create_customer({"Company Name": "X"}, filepath="", backup=False, ctx=_make_ctx(owner))
+    cust_id = _cust_id(cust_result)
     job_result = mcp_mod.create_job(
-        {"Customer Name / Company": "X", "CustomerID (Customers!A)": "CUST-0001",
+        {"Customer Name / Company": "X", "CustomerID (Customers!A)": cust_id,
          "Crew / Technician": crew["name"], "Quote Amount ($)": 100.0},
         filepath="", backup=False, ctx=_make_ctx(owner))
     inv_result = mcp_mod.create_invoice(_job_id(job_result), filepath="", backup=False, ctx=_make_ctx(owner))

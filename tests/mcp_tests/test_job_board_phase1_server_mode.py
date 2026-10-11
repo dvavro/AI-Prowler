@@ -99,7 +99,13 @@ def test_create_customer_server_mode(server_env, monkeypatch, mcp_mod):
         {"Company Name": "Blue Wave Cafe"}, filepath="", backup=False, ctx=_make_ctx(user),
     )
     assert result.startswith("✅"), result
-    assert _col(server_env, "customers", "company_name", "customer_id", "CUST-0001") == "Blue Wave Cafe"
+    # CUST-YEAR-N scheme (2026-10-04, COMPLETE_USER_GUIDE "CustomerID (CUST-YYYY-N)"):
+    # the first customer is CUST-<current year>-1, no longer CUST-0001 —
+    # read the id the tool actually issued instead of hard-coding it.
+    import re as _re
+    _m = _re.search(r"CUST-\d{4}-\d+", result)
+    assert _m, result
+    assert _col(server_env, "customers", "company_name", "customer_id", _m.group(0)) == "Blue Wave Cafe"
 
 
 def test_create_job_server_mode(server_env, monkeypatch, mcp_mod):

@@ -31,6 +31,13 @@ def _version(text):
     return int(m.group(1)) if m else None
 
 
+def _new_customer_id(db_path, name):
+    """Create a customer and return its real ID (CUST-YYYY-N year scheme)."""
+    result = db_create_customer(db_path, {"Company Name": name}, actor="david")
+    assert result.startswith("✅"), result
+    return re.search(r"NEW_CUST_ID=(\S+)", result).group(1)
+
+
 @pytest.mark.parametrize("sheet", ["Customers", "Quotes", "Invoices"])
 def test_sheet_columns_include_version(db_path, sheet):
     assert "Version" in [c.strip() for c in db_get_sheet_columns(db_path, sheet).splitlines()[0]
@@ -38,25 +45,25 @@ def test_sheet_columns_include_version(db_path, sheet):
 
 
 def test_customer_read_shows_version_and_it_moves(db_path):
-    db_create_customer(db_path, {"Company Name": "Blue Wave Cafe"}, actor="david")
+    cust_id = _new_customer_id(db_path, "Blue Wave Cafe")
     assert _version(db_read_job_spreadsheet(db_path, "Customers")) == 1
-    db_update_customer(db_path, "CUST-0001", {"Phone": "555"}, actor="david")
+    db_update_customer(db_path, cust_id, {"Phone": "555"}, actor="david")
     assert _version(db_read_job_spreadsheet(db_path, "Customers")) == 2
 
 
 def test_stale_customer_edit_is_refused(db_path):
-    db_create_customer(db_path, {"Company Name": "Blue Wave Cafe"}, actor="david")
+    cust_id = _new_customer_id(db_path, "Blue Wave Cafe")
     loaded = _version(db_read_job_spreadsheet(db_path, "Customers"))
-    db_update_customer(db_path, "CUST-0001", {"On-Site Contact": "Pat"}, actor="other")
-    out = db_update_customer(db_path, "CUST-0001", {"Phone": "555", "On-Site Contact": ""},
+    db_update_customer(db_path, cust_id, {"On-Site Contact": "Pat"}, actor="other")
+    out = db_update_customer(db_path, cust_id, {"Phone": "555", "On-Site Contact": ""},
                              actor="david", expected_version=loaded)
     assert out.startswith("❌") and "reload" in out
     assert "On-Site Contact: Pat" in db_read_job_spreadsheet(db_path, "Customers")
 
 
 def test_stale_quote_edit_is_refused(db_path):
-    db_create_customer(db_path, {"Company Name": "Blue Wave Cafe"}, actor="david")
-    db_create_quote(db_path, {"CustomerID": "CUST-0001", "Subtotal ($)": 100}, actor="david")
+    cust_id = _new_customer_id(db_path, "Blue Wave Cafe")
+    db_create_quote(db_path, {"CustomerID": cust_id, "Subtotal ($)": 100}, actor="david")
     loaded = _version(db_read_job_spreadsheet(db_path, "Quotes"))
     assert loaded == 1
     db_update_quote(db_path, "QTE-0001", {"Service Type": "Window"}, actor="other")
@@ -66,7 +73,11 @@ def test_stale_quote_edit_is_refused(db_path):
 
 
 def test_version_cannot_be_set_by_a_caller(db_path):
-    db_create_customer(db_path, {"Company Name": "A", "Version": 99}, actor="david")
+    # A caller-supplied Version on create is ignored - the row starts at 1
+    result = db_create_customer(db_path, {"Company Name": "A", "Version": 99}, actor="david")
+    assert result.startswith("✅"), result
+    cust_id = re.search(r"NEW_CUST_ID=(\S+)", result).group(1)
     assert _version(db_read_job_spreadsheet(db_path, "Customers")) == 1
-    db_update_customer(db_path, "CUST-0001", {"Version": 50, "Phone": "1"}, actor="david")
+    # ...and on update it is ignored too (normal bump to 2, not 50)
+    db_update_customer(db_path, cust_id, {"Version": 50, "Phone": "1"}, actor="david")
     assert _version(db_read_job_spreadsheet(db_path, "Customers")) == 2

@@ -193,6 +193,68 @@ def dialogs(monkeypatch):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# force_personal_mode (2026-10-08) — superseded on 2026-10-09 by the sandbox
+# below: every GUI test now runs
+# against sandbox copies of the installed .ai-prowler files (personal mode by
+# default), so this is only a no-op kept for the modules that request it.
+@pytest.fixture
+def force_personal_mode(sandbox_state):
+    yield sandbox_state
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# sandbox_state — every desktop GUI test runs against SANDBOX copies of the
+# installed AI-Prowler files, never David's real ones (2026-10-09).
+#
+# The AI-Prowler window reads ~/.ai-prowler/config.json (and users.json,
+# email_config.json, …) straight from the home folder. Through
+# tests/installed_files_guard.py every in-process read, write and existence
+# check of those real paths goes to a per-test sandbox folder instead. The
+# sandbox starts as a plain personal install: config.json =
+# {"edition": "home", "mode": "personal"} (the values mobile_activator.py
+# writes for a personal license); the other files don't exist.
+#
+# A server-mode test calls sandbox_state.set_config(edition="business",
+# mode="server") BEFORE building the window — only its own sandbox changes.
+# Writes the window makes (e.g. saving a setting) land in the sandbox too.
+# ─────────────────────────────────────────────────────────────────────────────
+class _SandboxState:
+    def __init__(self, folder: Path):
+        self.folder = folder
+        self.config_path = folder / "config.json"
+
+    def set_config(self, **values):
+        """Replace the sandbox config.json with exactly these keys."""
+        import installed_files_guard as g
+        with g._real["open"](self.config_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(values, indent=2))
+        return self
+
+    def read_config(self) -> dict:
+        import installed_files_guard as g
+        try:
+            with g._real["open"](self.config_path, "r", encoding="utf-8-sig") as f:
+                return json.loads(f.read() or "{}")
+        except FileNotFoundError:
+            return {}
+
+
+@pytest.fixture(autouse=True)
+def sandbox_state(tmp_path):
+    import installed_files_guard as g
+    folder = tmp_path / "sandbox_ai_prowler_state"
+    folder.mkdir(parents=True, exist_ok=True)
+    state = _SandboxState(folder)
+    state.set_config(edition="home", mode="personal")
+    sandboxed = g.PROTECTED + g.SANDBOX_ONLY
+    for real in sandboxed:
+        g.redirect(real, folder / real.name)
+    yield state
+    for real in sandboxed:
+        g.clear_redirect(real)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Shared Tk root — session-scoped
 #
 # Why session-scoped: creating a fresh Tk() per test exhausts the Tcl

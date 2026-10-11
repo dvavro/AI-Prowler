@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -86,7 +87,8 @@ def _run_fresh_install_flow(mcp_mod, filepath: str, ctx, check_fresh: bool = Tru
     )
     assert cust_result.startswith("✅"), f"create_customer failed:\n{cust_result}"
     cust_id = _marker(cust_result, "NEW_CUST_ID")
-    assert cust_id == "CUST-0001"
+    # Customer IDs follow the CUST-YYYY-N year scheme (first customer of the year)
+    assert re.fullmatch(r"CUST-\d{4}-1", cust_id), cust_id
 
     # 3. Quote.
     quote_result = mcp_mod.create_quote(

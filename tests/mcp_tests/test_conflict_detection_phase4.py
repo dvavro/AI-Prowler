@@ -117,12 +117,12 @@ def test_conflict_message_names_who_and_when(db_path):
 
 
 def test_conflict_check_applies_to_customers_too(db_path):
-    db_create_customer(db_path, {"Company Name": "A"}, actor="dave")
-    db_update_customer(db_path, "CUST-0001", {"Phone": "111-1111"}, actor="dave", expected_version=1)
-    result = db_update_customer(db_path, "CUST-0001", {"Phone": "222-2222"}, actor="dave",
+    cid = db_create_customer(db_path, {"Company Name": "A"}, actor="dave").split("NEW_CUST_ID=")[1].splitlines()[0].strip()
+    db_update_customer(db_path, cid, {"Phone": "111-1111"}, actor="dave", expected_version=1)
+    result = db_update_customer(db_path, cid, {"Phone": "222-2222"}, actor="dave",
                                  expected_version=1)  # stale
     assert result.startswith("❌")
-    assert _value(db_path, "customers", "phone", "customer_id", "CUST-0001") == "111-1111"
+    assert _value(db_path, "customers", "phone", "customer_id", cid) == "111-1111"
 
 
 # ── Ordering: permission check happens before the version check ─────────

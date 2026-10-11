@@ -75,11 +75,11 @@ Beyond core document search, AI-Prowler includes:
 1. Download from the Releases page
 2. Double-click and follow the prompts (admin rights required)
 3. The installer automatically sets up:
-   - Python 3.11
-   - All required Python packages
-   - Tesseract OCR engine
-   - Claude Desktop
-   - Cloudflare Tunnel client (`cloudflared`)
+- Python 3.11
+- All required Python packages
+- Tesseract OCR engine
+- Claude Desktop
+- Cloudflare Tunnel client (`cloudflared`)
 4. Sign in to Claude Desktop when it opens and pin it to the taskbar for quick access if you don't plan to activate mobile.
 5. Click the AI-Prowler shortcut on your Desktop. For mobile/web access, click **Start HTTP Server** in the Settings tab — but you first need a license key from the AI-Prowler subscription service.
 6. Open Claude Desktop — it will communicate directly with AI-Prowler via the MCP interface. If mobile is activated you will receive an email with a license key and instructions to enable it.
@@ -158,10 +158,28 @@ Indexing is incremental — on subsequent runs, only new or modified files are p
 - **Update Index** — re-scan tracked folders for changes
 - **Smart Scan** — preview what would be indexed without committing
 - **Pause / Resume** — stop mid-index and continue later
+- **⏹ Stop** — halt an in-progress index or update cleanly. AI-Prowler finishes the current file, then stops.
 
 ### Automatic Purge of Deleted Files
 
 When you delete a file from a tracked folder and run **Update Selected** or **Update All**, AI-Prowler automatically purges that file's chunks from ChromaDB. The vector database stays in sync with your file system — no manual cleanup required.
+
+### Corruption Protection — Startup Integrity Check
+
+Every time the AI-Prowler server starts, it runs `PRAGMA quick_check` on the ChromaDB SQLite store (takes under a second). If the index is corrupted, the status check reports **"index corrupted — run reindex_all(purge_first=True)"** instead of dying silently.
+
+When a reindex starts, AI-Prowler writes a crash marker file (`.reindex_in_progress.json`) and deletes it on success. If the server finds that marker on startup, it warns **"previous reindex interrupted"** — the last reindex was killed partway through. Re-run the reindex to fix it.
+
+### Duplicate Path Detection
+
+Tracked folders are always scanned **recursively**, so a folder that sits **inside** an already-indexed folder — or one that **contains** an already-indexed folder — would have every shared file indexed twice. AI-Prowler checks for both whenever a folder (or a single file) is added, in **personal and server mode alike**:
+
+- **Adding to the Index Queue** (Update Index tab) — an **Overlapping Index Path** warning if the folder is inside / contains an already-indexed folder *or* an already-queued one.
+- **When indexing registers it for tracking** — a **Duplicate or Overlapping Path** popup (and the same line in the output log).
+- **When Claude indexes it** (`index_path`, the only way in on a server) — the warning is in Claude's reply, together with the advice to untrack one of the two.
+- **In the tracked folder list** — any row covered by another tracked row is shown in **red** (re-checked every time the list reloads, so it clears once you untrack the parent).
+
+These are warnings, not blocks: the folder is still added, because tracking a sub-folder on purpose (e.g. a single file you want watched) is sometimes legitimate. An exact duplicate is simply ignored ("already tracked"); on Windows a different-case spelling of the same folder replaces the old entry.
 
 ### Server-Mode Scope Tagging (Business Server Only)
 
@@ -186,6 +204,29 @@ The tracked-paths listbox shows a write-permission prefix on every row:
 Double-click a row to toggle between read-only and writable.
 
 > **Note:** When Claude modifies a file it creates a `.bakN` backup alongside the changed file. This allows you or Claude to roll back to previous versions. After verifying changes work correctly, manually delete `.bakN` files to reduce clutter and free space.
+
+### Access-Only Folders — File Access Without Indexing (Personal mode only)
+
+An **access-only folder** is one Claude can **read** without it ever being **indexed into ChromaDB**: no embeddings, no disk cost, no reindex time, and its contents never show up in `search_documents` results. Claude's file tools (`read_file_lines`, `grep_documents`, `list_directory`, …) still work on files inside it. Use it for reference folders or working directories you want Claude to open on request but don't need searchable.
+
+**Rules for adding a folder** (the same everywhere — desktop, Remote app and Claude):
+
+1. **Folders only, always including their sub-folders.** Individual files can't be added — add the folder that contains them.
+2. **No duplicates.** A folder that's already on the list is refused ("already an access-only folder").
+3. **Nothing already covered.** A folder inside an access-only folder is refused ("already covered by access-only folder …") — it's readable already. So is a folder inside, or equal to, an **indexed** folder ("already readable — it's inside indexed folder …").
+4. **Adding a bigger folder is fine.** If you add a folder that contains folders already on the list, it's added and those inner entries are removed ("folded in") since the new folder now covers them. Their write switches aren't changed.
+
+Keeping one entry per area makes it simple to set read or read + write per folder.
+
+**Read access only, by default.** Adding a folder does *not* let Claude change anything there. Write access is a separate switch: each access-only row has the same **[W]** / **[R]** toggle as the indexed folders (see Mobile Write Zones above). The hard blocklist always wins — a blocked system folder stays unreadable even if it's listed here.
+
+**Where to manage them (all three edit the same list, `~/.rag_access_only_dirs.json`):**
+
+- **Desktop:** the **Access-Only Folders** panel on the Update Index tab — **📁 Add…**, **🗑 Remove Selected**, **🔄 Reload List**; double-click a row to toggle write access.
+- **Phone / browser:** the Remote Control app's **Perms** tab → **Access-Only Folders** section — type the folder path and tap **Add** (you'll re-enter your Bearer token to confirm), tap **🗑** to remove (instant), and use the switch on a row for write access.
+- **Claude:** ask it to "let Claude read C:\Manuals without indexing it" (`grant_access`) or "remove Claude's access to C:\Manuals" (`revoke_access`). `list_tracked_directories` shows them in their own **📂 Access-only folders** section.
+
+**Personal installs only.** On an AI-Prowler **Business server** the feature is switched off completely: the Update Index panel isn't shown, `grant_access` / `revoke_access` aren't offered to Claude (and refuse if called), `list_tracked_directories` has no access-only section, and an access-only list left on the server's disk makes nothing readable. To share a folder with your team on a server, index it (`index_path`) and give the right scope access instead.
 
 ---
 
@@ -247,7 +288,7 @@ The following tools are never registered when AI-Prowler runs in server mode (th
 | Category | Suppressed tools |
 |---|---|
 | Dev / code execution | `run_script`, `run_script_start`, `run_script_status`, `run_script_kill`, `compile_check`, `check_python_import`, `syntax_check`, `lint_check` |
-| Host filesystem writes (unscoped) | `list_directory`, `copy_to_backup`, `list_backups`, `restore_backup`, `cleanup_backups`, `cleanup_job_logs`, `reset_write_counter`, `grant_write_access`, `revoke_write_access` — backup/restore/approval-management tools remain operator/dev-only. `create_file`, `write_file`, `str_replace_in_file`, `line_replace_in_file`, and `create_directory` are **not** in this list — see §6.2c, they're gated per-call instead of blanket-suppressed. |
+| Host filesystem writes (unscoped) | `list_directory`, `copy_to_backup`, `list_backups`, `restore_backup`, `cleanup_backups`, `cleanup_job_logs`, `reset_write_counter`, `grant_write_access`, `revoke_write_access`, `grant_access`, `revoke_access` — backup/restore/approval-management and access-only-folder tools remain operator/dev-only (access-only folders are a personal-mode feature; see §4 Access-Only Folders). `create_file`, `write_file`, `str_replace_in_file`, `line_replace_in_file`, and `create_directory` are **not** in this list — see §6.2c, they're gated per-call instead of blanket-suppressed. |
 | Raw filesystem reads | `read_file_lines`, `grep_documents` |
 | Email operator tools | `configure_email`, `send_file`, `list_outlook_accounts` — use personal SMTP credentials or the local Outlook profile, not appropriate for a shared server. `send_learnings_report` is **not** in this category — see the note below. |
 | Learnings export/rebuild | `export_learnings_file`, `rebuild_learnings_index` — file-export and destructive index-rebuild operator actions. |
@@ -338,7 +379,7 @@ This scoping applies independently of Tier B role gating (§6.3) — even an own
 |---|---|---|
 | `index_path` | Indexes all supported documents in a folder (or a single file) and optionally adds the path to the auto-update tracking list. | Personal + Server |
 | `update_tracked_directories` | Re-scans all tracked paths and re-indexes only new or changed files. | Personal + Server |
-| `list_tracked_directories` | Lists every path currently registered for auto-update tracking. **Server mode:** gated by scope, not role — every role may call it; filtered to paths within the caller's own accessible scopes. | Personal + Server |
+| `list_tracked_directories` | Lists every tracked path. Personal mode shows two sections: **📁 Indexed directories (in ChromaDB)** and **📂 Access-only folders (readable, not indexed)**. Each entry shows **[W]** (writable) or **[R]** (read-only). **Server mode:** indexed directories only (no access-only section — that feature is personal-only); gated by scope, not role — every role may call it; filtered to paths within the caller's own accessible scopes. | Personal + Server |
 | `untrack_directory` | Removes a path from the tracking list and deletes all its chunks from ChromaDB. Destructive — chunks are gone until re-indexed. | Personal + Server |
 | `get_database_stats` | Chunk count, unique document count, and file-type breakdown for the ChromaDB index. Personal mode always covers the whole database. **Server mode:** scoped to the caller's own accessible scopes — every role, including owner, sees only their own private, assigned scope, and shared totals (§9 — no role gets a company-wide-total exception). | Personal + Server |
 
@@ -351,6 +392,8 @@ This scoping applies independently of Tier B role gating (§6.3) — even an own
 | `reindex_file` | Purges and rebuilds the ChromaDB index for a single file. Call after finishing edits to a file. | Personal + Server |
 | `reindex_directory` | Fully purges and rebuilds the index for one tracked directory. More thorough than `reindex_file`. | Personal + Server |
 | `reindex_all` | Nuclear option — wipes and rebuilds the entire ChromaDB index from scratch across all tracked directories. | Personal |
+| `cancel_indexing` | Stops a running index job cleanly — finishes the current file, then halts. | Personal + Server |
+| `indexing_status` | Shows whether an index/reindex is running and its current progress. | Personal + Server |
 
 ---
 
@@ -361,6 +404,7 @@ This scoping applies independently of Tier B role gating (§6.3) — even an own
 | `record_learning` | Saves a new lesson, fact, client preference, or business insight. Instantly indexed. In server mode the recording employee's name is automatically stamped. | Personal + Server |
 | `search_learnings` | Semantic search of the learning store. Claude calls this proactively before answering questions so personal knowledge overrides generic responses. | Personal + Server |
 | `list_learnings` | Browses learnings by recency with exact-match filters on category, status, or tag. | Personal + Server |
+| `get_learning` | Returns one learning's full record (title, content, context, category, outcome, tags, …) as JSON — read-only. The Remote Control app's Learn tab uses it to fill its Edit form. | Personal + Server |
 | `update_learning` | Edits fields of an existing learning — content, confidence, outcome, status, tags. **Server mode ownership:** each employee may only edit learnings they personally recorded; managers may edit any employee's learning but never the owner's; the owner may edit anything. Reading/searching learnings stays fully shared (§ above) — only modification is ownership-gated. | Personal + Server |
 | `delete_learning` | Permanently removes a learning from both JSON and ChromaDB. Consider archiving instead. **Same server-mode ownership rules as `update_learning`.** | Personal + Server |
 | `get_learning_stats` | Summary statistics: totals by category, source, outcome, and status. | Personal + Server |
@@ -482,12 +526,14 @@ Most email tools are personal-mode only, but `send_email` and `send_alert` are a
 |---|---|---|
 | `grant_write_access` | Adds a directory to the write-zone allowlist so Claude can create and edit files there. The directory must already be in the read allowlist. | Personal |
 | `revoke_write_access` | Removes a directory from the write allowlist. Read access is unaffected. | Personal |
+| `grant_access` | Adds a **folder** (always including its sub-folders) to the access-only list — **readable** by Claude, never indexed. Refuses files, duplicates, and folders already covered by an access-only or indexed folder; a folder containing access-only folders folds them in. Does not grant write access (use `grant_write_access` for that, which accepts access-only folders). Hidden and refused on a server. | Personal |
+| `revoke_access` | Removes a directory from the access-only list; Claude can no longer read it through that list. Hidden and refused on a server. | Personal |
 
 ---
 
 #### Code Tools — Write-Side (Personal + Server, Server Scoped to Own Directory)
 
-All write operations are protected by four independent layers: read allowlist, writable allowlist, hard blocklist, and per-session circuit breaker. In server mode, a fifth layer applies to `create_file`, `write_file`, `str_replace_in_file`, `line_replace_in_file`, and `create_directory`: writes are scoped to the caller's own personal directory only, and denied entirely for users without one configured (see §6.2b). The remaining dev/backup-management tools (`copy_to_backup`, `restore_backup`, `list_backups`, `list_directory`, `reset_write_counter`, `grant_write_access`, `revoke_write_access`, `cleanup_backups`, `cleanup_job_logs`) stay fully suppressed in server mode (§6.2).
+All write operations are protected by four independent layers: read allowlist, writable allowlist, hard blocklist, and per-session circuit breaker. In server mode, a fifth layer applies to `create_file`, `write_file`, `str_replace_in_file`, `line_replace_in_file`, and `create_directory`: writes are scoped to the caller's own personal directory only, and denied entirely for users without one configured (see §6.2b). The remaining dev/backup-management tools (`copy_to_backup`, `restore_backup`, `list_backups`, `list_directory`, `reset_write_counter`, `grant_write_access`, `revoke_write_access`, `grant_access`, `revoke_access`, `cleanup_backups`, `cleanup_job_logs`) stay fully suppressed in server mode (§6.2).
 
 | Tool | What It Does | Mode |
 |---|---|---|
@@ -501,7 +547,7 @@ All write operations are protected by four independent layers: read allowlist, w
 | `list_backups` | Lists all backups for a given file with timestamps and sizes. | Personal |
 | `restore_backup` | Overwrites the active file with the contents of the specified backup. | Personal |
 | `cleanup_backups` | Finds and optionally deletes backup files. Always run with `dry_run=True` first to preview. | Personal |
-| `cleanup_job_logs` | **Recently added.** Deletes old `run_script_start` job files (manifest `.json`, `.log`, `_wrapper.py`) from `~/.ai-prowler/jobs/`, which has no automatic retention. A job is only deleted if it's BOTH older than `older_than_days` (default 7) AND ranked beyond the `keep_last` most recent jobs (default 20) — either condition alone protects it. A job still marked "running" is never deleted. Always run with `dry_run=True` first (the default). | Personal |
+| `cleanup_job_logs` | Deletes old `run_script_start` job files from `~/.ai-prowler/jobs/`. **Note:** as of Oct 2026, files older than 48 hours are auto-deleted on every server startup — this tool is now only useful for manual cleanup of newer files. Always run with `dry_run=True` first. | Personal |
 | `reset_write_counter` | Resets the per-session 20-write circuit breaker so large editing sessions can continue without restarting the server. | Personal |
 | `list_writable_directories` | Personal mode / server-mode owner+manager: full write-zone and read-zone allowlist. Server-mode staff/field_crew: only their own personal directory's read/write status — not the company-wide list. | Personal + Server |
 
@@ -577,9 +623,9 @@ Everything the Jobs PWA's **Route** tab buttons call — building, reordering, r
 | `get_route_drive_matrix` | Returns a real drive-time/drive-distance matrix (minutes and miles) between every geocoded job scheduled on a date — one OSRM `/table` call — for something doing its own reasoning about visit order to work from before calling `apply_route_order`. | Personal + Server |
 | `reorder_route_stop` | Moves one stop to a new position within its own day's route (the Route tab's drag-and-drop / ▲▼ buttons), then **re-plans the whole day** in the new order using the same timeline engine as `build_daily_route` — every stop's arrival time is recomputed, not just the moved ones, so moving a stop and moving it back always returns exactly the same times. | Personal + Server, crew-scoped |
 | `replan_route_day` | Re-plans a day's stored route **in its current order** — recomputes every arrival time, the lunch pause, and every warning after a job's own schedule (Start Time, Duration, Hard/Soft type) was edited elsewhere, without changing the visit order itself. | Personal + Server, crew-scoped |
-| `approve_route_schedule` | The Route tab's "Approve" button — pushes each routed non-hard job's computed arrival time into its actual Start Time (with End Time derived from Est. Duration). Hard jobs are skipped — their Start Time is already a real commitment. Never touches Original Start Time/Original End Time, which is what makes `unapprove_route_schedule` a safe, repeatable undo. | Personal + Server |
-| `unapprove_route_schedule` | The direct inverse of `approve_route_schedule` — copies each non-hard job's Original Start Time/Original End Time back into Start Time/End Time, restoring the customer's actually-agreed schedule after any amount of trial-and-error route approving. | Personal + Server |
-| `email_route_now` | Emails the currently-saved route (stop order + arrival times + tap-to-navigate link) for a date/crew right now, on request — independent of whether Settings → "Email Route On Build" auto-email is on. **Server mode:** a field_crew caller can only email their own route; owner/manager/staff may email any crew's. | Personal + Server, crew-scoped |
+| `approve_route_schedule` | The Route tab's "Approve — Allows Email & Link Viewing" button — records the route as approved. Approval is a pure flag: it allows emailing the route and pins its tap-to-navigate link so it is viewable on the Jobs and Calendar pages. It NEVER changes any job's Start Time / End Time — a job's window always stays as the customer settings. | Personal + Server |
+| `unapprove_route_schedule` | The exact inverse of `approve_route_schedule` — fully undoes approval: clears the approval flag, unpins the route link (Jobs/Calendar stop showing it), and revokes email eligibility. Rebuilding a route also clears its approval — a rebuilt route is experimental until re-approved. | Personal + Server |
+| `email_route_now` | Emails the currently-approved route (stop order + arrival times + tap-to-navigate link) for a date/crew right now, on request — the manual counterpart to Settings → "Email Route On Approve", and it works even when that setting is Disabled. Only an approved route can ever be emailed: an unapproved route reports "Email is only allowed for approved routes — approve the route first" instead of sending. **Server mode:** a field_crew caller can only email their own route; owner/manager/staff may email any crew's. | Personal + Server, crew-scoped |
 | `get_route_start_options` | Backs the Jobs PWA's AI Routing start/end picker: reports which home address to offer next to "Current location (GPS)." Read-only — never geocodes, writes, or spends anything. **Server mode:** the home address saved for the relevant user in the Admin tab (a field_crew caller can only see their own); this is the per-user, server-mode equivalent of `get_home_address` (§6.2, Personal-only). | Personal + Server |
 
 ---
@@ -712,11 +758,11 @@ The Remote Access feature lets you use AI-Prowler with Claude.ai from any device
 2. **Start the HTTP Server** — Click **▶ Start HTTP Server**. The status light turns green.
 3. **Subscribe** — Click **🛒 Subscribe — Personal**. Complete Stripe checkout. Check your email for an activation code (format: `APRO-XXXXXX-XXXXXX-XXXXXX`).
 4. **Configure** — Paste the activation code into the **Activation Code** field in Settings → Remote Access. Click **⚡ Configure Mobile Access**. AI-Prowler automatically:
-   - Fetches your tunnel credentials from the activation server
-   - Creates a Cloudflare tunnel with a permanent public URL
-   - Installs `cloudflared` as a Windows service
-   - Starts the tunnel (shown as **Tunnel active (Windows service)**)
-   - Auto-fills your license key, domain, and tunnel token fields
+- Fetches your tunnel credentials from the activation server
+- Creates a Cloudflare tunnel with a permanent public URL
+- Installs `cloudflared` as a Windows service
+- Starts the tunnel (shown as **Tunnel active (Windows service)**)
+- Auto-fills your license key, domain, and tunnel token fields
 5. **Connect Claude.ai** — Click the red **📖 Connect Claude.ai (auto)** button. A popup explains the steps and copies your MCP URL to the clipboard. Click OK — Claude.ai opens to the Add Custom Connector dialog. Paste the URL, name it **AI-Prowler Local**, leave OAuth fields blank, click Add. Enter your Bearer token when prompted. Set **Always Allow** for all tools.
 
 > **No Cloudflare account needed.** The subscription automatically provisions and manages your Cloudflare tunnel. No manual DNS, no dashboard setup, no domain purchase required.
@@ -728,8 +774,8 @@ See **Section 9** for the full server deployment guide. In brief:
 1. **Start the HTTP Server** in Settings → Remote Access
 2. **Subscribe** — Click **🛒 Subscribe — Business** in the Business Subscription & Server Setup panel. Complete Stripe checkout.
 3. You will receive **N+1 emails**:
-   - One **server activation email** (subject: *AI-Prowler Business Server — Your Activation Code*) — for configuring the server machine
-   - One **personal seat email per employee** (subject: *AI-Prowler Personal — Seat N of M — Forward to your employee*) — forward each to the right team member
+- One **server activation email** (subject: *AI-Prowler Business Server — Your Activation Code*) — for configuring the server machine
+- One **personal seat email per employee** (subject: *AI-Prowler Personal — Seat N of M — Forward to your employee*) — forward each to the right team member
 4. **Auto-Configure** — Paste your server activation code and click **⚡ Auto-Configure Server**. The tunnel is provisioned and the server is live.
 5. **Test** — Click **🌐 Test Server Connection** — the LED turns green when the server is publicly reachable.
 6. **Share the Connector URL** — Copy the URL from the Server Connection Test panel and add it as a custom connector in Claude.ai (Team plan: once via Org Settings; Pro plan: each employee individually).
@@ -954,7 +1000,7 @@ A Business subscription provisions three things automatically when you subscribe
 4. Click **🛒 Subscribe — Business** — complete Stripe checkout
 5. Check your email for the server activation code (subject: *AI-Prowler Business Server — Your Activation Code*)
 6. Paste the code into the **Activation Code** field and click **⚡ Auto-Configure Server**
-   - Tunnel is provisioned, cloudflared service installed, license key auto-filled
+- Tunnel is provisioned, cloudflared service installed, license key auto-filled
 7. Click **🌐 Test Server Connection** — LED turns green when publicly reachable
 8. Go to the **Admin** tab and add your employees as users
 9. Forward each per-seat personal email to the right employee
@@ -1208,11 +1254,34 @@ Every MCP tool built for the field-service/contractor workflow, in one place. Fu
 
 > Export tools (`export_to_excel`/`export_to_csv`/`export_to_quickbooks_csv`) and backup/restore tools solve **different** problems — see **Data Portability** below for which to reach for.
 
+### Importing from QuickBooks (Conversational Import)
+
+AI-Prowler does not connect directly to QuickBooks. There are no QuickBooks buttons, OAuth flows, or logins in the app. Instead, imports happen conversationally through Claude.
+
+**How it works:**
+
+1. In Claude.ai, open **Connectors** and connect **QuickBooks Online**.
+2. Ask Claude to import, by text or voice. Examples:
+   - "Import my customers from QuickBooks into AI-Prowler"
+   - "Pull last month's invoices from QuickBooks into AI-Prowler"
+   - "Mark JOB-4099 as paid — the customer paid $180"
+   - "Show me all unpaid invoices"
+   - "Which customers owe me money?"
+
+**What gets imported:**
+- **Customers** — name, address, contact info, payment terms. Existing customers are matched (by phone, then name + email) and never duplicated. On matched customers, only blank fields are filled in — your service preferences (frequency, time windows, pricing) are never overwritten.
+- **Invoices** — invoice details linked to the correct job and customer.
+- **Payments and sales receipts** — applied to the matching invoice.
+
+**Data out:** The `export_to_quickbooks_csv` tool writes a QuickBooks-ready CSV for your accountant or for importing back into QuickBooks.
+
+**Where this is introduced:** The Jobs PWA onboarding wizard (Step 1) leads with "Import from QuickBooks (fastest start)" so new users see this option before manual entry.
+
 ### create_customer, create_quote, build_daily_route
 
 `update_job_spreadsheet()` only ever edits a row that *already exists* — it can't add a brand-new customer or quote, and building a whole day's route from scratch (rather than one stop at a time) needs its own dedicated logic. These three tools cover that ground.
 
-**`create_customer(updates, filepath="", backup=True)`** — appends a new row to the `Customers` sheet with an auto-generated `CustomerID (CUST-####)`. Always creates a new row; never use it to edit an existing customer (e.g. marking one inactive) — use `update_job_spreadsheet(sheet_name="Customers", ...)` for that instead.
+**`create_customer(updates, filepath="", backup=True)`** — appends a new row to the `Customers` sheet with an auto-generated `CustomerID` in `CUST-YEAR-NUMBER` form (e.g. `CUST-2026-1`): the year comes from the server clock, the number increments within the year, resets each January, and numbers are never reused. Always creates a new row; never use it to edit an existing customer (e.g. marking one inactive) — use `update_job_spreadsheet(sheet_name="Customers", ...)` for that instead.
 
 > *"Add a new customer: Sunshine Grill, 501 Canal St, New Smyrna Beach FL 32168, phone 386-555-0142, biweekly pressure washing"*
 
@@ -1276,12 +1345,47 @@ A job can last more than one day — a roof, a fence, a renovation. Give it an *
 - In server mode, field crew can't open the Settings sheet, but their Calendar still uses the company's Working Days (through `get_working_days`).
 - **In-app switch instead of a sheet edit (2026-10-02):** the Jobs app's Settings now offers a simple **weekday-only vs every-day** choice for Working Days — weekday-only saves `Mon,Tue,Wed,Thu,Fri`, every-day saves `Mon,Tue,Wed,Thu,Fri,Sat,Sun`, the same values the sheet row holds, so everything above applies either way.
 
-#### Email Route On Build
+#### Customer scheduling preferences & new-job autofill
 
-Whether building a route also emails it out automatically. A Settings-sheet row (Database tab → Settings, or ask Claude) — a simple on/off toggle, **`Enabled`** or **`Disabled`** (default):
+Each customer record carries scheduling preferences that flow into new jobs, so they don't have to be retyped every visit:
 
-- **Disabled (default)** = no automatic email after **Route Today** or **Run AI Route**. When you want the route in your inbox, use the **📧 Email Approved Route Now** button on the Jobs page or the Route tab — it sends the currently saved route on request, any time, and it works regardless of this setting.
-- **Enabled** = the route results + link are also emailed automatically every time **Route Today** or **Run AI Route** builds one.
+- **Preferred Day(s)** — a Mon–Sun checkbox group on the customer (stored as `Monday/Friday`). When you pick a customer on a new job, its Preferred Day(s) carry over to the job — still editable there for one-off adjustments.
+- **Pref. Time Start / Pref. Time End** — two separate columns (`H:MM AM/PM`); either end may be empty. A "before X" window is an empty start plus an end — e.g. start empty, end `10:00 AM` means "any time before 10:00 AM". When scheduling, a missing start or end falls back to the Settings working-hours start/end; the customer record itself stays as entered.
+- **Schedule Type** — `Soft` (flexible, the route may move it) or `Hard` (fixed commitment), default `Soft`. New jobs inherit the customer's setting; you can still change it per job.
+- Picking a customer on a new job also prefills **Window Opens/Closes** (from Pref. Time Start/End), **Est. Duration** (from Avg Job Duration), and **Service Type** — all editable on the job.
+
+Two advisory warnings watch these preferences — they flag the issue, never block the save:
+
+- **"Preferred day not met"** — the job has Preferred Day(s) set but is scheduled or routed on a day outside that list. Blank preferred days means no preference: no check, no warning.
+- **"⚠️ outside window"** — a soft job's scheduled time falls outside its true Start Time / End Time window.
+
+#### Recurring jobs — automatic next-job scheduling
+
+Once a customer has a **Last Service Date**, the next visit schedules itself:
+
+- The next job is created automatically with **Service Date = last service + the customer's Frequency interval**: Weekly +7 days, Biweekly +14, Monthly +1 month, Bi-Monthly +2, Quarterly +3, Semi-Annually +6, Annually +12.
+- It appears on the **Calendar** at its calculated date, and the customer's **Next Sched. Date** reflects it.
+- The generated job carries the customer's scheduling preferences (schedule type, time window, duration, service type, preferred days) and is fully editable afterward — adjust or reschedule it like any job.
+- One-time customers (blank or one-time Frequency) are skipped — nothing is generated for them.
+- **Lead time:** the daily sweep creates jobs due within the next **14 days** (Settings → `Recurring Job Lead Time (days)`), so the rolling 2-week Calendar view stays populated with upcoming recurring work. Overdue recurring customers always generate their next job regardless of lead time.
+
+#### No Sales Tax (tax-exempt jobs)
+
+Some jobs are tax-exempt — resale, nonprofit, out-of-state work. Mark the job itself and the $0 flows through everywhere on its own:
+
+- **Check the box on the job.** In the Jobs App, open the job's edit popup — right after **Payment Status** you'll find the **🚫🧾 No Sales Tax** checkbox. Check it for a tax-exempt job. (Asking Claude or using the tools: it's the `No Sales Tax` column on the job row — `1` = exempt, `0` = taxable, default `0`.)
+- **Invoices store $0.00 tax.** When the invoice is created, tax is computed as `(quote − discount) × rate` — for an exempt job that's `$0.00`, and the invoice confirmation shows **"Tax (exempt): $0.00"**. Tax is frozen at invoice creation, so unchecking the box later won't rewrite an invoice you've already sent.
+- **Receipts follow automatically.** Receipts pull the tax from the stored invoice, so the $0 carries through with nothing extra to do.
+- **Where you'll see it.** Tax-exempt jobs get a **🚫🧾** badge on their Board cards. In **Database → Jobs**, the **Tax Disabled** column (right after the Tax column) shows ✓ for exempt jobs, — for taxable ones.
+
+#### Email Route On Approve
+
+
+Whether approving a route also emails it out automatically. A Settings-sheet row (Database tab → Settings, or ask Claude) — a simple on/off toggle, **`Enabled`** or **`Disabled`** (default):
+
+- **Disabled (default)** = approving a route never emails it. When you want the route in your inbox, use the **📧 Email Approved Route Now** button on the Jobs page or the Route tab — it sends an approved route on request, any time, and it works regardless of this setting.
+- **Enabled** = the route results + link are emailed automatically each time a route is approved.
+- Only an **approved** route can ever be emailed — a just-built route is never approved, so trying to email one reports "Email is only allowed for approved routes — approve the route first" instead of sending.
 - **Server mode:** the auto-email goes to the requesting user's own email (Admin → Users). The manual button lets any crew member fetch their own copy of an admin-approved route even with this Disabled.
 - **Personal mode:** the auto-email uses the SMTP recipient configured in Email Configuration (see §6.5).
 
@@ -1413,7 +1517,7 @@ Two distinct capabilities cover "give my data to my accountant," "get this into 
 
 | Column | Description | Example |
 |---|---|---|
-| `CustomerID (CUST-####)` | Unique customer ID — referenced by Jobs_Schedule and Invoices | `CUST-0001` |
+| `CustomerID (CUST-YYYY-N)` | Unique customer ID — referenced by Jobs_Schedule and Invoices. Year-numbered: the year comes from the server clock, the number increments per year, resets each January, and numbers are never reused. | `CUST-2026-1` |
 | `Customer Type Comm/Res` | Commercial or Residential | `Commercial` |
 | `Company Name` | Company name (commercial customers) | `Sunshine Realty LLC` |
 | `First Name` | Contact first name | `Karen` |
@@ -1425,9 +1529,11 @@ Two distinct capabilities cover "give my data to my accountant," "get this into 
 | `State` | State | `FL` |
 | `ZIP` | ZIP — used for geocoding | `32168` |
 | `Service Type(s) Win/Press/Both` | Services this customer receives | `Both` |
-| `Frequency W/BW/M/Q/OT` | Weekly / Biweekly / Monthly / Quarterly / One-Time | `Monthly` |
-| `Preferred Day(s)` | Preferred service days | `Mon,Wed` |
-| `Pref. Time Window` | Preferred time range | `8am-5pm` |
+| `Frequency` | How often the customer is serviced — drives automatic recurring-job scheduling (Weekly +7 days, Biweekly +14, Monthly +1 month, Bi-Monthly +2, Quarterly +3, Semi-Annually +6, Annually +12). Short codes W/BW/M/BM/Q/SA/A also accepted. | `Monthly` |
+| `Schedule Type` | `Soft` (flexible — the route can move it) or `Hard` (fixed commitment). New jobs inherit it; changeable per job. | `Soft` |
+| `Preferred Day(s)` | Preferred service days, picked from a Mon–Sun checkbox group | `Monday/Friday` |
+| `Pref. Time Start` | Preferred window start (`H:MM AM/PM`), or empty for "no start requirement" | `7:00 AM` |
+| `Pref. Time End` | Preferred window end (`H:MM AM/PM`), or empty for "no end requirement" | `10:00 AM` |
 | `Avg Job Duration (min)` | Typical job length for scheduling | `90` |
 | `Standard Quote ($)` | Default quote amount | `350` |
 | `Discount (%)` | Default discount percentage (decimal) | `0.1` (= 10%) |
@@ -1455,8 +1561,10 @@ Two distinct capabilities cover "give my data to my accountant," "get this into 
 | `Longitude (AI Geocode)` | Auto-filled by `geocode_address()` | `-80.8512` |
 | `Service Date` | Scheduled date (YYYY-MM-DD) | `2026-03-30` |
 | `Day of Week` | Auto-filled day name | `Monday` |
-| `Start Time` | Scheduled start (HH:MM) | `08:00` |
-| `End Time` | Scheduled end (HH:MM) | `09:30` |
+| `Start Time` | Scheduled start (`H:MM AM/PM`) | `8:00 AM` |
+| `End Time` | Scheduled end (`H:MM AM/PM`) | `9:30 AM` |
+| `Schedule Type` | `Soft` (flexible) or `Hard` (fixed commitment) — inherited from the customer on new jobs, changeable per job | `Soft` |
+| `Preferred Day(s)` | Preferred service days, inherited from the customer. Scheduling or routing the job on another day raises a "preferred day not met" warning; blank means no preference, no warning. | `Monday/Friday` |
 | `Service Type` | Window / Pressure / Both | `Window` |
 | `Service Details / Notes` | Job-specific instructions or scope | `Full exterior — 12 windows` |
 | `Crew / Technician` | Assigned crew member | `Mike C.` |
@@ -1475,6 +1583,7 @@ Two distinct capabilities cover "give my data to my accountant," "get this into 
 | `InvoiceID (INV-####)` | Linked invoice | `INV-0001` |
 | `Invoice Sent Date` | Date invoice was emailed to customer | `2026-03-30` |
 | `Payment Status` | Unpaid / Paid / Overdue | `Unpaid` |
+| `No Sales Tax` | `1` = tax-exempt job — invoices compute $0 tax (total = quote − discount only); shows a 🚫🧾 badge on Board cards | `0` |
 
 ---
 
@@ -1555,17 +1664,17 @@ When Claude writes back to the job tracker, it matches on the **exact column hea
 
 ```python
 {
-    "Job\nStatus":               "Complete",
-    "Actual\nDuration (min)":    86,
-    "Actual\nAmount ($)":        185.00,
-    "Discount\nApplied ($)":     0,
-    "Payment\nStatus":           "Paid",
-    "Invoice\nSent Date":        "2026-06-25",
-    "Route Stop #":   1,
-    "Latitude\n(AI Geocode)":    28.9831,
-    "Longitude\n(AI Geocode)":   -80.8512,
-    "Route Map URL\n★ AI Prowler": "https://maps.google.com/...",
-    "Weather Check\n★ AI Prowler": "Partly cloudy 81°F",
+"Job\nStatus":               "Complete",
+"Actual\nDuration (min)":    86,
+"Actual\nAmount ($)":        185.00,
+"Discount\nApplied ($)":     0,
+"Payment\nStatus":           "Paid",
+"Invoice\nSent Date":        "2026-06-25",
+"Route Stop #":   1,
+"Latitude\n(AI Geocode)":    28.9831,
+"Longitude\n(AI Geocode)":   -80.8512,
+"Route Map URL\n★ AI Prowler": "https://maps.google.com/...",
+"Weather Check\n★ AI Prowler": "Partly cloudy 81°F",
 }
 ```
 ### Typical Small Business Contractor Workflow
@@ -1749,7 +1858,7 @@ The widget script is hosted once at `https://ai-prowler.com/consent-widget.js` a
 ```html
 <div data-ai-prowler-consent-widget></div>
 <script src="https://ai-prowler.com/consent-widget.js"
-        data-endpoint="YOUR_CONSENT_FORM_ENDPOINT_URL"></script>
+data-endpoint="YOUR_CONSENT_FORM_ENDPOINT_URL"></script>
 ```
 
 *Full control — your own custom-styled form:* build the HTML yourself with fields named `name` and `phone`, and a `consent` checkbox, add `data-ai-prowler-consent-form` to the `<form>` tag, and include the same script tag. The widget only wires up the submit handler over `fetch()` — your styling is untouched.
@@ -1879,6 +1988,15 @@ This approach works entirely within the MCP architecture — Claude is the reaso
 
 > **🔌 QuickBooks Integration:** If you connect the QuickBooks Online MCP connector in Claude.ai (Settings → Connectors), Claude will automatically detect it when executing any of these analyses and use QuickBooks as the primary financial data source — giving you real P&L, true net margins, expense ratios, AP aging, and cash flow data that goes beyond what the job tracker can provide on its own. No configuration change needed in AI-Prowler; the prompts detect and use QuickBooks automatically at runtime.
 
+**Importing from QuickBooks into the job tracker.** With the QuickBooks connector connected in Claude.ai, you can also ask Claude conversationally to pull data from QuickBooks into the Jobs database — for example: *"Import new customers from QuickBooks,"* *"Import this month's QuickBooks invoices and link them to jobs,"* or *"Import QuickBooks payments and update job payment statuses."* What Claude does:
+
+- **Customers:** queries QuickBooks customers, matches against the Jobs DB (by phone, then name + email), and creates only the new ones (`CUST-####`, never reusing numbers). On matched customers it fills in blank fields only — never overwrites your service preferences (frequency, time windows, pricing).
+- **Invoices:** imports QuickBooks invoices, links each to its job by customer + date, and writes the invoice ID back onto the job. Already-imported invoices are skipped, so re-running is safe.
+- **Payments:** applies QuickBooks payments to their invoices (`amount paid`, `payment date`, `payment method`, Paid/Partial status) and cascades the status to the linked jobs.
+- **Receipts (sales receipts):** creates paid-in-full invoice records and stamps the job's receipt-sent date.
+
+Claude always previews counts and matches before writing anything, so you can review before it commits. (There are no QuickBooks buttons in the app itself — that would require building Intuit OAuth into AI-Prowler, which isn't included; the conversational path above is the supported workflow.)
+
 #### Configure Popup
 
 When you click any button except 🧠 Run Pending Analysis, a scrollable **Configure** popup opens (806×980). All fields are always reachable by scrolling with the mouse wheel.
@@ -1908,23 +2026,23 @@ Tasks are stored in `~/.ai-prowler/pending_tasks.json`. The full schema:
 
 ```json
 {
-  "task_id":          "analyze_business_20260624_143022",
-  "type":             "analyze_business",
-  "label":            "📊 Analyze My Business",
-  "prompt":           "Analyze my business data...",
-  "scope_dirs":       ["C:\\Users\\david\\OneDrive\\Documents\\Invoices"],
-  "output_learnings": true,
-  "output_report":    false,
-  "output_email":     false,
-  "report_folder":    "C:\\Users\\david\\Documents\\AI-Prowler_tasks_reports",
-  "schedule":         "daily",
-  "first_due":        "2026-06-24",
-  "next_due":         "2026-06-25T09:00:00",
-  "daily_start_time":    "09:00",
-  "daily_end_time":      "17:00",
-  "daily_times_per_day": 1,
-  "created_at":       "2026-06-24T14:30:22Z",
-  "status":           "pending"
+"task_id":          "analyze_business_20260624_143022",
+"type":             "analyze_business",
+"label":            "📊 Analyze My Business",
+"prompt":           "Analyze my business data...",
+"scope_dirs":       ["C:\\Users\\david\\OneDrive\\Documents\\Invoices"],
+"output_learnings": true,
+"output_report":    false,
+"output_email":     false,
+"report_folder":    "C:\\Users\\david\\Documents\\AI-Prowler_tasks_reports",
+"schedule":         "daily",
+"first_due":        "2026-06-24",
+"next_due":         "2026-06-25T09:00:00",
+"daily_start_time":    "09:00",
+"daily_end_time":      "17:00",
+"daily_times_per_day": 1,
+"created_at":       "2026-06-24T14:30:22Z",
+"status":           "pending"
 }
 ```
 
@@ -2072,18 +2190,18 @@ The SMS Reply Monitor defaults to `every_2h` — it checks repeatedly throughout
 
 ```json
 {
-  "enabled":  true,
-  "email_to": "david.vavro1@gmail.com",
-  "location": "New Smyrna Beach, Florida",
-  "name":     "David",
-  "jobs": {
-    "morning_briefing":      {"enabled": true,  "time": "07:00",    "days": "weekdays"},
-    "overdue_invoice_alert": {"enabled": true,  "time": "08:00",    "days": "daily"},
-    "due_analysis_tasks":    {"enabled": true,  "time": "08:05",    "days": "daily"},
-    "sms_reply_monitor":     {"enabled": false, "time": "every_2h", "days": "daily"},
-    "weather_watch":         {"enabled": true,  "time": "19:00",    "days": "sunday"},
-    "end_of_day_summary":    {"enabled": false, "time": "18:00",    "days": "daily"}
-  }
+"enabled":  true,
+"email_to": "david.vavro1@gmail.com",
+"location": "New Smyrna Beach, Florida",
+"name":     "David",
+"jobs": {
+"morning_briefing":      {"enabled": true,  "time": "07:00",    "days": "weekdays"},
+"overdue_invoice_alert": {"enabled": true,  "time": "08:00",    "days": "daily"},
+"due_analysis_tasks":    {"enabled": true,  "time": "08:05",    "days": "daily"},
+"sms_reply_monitor":     {"enabled": false, "time": "every_2h", "days": "daily"},
+"weather_watch":         {"enabled": true,  "time": "19:00",    "days": "sunday"},
+"end_of_day_summary":    {"enabled": false, "time": "18:00",    "days": "daily"}
+}
 }
 ```
 
@@ -2129,9 +2247,9 @@ The SMS Reply Monitor defaults to `every_2h` — it checks repeatedly throughout
 
 **Shared (both modes):**
 - **Mobile Activation** — shown in personal/home mode only (hidden in server mode):
-  - **Check Activation** — checks if this machine is the active install
-  - **Transfer to This Machine** — use when replacing your computer
-  - *(Forgot token? In personal mode just retype it in the Bearer Token field above and click Save Token)*
+- **Check Activation** — checks if this machine is the active install
+- **Transfer to This Machine** — use when replacing your computer
+- *(Forgot token? In personal mode just retype it in the Bearer Token field above and click Save Token)*
 - **One-Time Activation panel** — shows Public hostname and Claude.ai MCP URL (read-only, assembled automatically from tunnel domain)
 - **Tunnel controls** — **Activate Tunnel Service** / **Uninstall Service** / **Start Tunnel** / **Stop Tunnel**
 - **Keep It Running panel** — LED status indicators + **⚡ Apply Power Settings Now** + **📋 Power Settings Guide**
@@ -2145,6 +2263,8 @@ The SMS Reply Monitor defaults to `every_2h` — it checks repeatedly throughout
 | Clear Database + Database list | Everything above + tracked-directories list | ❌ No | ✅ Yes |
 
 Learnings are **always preserved**. The `ai_prowler_learnings` ChromaDB collection is never touched by either clear button.
+
+- **🟢 Index healthy / 🔴 Corruption detected** — Checks the ChromaDB index with `PRAGMA quick_check`. Green = healthy, red = corrupted. Clicking red asks for confirmation, then clears and reindexes. Auto-checks when you open the Settings tab and after every reindex.
 
 ### Smart Scan Config Tab
 
@@ -2258,22 +2378,22 @@ After OCR, text is embedded into ChromaDB using `all-MiniLM-L6-v2` (sentence-tra
 
 ```
 You ask Claude (in English):
-  "Find all overdue invoices from last month"
-          ↓
+"Find all overdue invoices from last month"
+↓
 Claude calls search_documents()
-          ↓
+↓
 all-MiniLM-L6-v2 encodes your query as a 384-dim semantic vector
-          ↓
+↓
 ChromaDB computes cosine similarity against ALL indexed chunks
-  — English chunks
-  — Spanish chunks            ← same similarity calculation
-  — Mixed-language chunks
-          ↓
+— English chunks
+— Spanish chunks            ← same similarity calculation
+— Mixed-language chunks
+↓
 Top results returned (may include Spanish text)
-          ↓
+↓
 Claude reads Spanish text natively, synthesizes into English answer:
-  "I found 3 overdue invoices. Torres owes $450 (45 days overdue),
-   Ramirez owes $280 (32 days overdue)..."
+"I found 3 overdue invoices. Torres owes $450 (45 days overdue),
+Ramirez owes $280 (32 days overdue)..."
 ```
 
 ### What Is and Isn't Translated
@@ -2459,6 +2579,10 @@ Error 1033 means `cloudflared` is running but cannot reach the local AI-Prowler 
 3. Open the browser DevTools Console on the page with the form and check for a fetch error after submitting — a "Failed to fetch" with no other detail usually means the tunnel is down or the URL is wrong, not a form problem.
 4. If the form has a field named `website`, make sure it's genuinely empty on submission — that field is a spam honeypot and any value in it causes the submission to be silently discarded by design.
 
+### Automatic Cleanup of Background Job Files
+
+The background-jobs spool folder (`~/.ai-prowler/jobs/`) cleans itself: on every server startup and every new background-job launch, files older than **48 hours** are deleted automatically. Stuck "running" jobs get their process checked — dead ones cleaned up, live ones after 2 days killed.
+
 ---
 
 ## 20. Troubleshooting
@@ -2510,6 +2634,7 @@ No GPU. No training. New knowledge is queryable within roughly 1 second of being
 | `record_learning` | Save a new fact, lesson, or correction |
 | `search_learnings` | Semantic search the knowledge base |
 | `list_learnings` | Browse by category / status / tag |
+| `get_learning` | One learning's full record (JSON) |
 | `update_learning` | Modify an existing learning |
 | `delete_learning` | Permanently remove a learning |
 | `get_learning_stats` | Summary stats — totals, most applied |
@@ -2634,8 +2759,8 @@ The Jobs App is a mobile-friendly web app for field crew and business owners to 
 2. **Open the app URL** — `https://your-tunnel-domain.ai-prowler.com/jobs/`. The exact URL is also shown on the **Small Business tab** next to "Jobs App URL."
 3. **Install to the home screen (recommended)** — **iPhone:** open it in **Safari** → Share → Add to Home Screen. If the QR opened in another browser, copy the link into Safari first (or set Safari as the default in Settings → Apps — the iPhone Camera QR scanner opens links in your default browser, not necessarily Safari). **Android:** open it in **Chrome** and tap the **Install** button on the page (or ⋮ → Install app). It then opens full-screen like a native app, no browser chrome, no app store needed.
 4. **Log in once:**
-   - **Personal mode** — enter your single owner token (the same Bearer Token set in Settings → Remote Access).
-   - **Server mode** — each employee enters their **name** and their own personal token, set up for them in the Admin tab. What they then see depends on their role: **field crew** see only their own assigned jobs (schedule, board, calendar, route, database rows); **owner, manager and staff** see every crew's jobs. See **Server Mode — Roles and What Each User Sees** below.
+- **Personal mode** — enter your single owner token (the same Bearer Token set in Settings → Remote Access).
+- **Server mode** — each employee enters their **name** and their own personal token, set up for them in the Admin tab. What they then see depends on their role: **field crew** see only their own assigned jobs (schedule, board, calendar, route, database rows); **owner, manager and staff** see every crew's jobs. See **Server Mode — Roles and What Each User Sees** below.
 5. **Login persists on the device** — not tied to the browser tab or the app staying open. Closing or restarting the app never signs you out. To switch users or sign out, use **Sign Out / Change Device** on the Profile tab.
 
 ### Jobs Setup Popup — Skipping What You Don’t Need Yet
@@ -2652,17 +2777,18 @@ You don’t have to do everything at once. Sections 1 and 2 each have their own 
 
 The app has ten bottom-nav tabs: **Jobs**, **Board**, **Route**, **Calendar**, **Clock**, **Photos**, **Messages**, **Database**, **Reports**, **Profile**. (**Reports** appears in personal mode and, in server mode, for the owner only.)
 
-**Jobs** — today's schedule at a glance, split into a **Today** section and an **Upcoming** section. Each job is a card showing its ID, customer, service type, status badge, time window, city, and assigned crew. Tapping a card opens the full job-detail popup: clock in/out for that job, add notes, and — for any unpaid, un-invoiced completed job — a green **🧾 Create Invoice** button that opens a pre-filled form (quote, discount, tax rate, service type, description, payment terms) with a live Taxable / Tax / Total Due strip that recalculates on every keystroke. Once an invoice exists, **Email Invoice** / **Text Invoice** buttons send it directly from the app.
-- If a route has been built for today (via Claude calling `build_daily_route()` — see Section 10), a tappable **"📍 Today's route is ready — tap to navigate"** banner appears at the top of this tab, above the job list.
+**Jobs** — today's schedule at a glance, split into a **Today** section and an **Upcoming** section. Each job is a card showing its ID, customer, service type, status badge, time window, city, and assigned crew. Tapping a card opens the full job-detail popup: clock in/out for that job, add notes, and — for any unpaid, un-invoiced completed job — a green **🧾 Create Invoice** button that opens a pre-filled form (quote, discount, tax rate, service type, description, payment terms) with a live Taxable / Tax / Total Due strip that recalculates on every keystroke. The job edit form also has a **No sales tax** checkbox (after Payment Status) for tax-exempt jobs — when enabled, invoices compute $0 tax and the job shows a 🚫🧾 badge on Board cards. Once an invoice exists, **Email Invoice** / **Text Invoice** buttons send it directly from the app.
+- If today's route has been **approved** (Route tab → Approve — see Section 10), a tappable **"📍 Today's route is ready — tap to navigate"** banner appears at the top of this tab, above the job list. Unapproved/experimental routes show no banner.
 - A refresh button (spinning-icon control, top-right) manually re-fetches the list. Simply navigating to this tab also refreshes it automatically — you'll never see stale data just from switching back to it.
 
 **Board** — the live kanban/grid Job Board described in **Section 10 → Job Board**: Scheduled / In Progress / Completed columns, drag-and-drop to reschedule or reassign, polling `get_board_updates()` roughly every 60 seconds so it reflects crew activity without a manual refresh. The exact same markup renders for every role — owner, manager, staff, field_crew — in both Personal and Server mode; what actually differs is only which rows come back from the server (the same crew-scoping every other job-tracker tool applies), never anything role-specific on the client side.
 
 **Calendar** — a rolling 2-week day-by-day agenda, followed by a scrollable 12-month overview grid. Tapping any day, past or future, in either view opens a modal listing that day's jobs.
-- Any day that has a built route shows a small tappable **📍** icon — next to the date header in the 2-week agenda, next to the day number in the 12-month grid, and as a full "Route for this day — tap to navigate" banner inside the day-tap modal. This works for *any* date that currently has a route, not just today, which is what makes it practical to build routes for several days ahead of time and still have each one reachable later from the Calendar.
+- The 12-month overview also shows 🔮 dashed **projected** entries for recurring customers' future visits across the full year — view-only planning aids synthesized from each customer's frequency + last service date. They are not real jobs: they can't be tapped, scheduled, or edited, they never create database rows, and a real job on the same date suppresses its projection. A legend at the top of the overview explains this.
+- Any day whose route has been **approved** shows a small tappable **📍** icon — next to the date header in the 2-week agenda, next to the day number in the 12-month grid, and as a full "Route for this day — tap to navigate" banner inside the day-tap modal. Unapproved routes show no icon. This works for *any* date with an approved route, not just today, which is what makes it practical to build and approve routes for several days ahead of time and still have each one reachable later from the Calendar.
 - Auto-refreshes every time you navigate to this tab.
 
-**Route** — pick a day, check it for problems (prescreen), build the day's route, adjust the stop order (▲▼, drag ✋, edit ✏️, remove 🗑️), approve it, and send the route or a phone link to the crew. Where each route starts and ends is set by **Route Origin Mode** (see #### Route Origin Mode). Whether building a route also emails it automatically is set by **Email Route On Build** — the **📧 Email Approved Route Now** button sends the saved route on request either way (see #### Email Route On Build). In server mode field crew work only with their own route.
+**Route** — pick a day, check it for problems (prescreen), build the day's route, adjust the stop order (▲▼, drag ✋, edit ✏️, remove 🗑️), pin stops with 📌 "Fix stop #", approve it, and send the route or a phone link to the crew. Approving (**Approve — Allows Email & Link Viewing**) allows emailing the route and makes its link viewable on the Jobs and Calendar pages — it never changes any job's time window, and un-approving fully undoes it. Where each route starts and ends is set by **Route Origin Mode** (see #### Route Origin Mode). Whether approving a route also emails it automatically is set by **Email Route On Approve** — the **📧 Email Approved Route Now** button sends an approved route on request either way (see #### Email Route On Approve). In server mode field crew work only with their own route.
 
 **Clock** — shows active clock-in status and a simple manual clock in/out control, the same underlying action as asking Claude to clock you in or out.
 
@@ -2672,10 +2798,17 @@ The app has ten bottom-nav tabs: **Jobs**, **Board**, **Route**, **Calendar**, *
 
 **Database** — a raw, tab-switchable table view of every table in the job tracker (Jobs_Schedule, Customers, Invoices, Quotes, TimeLog, Route_Planner, Services_Pricing, Settings, Commands) — this is the app's general-purpose, row-level view into the same SQLite database Claude reads and writes, for anything the Board and Jobs tabs don't have a purpose-built screen for. (Labeled "Database" in the app; still called the "Sheet" screen internally and in a few places in this guide — same tab, same name change reflecting that there's no underlying spreadsheet file anymore.) Every row is editable via a generic edit form, and tables that support it have a **+ Add** button for appending a brand-new row.
 - A manual refresh button next to the table tabs re-fetches whichever one is currently open, in place — no need to switch tabs away and back just to see new data. Switching between table tabs has always re-fetched fresh data on every switch.
+- The Customers table's **⇅ ID** button cycles the CustomerID sort: default order → ascending → descending. It's numeric-aware (`CUST-2026-10` sorts after `CUST-2026-2`), and sorting is view-only — it never changes the database order.
+- After you save an edit, the table keeps your scroll position instead of jumping back to the top-left — handy when working across a wide table.
 - Any cell whose value is a URL (`Route Map URL`, `Waypoint Map URL`) renders as a real tappable **"📍 Open in Maps"** link — in both the row-edit form and the plain table list view — instead of unclickable raw text.
 - Auto-refreshes every time you navigate to this tab.
+  - In the **Jobs** table, the **Tax Disabled** column (right after the Tax column) shows ✓ for tax-exempt jobs and — for taxable ones. See **No Sales Tax** in Section 10.
 
-**Reports** — weekly revenue (collected and still owed), hours, stale customers and customer reminders. Owner only in server mode.
+**Reports** — weekly revenue (collected and still owed), hours, **tax collected**, stale customers and customer reminders. Owner only in server mode.
+- The **🧾 Weekly Tax Collected** card tracks the sales tax you're collecting, week by week. Each week gets a bar, split two ways: **solid bars = tax actually collected**, **hatched bars = projected/outstanding tax** (what's still owed).
+  - The table under it has four columns: **Week**, **Actual Tax**, **Proj Tax**, **Total Tax**.
+  - **The math:** collected = invoice tax × (amount_paid ÷ total_due) — a half-paid invoice with $100 of tax counts as $50 collected. Projected = tax − collected. Tax-exempt jobs (`No Sales Tax`) contribute $0.
+  - Tax is frozen when the invoice is created — tax = (quote − discount) × rate — so the chart never shifts under you after the fact.
 
 **Profile** — the logged-in user's info (in server mode: name and role) and **Sign Out / Change Device**.
 
@@ -2728,13 +2861,17 @@ The app has seven bottom-nav tabs: **Dashboard**, **Files**, **Search**, **Perms
 
 **Files** — browse, download, and upload tracked files directly from the phone or browser, with no Claude conversation needed. This is the human-usable counterpart to the `get_file_download_url()` / `get_file_upload_url()` MCP tools (Section 7 → File Transfer Tools), which let *Claude* do the same thing programmatically during a conversation.
 
+The tab has two sections: **Indexed Folders** (your tracked folders) and, below them, **Access-Only Folders** (readable by Claude, never indexed — see §4). Both work the same way: **📥 Download** opens a folder browser (Open → / ← Back, **👁 View** for text and images, **⬇ Get** to download), and **📷 Upload** appears on folders with write access (a folder without it shows 🔒 Read only — turn write access on in the **Perms** tab). The difference is what happens to an upload: in an indexed folder it's saved **and indexed** into AI-Prowler; in an access-only folder it's **saved only — never indexed**, and the folder is not added to tracking.
+
 **Search** — run a semantic search against your knowledge base directly from this tab, using the same underlying search `search_documents()` uses when Claude searches on your behalf.
 
-**Perms** — view and manage the readable/writable directory allowlist, the same permission set the `list_writable_directories()`, `grant_write_access()`, and `revoke_write_access()` MCP tools operate on. Useful for checking or fixing folder permissions without needing to ask Claude to do it.
+**Perms** — view and manage the readable/writable directory allowlist, the same permission set the `list_writable_directories()`, `grant_write_access()`, and `revoke_write_access()` MCP tools operate on. Useful for checking or fixing folder permissions without needing to ask Claude to do it. Turning write access **on** asks you to re-enter your Bearer token; turning it off is instant.
 
-**Learn** — browse existing self-learning entries, and add a new one directly (**+ New Learning**) without a conversation — the same knowledge base `record_learning()` and `search_learnings()` read from and write to.
+Below the indexed folders is the **Access-Only Folders** section (folders Claude can read but that are never indexed — see §4): type a folder path and tap **Add** (re-enter your Bearer token to confirm), tap **🗑** on a row to remove it (instant), and use a row's switch to give or take away write access. This is the same list as the desktop's Update Index panel and the `grant_access()` / `revoke_access()` tools. Like the whole Remote Control app, it's personal-mode only.
 
-**Tasks** — the agentic analysis task queue, grouped into **Due Now**, **Scheduled**, and **Completed / One-off**, with a **+ New Custom AI Task** form for defining a new one. Mirrors what `list_analysis_tasks()`, `get_pending_analysis_tasks()`, and `create_analysis_task()` work with.
+**Learn** — browse and search self-learning entries, add a new one (**+ Add Learning**), **edit** one (**✎ Edit** on its card opens the form filled in with its title, content, category, outcome, tags and context — change anything, or empty Tags/Context to clear them, then **✓ Save Changes**), or delete one (**🗑 Delete**, with confirmation) — all without a conversation, on the same knowledge base `record_learning()`, `update_learning()` and `search_learnings()` use.
+
+**Tasks** — the agentic analysis task queue, grouped into **Due Now**, **Scheduled**, and **Completed / One-off**, with a **+ New Custom AI Task** form for defining a new one and **Edit** on each task. In Edit, every field can be changed — and cleared: emptying the Report folder or un-ticking every scope folder removes them, and First due can be emptied on a **Run once** task (a scheduled task always needs one, so the form says so instead of saving). Mirrors what `list_analysis_tasks()`, `get_pending_analysis_tasks()`, `create_analysis_task()` and `update_analysis_task()` work with.
 
 **System** — **AI-Prowler Status** and **Database Stats** panels, the same information `check_ai_prowler_status()` and `get_database_stats()` return to Claude.
 

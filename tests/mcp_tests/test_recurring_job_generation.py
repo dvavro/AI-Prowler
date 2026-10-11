@@ -2,22 +2,18 @@
 tests/mcp_tests/test_recurring_job_generation.py
 ============================================
 Review of the "proactive recurring-job generation" feature (built 2026-09-23):
-customers with a recognized Frequency should get their next job auto-created,
-UNSCHEDULED (so it lands in the Jobs page / Job Board's Unscheduled column,
-indistinguishable from one an employee or admin typed by hand), a configurable
-number of days before it's actually due.
+customers with a recognized Frequency should get their next job auto-created
+a configurable number of days before it's actually due
+('Recurring Job Lead Time (days)', default 5).
 
-The backend (db_generate_upcoming_recurring_jobs, db_read_settings_recurring_
-job_lead_days, _maybe_sweep_recurring_jobs) was already built and correct, but
-had two real gaps this file locks in the fix for:
-  1. _maybe_sweep_recurring_jobs was imported into db_read_ops.py but never
-     actually CALLED anywhere — the "runs automatically when the Jobs tab or
-     Board is opened" behavior the feature's own docstrings describe did not
-     exist. Fixed: db_read_job_spreadsheet AND db_get_jobs_changed_since (the
-     Board's actual poll — a SEPARATE function) both now call it, scoped to
-     Jobs_Schedule reads only.
-  2. No live Settings row existed for "Recurring Job Lead Time (days)", so
-     the admin had no way to see or change it. Now created (default 5).
+2026-10-04: generated jobs carry the calculated Service Date (Last Service
+Date + frequency interval) so they appear on the calendar at that date —
+no longer unscheduled.
+2026-10-07: the sweep honors the lead-time setting. The reader
+(db_read_settings_recurring_job_lead_days) existed since 2026-09-23 but the
+sweep never called it, so every recurring customer got their next job
+immediately regardless of distance. These tests lock in the lead-window gate:
+a job is only created when today is within lead_days before next-due.
 """
 import datetime
 import sqlite3
@@ -73,11 +69,11 @@ def _create_past_job(db_path, cust_id, name, service_date, status="Complete"):
     return job_id
 
 
-def _unscheduled_jobs_for(db_path, cust_id):
+def _generated_jobs_for(db_path, cust_id):
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
-        "SELECT * FROM jobs WHERE customer_id = ? AND (service_date IS NULL OR TRIM(service_date) = '')",
+        "SELECT * FROM jobs WHERE customer_id = ? AND service_details LIKE '%Auto-generated recurring job%'",
         (cust_id,),
     ).fetchall()
     conn.close()
@@ -113,7 +109,7 @@ def test_garbage_value_falls_back_to_default(db_path):
 
 # ── db_generate_upcoming_recurring_jobs ─────────────────────────────────────
 
-def test_creates_an_unscheduled_job_within_the_lead_window(db_path):
+def test_creates_a_dated_job_within_the_lead_window(db_path):
     _set_lead_days(db_path, 5)
     # Weekly customer, last serviced 3 days ago -> next due in 4 days -> within a 5-day lead window
     last = (TODAY - datetime.timedelta(days=3)).isoformat()
@@ -121,12 +117,13 @@ def test_creates_an_unscheduled_job_within_the_lead_window(db_path):
     _create_past_job(db_path, "CUST-0001", "Riverside Grill", last)
 
     res = db_generate_upcoming_recurring_jobs(db_path)
-    assert "1 new unscheduled job" in res, res
-    pending = _unscheduled_jobs_for(db_path, "CUST-0001")
-    assert len(pending) == 1
-    assert pending[0]["job_status"] == "Scheduled"          # same default status a hand-typed job gets
-    assert not pending[0]["service_date"]                    # unscheduled — lands in the Unscheduled column
-    assert "🔁 Auto-generated" in (pending[0]["service_details"] or "")
+    assert "1 new job(s)" in res, res
+    jobs = _generated_jobs_for(db_path, "CUST-0001")
+    assert len(jobs) == 1
+    assert jobs[0]["job_status"] == "Scheduled"          # same default status a hand-typed job gets
+    expected_due = (TODAY - datetime.timedelta(days=3) + datetime.timedelta(weeks=1)).isoformat()
+    assert jobs[0]["service_date"] == expected_due       # dated: last + interval, shows on the calendar
+    assert "🔁 Auto-generated" in (jobs[0]["service_details"] or "")
 
 
 def test_not_yet_within_the_lead_window_creates_nothing(db_path):
@@ -137,9 +134,21 @@ def test_not_yet_within_the_lead_window_creates_nothing(db_path):
     _create_past_job(db_path, "CUST-0002", "Coastal Dental", last)
 
     res = db_generate_upcoming_recurring_jobs(db_path)
-    assert "0 new unscheduled job" in res
-    assert "not yet within the lead window" in res
-    assert _unscheduled_jobs_for(db_path, "CUST-0002") == []
+    assert "0 new job(s)" in res
+    assert "not yet within the" in res and "lead window" in res
+    assert _generated_jobs_for(db_path, "CUST-0002") == []
+
+
+def test_exactly_at_the_lead_boundary_creates(db_path):
+    _set_lead_days(db_path, 5)
+    # Weekly, serviced 2 days ago -> next due in exactly 5 days -> at the boundary, creates
+    last = (TODAY - datetime.timedelta(days=2)).isoformat()
+    _create_customer(db_path, "CUST-0020", "Boundary Cafe", "Weekly")
+    _create_past_job(db_path, "CUST-0020", "Boundary Cafe", last)
+
+    res = db_generate_upcoming_recurring_jobs(db_path)
+    assert "1 new job(s)" in res, res
+    assert len(_generated_jobs_for(db_path, "CUST-0020")) == 1
 
 
 def test_a_larger_lead_window_surfaces_the_same_customer_earlier(db_path):
@@ -151,30 +160,30 @@ def test_a_larger_lead_window_surfaces_the_same_customer_earlier(db_path):
     _create_past_job(db_path, "CUST-0002", "Coastal Dental", last)
 
     res = db_generate_upcoming_recurring_jobs(db_path)
-    assert "1 new unscheduled job" in res
-    assert len(_unscheduled_jobs_for(db_path, "CUST-0002")) == 1
+    assert "1 new job(s)" in res
+    assert len(_generated_jobs_for(db_path, "CUST-0002")) == 1
 
 
 def test_one_time_customer_is_never_auto_scheduled(db_path):
     _create_customer(db_path, "CUST-0003", "Blue Wave Cafe", "One-time")
     _create_past_job(db_path, "CUST-0003", "Blue Wave Cafe", (TODAY - datetime.timedelta(days=100)).isoformat())
     res = db_generate_upcoming_recurring_jobs(db_path)
-    assert "0 new unscheduled job" in res
-    assert _unscheduled_jobs_for(db_path, "CUST-0003") == []
+    assert "0 new job(s)" in res
+    assert _generated_jobs_for(db_path, "CUST-0003") == []
 
 
 def test_customer_with_no_job_history_is_skipped(db_path):
     _create_customer(db_path, "CUST-0004", "New Prospect", "Monthly")
     res = db_generate_upcoming_recurring_jobs(db_path)
     assert "no job history yet" in res
-    assert _unscheduled_jobs_for(db_path, "CUST-0004") == []
+    assert _generated_jobs_for(db_path, "CUST-0004") == []
 
 
 def test_inactive_customer_is_never_auto_scheduled(db_path):
     _create_customer(db_path, "CUST-0005", "Closed Account", "Weekly", status="Inactive")
     _create_past_job(db_path, "CUST-0005", "Closed Account", (TODAY - datetime.timedelta(days=10)).isoformat())
     res = db_generate_upcoming_recurring_jobs(db_path)
-    assert _unscheduled_jobs_for(db_path, "CUST-0005") == []
+    assert _generated_jobs_for(db_path, "CUST-0005") == []
 
 
 def test_unrecognized_frequency_is_skipped_and_reported(db_path):
@@ -184,7 +193,7 @@ def test_unrecognized_frequency_is_skipped_and_reported(db_path):
     _create_past_job(db_path, "CUST-0006", "Odd Freq", (TODAY - datetime.timedelta(days=10)).isoformat())
     res = db_generate_upcoming_recurring_jobs(db_path)
     assert "unrecognized frequency" in res
-    assert _unscheduled_jobs_for(db_path, "CUST-0006") == []
+    assert _generated_jobs_for(db_path, "CUST-0006") == []
 
 
 def test_does_not_create_a_second_pending_job_while_one_exists(db_path):
@@ -194,11 +203,39 @@ def test_does_not_create_a_second_pending_job_while_one_exists(db_path):
     _create_past_job(db_path, "CUST-0007", "Riverside Grill", last)
 
     first = db_generate_upcoming_recurring_jobs(db_path)
-    assert "1 new unscheduled job" in first
+    assert "1 new job(s)" in first
     second = db_generate_upcoming_recurring_jobs(db_path)          # running it again the same day
-    assert "0 new unscheduled job" in second
-    assert "already have a pending unscheduled job" in second
-    assert len(_unscheduled_jobs_for(db_path, "CUST-0007")) == 1   # still just the one
+    assert "0 new job(s)" in second
+    assert "already have a pending/future job" in second
+    assert len(_generated_jobs_for(db_path, "CUST-0007")) == 1   # still just the one
+
+
+def test_r080_overdue_customer_gets_one_job_not_one_per_sweep(db_path):
+    """R-080 (2026-10-09): an OVERDUE customer's generated job is dated in the
+    past (last service + interval < today). The 'pending' guard only counted
+    jobs dated today-or-later, so every daily sweep created another copy of
+    the same overdue visit until someone completed or cancelled one."""
+    _set_lead_days(db_path, 5)
+    last = (TODAY - datetime.timedelta(days=40)).isoformat()
+    _create_customer(db_path, "CUST-0080", "Overdue Deli", "Weekly")
+    _create_past_job(db_path, "CUST-0080", "Overdue Deli", last)
+    assert "1 new job(s)" in db_generate_upcoming_recurring_jobs(db_path)
+    second = db_generate_upcoming_recurring_jobs(db_path)      # the next day's sweep
+    assert "0 new job(s)" in second, second
+    assert len(_generated_jobs_for(db_path, "CUST-0080")) == 1
+
+
+def test_r080_completing_the_overdue_job_lets_the_next_one_come(db_path):
+    _set_lead_days(db_path, 5)
+    last = (TODAY - datetime.timedelta(days=40)).isoformat()
+    _create_customer(db_path, "CUST-0081", "Overdue Deli", "Weekly")
+    _create_past_job(db_path, "CUST-0081", "Overdue Deli", last)
+    db_generate_upcoming_recurring_jobs(db_path)
+    (job,) = _generated_jobs_for(db_path, "CUST-0081")
+    _sql(db_path, "UPDATE jobs SET job_status = 'Complete', service_date = ? WHERE job_id = ?",
+         ((TODAY - datetime.timedelta(days=3)).isoformat(), job["job_id"]))
+    assert "1 new job(s)" in db_generate_upcoming_recurring_jobs(db_path)
+    assert len(_generated_jobs_for(db_path, "CUST-0081")) == 2
 
 
 def test_a_cancelled_pending_job_does_not_block_a_new_one(db_path):
@@ -207,13 +244,13 @@ def test_a_cancelled_pending_job_does_not_block_a_new_one(db_path):
     _create_customer(db_path, "CUST-0008", "Riverside Grill", "Weekly")
     _create_past_job(db_path, "CUST-0008", "Riverside Grill", last)
     db_generate_upcoming_recurring_jobs(db_path)
-    pending = _unscheduled_jobs_for(db_path, "CUST-0008")
+    pending = _generated_jobs_for(db_path, "CUST-0008")
     assert len(pending) == 1
     _sql(db_path, "UPDATE jobs SET job_status = 'Cancelled' WHERE job_id = ?", (pending[0]["job_id"],))
 
     res = db_generate_upcoming_recurring_jobs(db_path)
-    assert "1 new unscheduled job" in res                          # the cancelled one no longer blocks it
-    assert len(_unscheduled_jobs_for(db_path, "CUST-0008")) == 2    # the cancelled one + the fresh one
+    assert "1 new job(s)" in res                                   # the cancelled one no longer blocks it
+    assert len(_generated_jobs_for(db_path, "CUST-0008")) == 2    # the cancelled one + the fresh one
 
 
 def test_new_job_carries_the_customers_address(db_path):
@@ -227,7 +264,7 @@ def test_new_job_carries_the_customers_address(db_path):
          "'Active', '42 Sunset Blvd', 'Edgewater', 'FL', '32132')")
     _create_past_job(db_path, "CUST-0009", "Sunset Villas", (TODAY - datetime.timedelta(days=3)).isoformat())
     db_generate_upcoming_recurring_jobs(db_path)
-    pending = _unscheduled_jobs_for(db_path, "CUST-0009")
+    pending = _generated_jobs_for(db_path, "CUST-0009")
     assert len(pending) == 1
     assert pending[0]["street_address"] == "42 Sunset Blvd"
     assert pending[0]["city"] == "Edgewater"
@@ -243,7 +280,7 @@ def test_sweep_runs_once_and_creates_the_job(db_path):
     _create_past_job(db_path, "CUST-0010", "Riverside Grill", last)
 
     _maybe_sweep_recurring_jobs(db_path)
-    assert len(_unscheduled_jobs_for(db_path, "CUST-0010")) == 1
+    assert len(_generated_jobs_for(db_path, "CUST-0010")) == 1
 
 
 def test_sweep_does_not_run_twice_in_the_same_day(db_path, monkeypatch):
@@ -253,15 +290,15 @@ def test_sweep_does_not_run_twice_in_the_same_day(db_path, monkeypatch):
     _create_past_job(db_path, "CUST-0011", "Riverside Grill", last)
 
     _maybe_sweep_recurring_jobs(db_path)
-    assert len(_unscheduled_jobs_for(db_path, "CUST-0011")) == 1
+    assert len(_generated_jobs_for(db_path, "CUST-0011")) == 1
 
     # Mark that pending job Cancelled — if the sweep ran again it WOULD create
     # a second one (per the cancelled-doesn't-block test above); it must not,
     # since it already ran today.
-    pending = _unscheduled_jobs_for(db_path, "CUST-0011")
+    pending = _generated_jobs_for(db_path, "CUST-0011")
     _sql(db_path, "UPDATE jobs SET job_status = 'Cancelled' WHERE job_id = ?", (pending[0]["job_id"],))
     _maybe_sweep_recurring_jobs(db_path)
-    assert len(_unscheduled_jobs_for(db_path, "CUST-0011")) == 1   # unchanged — didn't run again
+    assert len(_generated_jobs_for(db_path, "CUST-0011")) == 1   # unchanged — didn't run again
 
 
 def test_sweep_runs_again_on_a_new_day(db_path):
@@ -270,14 +307,14 @@ def test_sweep_runs_again_on_a_new_day(db_path):
     _create_customer(db_path, "CUST-0012", "Riverside Grill", "Weekly")
     _create_past_job(db_path, "CUST-0012", "Riverside Grill", last)
     _maybe_sweep_recurring_jobs(db_path)
-    assert len(_unscheduled_jobs_for(db_path, "CUST-0012")) == 1
+    assert len(_generated_jobs_for(db_path, "CUST-0012")) == 1
 
-    pending = _unscheduled_jobs_for(db_path, "CUST-0012")
+    pending = _generated_jobs_for(db_path, "CUST-0012")
     _sql(db_path, "UPDATE jobs SET job_status = 'Cancelled' WHERE job_id = ?", (pending[0]["job_id"],))
     # Back-date the marker to simulate a real new calendar day.
     _sql(db_path, "UPDATE settings SET value = '2000-01-01' WHERE key = 'internal_recurring_job_sweep_last_run'")
     _maybe_sweep_recurring_jobs(db_path)
-    assert len(_unscheduled_jobs_for(db_path, "CUST-0012")) == 2   # ran again, created a fresh one
+    assert len(_generated_jobs_for(db_path, "CUST-0012")) == 2   # ran again, created a fresh one
 
 
 def test_sweep_never_raises_on_bad_data(db_path):
@@ -352,12 +389,13 @@ def test_a_job_the_sweep_creates_is_visible_in_the_same_board_poll_that_triggere
 
     from db_read_ops import db_get_jobs_changed_since
     rows = db_get_jobs_changed_since(db_path, since_iso="2000-01-01T00:00:00+00:00", sheet_name="Jobs_Schedule")
-    # The dict uses JOBS_HEADER_MAP's canonical DISPLAY headers, not raw db
-    # column names — "CustomerID (Customers!A)" for customer_id, "Service
-    # Date" for service_date (omitted entirely from the dict when blank).
+    # The sweep-created job carries its calculated Service Date (2026-10-04
+    # design) — verify it is the one visible in this same poll.
+    gen = _generated_jobs_for(db_path, "CUST-0014")
+    assert len(gen) == 1
     new_job_ids = {r["JobID (JOB-####)"] for r in rows
-                   if r.get("CustomerID (Customers!A)") == "CUST-0014" and not r.get("Service Date")}
-    assert len(new_job_ids) == 1
+                   if r.get("CustomerID (Customers!A)") == "CUST-0014"}
+    assert gen[0]["job_id"] in new_job_ids
 
 
 # ── Settings visibility (the second gap the review found) ──────────────────

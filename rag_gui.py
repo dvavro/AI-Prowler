@@ -253,6 +253,7 @@ try:
         get_model_context_window, calculate_optimal_chunks,
         get_model_num_ctx,                        # ← new: for chunk-aware prewarm
         load_auto_update_list, add_to_auto_update_list,
+        path_startswith, path_equals,
         remove_directory_from_index,
         scan_directory_for_changes, save_tracking_database,
         normalise_path,
@@ -300,6 +301,23 @@ except Exception as _sl_e:
     print(f"Warning: self_learning import error: {_sl_e}")
 
 # ── Speech Recorder ──────────────────────────────────────────────────────────
+
+def _http_server_state(health_alive: bool, proc_alive: bool) -> str:
+    """Classify the MCP HTTP server state for the GUI status LED (R-053).
+
+    Returns one of 'running', 'busy', 'stopped':
+      - 'running': /health answers — the server is serving requests.
+      - 'busy':    /health fails but the OS process is alive — the server is
+                   wedged in heavy work (e.g. loading the embedding model)
+                   and should recover; do NOT report it as stopped.
+      - 'stopped': /health fails and the process is dead — genuinely down.
+    """
+    if health_alive:
+        return "running"
+    if proc_alive:
+        return "busy"
+    return "stopped"
+
 
 class SpeechRecorder:
     """
@@ -887,6 +905,11 @@ class RAGGui:
         self._index_stop_event  = threading.Event()   # set = stop requested
         self._index_pause_event = threading.Event()   # set = paused
         self._index_running     = False
+        # R-069: stop control for the Update Index tab workers (separate
+        # from the Index Docs tab's _index_stop_event above -- the two tabs
+        # run independent operations).
+        self._update_stop_event    = threading.Event()  # set = stop requested
+        self._update_worker_thread = None               # worker thread handle
         self._index_cancelled   = False               # True = stop was a cancel, not a save
         self._embedding_ready    = False               # True once embedding model is loaded
         # v8.1.9 fix: guards against firing a second prewarm attempt while
@@ -10820,6 +10843,74 @@ or from the Help menu."""
             command=self._remove_tracked_directory
         )
         self.remove_tracked_btn.pack(side='left')
+        # ── R-071: Access-Only Folders — readable, not indexed ─────────────
+        access_frame = ttk.LabelFrame(
+            f,
+            text="Access-Only Folders — readable, not indexed",
+            padding=10)
+        # (2026-10-09, David) Personal mode only — server mode doesn't support
+        # access-only folders, so the section isn't shown there. The widgets
+        # are still built (just never packed) so refresh_access_only_dirs and
+        # the write-toggle refresh keep working without mode checks.
+        if not self._is_business_server_mode():
+            access_frame.pack(fill='x', padx=20, pady=(0, 6))
+
+        # Listbox with scrollbar (mirrors the tracked-folders pattern)
+        ao_list_frame = ttk.Frame(access_frame)
+        ao_list_frame.pack(fill='both', expand=True)
+
+        ao_scrollbar = ttk.Scrollbar(ao_list_frame)
+        ao_scrollbar.pack(side='right', fill='y')
+
+        self.access_only_listbox = tk.Listbox(
+            ao_list_frame, height=4,
+            font=('Courier', 9),
+            yscrollcommand=ao_scrollbar.set,
+            selectmode=tk.SINGLE,
+            activestyle='dotbox')
+        self.access_only_listbox.pack(side='left', fill='both', expand=True)
+        ao_scrollbar.config(command=self.access_only_listbox.yview)
+
+        # Parallel list of raw paths indexed by listbox row. Populated by
+        # refresh_access_only_dirs. Placeholder/error rows store None.
+        self._access_only_raw_paths: list = []
+
+        # Double-click toggles write access via the same logic as the
+        # tracked list (Mobile Write Zones).
+        self.access_only_listbox.bind(
+            "<Double-Button-1>",
+            lambda _e: self._toggle_writable_for_selected(
+                listbox=self.access_only_listbox,
+                raw_paths=self._access_only_raw_paths,
+                refresh=self.refresh_access_only_dirs)
+        )
+
+        ttk.Label(
+            access_frame,
+            text="Folders Claude may READ without indexing. Never touched by "
+                 "the auto-update sweep. Double-click a row to toggle write "
+                 "access (Mobile Write Zones).",
+            font=('Arial', 8),
+            foreground='gray',
+            wraplength=900,
+            justify='left'
+        ).pack(fill='x', pady=(4, 0))
+
+        # Buttons row: reload + add + remove
+        ao_btn_row = ttk.Frame(access_frame)
+        ao_btn_row.pack(fill='x', pady=(6, 0))
+
+        ttk.Button(ao_btn_row, text="🔄 Reload List",
+                   command=self.refresh_access_only_dirs).pack(
+                       side='left', padx=(0, 8))
+        ttk.Button(ao_btn_row, text="📁 Add…",
+                   command=self._add_access_only_directory).pack(
+                       side='left', padx=(0, 8))
+        ttk.Button(ao_btn_row, text="🗑 Remove Selected",
+                   command=self._remove_access_only_directory).pack(side='left')
+
+        # Load access-only folders
+        self.refresh_access_only_dirs()
 
         # Update buttons
         buttons_frame = ttk.Frame(f)
@@ -10833,6 +10924,11 @@ or from the Help menu."""
                    command=self.update_all,
                    style='Accent.TButton')
         self.update_all_btn.pack(side='left')
+
+        # R-069: Stop button -- enabled only while an update is running.
+        self.update_stop_btn = ttk.Button(buttons_frame, text="⏹ Stop",
+                     command=self._update_stop, state='disabled')
+        self.update_stop_btn.pack(side='left', padx=(6, 0))
 
         # Progress
         self.update_progress = ttk.Progressbar(f, mode='indeterminate')
@@ -12143,10 +12239,14 @@ or from the Help menu."""
 
             _tool_cfg_cats = []   # (CategoryMeta, [tools in this mode], cat_locked)
             for _cat in _tc.CATEGORY_ORDER:
-                _cat_tools = [
-                    n for n in _tc.tools_in_category(_cat.key)
-                    if _tool_cfg_mode_key in _tc.modes_of(n)
-                ]
+                # 2026-10-05: alphabetical (case-insensitive) by DISPLAYED
+                # label so the Configure.../Details... popups list tools A-Z
+                # as the user sees them.
+                _cat_tools = sorted(
+                    (n for n in _tc.tools_in_category(_cat.key)
+                     if _tool_cfg_mode_key in _tc.modes_of(n)),
+                    key=lambda n: _tc.TOOL_CATALOG[n].label.lower(),
+                )
                 if not _cat_tools:
                     continue  # nothing in this category applies to this mode
                 for n in _cat_tools:
@@ -12670,6 +12770,17 @@ or from the Help menu."""
         clear_full_btn = ttk.Button(db_frame, text="Clear Database + Database list",
                                     command=self.clear_database)
         clear_full_btn.pack(side='left', padx=5)
+
+        # R-072: index corruption status indicator. RED = corrupt (click to
+        # clear + reindex), GREEN = healthy (click to re-check). tk.Button
+        # (not ttk) so the red/green background renders on Windows.
+        self._corrupt_btn = tk.Button(db_frame, text="\U0001f50d Checking index\u2026",
+                                      command=self._on_corrupt_btn_click)
+        self._corrupt_btn.pack(side='left', padx=5)
+        self._corrupt_state = None  # None=checking, True=corrupt, False=healthy
+        # Delay the first check slightly so the embedding prewarm gets a head
+        # start (avoids a spurious RED while ChromaDB is still initializing).
+        self.root.after(3000, self._check_index_integrity_async)
 
         # ── Email Configuration ────────────────────────────────────────────
         # Shown in BOTH personal and server mode, but serves different purposes:
@@ -16059,7 +16170,7 @@ or from the Help menu."""
             except Exception:
                 pass
 
-        def _http_health_check(port, timeout=2.5):
+        def _http_health_check(port, timeout=10):
             """Actual liveness probe against the server's own /health endpoint.
             Returns (alive: bool, detail: str) — detail is debug-log-only."""
             import urllib.request as _ur, time as _time
@@ -16187,9 +16298,12 @@ or from the Help menu."""
                            and self._http_server_proc.poll() is None)
 
                 def _apply():
+                    # R-053: classify via _http_server_state so a wedged-but-alive
+                    # server shows Busy… (amber) instead of Stopped (red).
+                    state         = _http_server_state(alive, tracked)
                     was_running   = (_http_status_var.get() == "⬤ Running")
                     transitional  = _http_status_var.get() in ("⬤ Checking…", "⬤ Starting…")
-                    if alive:
+                    if state == "running":
                         _led_fail_streak[0] = 0
                         if not was_running:
                             _log_http_led_debug(
@@ -16202,14 +16316,25 @@ or from the Help menu."""
                     elif not transitional:
                         _led_fail_streak[0] += 1
                         if _led_fail_streak[0] >= 2:
-                            if was_running:
-                                _log_http_led_debug(
-                                    f"LED -> Stopped (override, after "
-                                    f"{_led_fail_streak[0]} consecutive failed checks). "
-                                    f"{detail} | gui-tracked-proc={'yes' if tracked else 'no'}")
-                            _http_status_var.set("⬤ Stopped")
-                            _http_status_lbl.configure(foreground='#cc0000')
-                            _stop_uptime_ticker()
+                            if state == "busy":
+                                if _http_status_var.get() != "⬤ Busy…":
+                                    _log_http_led_debug(
+                                        f"LED -> Busy… (proc alive but /health failing, after "
+                                        f"{_led_fail_streak[0]} consecutive failed checks). "
+                                        f"{detail}")
+                                _http_status_var.set("⬤ Busy…")
+                                _http_status_lbl.configure(foreground='#e67e00')
+                                # Uptime ticker keeps running — the server is
+                                # not down, just wedged in heavy work.
+                            else:  # state == "stopped": proc genuinely dead
+                                if was_running:
+                                    _log_http_led_debug(
+                                        f"LED -> Stopped (override, after "
+                                        f"{_led_fail_streak[0]} consecutive failed checks). "
+                                        f"{detail} | gui-tracked-proc={'yes' if tracked else 'no'}")
+                                _http_status_var.set("⬤ Stopped")
+                                _http_status_lbl.configure(foreground='#cc0000')
+                                _stop_uptime_ticker()
                         else:
                             _log_http_led_debug(
                                 f"Health check failed ({detail}) but not yet acting — "
@@ -16233,7 +16358,15 @@ or from the Help menu."""
                 messagebox.showwarning("No Token", "Save a Bearer token first.")
                 return
             if self._http_server_proc is not None and self._http_server_proc.poll() is None:
-                messagebox.showinfo("Already Running", "HTTP server is already running.")
+                # R-053: if the LED says Busy…, the user is looking at a wedged
+                # server — tell them to wait instead of the confusing
+                # "Already Running".
+                if _http_status_var.get() == "⬤ Busy…":
+                    messagebox.showinfo("Server Busy",
+                        "The HTTP server is busy (working on a heavy task, not stopped).\n"
+                        "Please wait — the status will turn green when it is responsive again.")
+                else:
+                    messagebox.showinfo("Already Running", "HTTP server is already running.")
                 return
 
             # ── Subscription check before starting ────────────────────────────
@@ -18013,35 +18146,14 @@ or from the Help menu."""
                         "to share your data, back it up, or move it to a new computer.")
                   ).pack(anchor='w', pady=(0, 6))
 
-        # Bootstrap default_spreadsheet_path (2026-09-16, restored after
-        # removing the old editable "Default database folder" box below):
-        # this config value is STILL the real, live setting behind
-        # export_to_excel()'s default output location and the legacy
-        # _resolve_job_spreadsheet_path() — removing the editable Entry
-        # must not also remove the safety net that used to populate it.
-        # Some installs may not have written default_spreadsheet_path to
-        # config.json (e.g. the bundled template went missing at compile
-        # time, or installer-side config init failed silently). Pure
-        # detect-and-persist, no UI — nothing here is user-facing anymore.
-        def _bootstrap_default_spreadsheet_path():
-            if _load_cfg().get('default_spreadsheet_path', '').strip():
-                return  # already set — real installs get this from the installer
-            import os as _os
-            for candidate in (
-                Path.home() / 'Documents' / 'AI-Prowler' / 'AI-Prowler_Job_Tracker.xlsx',
-                # Older installs may have used OneDrive's redirected Documents
-                Path.home() / 'OneDrive' / 'Documents' / 'AI-Prowler' / 'AI-Prowler_Job_Tracker.xlsx',
-                # Fall back to the file shipped next to rag_gui.py (dev runs)
-                Path(__file__).parent / 'AI-Prowler_Job_Tracker.xlsx',
-            ):
-                try:
-                    if candidate.exists():
-                        _save_cfg({'default_spreadsheet_path': str(candidate).replace('/', _os.sep)})
-                        return
-                except Exception:
-                    pass
-
-        _bootstrap_default_spreadsheet_path()
+        # 2026-10-09: the default_spreadsheet_path bootstrap that used to sit
+        # here is REMOVED. There is no default job spreadsheet any more — the
+        # job data lives in the SQLite database — and David removed the key
+        # from his config.json. The bootstrap silently wrote it back on every
+        # start whenever the old AI-Prowler_Job_Tracker.xlsx still existed (and
+        # did the same to the real config.json during every desktop GUI test).
+        # Readers of the key already handle it being absent: export_to_excel
+        # and restore_job_database fall back to their own defaults.
 
         # Fixed database folder (2026-09-16): no longer user-configurable.
         # The live database always lives in AI-Prowler's own state folder
@@ -23718,10 +23830,49 @@ or from the Help menu."""
         if directory in existing:
             messagebox.showinfo("Already Queued", "That directory is already in the queue.")
             return
+        # R-070: duplicate index-path detection — warn when the candidate
+        # overlaps (as a subdirectory OR as a parent) with an already
+        # tracked path or an already-queued path. Warning only; the user
+        # may still proceed.
+        if RAG_AVAILABLE:
+            _overlap_msg = self._find_index_path_overlap(directory)
+            if _overlap_msg:
+                messagebox.showwarning("Overlapping Index Path", _overlap_msg)
         self.queue_listbox.insert(tk.END, directory)
         self._index_queue.append(directory)
         self._update_queue_count()
         self.index_dir_var.set("")   # clear entry ready for next directory
+
+    def _find_index_path_overlap(self, directory):
+        """R-070 — duplicate index-path detection (queue-time check).
+
+        Return a warning message if `directory` overlaps — as a
+        subdirectory OR as a parent — with any path in the persisted
+        auto-update (tracked) list or with any already-queued path.
+        Returns None when there is no overlap. Comparison is
+        case-insensitive on Windows (path_startswith/path_equals).
+        """
+        candidate = normalise_path(str(Path(directory).resolve()))
+        sources = [
+            ("already-indexed", list(load_auto_update_list())),
+            ("already-queued", list(self.queue_listbox.get(0, tk.END))),
+        ]
+        for source, paths in sources:
+            for other in paths:
+                other_n = normalise_path(str(other))
+                if path_equals(candidate, other_n):
+                    continue  # exact dupes are rejected by the caller
+                if path_startswith(candidate, other_n):
+                    return (
+                        f"Warning: '{directory}' is inside {source} "
+                        f"'{other}' — files will be indexed twice"
+                    )
+                if path_startswith(other_n, candidate):
+                    return (
+                        f"Warning: '{directory}' contains {source} "
+                        f"'{other}' — files will be indexed twice"
+                    )
+        return None
 
     def _queue_remove_selected(self):
         """Remove the selected item from the queue."""
@@ -23988,7 +24139,28 @@ or from the Help menu."""
                 from rag_preprocessor import get_chroma_client
                 get_chroma_client()
                 self.output_queue.put(('embedding_ready', None))
+                # R-056: surface an interrupted reindex as a warning (non-fatal).
+                try:
+                    from rag_preprocessor import read_reindex_marker as _rrm_gui
+                    _gui_marker = _rrm_gui()
+                    if _gui_marker:
+                        self.output_queue.put(
+                            ('reindex_interrupted_warning', _gui_marker))
+                except Exception:
+                    pass
             except Exception as e:
+                # R-056: a corrupt on-disk index gets a distinct, actionable
+                # message instead of a generic load failure.
+                try:
+                    from rag_preprocessor import IndexCorruptError as _ICE_gui
+                    if isinstance(e, _ICE_gui):
+                        self.output_queue.put(('embedding_ready_error',
+                            "Search index is corrupted. Rebuild it from the "
+                            "Reindex tab (Reindex All), or restore an index "
+                            f"backup. Details: {e}"))
+                        return
+                except Exception:
+                    pass
                 self.output_queue.put(('embedding_ready_error', str(e)))
 
         threading.Thread(target=_worker, daemon=True).start()
@@ -24128,11 +24300,12 @@ or from the Help menu."""
                 kind = "file" if is_file else "directory"
                 print(f"   ✅ Added {kind} to Update Index tracking list")
             elif isinstance(added, str):
-                # Case-variant replacement — warn the user in the output log
+                # Case-variant replacement or R-070 subdirectory/
+                # parent overlap — warn the user in the output log
                 # and show a popup so it's not missed.
                 print(f"   {added}")
                 self.root.after(0, lambda msg=added: messagebox.showwarning(
-                    "Duplicate Folder Name (Case Variant)", msg))
+                    "Duplicate or Overlapping Path", msg))
             else:
                 print(f"   ℹ️  Already in tracking list")
 
@@ -25177,6 +25350,50 @@ or from the Help menu."""
             self.tracked_listbox.insert(tk.END, f"(Error loading list: {e})")
             self._tracked_raw_paths.append(None)
 
+        # R-070 — red-highlight rows subsumed by another tracked row.
+        self._mark_subsumed_tracked_rows()
+
+    def _mark_subsumed_tracked_rows(self):
+        """R-070 — duplicate index-path detection (red highlighting).
+
+        After the tracked-dirs listbox is rebuilt, flag every row whose
+        path is a strict subdirectory of another tracked row's path: the
+        parent is scanned recursively, so the subsumed row's files get
+        indexed twice. Subsumed rows get a red foreground. All rows are
+        reset to the default color first so stale highlighting cannot
+        survive a rebuild. Comparison is case-insensitive on Windows
+        (path_startswith/path_equals).
+        """
+        if not RAG_AVAILABLE:
+            return
+        try:
+            n = self.tracked_listbox.size()
+            default_fg = self.tracked_listbox.cget("fg")
+        except Exception:
+            return
+        raw = list(self._tracked_raw_paths)
+        for idx in range(n):
+            try:
+                self.tracked_listbox.itemconfig(idx, fg=default_fg)
+            except Exception:
+                pass
+        for idx, p in enumerate(raw):
+            if not p or idx >= n:
+                continue
+            pn = normalise_path(str(p))
+            for j, q in enumerate(raw):
+                if j == idx or not q:
+                    continue
+                qn = normalise_path(str(q))
+                if path_equals(pn, qn):
+                    continue
+                if path_startswith(pn, qn):
+                    try:
+                        self.tracked_listbox.itemconfig(idx, fg="red")
+                    except Exception:
+                        pass
+                    break
+
     # ══════════════════════════════════════════════════════════════════════
     # Mobile Write Zones — write-permission management for the tracked-path
     # list. The writable allowlist (~/.rag_writable_dirs.json) is read by
@@ -25296,7 +25513,152 @@ or from the Help menu."""
             return ("partial", False, narrower)
         return ("none", False, [])
 
-    def _toggle_writable_for_selected(self):
+    # ── R-071 (2026-10-08): Access-Only Folders ─────────────────────────────
+    # Folders here are readable but never indexed. Mirrors the tracked-folders
+    # listbox pattern on the Update Index tab. File location mirrors
+    # ai_prowler_mcp.py:_ACCESS_ONLY_DIRS_FILE.
+    @property
+    def _access_only_dirs_file(self):
+        return Path.home() / ".rag_access_only_dirs.json"
+
+    def _load_access_only_paths(self) -> list:
+        """Read ~/.rag_access_only_dirs.json. Returns [] on any error or missing file."""
+        try:
+            f = self._access_only_dirs_file
+            if not f.exists():
+                return []
+            import json as _json
+            with open(f, "r", encoding="utf-8") as fh:
+                data = _json.load(fh)
+            if isinstance(data, list):
+                return [str(p) for p in data if isinstance(p, str)]
+            return []
+        except Exception:
+            return []
+
+    def _save_access_only_paths(self, paths: list) -> bool:
+        """Write ~/.rag_access_only_dirs.json. Returns True on success."""
+        try:
+            f = self._access_only_dirs_file
+            f.parent.mkdir(parents=True, exist_ok=True)
+            import json as _json
+            with open(f, "w", encoding="utf-8") as fh:
+                _json.dump(sorted(set(paths)), fh, indent=2)
+            return True
+        except Exception as e:
+            messagebox.showerror(
+                "Cannot save Access-Only Folders",
+                f"Failed to write {self._access_only_dirs_file}:\n\n{e}"
+            )
+            return False
+
+    def refresh_access_only_dirs(self):
+        """Refresh the access-only listbox from ~/.rag_access_only_dirs.json.
+
+        Rows show the same [W]/[R]/[W*] write-permission prefixes as the
+        tracked list (Mobile Write Zones apply here too — double-click a
+        row to toggle).
+        """
+        self.access_only_listbox.delete(0, tk.END)
+        self._access_only_raw_paths = []
+        try:
+            dirs = self._load_access_only_paths()
+            writable_paths = self._load_writable_paths()
+            if dirs:
+                for directory in dirs:
+                    state, _exact, _narrower = self._writable_state(
+                        directory, writable_paths
+                    )
+                    if state == "full":
+                        prefix = "[W] "
+                    elif state == "partial":
+                        prefix = "[W*]"
+                    else:
+                        prefix = "[R] "
+                    self.access_only_listbox.insert(
+                        tk.END, f"{prefix} {directory}")
+                    self._access_only_raw_paths.append(directory)
+            else:
+                self.access_only_listbox.insert(
+                    tk.END,
+                    "(No access-only folders — readable, never indexed)"
+                )
+                self._access_only_raw_paths.append(None)
+        except Exception as e:
+            self.access_only_listbox.insert(tk.END, f"(Error loading list: {e})")
+            self._access_only_raw_paths.append(None)
+
+    def _add_access_only_directory(self):
+        """R-071 — directory picker dialog → append to the access-only list."""
+        from tkinter import filedialog
+        directory = filedialog.askdirectory(
+            title="Choose an access-only folder (readable, never indexed)")
+        if not directory:
+            return  # cancelled
+        self._add_access_only_path(directory)
+
+    def _add_access_only_path(self, directory: str) -> bool:
+        """2026-10-10 (David): the shared add rules (rag_preprocessor.
+        access_only_add_check — same as Claude's grant_access and the Remote
+        app): folders only (always recursive), no duplicates, nothing already
+        covered by an access-only or indexed folder. A folder that contains
+        access-only folders replaces them. Returns True when added."""
+        try:
+            from rag_preprocessor import access_only_add_check
+        except Exception as e:
+            messagebox.showerror("Access-Only Folders", f"Could not check the folder:\n\n{e}")
+            return False
+        existing = self._load_access_only_paths()
+        chk = access_only_add_check(directory, existing)
+        if not chk["ok"]:
+            messagebox.showwarning("Can't add access-only folder", chk["error"])
+            return False
+        resolved, folded = chk["path"], chk["folded"]
+        new_list = [p for p in existing if p not in folded] + [resolved]
+        if not self._save_access_only_paths(new_list):
+            return False
+        self.status_var.set(f"Added access-only folder: {resolved}")
+        if folded:
+            messagebox.showinfo(
+                "Access-only folder added",
+                f"'{resolved}' was added.\n\nThese access-only folders are inside it, so they "
+                f"were removed from the list (now covered):\n\n" + "\n".join(folded))
+        self.refresh_access_only_dirs()
+        return True
+
+    def _remove_access_only_directory(self):
+        """R-071 — remove the selected row from the access-only list.
+
+        Nothing to untrack or delete vectors for — access-only folders are
+        never indexed.
+        """
+        sel = self.access_only_listbox.curselection()
+        if not sel:
+            messagebox.showwarning(
+                "No Selection",
+                "Select a folder in the access-only list first.")
+            return
+        row_idx = sel[0]
+        if row_idx >= len(self._access_only_raw_paths):
+            return
+        directory = self._access_only_raw_paths[row_idx]
+        if directory is None:
+            return  # placeholder / error row — nothing to remove
+        if not messagebox.askyesno(
+                "Remove access-only folder",
+                f"Remove '{directory}' from the access-only list?\n\n"
+                f"Claude will no longer be able to read files there "
+                f"(unless the path is also tracked)."):
+            return
+        norm = os.path.normcase(os.path.abspath(directory))
+        new_list = [p for p in self._load_access_only_paths()
+                    if os.path.normcase(os.path.abspath(p)) != norm]
+        if self._save_access_only_paths(new_list):
+            self.status_var.set(f"Removed access-only folder: {directory}")
+            self.refresh_access_only_dirs()
+
+    def _toggle_writable_for_selected(self, listbox=None, raw_paths=None,
+                                        refresh=None):
         """Toggle write permission for the path under the current selection.
 
         Three transitions are possible depending on the row's current state:
@@ -25308,13 +25670,17 @@ or from the Help menu."""
                        from an ancestor, show an info dialog explaining where
                        the grant actually lives.
         """
-        sel = self.tracked_listbox.curselection()
+        _lb = listbox if listbox is not None else self.tracked_listbox
+        _rp = raw_paths if raw_paths is not None else self._tracked_raw_paths
+        _do_refresh = (refresh if refresh is not None
+                       else self.refresh_tracked_dirs)
+        sel = _lb.curselection()
         if not sel:
             return  # silent — double-click in empty space is harmless
         row_idx = sel[0]
-        if row_idx >= len(self._tracked_raw_paths):
+        if row_idx >= len(_rp):
             return
-        raw_path = self._tracked_raw_paths[row_idx]
+        raw_path = _rp[row_idx]
         if raw_path is None:
             return  # placeholder / error row, no path to toggle
 
@@ -25350,7 +25716,7 @@ or from the Help menu."""
                             if _norm(p) != norm_raw]
                 if self._save_writable_paths(new_list):
                     self.status_var.set(f"Revoked write access: {raw_path}")
-                    self.refresh_tracked_dirs()
+                    _do_refresh()
             else:
                 # Find the ancestor grant that's giving us write access
                 granting_ancestor = next(
@@ -25398,7 +25764,7 @@ or from the Help menu."""
                 self.status_var.set(
                     f"Widened {len(narrower)} → 1 grant: {raw_path}"
                 )
-                self.refresh_tracked_dirs()
+                _do_refresh()
             return
 
         # state == "none"  → ── GRANT ── significant action, require confirmation
@@ -25420,7 +25786,7 @@ or from the Help menu."""
         new_list = writable_paths + [norm_raw]
         if self._save_writable_paths(new_list):
             self.status_var.set(f"Granted write access: {raw_path}")
-            self.refresh_tracked_dirs()
+            _do_refresh()
 
     def _remove_tracked_directory(self):
         """Remove selected directory from tracking and delete all its vectors."""
@@ -25533,6 +25899,26 @@ or from the Help menu."""
             self.status_var.set("⬇ Retrying embedding model load…")
             self._prewarm_embedding_model()
 
+    def _update_stop(self):
+        """R-069: signal the Update Index worker to stop after the current file."""
+        self._update_stop_event.set()
+        self.update_stop_btn.configure(state='disabled')
+        self.status_var.set("⏹ Stopping after current file…")
+
+    def _update_set_buttons(self, state: str):
+        """R-069: Update Index tab button states.
+        'running' -- Update buttons disabled, Stop enabled;
+        anything else -- idle (Stop disabled, Update buttons enabled)."""
+        if state == 'running':
+            self.update_selected_btn.configure(state='disabled')
+            self.update_all_btn.configure(state='disabled')
+            self.update_stop_btn.configure(state='normal')
+        else:
+            self.update_selected_btn.configure(state='normal')
+            self.update_all_btn.configure(state='normal')
+            self.update_stop_btn.configure(state='disabled')
+            self._update_worker_thread = None
+
     def update_selected(self):
         if not self._embedding_ready:
             self._offer_embedding_retry()
@@ -25557,10 +25943,13 @@ or from the Help menu."""
         self.update_progress.start()
         self.status_var.set("Updating index + purging deleted...")
         
-        thread = threading.Thread(target=self.update_directory_worker,
-                                  args=(directory,))
+        # R-069: fresh run -- clear any previous stop, track the worker.
+        self._update_stop_event.clear()
+        self._update_worker_thread = thread = threading.Thread(
+            target=self.update_directory_worker, args=(directory,))
         thread.daemon = True
         thread.start()
+        self._update_set_buttons('running')
     
     def update_all(self):
         """Update all tracked directories and files."""
@@ -25571,9 +25960,13 @@ or from the Help menu."""
         self.update_progress.start()
         self.status_var.set("Updating all + purging deleted...")
         
-        thread = threading.Thread(target=self.update_all_worker)
+        # R-069: fresh run -- clear any previous stop, track the worker.
+        self._update_stop_event.clear()
+        self._update_worker_thread = thread = threading.Thread(
+            target=self.update_all_worker)
         thread.daemon = True
         thread.start()
+        self._update_set_buttons('running')
     
     def _tracked_file_is_unchanged(self, file_path):
         """Compare a tracked file's current mtime/size to the tracking DB record.
@@ -25662,14 +26055,21 @@ or from the Help menu."""
                         label="1/1",
                         root_directory=str(Path(directory).parent),
                         collection_resolver=_col_resolver_upd,
+                        stop_event=self._update_stop_event,
                     )
                     chunks = stats.get('chunks_added', 0) if stats else 0
                     print(f"✅ {fname} — {chunks} chunk(s)")
             else:
                 command_update(directory, recursive=True, auto_confirm=True,
-                               collection_resolver=_col_resolver_upd)
+                               collection_resolver=_col_resolver_upd,
+                               stop_event=self._update_stop_event)
 
-            self.output_queue.put(('status', 'Update complete — index synced & stale chunks purged'))
+            if self._update_stop_event.is_set():
+                self.output_queue.put(('update',
+                    "\n\u23f9  Stopped by user \u2014 files updated so far are kept.\n"))
+                self.output_queue.put(('status', '⏹ Stopped by user'))
+            else:
+                self.output_queue.put(('status', 'Update complete — index synced & stale chunks purged'))
             self.output_queue.put(('done', 'update'))
         except Exception as e:
             self.output_queue.put(('error', f"Error: {str(e)}"))
@@ -25698,6 +26098,11 @@ or from the Help menu."""
                 _col_resolver = None
 
                 for i, entry in enumerate(dirs, 1):
+                    # R-069: stop between entries -- the current one finishes first.
+                    if self._update_stop_event.is_set():
+                        self.output_queue.put(('update',
+                            f"\n\u23f9  Stopped by user \u2014 skipping remaining {len(dirs) - i + 1} item(s).\n"))
+                        break
                     entry_name = Path(entry).name or entry
                     is_file = Path(entry).is_file()
 
@@ -25713,6 +26118,7 @@ or from the Help menu."""
                                 label=f"{i}/{len(dirs)}",
                                 root_directory=str(Path(entry).parent),
                                 collection_resolver=_col_resolver,
+                                stop_event=self._update_stop_event,
                             )
                             chunks = stats.get('chunks_added', 0) if stats else 0
                             self.output_queue.put(('update', f"   ✅ {entry_name} — {chunks} chunk(s)\n"))
@@ -25740,7 +26146,8 @@ or from the Help menu."""
                         # in this function.
                         try:
                             command_update(entry, recursive=True, auto_confirm=True,
-                                           collection_resolver=_col_resolver)
+                                           collection_resolver=_col_resolver,
+                                           stop_event=self._update_stop_event)
                         except Exception as _de:
                             self.output_queue.put((
                                 'update',
@@ -25750,8 +26157,15 @@ or from the Help menu."""
                                 f"All again to retry it.)\n"
                             ))
 
-                self.output_queue.put(('update', "\n✅ All tracked items updated.\n"))
-            self.output_queue.put(('status', 'Update complete — index synced & stale chunks purged'))
+                if self._update_stop_event.is_set():
+                    self.output_queue.put(('update',
+                        "\n\u23f9  Stopped by user \u2014 items updated so far are kept.\n"))
+                else:
+                    self.output_queue.put(('update', "\n✅ All tracked items updated.\n"))
+                if self._update_stop_event.is_set():
+                    self.output_queue.put(('status', '⏹ Stopped by user'))
+                else:
+                    self.output_queue.put(('status', 'Update complete — index synced & stale chunks purged'))
             self.output_queue.put(('done', 'update'))
         except Exception as e:
             self.output_queue.put(('error', f"Error: {str(e)}"))
@@ -27373,6 +27787,98 @@ or from the Help menu."""
                     "Click 'Update All' in the Update Index tab to re-index.")
             self.refresh_tracked_dirs()
 
+    # ── R-072: index corruption status button ─────────────────────────────
+    def _check_index_integrity_async(self):
+        """Run PRAGMA quick_check in a background thread; update the
+        corruption button when done. Never blocks the UI thread."""
+        if getattr(self, '_corrupt_btn', None) is None:
+            return
+        def _worker():
+            try:
+                from rag_preprocessor import sqlite_quick_check_ok, CHROMA_DB_PATH
+                import os as _os
+                _sqlite = _os.path.join(CHROMA_DB_PATH, "chroma.sqlite3")
+                _healthy = sqlite_quick_check_ok(_sqlite)
+            except Exception:
+                _healthy = True  # don't cry wolf on unexpected errors
+            try:
+                self.root.after(0, lambda: self._set_corrupt_btn_state(not _healthy))
+            except Exception:
+                pass
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _set_corrupt_btn_state(self, is_corrupt):
+        """Update the corruption button: RED when corrupt, GREEN when healthy."""
+        btn = getattr(self, '_corrupt_btn', None)
+        if btn is None:
+            return
+        self._corrupt_state = is_corrupt
+        try:
+            if is_corrupt:
+                btn.configure(text="\U0001f534 Corruption detected \u2014 Clear/Reindex DB",
+                              bg="#c0392b", fg="white",
+                              activebackground="#e74c3c", activeforeground="white")
+            else:
+                btn.configure(text="\U0001f7e2 Index healthy",
+                              bg="#27ae60", fg="white",
+                              activebackground="#2ecc71", activeforeground="white")
+        except Exception:
+            pass
+
+    def _on_corrupt_btn_click(self):
+        """Click behavior: RED -> clear+reindex, GREEN -> re-check."""
+        if self._corrupt_state is True:
+            if not messagebox.askyesno(
+                    "Corruption detected",
+                    "The search index failed its integrity check.\n\n"
+                    "Clear the index and rebuild it from your tracked folders?\n\n"
+                    "Your tracked-folders list will be kept."):
+                return
+            self._corrupt_btn.configure(text="\u23f3 Clearing\u2026", state="disabled")
+            def _worker():
+                try:
+                    clear_database_only(confirm=True)
+                    invalidate_chroma_cache()
+                    if RAG_AVAILABLE and TRACKING_DB.exists():
+                        TRACKING_DB.write_text('{}', encoding='utf-8')
+                    from rag_preprocessor import get_chroma_client
+                    get_chroma_client()
+                    self.root.after(0, self._after_corrupt_cleared)
+                except Exception as e:
+                    _err = str(e)
+                    self.root.after(0, lambda: self._corrupt_clear_failed(_err))
+            threading.Thread(target=_worker, daemon=True).start()
+        elif self._corrupt_state is False:
+            self._corrupt_state = None
+            try:
+                self._corrupt_btn.configure(text="\U0001f50d Checking index\u2026")
+            except Exception:
+                pass
+            self._check_index_integrity_async()
+
+    def _after_corrupt_cleared(self):
+        """Fresh DB verified - mark healthy and kick off a full reindex."""
+        self._embedding_ready = True
+        try:
+            self._corrupt_btn.configure(state="normal")
+        except Exception:
+            pass
+        self._set_corrupt_btn_state(False)
+        self.refresh_tracked_dirs()
+        messagebox.showinfo(
+            "Index cleared",
+            "\u2705 Corrupt index cleared.\n\nStarting a full reindex now \u2014 "
+            "watch progress on the Update Index tab.")
+        self.update_all()
+
+    def _corrupt_clear_failed(self, err):
+        try:
+            self._corrupt_btn.configure(state="normal")
+        except Exception:
+            pass
+        self._set_corrupt_btn_state(True)
+        messagebox.showerror("Clear failed", f"Could not clear the index:\n\n{err}")
+
     def clear_database(self):
         """Clear Database + Database list — full wipe of all ChromaDB collections,
         file-tracking, email index, AND the tracked-directories list.
@@ -27609,6 +28115,27 @@ or from the Help menu."""
                     except Exception:
                         pass
                     self.status_var.set(f"⚠ Embedding model load failed: {msg_data}")
+                    # R-072: startup corruption -> RED button
+                    try:
+                        if 'corrupt' in str(msg_data).lower():
+                            self._set_corrupt_btn_state(True)
+                    except Exception:
+                        pass
+
+
+                elif msg_type == 'reindex_interrupted_warning':
+                    # R-056: a previous reindex was killed mid-run — warn the
+                    # user; the index may be incomplete. Non-blocking.
+                    try:
+                        _riw_started = (msg_data or {}).get('started_at', '?')
+                        messagebox.showwarning(
+                            "Reindex interrupted",
+                            f"A previous reindex was interrupted at {_riw_started}.\n\n"
+                            "The search index may be incomplete. Run Reindex All "
+                            "from the Reindex tab to rebuild it cleanly.")
+                    except Exception:
+                        pass
+
 
                 elif msg_type == 'index_progress':
                     self.index_progress_var.set(msg_data)
@@ -27660,7 +28187,14 @@ or from the Help menu."""
                         self._show_detected_files(detected)
                     elif msg_data == 'update':
                         self.update_progress.stop()
+                        # R-069: run finished (or stopped) -- back to idle buttons.
+                        self._update_set_buttons('idle')
                         self.refresh_tracked_dirs()
+                        # R-072: re-verify index health after any reindex.
+                        try:
+                            self._check_index_integrity_async()
+                        except Exception:
+                            pass
                         import datetime as _dt
                         self._last_index_time = _dt.datetime.now().strftime('%Y-%m-%d  %H:%M:%S')
                     elif msg_data == 'remove_tracked':

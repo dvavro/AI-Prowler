@@ -52,9 +52,24 @@ class RemoteApp:
         return self.page.locator(f"#screen{name}")
 
     def refresh_all(self):
+        """Tap ↻ and wait until that refresh has really finished.
+
+        2026-10-11: the button is disabled while a refresh runs (including the
+        one the app starts itself right after sign-in). Tapping it then did
+        nothing, and the old fixed 1.5 s wait never noticed — so the first test
+        after a fresh sign-in (AO-01 in a full run) read a Perms list loaded
+        BEFORE its fixture added a folder. Now: wait for ↻ to be enabled, tap,
+        wait for it to go busy (if it shows), then wait until it's enabled again."""
+        btn = self.page.locator("#refreshBtn")
+        expect(btn).to_be_enabled(timeout=60_000)
         self.step("tap top-bar ↻ (refresh all)")
-        self.page.locator("#refreshBtn").click()
-        self.page.wait_for_timeout(1500)
+        btn.click()
+        try:
+            expect(btn).to_be_disabled(timeout=2_000)
+        except AssertionError:
+            pass                                    # a very fast refresh may finish first
+        expect(btn).to_be_enabled(timeout=60_000)
+        self.page.wait_for_timeout(300)
 
     # ── direct call through the app's own api() (still passes the guard) ───
     def api(self, tool: str, args: dict | None = None) -> dict:

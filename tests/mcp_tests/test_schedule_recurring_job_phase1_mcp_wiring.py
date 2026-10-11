@@ -61,6 +61,21 @@ def _marker(result: str, key: str) -> str:
     raise AssertionError(f"{key}= marker not found in: {result!r}")
 
 
+def _make_job(mcp_mod, cust_fields, job_fields, ctx):
+    """Create a customer + one job through the real MCP tools; return job_id.
+
+    Customer IDs follow the CUST-YYYY-N year scheme, so this captures the ID
+    create_customer actually returns instead of hardcoding CUST-0001.
+    """
+    cust_result = mcp_mod.create_customer(cust_fields, filepath="", backup=False, ctx=ctx)
+    assert cust_result.startswith("✅"), cust_result
+    fields = dict(job_fields)
+    fields["CustomerID (Customers!A)"] = _marker(cust_result, "NEW_CUST_ID")
+    job_result = mcp_mod.create_job(fields, filepath="", backup=False, ctx=ctx)
+    assert job_result.startswith("✅"), job_result
+    return _marker(job_result, "NEW_JOB_ID")
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Personal mode (ctx=None)
 # ══════════════════════════════════════════════════════════════════════════
@@ -75,13 +90,11 @@ def personal_env(tmp_path, monkeypatch, mcp_mod):
 
 
 def test_personal_mode_schedules_next_job(personal_env, mcp_mod):
-    mcp_mod.create_customer({"Company Name": "Weekly Co", "Frequency": "Weekly"},
-                             filepath="", backup=False, ctx=None)
-    job_result = mcp_mod.create_job({
-        "CustomerID (Customers!A)": "CUST-0001", "Customer Name / Company": "Weekly Co",
-        "Service Date": "2026-04-05",
-    }, filepath="", backup=False, ctx=None)
-    job_id = job_result.split("NEW_JOB_ID=")[1].splitlines()[0].strip()
+    job_id = _make_job(mcp_mod,
+                        {"Company Name": "Weekly Co", "Frequency": "Weekly"},
+                        {"Customer Name / Company": "Weekly Co",
+                         "Service Date": "2026-04-05"},
+                        ctx=None)
 
     result = mcp_mod.schedule_next_recurring_job(job_id, when="any", ctx=None)
     assert result.startswith("✅"), result
@@ -94,26 +107,22 @@ def test_personal_mode_when_any_default_unrestricted(personal_env, mcp_mod):
     is NOT true for the tool's own default ('today' is the module-level
     default for the `when` argument in both modes per the docstring) —
     this test instead just confirms when='any' searches every date."""
-    mcp_mod.create_customer({"Company Name": "X", "Frequency": "Monthly"},
-                             filepath="", backup=False, ctx=None)
-    job_result = mcp_mod.create_job({
-        "CustomerID (Customers!A)": "CUST-0001", "Customer Name / Company": "X",
-        "Service Date": "2020-01-15",  # long in the past relative to "today"
-    }, filepath="", backup=False, ctx=None)
-    job_id = job_result.split("NEW_JOB_ID=")[1].splitlines()[0].strip()
+    job_id = _make_job(mcp_mod,
+                        {"Company Name": "X", "Frequency": "Monthly"},
+                        {"Customer Name / Company": "X",
+                         "Service Date": "2020-01-15"},  # long in the past relative to "today"
+                        ctx=None)
 
     result = mcp_mod.schedule_next_recurring_job(job_id, when="any", ctx=None)
     assert result.startswith("✅"), result
 
 
 def test_personal_mode_one_time_customer(personal_env, mcp_mod):
-    mcp_mod.create_customer({"Company Name": "OT Co", "Frequency": "One-time"},
-                             filepath="", backup=False, ctx=None)
-    job_result = mcp_mod.create_job({
-        "CustomerID (Customers!A)": "CUST-0001", "Customer Name / Company": "OT Co",
-        "Service Date": "2026-04-05",
-    }, filepath="", backup=False, ctx=None)
-    job_id = job_result.split("NEW_JOB_ID=")[1].splitlines()[0].strip()
+    job_id = _make_job(mcp_mod,
+                        {"Company Name": "OT Co", "Frequency": "One-time"},
+                        {"Customer Name / Company": "OT Co",
+                         "Service Date": "2026-04-05"},
+                        ctx=None)
 
     result = mcp_mod.schedule_next_recurring_job(job_id, when="any", ctx=None)
     assert result.startswith("ℹ️")
@@ -134,13 +143,11 @@ def server_env(tmp_path, monkeypatch, mcp_mod):
 def test_server_mode_field_crew_denied_for_unassigned_job(server_env, monkeypatch, mcp_mod):
     owner = _owner()
     _set_user(monkeypatch, mcp_mod, owner)
-    mcp_mod.create_customer({"Company Name": "X", "Frequency": "Weekly"},
-                             filepath="", backup=False, ctx=_make_ctx(owner))
-    job_result = mcp_mod.create_job({
-        "CustomerID (Customers!A)": "CUST-0001", "Customer Name / Company": "X",
-        "Service Date": "2026-04-05", "Crew / Technician": "Someone Else",
-    }, filepath="", backup=False, ctx=_make_ctx(owner))
-    job_id = job_result.split("NEW_JOB_ID=")[1].splitlines()[0].strip()
+    job_id = _make_job(mcp_mod,
+                        {"Company Name": "X", "Frequency": "Weekly"},
+                        {"Customer Name / Company": "X",
+                         "Service Date": "2026-04-05", "Crew / Technician": "Someone Else"},
+                        ctx=_make_ctx(owner))
 
     crew = _field_crew()
     _set_user(monkeypatch, mcp_mod, crew)
@@ -153,13 +160,11 @@ def test_server_mode_field_crew_allowed_for_own_job(server_env, monkeypatch, mcp
     owner = _owner()
     crew = _field_crew()
     _set_user(monkeypatch, mcp_mod, owner)
-    mcp_mod.create_customer({"Company Name": "X", "Frequency": "Weekly"},
-                             filepath="", backup=False, ctx=_make_ctx(owner))
-    job_result = mcp_mod.create_job({
-        "CustomerID (Customers!A)": "CUST-0001", "Customer Name / Company": "X",
-        "Service Date": "2026-04-05", "Crew / Technician": crew["name"],
-    }, filepath="", backup=False, ctx=_make_ctx(owner))
-    job_id = job_result.split("NEW_JOB_ID=")[1].splitlines()[0].strip()
+    job_id = _make_job(mcp_mod,
+                        {"Company Name": "X", "Frequency": "Weekly"},
+                        {"Customer Name / Company": "X",
+                         "Service Date": "2026-04-05", "Crew / Technician": crew["name"]},
+                        ctx=_make_ctx(owner))
 
     _set_user(monkeypatch, mcp_mod, crew)
     result = mcp_mod.schedule_next_recurring_job(job_id, when="any", ctx=_make_ctx(crew))
@@ -169,13 +174,11 @@ def test_server_mode_field_crew_allowed_for_own_job(server_env, monkeypatch, mcp
 def test_server_mode_owner_unrestricted(server_env, monkeypatch, mcp_mod):
     owner = _owner()
     _set_user(monkeypatch, mcp_mod, owner)
-    mcp_mod.create_customer({"Company Name": "X", "Frequency": "Weekly"},
-                             filepath="", backup=False, ctx=_make_ctx(owner))
-    job_result = mcp_mod.create_job({
-        "CustomerID (Customers!A)": "CUST-0001", "Customer Name / Company": "X",
-        "Service Date": "2026-04-05", "Crew / Technician": "Nobody In Particular",
-    }, filepath="", backup=False, ctx=_make_ctx(owner))
-    job_id = job_result.split("NEW_JOB_ID=")[1].splitlines()[0].strip()
+    job_id = _make_job(mcp_mod,
+                        {"Company Name": "X", "Frequency": "Weekly"},
+                        {"Customer Name / Company": "X",
+                         "Service Date": "2026-04-05", "Crew / Technician": "Nobody In Particular"},
+                        ctx=_make_ctx(owner))
 
     result = mcp_mod.schedule_next_recurring_job(job_id, when="any", ctx=_make_ctx(owner))
     assert result.startswith("✅"), result
@@ -184,13 +187,11 @@ def test_server_mode_owner_unrestricted(server_env, monkeypatch, mcp_mod):
 def test_server_mode_ignores_filepath_argument(server_env, monkeypatch, mcp_mod, tmp_path):
     owner = _owner()
     _set_user(monkeypatch, mcp_mod, owner)
-    mcp_mod.create_customer({"Company Name": "X", "Frequency": "Weekly"},
-                             filepath="", backup=False, ctx=_make_ctx(owner))
-    job_result = mcp_mod.create_job({
-        "CustomerID (Customers!A)": "CUST-0001", "Customer Name / Company": "X",
-        "Service Date": "2026-04-05",
-    }, filepath="", backup=False, ctx=_make_ctx(owner))
-    job_id = job_result.split("NEW_JOB_ID=")[1].splitlines()[0].strip()
+    job_id = _make_job(mcp_mod,
+                        {"Company Name": "X", "Frequency": "Weekly"},
+                        {"Customer Name / Company": "X",
+                         "Service Date": "2026-04-05"},
+                        ctx=_make_ctx(owner))
 
     decoy = tmp_path / "decoy.db"
     result = mcp_mod.schedule_next_recurring_job(job_id, filepath=str(decoy), when="any", ctx=_make_ctx(owner))

@@ -13,6 +13,7 @@ import datetime
 
 import pytest
 
+import db_write_ops
 from db_access import get_connection, init_db, transaction
 from db_write_ops import (
     CUSTOMERS_HEADER_MAP,
@@ -37,15 +38,21 @@ def db_path(tmp_path):
 
 # ── ID generation ────────────────────────────────────────────────────────
 
-def test_id_generation_starts_at_one(db_path):
+@pytest.fixture
+def y2026(monkeypatch):
+    """Pin the CUST-YEAR-N clock (2026-10-04 scheme) for deterministic ids."""
+    monkeypatch.setattr(db_write_ops, "_current_year", lambda: 2026)
+
+
+def test_id_generation_starts_at_one(db_path, y2026):
     result = db_create_customer(db_path, {"Company Name": "Blue Wave Cafe"}, actor="david")
-    assert "NEW_CUST_ID=CUST-0001" in result
+    assert "NEW_CUST_ID=CUST-2026-1" in result
 
 
-def test_id_generation_increments(db_path):
+def test_id_generation_increments(db_path, y2026):
     db_create_customer(db_path, {"Company Name": "A"}, actor="david")
     result = db_create_customer(db_path, {"Company Name": "B"}, actor="david")
-    assert "NEW_CUST_ID=CUST-0002" in result
+    assert "NEW_CUST_ID=CUST-2026-2" in result
 
 
 def test_id_generation_continues_after_a_gap(db_path):
@@ -61,7 +68,7 @@ def test_id_generation_continues_after_a_gap(db_path):
 
 # ── Generic create engine / audit trail ─────────────────────────────────
 
-def test_create_customer_maps_headers_and_stamps_audit(db_path):
+def test_create_customer_maps_headers_and_stamps_audit(db_path, y2026):
     result = db_create_customer(
         db_path,
         {
@@ -78,11 +85,11 @@ def test_create_customer_maps_headers_and_stamps_audit(db_path):
         },
         actor="david",
     )
-    assert "NEW_CUST_ID=CUST-0001" in result
+    assert "NEW_CUST_ID=CUST-2026-1" in result
     assert "CUST-9999" not in result
 
     conn = get_connection(db_path)
-    row = conn.execute("SELECT * FROM customers WHERE customer_id = 'CUST-0001'").fetchone()
+    row = conn.execute("SELECT * FROM customers WHERE customer_id = 'CUST-2026-1'").fetchone()
     conn.close()
     assert row["company_name"] == "Blue Wave Cafe"
     assert row["first_name"] == "Jane"
@@ -93,20 +100,20 @@ def test_create_customer_maps_headers_and_stamps_audit(db_path):
     assert row["version"] == 1
 
 
-def test_create_customer_reports_unrecognized_columns(db_path):
+def test_create_customer_reports_unrecognized_columns(db_path, y2026):
     result = db_create_customer(db_path, {"Not A Real Column": "x"}, actor="david")
     assert "Columns not found" in result
     assert "Not A Real Column" in result
 
 
-def test_create_job_newline_header_form_also_resolves(db_path):
+def test_create_job_newline_header_form_also_resolves(db_path, y2026):
     """Callers may pass either the raw newline form or the space-
     normalized form of a header — both must resolve to the same
     column, matching the live spreadsheet's header-detection aliasing."""
     db_create_customer(db_path, {"Company Name": "X"}, actor="david")
     result = db_create_job(
         db_path,
-        {"CustomerID (Customers!A)": "CUST-0001", "Job\nStatus": "Scheduled"},
+        {"CustomerID (Customers!A)": "CUST-2026-1", "Job\nStatus": "Scheduled"},
         actor="david",
     )
     assert result.startswith("✅")
@@ -118,9 +125,9 @@ def test_create_job_newline_header_form_also_resolves(db_path):
 
 # ── Generic update engine ────────────────────────────────────────────────
 
-def test_update_job_partial_match_and_audit_stamp(db_path):
+def test_update_job_partial_match_and_audit_stamp(db_path, y2026):
     db_create_customer(db_path, {"Company Name": "Crabby's Daytona"}, actor="david")
-    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-0001",
+    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-2026-1",
                              "Customer Name / Company": "Crabby's Daytona"}, actor="david")
 
     result = db_update_job(db_path, "crabby", {"Job\nStatus": "Complete"}, actor="mike",
@@ -142,9 +149,9 @@ def test_update_job_no_match_returns_error(db_path):
 
 # ── Crew-scoping parity with update_job_spreadsheet ─────────────────────
 
-def test_field_crew_cannot_update_unassigned_job(db_path):
+def test_field_crew_cannot_update_unassigned_job(db_path, y2026):
     db_create_customer(db_path, {"Company Name": "X"}, actor="owner")
-    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-0001",
+    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-2026-1",
                              "Crew / Technician": "Samantha"}, actor="owner")
 
     result = db_update_job(db_path, "JOB-0001", {"Job\nStatus": "Complete"},
@@ -153,9 +160,9 @@ def test_field_crew_cannot_update_unassigned_job(db_path):
     assert "assigned to you" in result
 
 
-def test_field_crew_can_update_own_assigned_job(db_path):
+def test_field_crew_can_update_own_assigned_job(db_path, y2026):
     db_create_customer(db_path, {"Company Name": "X"}, actor="owner")
-    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-0001",
+    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-2026-1",
                              "Crew / Technician": "mike c., samantha"}, actor="owner")
 
     result = db_update_job(db_path, "JOB-0001", {"Job\nStatus": "Complete"},
@@ -163,65 +170,65 @@ def test_field_crew_can_update_own_assigned_job(db_path):
     assert result.startswith("✅")
 
 
-def test_field_crew_cannot_touch_customer_they_have_no_job_for(db_path):
+def test_field_crew_cannot_touch_customer_they_have_no_job_for(db_path, y2026):
     db_create_customer(db_path, {"Company Name": "Unrelated Co"}, actor="owner")
-    # No jobs row links CUST-0001 to any crew member.
-    result = db_update_customer(db_path, "CUST-0001", {"Phone": "555-1111"},
+    # No jobs row links CUST-2026-1 to any crew member.
+    result = db_update_customer(db_path, "CUST-2026-1", {"Phone": "555-1111"},
                                  actor="samuel", restrict=True, crew_name="samuel")
     assert result.startswith("❌")
     assert "actually worked a job for" in result
 
 
-def test_field_crew_can_touch_linked_customer_contact_info(db_path):
+def test_field_crew_can_touch_linked_customer_contact_info(db_path, y2026):
     db_create_customer(db_path, {"Company Name": "Linked Co"}, actor="owner")
-    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-0001",
+    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-2026-1",
                              "Crew / Technician": "samuel"}, actor="owner")
-    result = db_update_customer(db_path, "CUST-0001", {"Phone": "555-2222"},
+    result = db_update_customer(db_path, "CUST-2026-1", {"Phone": "555-2222"},
                                  actor="samuel", restrict=True, crew_name="samuel")
     assert result.startswith("✅")
 
 
-def test_field_crew_locked_customer_fields_rejected(db_path):
+def test_field_crew_locked_customer_fields_rejected(db_path, y2026):
     db_create_customer(db_path, {"Company Name": "Linked Co"}, actor="owner")
-    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-0001",
+    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-2026-1",
                              "Crew / Technician": "samuel"}, actor="owner")
-    result = db_update_customer(db_path, "CUST-0001", {"Discount (%)": "50"},
+    result = db_update_customer(db_path, "CUST-2026-1", {"Discount (%)": "50"},
                                  actor="samuel", restrict=True, crew_name="samuel")
     assert result.startswith("❌")
     assert "staff/manager/owner" in result
 
 
-def test_staff_role_unrestricted_everywhere(db_path):
+def test_staff_role_unrestricted_everywhere(db_path, y2026):
     """restrict=False (owner/manager/staff) bypasses every crew-scoping
     check, matching _job_crew_scope's return for those roles."""
     db_create_customer(db_path, {"Company Name": "X"}, actor="owner")
-    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-0001",
+    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-2026-1",
                              "Crew / Technician": "someone-else"}, actor="owner")
     result = db_update_job(db_path, "JOB-0001", {"Job\nStatus": "Complete"},
                             actor="staffmember", restrict=False, crew_name="")
     assert result.startswith("✅")
 
 
-def test_db_customer_in_crew_scope_direct(db_path):
+def test_db_customer_in_crew_scope_direct(db_path, y2026):
     db_create_customer(db_path, {"Company Name": "X"}, actor="owner")
-    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-0001",
+    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-2026-1",
                              "Crew / Technician": "mike c., david vavro"}, actor="owner")
     conn = get_connection(db_path)
-    assert db_customer_in_crew_scope(conn, "david vavro", "CUST-0001") is True
-    assert db_customer_in_crew_scope(conn, "someone else", "CUST-0001") is False
+    assert db_customer_in_crew_scope(conn, "david vavro", "CUST-2026-1") is True
+    assert db_customer_in_crew_scope(conn, "someone else", "CUST-2026-1") is False
     assert db_customer_in_crew_scope(conn, "david vavro", "") is False
     conn.close()
 
 
 # ── log_time_entry: TimeLog row-placement is structurally impossible now ──
 
-def test_clock_in_and_out_no_row_placement_bug(db_path):
+def test_clock_in_and_out_no_row_placement_bug(db_path, y2026):
     """Spec Phase 1 explicit regression test: the old row-501 bug (a
     stray formula-only cell pushing new entries far below real data)
     cannot recur — there is no 'next empty row' scan at all. Assert
     it anyway rather than assuming."""
     db_create_customer(db_path, {"Company Name": "Harbor Inn"}, actor="owner")
-    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-0001",
+    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-2026-1",
                              "Customer Name / Company": "Harbor Inn"}, actor="owner")
 
     result = db_log_time_entry(db_path, "JOB-0001", "start",
@@ -236,13 +243,13 @@ def test_clock_in_and_out_no_row_placement_bug(db_path):
     assert row["clock_out"] is None
 
 
-def test_clock_out_ownership_keyed_off_real_user_id_fk(db_path):
+def test_clock_out_ownership_keyed_off_real_user_id_fk(db_path, y2026):
     """Spec Phase 1 explicit requirement: clock-out ownership match is
     now keyed off a real crew_user_id FK, not name-matching. Two
     different server-mode users clocking in on the same job must each
     only be able to stop their OWN entry."""
     db_create_customer(db_path, {"Company Name": "X"}, actor="owner")
-    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-0001"}, actor="owner")
+    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-2026-1"}, actor="owner")
     with transaction(db_path) as conn:
         conn.execute("INSERT INTO users (id, display_name) VALUES ('u_jake', 'Jake')")
         conn.execute("INSERT INTO users (id, display_name) VALUES ('u_karen', 'Karen')")
@@ -273,9 +280,9 @@ def test_clock_out_ownership_keyed_off_real_user_id_fk(db_path):
     assert karen_entry["clock_out"] is None  # untouched by Jake's stop
 
 
-def test_clock_out_writes_actual_duration_back_to_jobs(db_path):
+def test_clock_out_writes_actual_duration_back_to_jobs(db_path, y2026):
     db_create_customer(db_path, {"Company Name": "X"}, actor="owner")
-    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-0001"}, actor="owner")
+    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-2026-1"}, actor="owner")
     db_log_time_entry(db_path, "JOB-0001", "start", user_id="", user_display_name="operator")
 
     # Backdate clock_in so elapsed comes out > 0 without sleeping in the
@@ -298,9 +305,9 @@ def test_clock_out_writes_actual_duration_back_to_jobs(db_path):
     assert row["actual_duration_unit"] == "min"
 
 
-def test_starting_twice_on_same_job_blocked_for_same_user(db_path):
+def test_starting_twice_on_same_job_blocked_for_same_user(db_path, y2026):
     db_create_customer(db_path, {"Company Name": "X"}, actor="owner")
-    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-0001"}, actor="owner")
+    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-2026-1"}, actor="owner")
     with transaction(db_path) as conn:
         conn.execute("INSERT INTO users (id, display_name) VALUES ('u_jake', 'Jake')")
     db_log_time_entry(db_path, "JOB-0001", "start", user_id="u_jake", user_display_name="Jake")
@@ -308,12 +315,12 @@ def test_starting_twice_on_same_job_blocked_for_same_user(db_path):
     assert "already open" in result
 
 
-def test_ambiguous_job_identifier_rejected(db_path):
+def test_ambiguous_job_identifier_rejected(db_path, y2026):
     db_create_customer(db_path, {"Company Name": "Alpha Cafe"}, actor="owner")
     db_create_customer(db_path, {"Company Name": "Alpha Bakery"}, actor="owner")
-    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-0001",
+    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-2026-1",
                              "Customer Name / Company": "Alpha Cafe"}, actor="owner")
-    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-0002",
+    db_create_job(db_path, {"CustomerID (Customers!A)": "CUST-2026-2",
                              "Customer Name / Company": "Alpha Bakery"}, actor="owner")
     result = db_log_time_entry(db_path, "Alpha", "start", user_id="", user_display_name="operator")
     assert "matches 2 jobs" in result

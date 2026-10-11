@@ -1,9 +1,24 @@
-"""Route email — Settings -> "Email Route On Build" now covers BOTH routing methods.
+"""Route email — approval-gated since 2026-10-05 (David's rule).
 
-  * Route Today (free engine, suggest_route_schedule): after building, emails the
-    results + the saved phone link when the setting is Enabled.
-  * Run AI Route: apply_route_order itself never emails (the AI may call it twice in
-    one run); the run's worker emails ONCE at the end via _email_route_results.
+  * Email is ONLY allowed for APPROVED routes. _email_route_results returns
+    "" for an unapproved route (automatic send), or the explicit warning
+    "Email is only allowed for approved routes — approve the route first."
+    for a forced/on-demand send.
+  * Settings -> "Email Route On Approve" (renamed from "Email Route On
+    Build" 2026-10-05; the old key auto-migrates on first read): Enabled ->
+    approving a route automatically emails it; Disabled (default) -> no
+    automatic email. The "Email Approved Route Now" button (force=True)
+    sends on demand regardless of the setting.
+  * _with_route_link no longer publishes the phone link (2026-10-05) — only
+    an APPROVED route gets its link pinned (see approve_route_schedule).
+    It only appends the email note when email=True and the gate allows it.
+
+  * Route Today (free engine, suggest_route_schedule): after building, the
+    run's worker emails the results + saved phone link when the setting is
+    Enabled (and the route is approved).
+  * Run AI Route: apply_route_order itself never emails (the AI may call it
+    twice in one run); the run's worker emails ONCE at the end via
+    _email_route_results.
   * Setting Disabled -> nothing is sent by either.
 """
 import sqlite3
@@ -15,6 +30,8 @@ import pytest
 _SRC = Path(__file__).resolve().parent.parent.parent
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
+
+from db_route_ops import db_approve_route_schedule
 
 DATE = "2026-09-21"
 HOME = {"street": "1500 Shadow Pines Dr", "city": "New Smyrna Beach", "state": "FL", "zip": "32168"}
@@ -70,7 +87,7 @@ def _stop(job_id, address, arrival="07:15"):
             "leg_drive_min": 5, "leg_drive_miles": 1.0, "map_url": None}
 
 
-def _route(mcp_mod, env):
+def _route(mcp_mod, env, approve=True):
     """Two jobs, route stored, phone link published — like a finished routing run."""
     j1 = _make_job(mcp_mod, "Riverside Grill", "300 Riverside Dr", 29.02, -80.92)
     j2 = _make_job(mcp_mod, "Coastal Dental", "421 Faulkner St", 29.03, -80.93)
@@ -78,12 +95,18 @@ def _route(mcp_mod, env):
     db_write_route_stops(str(env), DATE, [_stop(j1, JOB1_ADDR, "07:15"), _stop(j2, JOB2_ADDR, "14:03")],
                          "test", single_crew=True)
     assert mcp_mod._publish_route_links(str(env), DATE, "", None, "test").startswith("📍")
+    if approve:
+        # 2026-10-05: email is only allowed for approved routes.
+        db_approve_route_schedule(str(env), DATE, "", actor="test")
     return j1, j2
 
 
 def _set_email_setting(env, value):
+    # 2026-10-05: renamed from 'Email Route On Build' to 'Email Route On
+    # Approve'. The old key auto-migrates on first read, but write the
+    # current key directly.
     conn = sqlite3.connect(env)
-    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('Email Route On Build', ?)", (value,))
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('Email Route On Approve', ?)", (value,))
     conn.commit()
     conn.close()
 
@@ -101,6 +124,25 @@ def test_enabled_emails_results_and_link(mcp_mod, env, sent):
     assert "https://www.google.com/maps/dir/" in sent[0]["body"]        # the link
 
 
+def test_unapproved_route_blocks_automatic_email(mcp_mod, env, sent):
+    """David's rule: until a route is approved, the automatic send stays
+    silent — even with the setting Enabled."""
+    _route(mcp_mod, env, approve=False)
+    _set_email_setting(env, "Enabled")
+    assert mcp_mod._email_route_results(str(env), DATE, "", "", "x") == ""
+    assert sent == []
+
+
+def test_unapproved_route_force_send_warns(mcp_mod, env, sent):
+    """The on-demand button on an unapproved route gets the explicit
+    warning instead of sending."""
+    _route(mcp_mod, env, approve=False)
+    _set_email_setting(env, "Enabled")
+    note = mcp_mod._email_route_results(str(env), DATE, "", "", "x", force=True)
+    assert "approved routes" in note and "approve the route first" in note
+    assert sent == []
+
+
 def test_disabled_sends_nothing(mcp_mod, env, sent):
     _route(mcp_mod, env)
     _set_email_setting(env, "Disabled")
@@ -112,7 +154,7 @@ def test_unset_setting_defaults_to_disabled(mcp_mod, env, sent):
     # Flipped 2026-09-21: an install that's never touched this key now stays
     # quiet by default, since "📧 Email Approved Route Now" (email_route_now)
     # covers on-demand sending regardless of this setting.
-    _route(mcp_mod, env)          # no 'Email Route On Build' row written at all
+    _route(mcp_mod, env)          # no 'Email Route On Approve' row written at all
     assert mcp_mod._email_route_results(str(env), DATE, "", "", "x") == ""
     assert sent == []
 
@@ -163,7 +205,10 @@ def test_free_engine_path_emails_once(mcp_mod, env, sent):
     _route(mcp_mod, env)
     _set_email_setting(env, "Enabled")   # default flipped to Disabled 2026-09-21 — must opt in for this test
     out = mcp_mod._with_route_link("✅ planned", str(env), DATE, "", None, "test", email=True)
-    assert "📍 Phone route link saved" in out and "📧 Route link and results emailed" in out
+    # 2026-10-05: _with_route_link no longer publishes the phone link (only
+    # an approved route gets its link pinned); it appends the email note.
+    assert "📍 Phone route link saved" not in out
+    assert "📧 Route link and results emailed" in out
     assert len(sent) == 1
 
 
@@ -171,14 +216,14 @@ def test_free_engine_path_emails_nothing_by_default(mcp_mod, env, sent):
     # The new default: an install that's never touched the setting stays quiet.
     _route(mcp_mod, env)
     out = mcp_mod._with_route_link("✅ planned", str(env), DATE, "", None, "test", email=True)
-    assert "📍 Phone route link saved" in out and "📧" not in out
+    assert out == "✅ planned" and "📧" not in out
     assert sent == []
 
 
 def test_ai_engine_apply_path_never_emails(mcp_mod, env, sent):
     _route(mcp_mod, env)
     out = mcp_mod._with_route_link("✅ applied", str(env), DATE, "", None, "test")   # email defaults to False
-    assert "📍 Phone route link saved" in out and "📧" not in out
+    assert out == "✅ applied" and "📧" not in out
     assert sent == []
 
 

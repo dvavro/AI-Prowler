@@ -296,9 +296,96 @@ class TestPermissions:
             "loadPerms should filter lines containing '[W]' for writable set"
 
     def test_tracked_dirs_strips_numbering(self, js):
-        fn = _fn(js, "loadPerms")
-        assert r"replace(/^\d+" in fn, \
-            "loadPerms should strip leading '1. ' from list_tracked_directories output"
+        # 2026-10-09: parsing moved to _parseTrackedSections (two sections —
+        # indexed / access-only — and a [W]/[R] badge on each numbered line).
+        assert "_parseTrackedSections(" in _fn(js, "loadPerms"), \
+            "loadPerms should parse list_tracked_directories with _parseTrackedSections"
+        fn = _fn(js, "_parseTrackedSections")
+        assert r"^\d+\." in fn, "should keep only numbered lines and strip the '1. '"
+        assert r"\[(?:W|R|W\*)\]" in fn, "should strip the [W]/[R]/[W*] badge from the path"
+        assert "access-only folders" in fn.lower(), "should split off the access-only section"
+
+    # ── R-087 (2026-10-09): every screen uses the shared parsers ──────────────
+    def test_files_and_scope_picker_use_shared_parser(self, js):
+        assert "_parseTrackedSections(" in _fn(js, "loadFilesList"), "Files tab must use the shared parser"
+        assert "_parseWritableSet(" in _fn(js, "loadFilesList")
+        assert "_parseTrackedSections(" in _fn(js, "_loadScopeDirCheckboxes"), "scope picker must use it"
+        assert "_parseWritableSet(" in _fn(js, "loadPerms")
+
+    def test_files_tab_has_indexed_and_access_only_sections(self, js):
+        """2026-10-10 (David): Files lists indexed folders, then access-only
+        folders, separately; uploads report 'not indexed' for access-only."""
+        fn = _fn(js, "loadFilesList")
+        assert "secs.tracked" in fn and "secs.accessOnly" in fn
+        assert "Indexed Folders" in fn and "Access-Only Folders" in fn
+        assert "files-idx" in fn and "files-ao" in fn
+        assert "secs.hasSection && !serverMode" in fn, "access-only section must be personal-mode only"
+        assert "'upl_' + kind + i" in fn and "'dlp_' + kind + i" in fn, "ids must be unique across sections"
+        assert "data.indexed === false" in _fn(js, "handleUpload")
+
+    def test_writable_via_parent(self, js):
+        """R-088 (2026-10-10): a folder inside a writable folder IS writable —
+        Files must offer Upload, Perms must show R+W (switch locked on)."""
+        import json as _json
+        import shutil
+        import subprocess
+        if not shutil.which("node"):
+            pytest.skip("node not installed")
+        for name in ("loadFilesList",):
+            assert "_writableVia(" in _fn(js, name), f"{name} must use _writableVia"
+        assert "_permToggleHtml(p, i, _writableVia(p, wSet))" in _fn(js, "loadPerms")
+        assert "_permToggleHtml(p, id, _writableVia(p, wSet))" in _fn(js, "renderAccessOnly")
+        w = ["c:\\users\\david\\ai-prowler-v910_to_v920_work", "c:/users/david/.ai-prowler"]
+        cases = {
+            "C:\\Users\\david\\AI-Prowler-V910_to_V920_work": "self",
+            "C:\\Users\\david\\AI-Prowler-V910_to_V920_work\\tests\\x": "parent",
+            "C:/Users/david/AI-Prowler-V910_to_V920_work/tests": "parent",
+            "C:\\Users\\david\\.ai-prowler\\jobs": "parent",
+            "C:\\Users\\david\\AI-Prowler-V910_to_V920_work2": "",       # sibling, not inside
+            "C:\\Users\\david\\Documents": "",
+        }
+        src = (_fn(js, "_writableVia") + "\nconst w = new Set(" + _json.dumps(w) + ");\n" +
+               "console.log(JSON.stringify(" + _json.dumps(list(cases)) + ".map(p => _writableVia(p, w))));")
+        r = subprocess.run(["node", "-e", src], capture_output=True, text=True, encoding="utf-8")
+        assert r.returncode == 0, r.stderr
+        assert _json.loads(r.stdout) == list(cases.values()), dict(zip(cases, _json.loads(r.stdout)))
+        toggle = _fn(js, "_permToggleHtml")
+        assert "checked disabled" in toggle and "Writable through a parent folder" in toggle
+
+    def test_parsers_on_real_output(self, js):
+        """Run the two parsers with node on the real list_tracked_directories /
+        list_writable_directories output (2026-10-10) + a non-English name."""
+        import json as _json
+        import shutil
+        import subprocess
+        if not shutil.which("node"):
+            pytest.skip("node not installed")
+        tracked_txt = (
+            "📁 Indexed directories (in ChromaDB):\n"
+            "  1. [R] 📄 C:\\Users\\david\\Documents\\AI-Prowler\\COMPLETE_USER_GUIDE.md\n"
+            "  2. [W] 📁 C:\\Users\\david\\Documents\\Misc\n"
+            "  3. [R] 📁 C:\\Users\\david\\Café Docs\n"
+            "  4. [W*] ❓ C:\\Users\\david\\Gone\n"
+            "\n📂 Access-only folders (readable, not indexed):\n"
+            "  1. [W] 📁 C:/Users/david/.ai-prowler\n"
+            "\nLegend: [W] = writable  [R] = read-only\n")
+        writable_txt = ("Writable:\n  ✅ [W]  C:\\Users\\david\\Documents\\Misc\n"
+                        "  📖 [R]  C:\\Users\\david\\Café Docs\n")
+        src = (_fn(js, "_parseTrackedSections") + "\n" + _fn(js, "_parseWritableSet") + "\n" +
+               "const t = _parseTrackedSections(" + _json.dumps(tracked_txt) + ");\n" +
+               "const w = Array.from(_parseWritableSet(" + _json.dumps(writable_txt) + "));\n" +
+               "console.log(JSON.stringify({t, w}));")
+        r = subprocess.run(["node", "-e", src], capture_output=True, text=True, encoding="utf-8")
+        assert r.returncode == 0, r.stderr
+        out = _json.loads(r.stdout)
+        assert out["t"]["tracked"] == [
+            "C:\\Users\\david\\Documents\\AI-Prowler\\COMPLETE_USER_GUIDE.md",
+            "C:\\Users\\david\\Documents\\Misc",
+            "C:\\Users\\david\\Café Docs",
+            "C:\\Users\\david\\Gone"], out["t"]
+        assert out["t"]["accessOnly"] == ["C:/Users/david/.ai-prowler"], out["t"]
+        assert out["t"]["hasSection"] is True
+        assert out["w"] == ["c:\\users\\david\\documents\\misc"], out["w"]
 
     def test_reauth_3attempt_lockout(self, js):
         fn = _fn(js, "confirmGrant")
@@ -308,10 +395,13 @@ class TestPermissions:
     def test_revoke_does_not_open_modal(self, js):
         fn = _fn(js, "onPerm")
         assert "revoke_write_access" in fn
-        assert "reAuthModal" in fn
+        # 2026-10-09: the popup opens through _openReAuth (shared with Add
+        # Access-Only Folder); the grant branch sets raMode = 'write' first.
+        assert "_openReAuth(" in fn and "raMode = 'write'" in fn
+        assert "reAuthModal" in _fn(js, "_openReAuth")
         # revoke happens in the !cb.checked branch, modal in else (grant) branch
         revoke_idx = fn.find("revoke_write_access")
-        modal_idx  = fn.find("reAuthModal")
+        modal_idx  = fn.find("_openReAuth(")
         assert revoke_idx < modal_idx, \
             "onPerm structure wrong — revoke and modal open in wrong branches"
 
@@ -611,8 +701,10 @@ class TestRemoteAllowedTools:
 
     def _allowed(self, mcp_src: str) -> set:
         import re
-        idx = mcp_src.find("_REMOTE_ALLOWED")
-        block = mcp_src[idx:idx+2000]
+        # the whole set literal (2026-10-09: a fixed 2000-char window cut
+        # off the task tools once the access-only entries were added)
+        idx = mcp_src.find("_REMOTE_ALLOWED = {")
+        block = mcp_src[idx:mcp_src.index("}", idx)]
         return set(re.findall(r'"([\w_]+)"', block))
 
     def test_learnings_tools_in_allowed(self, mcp_src):

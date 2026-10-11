@@ -12,6 +12,7 @@ Run: run_tests.bat tests\\mcp\\test_r044_ids_never_reused.py -v
 """
 import pytest
 
+import db_write_ops
 from db_access import get_connection, init_db, transaction
 from db_write_ops import (
     db_create_customer,
@@ -36,6 +37,12 @@ def _new_id(result: str, key: str) -> str:
 
 def _customer(db_path, name="R044 Customer"):
     return _new_id(db_create_customer(db_path, {"Company Name": name}, actor="dave"), "NEW_CUST_ID")
+
+
+@pytest.fixture
+def y2026(monkeypatch):
+    """Pin the CUST-YEAR-N clock (2026-10-04 scheme) for deterministic ids."""
+    monkeypatch.setattr(db_write_ops, "_current_year", lambda: 2026)
 
 
 def _job(db_path, cust):
@@ -66,12 +73,12 @@ def test_R044_02_deleting_every_job_still_never_restarts_at_one(db_path):
     assert _job(db_path, cust) == "JOB-0004"
 
 
-def test_R044_03_customer_numbers_are_not_reused_either(db_path):
-    _customer(db_path, "A")
-    c2 = _customer(db_path, "B")
+def test_R044_03_customer_numbers_are_not_reused_either(db_path, y2026):
+    _customer(db_path, "A")                      # CUST-2026-1
+    c2 = _customer(db_path, "B")                 # CUST-2026-2
     out = db_delete_customer(db_path, c2, confirm=True)
     assert "CUST" in out or out.startswith("✅"), out
-    assert _customer(db_path, "C") == "CUST-0003"
+    assert _customer(db_path, "C") == "CUST-2026-3"
 
 
 def test_R044_04_existing_database_without_a_counter_continues_from_highest(db_path):
@@ -100,8 +107,8 @@ def test_R044_06_a_rolled_back_create_does_not_burn_a_number(db_path):
     assert _job(db_path, cust) == "JOB-0001"
 
 
-def test_R044_07_each_prefix_counts_on_its_own(db_path):
-    cust = _customer(db_path)            # CUST-0001
+def test_R044_07_each_prefix_counts_on_its_own(db_path, y2026):
+    cust = _customer(db_path)            # CUST-2026-1
     _job(db_path, cust)                  # JOB-0001
     _job(db_path, cust)                  # JOB-0002
-    assert _customer(db_path, "Second") == "CUST-0002"
+    assert _customer(db_path, "Second") == "CUST-2026-2"

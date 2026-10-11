@@ -45,7 +45,7 @@ import datetime
 
 import requests
 
-from db_access import get_connection, transaction, utcnow_iso
+from db_access import get_connection, touch_row, transaction, utcnow_iso
 
 
 # ── Header-name -> DB-column maps ───────────────────────────────────────
@@ -77,8 +77,10 @@ CUSTOMERS_HEADER_MAP = {
     "Longitude (AI Geocode)": "longitude",
     "Service Type(s) Win/Press/Both": "service_types",
     "Frequency": "frequency",
+    "Schedule Type": "schedule_type",
     "Preferred Day(s)": "preferred_days",
-    "Pref. Time Window": "preferred_time_window",
+    "Pref. Time Start": "preferred_time_start",
+    "Pref. Time End": "preferred_time_end",
     "Avg Job Duration (min)": "avg_job_duration_min",
     "Standard Quote ($)": "standard_quote",
     "Discount (%)": "discount_pct",
@@ -115,6 +117,11 @@ JOBS_HEADER_MAP = {
     "Service Date": "service_date",
     "End Date (blank = single-day job)": "end_date",
     "Day of Week": "day_of_week",
+      "Preferred Day(s)": "preferred_days",
+    "Paused": "paused",
+    "Paused Service Date": "paused_service_date",
+    "Paused End Date": "paused_end_date",
+    "Pause Comment": "pause_comment",
     "Start Time": "start_time",
     "End Time": "end_time",
     "Service Type": "service_type",
@@ -136,7 +143,9 @@ JOBS_HEADER_MAP = {
     "Recurrence": "recurrence",
     "InvoiceID (INV-####)": "invoice_id",
     "Invoice Sent Date": "invoice_sent_date",
+    "Receipt Sent Date": "receipt_sent_date",
     "Payment Status": "payment_status",
+    "No Sales Tax": "no_sales_tax",  # 1 = tax-exempt job: invoices compute $0 tax (2026-10-08)
     "Schedule Type (Hard/Soft)": "schedule_type",
     "Schedule Type": "schedule_type",
     # Mileage/routing follow-up (2026-09-20): the customer's actually-
@@ -234,6 +243,7 @@ ROUTE_STOPS_HEADER_MAP = {
     "Route Date": "route_date",
     "Crew / Technician": "crew_id",
     "Stop #": "stop_number",
+    "Fixed Stop #": "fixed_position",
     "JobID (JOB-####)": "job_id",
     "JobID": "job_id",
     "CustomerID": "customer_id",
@@ -380,7 +390,10 @@ def _compose_checks(*fns):
 
 
 _ID_PREFIX_DIGITS = {
-    "customers": ("customer_id", "CUST", 4),
+    # customers: digits=0 selects the CUST-YEAR-N scheme (2026-10-04, no
+    # padding) — generate_next_id branches to _generate_next_customer_id
+    # and ignores the digit width.
+    "customers": ("customer_id", "CUST", 0),
     "jobs": ("job_id", "JOB", 4),
     "quotes": ("quote_id", "QTE", 4),
     "invoices": ("invoice_id", "INV", 4),
@@ -508,6 +521,7 @@ _CUSTOMER_TYPE_CHOICES = {
 # (table, db column) -> {canonical value: accepted aliases (squashed)}
 _CHOICE_FIELDS = {
     ("jobs", "job_status"): {
+        "Unscheduled": ("unscheduled",),
         "Scheduled":   ("scheduled", "booked", "pending", "upcoming", "planned", "notstarted"),
         "In Progress": ("inprogress", "started", "working", "ongoing", "underway", "onsite", "wip"),
         "Complete":    ("complete", "completed", "done", "finished", "closed", "compete"),
@@ -541,6 +555,9 @@ _CHOICE_FIELDS = {
     },
 }
 _CHOICE_FIELDS[("jobs", "actual_duration_unit")] = _CHOICE_FIELDS[("jobs", "est_duration_unit")]
+# 2026-10-04: customers.schedule_type shares the jobs schedule_type choice set
+# (Hard/Soft canonical) — server-side validation for the new customer column.
+_CHOICE_FIELDS[("customers", "schedule_type")] = _CHOICE_FIELDS[("jobs", "schedule_type")]
 
 # Settings rows whose Value is a fixed choice (keyed by the lower-cased setting name).
 _TOGGLE = {"Enabled": ("enabled", "enable", "on", "yes", "true", "1", "y"),
@@ -962,6 +979,10 @@ def generate_next_id(conn, table: str, id_column: str, prefix: str, digits: int)
     internal constants supplied by this module's own wrappers, never external
     input."""
     assert table in _ID_PREFIX_DIGITS, f"unrecognized table for ID generation: {table}"
+    if table == "customers":
+        # CUST-YEAR-N scheme (2026-10-04) — year-aware, unpadded, per-year
+        # counter; the digits width is ignored for customers.
+        return _generate_next_customer_id(conn)
     rows = conn.execute(f"SELECT {id_column} FROM {table}").fetchall()
     max_num = 0
     for row in rows:
@@ -979,6 +1000,67 @@ def generate_next_id(conn, table: str, id_column: str, prefix: str, digits: int)
     conn.execute("INSERT INTO id_counters (prefix, last_num) VALUES (?, ?) "
                  "ON CONFLICT(prefix) DO UPDATE SET last_num = excluded.last_num", (prefix, nxt))
     return f"{prefix}-{nxt:0{digits}d}"
+
+
+def _current_year() -> int:
+    """Year stamped into new CUST-YEAR-N ids — one-line indirection so
+    tests can monkeypatch the clock instead of the whole datetime module
+    (2026-10-04, CUST-YEAR-N scheme)."""
+    return datetime.date.today().year
+
+
+def _split_customer_id(customer_id: str):
+    """Parse a customer ID into (year, number).
+
+    CUST-2026-12 -> (2026, 12)
+    CUST-1643    -> (None, 1643)   # legacy pre-year scheme
+    anything else -> (None, None)
+    """
+    parts = str(customer_id or "").strip().split("-")
+    if (len(parts) == 3 and parts[0] == "CUST"
+            and len(parts[1]) == 4 and parts[1].isdigit()
+            and parts[2].isdigit()):
+        return int(parts[1]), int(parts[2])
+    if len(parts) == 2 and parts[0] == "CUST" and parts[1].isdigit():
+        return None, int(parts[1])
+    return None, None
+
+
+def _generate_next_customer_id(conn) -> str:
+    """Next CUST-{YYYY}-{N} id (2026-10-04 — David: customer numbers now
+    carry the creation year; N restarts at 1 every January).
+
+    R-044 applies per year: N is one past the larger of the highest N
+    already present for THIS year and the persisted high-water mark in
+    id_counters under key f"CUST-{year}" — a deleted number is never
+    reused. CUST-2026-5 and CUST-2027-5 are different ids, so per-year
+    counters can never collide with each other. Unpadded, therefore the
+    table scan compares numerically, not lexically (10 > 2).
+
+    Runs on the caller's connection, so the counter bump commits or rolls
+    back together with the row being created.
+    """
+    year = _current_year()
+    counter_key = f"CUST-{year}"
+    max_num = 0
+    for row in conn.execute("SELECT customer_id FROM customers").fetchall():
+        y, n = _split_customer_id(row[0])
+        if y == year and n:
+            max_num = max(max_num, n)
+    conn.execute("CREATE TABLE IF NOT EXISTS id_counters "
+                 "(prefix TEXT PRIMARY KEY, last_num INTEGER NOT NULL)")
+    got = conn.execute(
+        "SELECT last_num FROM id_counters WHERE prefix = ?", (counter_key,)
+    ).fetchone()
+    issued = int(got[0]) if got else 0
+    nxt = max(max_num, issued) + 1
+    conn.execute("INSERT INTO id_counters (prefix, last_num) VALUES (?, ?) "
+                 "ON CONFLICT(prefix) DO UPDATE SET last_num = excluded.last_num",
+                 (counter_key, nxt))
+    return f"CUST-{year}-{nxt}"
+
+
+# ── Generic create engine (replaces _append_sheet_row_impl) ─────────────
 
 
 # ── Generic create engine (replaces _append_sheet_row_impl) ─────────────
@@ -1126,10 +1208,9 @@ def db_create_job(db_path: str, updates: dict, actor: str) -> str:
     customer_id = _mapped_value(updates, JOBS_HEADER_MAP, "customer_id")
     if not customer_id or not str(customer_id).strip():
         return (
-            "❌ customer_id is required — a job cannot be created without "
+            "\u274c CustomerID is required \u2014 a job cannot be created without "
             "an existing customer. Create the customer first with "
-            "create_customer, then pass the CustomerID it returns as "
-            "CustomerID here."
+            "create_customer, then retry with the returned CustomerID."
         )
     customer_id = str(customer_id).strip()
     conn = get_connection(db_path)
@@ -1141,9 +1222,9 @@ def db_create_job(db_path: str, updates: dict, actor: str) -> str:
         conn.close()
     if not found:
         return (
-            f"❌ No customer found with ID {customer_id} — create the "
-            f"customer first with create_customer, then retry create_job "
-            f"with the CustomerID it returns."
+            f"\u274c Customer not found ({customer_id}). Create the customer "
+            f"first with create_customer, then retry with the returned "
+            f"CustomerID."
         )
 
     # Mileage/routing follow-up (2026-09-20): a job's Original Start/End
@@ -1165,9 +1246,9 @@ def db_create_job(db_path: str, updates: dict, actor: str) -> str:
         result = db_create_row(db_path, "jobs", JOBS_HEADER_MAP, updates, actor)
     except _sqlite3.IntegrityError:
         return (
-            f"❌ No customer found with ID {customer_id} — create the "
-            f"customer first with create_customer, then retry create_job "
-            f"with the CustomerID it returns."
+            f"\u274c Customer not found ({customer_id}). Create the customer "
+            f"first with create_customer, then retry with the returned "
+            f"CustomerID."
         )
     # A new job with an address but no coordinates gets them now (R-022,
     # 2026-09-26) — otherwise it can't be routed at all.
@@ -1563,6 +1644,27 @@ def make_jobs_crew_check(restrict: bool, crew_name: str):
     return _check
 
 
+def _locked_customer_value_changes(row, header, new_value) -> bool:
+    """R-078: would writing `new_value` to this locked Customers header change
+    what is stored? Blank == None; numbers compare numerically (\"120\" ==
+    120.0); text compares trimmed and case-insensitively. A header with no
+    stored column (the computed rollups) can't be written, so it's no change."""
+    col = CUSTOMERS_HEADER_MAP.get(_normalize_header(header))
+    if not col or col not in row.keys():
+        return False
+    old = row[col]
+    a = "" if old is None else str(old).strip()
+    b = "" if new_value is None else str(new_value).strip()
+    if a == b:
+        return False
+    try:
+        return abs(float(a.replace("$", "").replace(",", "").rstrip("%") or 0)
+                   - float(b.replace("$", "").replace(",", "").rstrip("%") or 0)) > 1e-9 \
+            or (a == "") != (b == "")
+    except ValueError:
+        return a.lower() != b.lower()
+
+
 def make_linked_customer_check(restrict: bool, crew_name: str, table: str, requested_headers):
     """Builds the check_fn for db_update_row(table in
     {'customers','invoices','quotes'}, ...), replicating
@@ -1577,8 +1679,19 @@ def make_linked_customer_check(restrict: bool, crew_name: str, table: str, reque
                      f"actually worked a job for. This CustomerID isn't linked to any "
                      f"job assigned to you.")
         if table == "customers":
-            locked = {h for h in requested_headers
-                      if _normalize_header(h) in _FIELD_CREW_LOCKED_CUSTOMER_HEADERS}
+            # R-078 (2026-10-09, E2E SRV-FR-02): the Jobs app's customer editor
+            # sends EVERY column on Save, so refusing on the mere presence of a
+            # locked header blocked field crew from ever saving a customer
+            # (even a phone-number fix). Only a locked field whose value would
+            # actually CHANGE is refused; an unchanged one is harmless.
+            values = requested_headers if isinstance(requested_headers, dict) else None
+            locked = set()
+            for h in requested_headers:
+                if _normalize_header(h) not in _FIELD_CREW_LOCKED_CUSTOMER_HEADERS:
+                    continue
+                if values is not None and not _locked_customer_value_changes(row, h, values[h]):
+                    continue
+                locked.add(h)
             if locked:
                 return (f"❌ These Customers fields require staff/manager/owner access: "
                          f"{', '.join(sorted(locked))}. Contact info, address, service "
@@ -1640,7 +1753,7 @@ def db_update_customer(db_path, customer_identifier, updates, actor, restrict=Fa
     id_db_column = CUSTOMERS_HEADER_MAP.get(_normalize_header(id_column), "customer_id")
     # Spec §13.4's rollup fields are enforced by _split_computed_only
     # (the columns don't exist) inside db_update_row — no check_fn needed.
-    check_fn = make_linked_customer_check(restrict, crew_name, "customers", updates.keys())
+    check_fn = make_linked_customer_check(restrict, crew_name, "customers", dict(updates or {}))
     return db_update_row(db_path, "customers", CUSTOMERS_HEADER_MAP, id_db_column,
                           customer_identifier, updates, actor, check_fn=check_fn,
                           expected_version=expected_version)
@@ -1828,6 +1941,111 @@ def db_delete_customer(db_path: str, customer_identifier: str, confirm: bool = F
         f"✅ Deleted {customer_id} ({display_name}) and all linked records.\n"
         f"   Safety backup saved first: {safety_backup_path}\n\n"
         + "\n".join(preview_lines[1:])
+    )
+
+
+def db_rename_customer_number(db_path: str, customer_id: str, new_number, actor: str = "") -> str:
+    """Change a customer's number, keeping the year: CUST-2026-5 -> CUST-2026-9.
+
+    (2026-10-04 — David: the customer NUMBER is user-editable, the year is
+    not. A legacy CUST-#### id without a year adopts the current year,
+    which is also the migration path onto the CUST-YEAR-N scheme.)
+
+    Validation — hard errors, nothing changed in any of these cases:
+      - customer_id must match an existing customer (exact, case-insensitive);
+      - new_number must be a positive whole number;
+      - CUST-{year}-{new_number} must not already belong to a DIFFERENT
+        customer — the conflicting id is named in the error.
+    On success the Customers row and every referencing row (jobs,
+    invoices, quotes, route_stops) move to the new id in a single
+    transaction — FK enforcement is deferred to commit (the schema's
+    REFERENCES have no ON UPDATE CASCADE). The id_counters high-water
+    mark for CUST-{year} is raised to at least the new number, so
+    R-044's never-reuse holds across renames too.
+
+    Returns a ✅ report ending with NEW_CUSTOMER_ID=<new id> (the UI
+    parses that marker), or a ❌ error with nothing changed.
+    """
+    customer_id = str(customer_id or "").strip()
+    if not customer_id:
+        return "❌ customer_id is required."
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute(
+            "SELECT customer_id FROM customers WHERE customer_id = ?", (customer_id,)
+        ).fetchone()
+        if row is None:
+            row = conn.execute(
+                "SELECT customer_id FROM customers WHERE LOWER(customer_id) = ?",
+                (customer_id.lower(),),
+            ).fetchone()
+        if row is None:
+            return f"❌ No customer found with ID {customer_id}."
+        old_id = row["customer_id"]
+        clash = None
+    finally:
+        conn.close()
+
+    year, _old_num = _split_customer_id(old_id)
+    if year is None:
+        year = _current_year()  # legacy CUST-#### → adopts the current year
+
+    try:
+        n = int(str(new_number).strip())
+    except (ValueError, AttributeError):
+        return (f"❌ '{new_number}' is not a whole number — the customer number "
+                f"must be a positive integer.")
+    if n < 1:
+        return (f"❌ '{new_number}' is not a positive whole number — "
+                f"customer numbers start at 1.")
+    new_id = f"CUST-{year}-{n}"
+
+    if new_id == old_id:
+        return (f"✅ {old_id} already has number {n} — nothing to change.\n"
+                f"NEW_CUSTOMER_ID={new_id}")
+
+    with transaction(db_path) as conn:
+        clash = conn.execute(
+            "SELECT customer_id FROM customers WHERE customer_id = ?", (new_id,)
+        ).fetchone()
+        if clash:
+            # No writes have happened yet; the commit is a no-op.
+            return (f"❌ {new_id} already exists — pick a different number. "
+                    f"Nothing changed; {old_id} is untouched.")
+        # The schema's REFERENCES have no ON UPDATE CASCADE, so defer FK
+        # enforcement to commit time — parent and children are all
+        # consistent again by then.
+        conn.execute("PRAGMA defer_foreign_keys = ON")
+        conn.execute(
+            "UPDATE customers SET customer_id = ? WHERE customer_id = ?",
+            (new_id, old_id),
+        )
+        counts = {}
+        for tbl in ("route_stops", "invoices", "quotes", "jobs"):
+            cur = conn.execute(
+                f"UPDATE {tbl} SET customer_id = ? WHERE customer_id = ?",
+                (new_id, old_id),
+            )
+            counts[tbl] = cur.rowcount or 0
+        # Audit stamp (spec §4.2 row-versioning) — same helper every
+        # other write path uses.
+        touch_row(conn, "customers", "customer_id", new_id, actor or "system")
+        # R-044 across renames: the year's high-water mark must cover the
+        # new number, or a later create could reissue it.
+        conn.execute("CREATE TABLE IF NOT EXISTS id_counters "
+                     "(prefix TEXT PRIMARY KEY, last_num INTEGER NOT NULL)")
+        conn.execute(
+            "INSERT INTO id_counters (prefix, last_num) VALUES (?, ?) "
+            "ON CONFLICT(prefix) DO UPDATE "
+            "SET last_num = MAX(last_num, excluded.last_num)",
+            (f"CUST-{year}", n),
+        )
+
+    moved = ", ".join(f"{t}: {counts[t]}" for t in ("jobs", "invoices", "quotes", "route_stops"))
+    return (
+        f"✅ Customer {old_id} → {new_id}\n"
+        f"   Rows repointed — {moved}\n"
+        f"NEW_CUSTOMER_ID={new_id}"
     )
 
 
@@ -2312,17 +2530,24 @@ def db_delete_route_stop(db_path: str, stop_id, confirm: bool = False,
 
 
 def _parse_hhmm(s):
-    """Parses an 'HH:MM' or 'HH:MM:SS' string into a datetime anchored on
-    an arbitrary fixed date (2000-01-01), so route-timeline minute
+    """Parses an 'HH:MM', 'HH:MM:SS', or 12-hour 'H:MM AM/PM' string into a datetime
+    anchored on an arbitrary fixed date (2000-01-01), so route-timeline minute
     arithmetic (adding drive minutes, comparing two times) can just use
     normal datetime subtraction/addition. Returns None if `s` is blank or
     doesn't parse — callers fall back to a default rather than crash."""
     s = (s or "").strip()
     if not s:
         return None
-    for fmt in ("%H:%M", "%H:%M:%S"):
+    # Normalize 12h suffix: "8:00am", "8:00 AM", "8:00 a.m." -> "8:00 AM"
+    s_up = s.upper().replace(".", "")
+    if s_up.endswith("AM") or s_up.endswith("PM"):
+        s_norm = s_up[:-2].strip() + " " + s_up[-2:]
+    else:
+        s_norm = s
+    for fmt in ("%H:%M", "%H:%M:%S", "%I:%M %p"):
         try:
-            t = datetime.datetime.strptime(s, fmt)
+            src = s_norm if "%p" in fmt else s
+            t = datetime.datetime.strptime(src, fmt)
             return datetime.datetime(2000, 1, 1, t.hour, t.minute)
         except ValueError:
             continue
@@ -3513,37 +3738,40 @@ def _resolve_jobs_only_origin(origin_lat, origin_lon, crew_name: str = "", is_se
     return None
 
 
-def db_read_email_route_on_build(db_path: str) -> bool:
-    """Reads the 'Email Route On Build' Settings key — a persisted toggle
-    for build_daily_route's email_link default. When the caller (Claude,
-    voice, the Jobs PWA) doesn't explicitly pass email_link=True/False for
-    a specific call, THIS setting decides whether a route build emails its
-    tap-to-navigate link automatically. An explicit email_link argument on
-    a given call always overrides this — same override pattern as Route
-    Origin Mode / origin=.
+def db_read_email_route_on_approve(db_path: str) -> bool:
+    """Reads the 'Email Route On Approve' Settings key — a persisted toggle
+    for approve_route_schedule's auto-email. When Enabled, approving a route
+    automatically emails it (via _email_route_results). When Disabled
+    (default), approving never emails; the "📧 Email Approved Route Now"
+    button (email_route_now, force=True) still sends on demand.
 
-    Recipient resolution is unchanged by this setting and already lives in
-    build_daily_route itself: server mode emails the calling user's own
-    address (from Admin -> Users), personal mode falls back to the SMTP
-    config's default_to/username (Settings -> Email Configuration).
+    2026-10-05: renamed from 'Email Route On Build' (David's rule — only
+    approved routes may ever be emailed, so the build-time auto-send is gone;
+    the setting now fires at approve time). Migrates the old key on first
+    read: if 'Email Route On Approve' is unset but 'Email Route On Build'
+    exists, its value is copied to the new key and the old key removed.
 
-    Missing/unset key defaults to False (disabled) as of 2026-09-21 — flipped
-    from the original True default now that "📧 Email Approved Route Now"
-    (email_route_now) exists as a manual, on-demand alternative that works
-    regardless of this setting. Auto-emailing every route build by default was
-    the wrong default for a server-mode install with several crew members:
-    an install that's never touched this key now stays quiet until someone
-    turns it on, rather than emailing every route to every crew member's
-    saved address the first time anyone builds one."""
+    Missing/unset key defaults to False (disabled)."""
     try:
         conn = get_connection(db_path)
-        row = conn.execute("SELECT value FROM settings WHERE key = 'Email Route On Build'").fetchone()
+        row = conn.execute("SELECT value FROM settings WHERE key = 'Email Route On Approve'").fetchone()
+        if row is None:
+            old = conn.execute("SELECT value FROM settings WHERE key = 'Email Route On Build'").fetchone()
+            if old is not None:
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value) VALUES ('Email Route On Approve', ?)",
+                    (old["value"],),
+                )
+                conn.execute("DELETE FROM settings WHERE key = 'Email Route On Build'")
+                conn.commit()
+                row = old
         conn.close()
         if row is None or not row["value"]:
             return False
         return str(row["value"]).strip().lower() not in ("disabled", "false", "off", "no", "0")
     except Exception:
         return False
+
 
 
 
@@ -3613,13 +3841,26 @@ def db_create_invoice(db_path: str, job_identifier: str, actor: str,
         description = (description or job["service_details"] or "").strip()
         service_type = (service_type or job["service_type"] or "").strip()
 
-        # ── Independently computed — same formula, same rounding, as the
+        # —— Independently computed — same formula, same rounding, as the
         # spreadsheet version. This is the exact byte-for-byte calculation
         # Phase 1's financial-parity testing requirement checks against.
+        # 2026-10-08: per-job tax exemption ("No Sales Tax" checkbox,
+        # jobs.no_sales_tax = 1). A tax-exempt job's invoice STORES $0 tax —
+        # the stored number, not just hidden on display — so total_due =
+        # quote - discount only, and every downstream read (Invoices sheet,
+        # receipts, reports) sees 0 too. The job row was fetched above with
+        # SELECT rowid AS _rowid, * so no_sales_tax is present once the
+        # apply_schema migration has run (existing installs) or the fresh
+        # CREATE TABLE (new installs) created it; the keys() guard covers
+        # the theoretical case where it somehow hasn't.
+        _no_sales_tax = (
+            int(job["no_sales_tax"] or 0) == 1
+            if "no_sales_tax" in job.keys() else False
+        )
         subtotal = round(quote_amount, 2)
         discount_amt = round(discount, 2)
         taxable = round(subtotal - discount_amt, 2)
-        tax_amt = round(taxable * float(tax_rate), 2)
+        tax_amt = 0.0 if _no_sales_tax else round(taxable * float(tax_rate), 2)
         total_due = round(taxable + tax_amt, 2)
 
         today = _dt.date.today()
@@ -3664,7 +3905,7 @@ def db_create_invoice(db_path: str, job_identifier: str, actor: str,
         f"   Customer:    {job['customer_name'] or '(none on file)'}",
         f"   Subtotal:    ${subtotal:,.2f}",
         f"   Discount:    ${discount_amt:,.2f}",
-        f"   Tax ({tax_rate * 100:g}%):    ${tax_amt:,.2f}",
+          f"   Tax ({'exempt' if _no_sales_tax else f'{tax_rate * 100:g}%'}):    ${tax_amt:,.2f}",
         f"   TOTAL DUE:   ${total_due:,.2f}",
         f"   Due:         {due_date.isoformat()} (Net {due_days})",
     ]
@@ -3871,7 +4112,8 @@ def db_schedule_next_recurring_job(db_path: str, job_identifier: str, actor: str
         f"   Last Service: {base_date.strftime('%m/%d/%Y')}\n"
         f"   Next Service: {next_date.strftime('%m/%d/%Y')} ({next_date.strftime('%A')})\n"
         f"   Crew:         {crew or '(unassigned)'}\n"
-        f"   Service:      {svc_type}"
+        f"   Service:      {svc_type}\n"
+        f"NEW_JOB_ID={new_job_id}"   # machine-readable, like create_job's
     )
 
 
@@ -3880,26 +4122,36 @@ def db_schedule_next_recurring_job(db_path: str, job_identifier: str, actor: str
 # specific completed job is told to advance), this scans every recurring
 # customer on its own and creates their next job AHEAD of time, based purely
 # on the customer's own data (Frequency + Last Service Date — the same live-
-# computed MAX(service_date) compute_customer_rollups already exposes as
-# "Last Service Date" in the Customers sheet) — no job needs to be marked
-# Complete first. The new job is created with NO Service Date, so it lands
-# in the Jobs page / Job Board's existing "Unscheduled" column automatically
-# (jobs/index.html's _boardStatus: absence of a Service Date IS what
-# "Unscheduled" means — nothing new to build there), indistinguishable from
-# a job an employee or admin typed in by hand — same tool (db_create_job),
-# same table, same row shape.
+# computed value compute_customer_rollups exposes as "Last Service Date" in
+# the Customers sheet) — no job needs to be marked Complete first.
+# 2026-10-04: the new job is created WITH the calculated Service Date
+# (Last Service Date + frequency interval), so it appears on the calendar at
+# that date and the Customers sheet's "Next Sched. Date" overlay picks it up
+# automatically. The customer’s scheduling preferences (Schedule Type, time
+# window, duration, service type, preferred days) are carried onto the job —
+# the user can still adjust any of it. Same tool (db_create_job), same
+# table, same row shape as a hand-entered job.
+# 2026-10-07: the 'Recurring Job Lead Time (days)' setting is honored —
+# a job is only created when today is within lead_days before next-due.
+# (The reader db_read_settings_recurring_job_lead_days existed since
+# 2026-09-23 but the sweep never called it, so every recurring customer
+# got their next job immediately regardless of distance.)
 def db_generate_upcoming_recurring_jobs(db_path: str, actor: str = "system") -> str:
     """For every Active customer with a recognized recurring Frequency,
     computes their next-due date (Last Service Date + frequency interval)
-    and — once today is within the configured lead time of that date —
-    creates their next job unscheduled, unless one is already pending.
+    and creates their next job dated then, unless one is already pending.
 
-    "Already pending" = this customer already has a job with a blank
-    Service Date and a Job Status other than Cancelled — this is the
-    dedupe guard: it stops the same due cycle from generating a second
-    job on a later run, while still allowing a fresh one once the
-    existing pending job is either scheduled (gets a real Service Date,
-    which advances Last Service Date once it's serviced) or cancelled.
+    Lead-time gate: the job is only created when today is within the
+    'Recurring Job Lead Time (days)' Settings window before next-due
+    (default 5; 0 = only once actually due). Customers due further out are
+    skipped until a later sweep — this is what keeps a Monthly customer
+    from getting their next job a full month early.
+
+    "Already pending" = this customer already has a non-cancelled job with
+    a blank Service Date OR a Service Date of today-or-later — this is the
+    dedupe guard: it stops the same due cycle from generating a second job
+    on a later run, while still allowing a fresh one once the existing job
+    is serviced (its date moves into the past) or cancelled.
 
     A customer with no job history at all (Last Service Date is None —
     compute_customer_rollups has nothing to compute from) is skipped
@@ -3908,19 +4160,26 @@ def db_generate_upcoming_recurring_jobs(db_path: str, actor: str = "system") -> 
     as today.
 
     Returns a summary: how many jobs were created (with customer/date),
-    and, for visibility, how many recurring customers were checked but
-    not yet due. Never raises — a single customer's bad data (unparsable
-    date, unrecognized frequency) is skipped and noted, not fatal to the
-    whole sweep.
+    and, for visibility, how many recurring customers were skipped and why.
+    Never raises — a single customer's bad data (unparsable date,
+    unrecognized frequency) is skipped and noted, not fatal to the whole
+    sweep.
     """
-    lead_days = db_read_settings_recurring_job_lead_days(db_path)
     today = datetime.date.today()
+    today_iso = today.isoformat()
+
+    # Lead-time gate (owner's setting): a job is only created when today is
+    # within this many days BEFORE the computed next-due date. 0 = only once
+    # actually due. Read once per sweep; missing/invalid -> default 5.
+    lead_days = db_read_settings_recurring_job_lead_days(db_path)
 
     conn = get_connection(db_path)
     try:
         customers = conn.execute(
             "SELECT customer_id, company_name, first_name, last_name, "
-            "customer_type, frequency, street_address, city, state, zip "
+            "customer_type, frequency, street_address, city, state, zip, "
+            "schedule_type, preferred_days, preferred_time_start, "
+            "preferred_time_end, avg_job_duration_min, service_types "
             "FROM customers "
             "WHERE LOWER(IFNULL(status,'active')) != 'inactive' "
             "AND frequency IS NOT NULL AND TRIM(frequency) != ''"
@@ -3928,7 +4187,8 @@ def db_generate_upcoming_recurring_jobs(db_path: str, actor: str = "system") -> 
     finally:
         conn.close()
 
-    created, skipped_not_due, skipped_pending, skipped_no_history, skipped_bad_freq = [], 0, 0, 0, 0
+    created, skipped_pending, skipped_no_history, skipped_bad_freq = [], 0, 0, 0
+    skipped_too_early = 0
 
     for cust in customers:
         cust_id = cust["customer_id"]
@@ -3953,17 +4213,26 @@ def db_generate_upcoming_recurring_jobs(db_path: str, actor: str = "system") -> 
             continue
 
         next_due = delta_fn(base_date)
-        if today < (next_due - datetime.timedelta(days=lead_days)):
-            skipped_not_due += 1
+
+        # Lead-time gate: not yet due enough to surface. (next_due - today)
+        # is negative for overdue customers — those always qualify.
+        if (next_due - today).days > lead_days:
+            skipped_too_early += 1
             continue
 
         conn = get_connection(db_path)
         try:
+            # R-080 (2026-10-09): an overdue customer's job is dated in the
+            # PAST (next_due < today), so "dated today-or-later" alone let every
+            # daily sweep add another copy of the same overdue visit. Any
+            # not-yet-performed job dated after the last completed service
+            # also counts as pending.
             pending = conn.execute(
                 "SELECT 1 FROM jobs WHERE customer_id = ? AND "
-                "(service_date IS NULL OR TRIM(service_date) = '') AND "
+                "(service_date IS NULL OR TRIM(service_date) = '' OR service_date >= ? "
+                " OR (service_date > ? AND LOWER(IFNULL(job_status,'')) NOT IN ('complete','canceled'))) AND "
                 "LOWER(IFNULL(job_status,'')) != 'cancelled'",
-                (cust_id,),
+                (cust_id, today_iso, base_date.isoformat()),
             ).fetchone()
         finally:
             conn.close()
@@ -3971,6 +4240,11 @@ def db_generate_upcoming_recurring_jobs(db_path: str, actor: str = "system") -> 
             skipped_pending += 1
             continue
 
+        # Carry the customer's scheduling preferences onto the new job
+        # (prefill — the user can adjust any of it on the job itself).
+        svc_raw = str(cust["service_types"] or "").strip().lower()
+        svc_type = {"win": "Window", "window": "Window", "press": "Pressure",
+                    "pressure": "Pressure", "both": "Both"}.get(svc_raw, "")
         new_job_updates = {
             "CustomerID (Customers!A)": cust_id,
             "Customer Name / Company": cust_name,
@@ -3980,11 +4254,18 @@ def db_generate_upcoming_recurring_jobs(db_path: str, actor: str = "system") -> 
             "State": cust["state"] or "",
             "ZIP": cust["zip"] or "",
             "Job Status": "Scheduled",
-            # No Service Date on purpose — lands in Unscheduled until
-            # someone (or Route Today/AI Routing) actually schedules it.
+            "Service Date": next_due.isoformat(),
+            "Schedule Type": cust["schedule_type"] or "Soft",
+            "Start Time": cust["preferred_time_start"] or "",
+            "End Time": cust["preferred_time_end"] or "",
+            "Est. Duration": cust["avg_job_duration_min"] or "",
+            "Est. Duration Unit": "min",
+            "Service Type": svc_type,
+            "Day of Week": cust["preferred_days"] or "",
+            "Preferred Day(s)": cust["preferred_days"] or "",
             "Service Details / Notes": (
-                f"🔁 Auto-generated recurring job — {cust['frequency']} customer, "
-                f"due ~{next_due.strftime('%m/%d/%Y')} (last serviced "
+                f"\U0001f501 Auto-generated recurring job — {cust['frequency']} customer, "
+                f"due {next_due.strftime('%m/%d/%Y')} (last serviced "
                 f"{base_date.strftime('%m/%d/%Y')})."
             ),
         }
@@ -3993,42 +4274,62 @@ def db_generate_upcoming_recurring_jobs(db_path: str, actor: str = "system") -> 
                       if "NEW_JOB_ID=" in result else "?")
         created.append((new_job_id, cust_name, next_due))
 
-    lines = [f"✅ Recurring job sweep complete — {len(created)} new unscheduled job(s) created."]
+    lines = [f"\u2705 Recurring job sweep complete — {len(created)} new job(s) created."]
     for job_id, name, due in created:
-        lines.append(f"   {job_id} — {name} (due ~{due.strftime('%m/%d/%Y')})")
-    if skipped_not_due:
-        lines.append(f"   {skipped_not_due} recurring customer(s) checked, not yet within the lead window.")
+        lines.append(f"   {job_id} — {name} (due {due.strftime('%m/%d/%Y')})")
     if skipped_pending:
-        lines.append(f"   {skipped_pending} customer(s) already have a pending unscheduled job — skipped.")
+        lines.append(f"   {skipped_pending} customer(s) already have a pending/future job — skipped.")
     if skipped_no_history:
         lines.append(f"   {skipped_no_history} recurring customer(s) have no job history yet — skipped.")
     if skipped_bad_freq:
         lines.append(f"   {skipped_bad_freq} customer(s) skipped — unparsable date or unrecognized frequency.")
+    if skipped_too_early:
+        lines.append(f"   {skipped_too_early} recurring customer(s) not yet within the {lead_days}-day lead window — skipped.")
     return "\n".join(lines)
 
 
 def compute_customer_rollups_for_generation(db_path: str, customer_id: str) -> dict:
-    """Same MAX(service_date)/MIN(future service_date) computation as
-    db_read_ops.py's compute_customer_rollups (Last Service Date / Next
-    Sched. Date) — duplicated at the read-connection level rather than
-    imported, since db_write_ops.py has no existing dependency on
-    db_read_ops.py and this needs only the two date fields, not the
-    invoice-revenue rollup. Kept intentionally in lock-step with that
-    function; if its query ever changes, mirror the change here too."""
+    """Same Last Service Date / Next Sched. Date computation as
+    db_read_ops.py's compute_customer_rollups — duplicated at the
+    read-connection level rather than imported, since db_write_ops.py has no
+    existing dependency on db_read_ops.py and this needs only the two date
+    fields, not the invoice-revenue rollup. Kept intentionally in lock-step
+    with that function; if its query ever changes, mirror the change here too.
+
+    2026-10-04: last_service is MAX(service_date) over PAST dates only
+    (service_date <= today). Generated recurring jobs now carry a real future
+    service_date (so they appear on the calendar); letting that future date
+    feed back in as the "last" service would push every subsequent cycle one
+    interval further out. Next Sched. Date is unchanged: earliest future job.
+
+    2026-10-05 (David's rule): last_service reflects COMPLETED jobs only —
+    a scheduled-but-unperformed job is not a "last service". next_sched is
+    the earliest upcoming non-completed job; when none exists it falls back
+    to last_service + the customer's Frequency interval."""
     if not customer_id:
         return {"last_service_date": None, "next_scheduled_date": None}
     today_iso = datetime.date.today().isoformat()
     conn = get_connection(db_path)
     try:
         row = conn.execute(
-            "SELECT MAX(service_date) AS last_service, "
-            "MIN(CASE WHEN service_date >= ? THEN service_date END) AS next_sched "
-            "FROM jobs WHERE customer_id = ?",
-            (today_iso, customer_id),
+            "SELECT MAX(CASE WHEN LOWER(job_status) = 'complete' AND service_date <= ? THEN service_date END) AS last_service, "
+            "MIN(CASE WHEN service_date >= ? AND LOWER(IFNULL(job_status,'')) NOT IN ('complete','cancelled','canceled') THEN service_date END) AS next_sched, "
+            "frequency FROM jobs LEFT JOIN customers USING (customer_id) WHERE jobs.customer_id = ?",
+            (today_iso, today_iso, customer_id),
         ).fetchone()
+        last_service = row["last_service"]
+        next_sched = row["next_sched"]
+        if not next_sched and last_service and row["frequency"]:
+            delta_fn = _FREQ_MAP.get(_freq_map_key(row["frequency"]))
+            if delta_fn is not None:
+                try:
+                    base = datetime.datetime.strptime(str(last_service)[:10], "%Y-%m-%d").date()
+                    next_sched = delta_fn(base).isoformat()
+                except (ValueError, TypeError):
+                    pass
     finally:
         conn.close()
-    return {"last_service_date": row["last_service"], "next_scheduled_date": row["next_sched"]}
+    return {"last_service_date": last_service, "next_scheduled_date": next_sched}
 
 
 # Throttle marker (2026-09-23): the sweep above scans every recurring

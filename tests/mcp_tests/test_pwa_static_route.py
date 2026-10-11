@@ -273,7 +273,10 @@ class TestPwaAsgiHandler:
     """Simulate ASGI requests to the PWA handler — no live server needed."""
 
     def _run(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+        # asyncio.run() — get_event_loop().run_until_complete() raises
+        # RuntimeError on Python 3.12+ when no loop is running in this
+        # thread (deprecated since 3.10). asyncio.run() works everywhere.
+        return asyncio.run(coro)
 
     def test_index_html_200(self, pwa_dir):
         rec = _Recorder()

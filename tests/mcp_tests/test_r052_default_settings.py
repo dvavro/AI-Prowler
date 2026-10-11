@@ -39,7 +39,7 @@ def _settings(path):
 def _readers(path):
     return (
         dwo.db_read_route_origin_mode(path), dwo.db_read_route_address(path),
-        dwo.db_read_email_route_on_build(path),
+        dwo.db_read_email_route_on_approve(path),
         dwo.db_read_settings_workday_start(path), dwo.db_read_settings_workday_end(path),
         dwo.db_read_settings_lunch_break_start(path),
         dwo.db_read_settings_lunch_break_duration_min(path),

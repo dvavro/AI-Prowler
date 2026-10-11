@@ -107,6 +107,8 @@ class World:
         self.done_days: set[dt.date] = set()
         self.briefings: dict[dt.date, str] = {}
         self.stale_seen: dict[dt.date, str] = {}
+        # TM-04b: customer key -> (day seen, 🔮 projected visit dates on the calendar)
+        self.projections: dict[str, tuple[dt.date, list[dt.date]]] = {}
 
     # ── helpers ──────────────────────────────────────────────────────────────
     def crew_name(self, k: str) -> str:
@@ -152,18 +154,35 @@ class World:
     # ── the owner's morning ──────────────────────────────────────────────────
     def open_app_and_schedule_new_visits(self, day: dt.date):
         """Opening the app runs the once-a-day sweep. Any new auto-generated
-        (unscheduled) recurring job is checked, then scheduled for its due date."""
+        recurring job is checked, then confirmed for its due date (crew, time).
+
+        2026-10-09: since 2026-10-04 the sweep creates the job ALREADY DATED
+        on its due date (note "due MM/DD/YYYY"); before that it was undated
+        ("due ~MM/DD/YYYY"). This used to skip every dated job, so after the
+        change the six weeks never saw a single recurring visit. A new sweep
+        job is now recognised by its note, dated or not."""
+        known = {jid for vs in self.visits.values() for jid, _ in vs}
         for j in self.jobs():
-            if iso_date(j.get("Service Date", "")) or j.get("Job Status", "") in ("Cancelled",):
+            jid = j.get("JobID (JOB-####)", "")
+            notes = j.get("Service Details / Notes", "")
+            if jid in known or "Auto-generated recurring job" not in notes \
+                    or j.get("Job Status", "") in ("Cancelled",):
                 continue
             k = self.key_of(j)
-            notes = j.get("Service Details / Notes", "")
-            m = re.search(r"due ~(\d\d)/(\d\d)/(\d{4})", notes)
-            assert m, f"unscheduled job {j['JobID (JOB-####)']} for {k} has no due date in its note: {notes!r}"
+            m = re.search(r"due ~?(\d\d)/(\d\d)/(\d{4})", notes)
+            assert m, f"auto-generated job {jid} for {k} has no due date in its note: {notes!r}"
             due = dt.date(int(m.group(3)), int(m.group(1)), int(m.group(2)))
-            last = max(d for _, d in self.visits[k])
+            dated = iso_date(j.get("Service Date", ""))
+            assert dated in ("", due.isoformat()), \
+                f"the sweep dated {k}'s {jid} {dated}, but its note says due {due}"
+            last_jid, last = max(self.visits[k], key=lambda v: v[1])
             expected_due = self._next_due(k, last)
-            first_chance = next(d for d in self._opened_days(due - dt.timedelta(days=LEAD_DAYS)))
+            # The sweep runs in the morning and (R-080) waits while the previous
+            # visit is still open — an overrun visit finished late in the day
+            # lets the next one come the NEXT morning the app is opened.
+            done_on = self.overrun_done_on if last_jid == self.overrun_job and self.overrun_done_on else last
+            earliest = max(due - dt.timedelta(days=LEAD_DAYS), done_on + dt.timedelta(days=1))
+            first_chance = next(d for d in self._opened_days(earliest))
             self.sweep_log.append({"cust": k, "job": j["JobID (JOB-####)"], "due": due, "expected_due": expected_due,
                                    "created_on": day, "expected_on": first_chance})
             # the owner (personal) / the manager (server) puts it on the calendar and
@@ -449,6 +468,40 @@ def test_TM_04_overrun_carries_to_the_next_day(world, tm, app, page):
     w.work(day, want)
 
 
+# ── TM-04b: the calendar's 🔮 projected visits (checked against the sweep in TM-07)
+def test_TM_04b_calendar_projects_the_recurring_visits(world, tm, app, page):
+    """Day 10, Calendar tab: the view-only 🔮 visits for the recurring
+    customers. TM-07 checks they are exactly the dates the sweep later
+    creates (R-079: Bi-Monthly/Quarterly/... and month-ends now use the
+    sweep's own periods). C is left out — its overrun moved its real
+    schedule after its last completed visit, which a projection can't know."""
+    w = world
+    day = w.d0 + dt.timedelta(days=10)
+    page.clock.set_system_time(tm.now())
+    page.reload()
+    page.wait_for_load_state("networkidle")
+    app.goto("calendar")
+    expect(page.locator("#calendarContent .cal-week-row").first).to_be_visible(timeout=30_000)
+    page.wait_for_function("() => window._calLastByDate && Object.keys(window._calLastByDate).length > 0",
+                           timeout=30_000)
+    projected = page.evaluate("""() => {
+        const out = [];
+        for (const [d, jobs] of Object.entries(window._calLastByDate || {}))
+            for (const j of jobs) if (j && j.projected) out.push([j.customer, d]);
+        return out; }""")
+    chips = page.locator("#calendarContent [data-customer]", has_text="🔮")
+    app.log(f"TM {day:%a %m/%d}: {len(projected)} 🔮 projections, {chips.count()} on screen")
+    assert chips.count() > 0, "no 🔮 projected visit is drawn on the calendar"
+    for k in ("A", "B", "D"):                       # the recurring customers (C: see above)
+        dates = sorted(dt.date.fromisoformat(d) for c, d in projected if c == cname(k))
+        w.projections[k] = (day, dates)
+        app.log(f"TM 🔮 {k} ({CUST[k][5]}): {[d.isoformat() for d in dates[:6]]}")
+        assert dates, f"{k} ({CUST[k][5]}) has no 🔮 projected visits on the calendar"
+        assert all(d > day for d in dates), f"{k}: a projection on/before today: {dates[:3]}"
+    for k in ("E", "F"):                            # no Frequency -> never projected
+        assert not [d for c, d in projected if c == cname(k)], f"{k} has no Frequency but got 🔮 visits"
+
+
 # ── TM-05: the rest of the six weeks ─────────────────────────────────────────
 def test_TM_05_walk_to_the_end(world):
     w = world
@@ -546,9 +599,23 @@ def test_TM_07_the_six_weeks_add_up(world, tm, api):
         assert s["created_on"] == s["expected_on"], \
             f"{s['cust']} {s['job']} (due {s['due']}) created {s['created_on']}, first chance was {s['expected_on']}"
     jobs = w.jobs()
-    open_unscheduled = [j for j in jobs if not iso_date(j.get("Service Date", ""))]
-    assert len({w.key_of(j) for j in open_unscheduled}) == len(open_unscheduled), \
-        f"duplicate pending auto visits: {[j['JobID (JOB-####)'] for j in open_unscheduled]}"
+    assert w.sweep_log, "the recurring sweep never created a single visit in six weeks"
+    # never two auto visits for the same customer and due date (R-080), and at
+    # most one not-yet-done auto visit per customer at the end
+    autos = [j for j in jobs if "Auto-generated recurring job" in (j.get("Service Details / Notes") or "")]
+    dues = [(w.key_of(j), re.search(r"due ~?(\d\d/\d\d/\d{4})", j["Service Details / Notes"]).group(1)) for j in autos]
+    assert len(set(dues)) == len(dues), f"duplicate auto visits (customer, due): {sorted(dues)}"
+    open_autos = [w.key_of(j) for j in autos if (j.get("Job Status") or "") not in ("Complete", "Cancelled")]
+    assert len(set(open_autos)) == len(open_autos), f"more than one pending auto visit per customer: {open_autos}"
+    # the calendar's 🔮 projections (seen in the app on day 10, TM-04b) were the
+    # sweep's real dates: every projected visit up to the last day became a job
+    # on that date, and every visit the sweep made after day 10 had been projected
+    for k, (seen_on, projected) in w.projections.items():
+        sweep_dues = {s["due"] for s in w.sweep_log if s["cust"] == k}
+        want = {d for d in projected if d <= w.end}
+        assert want <= sweep_dues, f"{k}: 🔮 projected {sorted(want - sweep_dues)} but the sweep never made those"
+        later = {s["due"] for s in w.sweep_log if s["cust"] == k and s["created_on"] > seen_on and s["due"] <= w.end}
+        assert later <= set(projected), f"{k}: the sweep made {sorted(later - set(projected))} that the calendar never projected"
     # visits: weekly = every week, biweekly = every 2nd week, monthly = twice, one-time = once
     count = {k: sum(1 for _, d in v if d <= w.end) for k, v in w.visits.items()}
     assert count["A"] == WEEKS and count["C"] == WEEKS, f"weekly visits: {count}"

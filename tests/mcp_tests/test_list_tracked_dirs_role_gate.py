@@ -185,11 +185,13 @@ class TestScopeGate:
         monkeypatch.setattr(mcp_mod, "_IS_SERVER_MODE", True)
         monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: user)
         monkeypatch.setattr(mcp_mod, "load_auto_update_list", lambda: ["C:/vicki-private"])
+        monkeypatch.setattr(mcp_mod, "access_allowlist_load", lambda: [])
         monkeypatch.setattr(mcp_mod, "_allowed_scopes", lambda u: {"shared"})
         _patch_scope_resolution(monkeypatch, {"vicki": "private:vicki"})
         result = mcp_mod.list_tracked_directories(ctx=_make_ctx(user))
         assert "⛔" not in result
-        assert "no tracked paths" in result.lower()
+        # R-072: expanded list shows "(none)" per section when filtered empty
+        assert "(none)" in result
 
     def test_uses_allowed_scopes_and_resolver_not_check_db_cap(self, mcp_mod, monkeypatch):
         """Locks in the mechanism: this now goes through _allowed_scopes() +

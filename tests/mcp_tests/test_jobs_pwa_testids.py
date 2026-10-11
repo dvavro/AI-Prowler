@@ -17,7 +17,9 @@ TESTIDS = {
     "auth-unlock": 1, "auth-eye": 1, "profile-signout": 1, "route-help-toggle": 1,
     "prescreen-recheck": 1, "prescreen-close": 1, "prescreen-item": 1, "prescreen-fix": 1,
     "route-stop": 1, "stop-up": 1, "stop-down": 1, "stop-edit": 1, "stop-remove": 1, "stop-drag": 1,
-    "unrouted-job": 1, "unrouted-edit": 1, "not-routed-banner": 1, "not-on-route-banner": 1,
+    # unrouted-job appears 2x: once in the row template and once in the
+    # in-app JS selector that finds those rows (both must stay in sync).
+    "unrouted-job": 2, "unrouted-edit": 1, "not-routed-banner": 1, "not-on-route-banner": 1,
     "job-card": 1,
     "nav-jobs": 1, "nav-board": 1, "nav-route": 1, "nav-calendar": 1, "nav-clock": 1,
     "nav-photos": 1, "nav-messages": 1, "nav-sheet": 1, "nav-reports": 1, "nav-profile": 1,
@@ -31,7 +33,12 @@ IDS = [
     "routeDatePicker", "routeMap", "routePrescreen", "routeWarnings", "routeStopsList",
     "routeTodayBtnRoute", "routeAiSuggestBtn", "routeEmailRouteBtn",
     "routeApproveBtn", "routeUnapproveBtn",
-    "routeTodayBtn", "jobsAiRouteBtn", "jobsEmailRouteBtn", "jobsPrescreen", "jobsRouteStatus",
+    # 2026-10-08: the old Jobs-page route buttons (routeTodayBtn,
+    # jobsAiRouteBtn, jobsEmailRouteBtn) were removed in the Route-page
+    # redesign — the Jobs page now has the single "Go to Route Page"
+    # button (jobsGoRouteBtn); routing itself lives on the Route tab
+    # (routeTodayBtnRoute / routeAiSuggestBtn / routeEmailRouteBtn above).
+    "jobsGoRouteBtn", "jobsPrescreen", "jobsRouteStatus",
 ]
 
 

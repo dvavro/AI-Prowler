@@ -250,6 +250,19 @@ def test_DB_05_edit_form_does_not_offer_to_change_the_id(db, app, api, data, she
                                                         "Base Price ($)": 10}})
     _tab(app, page, sheet)
     _open_edit(app, page, rid)
+    if sheet == "Customers" and re.fullmatch(r"CUST-\d{4}-\d+", rid):
+        # CUST-YEAR-N (2026-10-04, at the owner's request): the year is shown
+        # read-only and ONLY the trailing number is editable — a changed number
+        # is really applied (rename_customer), so it's no longer a box that
+        # silently does nothing. The editable-number flow is SRV-CUST-01/02.
+        year, num = rid.split("-")[1:]
+        num_box = page.locator("#jfCustNum")
+        expect(num_box).to_have_value(num)
+        year_ro = page.evaluate("y => [...document.querySelectorAll('#jfGenericInputs input')]"
+                                ".some(e => e.value === y && e.readOnly)", year)
+        _close_form(page)
+        assert year_ro, "the customer ID's year is editable — it must be fixed"
+        return
     el = _field(page, id_col)
     expect(el).to_have_count(1)
     expect(el).to_have_value(rid)

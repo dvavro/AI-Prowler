@@ -88,10 +88,55 @@ class TestSheetHTML:
             "navSheet must navigate to the sheet screen"
 
     def test_div_balance(self, html):
-        opens  = html.count("<div")
-        closes = html.count("</div>")
-        assert opens == closes, \
-            f"Unbalanced divs: {opens} opens vs {closes} closes — causes black screen"
+        # Parser-verified div nesting (AGENTS.md lesson 2026-10-05/06:
+        # node --check cannot catch a misplaced </div>).
+        #
+        # The old whole-file substring count (html.count("<div") vs
+        # html.count("</div>")) false-failed on 2026-10-08 (467 vs 470):
+        # all 3 extra closes were an HTML comment mentioning </div> in
+        # prose plus JS template strings — the static markup was balanced
+        # (verified with an HTMLParser stack check: 0 stray, 0 unclosed).
+        # This instead parses the markup only — <script>/<style> contents
+        # are skipped and comments never touch the stack — and asserts no
+        # stray </div> and no unclosed <div>, with line numbers.
+        from html.parser import HTMLParser
+
+        class _DivChecker(HTMLParser):
+            def __init__(self):
+                super().__init__(convert_charrefs=True)
+                self.stack = []   # (lineno, col) of open <div>
+                self.stray = []   # (lineno, col) of </div> with empty stack
+                self._skip = 0    # nesting depth inside script/style
+
+            def handle_starttag(self, tag, attrs):
+                if tag in ("script", "style"):
+                    self._skip += 1
+                elif tag == "div" and not self._skip:
+                    self.stack.append(self.getpos())
+
+            def handle_endtag(self, tag):
+                if tag in ("script", "style"):
+                    self._skip = max(0, self._skip - 1)
+                elif tag == "div" and not self._skip:
+                    if self.stack:
+                        self.stack.pop()
+                    else:
+                        self.stray.append(self.getpos())
+            # HTML comments are ignored by HTMLParser (handle_comment) —
+            # a comment merely mentioning </div> cannot unbalance the stack.
+
+        checker = _DivChecker()
+        checker.feed(html)
+        assert not checker.stray, (
+            "Stray </div> with no matching <div> at line(s) "
+            + ", ".join(str(ln) for ln, _ in checker.stray)
+            + " — orphaned content breaks screen switching (black screen)"
+        )
+        assert not checker.stack, (
+            "Unclosed <div> opened at line(s) "
+            + ", ".join(str(ln) for ln, _ in checker.stack)
+            + " — unbalanced markup breaks screen switching (black screen)"
+        )
 
     def test_screen_inside_app(self, html):
         app_pos    = html.find('id="app"')

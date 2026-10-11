@@ -58,94 +58,53 @@ if str(SRC_ROOT) not in sys.path:
 # Fixtures
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.fixture
-def home_gui(gui, monkeypatch, tmp_path):
-    """GUI fixture forced into personal/home mode regardless of the real
-    config.json on disk.  Writes edition=personal + mode=personal into the
-    real config location, rebuilds the GUI, then restores on teardown."""
+# 2026-10-09: both fixtures run in the per-test SANDBOX (tests/gui/conftest.py
+# sandbox_state). They used to write edition/mode into David's REAL
+# ~/.ai-prowler/config.json and keep the original only in memory — an
+# interrupted run left his personal install as a 3-line server-mode stub
+# (every other setting lost). Now only the sandbox config changes; the real
+# file is never opened for writing (tests/installed_files_guard.py refuses it).
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch):
+    """The window starts a background thread that fetches the welcome ad and
+    notifications from GitHub and writes notifications_cache.json. In a test
+    that thread raced notif_cache: it finished after the fixture had written
+    its "latest_version 99.0.0" cache and replaced it with the real feed, so
+    SS-16 found no Download Update button (2026-10-09, full tests\\gui run;
+    passed alone). GUI tests never need the network — make every fetch fail
+    at once so the thread never writes the cache."""
+    import urllib.request
+
+    def _offline(*a, **kw):
+        raise OSError("network is switched off in the desktop GUI tests")
+    monkeypatch.setattr(urllib.request, "urlopen", _offline)
+
+
+def _rebuild_gui(gui):
     import rag_gui as gui_mod
-
-    cfg_dir  = Path.home() / ".ai-prowler"
-    cfg_dir.mkdir(parents=True, exist_ok=True)
-    cfg_path = cfg_dir / "config.json"
-
-    original_content = cfg_path.read_text(encoding="utf-8-sig") if cfg_path.exists() else None
-
-    # Force personal/home mode
-    existing = {}
-    try:
-        existing = json.loads(original_content) if original_content else {}
-    except Exception:
-        pass
-    existing.update({"edition": "personal", "mode": "personal"})
-    cfg_path.write_text(json.dumps(existing), encoding="utf-8")
-
     root = gui.root
     for child in list(root.winfo_children()):
         try:
             child.destroy()
         except Exception:
             pass
-
-    app = gui_mod.RAGGui(root)
-    gui.app = app
+    gui.app = gui_mod.RAGGui(root)
     gui.pump()
-
-    yield gui
-
-    if original_content is not None:
-        cfg_path.write_text(original_content, encoding="utf-8")
-    else:
-        try:
-            cfg_path.unlink()
-        except Exception:
-            pass
+    return gui
 
 
 @pytest.fixture
-def server_gui(gui, monkeypatch, tmp_path):
-    """GUI fixture with Business Server mode active.
+def home_gui(gui, sandbox_state):
+    """The window built as a personal (Home) install — sandbox config only."""
+    sandbox_state.set_config(edition="home", mode="personal")
+    yield _rebuild_gui(gui)
 
-    Writes a config.json declaring edition=business + mode=server into the
-    home dir that _is_business_server_mode() reads, then rebuilds the GUI
-    so create_welcome_tab() sees the server config.
-    """
-    import rag_gui as gui_mod
 
-    # Write config.json to the real home dir location the GUI reads
-    cfg_dir = Path.home() / ".ai-prowler"
-    cfg_dir.mkdir(parents=True, exist_ok=True)
-    cfg_path = cfg_dir / "config.json"
-
-    original_content = cfg_path.read_text(encoding="utf-8-sig") if cfg_path.exists() else None
-
-    cfg_path.write_text(
-        json.dumps({"edition": "business", "mode": "server"}),
-        encoding="utf-8"
-    )
-
-    # Rebuild the GUI so create_welcome_tab sees the new config
-    root = gui.root
-    for child in list(root.winfo_children()):
-        try:
-            child.destroy()
-        except Exception:
-            pass
-
-    app = gui_mod.RAGGui(root)
-    gui.app = app
-    gui.pump()
-
-    yield gui
-
-    # Restore config
-    if original_content is not None:
-        cfg_path.write_text(original_content, encoding="utf-8")
-    else:
-        try:
-            cfg_path.unlink()
-        except Exception:
-            pass
+@pytest.fixture
+def server_gui(gui, sandbox_state):
+    """The window built as a Business Server — sandbox config only."""
+    sandbox_state.set_config(edition="business", mode="server")
+    yield _rebuild_gui(gui)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -470,9 +429,10 @@ def _widget_texts(widget):
 
 @pytest.fixture
 def notif_cache(request):
-    """Write a real notifications_cache.json for the duration of a test,
-    restoring whatever was there before on teardown. Mirrors the real-path
-    pattern the server_gui/home_gui fixtures already use for config.json."""
+    """Write notifications_cache.json for the duration of a test. Through the
+    GUI sandbox (tests/gui/conftest.py sandbox_state) this real-looking path
+    lands in the test's own sandbox folder — the installed cache is never
+    touched (2026-10-09)."""
     cache_path = Path.home() / ".ai-prowler" / "notifications_cache.json"
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     original = cache_path.read_text(encoding="utf-8") if cache_path.exists() else None

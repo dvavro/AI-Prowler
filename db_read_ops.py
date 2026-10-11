@@ -31,6 +31,8 @@ from db_write_ops import (
     _maybe_send_stale_customer_digest,
     _maybe_normalize_choice_fields,
     db_read_settings_hard_time_tolerance_min,
+    _FREQ_MAP,
+    _freq_map_key,
 )
 
 
@@ -192,13 +194,22 @@ def _overlay_customer_owned_fields(conn, row_dict: dict) -> dict:
 
 
 def compute_customer_rollups(conn, customer_id: str) -> dict:
-    """Case D: Last Service Date / Next Sched. Date / Total Jobs
-    Completed / Lifetime Revenue are never trusted as stored numbers —
-    always computed live from the real jobs/invoices rows for this
-    customer. `total_jobs_completed` counts jobs whose Job Status is
-    'Complete'; `lifetime_revenue` sums actual amount paid (invoices.
-    amount_paid), not billed totals, so it reflects money actually
-    collected, not just invoiced."""
+    """Case D: Last Service Date / Next Sched. Date / Total Jobs Completed /
+    Lifetime Revenue are never trusted as stored numbers — always computed
+    live from the real jobs/invoices rows for this customer. `total_jobs_completed`
+    counts jobs whose Job Status is 'Complete'; `lifetime_revenue` sums actual
+    amount paid (invoices.amount_paid), not billed totals, so it reflects
+    money actually collected, not just invoiced.
+
+    2026-10-04: last_service_date is MAX(service_date) over PAST dates only.
+    Auto-generated recurring jobs now carry a real future service_date (so
+    they show on the calendar); a future date is not a "last service".
+
+    2026-10-05 (David's rule): last_service_date reflects COMPLETED jobs
+    only — a scheduled-but-unperformed job is not a "last service".
+    next_scheduled_date is the earliest upcoming non-completed job; when no
+    future job exists it falls back to last_service_date + the customer's
+    Frequency interval. It never merely echoes the last-service date."""
     if not customer_id:
         return {
             "last_service_date": None, "next_scheduled_date": None,
@@ -206,19 +217,35 @@ def compute_customer_rollups(conn, customer_id: str) -> dict:
         }
     today_iso = datetime.date.today().isoformat()
     job_row = conn.execute(
-        "SELECT MAX(service_date) AS last_service, "
-        "MIN(CASE WHEN service_date >= ? THEN service_date END) AS next_sched, "
+        "SELECT MAX(CASE WHEN LOWER(job_status) = 'complete' AND service_date <= ? THEN service_date END) AS last_service, "
+        "MIN(CASE WHEN service_date >= ? AND LOWER(IFNULL(job_status,'')) NOT IN ('complete','cancelled','canceled') THEN service_date END) AS next_sched, "
         "SUM(CASE WHEN LOWER(job_status) = 'complete' THEN 1 ELSE 0 END) AS completed "
         "FROM jobs WHERE customer_id = ?",
-        (today_iso, customer_id),
+        (today_iso, today_iso, customer_id),
     ).fetchone()
+    last_service = job_row["last_service"]
+    next_sched = job_row["next_sched"]
+    # Frequency fallback (2026-10-05): no upcoming job but a real last service
+    # and a recognized recurring frequency -> next = last + interval.
+    if not next_sched and last_service:
+        freq_row = conn.execute(
+            "SELECT frequency FROM customers WHERE customer_id = ?", (customer_id,)
+        ).fetchone()
+        if freq_row and freq_row["frequency"]:
+            delta_fn = _FREQ_MAP.get(_freq_map_key(freq_row["frequency"]))
+            if delta_fn is not None:
+                try:
+                    base = datetime.datetime.strptime(str(last_service)[:10], "%Y-%m-%d").date()
+                    next_sched = delta_fn(base).isoformat()
+                except (ValueError, TypeError):
+                    pass
     revenue_row = conn.execute(
         "SELECT COALESCE(SUM(amount_paid), 0) AS revenue FROM invoices WHERE customer_id = ?",
         (customer_id,),
     ).fetchone()
     return {
-        "last_service_date": job_row["last_service"],
-        "next_scheduled_date": job_row["next_sched"],
+        "last_service_date": last_service,
+        "next_scheduled_date": next_sched,
         "total_jobs_completed": job_row["completed"] or 0,
         "lifetime_revenue": revenue_row["revenue"] or 0.0,
     }
@@ -421,6 +448,7 @@ _KNOWN_DROPDOWNS = {
         "Customer Type Comm/Res": ["Commercial", "Residential"],
         "Frequency": ["Weekly", "Biweekly", "Monthly", "Bi-Monthly",
                        "Quarterly", "Semi-Annually", "Annually", "One-time"],
+        "Schedule Type": ["Soft", "Hard"],  # 2026-10-04: per-customer Soft/Hard default
         "Status Active/Inactive": ["Active", "Inactive"],
     },
     "Invoices": {

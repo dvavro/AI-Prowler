@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import expect
 
-from remote_safety import SANDBOX
+from remote_safety import SANDBOX, parse_tracked_sections
 
 SEED_TXT = "ZTEST_E2E_seed.txt"
 SEED_PNG = "ZTEST_E2E_seed.png"
@@ -35,9 +35,10 @@ def _tracked_root(rapi) -> str:
     """The tracked folder (as the Files screen lists it) that contains the sandbox."""
     sb = str(SANDBOX).lower()
     roots = []
-    for line in rapi.text("list_tracked_directories").splitlines():
-        s = "".join(ch for ch in line if 32 <= ord(ch) < 127).strip()
-        s = s.split(". ", 1)[-1].strip() if s[:1].isdigit() else s
+    # 2026-10-10: the shared section parser — lines carry a [W]/[R] badge since
+    # R-071, which the old inline parse kept, so it never found the sandbox and
+    # all six RF tests here were skipped.
+    for s in parse_tracked_sections(rapi.text("list_tracked_directories"))["tracked"]:
         s = s.rstrip("\\")
         # the sandbox's own row (it is tracked by itself) or a folder containing it
         if ":\\" in s and (sb == s.lower() or sb.startswith(s.lower() + "\\")):

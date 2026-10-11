@@ -142,6 +142,33 @@ Same philosophy as the Jobs app spec §4: **the live personal install, real data
 | RP-04 | Revoke on the sandbox | instant; server confirms read-only. Records RQ-05 (no confirm) |
 | RP-05 | Cancel the grant modal | nothing changes |
 
+#### 5.5b Access-Only Folders — `test_remote_access_only.py` (AO, added 2026-10-09)
+Folders Claude can read but that are never indexed; personal mode only (David 2026-10-09 — like the whole Remote app). Acts ONLY on `<sandbox>\ZTEST_E2E_access_only` (`remote_safety.AO_SANDBOX`): the guard allows `grant_access` / `revoke_access` on that path and nothing else, each test takes it off the list again, and the session end removes it (SUMMARY line "Access-only test folder: clean ✅").
+
+| ID | Scenario | Verify |
+|---|---|---|
+| AO-01 | Perms tab with the test folder listed | Access-Only section shown, the folder's row is there; the indexed list above has the sandbox by its exact path and never the access-only folder; no path keeps a `[W]`/`[R]` badge (the old parser kept it) |
+| AO-02 | Type the path → Add → popup "Add Access-Only Folder" → right token | row appears as R, input cleared, toast; the server lists it under access-only and NOT as indexed |
+| AO-03 | Same with a wrong token | "Incorrect token (1/3)", nothing added |
+| AO-04 | Add with an empty path | toast "Type a folder path first", no popup |
+| AO-05 | Add a folder that doesn't exist | the server's "does not exist" refusal shows in the popup; nothing added |
+| AO-06 | 🗑 on the row | instant; toast; gone from the screen and the server |
+| AO-07 | Add a folder that's already there | **refused** (2026-10-10) — popup shows "already an access-only folder"; listed once |
+| AO-12 | Add a folder inside an access-only folder | refused: "already covered by access-only folder …"; not listed |
+| AO-13 | Add a file | refused: "is a file … folders only" |
+| AO-14 | Add a folder that contains an access-only folder | added; toast "folded in"; the inner entry is gone from the list |
+| AO-15 | Add a ZTEST folder inside the indexed sandbox | refused: "inside indexed folder …" |
+| AO-08 | **Files tab** (2026-10-10, David): two sections | "Indexed Folders" holds the sandbox, "Access-Only Folders" the test folder — each only in its own section; no path keeps a badge |
+| AO-09 | Read-only access-only folder | 🔒 Read only, no Upload; 📥 Download → ⬇ Get downloads the exact bytes |
+| AO-10 | Writable access-only folder → 📷 Upload | file saved; `/remote/upload` answers `indexed: false`; status says "not indexed"; the tracked list is unchanged |
+| AO-11 | 👁 View a text file in the access-only folder | preview opens with the file's text |
+
+Add rules (David 2026-10-10, personal mode only): folders only — always recursive; no duplicates; nothing already covered by an access-only or indexed folder; a containing folder folds the inner ones in. One shared check, `rag_preprocessor.access_only_add_check`, used by the desktop panel, `grant_access` and so the Remote app. Unit: `tests\mcp_tests\test_access_only_add_rules.py`; desktop: `tests\gui\test_access_only_add_rules_gui.py` (AG-01…07, AG-07 = no panel on a server window). The guard lets `grant_access`/`revoke_access` touch the test folder, anything inside it, and `ZTEST_E2E_*` paths in the sandbox (refusal expected); the run end revokes all of them.
+
+2026-10-10: the access-only test folder moved to `C:\Users\david\AI-Prowler-E2E-Remote-AccessOnly` (David's OK) — outside every tracked AND writable folder. Inside the tracked sandbox an upload would rightly be indexed; inside the work copy (itself writable) the folder was always "writable via its parent", so its own write switch couldn't be tested — which exposed **R-088**: Files and Perms only treated a folder as writable when it had its OWN `[W]` entry, so a folder writable through a parent showed 🔒 Read only and no Upload although the server accepts the upload. Fixed (`remote\index.html`): `_writableVia()` → Files offers Upload; Perms shows R+W with the switch locked on ("Writable through a parent folder" — switching it off there can't work). Unit test runs `_writableVia` with node. The guard also lets the write switch (`grant/revoke_write_access`) touch that one folder; the run end revokes both and deletes it. Server side (`ai_prowler_mcp.py`): `/remote/download` accepts access-only folders and uses a folder-boundary check (was a text prefix: `…\proj` also matched `…\project2`); `/remote/upload` saves without indexing when the folder is access-only and not inside a tracked folder (`_upload_should_index`). `test_remote_files.py` used its own badge-blind parser and skipped all six RF tests since 2026-10-08 — now the shared `parse_tracked_sections`.
+
+Also 2026-10-09: the session pre-flight's "is the sandbox inside a tracked folder" check now uses the indexed section only and strips the `[W]`/`[R]` badge (`conftest.tracked_paths`).
+
 ### 5.6 Learnings — `test_remote_learn.py` (RL)
 | ID | Scenario | Verify |
 |---|---|---|
@@ -185,6 +212,28 @@ Same philosophy as the Jobs app spec §4: **the live personal install, real data
 | RM-02 | Buttons | ≥ 40 px tap size (as R-037 for Jobs) |
 
 ---
+
+#### 5.10 Every entry field saves — `test_remote_fields.py` (RE, added 2026-10-11)
+David 2026-10-11: "check that every entry field operates and can save data". An inventory of `remote\index.html` (27 entry fields, `tests\dev\remote_field_inventory.py`) against the suite found fields that were typed into but never checked on the server (learning Outcome / Tags / Context; task Prompt, First due, Report + Email outputs) and fields never exercised at all (Daily start / end time, Report folder, the Scope-folder checkboxes — where R-087 had hidden). Each RE test types / picks in the browser, saves, and reads the value back from the SERVER (`list_analysis_tasks` JSON; the learnings store `~/.ai-prowler/learnings/self_learning_data.json`).
+
+| ID | Scenario | Verify |
+|---|---|---|
+| RE-01 | Add a learning with every field | title, content, category, outcome, tags, context all stored as typed |
+| RE-02 | New task with every field: Daily 07:30–18:00 ×3, first due, all three outputs, report folder, a scope folder | preview "07:30, 12:45, 18:00"; every value stored |
+| RE-03 | Weekly (Fri) / Biweekly (Wed) / Monthly (Not pinned) | schedule, first due, weekday (none for Not pinned) stored |
+| RE-04 | Edit a task saved with every field | every input shows the saved value |
+| RE-05 | Edit changes every field (→ Monthly pinned Friday, prompt, outputs, folder, scope) | all stored, same task id |
+| RE-06 | Edit clears the report folder and un-ticks every scope folder | cleared on the server (R-089) |
+| RE-07 | Times/day typed 0 / 30 | never saved outside 1–24 |
+| RE-08 | **Edit a learning** (2026-10-11): ✎ Edit → form shows every saved field; change all six → ✓ Save Changes | same learning id, every field stored, old title gone |
+| RE-09 | Edit a learning: empty Tags and Context | both cleared on the server |
+| RE-10 | Edit a task: empty First due | Run once → cleared; Weekly → refused "needs a first due date", nothing changed |
+
+**R-089 (fixed 2026-10-11):** Edit couldn't CLEAR an optional task field — `submitNewTask` sent `report_folder`, `scope_dirs` and `first_due` only when they had a value, and `update_analysis_task` changes only the fields it's given, so emptying them kept the old value while the form said "updated". Fix (`remote\index.html`): an edit always sends all three (empty = clear); a scheduled task with no first due date is refused in the form, the same rule as creating one.
+
+**Learning edit (added 2026-10-11, David):** ✎ Edit on each learning card; the form fills from the new read-only `get_learning(learning_id)` tool (one learning's full record as JSON — `list_learnings` only shows a preview without tags/context) and saves with `update_learning` (tags as a list, every field sent so emptying clears). Unit tests: `tests\mcp_tests\test_learning_edit_and_r089.py`.
+
+Fields already checked end-to-end elsewhere: sign-in token (RA), search box (RS), Learnings search (RL-04), access-only path + token popup (AO), write switches + token popup (RP), file upload (RF-05, AO-10).
 
 ## 6. Implementation plan
 

@@ -265,17 +265,29 @@ def test_G_MCP_05_list_tracked_with_icons(mcp_env, small_text_file):
     assert "❓" in output, f"Should show ❓ for missing path. Output: {output!r}"
 
 
-def test_G_MCP_05b_list_when_nothing_tracked(mcp_env):
+def test_G_MCP_05b_list_when_nothing_tracked(mcp_env, monkeypatch):
     """When no paths are tracked, list_tracked_directories should return a
-    helpful message that suggests the next step."""
+    helpful message that suggests the next step.
+
+    R-071/R-072 (2026-10-08): the tool now always renders BOTH sections -
+    Indexed directories and Access-only folders - with (none) placeholders.
+    The real ~/.rag_access_only_dirs.json is not redirected by isolated_env,
+    so point it at an empty temp list to exercise the true empty state.
+    """
+    empty_ao = mcp_env.tmp_path / "access_only.json"
+    empty_ao.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(mcp_env.mcp, "_ACCESS_ONLY_DIRS_FILE", empty_ao)
+
     output = mcp_env.mcp.list_tracked_directories()
     assert isinstance(output, str)
-    assert "no paths" in output.lower() or "no directories" in output.lower(), (
-        f"Empty-list output should be informative. Got: {output!r}"
+    assert "(none)" in output, (
+        f"Empty-list output should show (none) placeholders. Got: {output!r}"
     )
-    # The message should mention index_path as the next step
-    assert "index_path" in output, (
-        f"Empty-list message should reference the indexing tool. Got: {output!r}"
+    assert "Indexed directories" in output
+    assert "Access-only folders" in output
+    # The message should mention the next step (grant_access adds a folder)
+    assert "grant_access" in output, (
+        f"Empty-list message should reference the access-grant tool. Got: {output!r}"
     )
 
 

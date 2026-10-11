@@ -37,6 +37,14 @@ from pathlib import Path
 import pytest
 
 
+# Proactive Alerts is personal-mode only (create_query_tab skips it in
+# Business Server mode) — pin personal mode so the result doesn't depend on
+# this PC's real config.json (2026-10-08).
+@pytest.fixture(autouse=True)
+def _personal_mode(force_personal_mode):
+    yield
+
+
 @pytest.fixture
 def alerts_env(gui, tmp_path, monkeypatch):
     """Isolate scheduler_config.json/log/last-run to a temp location and

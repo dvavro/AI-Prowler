@@ -3,8 +3,14 @@
 Everything lives on the sandbox date (2030-01-07) under 'ZTEST E2E' names,
 attached to ONE customer 'ZTEST E2E Customer' — so deleting that customer
 removes every job, route stop, time entry, invoice and quote in one step
-(one safety backup instead of dozens). The customer never gets a Frequency,
-so the app's once-a-day recurring-job sweep can't spawn jobs from it.
+(one safety backup instead of dozens).
+
+Recurring jobs (David, 2026-10-09): test data does NOT dodge the recurring-
+job sweep. Tests may give the ZTEST customer a Frequency and jobs a
+Recurrence (FR-01/FR-02 do). Anything the sweep spawns carries the ZTEST
+customer's ID/name, so deleting the customer (and the ZTEST-name job sweep
+below) still removes it. The sweep itself — new jobs appearing week after
+week — is tested with a movable clock in tests/gui_jobs_timemachine.
 """
 from __future__ import annotations
 

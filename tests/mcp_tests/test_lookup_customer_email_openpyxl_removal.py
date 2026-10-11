@@ -72,9 +72,10 @@ def test_never_touches_the_old_xlsx_file(personal_env, mcp_mod):
 
 
 def test_matches_by_exact_customer_id(personal_env, mcp_mod):
-    mcp_mod.create_customer({"Company Name": "Blue Wave Cafe", "Email": "jane@example.com"},
-                             filepath="", backup=False, ctx=None)
-    email = mcp_mod._lookup_customer_email("CUST-0001", ctx=None)
+    cust_result = mcp_mod.create_customer({"Company Name": "Blue Wave Cafe", "Email": "jane@example.com"},
+                                          filepath="", backup=False, ctx=None)
+    cust_id = cust_result.split("NEW_CUST_ID=")[1].splitlines()[0].strip()
+    email = mcp_mod._lookup_customer_email(cust_id, ctx=None)
     assert email == "jane@example.com"
 
 

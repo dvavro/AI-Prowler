@@ -1,14 +1,17 @@
 """
 tests/mcp_tests/test_route_soft_window_and_replan.py
 ================================================
-Two Route-tab changes (2026-09-21):
+Two Route-tab changes:
 
-1. The yellow "outside window" check is for SOFT jobs only and is judged against the
-   customer-AGREED window: Original Start/End Time (when both are set), and ONLY that. With no
-   original window the job has a full-day window, so it can never be flagged — the current
-   Start/End is NOT a fallback, because Approve overwrites it with the routed slot (after
-   which "the window" would just be wherever the route had put the job).
-   (Server: _soft_window_strs + the SOFT WINDOW VIOLATION warning. Client: jobs/index.html.)
+1. (2026-10-05, David's rule) The yellow "outside window" check is for SOFT
+   jobs only and is judged ONLY against the CUSTOMER's preferred time
+   window (Pref. Time Start/End on the customer record) — never the job's
+   Start/End Time, which is a scheduled slot, not a constraint. A customer
+   with no preferred window set has no constraint: no warning can fire.
+   Either end may be blank (a partial window like "before 10:00 AM"
+   constrains only its set end).
+   (Server: _soft_window_strs + the SOFT WINDOW VIOLATION warning. Client:
+   jobs/index.html.)
 
 2. Editing a job from a Route stop (✏️) re-plans the day IN ITS CURRENT ORDER
    (db_replan_current_order / the replan_route_day tool) so every stop's time reflects the
@@ -66,10 +69,16 @@ def _osrm(monkeypatch):
     monkeypatch.setattr(requests, "get", fake_get)
 
 
-def _job(db_path, name, start, duration, kind="soft", end=None, crew="", date=DATE):
+def _job(db_path, name, start, duration, kind="soft", end=None, crew="", date=DATE,
+         cust_pref_start="", cust_pref_end=""):
     # Job Board Architecture Spec §5.1 (2026-09-22): create_job now requires
     # a real, existing CustomerID.
-    cust_result = db_create_customer(db_path, {"Company Name": name}, actor="dave")
+    cust_fields = {"Company Name": name}
+    if cust_pref_start:
+        cust_fields["Pref. Time Start"] = cust_pref_start
+    if cust_pref_end:
+        cust_fields["Pref. Time End"] = cust_pref_end
+    cust_result = db_create_customer(db_path, cust_fields, actor="dave")
     cust_id = cust_result.split("NEW_CUST_ID=")[1].splitlines()[0].strip()
     fields = {
         "CustomerID (Customers!A)": cust_id,
@@ -121,68 +130,73 @@ def _mins(hhmm):
     return int(h) * 60 + int(m)
 
 
-# ── 1. the soft window is the customer-agreed one ─────────────────────────
-
-def test_window_is_the_original_when_both_originals_are_set():
-    job = {"start_time": "08:05", "end_time": "08:35", "original_start_time": "10:00", "original_end_time": "10:30"}
-    assert _soft_window_strs(job) == ("10:00", "10:30")
+# ── 1. the soft window is the CUSTOMER's preferred window (2026-10-05) ──
 
 
-def test_no_original_window_is_no_window_never_the_current_start_end():
-    # Current Start/End is deliberately NOT a fallback: Approve overwrites it with the routed slot.
+def test_window_comes_from_customer_preferred_window_not_job_times():
+    job = {"start_time": "08:05", "end_time": "08:35",
+           "cust_pref_start": "10:00 AM", "cust_pref_end": "10:30 AM"}
+    assert _soft_window_strs(job) == ("10:00 AM", "10:30 AM")
+
+
+def test_blank_customer_window_is_no_window_even_with_job_times():
+    # David's rule: the job's Start/End is a scheduled slot, not a constraint.
     assert _soft_window_strs({"start_time": "09:00", "end_time": "09:30"}) is None
     assert _soft_window_strs({"start_time": "09:00", "end_time": "09:30",
-                              "original_start_time": "10:00", "original_end_time": ""}) is None
-    assert _soft_window_strs({"start_time": "09:00", "end_time": "09:30",
-                              "original_start_time": "", "original_end_time": "10:30"}) is None
-    assert _soft_window_strs({"original_start_time": None, "original_end_time": None}) is None
+                              "cust_pref_start": "", "cust_pref_end": ""}) is None
     assert _soft_window_strs({}) is None
 
 
-def test_arriving_inside_the_original_window_is_fine_even_after_approve_moved_the_slot(db_path):
+def test_partial_customer_window_constrains_only_its_set_end():
+    # "before 10:00 AM" — only the end constrains.
+    assert _soft_window_strs({"cust_pref_start": "", "cust_pref_end": "10:00 AM"}) == ("", "10:00 AM")
+    assert _soft_window_strs({"cust_pref_start": "7:00 AM", "cust_pref_end": ""}) == ("7:00 AM", "")
+
+
+def test_arriving_inside_customer_window_is_fine(db_path):
     _set_workday_start(db_path, "07:00")
-    j = _job(db_path, "Soft", "07:00", 30, "soft", end="07:30")        # customer agreed 07:00-07:30
-    _sql(db_path, "UPDATE jobs SET start_time='12:00', end_time='12:30' WHERE job_id = ?", (j,))   # Approve put it at noon
+    j = _job(db_path, "Soft", "09:00", 30, "soft", end="09:30",
+             cust_pref_start="7:00 AM", cust_pref_end="10:00 AM")
     res = db_apply_route_order(db_path, DATE, j, "", "dave", single_crew=True)
     assert res.startswith("✅ Applied route"), res
-    assert _etas(db_path)[j] == "07:00"
-    # Judged against the CURRENT (12:00-12:30) slot this would have been flagged, wrongly.
     assert "SOFT WINDOW VIOLATION" not in res
 
 
-def test_arriving_outside_the_original_window_is_flagged_and_names_the_original(db_path):
+def test_arriving_outside_customer_window_is_flagged(db_path):
     _set_workday_start(db_path, "07:00")
-    j = _job(db_path, "Soft", "09:00", 30, "soft", end="09:30")        # customer agreed 09:00-09:30
-    _sql(db_path, "UPDATE jobs SET start_time='07:00', end_time='07:30' WHERE job_id = ?", (j,))   # approved slot = arrival
+    # Customer window 7:00-10:00 AM; the route cannot arrive before 07:00
+    # (workday start), so force lateness by making the job's duration push
+    # a second stop past the window — simpler: single job, workday starts
+    # at 11:00 so arrival (11:00) is outside the 7:00-10:00 window.
+    _set_workday_start(db_path, "11:00")
+    j = _job(db_path, "Soft", "09:00", 30, "soft", end="09:30",
+             cust_pref_start="7:00 AM", cust_pref_end="10:00 AM")
     res = db_apply_route_order(db_path, DATE, j, "", "dave", single_crew=True)
-    # Judged against the current slot (07:00-07:30) it would look perfect, wrongly hiding the miss.
-    assert "SOFT WINDOW VIOLATION" in res and "09:00–09:30" in res
+    assert "SOFT WINDOW VIOLATION" in res and "7:00 AM" in res
 
 
-def test_no_original_window_means_a_full_day_window_so_no_warning_is_possible(db_path):
-    """No Original Start/End -> no window at all. The job's CURRENT Start/End (09:00-09:30
-    here, and arrival is 07:00 — outside it) must NOT be used as a fallback."""
-    _set_workday_start(db_path, "07:00")
-    j = _job(db_path, "Old", "09:00", 30, "soft", end="09:30")
-    _sql(db_path, "UPDATE jobs SET original_start_time=NULL, original_end_time=NULL WHERE job_id = ?", (j,))
+def test_job_times_alone_never_trigger_a_warning(db_path):
+    # The reported bug: customer has NO preferred window, job has a scheduled
+    # slot (09:00-09:30), arrival falls outside that slot — must NOT warn.
+    _set_workday_start(db_path, "11:00")
+    j = _job(db_path, "NoWin", "09:00", 30, "soft", end="09:30")
     res = db_apply_route_order(db_path, DATE, j, "", "dave", single_crew=True)
     assert res.startswith("✅ Applied route"), res
-    assert _etas(db_path)[j] == "07:00"
     assert "SOFT WINDOW VIOLATION" not in res
 
 
-def test_a_half_set_original_is_no_window_either(db_path):
-    _set_workday_start(db_path, "07:00")
-    j = _job(db_path, "Half", "09:00", 30, "soft", end="09:30")
-    _sql(db_path, "UPDATE jobs SET original_start_time='09:00', original_end_time=NULL WHERE job_id = ?", (j,))
+def test_partial_window_before_end_flags_late_arrival(db_path):
+    _set_workday_start(db_path, "11:00")
+    j = _job(db_path, "Before", "09:00", 30, "soft", end="09:30",
+             cust_pref_end="10:00 AM")
     res = db_apply_route_order(db_path, DATE, j, "", "dave", single_crew=True)
-    assert "SOFT WINDOW VIOLATION" not in res
+    assert "SOFT WINDOW VIOLATION" in res
 
 
 def test_hard_jobs_never_get_the_soft_warning(db_path):
     _set_workday_start(db_path, "07:00")
-    j = _job(db_path, "Hard", "10:00", 30, "hard")
-    _sql(db_path, "UPDATE jobs SET original_start_time='06:00', original_end_time='06:30' WHERE job_id = ?", (j,))
+    j = _job(db_path, "Hard", "10:00", 30, "hard",
+             cust_pref_start="7:00 AM", cust_pref_end="10:00 AM")
     res = db_apply_route_order(db_path, DATE, j, "", "dave", single_crew=True)
     assert "SOFT WINDOW VIOLATION" not in res
 
@@ -270,7 +284,12 @@ def mcp_mod():
     return ap
 
 
-def test_the_tool_replans_and_refreshes_the_saved_phone_link(tmp_path, monkeypatch, mcp_mod):
+def test_the_tool_replans_without_publishing_the_phone_link(tmp_path, monkeypatch, mcp_mod):
+    """2026-10-05: the tap-to-navigate link is NO LONGER published by routing
+    tools — only an APPROVED route gets its link pinned (see
+    approve_route_schedule). Re-plan recomputes the times but leaves link
+    pinning to the approve step, so the 📍 note must NOT appear here."""
+
     monkeypatch.setattr(mcp_mod, "_get_default_spreadsheet_path", lambda: str(tmp_path / "x.xlsx"))
     monkeypatch.setattr(mcp_mod, "_test_db_folder_override", lambda: str(tmp_path))
     monkeypatch.setattr(mcp_mod, "_current_user", lambda ctx: None)
@@ -289,7 +308,8 @@ def test_the_tool_replans_and_refreshes_the_saved_phone_link(tmp_path, monkeypat
     assert "Applied route" in mcp_mod.apply_route_order(DATE, f"{a},{b}", ctx=None)
     out = mcp_mod.replan_route_day(DATE, ctx=None)
     assert out.startswith("✅ Re-planned the day"), out
-    assert "📍 Phone route link saved" in out
+    assert "07:00" in out and "07:35" in out   # times recomputed in current order
+    assert "📍 Phone route link saved" not in out   # approve-only since 2026-10-05
 
 
 def test_the_tool_is_registered_and_on_both_phone_allow_lists(mcp_mod):
@@ -303,13 +323,17 @@ _HTML = (_SRC / "jobs" / "index.html").read_text(encoding="utf-8")
 
 def test_client_yellow_check_uses_the_agreed_window_and_only_for_soft_jobs():
     assert "s._softViolation = false;" in _HTML
-    assert "if (!s._hard && s._jobId && s._winStart && s._winEnd && arrivalMin !== null)" in _HTML
-    # the old check compared against the current (possibly approved) Start/End
-    assert "!s._hard && s._jobId && s._committedStart && s._committedEnd" not in _HTML
-    # no original window -> NO window (full-day), never a fallback to the current Start/End
-    assert "s._winStart = (_oS && _oE) ? _oS : '';" in _HTML
-    assert "s._winEnd   = (_oS && _oE) ? _oE : '';" in _HTML
-    assert "? _oS : s._committedStart" not in _HTML
+    # 2026-10-06: refactored to the customer-window fields with partial-window
+    # support — EITHER end set is enough (a "before X"/"after X" window
+    # constrains only its set end).
+    assert "if (!s._hard && s._jobId && (s._custWinStart || s._custWinEnd) && arrivalMin !== null)" in _HTML
+    # the yellow window comes from the CUSTOMER's Pref. Time Start/End — never
+    # the job's own (possibly approved) Start/End, never Original Start/End.
+    assert "s._custWinStart = _cwS;" in _HTML
+    assert "s._custWinEnd = _cwE;" in _HTML
+    assert "_cust['Pref. Time Start']" in _HTML and "_cust['Pref. Time End']" in _HTML
+    assert "? _cwS : s._committedStart" not in _HTML
+    assert "? _cwS : s._winStart" not in _HTML
     # and the row says so instead of showing a made-up slot
     assert "'Any time'" in _HTML
 

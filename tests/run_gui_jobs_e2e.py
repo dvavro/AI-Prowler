@@ -174,8 +174,18 @@ def main() -> int:
                   "remote_gui_e2e" if a.remote else
                   "jobs_gui_timemachine" if a.timemachine else "jobs_gui_e2e")
         cmd = [sys.executable, "-m", "pytest", str(SUITE), "-m", marker, "-p", "no:cacheprovider",
-               "--browser-channel", channel,
-               "--html", str(run_dir / "report.html"), "--self-contained-html"]
+               "--browser-channel", channel]
+        # report.html needs the pytest-html plugin. Found 2026-10-08: after
+        # pytest moved to 9.x the plugin was gone and every run died at once
+        # with "unrecognized arguments: --html" (exit 4, no tests). The HTML
+        # report is a nicety — SUMMARY.txt / run.log are always written — so
+        # add it only when the plugin is installed
+        # (tests\install_gui_jobs_e2e_deps.bat puts it back).
+        import importlib.util as _ilu
+        if _ilu.find_spec("pytest_html") is not None:
+            cmd += ["--html", str(run_dir / "report.html"), "--self-contained-html"]
+        else:
+            print("[e2e] pytest-html not installed — skipping report.html (SUMMARY.txt still written)")
         if a.server or a.remote:
             # No traces / videos: they would record the token typed at sign-in
             # (server spec §6.11.3, Remote spec §3.6). The suites take their own

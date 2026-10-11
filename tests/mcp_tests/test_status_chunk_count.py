@@ -36,6 +36,7 @@ Test IDs
 """
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
 
@@ -81,7 +82,7 @@ def test_sc01_status_nonzero_after_index(mcp_env):
     )
     mcp_env.mcp.index_path(directory=str(mcp_env.sample_root))
 
-    status = mcp_env.mcp.check_ai_prowler_status()
+    status = asyncio.run(mcp_env.mcp.check_ai_prowler_status())
     count = _chunk_count_from_status(status)
     assert count > 0, (
         f"SC-01 FAIL: check_ai_prowler_status reported 0 chunks after indexing.\n"
@@ -105,7 +106,7 @@ def test_sc02_status_and_stats_agree(mcp_env):
     )
     mcp_env.mcp.index_path(directory=str(mcp_env.sample_root))
 
-    status = mcp_env.mcp.check_ai_prowler_status()
+    status = asyncio.run(mcp_env.mcp.check_ai_prowler_status())
     stats  = mcp_env.mcp.get_database_stats()
 
     status_count = _chunk_count_from_status(status)
@@ -128,7 +129,7 @@ def test_sc02_status_and_stats_agree(mcp_env):
 def test_sc03_status_zero_on_empty_db(mcp_env):
     """On a fresh isolated database with nothing indexed, status must show 0."""
     # mcp_env gives us a clean isolated DB — nothing indexed yet
-    status = mcp_env.mcp.check_ai_prowler_status()
+    status = asyncio.run(mcp_env.mcp.check_ai_prowler_status())
 
     # Either "Chunks : 0" or an empty-DB hint message is acceptable
     if "Chunks" in status:
@@ -157,11 +158,11 @@ def test_sc04_status_correct_after_reindex(mcp_env):
         "SC-04 first index pass."
     )
     mcp_env.mcp.index_path(directory=str(mcp_env.sample_root))
-    count_first = _chunk_count_from_status(mcp_env.mcp.check_ai_prowler_status())
+    count_first = _chunk_count_from_status(asyncio.run(mcp_env.mcp.check_ai_prowler_status()))
 
     # Re-index same directory — chunk count should stay the same (dedup)
     mcp_env.mcp.index_path(directory=str(mcp_env.sample_root))
-    count_second = _chunk_count_from_status(mcp_env.mcp.check_ai_prowler_status())
+    count_second = _chunk_count_from_status(asyncio.run(mcp_env.mcp.check_ai_prowler_status()))
 
     assert count_second == count_first, (
         f"SC-04 FAIL: chunk count changed after re-indexing same directory "
@@ -180,7 +181,7 @@ def test_sc05_status_increases_after_adding_file(mcp_env):
         "SC-05 first file — baseline chunk count."
     )
     mcp_env.mcp.index_path(directory=str(mcp_env.sample_root))
-    count_before = _chunk_count_from_status(mcp_env.mcp.check_ai_prowler_status())
+    count_before = _chunk_count_from_status(asyncio.run(mcp_env.mcp.check_ai_prowler_status()))
 
     # Add a second, larger file
     _write_sample_file(
@@ -188,7 +189,7 @@ def test_sc05_status_increases_after_adding_file(mcp_env):
         "SC-05 second file. " + ("Additional content. " * 20)
     )
     mcp_env.mcp.index_path(directory=str(mcp_env.sample_root))
-    count_after = _chunk_count_from_status(mcp_env.mcp.check_ai_prowler_status())
+    count_after = _chunk_count_from_status(asyncio.run(mcp_env.mcp.check_ai_prowler_status()))
 
     assert count_after > count_before, (
         f"SC-05 FAIL: chunk count did not increase after adding a file "
@@ -213,11 +214,11 @@ def test_sc06_status_decreases_after_untrack(mcp_env):
 
     mcp_env.mcp.index_path(directory=str(sub_a))
     mcp_env.mcp.index_path(directory=str(sub_b))
-    count_before = _chunk_count_from_status(mcp_env.mcp.check_ai_prowler_status())
+    count_before = _chunk_count_from_status(asyncio.run(mcp_env.mcp.check_ai_prowler_status()))
 
     # Untrack sub_b — its chunks should be purged
     mcp_env.mcp.untrack_directory(directory=str(sub_b))
-    count_after = _chunk_count_from_status(mcp_env.mcp.check_ai_prowler_status())
+    count_after = _chunk_count_from_status(asyncio.run(mcp_env.mcp.check_ai_prowler_status()))
 
     assert count_after < count_before, (
         f"SC-06 FAIL: chunk count did not decrease after untrack_directory "
@@ -238,7 +239,7 @@ def test_sc07_sync_across_cycles(mcp_env):
     mismatches = []
 
     def _check_agreement(label: str):
-        status = mcp_env.mcp.check_ai_prowler_status()
+        status = asyncio.run(mcp_env.mcp.check_ai_prowler_status())
         stats  = mcp_env.mcp.get_database_stats()
         sc = _chunk_count_from_status(status)
         gc = _chunk_count_from_stats(stats)
@@ -272,7 +273,7 @@ def test_sc07_sync_across_cycles(mcp_env):
 
 def test_sc08_status_output_has_header(mcp_env):
     """check_ai_prowler_status output must contain the status header."""
-    status = mcp_env.mcp.check_ai_prowler_status()
+    status = asyncio.run(mcp_env.mcp.check_ai_prowler_status())
     assert "AI-Prowler Status Check" in status, (
         f"SC-08 FAIL: header 'AI-Prowler Status Check' not found in output:\n{status}"
     )
@@ -284,7 +285,7 @@ def test_sc08_status_output_has_header(mcp_env):
 
 def test_sc09_status_output_chroma_connected(mcp_env):
     """check_ai_prowler_status must report ChromaDB as connected."""
-    status = mcp_env.mcp.check_ai_prowler_status()
+    status = asyncio.run(mcp_env.mcp.check_ai_prowler_status())
     assert "ChromaDB" in status, (
         f"SC-09 FAIL: 'ChromaDB' not found in status output:\n{status}"
     )
@@ -305,7 +306,7 @@ def test_sc10_status_output_has_chunk_line(mcp_env):
     )
     mcp_env.mcp.index_path(directory=str(mcp_env.sample_root))
 
-    status = mcp_env.mcp.check_ai_prowler_status()
+    status = asyncio.run(mcp_env.mcp.check_ai_prowler_status())
     assert re.search(r"Chunks\s*:", status), (
         f"SC-10 FAIL: 'Chunks :' line not found in status output:\n{status}"
     )
@@ -398,7 +399,7 @@ def test_sc11_server_split_mock(mcp_env):
     ) as patched:
 
         # ── Step 4: call check_ai_prowler_status under the poisoned condition ─
-        status = mcp_env.mcp.check_ai_prowler_status()
+        status = asyncio.run(mcp_env.mcp.check_ai_prowler_status())
         status_count = _chunk_count_from_status(status)
 
         # Confirm the mock was actually called (so we know the patch landed)

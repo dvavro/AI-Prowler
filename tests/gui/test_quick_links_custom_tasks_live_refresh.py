@@ -36,6 +36,13 @@ from unittest.mock import patch
 import pytest
 
 
+# Custom Analyses (and its file poller) is personal-mode only — pin personal
+# mode so the result doesn't depend on this PC's real config.json (2026-10-08).
+@pytest.fixture(autouse=True)
+def _personal_mode(force_personal_mode):
+    yield
+
+
 def test_G_QL_01_custom_task_count_shows_dynamic_cap_not_stale_10(gui, isolated_env, tmp_path):
     """The count label must read '.../ 25', not the old hardcoded '.../ 10'
     — regardless of how many tasks currently exist."""
