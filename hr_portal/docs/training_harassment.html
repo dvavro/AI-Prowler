@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Anti-Harassment & Discrimination — AI-Prowler</title>
+<style>
+  body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; background: #f6f8fa; color: #0d1117; }
+  .doc { max-width: 820px; margin: 0 auto; background: #fff; padding: 0; min-height: 100vh; }
+  .hero { background: linear-gradient(135deg, #0d1117 0%, #1a0a0a 60%, #3a0d0d 100%); padding: 48px 52px 40px; color: #fff; }
+  .hero-brand { font-size: 12px; font-weight: 700; color: #f85149; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 16px; }
+  .hero h1 { font-size: 32px; font-weight: 800; margin: 0 0 10px; color: #fff; }
+  .hero p { font-size: 14px; color: #8b949e; margin: 0 0 20px; line-height: 1.7; }
+  .hero-meta { display: flex; gap: 20px; flex-wrap: wrap; }
+  .hero-badge { background: rgba(248,81,73,.15); border: 1px solid rgba(248,81,73,.3); color: #f85149; font-size: 11px; font-weight: 600; padding: 4px 12px; border-radius: 20px; }
+  .progress-bar { background: #161b22; padding: 20px 52px; border-bottom: 1px solid #21262d; }
+  .progress-label { display: flex; justify-content: space-between; font-size: 12px; color: #8b949e; margin-bottom: 8px; }
+  .progress-track { background: #21262d; border-radius: 10px; height: 8px; }
+  .progress-fill { background: linear-gradient(90deg, #f85149, #ff6b6b); height: 8px; border-radius: 10px; width: 0%; transition: width 1s ease; }
+  .content { padding: 40px 52px; }
+  h2 { font-size: 20px; font-weight: 800; color: #0d1117; margin: 36px 0 14px; display: flex; align-items: center; gap: 10px; }
+  h2 .sec-num { background: #f85149; color: #fff; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; flex-shrink: 0; }
+  h3 { font-size: 15px; font-weight: 700; color: #24292f; margin: 20px 0 8px; }
+  p { font-size: 14px; line-height: 1.8; color: #24292f; margin: 0 0 12px; }
+  ul, ol { font-size: 14px; line-height: 1.8; color: #24292f; margin: 0 0 12px; padding-left: 22px; }
+  li { margin-bottom: 6px; }
+  .scenario { background: #fff8e1; border: 1px solid #f0a500; border-radius: 10px; padding: 16px; margin: 16px 0; }
+  .scenario .label { font-size: 11px; font-weight: 700; color: #f0a500; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
+  .scenario p { margin: 0; font-size: 13px; }
+  .highlight { background: #fff8e1; border-left: 4px solid #f0a500; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .red-box { background: #fff5f5; border-left: 4px solid #f85149; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .green-box { background: #f0fff4; border-left: 4px solid #22c55e; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .blue-box { background: #eff6ff; border-left: 4px solid #1f6feb; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .table-wrap { overflow-x: auto; margin: 14px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { background: #fff5f5; color: #cf222e; font-weight: 700; padding: 10px 14px; text-align: left; border-bottom: 2px solid #fca5a5; }
+  td { padding: 9px 14px; border-bottom: 1px solid #eaeef2; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  .quiz-section { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 12px; padding: 24px; margin: 24px 0; }
+  .quiz-q { font-size: 14px; font-weight: 600; color: #0d1117; margin-bottom: 12px; }
+  .quiz-options { display: flex; flex-direction: column; gap: 8px; }
+  .quiz-opt { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: #fff; border: 1.5px solid #d0d7de; border-radius: 8px; cursor: pointer; font-size: 13px; color: #24292f; transition: all .15s; }
+  .quiz-opt:hover { border-color: #1f6feb; background: #eff6ff; }
+  .quiz-opt.correct { border-color: #22c55e; background: #f0fff4; color: #166534; font-weight: 600; }
+  .quiz-opt.wrong { border-color: #f85149; background: #fff5f5; color: #cf222e; }
+  .quiz-feedback { display: none; margin-top: 10px; font-size: 13px; font-weight: 600; }
+  .quiz-feedback.show { display: block; }
+  .complete-section { background: linear-gradient(135deg, #0d1117, #3a0d0d); border-radius: 12px; padding: 28px; text-align: center; margin: 32px 0 0; }
+  .complete-section h3 { color: #fff; font-size: 18px; margin: 0 0 8px; }
+  .complete-section p { color: #8b949e; font-size: 13px; margin: 0 0 20px; }
+  .complete-btn { padding: 12px 32px; background: #f85149; color: #fff; border: none; border-radius: 8px; font-size: 14px; font-weight: 700; cursor: pointer; }
+  .divider { border: none; border-top: 1px solid #eaeef2; margin: 32px 0; }
+  .footer { padding: 20px 52px; border-top: 1px solid #eaeef2; font-size: 11px; color: #8c959f; text-align: center; }
+</style>
+</head>
+<body>
+<div class="doc">
+
+  <div class="hero">
+    <div class="hero-brand">AI-Prowler &middot; Human Resources &middot; Required Training</div>
+    <h1>🤝 Anti-Harassment &amp; Discrimination</h1>
+    <p>This training covers AI-Prowler's zero-tolerance policy on harassment and discrimination, how to recognize prohibited behavior, what to do if you experience or witness it, and your rights as an employee.</p>
+    <div class="hero-meta">
+      <span class="hero-badge">⏱ 60 min</span>
+      <span class="hero-badge">📋 Required</span>
+      <span class="hero-badge">🏠 Remote / WFH</span>
+      <span class="hero-badge">⚖️ Legal Compliance</span>
+    </div>
+  </div>
+
+  <div class="progress-bar">
+    <div class="progress-label"><span>Course Progress</span><span id="progress-pct">0%</span></div>
+    <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+  </div>
+
+  <div class="content">
+
+    <h2><span class="sec-num">1</span> Why This Training Matters</h2>
+    <p>AI-Prowler has a <strong>zero-tolerance policy</strong> for harassment and discrimination. This isn't just about legal compliance — it's about creating a workplace where every single person feels safe, respected, and valued, regardless of who they are or where they work from.</p>
+    <p>As a remote company, our interactions happen through screens — but that does not make harassment or discrimination any less real or harmful. A hostile message, an exclusionary comment on a video call, or a discriminatory joke in a chat thread can cause just as much harm as if it happened in person.</p>
+    <div class="red-box">🚨 Violations of this policy can result in immediate termination — and in serious cases, legal action. There are no exceptions and no second chances for severe violations.</div>
+
+    <h2><span class="sec-num">2</span> Protected Characteristics</h2>
+    <p>Federal and state law — and AI-Prowler policy — prohibit discrimination and harassment based on any of the following characteristics:</p>
+    <div class="table-wrap">
+      <table>
+        <tr><th colspan="2">Protected Characteristics</th></tr>
+        <tr><td>🎂 Age (40+)</td><td>🌍 National Origin</td></tr>
+        <tr><td>♿ Disability</td><td>🤰 Pregnancy</td></tr>
+        <tr><td>🧬 Genetic Information</td><td>🙏 Religion</td></tr>
+        <tr><td>⚥ Sex / Gender</td><td>🏳️‍🌈 Sexual Orientation</td></tr>
+        <tr><td>🌈 Gender Identity / Expression</td><td>🎖 Military / Veteran Status</td></tr>
+        <tr><td>✊ Race / Color / Ethnicity</td><td>👶 Familial Status</td></tr>
+      </table>
+    </div>
+    <div class="highlight">💡 This list is not exhaustive. AI-Prowler extends protection beyond what is legally required. When in doubt, treat everyone with dignity and respect — always.</div>
+
+    <h2><span class="sec-num">3</span> What Is Harassment?</h2>
+    <p>Harassment is any unwelcome conduct based on a protected characteristic that creates a hostile, intimidating, or offensive work environment — OR that results in an adverse employment decision (like being fired or demoted).</p>
+    <h3>Types of Harassment</h3>
+    <ul>
+      <li><strong>Verbal:</strong> Slurs, offensive jokes, derogatory comments, name-calling, threats</li>
+      <li><strong>Written/Digital:</strong> Offensive emails, chats, messages, memes, or social media posts directed at a coworker</li>
+      <li><strong>Visual:</strong> Displaying offensive images, symbols, or content in a shared video call background or shared screen</li>
+      <li><strong>Physical:</strong> Unwanted touching (at in-person events), invasion of personal space</li>
+      <li><strong>Cyberbullying:</strong> Repeated hostile or humiliating messages sent through work or personal channels</li>
+    </ul>
+    <div class="scenario">
+      <div class="label">📌 Example — Harassment</div>
+      <p>A team member sends a chat message with a derogatory joke about a colleague's accent. Even if it was "just a joke" and even if it was sent privately, this is harassment based on national origin. It is prohibited and reportable.</p>
+    </div>
+
+    <h2><span class="sec-num">4</span> Sexual Harassment</h2>
+    <p>Sexual harassment is one of the most common forms of workplace harassment and deserves specific attention. It falls into two categories:</p>
+    <h3>Quid Pro Quo</h3>
+    <p>"This for that" — when someone in a position of power makes employment decisions (hiring, promotion, assignments) contingent on sexual favors or submission to unwanted sexual conduct.</p>
+    <div class="scenario">
+      <div class="label">📌 Example</div>
+      <p>A manager implies to a direct report that getting a promotion depends on going on a date with them. This is quid pro quo sexual harassment — a serious violation that would result in immediate termination.</p>
+    </div>
+    <h3>Hostile Work Environment</h3>
+    <p>When unwelcome sexual conduct is so severe or pervasive that it creates an intimidating, hostile, or offensive work environment. This includes:</p>
+    <ul>
+      <li>Repeated unwanted compliments about physical appearance</li>
+      <li>Sending sexually suggestive messages, images, or GIFs</li>
+      <li>Making sexual jokes or innuendo in team chats or calls</li>
+      <li>Asking intrusive questions about someone's personal or romantic life</li>
+      <li>Discussing sexual topics in work communication channels</li>
+    </ul>
+    <div class="red-box">🔞 Sharing, displaying, or sending sexually explicit content through any work channel is grounds for immediate termination.</div>
+
+    <h2><span class="sec-num">5</span> What Is Discrimination?</h2>
+    <p>Discrimination is treating someone differently — or less favorably — in employment decisions because of a protected characteristic. Employment decisions include hiring, firing, pay, job assignments, promotions, layoffs, training, and benefits.</p>
+    <div class="scenario">
+      <div class="label">📌 Example — Discrimination</div>
+      <p>An employee is passed over for a promotion despite being the most qualified candidate. Later it's revealed that the hiring manager made the decision based on the employee's religion. This is illegal religious discrimination.</p>
+    </div>
+    <h3>Disparate Treatment vs. Disparate Impact</h3>
+    <ul>
+      <li><strong>Disparate Treatment:</strong> Intentionally treating someone differently because of a protected characteristic</li>
+      <li><strong>Disparate Impact:</strong> A neutral policy that, in practice, disproportionately harms a protected group — even if unintentional</li>
+    </ul>
+
+    <h2><span class="sec-num">6</span> Remote-Specific Considerations</h2>
+    <p>Working remotely does NOT reduce the risk of harassment or discrimination — it just changes the form it takes. Here's what to watch for in a remote environment:</p>
+    <div class="table-wrap">
+      <table>
+        <tr><th>Remote Context</th><th>Examples of Prohibited Behavior</th></tr>
+        <tr><td>Chat / Messaging</td><td>Offensive jokes, slurs, or exclusionary comments in Slack, Teams, or email</td></tr>
+        <tr><td>Video Calls</td><td>Inappropriate comments about appearance, offensive backgrounds, talking over/ignoring certain people</td></tr>
+        <tr><td>Social Media</td><td>Targeting a coworker with harassing posts when identifiable as an AI-Prowler employee</td></tr>
+        <tr><td>Email</td><td>Sending offensive content, making inappropriate personal comments</td></tr>
+        <tr><td>Group Exclusion</td><td>Deliberately leaving someone out of meetings or communications based on protected characteristics</td></tr>
+      </table>
+    </div>
+    <div class="blue-box">💬 Remember: Digital messages are permanent and traceable. "I was just joking" is not a defense. Think before you send.</div>
+
+    <h2><span class="sec-num">7</span> What To Do If It Happens To You</h2>
+    <p>If you experience harassment or discrimination at AI-Prowler — even if you're not sure it meets the legal definition — you have the right to report it. Here's what to do:</p>
+    <ol>
+      <li><strong>Document it.</strong> Save the message, screenshot the conversation, note the date, time, and any witnesses. Keep this documentation somewhere personal and secure.</li>
+      <li><strong>You don't have to confront the person.</strong> You are never required to address the harasser directly. Go straight to HR if you prefer.</li>
+      <li><strong>Report it to HR.</strong> Use the <strong>Messages tab</strong> or <strong>Incident Reports tab</strong> in the HR portal. All reports are confidential.</li>
+      <li><strong>HR will investigate.</strong> AI-Prowler will investigate every report promptly, fairly, and confidentially. You will be kept informed of the outcome.</li>
+    </ol>
+    <div class="green-box">🔒 You will NEVER face retaliation for reporting harassment or discrimination in good faith. Retaliation is itself a serious policy violation.</div>
+
+    <h2><span class="sec-num">8</span> What To Do If You Witness It</h2>
+    <p>Bystanders play a crucial role in preventing harassment. If you witness harassment or discrimination:</p>
+    <ul>
+      <li><strong>Speak up if it's safe to do so.</strong> A simple "That's not appropriate" or "Let's keep things professional" can be powerful.</li>
+      <li><strong>Support the target privately.</strong> Check in with the person who was targeted. Let them know you saw what happened and that you support them.</li>
+      <li><strong>Report it to HR.</strong> You don't have to be the direct target to report. Witnesses are encouraged to report what they saw.</li>
+      <li><strong>Document what you observed.</strong> Note the date, time, what was said, and who was present.</li>
+    </ul>
+    <div class="highlight">👁 Silence in the face of harassment can be interpreted as approval. You have a responsibility to your colleagues to speak up or report.</div>
+
+    <h2><span class="sec-num">9</span> Retaliation — What It Is and Why It's Prohibited</h2>
+    <p>Retaliation occurs when someone takes a negative action against an employee because they reported harassment, filed a complaint, or participated in an investigation. Retaliation is illegal and is a separate, serious violation of AI-Prowler policy.</p>
+    <p>Retaliation can include:</p>
+    <ul>
+      <li>Demotion, termination, or reduced hours</li>
+      <li>Exclusion from meetings, projects, or communications</li>
+      <li>Negative performance reviews not based on actual performance</li>
+      <li>Hostile treatment, cold-shoulder behavior, or ostracism</li>
+      <li>Threats, intimidation, or spreading rumors</li>
+    </ul>
+    <div class="red-box">⚖️ If you experience retaliation after making a report, report the retaliation immediately to HR. It will be treated as a separate, serious violation.</div>
+
+    <h2><span class="sec-num">10</span> Consequences of Violations</h2>
+    <div class="table-wrap">
+      <table>
+        <tr><th>Violation Type</th><th>Consequence</th></tr>
+        <tr><td>Minor — inappropriate joke, single offensive comment</td><td>Written warning, mandatory retraining</td></tr>
+        <tr><td>Moderate — repeated behavior, hostile messages</td><td>Written warning, PIP, possible suspension</td></tr>
+        <tr><td>Serious — sustained harassment, discrimination in employment decisions</td><td>Termination</td></tr>
+        <tr><td>Severe — sexual harassment, quid pro quo, retaliation</td><td>Immediate termination, possible legal action</td></tr>
+      </table>
+    </div>
+
+    <hr class="divider">
+
+    <h2><span class="sec-num">11</span> Knowledge Check</h2>
+    <p>Answer all 10 questions. You need 75% to pass.</p>
+
+    <div class="quiz-section">
+      <div class="quiz-q">1. A coworker repeatedly sends you messages making comments about your religion that make you uncomfortable. This is an example of:</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q1')">Friendly team banter — not a policy violation</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q1')">Religious harassment — a serious policy violation that should be reported to HR</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q1')">A misunderstanding that you should ignore</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q1')">Only a violation if it happens more than 10 times</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q1"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">2. What is "quid pro quo" sexual harassment?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q2')">Making offensive jokes during a video call</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q2')">Sending inappropriate images through work chat</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q2')">When someone ties employment decisions to sexual favors or conduct</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q2')">Accidentally using offensive language once</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q2"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">3. You witness a colleague being bullied in a team chat. What should you do?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q3')">Stay out of it — it's not your problem</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q3')">Wait to see if it happens again before doing anything</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q3')">Speak up if safe, support the target, and/or report it to HR</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q3')">Tell the bully to stop and then forget about it</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q3"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">4. After you report harassment, your manager gives you a negative performance review for the first time ever. This is likely:</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q4')">A coincidence — performance reviews are independent of HR reports</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q4')">Normal — managers have full discretion over reviews</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q4')">Retaliation — a separate serious violation that should be reported to HR immediately</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q4')">Something you should accept and move on from</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q4"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">5. A manager implies a promotion depends on going on a date. This is an example of:</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q5')">A hostile work environment only</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q5')">Quid pro quo sexual harassment</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q5')">Normal workplace flirting</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q5')">Not a policy violation since no one was touched</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q5"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">6. What is "disparate impact" discrimination?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q6')">Intentionally treating someone differently</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q6')">A neutral policy that, in practice, disproportionately harms a protected group — even unintentionally</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q6')">A policy that treats everyone exactly the same with no effect</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q6')">Something that only applies to hiring</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q6"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">7. Does working remotely reduce the risk of harassment or discrimination?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q7')">Yes, remote work eliminates the risk entirely</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q7')">No — it just changes the form it takes (chat, video calls, email, social media)</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q7')">Only in-person harassment counts as a violation</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q7')">Yes, digital messages don't count as harassment</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q7"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">8. If you experience harassment, are you required to confront the person directly first?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q8')">Yes, always confront them first</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q8')">No — you can go straight to HR</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q8')">Only if they're more senior than you</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q8')">Yes, HR will not accept a report otherwise</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q8"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">9. What should you do if you witness harassment happening to a coworker?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q9')">Stay silent since it's not about you</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q9')">Speak up if safe, support the target, and consider reporting it to HR</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q9')">Only report it if the target asks you to</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q9')">Join in if others are doing it</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q9"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">10. What is the typical consequence for severe violations like quid pro quo harassment or retaliation?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q10')">A verbal reminder</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q10')">Nothing, as long as it doesn't happen again</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q10')">Immediate termination, possibly legal action</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q10')">A mandatory apology only</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q10"></div>
+    </div>
+
+    <div class="complete-section" id="complete-section">
+      <div id="complete-prompt">
+        <h3>⚖️ Ready to Complete?</h3>
+        <p>Answer all questions and click below to submit your results to HR.</p>
+        <button class="complete-btn" onclick="markComplete()">✅ Mark as Complete</button>
+      </div>
+      <div id="complete-done" style="display:none"></div>
+    </div>
+
+  </div>
+  <div class="footer">AI-Prowler &middot; Human Resources &middot; Anti-Harassment &amp; Discrimination &middot; Required Training &middot; &copy; 2026 AI-Prowler</div>
+</div>
+
+<script>
+var quizAnswers = {};
+function answer(el, correct, qid) {
+  if (quizAnswers[qid]) return;
+  quizAnswers[qid] = correct ? 'correct' : 'wrong';
+  var opts = el.parentElement.querySelectorAll('.quiz-opt');
+  opts.forEach(function(o){ o.style.pointerEvents='none'; });
+  if (correct) { el.classList.add('correct'); el.textContent='✅ '+el.textContent; }
+  else {
+    el.classList.add('wrong'); el.textContent='❌ '+el.textContent;
+    opts.forEach(function(o){ if(o.getAttribute('onclick')&&o.getAttribute('onclick').includes('true')){ o.classList.add('correct'); o.textContent='✅ '+o.textContent; }});
+  }
+  var fb=document.getElementById('fb-'+qid);
+  if(fb){ fb.textContent=correct?'✅ Correct! Great job.':'❌ Not quite — review the section above.'; fb.style.color=correct?'#166534':'#cf222e'; fb.classList.add('show'); }
+  var done=Object.keys(quizAnswers).length;
+  var pct=Math.round((done/10)*100);
+  document.getElementById('progress-fill').style.width=pct+'%';
+  document.getElementById('progress-pct').textContent=pct+'%';
+}
+function markComplete() {
+  var correct=Object.values(quizAnswers).filter(function(v){return v==='correct';}).length;
+  var pct=Math.round((correct/10)*100);
+  var passed=pct>=75;
+  document.getElementById('complete-prompt').style.display='none';
+  document.getElementById('complete-done').style.display='block';
+  document.getElementById('progress-fill').style.width='100%';
+  document.getElementById('progress-pct').textContent='100%';
+  document.getElementById('complete-done').innerHTML=
+    '<div style="font-size:48px;margin-bottom:12px">'+(passed?'🎉':'📋')+'</div>'+
+    '<h3 style="color:'+(passed?'#3fb950':'#f0a500')+';margin:0 0 8px">'+(passed?'Training Complete!':'Review Recommended')+'</h3>'+
+    '<p style="color:#8b949e;font-size:13px">Score: <strong style="color:'+(passed?'#3fb950':'#f0a500')+'">'+correct+'/10 ('+pct+'%)</strong> — '+(passed?'You passed!':'Score below 75%. Please review and retake.')+'</p>';
+  var empName='Employee';
+  try{ var s=JSON.parse(window.parent.localStorage.getItem('hr_portal_session')||'{}'); if(s.name)empName=s.name; }catch(e){}
+  var labels=['Recognizing religious harassment','Quid pro quo definition','Bystander responsibility','Identifying retaliation','Quid pro quo scenario','Disparate impact definition','Remote harassment risk','Reporting without confronting','Witnessing harassment','Severe violation consequences'];
+  var body='=== TRAINING COMPLETION REPORT ===\n\nTraining: Anti-Harassment & Discrimination\nEmployee: '+empName+'\nDate: '+new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})+'\nTime: '+new Date().toLocaleTimeString()+'\nScore: '+correct+'/10 ('+pct+'%)\nResult: '+(passed?'✅ PASSED':'⚠️ NEEDS REVIEW')+'\n\n--- Quiz Results ---\n';
+
+  labels.forEach(function(q,i){ var ans=quizAnswers['q'+(i+1)]; body+=(i+1)+'. '+q+': '+(ans==='correct'?'✅ Correct':ans==='wrong'?'❌ Incorrect':'— Not answered')+'\n'; });
+  body+='\n'+(passed?'✅ Employee certified on anti-harassment policy.':'⚠️ HR should follow up with this employee.');
+  fetch('/hr-api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sender_name:empName,subject:'🎓 Training Complete — Anti-Harassment & Discrimination — '+empName+' — '+pct+'% ('+(passed?'PASSED':'NEEDS REVIEW')+')',body:body,message_type:'training_result'})}).catch(function(){});
+  try{ window.parent.postMessage({type:'training-complete',id:'anti-harassment',employee:empName,score:pct,passed:passed},'*'); }catch(e){}
+}
+</script>
+</body>
+</html>

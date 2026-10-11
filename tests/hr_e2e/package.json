@@ -1,0 +1,12 @@
+{
+  "name": "ai-prowler-hr-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "description": "End-to-end browser tests for AI-Prowler HR Admin + Employee Portal PWAs. Run with run_tests_hr_e2e.py.",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.47.0"
+  }
+}

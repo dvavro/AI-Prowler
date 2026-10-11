@@ -1,0 +1,25 @@
+{
+  "name": "AI-Prowler HR",
+  "short_name": "AI-Prowler HR",
+  "description": "AI-Prowler HR onboarding, compliance tasks, and employee management",
+  "start_url": "/hr/",
+  "scope": "/hr/",
+  "display": "standalone",
+  "background_color": "#07080f",
+  "theme_color": "#00d4ff",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/hr/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/hr/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

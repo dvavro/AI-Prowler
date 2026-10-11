@@ -172,24 +172,17 @@ class TestPwaTokenLive:
         assert "token" in data, "Response missing 'token' field"
 
     def test_pwa_token_is_non_empty(self):
+        # 2026-09-25 security fix: /pwa-token returns EMPTY token.
         status, _, body = _get("/pwa-token")
         data = json.loads(body)
-        assert data.get("token"), \
-            "Bearer token is empty — check config.json remote_token field"
+        assert not data.get("token"), "SECURITY: /pwa-token must be empty"
 
     def test_pwa_token_matches_config(self):
-        if not BEARER_TOKEN:
-            pytest.skip("Could not read bearer token from config.json")
+        # 2026-09-25 security fix: /pwa-token returns EMPTY.
+        # The bearer token is no longer exposed via this endpoint.
         status, _, body = _get("/pwa-token")
         data = json.loads(body)
-        assert data.get("token") == BEARER_TOKEN, \
-            "Token from /pwa-token doesn't match config.json remote_token"
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# 3. PWA API ENDPOINT
-# ══════════════════════════════════════════════════════════════════════════
-
+        assert not data.get("token"), "SECURITY: token must be empty"
 class TestPwaApiLive:
 
     def test_read_jobs_returns_200(self):

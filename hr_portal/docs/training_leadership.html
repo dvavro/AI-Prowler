@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Leadership Fundamentals — AI-Prowler</title>
+<style>
+  body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; background: #f6f8fa; color: #0d1117; }
+  .doc { max-width: 820px; margin: 0 auto; background: #fff; padding: 0; min-height: 100vh; }
+  .hero { background: linear-gradient(135deg, #0d1117 0%, #1a0a2e 60%, #2d1a4a 100%); padding: 48px 52px 40px; color: #fff; }
+  .hero-brand { font-size: 12px; font-weight: 700; color: #a78bfa; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 16px; }
+  .hero h1 { font-size: 32px; font-weight: 800; margin: 0 0 10px; color: #fff; }
+  .hero p { font-size: 14px; color: #8b949e; margin: 0 0 20px; line-height: 1.7; }
+  .hero-meta { display: flex; gap: 20px; flex-wrap: wrap; }
+  .hero-badge { background: rgba(167,139,250,.15); border: 1px solid rgba(167,139,250,.3); color: #a78bfa; font-size: 11px; font-weight: 600; padding: 4px 12px; border-radius: 20px; }
+  .progress-bar { background: #161b22; padding: 20px 52px; border-bottom: 1px solid #21262d; }
+  .progress-label { display: flex; justify-content: space-between; font-size: 12px; color: #8b949e; margin-bottom: 8px; }
+  .progress-track { background: #21262d; border-radius: 10px; height: 8px; }
+  .progress-fill { background: linear-gradient(90deg, #a78bfa, #c4b5fd); height: 8px; border-radius: 10px; width: 0%; transition: width 1s ease; }
+  .content { padding: 40px 52px; }
+  h2 { font-size: 20px; font-weight: 800; color: #0d1117; margin: 36px 0 14px; display: flex; align-items: center; gap: 10px; }
+  h2 .sec-num { background: #7c3aed; color: #fff; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; flex-shrink: 0; }
+  h3 { font-size: 15px; font-weight: 700; color: #24292f; margin: 20px 0 8px; }
+  p { font-size: 14px; line-height: 1.8; color: #24292f; margin: 0 0 12px; }
+  ul, ol { font-size: 14px; line-height: 1.8; color: #24292f; margin: 0 0 12px; padding-left: 22px; }
+  li { margin-bottom: 6px; }
+  .highlight { background: #faf5ff; border-left: 4px solid #a78bfa; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .green-box { background: #f0fff4; border-left: 4px solid #22c55e; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .blue-box { background: #eff6ff; border-left: 4px solid #1f6feb; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .trait-card { background: #faf5ff; border: 1px solid #e9d5ff; border-radius: 10px; padding: 16px; margin: 10px 0; }
+  .trait-card .icon { font-size: 24px; margin-bottom: 6px; }
+  .trait-card h4 { font-size: 14px; font-weight: 700; color: #0d1117; margin: 0 0 4px; }
+  .trait-card p { margin: 0; font-size: 13px; color: #636e7b; }
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin: 16px 0; }
+  .table-wrap { overflow-x: auto; margin: 14px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { background: #faf5ff; color: #7c3aed; font-weight: 700; padding: 10px 14px; text-align: left; border-bottom: 2px solid #e9d5ff; }
+  td { padding: 9px 14px; border-bottom: 1px solid #eaeef2; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  .quiz-section { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 12px; padding: 24px; margin: 24px 0; }
+  .quiz-q { font-size: 14px; font-weight: 600; color: #0d1117; margin-bottom: 12px; }
+  .quiz-options { display: flex; flex-direction: column; gap: 8px; }
+  .quiz-opt { padding: 10px 14px; background: #fff; border: 1.5px solid #d0d7de; border-radius: 8px; cursor: pointer; font-size: 13px; color: #24292f; transition: all .15s; }
+  .quiz-opt:hover { border-color: #7c3aed; background: #faf5ff; }
+  .quiz-opt.correct { border-color: #22c55e; background: #f0fff4; color: #166534; font-weight: 600; }
+  .quiz-opt.wrong { border-color: #f85149; background: #fff5f5; color: #cf222e; }
+  .quiz-feedback { display: none; margin-top: 10px; font-size: 13px; font-weight: 600; }
+  .quiz-feedback.show { display: block; }
+  .complete-section { background: linear-gradient(135deg, #0d1117, #2d1a4a); border-radius: 12px; padding: 28px; text-align: center; margin: 32px 0 0; }
+  .complete-section h3 { color: #fff; font-size: 18px; margin: 0 0 8px; }
+  .complete-section p { color: #8b949e; font-size: 13px; margin: 0 0 20px; }
+  .complete-btn { padding: 12px 32px; background: #7c3aed; color: #fff; border: none; border-radius: 8px; font-size: 14px; font-weight: 700; cursor: pointer; }
+  .divider { border: none; border-top: 1px solid #eaeef2; margin: 32px 0; }
+  .footer { padding: 20px 52px; border-top: 1px solid #eaeef2; font-size: 11px; color: #8c959f; text-align: center; }
+</style>
+</head>
+<body>
+<div class="doc">
+  <div class="hero">
+    <div class="hero-brand">AI-Prowler &middot; Human Resources &middot; Optional Training</div>
+    <h1>👑 Leadership Fundamentals</h1>
+    <p>Designed for employees interested in growing into a lead or management role at AI-Prowler. Learn the core skills, mindset, and responsibilities of effective remote leadership.</p>
+    <div class="hero-meta">
+      <span class="hero-badge">⏱ 2 hrs</span>
+      <span class="hero-badge">⭐ Optional</span>
+      <span class="hero-badge">🏠 Remote Leadership</span>
+      <span class="hero-badge">📈 Career Growth</span>
+    </div>
+  </div>
+  <div class="progress-bar">
+    <div class="progress-label"><span>Course Progress</span><span id="progress-pct">0%</span></div>
+    <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+  </div>
+  <div class="content">
+
+    <h2><span class="sec-num">1</span> What Leadership Means at AI-Prowler</h2>
+    <p>Leadership at AI-Prowler isn't a title — it's a mindset and a set of behaviors. Whether you're a team lead, a senior contributor, or someone who wants to grow into those roles, effective leadership in a remote company requires intentional communication, trust-building, and accountability.</p>
+    <div class="highlight">🌟 AI-Prowler's best leaders don't command — they enable. Their job is to remove obstacles, provide clarity, and help their team do their best work.</div>
+
+    <h2><span class="sec-num">2</span> Core Leadership Traits</h2>
+    <div class="card-grid">
+      <div class="trait-card"><div class="icon">🗣</div><h4>Clear Communication</h4><p>Leaders communicate expectations, decisions, and feedback clearly and promptly — especially in writing in a remote environment.</p></div>
+      <div class="trait-card"><div class="icon">🤝</div><h4>Trust & Dependability</h4><p>Leaders do what they say they will do. Their team knows they can count on them — and they extend the same trust to their team.</p></div>
+      <div class="trait-card"><div class="icon">🧠</div><h4>Emotional Intelligence</h4><p>Leaders understand their own emotions and those of their team. They respond thoughtfully rather than react impulsively.</p></div>
+      <div class="trait-card"><div class="icon">🔍</div><h4>Active Listening</h4><p>Leaders genuinely listen — not just to respond, but to understand. They ask questions and create space for others to speak.</p></div>
+      <div class="trait-card"><div class="icon">⚖️</div><h4>Fairness & Consistency</h4><p>Leaders apply the same standards to everyone. Favoritism destroys team trust faster than almost anything else.</p></div>
+      <div class="trait-card"><div class="icon">🚀</div><h4>Bias Toward Action</h4><p>Leaders make decisions with available information. Waiting for perfect information often means waiting too long.</p></div>
+    </div>
+
+    <h2><span class="sec-num">3</span> Leading a Remote Team</h2>
+    <p>Remote leadership has unique challenges that in-person leadership doesn't. When you can't see your team, you have to be more intentional about connection, clarity, and accountability.</p>
+    <h3>Remote Leadership Best Practices</h3>
+    <ul>
+      <li><strong>Over-communicate:</strong> What feels like too much communication in person is often just right remotely. When in doubt, say it again.</li>
+      <li><strong>Set clear expectations:</strong> Every team member should know exactly what's expected of them, when it's due, and how success is measured.</li>
+      <li><strong>Check in regularly:</strong> Schedule regular 1-on-1s with each team member — not just about work, but about how they're doing.</li>
+      <li><strong>Assume positive intent:</strong> In remote work, it's easy to misread silence or delayed responses as disengagement. Assume the best until you have evidence otherwise.</li>
+      <li><strong>Be available during core hours:</strong> Your team needs to know they can reach you. Respond promptly to messages from your team.</li>
+      <li><strong>Recognize good work publicly:</strong> Remote employees can feel invisible. Call out great work in team channels and meetings.</li>
+    </ul>
+
+    <h2><span class="sec-num">4</span> Having Difficult Conversations</h2>
+    <p>One of the hardest parts of leadership is addressing problems directly. Avoiding difficult conversations doesn't make them go away — it lets them get worse.</p>
+    <div class="table-wrap">
+      <table>
+        <tr><th>Situation</th><th>What to Do</th><th>What NOT to Do</th></tr>
+        <tr><td>Performance issue</td><td>Address it directly, privately, with specific examples and clear expectations going forward</td><td>Complain to other team members, ignore it, or wait until review time</td></tr>
+        <tr><td>Missed deadline</td><td>Ask what happened, listen first, then problem-solve together</td><td>Publicly call it out or assign blame without understanding the cause</td></tr>
+        <tr><td>Team conflict</td><td>Bring both parties together, facilitate a focused conversation, seek a solution</td><td>Take sides, ignore it, or let it fester</td></tr>
+        <tr><td>Policy violation</td><td>Document it, address it privately, involve HR if needed</td><td>Handle it alone without documentation or escalate without trying to resolve it first</td></tr>
+      </table>
+    </div>
+    <div class="blue-box">💬 When in doubt on how to handle a personnel situation, contact HR via the Messages tab before acting. It's always better to loop in HR early than to undo a mistake.</div>
+
+    <h2><span class="sec-num">5</span> Giving Effective Feedback</h2>
+    <p>Feedback is one of the most powerful leadership tools — and one of the most often misused. Great feedback is specific, timely, and focused on behavior and impact, not personality.</p>
+    <h3>The SBI Framework</h3>
+    <ul>
+      <li><strong>S — Situation:</strong> Describe the specific situation. "In yesterday's team call…"</li>
+      <li><strong>B — Behavior:</strong> Describe the observable behavior. "…you interrupted three colleagues before they finished speaking…"</li>
+      <li><strong>I — Impact:</strong> Describe the impact. "…which made it hard for people to share their ideas and may have discouraged participation."</li>
+    </ul>
+    <div class="green-box">✅ Great feedback: "In yesterday's team call, you interrupted three colleagues before they finished speaking, which made it hard for others to share their ideas." <br><br>❌ Poor feedback: "You're not a good listener and it hurts the team."</div>
+
+    <h2><span class="sec-num">6</span> Delegation — Letting Go to Grow</h2>
+    <p>Many new leaders struggle with delegation. They either do everything themselves (burning out) or delegate without enough clarity (setting people up to fail). Effective delegation means:</p>
+    <ul>
+      <li>Assigning the right task to the right person based on their skills and development goals</li>
+      <li>Being clear about the outcome expected, not just the task</li>
+      <li>Providing the resources and authority the person needs to succeed</li>
+      <li>Following up — not to micromanage, but to remove obstacles</li>
+      <li>Giving credit when the work is done well</li>
+    </ul>
+
+    <h2><span class="sec-num">7</span> HR & Compliance for Leaders</h2>
+    <p>As a leader, you have additional responsibilities under AI-Prowler policy and federal law:</p>
+    <ul>
+      <li><strong>You cannot retaliate</strong> against an employee who reports a concern or exercises their rights</li>
+      <li><strong>You must report</strong> harassment or discrimination you witness — not just what's reported to you</li>
+      <li><strong>All employment decisions</strong> (assignments, reviews, promotions) must be based on performance and qualifications — never on protected characteristics</li>
+      <li><strong>Involve HR</strong> before taking disciplinary action, issuing write-ups, or terminating an employee</li>
+      <li><strong>Keep personnel matters confidential</strong> — never discuss an employee's HR record with other team members</li>
+    </ul>
+    <div class="highlight">⚖️ Leaders are held to a higher standard. Your actions set the tone for the entire team. Behave as if every decision could be reviewed by HR and legal — because it can be.</div>
+
+    <h2><span class="sec-num">8</span> Growing as a Leader</h2>
+    <p>Great leaders never stop learning. Here are practices that will help you grow:</p>
+    <ul>
+      <li>Seek feedback from your team — ask directly how you can support them better</li>
+      <li>Reflect after difficult situations — what would you do differently?</li>
+      <li>Find a mentor — someone who leads in a way you admire</li>
+      <li>Read broadly — leadership, psychology, communication, and business</li>
+      <li>Celebrate your team's wins more than your own</li>
+    </ul>
+
+    <hr class="divider">
+    <h2><span class="sec-num">9</span> Knowledge Check</h2>
+    <p>Answer all 10 questions. You need 75% to pass.</p>
+
+    <div class="quiz-section">
+      <div class="quiz-q">1. What is the SBI feedback framework?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q1')">Simple, Brief, Impactful</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q1')">Situation, Behavior, Impact</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q1')">Support, Build, Inspire</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q1')">Start, Block, Improve</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q1"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">2. An employee on your team reports being harassed by a coworker. What should you do?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q2')">Handle it yourself without involving HR</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q2')">Tell the employee to work it out directly with the coworker</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q2')">Take it seriously, document it, and involve HR immediately</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q2')">Wait to see if it happens again before acting</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q2"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">3. Which of these is the most important remote leadership skill?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q3')">Monitoring your team's every action to ensure productivity</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q3')">Over-communicating clearly and creating psychological safety for the team</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q3')">Making all decisions independently without team input</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q3')">Being available 24/7 for your team</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q3"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">4. A team member misses a project deadline. What should you do first?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q4')">Immediately issue a written warning</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q4')">Tell the rest of the team as a cautionary example</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q4')">Talk to them privately, ask what happened, and problem-solve together</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q4')">Reassign all future tasks away from them</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q4"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">5. What is a common mistake new leaders make with delegation?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q5')">Assigning tasks that match someone's skills and goals</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q5')">Doing everything themselves, or delegating without enough clarity</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q5')">Following up on delegated work</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q5')">Giving credit when work is done well</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q5"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">6. As a leader, can you retaliate against an employee who reports a concern?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q6')">Yes, if you disagree with the report</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q6')">Yes, but only informally</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q6')">No — retaliation is never permitted</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q6')">Only if HR approves it first</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q6"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">7. What should employment decisions like assignments and promotions always be based on?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q7')">Personal friendship with the leader</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q7')">Performance and qualifications</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q7')">Seniority alone, regardless of performance</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q7')">Whoever asks first</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q7"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">8. Before issuing a write-up or taking disciplinary action, a leader should:</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q8')">Act immediately without documentation</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q8')">Discuss it with the rest of the team first</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q8')">Involve HR</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q8')">Wait until the annual review</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q8"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">9. Which is a recommended way to keep growing as a leader?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q9')">Avoid feedback so you don't get discouraged</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q9')">Seek feedback from your team and reflect after difficult situations</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q9')">Stop learning once you're in a leadership role</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q9')">Focus only on your own wins</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q9"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">10. Can you discuss an employee's HR record with other team members?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q10')">Yes, if it helps the team understand a decision</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q10')">Yes, as long as it's true</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q10')">No — personnel matters must stay confidential</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q10')">Only with your favorite team members</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q10"></div>
+    </div>
+
+    <div class="complete-section">
+      <div id="complete-prompt">
+        <h3>👑 Ready to Complete?</h3>
+        <p>Answer all questions and click below to submit your results to HR.</p>
+        <button class="complete-btn" onclick="markComplete()">✅ Mark as Complete</button>
+      </div>
+      <div id="complete-done" style="display:none"></div>
+    </div>
+  </div>
+  <div class="footer">AI-Prowler &middot; Human Resources &middot; Leadership Fundamentals &middot; Optional Training &middot; &copy; 2026 AI-Prowler</div>
+</div>
+<script>
+var quizAnswers={};
+function answer(el,correct,qid){
+  if(quizAnswers[qid])return;
+  quizAnswers[qid]=correct?'correct':'wrong';
+  var opts=el.parentElement.querySelectorAll('.quiz-opt');
+  opts.forEach(function(o){o.style.pointerEvents='none';});
+  if(correct){el.classList.add('correct');el.textContent='✅ '+el.textContent;}
+  else{el.classList.add('wrong');el.textContent='❌ '+el.textContent;opts.forEach(function(o){if(o.getAttribute('onclick')&&o.getAttribute('onclick').includes('true')){o.classList.add('correct');o.textContent='✅ '+o.textContent;}});}
+  var fb=document.getElementById('fb-'+qid);
+  if(fb){fb.textContent=correct?'✅ Correct!':'❌ Not quite — review the section above.';fb.style.color=correct?'#166534':'#cf222e';fb.classList.add('show');}
+  var pct=Math.round((Object.keys(quizAnswers).length/10)*100);
+  document.getElementById('progress-fill').style.width=pct+'%';
+  document.getElementById('progress-pct').textContent=pct+'%';
+}
+function markComplete(){
+  var correct=Object.values(quizAnswers).filter(function(v){return v==='correct';}).length;
+  var pct=Math.round((correct/10)*100);
+  var passed=pct>=75;
+  document.getElementById('complete-prompt').style.display='none';
+  document.getElementById('complete-done').style.display='block';
+  document.getElementById('progress-fill').style.width='100%';
+  document.getElementById('progress-pct').textContent='100%';
+  document.getElementById('complete-done').innerHTML='<div style="font-size:48px;margin-bottom:12px">'+(passed?'🎉':'📋')+'</div><h3 style="color:'+(passed?'#3fb950':'#f0a500')+';margin:0 0 8px">'+(passed?'Training Complete!':'Review Recommended')+'</h3><p style="color:#8b949e;font-size:13px">Score: <strong style="color:'+(passed?'#3fb950':'#f0a500')+'">'+correct+'/10 ('+pct+'%)</strong> — '+(passed?'Great work — your leadership journey has begun!':'Score below 75%. Review and try again.')+'</p>';
+  var empName='Employee';
+  try{var s=JSON.parse(window.parent.localStorage.getItem('hr_portal_session')||'{}');if(s.name)empName=s.name;}catch(e){}
+  var labels=['SBI feedback framework','Handling harassment reports','Key remote leadership skill','Handling missed deadlines','Common delegation mistake','Retaliation policy','Basis for employment decisions','Before disciplinary action','Growing as a leader','HR record confidentiality'];
+  var body='=== TRAINING COMPLETION REPORT ===\n\nTraining: Leadership Fundamentals (Optional)\nEmployee: '+empName+'\nDate: '+new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})+'\nTime: '+new Date().toLocaleTimeString()+'\nScore: '+correct+'/10 ('+pct+'%)\nResult: '+(passed?'✅ PASSED':'⚠️ NEEDS REVIEW')+'\n\n--- Quiz Results ---\n';
+  labels.forEach(function(q,i){var ans=quizAnswers['q'+(i+1)];body+=(i+1)+'. '+q+': '+(ans==='correct'?'✅ Correct':ans==='wrong'?'❌ Incorrect':'— Not answered')+'\n';});
+  body+='\n'+(passed?'✅ Employee completed optional Leadership Fundamentals training.':'⚠️ Employee did not pass. Consider following up.');
+  fetch('/hr-api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sender_name:empName,subject:'🎓 Training Complete — Leadership Fundamentals — '+empName+' — '+pct+'% ('+(passed?'PASSED':'NEEDS REVIEW')+')',body:body,message_type:'training_result'})}).catch(function(){});
+  try{window.parent.postMessage({type:'training-complete',id:'leadership-fundamentals',employee:empName,score:pct,passed:passed},'*');}catch(e){}
+}
+</script>
+</body>
+</html>

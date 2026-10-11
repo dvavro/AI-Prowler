@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AI-Prowler Tools Training — AI-Prowler</title>
+<style>
+  body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; background: #f6f8fa; color: #0d1117; }
+  .doc { max-width: 820px; margin: 0 auto; background: #fff; padding: 0; min-height: 100vh; }
+  .hero { background: linear-gradient(135deg, #0d1117 0%, #0a1628 60%, #0f2244 100%); padding: 48px 52px 40px; color: #fff; }
+  .hero-brand { font-size: 12px; font-weight: 700; color: #58a6ff; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 16px; }
+  .hero h1 { font-size: 32px; font-weight: 800; margin: 0 0 10px; color: #fff; }
+  .hero p { font-size: 14px; color: #8b949e; margin: 0 0 20px; line-height: 1.7; }
+  .hero-meta { display: flex; gap: 20px; flex-wrap: wrap; }
+  .hero-badge { background: rgba(88,166,255,.15); border: 1px solid rgba(88,166,255,.3); color: #58a6ff; font-size: 11px; font-weight: 600; padding: 4px 12px; border-radius: 20px; }
+  .progress-bar { background: #161b22; padding: 20px 52px; border-bottom: 1px solid #21262d; }
+  .progress-label { display: flex; justify-content: space-between; font-size: 12px; color: #8b949e; margin-bottom: 8px; }
+  .progress-track { background: #21262d; border-radius: 10px; height: 8px; }
+  .progress-fill { background: linear-gradient(90deg, #58a6ff, #79c0ff); height: 8px; border-radius: 10px; width: 0%; transition: width 1s ease; }
+  .content { padding: 40px 52px; }
+  h2 { font-size: 20px; font-weight: 800; color: #0d1117; margin: 36px 0 14px; display: flex; align-items: center; gap: 10px; }
+  h2 .sec-num { background: #1f6feb; color: #fff; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; flex-shrink: 0; }
+  h3 { font-size: 15px; font-weight: 700; color: #24292f; margin: 20px 0 8px; }
+  p { font-size: 14px; line-height: 1.8; color: #24292f; margin: 0 0 12px; }
+  ul, ol { font-size: 14px; line-height: 1.8; color: #24292f; margin: 0 0 12px; padding-left: 22px; }
+  li { margin-bottom: 6px; }
+  .step-box { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 10px; padding: 16px 20px; margin: 12px 0; display: flex; gap: 14px; align-items: flex-start; }
+  .step-num { background: #1f6feb; color: #fff; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; flex-shrink: 0; margin-top: 1px; }
+  .step-box p { margin: 0; font-size: 13px; }
+  .highlight { background: #fff8e1; border-left: 4px solid #f0a500; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .green-box { background: #f0fff4; border-left: 4px solid #22c55e; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .blue-box { background: #eff6ff; border-left: 4px solid #1f6feb; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .tool-card { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 10px; padding: 16px; margin: 10px 0; }
+  .tool-card .tool-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .tool-card .tool-icon { font-size: 22px; }
+  .tool-card .tool-name { font-size: 14px; font-weight: 700; color: #0d1117; }
+  .tool-card .tool-where { font-size: 11px; color: #1f6feb; font-weight: 600; }
+  .tool-card p { margin: 0; font-size: 13px; color: #636e7b; }
+  .table-wrap { overflow-x: auto; margin: 14px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { background: #eff6ff; color: #1f6feb; font-weight: 700; padding: 10px 14px; text-align: left; border-bottom: 2px solid #bfdbfe; }
+  td { padding: 9px 14px; border-bottom: 1px solid #eaeef2; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  .quiz-section { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 12px; padding: 24px; margin: 24px 0; }
+  .quiz-q { font-size: 14px; font-weight: 600; color: #0d1117; margin-bottom: 12px; }
+  .quiz-options { display: flex; flex-direction: column; gap: 8px; }
+  .quiz-opt { padding: 10px 14px; background: #fff; border: 1.5px solid #d0d7de; border-radius: 8px; cursor: pointer; font-size: 13px; color: #24292f; transition: all .15s; }
+  .quiz-opt:hover { border-color: #1f6feb; background: #eff6ff; }
+  .quiz-opt.correct { border-color: #22c55e; background: #f0fff4; color: #166534; font-weight: 600; }
+  .quiz-opt.wrong { border-color: #f85149; background: #fff5f5; color: #cf222e; }
+  .quiz-feedback { display: none; margin-top: 10px; font-size: 13px; font-weight: 600; }
+  .quiz-feedback.show { display: block; }
+  .complete-section { background: linear-gradient(135deg, #0d1117, #0f2244); border-radius: 12px; padding: 28px; text-align: center; margin: 32px 0 0; }
+  .complete-section h3 { color: #fff; font-size: 18px; margin: 0 0 8px; }
+  .complete-section p { color: #8b949e; font-size: 13px; margin: 0 0 20px; }
+  .complete-btn { padding: 12px 32px; background: #1f6feb; color: #fff; border: none; border-radius: 8px; font-size: 14px; font-weight: 700; cursor: pointer; }
+  .divider { border: none; border-top: 1px solid #eaeef2; margin: 32px 0; }
+  .footer { padding: 20px 52px; border-top: 1px solid #eaeef2; font-size: 11px; color: #8c959f; text-align: center; }
+</style>
+</head>
+<body>
+<div class="doc">
+
+  <div class="hero">
+    <div class="hero-brand">AI-Prowler &middot; Human Resources &middot; Required Training</div>
+    <h1>🤖 AI-Prowler Tools Training</h1>
+    <p>Learn how to use the AI-Prowler HR Employee Portal for your daily work tasks — clocking in, requesting time off, messaging HR, filing reports, and everything in between.</p>
+    <div class="hero-meta">
+      <span class="hero-badge">⏱ 40 min</span>
+      <span class="hero-badge">📋 Required</span>
+      <span class="hero-badge">🏠 Remote / WFH</span>
+      <span class="hero-badge">🤖 AI-Powered</span>
+    </div>
+  </div>
+
+  <div class="progress-bar">
+    <div class="progress-label"><span>Course Progress</span><span id="progress-pct">0%</span></div>
+    <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+  </div>
+
+  <div class="content">
+
+    <h2><span class="sec-num">1</span> Welcome to the AI-Prowler Platform</h2>
+    <p>AI-Prowler is the platform that powers your entire work life at our company. It's where you clock in, request time off, view your pay, communicate with HR, and complete trainings — all in one place, from any device.</p>
+    <p>The platform has two sides:</p>
+    <ul>
+      <li><strong>Employee Portal</strong> (where you are now) — your personal dashboard for everything work-related</li>
+      <li><strong>HR Admin App</strong> — used by HR and managers to manage the team, view your records, and respond to requests</li>
+    </ul>
+    <div class="blue-box">📱 The Employee Portal works on your phone too! Open it in your mobile browser and tap <strong>Add to Home Screen</strong> to bookmark it like an app.</div>
+
+    <h2><span class="sec-num">2</span> The Sidebar — Your Navigation Hub</h2>
+    <p>The sidebar on the left is how you navigate the portal. It's organized into sections:</p>
+    <div class="table-wrap">
+      <table>
+        <tr><th>Section</th><th>What's Inside</th></tr>
+        <tr><td><strong>My Profile</strong></td><td>Welcome, About Me, Portfolio, Details</td></tr>
+        <tr><td><strong>Workspace</strong></td><td>Home/Feed, Schedule, Time Clock, Pay & Benefits, Tasks</td></tr>
+        <tr><td><strong>Company</strong></td><td>Directory, Documents, Help/Support, Messages</td></tr>
+        <tr><td><strong>Money</strong></td><td>Payroll, Deposits</td></tr>
+        <tr><td><strong>Time Off</strong></td><td>Calendar, Company Calendar, PTO/Time Off</td></tr>
+        <tr><td><strong>HR</strong></td><td>HR Handbook, Write-Ups, Trainings, Incident Reports</td></tr>
+        <tr><td><strong>Manager</strong></td><td>My Team (managers only)</td></tr>
+      </table>
+    </div>
+
+    <h2><span class="sec-num">3</span> Time Clock — Clocking In &amp; Out</h2>
+    <p>The Time Clock is the most important tool you'll use every day. Your clock-ins and clock-outs are sent directly to HR in real time for payroll processing.</p>
+    <div class="step-box"><div class="step-num">1</div><p>Click <strong>Time Clock</strong> in the sidebar under Workspace</p></div>
+    <div class="step-box"><div class="step-num">2</div><p>Press the green <strong>Clock In</strong> button at the start of your shift</p></div>
+    <div class="step-box"><div class="step-num">3</div><p>Press <strong>Clock Out</strong> when you're done for the day</p></div>
+    <div class="step-box"><div class="step-num">4</div><p>If you're running late, tap <strong>Running Late</strong> to instantly notify your manager</p></div>
+    <div class="step-box"><div class="step-num">5</div><p>If you can't work today, tap <strong>Out Today</strong> to notify HR automatically</p></div>
+    <div class="highlight">⚠️ Always clock in at the start of your shift and clock out at the end. Missed clock-ins cause payroll issues. If you forget, contact HR immediately via the Messages tab.</div>
+
+    <h2><span class="sec-num">4</span> Requesting Time Off</h2>
+    <p>All time off requests go through the portal — never through personal text or email. This keeps everything documented and ensures fast approval.</p>
+    <div class="step-box"><div class="step-num">1</div><p>Click <strong>PTO / Time Off</strong> in the sidebar under Time Off</p></div>
+    <div class="step-box"><div class="step-num">2</div><p>Click <strong>Request Time Off</strong></p></div>
+    <div class="step-box"><div class="step-num">3</div><p>Select the type: Vacation, Sick, Personal, or Other</p></div>
+    <div class="step-box"><div class="step-num">4</div><p>Enter your start and end dates</p></div>
+    <div class="step-box"><div class="step-num">5</div><p>Add a note (optional) and click <strong>Submit Request</strong></p></div>
+    <div class="green-box">✅ You'll be notified of approval or denial through the portal. Approved time off automatically shows on the Company Calendar so your team is always informed.</div>
+
+    <h2><span class="sec-num">5</span> Messaging HR</h2>
+    <p>The Messages tab is your private, confidential line to HR. Use it for questions about pay, policies, schedules, concerns, or anything else you need HR's help with.</p>
+    <div class="step-box"><div class="step-num">1</div><p>Click <strong>Messages</strong> in the sidebar under Company</p></div>
+    <div class="step-box"><div class="step-num">2</div><p>Type your subject and message in the compose box</p></div>
+    <div class="step-box"><div class="step-num">3</div><p>Click <strong>Send Message to HR</strong></p></div>
+    <div class="step-box"><div class="step-num">4</div><p>HR will reply in the same Messages tab — you'll see their response there</p></div>
+    <div class="blue-box">🔒 All messages to HR are private and confidential. Only HR staff can see them — not your manager or coworkers.</div>
+
+    <h2><span class="sec-num">6</span> Viewing Your Pay</h2>
+    <div class="tool-card">
+      <div class="tool-header"><div class="tool-icon">💰</div><div><div class="tool-name">Payroll</div><div class="tool-where">Sidebar → Money → Payroll</div></div></div>
+      <p>View your pay stubs, earnings history, tax withholdings, and deductions. Pay stubs are available the business day before every payday (bi-weekly Fridays).</p>
+    </div>
+    <div class="tool-card">
+      <div class="tool-header"><div class="tool-icon">🏦</div><div><div class="tool-name">Direct Deposit</div><div class="tool-where">Sidebar → Money → Deposits</div></div></div>
+      <p>Set up or update your direct deposit bank account. Do this as soon as possible after starting to ensure your first paycheck arrives on time.</p>
+    </div>
+    <div class="tool-card">
+      <div class="tool-header"><div class="tool-icon">💳</div><div><div class="tool-name">Pay &amp; Benefits</div><div class="tool-where">Sidebar → Workspace → Pay &amp; Benefits</div></div></div>
+      <p>View your benefits enrollment, health insurance details, and compensation information.</p>
+    </div>
+
+    <h2><span class="sec-num">7</span> Filing an Incident Report</h2>
+    <p>If you experience a work-related injury, near-miss, or safety concern, file an Incident Report immediately. All reports are confidential.</p>
+    <div class="step-box"><div class="step-num">1</div><p>Click <strong>Incident Reports</strong> in the sidebar under HR</p></div>
+    <div class="step-box"><div class="step-num">2</div><p>Click <strong>+ New Incident Report</strong></p></div>
+    <div class="step-box"><div class="step-num">3</div><p>Fill in all required sections — incident type, location, description, witnesses</p></div>
+    <div class="step-box"><div class="step-num">4</div><p>Add your digital signature and click <strong>Submit</strong></p></div>
+    <div class="step-box"><div class="step-num">5</div><p>Your report is sent directly to HR. You can track its status in the Incident Reports tab.</p></div>
+
+    <h2><span class="sec-num">8</span> HR Handbook &amp; Policies</h2>
+    <p>All AI-Prowler company policies are available 24/7 in the HR Handbook. You should read all policies during your first week.</p>
+    <div class="step-box"><div class="step-num">1</div><p>Click <strong>HR Handbook</strong> in the sidebar under HR</p></div>
+    <div class="step-box"><div class="step-num">2</div><p>Click the <strong>Download PDF</strong> button to download the full Employee Handbook</p></div>
+    <div class="step-box"><div class="step-num">3</div><p>Click any <strong>Policy Section</strong> to read it — it opens in a popup right on the page</p></div>
+    <div class="table-wrap">
+      <table>
+        <tr><th>Policy</th><th>What It Covers</th></tr>
+        <tr><td>📅 Attendance &amp; Punctuality</td><td>Core hours, clocking in, tardiness, absences</td></tr>
+        <tr><td>💰 Compensation &amp; Pay</td><td>Pay schedule, overtime, raises, pay disputes</td></tr>
+        <tr><td>🏖 Time Off &amp; Leave</td><td>PTO, sick days, holidays, FMLA</td></tr>
+        <tr><td>📋 Code of Conduct</td><td>Professional behavior, dress code, conflicts of interest</td></tr>
+        <tr><td>🔒 Privacy &amp; Confidentiality</td><td>Data handling, NDAs, client information</td></tr>
+        <tr><td>🦺 Health &amp; Safety</td><td>Ergonomics, home office safety, emergency procedures</td></tr>
+      </table>
+    </div>
+
+    <h2><span class="sec-num">9</span> Help &amp; Support Tools</h2>
+    <p>The Help / Support page gives you multiple ways to get help quickly:</p>
+    <div class="tool-card">
+      <div class="tool-header"><div class="tool-icon">👩‍💼</div><div><div class="tool-name">Contact HR</div><div class="tool-where">Help / Support → Contact HR</div></div></div>
+      <p>Opens the Messages tab to send HR a private message.</p>
+    </div>
+    <div class="tool-card">
+      <div class="tool-header"><div class="tool-icon">💻</div><div><div class="tool-name">IT Support</div><div class="tool-where">Help / Support → IT Support</div></div></div>
+      <p>Submit an IT support request for technical issues, account access, equipment, or software problems.</p>
+    </div>
+    <div class="tool-card">
+      <div class="tool-header"><div class="tool-icon">💬</div><div><div class="tool-name">Submit Feedback</div><div class="tool-where">Help / Support → Submit Feedback</div></div></div>
+      <p>Share ideas, report issues, or give general feedback to HR. Can be submitted anonymously.</p>
+    </div>
+    <div class="tool-card">
+      <div class="tool-header"><div class="tool-icon">🤖</div><div><div class="tool-name">Ask AI-Prowler</div><div class="tool-where">Help / Support → Ask AI-Prowler for Help</div></div></div>
+      <p>Ask the AI assistant any HR question — policies, how-to, pay, time off, benefits. Available 24/7.</p>
+    </div>
+
+    <h2><span class="sec-num">10</span> Quick Reference — Daily Workflow</h2>
+    <div class="table-wrap">
+      <table>
+        <tr><th>Time</th><th>Action</th><th>Where</th></tr>
+        <tr><td>Start of shift</td><td>Clock In</td><td>Time Clock tab</td></tr>
+        <tr><td>Running late</td><td>Tap Running Late</td><td>Time Clock tab</td></tr>
+        <tr><td>Can't work today</td><td>Tap Out Today</td><td>Time Clock tab</td></tr>
+        <tr><td>Need time off</td><td>Submit PTO request</td><td>PTO / Time Off tab</td></tr>
+        <tr><td>Question for HR</td><td>Send a message</td><td>Messages tab</td></tr>
+        <tr><td>Read company policy</td><td>Open HR Handbook</td><td>HR Handbook tab</td></tr>
+        <tr><td>Safety incident</td><td>File incident report</td><td>Incident Reports tab</td></tr>
+        <tr><td>End of shift</td><td>Clock Out</td><td>Time Clock tab</td></tr>
+      </table>
+    </div>
+
+    <hr class="divider">
+
+    <h2><span class="sec-num">11</span> Knowledge Check</h2>
+    <p>Answer all 10 questions. You need 75% to pass.</p>
+
+    <div class="quiz-section">
+      <div class="quiz-q">1. Where do you go to clock in at the start of your shift?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q1')">Home / Feed tab</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q1')">Time Clock tab under Workspace</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q1')">Messages tab</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q1')">Payroll tab</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q1"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">2. You need to request 3 days of vacation next week. Where do you do this?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q2')">Send your manager a text message</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q2')">Email HR directly</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q2')">PTO / Time Off tab in the portal</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q2')">Post in the Home / Feed</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q2"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">3. You have a confidential question about your paycheck. What is the best way to contact HR?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q3')">Call HR on their personal phone</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q3')">Use the Messages tab in the HR portal</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q3')">Ask a coworker to pass the message along</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q3')">Post about it in the company feed</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q3"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">4. Where can you find and read all AI-Prowler company policies?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q4')">The Home / Feed tab</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q4')">The Documents tab</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q4')">The HR Handbook tab under HR</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q4')">The Trainings tab</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q4"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">5. Where do you go to tap "Running Late" or "Out Today"?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q5')">Messages tab</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q5')">Time Clock tab</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q5')">Schedule tab</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q5')">Documents tab</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q5"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">6. Which section of the sidebar holds Payroll and Deposits?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q6')">Workspace</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q6')">Money</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q6')">My Profile</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q6')">Time Off</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q6"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">7. Where would you go to file a safety incident report?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q7')">Home / Feed tab</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q7')">Incident Reports tab</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q7')">Payroll tab</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q7')">Schedule tab</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q7"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">8. What should you do at the end of your shift?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q8')">Nothing — hours track automatically</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q8')">Clock Out using the Time Clock tab</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q8')">Send a message to HR</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q8')">Submit a PTO request</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q8"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">9. Which tab lets you check your upcoming shifts?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q9')">Documents</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q9')">Schedule</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q9')">Directory</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q9')">Payroll</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q9"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">10. Which section of the sidebar holds Trainings and Write-Ups?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q10')">Money</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q10')">HR</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q10')">Workspace</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q10')">Time Off</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q10"></div>
+    </div>
+
+    <div class="complete-section">
+      <div id="complete-prompt">
+        <h3>🤖 Ready to Complete?</h3>
+        <p>Answer all questions and click below to submit your results to HR.</p>
+        <button class="complete-btn" onclick="markComplete()">✅ Mark as Complete</button>
+      </div>
+      <div id="complete-done" style="display:none"></div>
+    </div>
+
+  </div>
+  <div class="footer">AI-Prowler &middot; Human Resources &middot; AI-Prowler Tools Training &middot; Required Training &middot; &copy; 2026 AI-Prowler</div>
+</div>
+
+<script>
+var quizAnswers={};
+function answer(el,correct,qid){
+  if(quizAnswers[qid])return;
+  quizAnswers[qid]=correct?'correct':'wrong';
+  var opts=el.parentElement.querySelectorAll('.quiz-opt');
+  opts.forEach(function(o){o.style.pointerEvents='none';});
+  if(correct){el.classList.add('correct');el.textContent='✅ '+el.textContent;}
+  else{el.classList.add('wrong');el.textContent='❌ '+el.textContent;opts.forEach(function(o){if(o.getAttribute('onclick')&&o.getAttribute('onclick').includes('true')){o.classList.add('correct');o.textContent='✅ '+o.textContent;}});}
+  var fb=document.getElementById('fb-'+qid);
+  if(fb){fb.textContent=correct?'✅ Correct!':'❌ Not quite — review the section above.';fb.style.color=correct?'#166534':'#cf222e';fb.classList.add('show');}
+  var pct=Math.round((Object.keys(quizAnswers).length/10)*100);
+  document.getElementById('progress-fill').style.width=pct+'%';
+  document.getElementById('progress-pct').textContent=pct+'%';
+}
+function markComplete(){
+  var correct=Object.values(quizAnswers).filter(function(v){return v==='correct';}).length;
+  var pct=Math.round((correct/10)*100);
+  var passed=pct>=75;
+  document.getElementById('complete-prompt').style.display='none';
+  document.getElementById('complete-done').style.display='block';
+  document.getElementById('progress-fill').style.width='100%';
+  document.getElementById('progress-pct').textContent='100%';
+  document.getElementById('complete-done').innerHTML='<div style="font-size:48px;margin-bottom:12px">'+(passed?'🎉':'📋')+'</div><h3 style="color:'+(passed?'#3fb950':'#f0a500')+';margin:0 0 8px">'+(passed?'Training Complete!':'Review Recommended')+'</h3><p style="color:#8b949e;font-size:13px">Score: <strong style="color:'+(passed?'#3fb950':'#f0a500')+'">'+correct+'/10 ('+pct+'%)</strong> — '+(passed?'You passed!':'Score below 75%. Please review and retake.')+'</p>';
+  var empName='Employee';
+  try{var s=JSON.parse(window.parent.localStorage.getItem('hr_portal_session')||'{}');if(s.name)empName=s.name;}catch(e){}
+  var labels=['Where to clock in','How to request time off','How to contact HR','Where to find policies','Running Late / Out Today location','Payroll & Deposits section','Filing an incident report','End-of-shift action','Checking upcoming shifts','Trainings & Write-Ups section'];
+  var body='=== TRAINING COMPLETION REPORT ===\n\nTraining: AI-Prowler Tools Training\nEmployee: '+empName+'\nDate: '+new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})+'\nTime: '+new Date().toLocaleTimeString()+'\nScore: '+correct+'/10 ('+pct+'%)\nResult: '+(passed?'✅ PASSED':'⚠️ NEEDS REVIEW')+'\n\n--- Quiz Results ---\n';
+  labels.forEach(function(q,i){var ans=quizAnswers['q'+(i+1)];body+=(i+1)+'. '+q+': '+(ans==='correct'?'✅ Correct':ans==='wrong'?'❌ Incorrect':'— Not answered')+'\n';});
+  body+='\n'+(passed?'✅ Employee is proficient with AI-Prowler portal tools.':'⚠️ HR should provide additional portal walkthrough.');
+  fetch('/hr-api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sender_name:empName,subject:'🎓 Training Complete — AI-Prowler Tools Training — '+empName+' — '+pct+'% ('+(passed?'PASSED':'NEEDS REVIEW')+')',body:body,message_type:'training_result'})}).catch(function(){});
+  try{window.parent.postMessage({type:'training-complete',id:'ai-prowler-tools',employee:empName,score:pct,passed:passed},'*');}catch(e){}
+}
+</script>
+</body>
+</html>

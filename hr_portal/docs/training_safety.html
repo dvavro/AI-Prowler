@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Workplace Safety & OSHA Basics — AI-Prowler</title>
+<style>
+  body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; background: #f6f8fa; color: #0d1117; }
+  .doc { max-width: 820px; margin: 0 auto; background: #fff; padding: 0; min-height: 100vh; }
+  .hero { background: linear-gradient(135deg, #0d1117 0%, #161b22 60%, #1a3a1f 100%); padding: 48px 52px 40px; color: #fff; }
+  .hero-brand { font-size: 12px; font-weight: 700; color: #3fb950; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 16px; }
+  .hero h1 { font-size: 32px; font-weight: 800; margin: 0 0 10px; color: #fff; }
+  .hero p { font-size: 14px; color: #8b949e; margin: 0 0 20px; line-height: 1.7; }
+  .hero-meta { display: flex; gap: 20px; flex-wrap: wrap; }
+  .hero-badge { background: rgba(63,185,80,.15); border: 1px solid rgba(63,185,80,.3); color: #3fb950; font-size: 11px; font-weight: 600; padding: 4px 12px; border-radius: 20px; }
+  .progress-bar { background: #161b22; padding: 20px 52px; border-bottom: 1px solid #21262d; }
+  .progress-label { display: flex; justify-content: space-between; font-size: 12px; color: #8b949e; margin-bottom: 8px; }
+  .progress-track { background: #21262d; border-radius: 10px; height: 8px; }
+  .progress-fill { background: linear-gradient(90deg, #3fb950, #22c55e); height: 8px; border-radius: 10px; width: 0%; transition: width 1s ease; }
+  .content { padding: 40px 52px; }
+  h2 { font-size: 20px; font-weight: 800; color: #0d1117; margin: 36px 0 14px; display: flex; align-items: center; gap: 10px; }
+  h2 .sec-num { background: #22c55e; color: #fff; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; flex-shrink: 0; }
+  h3 { font-size: 15px; font-weight: 700; color: #24292f; margin: 20px 0 8px; }
+  p { font-size: 14px; line-height: 1.8; color: #24292f; margin: 0 0 12px; }
+  ul, ol { font-size: 14px; line-height: 1.8; color: #24292f; margin: 0 0 12px; padding-left: 22px; }
+  li { margin-bottom: 6px; }
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px; margin: 16px 0 24px; }
+  .info-card { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 10px; padding: 16px; }
+  .info-card .icon { font-size: 24px; margin-bottom: 8px; }
+  .info-card .label { font-size: 11px; color: #636e7b; text-transform: uppercase; letter-spacing: .5px; font-weight: 600; margin-bottom: 4px; }
+  .info-card .value { font-size: 13px; font-weight: 700; color: #0d1117; line-height: 1.4; }
+  .highlight { background: #fff8e1; border-left: 4px solid #f0a500; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .red-box { background: #fff5f5; border-left: 4px solid #f85149; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .green-box { background: #f0fff4; border-left: 4px solid #22c55e; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .blue-box { background: #eff6ff; border-left: 4px solid #1f6feb; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .table-wrap { overflow-x: auto; margin: 14px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { background: #f0fff4; color: #166534; font-weight: 700; padding: 10px 14px; text-align: left; border-bottom: 2px solid #bbf7d0; }
+  td { padding: 9px 14px; border-bottom: 1px solid #eaeef2; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  .checklist { list-style: none; padding: 0; margin: 0 0 16px; }
+  .checklist li { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 1px solid #eaeef2; font-size: 14px; color: #24292f; }
+  .checklist li:last-child { border-bottom: none; }
+  .checklist li::before { content: '☐'; font-size: 16px; color: #22c55e; flex-shrink: 0; margin-top: 1px; }
+  .quiz-section { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 12px; padding: 24px; margin: 24px 0; }
+  .quiz-q { font-size: 14px; font-weight: 600; color: #0d1117; margin-bottom: 12px; }
+  .quiz-options { display: flex; flex-direction: column; gap: 8px; }
+  .quiz-opt { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: #fff; border: 1.5px solid #d0d7de; border-radius: 8px; cursor: pointer; font-size: 13px; color: #24292f; transition: all .15s; }
+  .quiz-opt:hover { border-color: #22c55e; background: #f0fff4; }
+  .quiz-opt.correct { border-color: #22c55e; background: #f0fff4; color: #166534; font-weight: 600; }
+  .quiz-opt.wrong { border-color: #f85149; background: #fff5f5; color: #cf222e; }
+  .quiz-feedback { display: none; margin-top: 10px; font-size: 13px; font-weight: 600; }
+  .quiz-feedback.show { display: block; }
+  .complete-section { background: linear-gradient(135deg, #0d1117, #1a3a1f); border-radius: 12px; padding: 28px; text-align: center; margin: 32px 0 0; }
+  .complete-section h3 { color: #fff; font-size: 18px; margin: 0 0 8px; }
+  .complete-section p { color: #8b949e; font-size: 13px; margin: 0 0 20px; }
+  .complete-btn { padding: 12px 32px; background: #22c55e; color: #fff; border: none; border-radius: 8px; font-size: 14px; font-weight: 700; cursor: pointer; }
+  .divider { border: none; border-top: 1px solid #eaeef2; margin: 32px 0; }
+  .footer { padding: 20px 52px; border-top: 1px solid #eaeef2; font-size: 11px; color: #8c959f; text-align: center; }
+</style>
+</head>
+<body>
+<div class="doc">
+
+  <div class="hero">
+    <div class="hero-brand">AI-Prowler &middot; Human Resources &middot; Required Training</div>
+    <h1>🦺 Workplace Safety &amp; OSHA Basics</h1>
+    <p>This training covers essential workplace safety principles, OSHA regulations, hazard identification, and emergency procedures for AI-Prowler's remote work environment.</p>
+    <div class="hero-meta">
+      <span class="hero-badge">⏱ 30 min</span>
+      <span class="hero-badge">📋 Required</span>
+      <span class="hero-badge">🏠 Remote / WFH</span>
+      <span class="hero-badge">✅ Complete within first week</span>
+    </div>
+  </div>
+
+  <div class="progress-bar">
+    <div class="progress-label"><span>Course Progress</span><span id="progress-pct">0%</span></div>
+    <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+  </div>
+
+  <div class="content">
+
+    <h2><span class="sec-num">1</span> Why Workplace Safety Matters — Even at Home</h2>
+    <p>Workplace safety isn't just for factories and construction sites. As a remote employee, your home is your workplace, and AI-Prowler is committed to ensuring you have a safe and healthy work environment — wherever that is.</p>
+    <p>OSHA (Occupational Safety and Health Administration) is the federal agency that sets and enforces workplace safety standards. While OSHA's jurisdiction over home offices is limited, AI-Prowler voluntarily upholds OSHA principles to protect every team member.</p>
+    <div class="blue-box">📋 Under workers' compensation law, injuries that occur during work hours at your home office may be covered — which means workplace safety at home is a real legal and practical concern.</div>
+
+    <h2><span class="sec-num">2</span> Your Home Office Safety Checklist</h2>
+    <p>Before we dive in, review this checklist for your home workspace:</p>
+    <ul class="checklist">
+      <li>My workspace is free from clutter, trip hazards, and obstructions</li>
+      <li>Electrical cords are managed and not a trip or fire hazard</li>
+      <li>My workspace is well-lit to reduce eye strain</li>
+      <li>I have a working smoke detector in or near my workspace</li>
+      <li>My computer and equipment are on a surge protector</li>
+      <li>My chair provides proper back support</li>
+      <li>My monitor is at eye level and arm's length away</li>
+      <li>I take regular breaks to stretch and rest my eyes</li>
+      <li>I know the location of my nearest fire extinguisher</li>
+      <li>I have a basic first aid kit accessible at home</li>
+    </ul>
+
+    <h2><span class="sec-num">3</span> Hazard Identification</h2>
+    <p>A hazard is anything that has the potential to cause harm. In a home office, common hazards include:</p>
+    <div class="card-grid">
+      <div class="info-card"><div class="icon">⚡</div><div class="label">Electrical</div><div class="value">Overloaded outlets, frayed cords, improper grounding</div></div>
+      <div class="info-card"><div class="icon">🦶</div><div class="label">Trip & Fall</div><div class="value">Cords, rugs, clutter, poor lighting</div></div>
+      <div class="info-card"><div class="icon">🔥</div><div class="label">Fire</div><div class="value">Overheating equipment, no smoke detector, blocked exits</div></div>
+      <div class="info-card"><div class="icon">💺</div><div class="label">Ergonomic</div><div class="value">Poor posture, bad chair, screen too high or low</div></div>
+      <div class="info-card"><div class="icon">👁</div><div class="label">Eye Strain</div><div class="value">Screen glare, poor lighting, no breaks</div></div>
+      <div class="info-card"><div class="icon">😰</div><div class="label">Stress</div><div class="value">Overwork, isolation, poor work-life boundaries</div></div>
+    </div>
+    <div class="highlight">⚠️ If you identify a hazard in your workspace that you cannot fix yourself, contact HR through the portal Messages tab. We may be able to provide equipment or assistance.</div>
+
+    <h2><span class="sec-num">4</span> Ergonomics — Preventing Repetitive Strain</h2>
+    <p>Ergonomic injuries are the #1 work-from-home safety issue. Hours of poor posture can lead to back pain, carpal tunnel syndrome, and neck strain that can become chronic. Follow these guidelines:</p>
+    <div class="table-wrap">
+      <table>
+        <tr><th>Body Part</th><th>Correct Position</th><th>Common Mistake</th></tr>
+        <tr><td><strong>Back</strong></td><td>Upright with lumbar support, feet flat on floor</td><td>Slouching, sitting on a couch or bed</td></tr>
+        <tr><td><strong>Arms/Wrists</strong></td><td>Elbows at 90°, wrists straight while typing</td><td>Wrists bent up or down, arms reaching forward</td></tr>
+        <tr><td><strong>Monitor</strong></td><td>Top of screen at or below eye level, arm's length away</td><td>Screen too low (looking down) or too high</td></tr>
+        <tr><td><strong>Neck</strong></td><td>Head balanced over shoulders, not jutting forward</td><td>Craning forward to see screen</td></tr>
+        <tr><td><strong>Eyes</strong></td><td>20-20-20 rule: every 20 min, look 20 ft away for 20 sec</td><td>Staring at screen for hours without breaks</td></tr>
+      </table>
+    </div>
+    <div class="green-box">💪 Stand up and stretch every 60-90 minutes. Set a timer if needed. Your body will thank you — and so will your productivity.</div>
+
+    <h2><span class="sec-num">5</span> Emergency Procedures</h2>
+    <p>Even at home, emergencies happen. Know what to do before they do.</p>
+    <h3>🔥 Fire</h3>
+    <ul>
+      <li>If you smell smoke or see fire — evacuate immediately. Don't stop to save equipment.</li>
+      <li>Call 911 from outside the building.</li>
+      <li>Do not re-enter until cleared by fire department.</li>
+      <li>Notify HR via the portal as soon as you are safe.</li>
+    </ul>
+    <h3>⚡ Power Outage</h3>
+    <ul>
+      <li>Save your work immediately if you get a warning (UPS/surge protector).</li>
+      <li>Notify your manager via phone or text that you are experiencing an outage.</li>
+      <li>Log the outage in the Time Clock as an approved interruption.</li>
+      <li>Work may continue from a safe alternate location (library, coffee shop with VPN).</li>
+    </ul>
+    <h3>🏥 Medical Emergency</h3>
+    <ul>
+      <li>Call 911 immediately for any life-threatening emergency.</li>
+      <li>Know the address of your nearest emergency room.</li>
+      <li>If you are injured during work hours, file an Incident Report in the HR portal as soon as possible.</li>
+    </ul>
+    <div class="red-box">🚨 For ANY work-related injury or illness — no matter how minor — file an Incident Report in the HR portal within 24 hours. This protects both you and AI-Prowler legally.</div>
+
+    <h2><span class="sec-num">6</span> Reporting Safety Concerns & Incidents</h2>
+    <p>AI-Prowler has a zero-retaliation policy for safety reporting. If you see a safety issue — even a potential one — report it. You will never face consequences for reporting a genuine safety concern.</p>
+    <div class="table-wrap">
+      <table>
+        <tr><th>Situation</th><th>What to Do</th><th>Where</th></tr>
+        <tr><td>Work-related injury or illness</td><td>File an Incident Report immediately</td><td>HR Portal → Incident Reports</td></tr>
+        <tr><td>Near-miss (almost got hurt)</td><td>File an Incident Report</td><td>HR Portal → Incident Reports</td></tr>
+        <tr><td>Unsafe condition in workspace</td><td>Message HR with description</td><td>HR Portal → Messages</td></tr>
+        <tr><td>Emergency requiring 911</td><td>Call 911 first, then notify HR</td><td>Phone, then portal when safe</td></tr>
+        <tr><td>Mental health or stress concern</td><td>Message HR confidentially</td><td>HR Portal → Messages</td></tr>
+      </table>
+    </div>
+
+    <h2><span class="sec-num">7</span> Cybersecurity as a Safety Issue</h2>
+    <p>In a remote environment, cybersecurity is a workplace safety issue. A data breach can harm you, your colleagues, and AI-Prowler's customers. Basic safety rules:</p>
+    <ul>
+      <li>Use a <strong>password-protected Wi-Fi network</strong> — never work on open public Wi-Fi without a VPN.</li>
+      <li>Lock your screen whenever you step away — even at home.</li>
+      <li>Never leave sensitive documents visible on screen in shared spaces.</li>
+      <li>Report suspicious emails, links, or login attempts to HR immediately.</li>
+      <li>Keep your devices updated — security patches fix known vulnerabilities.</li>
+    </ul>
+
+    <h2><span class="sec-num">8</span> Mental Health & Wellbeing</h2>
+    <p>Workplace safety includes mental health. Remote work can lead to isolation, burnout, and stress that — left unaddressed — can be just as harmful as physical injury.</p>
+    <ul>
+      <li><strong>Set boundaries:</strong> Stop working at the end of your scheduled shift. Unplug.</li>
+      <li><strong>Take your PTO:</strong> Vacation time exists to rest and recharge. Use it.</li>
+      <li><strong>Stay connected:</strong> Reach out to colleagues. Isolation is a real risk of remote work.</li>
+      <li><strong>Ask for help:</strong> If you're struggling, message HR confidentially. We're here for you.</li>
+    </ul>
+    <div class="blue-box">❤️ If you are in crisis, call or text <strong>988</strong> (Suicide & Crisis Lifeline) — available 24/7. For domestic violence support: <strong>1-800-799-7233</strong>.</div>
+
+    <hr class="divider">
+
+    <h2><span class="sec-num">9</span> Knowledge Check</h2>
+    <p>Answer all 10 questions to complete this training. You need 75% to pass.</p>
+
+    <div class="quiz-section">
+      <div class="quiz-q">1. What should you do FIRST if you discover a fire in your home office?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q1')">Save your work and shut down your computer</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q1')">Call your manager to let them know</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q1')">Evacuate immediately and call 911 from outside</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q1')">Try to put out the fire yourself first</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q1"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">2. What is the 20-20-20 rule for eye safety?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q2')">Take a 20-minute break every 20 hours, 20 times per day</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q2')">Every 20 minutes, look at something 20 feet away for 20 seconds</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q2')">Work for 20 minutes, rest for 20 minutes, repeat 20 times</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q2')">Blink 20 times every 20 minutes for 20 seconds</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q2"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">3. If you are injured during work hours at your home office, what should you do?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q3')">Nothing — home injuries are not covered by work policies</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q3')">Only report it if you need to go to the hospital</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q3')">File an Incident Report in the HR portal within 24 hours</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q3')">Tell a coworker and let them handle the paperwork</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q3"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">4. Which of these is the BIGGEST ergonomic risk for remote workers?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q4')">Using a standing desk too often</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q4')">Poor posture from working on a couch or with a bad chair for long hours</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q4')">Having too much lighting in the workspace</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q4')">Working near a window</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q4"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">5. Will you face consequences for reporting a genuine safety concern?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q5')">Yes, if it turns out to be minor</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q5')">No — AI-Prowler has a zero-retaliation policy for safety reporting</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q5')">Only if HR agrees it was serious</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q5')">Yes, always</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q5"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">6. What should you use when working on public Wi-Fi?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q6')">Nothing extra — public Wi-Fi is fine as-is</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q6')">A VPN</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q6')">Your phone's flashlight</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q6')">A different browser</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q6"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">7. What should you do if you receive a suspicious email or login attempt?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q7')">Click the link to see what it is</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q7')">Ignore it and delete it</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q7')">Report it to HR immediately</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q7')">Forward it to a coworker to check</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q7"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">8. Which of these is a recommended way to protect your mental health while working remotely?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q8')">Skip your PTO to show dedication</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q8')">Keep working past the end of your shift whenever possible</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q8')">Set boundaries, take your PTO, and stay connected with colleagues</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q8')">Avoid talking to HR about stress</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q8"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">9. Under workers' compensation law, injuries during work hours at your home office:</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q9')">Are never covered</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q9')">May be covered — home office safety is a real legal concern</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q9')">Are only covered if OSHA inspects your home</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q9')">Are the employee's sole responsibility</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q9"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">10. What is the recommended crisis resource mentioned in this training?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q10')">Your direct manager only</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q10')">988 — the Suicide & Crisis Lifeline</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q10')">There is no such resource</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q10')">A general web search</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q10"></div>
+    </div>
+
+    <div class="complete-section" id="complete-section">
+      <div id="complete-prompt">
+        <h3>🦺 Ready to Complete?</h3>
+        <p>Answer all questions and click below to submit your results to HR.</p>
+        <button class="complete-btn" onclick="markComplete()">✅ Mark as Complete</button>
+      </div>
+      <div id="complete-done" style="display:none"></div>
+    </div>
+
+  </div>
+  <div class="footer">AI-Prowler &middot; Human Resources &middot; Workplace Safety &amp; OSHA Basics &middot; Required Training &middot; &copy; 2026 AI-Prowler</div>
+</div>
+
+<script>
+var quizAnswers = {};
+
+function answer(el, correct, qid) {
+  if (quizAnswers[qid]) return;
+  quizAnswers[qid] = correct ? 'correct' : 'wrong';
+  var opts = el.parentElement.querySelectorAll('.quiz-opt');
+  opts.forEach(function(o) { o.style.pointerEvents = 'none'; });
+  if (correct) {
+    el.classList.add('correct');
+    el.textContent = '✅ ' + el.textContent;
+  } else {
+    el.classList.add('wrong');
+    el.textContent = '❌ ' + el.textContent;
+    opts.forEach(function(o) {
+      if (o.getAttribute('onclick') && o.getAttribute('onclick').includes('true')) {
+        o.classList.add('correct');
+        o.textContent = '✅ ' + o.textContent;
+      }
+    });
+  }
+  var fb = document.getElementById('fb-' + qid);
+  if (fb) {
+    fb.textContent = correct ? '✅ Correct! Great job.' : '❌ Not quite — review the section above.';
+    fb.style.color = correct ? '#166534' : '#cf222e';
+    fb.classList.add('show');
+  }
+  updateProgress();
+}
+
+function updateProgress() {
+  var done = Object.keys(quizAnswers).length;
+  var pct = Math.round((done / 10) * 100);
+  document.getElementById('progress-fill').style.width = pct + '%';
+  document.getElementById('progress-pct').textContent = pct + '%';
+}
+
+function markComplete() {
+  var correct = Object.values(quizAnswers).filter(function(v){return v==='correct';}).length;
+  var pct = Math.round((correct/10)*100);
+  var passed = pct >= 75;
+
+  document.getElementById('complete-prompt').style.display = 'none';
+  document.getElementById('complete-done').style.display = 'block';
+  document.getElementById('progress-fill').style.width = '100%';
+  document.getElementById('progress-pct').textContent = '100%';
+  document.getElementById('complete-done').innerHTML =
+    '<div style="font-size:48px;margin-bottom:12px">' + (passed ? '🎉' : '📋') + '</div>' +
+    '<h3 style="color:' + (passed ? '#3fb950' : '#f0a500') + ';margin:0 0 8px">' + (passed ? 'Training Complete!' : 'Review Recommended') + '</h3>' +
+    '<p style="color:#8b949e;font-size:13px">Score: <strong style="color:' + (passed ? '#3fb950' : '#f0a500') + '">' + correct + '/10 (' + pct + '%)</strong> — ' + (passed ? 'You passed!' : 'Score below 75%. Please review and retake.') + '</p>';
+
+  var empName = 'Employee';
+  try {
+    var s = JSON.parse(window.parent.localStorage.getItem('hr_portal_session') || '{}');
+    if (s.name) empName = s.name;
+  } catch(e) {}
+
+  var labels = ['What to do first in a fire', '20-20-20 eye rule', 'Reporting work injuries', 'Biggest ergonomic risk', 'Retaliation for reporting', 'Public Wi-Fi safety', 'Suspicious emails/logins', 'Protecting mental health', 'Workers comp coverage', 'Crisis resource'];
+  var body = '=== TRAINING COMPLETION REPORT ===\n\n' +
+    'Training: Workplace Safety & OSHA Basics\n' +
+    'Employee: ' + empName + '\n' +
+    'Date: ' + new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'}) + '\n' +
+    'Time: ' + new Date().toLocaleTimeString() + '\n' +
+    'Score: ' + correct + '/10 (' + pct + '%)\n' +
+    'Result: ' + (passed ? '✅ PASSED' : '⚠️ NEEDS REVIEW') + '\n\n--- Quiz Results ---\n';
+  labels.forEach(function(q,i){
+    var ans = quizAnswers['q'+(i+1)];
+    body += (i+1) + '. ' + q + ': ' + (ans==='correct'?'✅ Correct':ans==='wrong'?'❌ Incorrect':'— Not answered') + '\n';
+  });
+  body += '\n' + (passed ? '✅ Employee cleared on workplace safety basics.' : '⚠️ HR should follow up with this employee.');
+
+  fetch('/hr-api/messages', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      sender_name: empName,
+      subject: '🎓 Training Complete — Workplace Safety & OSHA Basics — ' + empName + ' — ' + pct + '% (' + (passed?'PASSED':'NEEDS REVIEW') + ')',
+      body: body,
+      message_type: 'training_result'
+    })
+  }).catch(function(){});
+
+  try {
+    window.parent.postMessage({type:'training-complete',id:'workplace-safety',employee:empName,score:pct,passed:passed},'*');
+  } catch(e){}
+}
+</script>
+</body>
+</html>

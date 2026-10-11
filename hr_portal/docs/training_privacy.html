@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Data Privacy & Confidentiality — AI-Prowler</title>
+<style>
+  body { font-family: 'Segoe UI', Arial, sans-serif; margin: 0; background: #f6f8fa; color: #0d1117; }
+  .doc { max-width: 820px; margin: 0 auto; background: #fff; padding: 0; min-height: 100vh; }
+  .hero { background: linear-gradient(135deg, #0d1117 0%, #0a2a3a 60%, #0e4a66 100%); padding: 48px 52px 40px; color: #fff; }
+  .hero-brand { font-size: 12px; font-weight: 700; color: #58c4ff; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 16px; }
+  .hero h1 { font-size: 32px; font-weight: 800; margin: 0 0 10px; color: #fff; }
+  .hero p { font-size: 14px; color: #8b949e; margin: 0 0 20px; line-height: 1.7; }
+  .hero-meta { display: flex; gap: 20px; flex-wrap: wrap; }
+  .hero-badge { background: rgba(88,196,255,.15); border: 1px solid rgba(88,196,255,.3); color: #58c4ff; font-size: 11px; font-weight: 600; padding: 4px 12px; border-radius: 20px; }
+  .progress-bar { background: #161b22; padding: 20px 52px; border-bottom: 1px solid #21262d; }
+  .progress-label { display: flex; justify-content: space-between; font-size: 12px; color: #8b949e; margin-bottom: 8px; }
+  .progress-track { background: #21262d; border-radius: 10px; height: 8px; }
+  .progress-fill { background: linear-gradient(90deg, #0e4a66, #58c4ff); height: 8px; border-radius: 10px; width: 0%; transition: width 1s ease; }
+  .content { padding: 40px 52px; }
+  h2 { font-size: 20px; font-weight: 800; color: #0d1117; margin: 36px 0 14px; display: flex; align-items: center; gap: 10px; }
+  h2 .sec-num { background: #0e4a66; color: #fff; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; flex-shrink: 0; }
+  h3 { font-size: 15px; font-weight: 700; color: #24292f; margin: 20px 0 8px; }
+  p { font-size: 14px; line-height: 1.8; color: #24292f; margin: 0 0 12px; }
+  ul, ol { font-size: 14px; line-height: 1.8; color: #24292f; margin: 0 0 12px; padding-left: 22px; }
+  li { margin-bottom: 6px; }
+  .highlight { background: #eff8ff; border-left: 4px solid #58c4ff; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .green-box { background: #f0fff4; border-left: 4px solid #22c55e; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .blue-box { background: #eff6ff; border-left: 4px solid #1f6feb; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .red-box { background: #fff5f5; border-left: 4px solid #f85149; padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 16px 0; font-size: 13px; }
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin: 16px 0; }
+  .trait-card { background: #eff8ff; border: 1px solid #bfe4ff; border-radius: 10px; padding: 16px; margin: 10px 0; }
+  .trait-card .icon { font-size: 24px; margin-bottom: 6px; }
+  .trait-card h4 { font-size: 14px; font-weight: 700; color: #0d1117; margin: 0 0 4px; }
+  .trait-card p { margin: 0; font-size: 13px; color: #636e7b; }
+  .table-wrap { overflow-x: auto; margin: 14px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { background: #eff8ff; color: #0e4a66; font-weight: 700; padding: 10px 14px; text-align: left; border-bottom: 2px solid #bfe4ff; }
+  td { padding: 9px 14px; border-bottom: 1px solid #eaeef2; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  .quiz-section { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 12px; padding: 24px; margin: 24px 0; }
+  .quiz-q { font-size: 14px; font-weight: 600; color: #0d1117; margin-bottom: 12px; }
+  .quiz-options { display: flex; flex-direction: column; gap: 8px; }
+  .quiz-opt { padding: 10px 14px; background: #fff; border: 1.5px solid #d0d7de; border-radius: 8px; cursor: pointer; font-size: 13px; color: #24292f; transition: all .15s; }
+  .quiz-opt:hover { border-color: #0e4a66; background: #eff8ff; }
+  .quiz-opt.correct { border-color: #22c55e; background: #f0fff4; color: #166534; font-weight: 600; }
+  .quiz-opt.wrong { border-color: #f85149; background: #fff5f5; color: #cf222e; }
+  .quiz-feedback { display: none; margin-top: 10px; font-size: 13px; font-weight: 600; }
+  .quiz-feedback.show { display: block; }
+  .complete-section { background: linear-gradient(135deg, #0d1117, #0a2a3a); border-radius: 12px; padding: 28px; text-align: center; margin: 32px 0 0; }
+  .complete-section h3 { color: #fff; font-size: 18px; margin: 0 0 8px; }
+  .complete-section p { color: #8b949e; font-size: 13px; margin: 0 0 20px; }
+  .complete-btn { padding: 12px 32px; background: #0e4a66; color: #fff; border: none; border-radius: 8px; font-size: 14px; font-weight: 700; cursor: pointer; }
+  .divider { border: none; border-top: 1px solid #eaeef2; margin: 32px 0; }
+  .footer { padding: 20px 52px; border-top: 1px solid #eaeef2; font-size: 11px; color: #8c959f; text-align: center; }
+</style>
+</head>
+<body>
+<div class="doc">
+  <div class="hero">
+    <div class="hero-brand">AI-Prowler &middot; Human Resources &middot; Required Training</div>
+    <h1>🔒 Data Privacy &amp; Confidentiality</h1>
+    <p>Handling customer and company data responsibly is part of every role here. This training covers what counts as sensitive data, how to protect it, and what to do if something goes wrong.</p>
+    <div class="hero-meta">
+      <span class="hero-badge">⏱ 20 min</span>
+      <span class="hero-badge">📋 Required</span>
+      <span class="hero-badge">🔒 HIPAA / Privacy</span>
+    </div>
+  </div>
+  <div class="progress-bar">
+    <div class="progress-label"><span>Course Progress</span><span id="progress-pct">0%</span></div>
+    <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+  </div>
+  <div class="content">
+
+    <h2><span class="sec-num">1</span> Why This Matters</h2>
+    <p>Every day, you handle information that customers and coworkers trust AI-Prowler to protect — names, contact details, payment information, and sometimes health or other sensitive personal data. Mishandling that data isn't just a mistake; it can cause real harm to real people, and expose the company to legal liability.</p>
+    <div class="red-box">🚨 A data privacy violation — even an accidental one — must be reported. Trying to quietly fix it yourself is itself a policy violation.</div>
+
+    <h2><span class="sec-num">2</span> What Counts as Sensitive Data</h2>
+    <div class="card-grid">
+      <div class="trait-card"><div class="icon">🪪</div><h4>Personal Info (PII)</h4><p>Names, addresses, phone numbers, emails, Social Security numbers, dates of birth.</p></div>
+      <div class="trait-card"><div class="icon">💳</div><h4>Financial Data</h4><p>Payment card numbers, bank account details, payroll and compensation info.</p></div>
+      <div class="trait-card"><div class="icon">🏥</div><h4>Health Information</h4><p>Any medical, health, or disability-related information about a customer or employee.</p></div>
+      <div class="trait-card"><div class="icon">🔑</div><h4>Login Credentials</h4><p>Passwords, API keys, session tokens — anyone's, including your own.</p></div>
+      <div class="trait-card"><div class="icon">📊</div><h4>Business Data</h4><p>Client lists, pricing, contracts, and internal strategy — confidential to AI-Prowler.</p></div>
+      <div class="trait-card"><div class="icon">👤</div><h4>Employee Records</h4><p>Coworkers' HR files, performance reviews, and personal details.</p></div>
+    </div>
+
+    <h2><span class="sec-num">3</span> The Rules for Handling Data</h2>
+    <ul>
+      <li><strong>Need-to-know only:</strong> Only access data that's actually required for your role and current task.</li>
+      <li><strong>Company systems only:</strong> Never store customer or company data on personal devices, personal cloud accounts, or personal email.</li>
+      <li><strong>No casual sharing:</strong> Never discuss specific customer or employee data in public channels, social media, or outside conversations.</li>
+      <li><strong>Lock it up:</strong> Lock your screen whenever you step away, even at home.</li>
+      <li><strong>Minimum necessary:</strong> When sharing data internally, share only what the other person actually needs.</li>
+    </ul>
+    <div class="blue-box">📎 If you're ever unsure whether you're allowed to access or share something, don't guess — ask HR first.</div>
+
+    <h2><span class="sec-num">4</span> Account &amp; Password Security</h2>
+    <ul>
+      <li>Use a unique, strong password for every work account — never reuse passwords across sites</li>
+      <li>Never share your login credentials with anyone, including coworkers or your manager</li>
+      <li>Enable two-factor authentication wherever it's offered</li>
+      <li>Never write passwords down somewhere others could find them</li>
+    </ul>
+
+    <h2><span class="sec-num">5</span> Recognizing Phishing &amp; Social Engineering</h2>
+    <p>Attackers often try to trick employees into handing over access, rather than breaking in directly. Watch for:</p>
+    <ul>
+      <li>Urgent, pressuring emails or messages asking you to click a link or "verify" your account</li>
+      <li>Requests that seem to come from a manager or executive but feel slightly off</li>
+      <li>Login pages that look almost right, but the web address doesn't quite match</li>
+      <li>Anyone — internal or external — asking for your password "just this once"</li>
+    </ul>
+    <div class="highlight">🎣 When in doubt, don't click. Report suspicious messages to HR immediately instead of investigating them yourself.</div>
+
+    <h2><span class="sec-num">6</span> If You Suspect a Data Breach</h2>
+    <ol>
+      <li>Stop — don't try to fix it or cover it up on your own</li>
+      <li>Report it to HR immediately via the Messages tab or Incident Reports tab</li>
+      <li>Note what happened, when, and what data may have been involved</li>
+      <li>Follow any instructions HR gives you — do not discuss it outside the investigation</li>
+    </ol>
+    <div class="red-box">⏱ A data breach must be reported within hours, not days. Every hour of delay increases potential harm to the people affected.</div>
+
+    <h2><span class="sec-num">7</span> Confidentiality After Employment</h2>
+    <p>Your confidentiality and NDA obligations don't end when you leave AI-Prowler. Customer data, business strategy, and internal information you learned here must stay confidential — permanently, not just while you're employed.</p>
+
+    <h2><span class="sec-num">8</span> Personal Devices &amp; Remote Work</h2>
+    <div class="table-wrap">
+      <table>
+        <tr><th>Situation</th><th>What to Do</th></tr>
+        <tr><td>Working from a personal laptop</td><td>Only if company policy allows it, and only through approved systems</td></tr>
+        <tr><td>Public Wi-Fi</td><td>Use a VPN — never access sensitive data over open public Wi-Fi</td></tr>
+        <tr><td>Shared home space</td><td>Keep your screen turned away from others and lock it when stepping away</td></tr>
+        <tr><td>Printing sensitive documents</td><td>Avoid it — if unavoidable, shred immediately after use</td></tr>
+      </table>
+    </div>
+
+    <h2><span class="sec-num">9</span> Consequences of Violations</h2>
+    <div class="table-wrap">
+      <table>
+        <tr><th>Violation</th><th>Consequence</th></tr>
+        <tr><td>Accidental, promptly reported</td><td>Coaching, possible retraining</td></tr>
+        <tr><td>Careless handling, repeated</td><td>Written warning, formal retraining</td></tr>
+        <tr><td>Intentional misuse or sharing</td><td>Termination, possible legal action</td></tr>
+        <tr><td>Unreported known breach</td><td>Treated as seriously as the breach itself</td></tr>
+      </table>
+    </div>
+    <div class="green-box">✅ Reporting a mistake quickly is always better than hiding it. HR would rather help you fix a problem than discover it was hidden.</div>
+
+    <hr class="divider">
+    <h2><span class="sec-num">10</span> Knowledge Check</h2>
+    <p>Answer all 10 questions. You need 75% (8 of 10) to pass.</p>
+
+    <div class="quiz-section">
+      <div class="quiz-q">1. Which of these counts as sensitive data you must protect?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q1')">The company's public website content</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q1')">A customer's payment card number</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q1')">Publicly published pricing</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q1')">Your own job title</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q1"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">2. Where can customer or company data be stored?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q2')">Your personal Google Drive or Dropbox</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q2')">Only in company-approved systems</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q2')">A personal external hard drive, for backup</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q2')">Anywhere convenient, as long as it's password protected</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q2"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">3. Can you share your work account password with a coworker to help them out?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q3')">Yes, if you trust them</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q3')">Yes, but only temporarily</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q3')">No — never share your login credentials with anyone</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q3')">Only if your manager asks</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q3"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">4. You get an urgent email asking you to "verify your account" by clicking a link. What should you do?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q4')">Click it right away since it seems urgent</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q4')">Reply asking for more details</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q4')">Don't click — report it to HR as suspicious</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q4')">Forward it to a coworker to check first</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q4"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">5. You accidentally sent a file with customer data to the wrong person. What should you do?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q5')">Say nothing and hope it's not noticed</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q5')">Report it to HR right away</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q5')">Try to get the person to delete it yourself, quietly</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q5')">Wait to see if it becomes a problem first</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q5"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">6. How quickly must a suspected data breach be reported?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q6')">Within a week</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q6')">Within hours</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q6')">Only if a customer complains</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q6')">At your next scheduled check-in</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q6"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">7. Do your confidentiality obligations end when you leave AI-Prowler?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q7')">Yes, immediately upon leaving</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q7')">No — they continue after employment ends</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q7')">Only for one month</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q7')">Only if you were terminated</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q7"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">8. What should you use when accessing work data over public Wi-Fi?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q8')">Nothing extra — public Wi-Fi is fine</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q8')">A VPN</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q8')">A different email address</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q8')">Incognito mode only</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q8"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">9. What is the "need-to-know" principle?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q9')">Everyone should have access to all company data</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q9')">Only access data that's actually required for your role and current task</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q9')">Only managers need to follow data rules</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q9')">Data access is unrestricted after 90 days</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q9"></div>
+    </div>
+
+    <div class="quiz-section">
+      <div class="quiz-q">10. What is the likely consequence of intentionally misusing or sharing confidential data?</div>
+      <div class="quiz-options">
+        <div class="quiz-opt" onclick="answer(this,false,'q10')">A verbal reminder</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q10')">Nothing, if no one finds out</div>
+        <div class="quiz-opt" onclick="answer(this,true,'q10')">Termination, and possibly legal action</div>
+        <div class="quiz-opt" onclick="answer(this,false,'q10')">A mandatory apology only</div>
+      </div>
+      <div class="quiz-feedback" id="fb-q10"></div>
+    </div>
+
+    <div class="complete-section">
+      <div id="complete-prompt">
+        <h3>🔒 Ready to Complete?</h3>
+        <p>Answer all questions and click below to submit your results to HR.</p>
+        <button class="complete-btn" onclick="markComplete()">✅ Mark as Complete</button>
+      </div>
+      <div id="complete-done" style="display:none"></div>
+    </div>
+  </div>
+  <div class="footer">AI-Prowler &middot; Human Resources &middot; Data Privacy &amp; Confidentiality &middot; Required Training &middot; &copy; 2026 AI-Prowler</div>
+</div>
+<script>
+var quizAnswers={};
+function answer(el,correct,qid){
+  if(quizAnswers[qid])return;
+  quizAnswers[qid]=correct?'correct':'wrong';
+  var opts=el.parentElement.querySelectorAll('.quiz-opt');
+  opts.forEach(function(o){o.style.pointerEvents='none';});
+  if(correct){el.classList.add('correct');el.textContent='✅ '+el.textContent;}
+  else{el.classList.add('wrong');el.textContent='❌ '+el.textContent;opts.forEach(function(o){if(o.getAttribute('onclick')&&o.getAttribute('onclick').includes('true')){o.classList.add('correct');o.textContent='✅ '+o.textContent;}});}
+  var fb=document.getElementById('fb-'+qid);
+  if(fb){fb.textContent=correct?'✅ Correct!':'❌ Not quite — review the section above.';fb.style.color=correct?'#166534':'#cf222e';fb.classList.add('show');}
+  var pct=Math.round((Object.keys(quizAnswers).length/10)*100);
+  document.getElementById('progress-fill').style.width=pct+'%';
+  document.getElementById('progress-pct').textContent=pct+'%';
+}
+function markComplete(){
+  var correct=Object.values(quizAnswers).filter(function(v){return v==='correct';}).length;
+  var pct=Math.round((correct/10)*100);
+  var passed=pct>=75;
+  document.getElementById('complete-prompt').style.display='none';
+  document.getElementById('complete-done').style.display='block';
+  document.getElementById('progress-fill').style.width='100%';
+  document.getElementById('progress-pct').textContent='100%';
+  document.getElementById('complete-done').innerHTML='<div style="font-size:48px;margin-bottom:12px">'+(passed?'🎉':'📋')+'</div><h3 style="color:'+(passed?'#3fb950':'#f0a500')+';margin:0 0 8px">'+(passed?'Training Complete!':'Review Recommended')+'</h3><p style="color:#8b949e;font-size:13px">Score: <strong style="color:'+(passed?'#3fb950':'#f0a500')+'">'+correct+'/10 ('+pct+'%)</strong> — '+(passed?'Great work — you\\'re clear on data privacy!':'Score below 75%. Review and try again.')+'</p>';
+  var empName='Employee';
+  try{var s=JSON.parse(window.parent.localStorage.getItem('hr_portal_session')||'{}');if(s.name)empName=s.name;}catch(e){}
+  var labels=['Identifying sensitive data','Where data can be stored','Sharing login credentials','Suspicious verification email','Accidental data mishandling','Data breach reporting time','Confidentiality after employment','Public Wi-Fi safety','Need-to-know principle','Intentional misuse consequence'];
+  var body='=== TRAINING COMPLETION REPORT ===\n\nTraining: Data Privacy & Confidentiality (Required)\nEmployee: '+empName+'\nDate: '+new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})+'\nTime: '+new Date().toLocaleTimeString()+'\nScore: '+correct+'/10 ('+pct+'%)\nResult: '+(passed?'✅ PASSED':'⚠️ NEEDS REVIEW')+'\n\n--- Quiz Results ---\n';
+  labels.forEach(function(q,i){var ans=quizAnswers['q'+(i+1)];body+=(i+1)+'. '+q+': '+(ans==='correct'?'✅ Correct':ans==='wrong'?'❌ Incorrect':'— Not answered')+'\n';});
+  body+='\n'+(passed?'✅ Employee completed required Data Privacy & Confidentiality training.':'⚠️ Employee did not pass. Consider following up.');
+  fetch('/hr-api/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sender_name:empName,subject:'🔒 Training Complete — Data Privacy & Confidentiality — '+empName+' — '+pct+'% ('+(passed?'PASSED':'NEEDS REVIEW')+')',body:body,message_type:'training_result'})}).catch(function(){});
+  try{window.parent.postMessage({type:'training-complete',id:'data-privacy-confidentiality',employee:empName,score:pct,passed:passed},'*');}catch(e){}
+}
+</script>
+</body>
+</html>

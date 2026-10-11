@@ -22,7 +22,7 @@ import pytest
 # ── Config ────────────────────────────────────────────────────────────────
 PASS_THRESHOLD_SECONDS = 20   # fail if slower than this
 TOOL_NAME = "check_ai_prowler_status"
-PYTHON_EXE = r'C:\Users\david\AppData\Local\Programs\Python\Python311\python.exe'
+PYTHON_EXE = r'C:\Users\jamie\AppData\Local\Programs\Python\Python311\python.exe'
 WORKDIR_MCP = Path(__file__).resolve().parents[2] / 'ai_prowler_mcp.py'
 HOME = Path.home() / '.ai-prowler'
 TOKEN_FILE = HOME / 'claude_oauth_token.txt'
