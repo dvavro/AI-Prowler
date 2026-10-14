@@ -1,0 +1,4 @@
+optional_groups recorded: {'personal': {'job_tracker': True, 'sms_whatsapp': False}}
+jobs in use: True
+sms config keys: ['edition', 'expires_at', 'license_key', 'mode', 'owner_city', 'owner_name', 'owner_state', 'owner_street', 'owner_zip', 'plan', 'remote_token', 'seats']
+sms backend: TwilioBackend | validate_config: (False, '❌ Twilio is not configured.\n\nMissing: Account SID, Auth Token, From Number\n\nGo to Settings → SMS / Text Messaging (Twilio — Paid), enable it, and fill in your credentials.')

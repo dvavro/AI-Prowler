@@ -1,0 +1,1 @@
+{"mode": "server", "sms_provider": "twilio", "twilio_account_sid": "ACtimemachine", "twilio_auth_token": "time-machine", "twilio_from_number": "+15550100000", "edition": "business", "test_mode": true, "license_key": "TIME-MACHINE-TEST", "tunnel_domain": "", "owner_name": "ZT Owner"}

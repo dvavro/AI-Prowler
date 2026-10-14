@@ -1,0 +1,14 @@
+AI-Prowler Jobs app E2E — SERVER MODE — FAIL
+Finished: 2026-10-12 18:47:03   Tier: safe   Sandbox date: 2026-10-12
+Users: U1 · David Vavro · owner, U2 · Vicki Vavro · manager, U3 · Samual Cronin · field_crew
+Tests: 17 passed, 2 failed, 0 skipped
+Cleanup: {'route_days': 0, 'customers': 0, 'jobs': 0, 'prices': 0}
+Cleanup: 0 ZTEST rows left ✅
+
+Failed tests (screenshots per user: failures\<test>\<user>.png):
+  ✗ gui_jobs_e2e_server/test_srv_hr_features.py::test_HF_02_onboarding_tasks  (0.1s)
+      E   AssertionError: Samual has no onboarding tasks — the server isn't generating them (is hr_task_templates.json in the install folder?)
+  ✗ gui_jobs_e2e_server/test_srv_hr_features.py::test_HF_18_termination_ends_portal_access_and_starts_offboarding  (0.1s)
+      E   AssertionError: {'ok': True, 'employee': {'id': 'EMP-00002', 'status': 'Terminated', 'first_name': 'ZTEST HF2', 'last_name': '2B12B1', ...}, 'changed': ['end_date', 'status', 'termination_notes'], 'offboarding_tasks_
+
+Full log: C:\Users\david\AI-Prowler-V910_to_V920_work\AI-Prowler\tests\gui_jobs_e2e_server\artifacts\20261012_184600\run.log

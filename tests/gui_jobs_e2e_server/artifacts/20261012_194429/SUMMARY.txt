@@ -1,0 +1,8 @@
+AI-Prowler Jobs app E2E — SERVER MODE — PASS
+Finished: 2026-10-12 19:47:11   Tier: safe   Sandbox date: 2026-10-12
+Users: U1 · David Vavro · owner, U2 · Vicki Vavro · manager, U3 · Samual Cronin · field_crew
+Tests: 27 passed, 0 failed, 0 skipped
+Cleanup: {'route_days': 0, 'customers': 0, 'jobs': 0, 'prices': 0}
+Cleanup: 0 ZTEST rows left ✅
+
+Full log: C:\Users\david\AI-Prowler-V910_to_V920_work\AI-Prowler\tests\gui_jobs_e2e_server\artifacts\20261012_194429\run.log

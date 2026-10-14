@@ -1,0 +1,16 @@
+AI-Prowler Jobs app E2E — SERVER MODE — FAIL
+Finished: 2026-10-13 09:47:17   Tier: safe   Sandbox date: 2026-10-13
+Users: U1 · David Vavro · owner, U2 · Vicki Vavro · manager, U3 · Samual Cronin · field_crew
+Tests: 153 passed, 3 failed, 11 skipped
+Cleanup: {'route_days': 0, 'customers': 0, 'jobs': 0, 'prices': 0}
+Cleanup: 0 ZTEST rows left ✅
+
+Failed tests (screenshots per user: failures\<test>\<user>.png):
+  ✗ gui_jobs_e2e_server/test_srv_email_route.py::test_SRV_SCOPE_13_crew_email_route_is_forced_to_own_route[Vicki Vavro]  (0.3s)
+      E   AssertionError: ⚠️ Email is only allowed for approved routes — approve the route first.
+  ✗ gui_jobs_e2e_server/test_srv_email_route.py::test_SRV_SCOPE_13_crew_email_route_is_forced_to_own_route[]  (0.3s)
+      E   AssertionError: ⚠️ Email is only allowed for approved routes — approve the route first.
+  ✗ gui_jobs_e2e_server/test_srv_email_route.py::test_SRV_SCOPE_13_control_owner_can_ask_for_another_crews_route  (0.3s)
+      E   AssertionError: owner's request for Vicki's route wasn't honoured: '⚠️ Email is only allowed for approved routes — approve the route first.'
+
+Full log: C:\Users\david\AI-Prowler-V910_to_V920_work\AI-Prowler\tests\gui_jobs_e2e_server\artifacts\20261013_085727\run.log

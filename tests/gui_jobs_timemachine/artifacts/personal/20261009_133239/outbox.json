@@ -1,0 +1,142 @@
+[
+ {
+  "kind": "email",
+  "sim_time": "2026-10-12T06:30",
+  "to": "owner@time-machine.test",
+  "subject": "=?utf-8?q?=F0=9F=93=85_6_customer=28s=29_due_for_a_check-in?=",
+  "body": "6 active customer(s) haven't been serviced in 21+ days:\n\n  • ZT Riverside Cafe — never serviced\n  • ZT Library Annex — never serviced\n  • ZT Flagler Ave Shops — never serviced\n  • ZT Sports Complex — never serviced\n  • ZT Canal Street Gallery — never serviced\n  • ZT Beachside Condos — never serviced\n\nOpen Reports → Customer Reminders in the Jobs app to review and send reminders."
+ },
+ {
+  "kind": "email",
+  "sim_time": "2026-10-13T07:00",
+  "to": "owner@time-machine.test",
+  "subject": "=?utf-8?q?=F0=9F=93=85_5_customer=28s=29_due_for_a_check-in?=",
+  "body": "5 active customer(s) haven't been serviced in 21+ days:\n\n  • ZT Library Annex — never serviced\n  • ZT Flagler Ave Shops — never serviced\n  • ZT Sports Complex — never serviced\n  • ZT Canal Street Gallery — never serviced\n  • ZT Beachside Condos — never serviced\n\nOpen Reports → Customer Reminders in the Jobs app to review and send reminders."
+ },
+ {
+  "kind": "email",
+  "sim_time": "2026-10-14T07:00",
+  "to": "owner@time-machine.test",
+  "subject": "=?utf-8?q?=F0=9F=93=85_4_customer=28s=29_due_for_a_check-in?=",
+  "body": "4 active customer(s) haven't been serviced in 21+ days:\n\n  • ZT Flagler Ave Shops — never serviced\n  • ZT Sports Complex — never serviced\n  • ZT Canal Street Gallery — never serviced\n  • ZT Beachside Condos — never serviced\n\nOpen Reports → Customer Reminders in the Jobs app to review and send reminders."
+ },
+ {
+  "kind": "email",
+  "sim_time": "2026-10-15T07:00",
+  "to": "owner@time-machine.test",
+  "subject": "=?utf-8?q?=F0=9F=93=85_2_customer=28s=29_due_for_a_check-in?=",
+  "body": "2 active customer(s) haven't been serviced in 21+ days:\n\n  • ZT Sports Complex — never serviced\n  • ZT Beachside Condos — never serviced\n\nOpen Reports → Customer Reminders in the Jobs app to review and send reminders."
+ },
+ {
+  "kind": "email",
+  "sim_time": "2026-10-16T07:00",
+  "to": "owner@time-machine.test",
+  "subject": "=?utf-8?q?=F0=9F=93=85_1_customer=28s=29_due_for_a_check-in?=",
+  "body": "1 active customer(s) haven't been serviced in 21+ days:\n\n  • ZT Beachside Condos — never serviced\n\nOpen Reports → Customer Reminders in the Jobs app to review and send reminders."
+ },
+ {
+  "kind": "email",
+  "sim_time": "2026-10-17T07:00",
+  "to": "owner@time-machine.test",
+  "subject": "=?utf-8?q?=F0=9F=93=85_1_customer=28s=29_due_for_a_check-in?=",
+  "body": "1 active customer(s) haven't been serviced in 21+ days:\n\n  • ZT Beachside Condos — never serviced\n\nOpen Reports → Customer Reminders in the Jobs app to review and send reminders."
+ },
+ {
+  "kind": "email",
+  "sim_time": "2026-10-19T07:00",
+  "to": "owner@time-machine.test",
+  "subject": "=?utf-8?q?=F0=9F=93=85_1_customer=28s=29_due_for_a_check-in?=",
+  "body": "1 active customer(s) haven't been serviced in 21+ days:\n\n  • ZT Beachside Condos — never serviced\n\nOpen Reports → Customer Reminders in the Jobs app to review and send reminders."
+ },
+ {
+  "kind": "email",
+  "sim_time": "2026-11-04T07:00",
+  "to": "owner@time-machine.test",
+  "subject": "=?utf-8?q?=F0=9F=93=85_1_customer=28s=29_due_for_a_check-in?=",
+  "body": "1 active customer(s) haven't been serviced in 21+ days:\n\n  • ZT Canal Street Gallery — 21 days ago\n\nOpen Reports → Customer Reminders in the Jobs app to review and send reminders."
+ },
+ {
+  "kind": "email",
+  "sim_time": "2026-11-05T07:00",
+  "to": "owner@time-machine.test",
+  "subject": "=?utf-8?q?=F0=9F=93=85_3_customer=28s=29_due_for_a_check-in?=",
+  "body": "3 active customer(s) haven't been serviced in 21+ days:\n\n  • ZT Canal Street Gallery — 22 days ago\n  • ZT Sports Complex — 21 days ago\n  • ZT Beachside Condos — 21 days ago\n\nOpen Reports → Customer Reminders in the Jobs app to review and send reminders."
+ },
+ {
+  "kind": "email",
+  "sim_time": "2026-11-06T07:00",
+  "to": "owner@time-machine.test",
+  "subject": "=?utf-8?q?=F0=9F=93=85_3_customer=28s=29_due_for_a_check-in?=",
+  "body": "3 active customer(s) haven't been serviced in 21+ days:\n\n  • ZT Canal Street Gallery — 23 days ago\n  • ZT Sports Complex — 22 days ago\n  • ZT Beachside Condos — 22 days ago\n\nOpen Reports → Customer Reminders in the Jobs app to review and send reminders."
+ },
+ {
+  "kind": "email",
+  "sim_time": "2026-11-09T07:00",
+  "to": "owner@time-machine.test",
+  "subject": "=?utf-8?q?=F0=9F=93=85_3_customer=28s=29_due_for_a_check-in?=",
+  "body": "3 active customer(s) haven't been serviced in 21+ days:\n\n  • ZT Canal Street Gallery — 26 days ago\n  • ZT Sports Complex — 25 days ago\n  • ZT Beachside Condos — 25 days ago\n\nOpen Reports → Customer Reminders in the Jobs app to review and send reminders."
+ },
+ {
+  "kind": "email",
+  "sim_time": "2026-11-10T07:00",
+  "to": "owner@time-machine.test",
+  "subject": "=?utf-8?q?=F0=9F=93=85_3_customer=28s=29_due_for_a_check-in?=",
+  "body": "3 active customer(s) haven't been serviced in 21+ days:\n\n  • ZT Canal Street Gallery — 27 days ago\n  • ZT Sports Complex — 26 days ago\n  • ZT Beachside Condos — 26 days ago\n\nOpen Reports → Customer Reminders in the Jobs app to review and send reminders."
+ },
+ {
+  "kind": "email",
+  "sim_time": "2026-11-11T07:00",
+  "to": "owner@time-machine.test",
+  "subject": "=?utf-8?q?=F0=9F=93=85_3_customer=28s=29_due_for_a_check-in?=",
+  "body": "3 active customer(s) haven't been serviced in 21+ days:\n\n  • ZT Canal Street Gallery — 28 days ago\n  • ZT Sports Complex — 27 days ago\n  • ZT Beachside Condos — 27 days ago\n\nOpen Reports → Customer Reminders in the Jobs app to review and send reminders."
+ },
+ {
+  "kind": "email",
+  "sim_time": "2026-11-12T07:00",
+  "to": "owner@time-machine.test",
+  "subject": "=?utf-8?q?=F0=9F=93=85_3_customer=28s=29_due_for_a_check-in?=",
+  "body": "3 active customer(s) haven't been serviced in 21+ days:\n\n  • ZT Canal Street Gallery — 29 days ago\n  • ZT Sports Complex — 28 days ago\n  • ZT Beachside Condos — 28 days ago\n\nOpen Reports → Customer Reminders in the Jobs app to review and send reminders."
+ },
+ {
+  "kind": "email",
+  "sim_time": "2026-11-13T07:00",
+  "to": "owner@time-machine.test",
+  "subject": "=?utf-8?q?=F0=9F=93=85_3_customer=28s=29_due_for_a_check-in?=",
+  "body": "3 active customer(s) haven't been serviced in 21+ days:\n\n  • ZT Canal Street Gallery — 30 days ago\n  • ZT Sports Complex — 29 days ago\n  • ZT Beachside Condos — 29 days ago\n\nOpen Reports → Customer Reminders in the Jobs app to review and send reminders."
+ },
+ {
+  "kind": "email",
+  "sim_time": "2026-11-16T07:00",
+  "to": "owner@time-machine.test",
+  "subject": "=?utf-8?q?=F0=9F=93=85_3_customer=28s=29_due_for_a_check-in?=",
+  "body": "3 active customer(s) haven't been serviced in 21+ days:\n\n  • ZT Canal Street Gallery — 33 days ago\n  • ZT Sports Complex — 32 days ago\n  • ZT Beachside Condos — 32 days ago\n\nOpen Reports → Customer Reminders in the Jobs app to review and send reminders."
+ },
+ {
+  "kind": "email",
+  "sim_time": "2026-11-17T07:00",
+  "to": "owner@time-machine.test",
+  "subject": "=?utf-8?q?=F0=9F=93=85_2_customer=28s=29_due_for_a_check-in?=",
+  "body": "2 active customer(s) haven't been serviced in 21+ days:\n\n  • ZT Canal Street Gallery — 34 days ago\n  • ZT Beachside Condos — 33 days ago\n\nOpen Reports → Customer Reminders in the Jobs app to review and send reminders."
+ },
+ {
+  "kind": "email",
+  "sim_time": "2026-11-18T07:00",
+  "to": "owner@time-machine.test",
+  "subject": "=?utf-8?q?=F0=9F=93=85_2_customer=28s=29_due_for_a_check-in?=",
+  "body": "2 active customer(s) haven't been serviced in 21+ days:\n\n  • ZT Canal Street Gallery — 35 days ago\n  • ZT Beachside Condos — 34 days ago\n\nOpen Reports → Customer Reminders in the Jobs app to review and send reminders."
+ },
+ {
+  "kind": "email",
+  "sim_time": "2026-11-19T07:00",
+  "to": "owner@time-machine.test",
+  "subject": "=?utf-8?q?=F0=9F=93=85_2_customer=28s=29_due_for_a_check-in?=",
+  "body": "2 active customer(s) haven't been serviced in 21+ days:\n\n  • ZT Canal Street Gallery — 36 days ago\n  • ZT Beachside Condos — 35 days ago\n\nOpen Reports → Customer Reminders in the Jobs app to review and send reminders."
+ },
+ {
+  "kind": "email",
+  "sim_time": "2026-11-20T07:00",
+  "to": "owner@time-machine.test",
+  "subject": "=?utf-8?q?=F0=9F=93=85_2_customer=28s=29_due_for_a_check-in?=",
+  "body": "2 active customer(s) haven't been serviced in 21+ days:\n\n  • ZT Canal Street Gallery — 37 days ago\n  • ZT Beachside Condos — 36 days ago\n\nOpen Reports → Customer Reminders in the Jobs app to review and send reminders."
+ }
+]

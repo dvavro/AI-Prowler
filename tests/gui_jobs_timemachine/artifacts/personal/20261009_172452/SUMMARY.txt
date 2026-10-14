@@ -1,0 +1,11 @@
+AI-Prowler Jobs app TIME MACHINE (personal mode) — FAIL
+Finished: 2026-10-09 17:25:03   (throwaway copy of the app — real data never touched)
+Tests: 1 passed, 1 failed, 2 skipped
+Sandbox: 
+Outbox (caught, never sent): empty
+
+Failed tests:
+  ✗ gui_jobs_timemachine/test_tm_reports_year.py::test_TR_02_day_zero_calendar_and_year_of_reports[chromium]  (3.0s)
+      E   AssertionError: day 0: Reports differs from the rules in 14 place(s):
+
+Full log: C:\Users\david\AI-Prowler-V910_to_V920_work\AI-Prowler\tests\gui_jobs_timemachine\artifacts\personal\20261009_172452\run.log

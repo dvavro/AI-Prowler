@@ -1,0 +1,12 @@
+AI-Prowler Remote PWA E2E — FAIL
+Finished: 2026-10-10 19:58:31
+Tests: 10 passed, 1 failed, 0 skipped
+Cleanup: {'learnings': 0, 'tasks': 0, 'files': 1}
+Cleanup: 0 ZTEST items left ✅
+Access-only test folder: clean ✅
+
+Failed tests (screenshots: failures\):
+  ✗ gui_remote_e2e/test_remote_access_only.py::test_AO_10_upload_into_access_only_folder_is_not_indexed[chromium]  (63.3s)
+      E   playwright._impl._errors.TimeoutError: Timeout 60000ms exceeded while waiting for event "response"
+
+Full log: C:\Users\david\AI-Prowler-V910_to_V920_work\AI-Prowler\tests\gui_remote_e2e\artifacts\20261010_195427\run.log

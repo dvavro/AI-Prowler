@@ -1,5 +1,5 @@
 # AI-Prowler — Complete User Guide
-## Version 9.2.0
+## Version 9.3.0
 
 ---
 

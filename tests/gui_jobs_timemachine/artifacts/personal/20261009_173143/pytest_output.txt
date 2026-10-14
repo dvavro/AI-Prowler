@@ -1,0 +1,38 @@
+C:\Users\david\AppData\Local\Programs\Python\Python311\python.exe -m pytest C:\Users\david\AI-Prowler-V910_to_V920_work\AI-Prowler\tests\gui_jobs_timemachine -m jobs_gui_timemachine -p no:cacheprovider --browser-channel msedge --tracing retain-on-failure --video retain-on-failure --screenshot only-on-failure --output C:\Users\david\AI-Prowler-V910_to_V920_work\AI-Prowler\tests\gui_jobs_timemachine\artifacts\personal\20261009_173143\failures --headed --slowmo 600
+
+[1m============================= test session starts =============================[0m
+platform win32 -- Python 3.11.8, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\david\AppData\Local\Programs\Python\Python311\python.exe
+rootdir: C:\Users\david\AI-Prowler-V910_to_V920_work\AI-Prowler\tests
+configfile: pytest.ini
+plugins: anyio-4.15.1, base-url-2.1.0, playwright-0.9.0, time-machine-3.5.1
+[1mcollecting ... [0mcollected 16 items
+
+tests\gui_jobs_timemachine\test_tm_reports_year.py::test_TR_01_setup_a_business_with_history[chromium] [32mPASSED[0m[33m [  6%][0m
+tests\gui_jobs_timemachine\test_tm_reports_year.py::test_TR_02_day_zero_calendar_and_year_of_reports[chromium] [32mPASSED[0m[33m [ 12%][0m
+tests\gui_jobs_timemachine\test_tm_reports_year.py::test_TR_03_six_weeks_of_recurring_work[chromium] [32mPASSED[0m[33m [ 18%][0m
+tests\gui_jobs_timemachine\test_tm_reports_year.py::test_TR_04_six_weeks_later_calendar_and_year_of_reports[chromium] [32mPASSED[0m[33m [ 25%][0m
+tests\gui_jobs_timemachine\test_tm_six_weeks.py::test_TM_01_setup_day_zero[chromium] [32mPASSED[0m[33m [ 31%][0m
+tests\gui_jobs_timemachine\test_tm_six_weeks.py::test_TM_02_day_one_in_the_app[chromium] [32mPASSED[0m[33m [ 37%][0m
+tests\gui_jobs_timemachine\test_tm_six_weeks.py::test_TM_03_walk_to_the_overrun[chromium] [32mPASSED[0m[33m [ 43%][0m
+tests\gui_jobs_timemachine\test_tm_six_weeks.py::test_TM_04_overrun_carries_to_the_next_day[chromium] [32mPASSED[0m[33m [ 50%][0m
+tests\gui_jobs_timemachine\test_tm_six_weeks.py::test_TM_04b_calendar_projects_the_recurring_visits[chromium] [32mPASSED[0m[33m [ 56%][0m
+tests\gui_jobs_timemachine\test_tm_six_weeks.py::test_TM_05_walk_to_the_end[chromium] [32mPASSED[0m[33m [ 62%][0m
+tests\gui_jobs_timemachine\test_tm_six_weeks.py::test_TM_05b_idle_session_expires[chromium] [33mSKIPPED[0m[33m [ 68%][0m
+tests\gui_jobs_timemachine\test_tm_six_weeks.py::test_TM_06_last_day_reminders_screen[chromium] [32mPASSED[0m[33m [ 75%][0m
+tests\gui_jobs_timemachine\test_tm_six_weeks.py::test_TM_06b_manager_reports[chromium] [33mSKIPPED[0m[33m [ 81%][0m
+tests\gui_jobs_timemachine\test_tm_six_weeks.py::test_TM_06c_staff_reports[chromium] [33mSKIPPED[0m[33m [ 87%][0m
+tests\gui_jobs_timemachine\test_tm_six_weeks.py::test_TM_06d_field_crew_has_no_reports_tab[chromium] [33mSKIPPED[0m[33m [ 93%][0m
+tests\gui_jobs_timemachine\test_tm_six_weeks.py::test_TM_07_the_six_weeks_add_up[chromium] [32mPASSED[0m[33m [100%][0m
+
+[33m============================== warnings summary ===============================[0m
+..\..\AppData\Local\Programs\Python\Python311\Lib\importlib\__init__.py:126
+  C:\Users\david\AppData\Local\Programs\Python\Python311\Lib\importlib\__init__.py:126: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    return _bootstrap._gcd_import(name[level:], package, level)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+[36m[1m=========================== short test summary info ===========================[0m
+[33mSKIPPED[0m [1] tests\gui_jobs_timemachine\test_tm_six_weeks.py:520: server mode only (personal mode has no per-user sessions)
+[33mSKIPPED[0m [1] tests\gui_jobs_timemachine\test_tm_six_weeks.py:574: server mode only (personal mode has only the owner)
+[33mSKIPPED[0m [1] tests\gui_jobs_timemachine\test_tm_six_weeks.py:580: server mode only (personal mode has only the owner)
+[33mSKIPPED[0m [1] tests\gui_jobs_timemachine\test_tm_six_weeks.py:586: server mode only
+[33m============= [32m12 passed[0m, [33m[1m4 skipped[0m, [33m[1m1 warning[0m[33m in 77.59s (0:01:17)[0m[33m =============[0m

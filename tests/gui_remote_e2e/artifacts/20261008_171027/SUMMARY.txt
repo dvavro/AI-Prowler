@@ -1,0 +1,8 @@
+AI-Prowler Remote PWA E2E — FAIL
+Finished: 2026-10-08 17:37:00
+NO TESTS RAN (pytest exit code 1) — see pytest_output.txt
+Tests: 0 passed, 0 failed, 0 skipped
+Cleanup: None
+
+
+Full log: C:\Users\david\AI-Prowler-V910_to_V920_work\AI-Prowler\tests\gui_remote_e2e\artifacts\20261008_171027\run.log

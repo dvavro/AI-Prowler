@@ -1,0 +1,52 @@
+C:\Users\david\AppData\Local\Programs\Python\Python311\python.exe -m pytest C:\Users\david\AI-Prowler-V910_to_V920_work\AI-Prowler\tests\gui_jobs_timemachine -m jobs_gui_timemachine -p no:cacheprovider --browser-channel msedge --tracing retain-on-failure --video retain-on-failure --screenshot only-on-failure --output C:\Users\david\AI-Prowler-V910_to_V920_work\AI-Prowler\tests\gui_jobs_timemachine\artifacts\personal\20261009_172708\failures --headed --slowmo 600 -k test_tm_reports_year
+
+[1m============================= test session starts =============================[0m
+platform win32 -- Python 3.11.8, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\david\AppData\Local\Programs\Python\Python311\python.exe
+rootdir: C:\Users\david\AI-Prowler-V910_to_V920_work\AI-Prowler\tests
+configfile: pytest.ini
+plugins: anyio-4.15.1, base-url-2.1.0, playwright-0.9.0, time-machine-3.5.1
+[1mcollecting ... [0mcollected 16 items / 12 deselected / 4 selected
+
+tests\gui_jobs_timemachine\test_tm_reports_year.py::test_TR_01_setup_a_business_with_history[chromium] [32mPASSED[0m[33m [ 25%][0m
+tests\gui_jobs_timemachine\test_tm_reports_year.py::test_TR_02_day_zero_calendar_and_year_of_reports[chromium] [31mFAILED[0m[31m [ 50%][0m
+tests\gui_jobs_timemachine\test_tm_reports_year.py::test_TR_03_six_weeks_of_recurring_work[chromium] [33mSKIPPED[0m[31m [ 75%][0m
+tests\gui_jobs_timemachine\test_tm_reports_year.py::test_TR_04_six_weeks_later_calendar_and_year_of_reports[chromium] [33mSKIPPED[0m[31m [100%][0m
+
+================================== FAILURES ===================================
+[31m[1m_________ test_TR_02_day_zero_calendar_and_year_of_reports[chromium] __________[0m
+[1m[31mtests\gui_jobs_timemachine\test_tm_reports_year.py[0m:506: in test_TR_02_day_zero_calendar_and_year_of_reports
+    [0m[94massert[39;49;00m (three_wk[[33m"[39;49;00m[33mactual_rev[39;49;00m[33m"[39;49;00m], three_wk[[33m"[39;49;00m[33mproj_rev[39;49;00m[33m"[39;49;00m], three_wk[[33m"[39;49;00m[33mactual_tax[39;49;00m[33m"[39;49;00m], three_wk[[33m"[39;49;00m[33mproj_tax[39;49;00m[33m"[39;49;00m],[90m[39;49;00m
+[1m[31mE   AssertionError: {'label': '9/21', 'current': False, 'actual_rev': 1110, 'proj_rev': 60, ...}[0m
+[1m[31mE   assert (1110, 60, 70, 0, 5.5) == (254, 60, 14, 0, 2.5)[0m
+[1m[31mE     [0m
+[1m[31mE     At index 0 diff: [0m[94m1110[39;49;00m[90m[39;49;00m != [0m[94m254[39;49;00m[90m[39;49;00m[0m
+[1m[31mE     [0m
+[1m[31mE     Full diff:[0m
+[1m[31mE     [0m[90m [39;49;00m ([90m[39;49;00m[0m
+[1m[31mE     [91m-     254,[39;49;00m[90m[39;49;00m[0m
+[1m[31mE     [92m+     1110,[39;49;00m[90m[39;49;00m...[0m
+[1m[31mE     [0m
+[1m[31mE     ...Full output truncated (9 lines hidden), use '-vv' to show[0m
+----------------------------- Captured log setup ------------------------------
+[32mINFO    [0m e2e:conftest.py:51 [test_TR_02_day_zero_calendar_and_year_of_reports[chromium]] ===== START gui_jobs_timemachine/test_tm_reports_year.py::test_TR_02_day_zero_calendar_and_year_of_reports[chromium]
+[32mINFO    [0m e2e:conftest.py:51 [test_TR_02_day_zero_calendar_and_year_of_reports[chromium]] STEP open http://127.0.0.1:53136/jobs/
+------------------------------ Captured log call ------------------------------
+[32mINFO    [0m e2e:conftest.py:51 [test_TR_02_day_zero_calendar_and_year_of_reports[chromium]] ⏰ CLOCK -> Mon 2026-10-12 07:00
+[32mINFO    [0m e2e:conftest.py:51 [test_TR_02_day_zero_calendar_and_year_of_reports[chromium]] STEP go to screen 'calendar'
+[32mINFO    [0m e2e:conftest.py:51 [test_TR_02_day_zero_calendar_and_year_of_reports[chromium]] day 0: calendar shows 92 🔮 recurring visits (12 months) — as expected
+[32mINFO    [0m e2e:conftest.py:51 [test_TR_02_day_zero_calendar_and_year_of_reports[chromium]] STEP go to screen 'reports'
+[32mINFO    [0m e2e:conftest.py:51 [test_TR_02_day_zero_calendar_and_year_of_reports[chromium]] REPORTS weeks each direction → 26
+[32mINFO    [0m e2e:conftest.py:51 [test_TR_02_day_zero_calendar_and_year_of_reports[chromium]] day 0: Reports year totals (53 weeks) {'actual_rev': 2594.0, 'proj_rev': 8327.0, 'actual_tax': 154.0, 'proj_tax': 546.0, 'actual_hrs': 19.5, 'proj_hrs': 68.5}
+---------------------------- Captured log teardown ----------------------------
+[32mINFO    [0m e2e:conftest.py:51 [test_TR_02_day_zero_calendar_and_year_of_reports[chromium]] ===== END   gui_jobs_timemachine/test_tm_reports_year.py::test_TR_02_day_zero_calendar_and_year_of_reports[chromium]
+[33m============================== warnings summary ===============================[0m
+..\..\AppData\Local\Programs\Python\Python311\Lib\importlib\__init__.py:126
+  C:\Users\david\AppData\Local\Programs\Python\Python311\Lib\importlib\__init__.py:126: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    return _bootstrap._gcd_import(name[level:], package, level)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+[36m[1m=========================== short test summary info ===========================[0m
+[33mSKIPPED[0m [1] tests\gui_jobs_timemachine\test_tm_reports_year.py:535: an earlier step of the story failed (test_TR_02_day_zero_calendar_and_year_of_reports[chromium])
+[33mSKIPPED[0m [1] tests\gui_jobs_timemachine\test_tm_reports_year.py:577: an earlier step of the story failed (test_TR_02_day_zero_calendar_and_year_of_reports[chromium])
+[31mFAILED[0m tests\gui_jobs_timemachine\test_tm_reports_year.py::[1mtest_TR_02_day_zero_calendar_and_year_of_reports[chromium][0m - AssertionError: {'label': '9/21', 'current': False, 'actual_rev': 1110, 'pr...
+[31m====== [31m[1m1 failed[0m, [32m1 passed[0m, [33m2 skipped[0m, [33m12 deselected[0m, [33m1 warning[0m[31m in 11.18s[0m[31m ======[0m

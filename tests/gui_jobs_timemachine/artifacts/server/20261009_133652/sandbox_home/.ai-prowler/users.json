@@ -1,0 +1,60 @@
+{
+ "company_id": "ZT-TIME-MACHINE",
+ "users": {
+  "5Um2iD-qqex_Ix_vVkCJc4_vtHNjRUuZ": {
+   "name": "ZT Owner",
+   "role": "owner",
+   "status": "active",
+   "scopes": [],
+   "private_collection_enabled": false,
+   "can_manage_users": true,
+   "email": "owner@time-machine.test",
+   "cell_phone": "+15550100001",
+   "home_address": "210 Sams Ave, New Smyrna Beach, FL 32168"
+  },
+  "7D6ErliIyX3g7cEhdwmcHxfLzS0JNPGX": {
+   "name": "ZT Manager",
+   "role": "manager",
+   "status": "active",
+   "scopes": [],
+   "private_collection_enabled": false,
+   "can_manage_users": false,
+   "email": "manager@time-machine.test",
+   "cell_phone": "+15550100002",
+   "home_address": "210 Sams Ave, New Smyrna Beach, FL 32168"
+  },
+  "XsX1X9BB1luYoIXslwm60mfb2PynzK_J": {
+   "name": "ZT Office Sam",
+   "role": "staff",
+   "status": "active",
+   "scopes": [],
+   "private_collection_enabled": false,
+   "can_manage_users": false,
+   "email": "staff@time-machine.test",
+   "cell_phone": "+15550100005",
+   "home_address": "210 Sams Ave, New Smyrna Beach, FL 32168"
+  },
+  "6sQ4L-kGgMu2TC9pYtDuJ0WUhcJDzOfd": {
+   "name": "ZT Crew Alex",
+   "role": "field_crew",
+   "status": "active",
+   "scopes": [],
+   "private_collection_enabled": false,
+   "can_manage_users": false,
+   "email": "alex@time-machine.test",
+   "cell_phone": "+15550100003",
+   "home_address": "210 Sams Ave, New Smyrna Beach, FL 32168"
+  },
+  "FM_D541-C4oNbqXWCaM7JGX8IApI9Foe": {
+   "name": "ZT Crew Bea",
+   "role": "field_crew",
+   "status": "active",
+   "scopes": [],
+   "private_collection_enabled": false,
+   "can_manage_users": false,
+   "email": "bea@time-machine.test",
+   "cell_phone": "+15550100004",
+   "home_address": "210 Sams Ave, New Smyrna Beach, FL 32168"
+  }
+ }
+}

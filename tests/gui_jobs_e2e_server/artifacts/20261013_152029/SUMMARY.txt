@@ -1,0 +1,9 @@
+AI-Prowler Jobs app E2E — SERVER MODE — FAIL
+Finished: 2026-10-13 15:30:36   Tier: safe   Sandbox date: 2026-10-13
+Users: (pre-flight did not finish)
+NO TESTS RAN (pytest exit code 7) — see pytest_output.txt
+Tests: 0 passed, 0 failed, 0 skipped
+Cleanup: did not run
+
+
+Full log: C:\Users\david\AI-Prowler-V910_to_V920_work\AI-Prowler\tests\gui_jobs_e2e_server\artifacts\20261013_152029\run.log

@@ -1,0 +1,199 @@
+C:\Users\david\AppData\Local\Programs\Python\Python311\python.exe -m pytest C:\Users\david\AI-Prowler-V910_to_V920_work\AI-Prowler\tests\gui_jobs_e2e_server -m jobs_gui_e2e_server -p no:cacheprovider --browser-channel msedge --tracing off --video off --screenshot off --headed --slowmo 600
+
+[1m============================= test session starts =============================[0m
+platform win32 -- Python 3.11.8, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\david\AppData\Local\Programs\Python\Python311\python.exe
+rootdir: C:\Users\david\AI-Prowler-V910_to_V920_work\AI-Prowler\tests
+configfile: pytest.ini
+plugins: anyio-4.15.1, base-url-2.1.0, playwright-0.9.0, time-machine-3.5.1
+[1mcollecting ... [0mcollected 167 items
+
+tests\gui_jobs_e2e_server\test_srv_access_only.py::test_SRV_AO_01_not_offered_to_claude[U1] [32mPASSED[0m[33m [  0%][0m
+tests\gui_jobs_e2e_server\test_srv_access_only.py::test_SRV_AO_01_not_offered_to_claude[U2] [32mPASSED[0m[33m [  1%][0m
+tests\gui_jobs_e2e_server\test_srv_access_only.py::test_SRV_AO_01_not_offered_to_claude[U3] [32mPASSED[0m[33m [  1%][0m
+tests\gui_jobs_e2e_server\test_srv_access_only.py::test_SRV_AO_02_jobs_app_api_refuses[grant_access] [32mPASSED[0m[33m [  2%][0m
+tests\gui_jobs_e2e_server\test_srv_access_only.py::test_SRV_AO_02_jobs_app_api_refuses[revoke_access] [32mPASSED[0m[33m [  2%][0m
+tests\gui_jobs_e2e_server\test_srv_access_only.py::test_SRV_AO_03_no_access_only_section [32mPASSED[0m[33m [  3%][0m
+tests\gui_jobs_e2e_server\test_srv_api_matrix.py::test_SRV_API_01_role_matrix [32mPASSED[0m[33m [  4%][0m
+tests\gui_jobs_e2e_server\test_srv_api_tokens.py::test_SRV_API_06_bad_credentials_get_401[no_header] [32mPASSED[0m[33m [  4%][0m
+tests\gui_jobs_e2e_server\test_srv_api_tokens.py::test_SRV_API_06_bad_credentials_get_401[empty_bearer] [32mPASSED[0m[33m [  5%][0m
+tests\gui_jobs_e2e_server\test_srv_api_tokens.py::test_SRV_API_06_bad_credentials_get_401[basic_scheme] [32mPASSED[0m[33m [  5%][0m
+tests\gui_jobs_e2e_server\test_srv_api_tokens.py::test_SRV_API_06_bad_credentials_get_401[made_up_token] [32mPASSED[0m[33m [  6%][0m
+tests\gui_jobs_e2e_server\test_srv_api_tokens.py::test_SRV_API_06_bad_credentials_get_401[one_char_changed] [32mPASSED[0m[33m [  7%][0m
+tests\gui_jobs_e2e_server\test_srv_api_tokens.py::test_SRV_API_06_ended_session_gets_401[U1] [32mPASSED[0m[33m [  7%][0m
+tests\gui_jobs_e2e_server\test_srv_api_tokens.py::test_SRV_API_06_ended_session_gets_401[U2] [32mPASSED[0m[33m [  8%][0m
+tests\gui_jobs_e2e_server\test_srv_api_tokens.py::test_SRV_API_06_ended_session_gets_401[U3] [32mPASSED[0m[33m [  8%][0m
+tests\gui_jobs_e2e_server\test_srv_api_tokens.py::test_SRV_API_06_session_cannot_act_as_another_user[plain] [32mPASSED[0m[33m [  9%][0m
+tests\gui_jobs_e2e_server\test_srv_api_tokens.py::test_SRV_API_06_session_cannot_act_as_another_user[args_claim_owner] [32mPASSED[0m[33m [ 10%][0m
+tests\gui_jobs_e2e_server\test_srv_api_tokens.py::test_SRV_API_06_session_cannot_act_as_another_user[args_supply_ctx] [32mPASSED[0m[33m [ 10%][0m
+tests\gui_jobs_e2e_server\test_srv_api_tokens.py::test_SRV_API_06_session_cannot_act_as_another_user[headers_claim_owner] [32mPASSED[0m[33m [ 11%][0m
+tests\gui_jobs_e2e_server\test_srv_api_tokens.py::test_SRV_API_06_control_owner_session_is_allowed [32mPASSED[0m[33m [ 11%][0m
+tests\gui_jobs_e2e_server\test_srv_auth.py::test_SRV_AUTH_01_user_signs_in_and_sees_own_name_and_role[chromium-U1] [32mPASSED[0m[33m [ 12%][0m
+tests\gui_jobs_e2e_server\test_srv_auth.py::test_SRV_AUTH_02_right_token_wrong_name_is_refused[chromium] [32mPASSED[0m[33m [ 13%][0m
+tests\gui_jobs_e2e_server\test_srv_auth.py::test_SRV_AUTH_03_wrong_token_or_blank_name_is_refused[chromium-wrong_token] [32mPASSED[0m[33m [ 13%][0m
+tests\gui_jobs_e2e_server\test_srv_auth.py::test_SRV_AUTH_06_after_sign_out_back_and_forward_show_login[chromium] [32mPASSED[0m[33m [ 14%][0m
+tests\gui_jobs_e2e_server\test_srv_auth.py::test_SRV_AUTH_06b_signed_out_session_is_dead_on_the_server[chromium] [32mPASSED[0m[33m [ 14%][0m
+tests\gui_jobs_e2e_server\test_srv_auth.py::test_SRV_MULTI_01_two_users_side_by_side_independent[chromium] [32mPASSED[0m[33m [ 15%][0m
+tests\gui_jobs_e2e_server\test_srv_board_calendar.py::test_SRV_SCR_05_board_and_calendar_per_role[chromium-U1] [32mPASSED[0m[33m [ 16%][0m
+tests\gui_jobs_e2e_server\test_srv_buttons.py::test_SRV_SCR_08_button_sweep_per_role[chromium-U1] [32mPASSED[0m[33m [ 16%][0m
+tests\gui_jobs_e2e_server\test_srv_comms.py::test_SRV_COMMS_01_safe_tier_sends_nothing[chromium] [32mPASSED[0m[33m [ 17%][0m
+tests\gui_jobs_e2e_server\test_srv_comms.py::test_SRV_COMMS_02_real_email_receipt_to_vicki[chromium] [33mSKIPPED[0m[33m [ 17%][0m
+tests\gui_jobs_e2e_server\test_srv_comms.py::test_SRV_COMMS_03_real_sms_vicki_to_david[chromium] [33mSKIPPED[0m[33m [ 18%][0m
+tests\gui_jobs_e2e_server\test_srv_comms.py::test_SRV_COMMS_04_comms_tier_blocks_other_recipients[chromium] [33mSKIPPED[0m[33m [ 19%][0m
+tests\gui_jobs_e2e_server\test_srv_crew.py::test_SRV_CREW_01_crew_sees_only_own_jobs[chromium] [32mPASSED[0m[33m [ 19%][0m
+tests\gui_jobs_e2e_server\test_srv_crew.py::test_SRV_CREW_02_crew_can_edit_own_job_not_others[chromium] [32mPASSED[0m[33m [ 20%][0m
+tests\gui_jobs_e2e_server\test_srv_crew.py::test_SRV_CREW_03_no_reports_for_crew[chromium] [32mPASSED[0m[33m [ 20%][0m
+tests\gui_jobs_e2e_server\test_srv_crew.py::test_SRV_CREW_04_locked_sheets_refused_for_crew[chromium] [32mPASSED[0m[33m [ 21%][0m
+tests\gui_jobs_e2e_server\test_srv_crew.py::test_SRV_CREW_05_crew_customer_fields[chromium] [32mPASSED[0m[33m [ 22%][0m
+tests\gui_jobs_e2e_server\test_srv_crew.py::test_SRV_CREW_06_crew_cannot_invoice_others_job[chromium] [32mPASSED[0m[33m [ 22%][0m
+tests\gui_jobs_e2e_server\test_srv_field_roundtrip.py::test_SRV_FR_01_job_form_every_field_changes_and_is_stored[chromium-U1] [32mPASSED[0m[33m [ 23%][0m
+tests\gui_jobs_e2e_server\test_srv_field_roundtrip.py::test_SRV_FR_02_customer_editor_every_field_changes_and_is_stored[chromium-U1] [32mPASSED[0m[33m [ 23%][0m
+tests\gui_jobs_e2e_server\test_srv_field_roundtrip.py::test_SRV_FR_04_read_only_fields_look_read_only[chromium-U1] [32mPASSED[0m[33m [ 24%][0m
+tests\gui_jobs_e2e_server\test_srv_field_roundtrip.py::test_SRV_FR_05_change_a_jobs_customer[chromium-U1] [32mPASSED[0m[33m [ 25%][0m
+tests\gui_jobs_e2e_server\test_srv_field_roundtrip.py::test_SRV_FR_06_edit_keeps_preferred_days[chromium-U1] [32mPASSED[0m[33m [ 25%][0m
+tests\gui_jobs_e2e_server\test_srv_field_roundtrip.py::test_SRV_FR_03_ai_changes_show_in_the_app[chromium-U1] [32mPASSED[0m[33m [ 26%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_apps.py::test_HR_04_hr_admin_sign_in_in_the_browser[chromium] [32mPASSED[0m[33m [ 26%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_apps.py::test_HR_05_link_an_ai_prowler_login_in_hr_admin[chromium] [32mPASSED[0m[33m [ 27%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_apps.py::test_HR_06_portal_sign_in_with_ai_prowler_account[chromium] [32mPASSED[0m[33m [ 28%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_apps.py::test_HR_08_three_users_at_the_same_time[chromium] [32mPASSED[0m[33m [ 28%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_19_every_screen_opens[chromium] [32mPASSED[0m[33m [ 29%][0m
+tests\gui_jobs_e2e_server\test_srv_live_multi.py::test_SRV_MULTI_01_owner_change_reaches_crew_board_within_one_poll[chromium] [32mPASSED[0m[33m [ 29%][0m
+tests\gui_jobs_e2e_server\test_srv_live_multi.py::test_SRV_MULTI_02_reassigned_job_leaves_first_crews_lists[chromium] [32mPASSED[0m[33m [ 30%][0m
+tests\gui_jobs_e2e_server\test_srv_live_multi.py::test_SRV_MULTI_04_all_users_at_once_each_see_their_own_set[chromium] [32mPASSED[0m[33m [ 31%][0m
+tests\gui_jobs_e2e_server\test_srv_multi.py::test_SRV_MULTI_03_second_save_is_refused_not_overwritten[chromium] [32mPASSED[0m[33m [ 31%][0m
+tests\gui_jobs_e2e_server\test_srv_multi.py::test_SRV_SCR_01_reports_tab_owner_and_manager[chromium] [32mPASSED[0m[33m [ 32%][0m
+tests\gui_jobs_e2e_server\test_srv_multi.py::test_SRV_SCR_02_manager_sees_ar_and_reminders_not_the_owner_parts[chromium] [32mPASSED[0m[33m [ 32%][0m
+tests\gui_jobs_e2e_server\test_srv_oct_features.py::test_SRV_PAUSE_01_owner_pauses_with_reason_then_resumes[chromium] [32mPASSED[0m[33m [ 33%][0m
+tests\gui_jobs_e2e_server\test_srv_oct_features.py::test_SRV_PAUSE_02_crew_cannot_pause_another_crews_job[chromium] [32mPASSED[0m[33m [ 34%][0m
+tests\gui_jobs_e2e_server\test_srv_oct_features.py::test_SRV_PAUSE_03_crew_pauses_and_resumes_own_job[chromium] [32mPASSED[0m[33m [ 34%][0m
+tests\gui_jobs_e2e_server\test_srv_oct_features.py::test_SRV_VIEW_01_by_status_and_billing_per_role[chromium] [32mPASSED[0m[33m [ 35%][0m
+tests\gui_jobs_e2e_server\test_srv_oct_features.py::test_SRV_CUST_01_owner_renumbers_customer_in_edit_popup[chromium] [32mPASSED[0m[33m [ 35%][0m
+tests\gui_jobs_e2e_server\test_srv_oct_features.py::test_SRV_CUST_02_taken_number_is_refused_in_popup[chromium] [32mPASSED[0m[33m [ 36%][0m
+tests\gui_jobs_e2e_server\test_srv_oct_features.py::test_SRV_CUST_03_crew_cannot_renumber_a_customer[chromium] [32mPASSED[0m[33m [ 37%][0m
+tests\gui_jobs_e2e_server\test_srv_oct_features.py::test_SRV_TAX_01_weekly_tax_card_owner_only[chromium] [32mPASSED[0m[33m [ 37%][0m
+tests\gui_jobs_e2e_server\test_srv_oct_features.py::test_SRV_TAX_03_invoice_tax_reaches_weekly_tax_collected[chromium] [32mPASSED[0m[33m [ 38%][0m
+tests\gui_jobs_e2e_server\test_srv_oct_features.py::test_SRV_PDAY_01_new_job_inherits_preferred_days[chromium] [32mPASSED[0m[33m [ 38%][0m
+tests\gui_jobs_e2e_server\test_srv_oct_features.py::test_SRV_SCHED_10_start_after_end_blocked_end_only_saves[chromium] [32mPASSED[0m[33m [ 39%][0m
+tests\gui_jobs_e2e_server\test_srv_screens.py::test_SRV_SCR_06_route_screen_crew_sees_only_own_route[chromium] [32mPASSED[0m[33m [ 40%][0m
+tests\gui_jobs_e2e_server\test_srv_screens.py::test_SRV_SCR_07_clock_entry_is_the_crew_members_own[chromium] [32mPASSED[0m[33m [ 40%][0m
+tests\gui_jobs_e2e_server\test_srv_screens.py::test_SRV_SCOPE_08_crew_cannot_build_or_approve_another_crews_route[chromium] [32mPASSED[0m[33m [ 41%][0m
+tests\gui_jobs_e2e_server\test_srv_screens.py::test_SRV_SCR_09_profile_code_row_never_shows_a_token[chromium-U1] [32mPASSED[0m[33m [ 41%][0m
+tests\gui_jobs_e2e_server\test_srv_three_week_schedule.py::test_SRV_SCHED_09_crew_picker_lists_the_team[chromium] [32mPASSED[0m[33m [ 42%][0m
+tests\gui_jobs_e2e_server\test_srv_three_week_schedule.py::test_SRV_SCHED_06_jobs_screen_per_person[chromium] [32mPASSED[0m[33m [ 43%][0m
+tests\gui_jobs_e2e_server\test_srv_auth.py::test_SRV_AUTH_01_user_signs_in_and_sees_own_name_and_role[chromium-U2] [32mPASSED[0m[33m [ 43%][0m
+tests\gui_jobs_e2e_server\test_srv_auth.py::test_SRV_AUTH_03_wrong_token_or_blank_name_is_refused[chromium-blank_name] [32mPASSED[0m[33m [ 44%][0m
+tests\gui_jobs_e2e_server\test_srv_board_calendar.py::test_SRV_SCR_05_board_and_calendar_per_role[chromium-U2] [32mPASSED[0m[33m [ 44%][0m
+tests\gui_jobs_e2e_server\test_srv_buttons.py::test_SRV_SCR_08_button_sweep_per_role[chromium-U2] [32mPASSED[0m[33m [ 45%][0m
+tests\gui_jobs_e2e_server\test_srv_field_roundtrip.py::test_SRV_FR_01_job_form_every_field_changes_and_is_stored[chromium-U2] [32mPASSED[0m[33m [ 46%][0m
+tests\gui_jobs_e2e_server\test_srv_field_roundtrip.py::test_SRV_FR_02_customer_editor_every_field_changes_and_is_stored[chromium-U2] [32mPASSED[0m[33m [ 46%][0m
+tests\gui_jobs_e2e_server\test_srv_field_roundtrip.py::test_SRV_FR_04_read_only_fields_look_read_only[chromium-U2] [32mPASSED[0m[33m [ 47%][0m
+tests\gui_jobs_e2e_server\test_srv_field_roundtrip.py::test_SRV_FR_05_change_a_jobs_customer[chromium-U2] [32mPASSED[0m[33m [ 47%][0m
+tests\gui_jobs_e2e_server\test_srv_field_roundtrip.py::test_SRV_FR_06_edit_keeps_preferred_days[chromium-U2] [32mPASSED[0m[33m [ 48%][0m
+tests\gui_jobs_e2e_server\test_srv_field_roundtrip.py::test_SRV_FR_03_ai_changes_show_in_the_app[chromium-U2] [32mPASSED[0m[33m [ 49%][0m
+tests\gui_jobs_e2e_server\test_srv_screens.py::test_SRV_SCR_09_profile_code_row_never_shows_a_token[chromium-U2] [32mPASSED[0m[33m [ 49%][0m
+tests\gui_jobs_e2e_server\test_srv_auth.py::test_SRV_AUTH_05_login_reply_has_role_and_no_personal_token [32mPASSED[0m[33m [ 50%][0m
+tests\gui_jobs_e2e_server\test_srv_board_calendar.py::test_SRV_SCR_05_board_and_calendar_per_role[chromium-U3] [32mPASSED[0m[33m [ 50%][0m
+tests\gui_jobs_e2e_server\test_srv_buttons.py::test_SRV_SCR_08_button_sweep_per_role[chromium-U3] [32mPASSED[0m[33m [ 51%][0m
+tests\gui_jobs_e2e_server\test_srv_field_roundtrip.py::test_SRV_FR_01_job_form_every_field_changes_and_is_stored[chromium-U3] [32mPASSED[0m[33m [ 52%][0m
+tests\gui_jobs_e2e_server\test_srv_field_roundtrip.py::test_SRV_FR_02_customer_editor_every_field_changes_and_is_stored[chromium-U3] [32mPASSED[0m[33m [ 52%][0m
+tests\gui_jobs_e2e_server\test_srv_field_roundtrip.py::test_SRV_FR_04_read_only_fields_look_read_only[chromium-U3] [32mPASSED[0m[33m [ 53%][0m
+tests\gui_jobs_e2e_server\test_srv_field_roundtrip.py::test_SRV_FR_06_edit_keeps_preferred_days[chromium-U3] [32mPASSED[0m[33m [ 53%][0m
+tests\gui_jobs_e2e_server\test_srv_field_roundtrip.py::test_SRV_FR_03_ai_changes_show_in_the_app[chromium-U3] [32mPASSED[0m[33m [ 54%][0m
+tests\gui_jobs_e2e_server\test_srv_screens.py::test_SRV_SCR_09_profile_code_row_never_shows_a_token[chromium-U3] [32mPASSED[0m[33m [ 55%][0m
+tests\gui_jobs_e2e_server\test_srv_crew_create.py::test_SRV_SCOPE_09_crew_may_create_a_job_for_someone_else [32mPASSED[0m[33m [ 55%][0m
+tests\gui_jobs_e2e_server\test_srv_crew_create.py::test_SRV_SCOPE_10_crew_may_add_a_customer_with_locked_fields [32mPASSED[0m[33m [ 56%][0m
+tests\gui_jobs_e2e_server\test_srv_crew_create.py::test_SRV_G04_crew_cannot_delete_a_customer [32mPASSED[0m[33m [ 56%][0m
+tests\gui_jobs_e2e_server\test_srv_email_route.py::test_SRV_SCOPE_13_crew_email_route_is_forced_to_own_route[Vicki Vavro] [32mPASSED[0m[33m [ 57%][0m
+tests\gui_jobs_e2e_server\test_srv_email_route.py::test_SRV_SCOPE_13_crew_email_route_is_forced_to_own_route[] [32mPASSED[0m[33m [ 58%][0m
+tests\gui_jobs_e2e_server\test_srv_email_route.py::test_SRV_SCOPE_13_control_owner_can_ask_for_another_crews_route [32mPASSED[0m[33m [ 58%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_apps.py::test_HR_01_old_hr_app_redirects_to_hr_admin [32mPASSED[0m[33m [ 59%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_apps.py::test_HR_02_static_files_cannot_be_escaped [32mPASSED[0m[33m [ 59%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_apps.py::test_HR_03_admin_sign_in_rules [32mPASSED[0m[33m [ 60%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_apps.py::test_HR_07_unlinking_ends_the_portal_session [32mPASSED[0m[33m [ 61%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_01_employee_record_and_edit [32mPASSED[0m[33m [ 61%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_02_onboarding_tasks [32mPASSED[0m[33m [ 62%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_03_time_off [32mPASSED[0m[33m [ 62%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_04_time_clock [32mPASSED[0m[33m [ 63%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_05_messages [32mPASSED[0m[33m [ 64%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_06_schedule_change [32mPASSED[0m[33m [ 64%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_07_shift_swap [32mPASSED[0m[33m [ 65%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_08_training [32mPASSED[0m[33m [ 65%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_09_calendar [32mPASSED[0m[33m [ 66%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_10_locations [32mPASSED[0m[33m [ 67%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_11_directory [32mPASSED[0m[33m [ 67%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_12_attendance [32mPASSED[0m[33m [ 68%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_13_documents [32mPASSED[0m[33m [ 68%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_14_portal_profile [32mPASSED[0m[33m [ 69%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_15_recruiting [32mPASSED[0m[33m [ 70%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_16_incidents [32mPASSED[0m[33m [ 70%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_17_employees_only_see_their_own [32mPASSED[0m[33m [ 71%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_18_termination_ends_portal_access_and_starts_offboarding [32mPASSED[0m[33m [ 71%][0m
+tests\gui_jobs_e2e_server\test_srv_kb.py::test_SRV_KB_01_job_data_ignores_kb_scope [32mPASSED[0m[33m [ 72%][0m
+tests\gui_jobs_e2e_server\test_srv_kb.py::test_SRV_KB_02_no_document_tools_in_jobs_app[U1] [32mPASSED[0m[33m [ 73%][0m
+tests\gui_jobs_e2e_server\test_srv_kb.py::test_SRV_KB_02_no_document_tools_in_jobs_app[U2] [32mPASSED[0m[33m [ 73%][0m
+tests\gui_jobs_e2e_server\test_srv_kb.py::test_SRV_KB_02_no_document_tools_in_jobs_app[U3] [32mPASSED[0m[33m [ 74%][0m
+tests\gui_jobs_e2e_server\test_srv_kb.py::test_SRV_KB_02_app_page_never_calls_document_tools [32mPASSED[0m[33m [ 74%][0m
+tests\gui_jobs_e2e_server\test_srv_kb.py::test_SRV_KB_03_learnings_are_company_wide [32mPASSED[0m[33m [ 75%][0m
+tests\gui_jobs_e2e_server\test_srv_learnings.py::test_SRV_API_12_cannot_retire_the_owners_learning[U3] [33mSKIPPED[0m[33m [ 76%][0m
+tests\gui_jobs_e2e_server\test_srv_learnings.py::test_SRV_API_12_cannot_retire_the_owners_learning[U2] [33mSKIPPED[0m[33m [ 76%][0m
+tests\gui_jobs_e2e_server\test_srv_learnings.py::test_SRV_API_12_control_crew_can_retire_their_own_learning [33mSKIPPED[0m[33m [ 77%][0m
+tests\gui_jobs_e2e_server\test_srv_live_multi.py::test_SRV_MULTI_05_two_clock_ins_at_once_each_on_the_right_person [32mPASSED[0m[33m [ 77%][0m
+tests\gui_jobs_e2e_server\test_srv_oct_features.py::test_SRV_TAX_02_no_sales_tax_job_invoices_zero_tax [32mPASSED[0m[33m [ 78%][0m
+tests\gui_jobs_e2e_server\test_srv_owner_only.py::test_SRV_API_05_non_owner_cannot_send_customer_reminders[U2-email] [32mPASSED[0m[33m [ 79%][0m
+tests\gui_jobs_e2e_server\test_srv_owner_only.py::test_SRV_API_05_non_owner_cannot_send_customer_reminders[U2-sms] [32mPASSED[0m[33m [ 79%][0m
+tests\gui_jobs_e2e_server\test_srv_owner_only.py::test_SRV_API_05_non_owner_cannot_send_customer_reminders[U3-email] [32mPASSED[0m[33m [ 80%][0m
+tests\gui_jobs_e2e_server\test_srv_owner_only.py::test_SRV_API_05_non_owner_cannot_send_customer_reminders[U3-sms] [32mPASSED[0m[33m [ 80%][0m
+tests\gui_jobs_e2e_server\test_srv_owner_only.py::test_SRV_API_05_control_owner_passes_the_gate[email] [32mPASSED[0m[33m [ 81%][0m
+tests\gui_jobs_e2e_server\test_srv_owner_only.py::test_SRV_API_05_control_owner_passes_the_gate[sms] [32mPASSED[0m[33m [ 82%][0m
+tests\gui_jobs_e2e_server\test_srv_photos.py::test_SRV_SCOPE_12_crew_cannot_upload_to_another_crews_job [32mPASSED[0m[33m [ 82%][0m
+tests\gui_jobs_e2e_server\test_srv_photos.py::test_SRV_SCOPE_12_crew_can_upload_to_own_job [33mSKIPPED[0m[33m [ 83%][0m
+tests\gui_jobs_e2e_server\test_srv_photos.py::test_SRV_SCOPE_12_owner_and_manager_can_upload_to_any_crews_job[U1] [33mSKIPPED[0m[33m [ 83%][0m
+tests\gui_jobs_e2e_server\test_srv_photos.py::test_SRV_SCOPE_12_owner_and_manager_can_upload_to_any_crews_job[U2] [33mSKIPPED[0m[33m [ 84%][0m
+tests\gui_jobs_e2e_server\test_srv_photos.py::test_SRV_PH_08_job_number_cannot_escape_the_photos_folder[../ZTEST_E2E_escape_{t}] [32mPASSED[0m[33m [ 85%][0m
+tests\gui_jobs_e2e_server\test_srv_photos.py::test_SRV_PH_08_job_number_cannot_escape_the_photos_folder[..\\ZTEST_E2E_escape_{t}] [32mPASSED[0m[33m [ 85%][0m
+tests\gui_jobs_e2e_server\test_srv_photos.py::test_SRV_PH_08_job_number_cannot_escape_the_photos_folder[JOB-0001/../../ZTEST_E2E_escape_{t}] [32mPASSED[0m[33m [ 86%][0m
+tests\gui_jobs_e2e_server\test_srv_photos.py::test_SRV_PH_09_upload_for_a_job_that_does_not_exist_is_refused [32mPASSED[0m[33m [ 86%][0m
+tests\gui_jobs_e2e_server\test_srv_photos.py::test_SRV_PHOTOS_zz_no_leftovers [32mPASSED[0m[33m [ 87%][0m
+tests\gui_jobs_e2e_server\test_srv_scope.py::test_SRV_SCOPE_03_crew_cannot_change_another_crews_job_or_stop[delete_job] [32mPASSED[0m[33m [ 88%][0m
+tests\gui_jobs_e2e_server\test_srv_scope.py::test_SRV_SCOPE_03_crew_cannot_change_another_crews_job_or_stop[delete_route_stop] [32mPASSED[0m[33m [ 88%][0m
+tests\gui_jobs_e2e_server\test_srv_scope.py::test_SRV_SCOPE_03_crew_cannot_change_another_crews_job_or_stop[reorder_route_stop] [32mPASSED[0m[33m [ 89%][0m
+tests\gui_jobs_e2e_server\test_srv_scope.py::test_SRV_SCOPE_03_crew_cannot_change_another_crews_job_or_stop[delete_route] [32mPASSED[0m[33m [ 89%][0m
+tests\gui_jobs_e2e_server\test_srv_scope.py::test_SRV_SCOPE_03_crew_cannot_change_another_crews_job_or_stop[replan_route_day] [32mPASSED[0m[33m [ 90%][0m
+tests\gui_jobs_e2e_server\test_srv_scope.py::test_SRV_SCOPE_11_crew_may_clock_in_on_coworkers_job_under_own_name [32mPASSED[0m[33m [ 91%][0m
+tests\gui_jobs_e2e_server\test_srv_scope.py::test_SRV_SCOPE_11_control_crew_can_clock_in_on_own_job [32mPASSED[0m[33m [ 91%][0m
+tests\gui_jobs_e2e_server\test_srv_scope.py::test_SRV_SCOPE_14_same_address_on_two_crews_is_not_a_duplicate [32mPASSED[0m[33m [ 92%][0m
+tests\gui_jobs_e2e_server\test_srv_scope.py::test_SRV_SCOPE_14_control_same_address_same_crew_is_flagged [32mPASSED[0m[33m [ 92%][0m
+tests\gui_jobs_e2e_server\test_srv_scope.py::test_SRV_SCOPE_15_owner_routes_every_crew_separately [32mPASSED[0m[33m [ 93%][0m
+tests\gui_jobs_e2e_server\test_srv_three_week_schedule.py::test_SRV_SCHED_01_owner_builds_three_week_schedule [32mPASSED[0m[33m [ 94%][0m
+tests\gui_jobs_e2e_server\test_srv_three_week_schedule.py::test_SRV_SCHED_02_each_crew_member_sees_their_share [32mPASSED[0m[33m [ 94%][0m
+tests\gui_jobs_e2e_server\test_srv_three_week_schedule.py::test_SRV_SCHED_03_crew_works_first_day[Samual Cronin] [32mPASSED[0m[33m [ 95%][0m
+tests\gui_jobs_e2e_server\test_srv_three_week_schedule.py::test_SRV_SCHED_03_crew_works_first_day[Vicki Vavro] [32mPASSED[0m[33m [ 95%][0m
+tests\gui_jobs_e2e_server\test_srv_three_week_schedule.py::test_SRV_SCHED_04_crew_can_add_and_edit_their_own_jobs[Samual Cronin] [32mPASSED[0m[33m [ 96%][0m
+tests\gui_jobs_e2e_server\test_srv_three_week_schedule.py::test_SRV_SCHED_04_crew_can_add_and_edit_their_own_jobs[Vicki Vavro] [32mPASSED[0m[33m [ 97%][0m
+tests\gui_jobs_e2e_server\test_srv_three_week_schedule.py::test_SRV_SCHED_05_owner_routes_each_workday_per_crew [32mPASSED[0m[33m [ 97%][0m
+tests\gui_jobs_e2e_server\test_srv_three_week_schedule.py::test_SRV_SCHED_07_manager_blank_route_is_only_her_jobs [32mPASSED[0m[33m [ 98%][0m
+tests\gui_jobs_e2e_server\test_srv_three_week_schedule.py::test_SRV_SCHED_08_shared_job_on_each_self_served_route [32mPASSED[0m[33m [ 98%][0m
+tests\gui_jobs_e2e_server\test_srv_ztest_user.py::test_SRV_AUTH_08_role_change_applies_after_re_login [33mSKIPPED[0m[33m [ 99%][0m
+tests\gui_jobs_e2e_server\test_srv_ztest_user.py::test_SRV_AUTH_07_revoked_user_is_cut_off_while_signed_in [33mSKIPPED[0m[33m [100%][0m
+
+[33m============================== warnings summary ===============================[0m
+..\..\AppData\Local\Programs\Python\Python311\Lib\importlib\__init__.py:126
+  C:\Users\david\AppData\Local\Programs\Python\Python311\Lib\importlib\__init__.py:126: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    return _bootstrap._gcd_import(name[level:], package, level)
+
+gui_jobs_e2e_server/test_srv_access_only.py: 4 warnings
+gui_jobs_e2e_server/test_srv_field_roundtrip.py: 13 warnings
+  C:\Users\david\AppData\Local\Programs\Python\Python311\Lib\contextlib.py:105: DeprecationWarning: Use `streamable_http_client` instead.
+    self.gen = func(*args, **kwds)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+[36m[1m=========================== short test summary info ===========================[0m
+[33mSKIPPED[0m [1] tests\gui_jobs_e2e_server\test_srv_comms.py:57: real sends only with --tier comms
+[33mSKIPPED[0m [1] tests\gui_jobs_e2e_server\test_srv_comms.py:74: real sends only with --tier comms
+[33mSKIPPED[0m [1] tests\gui_jobs_e2e_server\test_srv_comms.py:86: real sends only with --tier comms
+[33mSKIPPED[0m [2] tests\gui_jobs_e2e_server\test_srv_learnings.py:62: setup missing: create an owner learning titled 'ZTEST E2E R-042 owner learning' first
+[33mSKIPPED[0m [1] tests\gui_jobs_e2e_server\test_srv_learnings.py:72: setup missing: create an owner learning titled 'ZTEST E2E R-042 owner learning' first
+[33mSKIPPED[0m [1] tests\gui_jobs_e2e_server\test_srv_photos.py:102: can't reach the server's photo folder (C:\Users\AI-Prowler-Server\Documents\AI-Prowler\JobPhotos) to remove an accepted upload — set E2E_SERVER_JOBPHOTOS or grant this account access
+[33mSKIPPED[0m [2] tests\gui_jobs_e2e_server\test_srv_photos.py:113: can't reach the server's photo folder (C:\Users\AI-Prowler-Server\Documents\AI-Prowler\JobPhotos) to remove an accepted upload — set E2E_SERVER_JOBPHOTOS or grant this account access
+[33mSKIPPED[0m [1] tests\gui_jobs_e2e_server\test_srv_ztest_user.py:52: AIPROWLER_ZTEST_USER_TOKEN not set — throw-away user not set up
+[33mSKIPPED[0m [1] tests\gui_jobs_e2e_server\test_srv_ztest_user.py:68: AIPROWLER_ZTEST_USER_TOKEN not set — throw-away user not set up
+[33m========== [32m156 passed[0m, [33m[1m11 skipped[0m, [33m[1m18 warnings[0m[33m in 3086.87s (0:51:26)[0m[33m ==========[0m

@@ -1,0 +1,78 @@
+C:\Users\david\AppData\Local\Programs\Python\Python311\python.exe -m pytest C:\Users\david\AI-Prowler-V910_to_V920_work\AI-Prowler\tests\gui_jobs_e2e_server -m jobs_gui_e2e_server -p no:cacheprovider --browser-channel msedge --tracing off --video off --screenshot off --headed --slowmo 600 -k test_srv_hr_features
+
+[1m============================= test session starts =============================[0m
+platform win32 -- Python 3.11.8, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\david\AppData\Local\Programs\Python\Python311\python.exe
+rootdir: C:\Users\david\AI-Prowler-V910_to_V920_work\AI-Prowler\tests
+configfile: pytest.ini
+plugins: anyio-4.15.1, base-url-2.1.0, playwright-0.9.0, time-machine-3.5.1
+[1mcollecting ... [0mcollected 167 items / 148 deselected / 19 selected
+
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_19_every_screen_opens[chromium] [32mPASSED[0m[33m [  5%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_01_employee_record_and_edit [32mPASSED[0m[33m [ 10%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_02_onboarding_tasks [31mFAILED[0m[31m [ 15%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_03_time_off [32mPASSED[0m[31m [ 21%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_04_time_clock [32mPASSED[0m[31m [ 26%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_05_messages [32mPASSED[0m[31m [ 31%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_06_schedule_change [32mPASSED[0m[31m [ 36%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_07_shift_swap [32mPASSED[0m[31m [ 42%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_08_training [32mPASSED[0m[31m [ 47%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_09_calendar [32mPASSED[0m[31m [ 52%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_10_locations [32mPASSED[0m[31m [ 57%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_11_directory [32mPASSED[0m[31m [ 63%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_12_attendance [32mPASSED[0m[31m [ 68%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_13_documents [32mPASSED[0m[31m [ 73%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_14_portal_profile [32mPASSED[0m[31m [ 78%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_15_recruiting [32mPASSED[0m[31m [ 84%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_16_incidents [32mPASSED[0m[31m [ 89%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_17_employees_only_see_their_own [32mPASSED[0m[31m [ 94%][0m
+tests\gui_jobs_e2e_server\test_srv_hr_features.py::test_HF_18_termination_ends_portal_access_and_starts_offboarding [31mFAILED[0m[31m [100%][0m
+
+================================== FAILURES ===================================
+[31m[1m_________________________ test_HF_02_onboarding_tasks _________________________[0m
+[1m[31mtests\gui_jobs_e2e_server\test_srv_hr_features.py[0m:132: in test_HF_02_onboarding_tasks
+    [0m[94massert[39;49;00m mine, ([33m"[39;49;00m[33mSamual has no onboarding tasks — the server isn[39;49;00m[33m'[39;49;00m[33mt generating them [39;49;00m[33m"[39;49;00m[90m[39;49;00m
+[1m[31mE   AssertionError: Samual has no onboarding tasks — the server isn't generating them (is hr_task_templates.json in the install folder?)[0m
+[1m[31mE   assert [][0m
+----------------------------- Captured log setup ------------------------------
+[32mINFO    [0m e2e_srv:conftest.py:65 [test_HF_02_onboarding_tasks] ===== START gui_jobs_e2e_server/test_srv_hr_features.py::test_HF_02_onboarding_tasks
+---------------------------- Captured log teardown ----------------------------
+[32mINFO    [0m e2e_srv:conftest.py:65 [test_HF_02_onboarding_tasks] ===== END   gui_jobs_e2e_server/test_srv_hr_features.py::test_HF_02_onboarding_tasks
+[31m[1m______ test_HF_18_termination_ends_portal_access_and_starts_offboarding _______[0m
+[1m[31mtests\gui_jobs_e2e_server\test_srv_hr_features.py[0m:423: in test_HF_18_termination_ends_portal_access_and_starts_offboarding
+    [0m[94massert[39;49;00m r.get([33m"[39;49;00m[33moffboarding_tasks_created[39;49;00m[33m"[39;49;00m, [94m0[39;49;00m) >= [94m5[39;49;00m, r[90m[39;49;00m
+[1m[31mE   AssertionError: {'ok': True, 'employee': {'id': 'EMP-00002', 'status': 'Terminated', 'first_name': 'ZTEST HF2', 'last_name': '2B12B1', ...}, 'changed': ['end_date', 'status', 'termination_notes'], 'offboarding_tasks_created': 0}[0m
+[1m[31mE   assert 0 >= 5[0m
+[1m[31mE    +  where 0 = <built-in method get of dict object at 0x000001FADCF51EC0>('offboarding_tasks_created', 0)[0m
+[1m[31mE    +    where <built-in method get of dict object at 0x000001FADCF51EC0> = {'ok': True, 'employee': {'id': 'EMP-00002', 'status': 'Terminated', 'first_name': 'ZTEST HF2', 'last_name': '2B12B1', ...}, 'changed': ['end_date', 'status', 'termination_notes'], 'offboarding_tasks_created': 0}.get[0m
+----------------------------- Captured log setup ------------------------------
+[32mINFO    [0m e2e_srv:conftest.py:65 [test_HF_18_termination_ends_portal_access_and_starts_offboarding] ===== START gui_jobs_e2e_server/test_srv_hr_features.py::test_HF_18_termination_ends_portal_access_and_starts_offboarding
+---------------------------- Captured log teardown ----------------------------
+[32mINFO    [0m e2e_srv:conftest.py:65 [test_HF_18_termination_ends_portal_access_and_starts_offboarding] ===== END   gui_jobs_e2e_server/test_srv_hr_features.py::test_HF_18_termination_ends_portal_access_and_starts_offboarding
+[32mINFO    [0m e2e_srv:conftest.py:65 [(session)] sweep (end-of-run): start
+[32mINFO    [0m e2e_srv:conftest.py:65 [(session)] guard[setup]: ALLOW  read_job_spreadsheet — read
+[32mINFO    [0m e2e_srv:conftest.py:65 [(session)] API setup: read_job_spreadsheet -> 200 ok (162 ms)
+[32mINFO    [0m e2e_srv:conftest.py:65 [(session)] guard[setup]: ALLOW  read_job_spreadsheet — read
+[32mINFO    [0m e2e_srv:conftest.py:65 [(session)] API setup: read_job_spreadsheet -> 200 ok (136 ms)
+[32mINFO    [0m e2e_srv:conftest.py:65 [(session)] guard[setup]: ALLOW  read_job_spreadsheet — read
+[32mINFO    [0m e2e_srv:conftest.py:65 [(session)] API setup: read_job_spreadsheet -> 200 ok (177 ms)
+[32mINFO    [0m e2e_srv:conftest.py:65 [(session)] guard[setup]: ALLOW  read_job_spreadsheet — read
+[32mINFO    [0m e2e_srv:conftest.py:65 [(session)] API setup: read_job_spreadsheet -> 200 ok (122 ms)
+[32mINFO    [0m e2e_srv:conftest.py:65 [(session)] sweep (end-of-run): removed {'route_days': 0, 'customers': 0, 'jobs': 0, 'prices': 0}
+[32mINFO    [0m e2e_srv:conftest.py:65 [(session)] guard[setup]: ALLOW  read_job_spreadsheet — read
+[32mINFO    [0m e2e_srv:conftest.py:65 [(session)] API setup: read_job_spreadsheet -> 200 ok (139 ms)
+[32mINFO    [0m e2e_srv:conftest.py:65 [(session)] guard[setup]: ALLOW  read_job_spreadsheet — read
+[32mINFO    [0m e2e_srv:conftest.py:65 [(session)] API setup: read_job_spreadsheet -> 200 ok (159 ms)
+[32mINFO    [0m e2e_srv:conftest.py:65 [(session)] guard[setup]: ALLOW  read_job_spreadsheet — read
+[32mINFO    [0m e2e_srv:conftest.py:65 [(session)] API setup: read_job_spreadsheet -> 200 ok (154 ms)
+[32mINFO    [0m e2e_srv:conftest.py:65 [(session)] guard[setup]: ALLOW  read_job_spreadsheet — read
+[32mINFO    [0m e2e_srv:conftest.py:65 [(session)] API setup: read_job_spreadsheet -> 200 ok (136 ms)
+[33m============================== warnings summary ===============================[0m
+..\..\AppData\Local\Programs\Python\Python311\Lib\importlib\__init__.py:126
+  C:\Users\david\AppData\Local\Programs\Python\Python311\Lib\importlib\__init__.py:126: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    return _bootstrap._gcd_import(name[level:], package, level)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+[36m[1m=========================== short test summary info ===========================[0m
+[31mFAILED[0m tests\gui_jobs_e2e_server\test_srv_hr_features.py::[1mtest_HF_02_onboarding_tasks[0m - AssertionError: Samual has no onboarding tasks — the server isn't generatin...
+[31mFAILED[0m tests\gui_jobs_e2e_server\test_srv_hr_features.py::[1mtest_HF_18_termination_ends_portal_access_and_starts_offboarding[0m - AssertionError: {'ok': True, 'employee': {'id': 'EMP-00002', 'status': 'Ter...
+[31m===== [31m[1m2 failed[0m, [32m17 passed[0m, [33m148 deselected[0m, [33m1 warning[0m[31m in 63.24s (0:01:03)[0m[31m ======[0m

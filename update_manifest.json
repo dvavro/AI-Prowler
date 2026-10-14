@@ -1,21 +1,21 @@
 {
-  "version": "9.2.0",
-  "generated": "2026-10-03T14:47:37",
+  "version": "9.3.0",
+  "generated": "2026-10-14T13:27:56",
   "files": [
     {
       "path": "rag_gui.py",
-      "sha256": "6f706c346b566a149db431ca0cce7caa29d66b6de4b7f027d5228245c41ad16d",
-      "bytes": 1424206
+      "sha256": "e81f48b88e6a9e81e77a80eb96acbc8e5f8e8c34e535b5145e1ce28a1de20944",
+      "bytes": 1488833
     },
     {
       "path": "rag_preprocessor.py",
-      "sha256": "98e335d2aa9dd5cd310f8d1c74b504fbd596b4a898d6f799be8a6102eaa5a839",
-      "bytes": 318329
+      "sha256": "dcaac9da5a148743e4019a4c25275eb368c4b851d934f842d9bbf56dcf0c388f",
+      "bytes": 331768
     },
     {
       "path": "ai_prowler_mcp.py",
-      "sha256": "1b9488e2afe0fc2a7b8dfe460687ad1a2a11a6bb92cc107b62775e2877295e3b",
-      "bytes": 1301792
+      "sha256": "022b7ecfce69c04a6e952d06c64455deb91a8258e04fa9181dc329f920e2a2dd",
+      "bytes": 1603301
     },
     {
       "path": "mcp_diagnostics.py",
@@ -24,18 +24,18 @@
     },
     {
       "path": "mcp_tool_catalog.py",
-      "sha256": "4013a970d0d5d1bf0000a01dbcac572f2f40008c0ec3224b79fe4cd6ffb8555c",
-      "bytes": 40817
+      "sha256": "64f4e008c13a630a57c785c612fd6ab5be913f38be7fd114987f9da889e6acf5",
+      "bytes": 47878
     },
     {
       "path": "tool_config_store.py",
-      "sha256": "7abc753f248b8ff0eaf4a4c45b7ad79ab485c9cb036ea613828d124658bf4e84",
-      "bytes": 7831
+      "sha256": "27837f028e321ce81c59cf081da274e885adba4a89655edf4e283e9971652b7b",
+      "bytes": 14021
     },
     {
       "path": "self_learning.py",
-      "sha256": "238dbf47d1ca7180d46bd816ecc1954c8e2e7c5f183920a20dc677aab16e03b9",
-      "bytes": 42072
+      "sha256": "1f2dfe877e89a3e6033e201f66bcfe69837a8bb9fed0e24e2614cf12b1af6704",
+      "bytes": 42117
     },
     {
       "path": "RAG_RUN.bat",
@@ -59,12 +59,12 @@
     },
     {
       "path": "COMPLETE_USER_GUIDE.md",
-      "sha256": "685bb79b7a116198068e09207104073ddb1ea7d1e82552f6727ff7a18d093dbf",
-      "bytes": 242618
+      "sha256": "7f4a8b9d218ab0e3a800c7c06f62875d7697f8e67e91c8fbbb19352e57e2d99f",
+      "bytes": 268230
     },
     {
       "path": "VERSION",
-      "sha256": "1b9487d55bea47fea50d226cc9c53bc548877ad2a318bac8fbc8b320f429e5c5",
+      "sha256": "14ebdd5f5d8dfccb0fc574ea9aabecc07d7cdd99d53e4fc01e58f9c3d23d18ef",
       "bytes": 6
     },
     {
@@ -109,13 +109,13 @@
     },
     {
       "path": "custom_tasks_manager.py",
-      "sha256": "20ca5627ed20712c904d53605e3e2538c3c50c7ff38b008835d90a25c7eaf91a",
-      "bytes": 51874
+      "sha256": "3eab4b3da6ac90e9a8049554c9ac40e199d4f44bf0f5122d6cd0a2288024117a",
+      "bytes": 51934
     },
     {
       "path": "scheduler_jobs.py",
-      "sha256": "544bb3aeb45e479b9417584fbfe60f9eb4e9256fe598308323a1b04604bd53ec",
-      "bytes": 19755
+      "sha256": "f164e5621e6a6bd52d97b070e2bbab15562a6d220e44d895c0ee685eb4865172",
+      "bytes": 19800
     },
     {
       "path": "scheduler_engine.py",
@@ -124,8 +124,8 @@
     },
     {
       "path": "task_queue_automation.py",
-      "sha256": "37453ed1ea05555f2ebb465608d216c5a5beca5871e8b4ec3eda70f95a0c2e27",
-      "bytes": 162134
+      "sha256": "902ae15f7ad8eb71016d9172dbf1384543d41c132bc1a587adf134018c0c8829",
+      "bytes": 191874
     },
     {
       "path": ".claude/settings.json",
@@ -154,23 +154,23 @@
     },
     {
       "path": "db_schema.py",
-      "sha256": "dbbff3380b3f67f03f65a86ee91477227988598055142be5f39fcb102a1c9214",
-      "bytes": 33605
+      "sha256": "ccbb8fe04bfd91c483251b805954f647aabd77b2e69fb4ce3ac226d8b1d67f69",
+      "bytes": 40916
     },
     {
       "path": "db_read_ops.py",
-      "sha256": "e954125635958445dc006c9ffbff727b31ad2ffff3505b8d4e8c0db15da06042",
-      "bytes": 37745
+      "sha256": "fdf952b68d1254cebfc185af9db4bb4d98fd0f4f94c797503ab8add38f194c0e",
+      "bytes": 39407
     },
     {
       "path": "db_write_ops.py",
-      "sha256": "d17ae4faed20de4f8be6ade68ceca197ec783ffc7095a7b82d49e32e395939de",
-      "bytes": 212953
+      "sha256": "5ee6ef7ffb2e8a3128b8e75ed3343cbb4d81a6a29e998d20dca44a987740c517",
+      "bytes": 227792
     },
     {
       "path": "db_route_ops.py",
-      "sha256": "00dd0e2c135f77433ec553ea38c08fa62e5b2570a7628a891c4e469dd6218e64",
-      "bytes": 102119
+      "sha256": "bbf1c549d43a5e912b19ae698c47fae6215629d86c3aba6179060b70878097e4",
+      "bytes": 142085
     },
     {
       "path": "db_backup_ops.py",
@@ -194,8 +194,8 @@
     },
     {
       "path": "jobs/index.html",
-      "sha256": "fea6321a2e8fe38ea3acf14552feb5f50ca4a50be45187e04ebd35a3d9d0520c",
-      "bytes": 861794
+      "sha256": "539d62e8ca6d53d4939d28c295f1ae04cb9bc08323c4fddac16c3980dfb119ae",
+      "bytes": 1003613
     },
     {
       "path": "jobs/manifest.json",
@@ -224,8 +224,8 @@
     },
     {
       "path": "remote/index.html",
-      "sha256": "128aa49602b7537f63b76d7b3bca36ff9c6ae15927f757ee59e20bf262475c95",
-      "bytes": 118405
+      "sha256": "bb003c68eb528995259ecfbba5bb25a9f3b2e3070fded1bd31ddea44d5d5806f",
+      "bytes": 134230
     },
     {
       "path": "remote/manifest.json",
@@ -246,6 +246,186 @@
       "path": "remote/icon-512.png",
       "sha256": "d272bd001dee979426bbaabe167910ea17c603f3cbbd788cc59494ae96fab354",
       "bytes": 365262
+    },
+    {
+      "path": "setup_wizard.py",
+      "sha256": "f1b1f5a018536579d5123b0b20497854ad57fd6901381ac85879cdd3190a46ce",
+      "bytes": 129051
+    },
+    {
+      "path": "startup_log.py",
+      "sha256": "0fd3d79e3f2e8741cc94cb3b8b898c442f726e9cc78912ff9354760739a2ee11",
+      "bytes": 11083
+    },
+    {
+      "path": "hr_scheduler.py",
+      "sha256": "fed7edc3152a62239c475965a542951072c8ff184bda3f6ec44a53262bab4c06",
+      "bytes": 43470
+    },
+    {
+      "path": "hr_state_rules.json",
+      "sha256": "d9bf063e9ceefe72f3ecdc918fb3326e23385a5abc36b3d7a70f4225c02bc784",
+      "bytes": 11195
+    },
+    {
+      "path": "hr_task_templates.json",
+      "sha256": "658c916ea4372b872b387464f44d7740efc1d7737a0a3d76838bd87a659e1d36",
+      "bytes": 38062
+    },
+    {
+      "path": "hr_forms_library.json",
+      "sha256": "265ce576768fad306c82ede70ae3be074f9d5d7548456b2a710dfbb6b2767029",
+      "bytes": 13047
+    },
+    {
+      "path": "hr_admin/index.html",
+      "sha256": "6060f1f12f089008e5664908d33418117051e83e5e882cb0b791e62ac9287718",
+      "bytes": 847068
+    },
+    {
+      "path": "hr_admin/manifest.json",
+      "sha256": "c10caa2169a333cfd031676315f61ea4e16ab2b4d4496a127f0a546f99243ead",
+      "bytes": 593
+    },
+    {
+      "path": "hr_admin/sw.js",
+      "sha256": "ab2f4840d8fec0e16ff2c5217cae520282afd2b207d456a5d641a058cb43020d",
+      "bytes": 3522
+    },
+    {
+      "path": "hr_admin/icon-192.png",
+      "sha256": "b7eeae056947d15fd7a15b33450fc22573b83b20e5d220cb684a5bf4a0dce5ba",
+      "bytes": 78696
+    },
+    {
+      "path": "hr_admin/icon-512.png",
+      "sha256": "d272bd001dee979426bbaabe167910ea17c603f3cbbd788cc59494ae96fab354",
+      "bytes": 365262
+    },
+    {
+      "path": "hr_portal/index.html",
+      "sha256": "6f5c46d0c384c95dc2efba6bf133c695d72a7abfb1ce69aef072ee7b70174c94",
+      "bytes": 603120
+    },
+    {
+      "path": "hr_portal/employee_manifest.json",
+      "sha256": "2f59e33f4ce081aaba1b632e7648541e7336f93e1ddfa695f93c8e6b2ffb2723",
+      "bytes": 470
+    },
+    {
+      "path": "hr_portal/icon-192.png",
+      "sha256": "b7eeae056947d15fd7a15b33450fc22573b83b20e5d220cb684a5bf4a0dce5ba",
+      "bytes": 78696
+    },
+    {
+      "path": "hr_portal/icon-512.png",
+      "sha256": "d272bd001dee979426bbaabe167910ea17c603f3cbbd788cc59494ae96fab354",
+      "bytes": 365262
+    },
+    {
+      "path": "hr_portal/docs/incident_report.html",
+      "sha256": "c0fd6b079e3d0f9979c6274e4318f599ad1daaf04f9eeaef9ad4eddaf776c21f",
+      "bytes": 27345
+    },
+    {
+      "path": "hr_portal/docs/policy_attendance.html",
+      "sha256": "abee27464f056229ad00ab2083e5948f1ce138aac9692fcdb108cddb921412ee",
+      "bytes": 8579
+    },
+    {
+      "path": "hr_portal/docs/policy_compensation.html",
+      "sha256": "87d7c4c15afe65dde06fe5d35acd980ea09f595389c9b3752a5a7a8eeea2fa07",
+      "bytes": 10743
+    },
+    {
+      "path": "hr_portal/docs/policy_conduct.html",
+      "sha256": "6f4f591c0fd26131131c9e7c2fe16b24cfb10866676241a533c19c8f15fdea3c",
+      "bytes": 14086
+    },
+    {
+      "path": "hr_portal/docs/policy_health_safety.html",
+      "sha256": "814e289732da6d6be68dd956ec527152329cf5332a93a818b471de9b3307c722",
+      "bytes": 12613
+    },
+    {
+      "path": "hr_portal/docs/policy_privacy.html",
+      "sha256": "424a106e057cf05adacfed65ada5c84c849dd2d064325e293ee1b6ad1bef54b4",
+      "bytes": 11834
+    },
+    {
+      "path": "hr_portal/docs/policy_timeoff.html",
+      "sha256": "b7547dd154ba82f8036435a63888c4ad2520961815e9d9a5608ab1d4393bf348",
+      "bytes": 12058
+    },
+    {
+      "path": "hr_portal/docs/training_about_company.html",
+      "sha256": "8d5466b72cbbb9bbdd6c35a747164d530f9692b2696425b4abfe02c17306d193",
+      "bytes": 25910
+    },
+    {
+      "path": "hr_portal/docs/training_certifications.html",
+      "sha256": "4b18719a9431bdde6b22306abc45d70fcef4e2f11b2d17d1e4c77419260e3cbc",
+      "bytes": 22071
+    },
+    {
+      "path": "hr_portal/docs/training_compliance_2026.html",
+      "sha256": "cec8c6c2805b59f729cd0d9574c67d98b709b87e16b198305f6cdc2ef0b46184",
+      "bytes": 27023
+    },
+    {
+      "path": "hr_portal/docs/training_customer_service.html",
+      "sha256": "6d07ad78b63efeffd9849f01cb929cc36cfae4085ac9f1c3a8327791e9ee47a5",
+      "bytes": 24602
+    },
+    {
+      "path": "hr_portal/docs/training_harassment.html",
+      "sha256": "c00c31bda4cad66d722732a61157e576e098de9b3d945c3574b5f412afb51f5d",
+      "bytes": 28206
+    },
+    {
+      "path": "hr_portal/docs/training_leadership.html",
+      "sha256": "f28cfe551c21eea8986124818ccdf20e805a0c2972240309f82e14cf6b92c1eb",
+      "bytes": 24902
+    },
+    {
+      "path": "hr_portal/docs/training_orientation.html",
+      "sha256": "3ad8259155fda786931c113efa51bc16d012c127d5161c6209132c1b44293696",
+      "bytes": 27808
+    },
+    {
+      "path": "hr_portal/docs/training_privacy.html",
+      "sha256": "98c7641ff540e3b5401516752edbe45fd53ca6346a3467b46a8bf09e9cb4fc16",
+      "bytes": 22957
+    },
+    {
+      "path": "hr_portal/docs/training_safety.html",
+      "sha256": "2c459c42caa16cc11f2124059a158cad5aafb7e09a984ffc1fcd632e700387da",
+      "bytes": 26635
+    },
+    {
+      "path": "hr_portal/docs/training_tools.html",
+      "sha256": "77bc15eb3cde43e2a6aa6eb28f2ed6a5092f1c4b356695ae041a251429cdbd16",
+      "bytes": 27041
+    },
+    {
+      "path": "hr_portal/docs/AI-Prowler_Incident_Report_Form.pdf",
+      "sha256": "55127f22cb679cceccbf4e12e90b7e844e32f6d9a134b3071108fbc775a32108",
+      "bytes": 5703
+    },
+    {
+      "path": "hr_portal/docs/AI-Prowler_Remote_Work_Policy.pdf",
+      "sha256": "6a178b0963d8ef1ea7d2e38ad9b8385ed3b9460f48918909a8eaffcbd630e6a1",
+      "bytes": 8754
+    },
+    {
+      "path": "hr_portal/docs/AI-Prowler_Safety_Guidelines_2026.pdf",
+      "sha256": "a0de197734a61661c16312a0e702116a85a45c2617ba1809fc3c71e87e58488d",
+      "bytes": 9921
+    },
+    {
+      "path": "hr_portal/docs/AI_Prowler_Employee_Handbook_2026.pdf",
+      "sha256": "2e6a77eb2cb1f3299763addfb4146f79415ecd5da64daccbe42dcb0cfaf2dd4b",
+      "bytes": 28712
     }
   ]
 }
